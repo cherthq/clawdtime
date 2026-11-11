@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { ClawdTimeClient } from "./client.js";
 import { startHeartbeat } from "./heartbeat.js";
+import { summarizeReadiness, requireAttentionReadiness } from "./readiness.js";
 import {
   loadConnection,
   secureRead,
@@ -143,12 +144,18 @@ export async function startMcp(options: {
         "Check this exact project/session connection. Returns no credentials.",
       inputSchema: {},
     },
-    guarded(async () => ({
-      ...(await (await getClient()).doctor()),
-      localRunId: runId,
-      projectRoot: connection.projectRoot,
-      adapter: connection.adapter,
-    })),
+    guarded(async () => {
+      const { ready: _legacyReady, ...backend } = await (
+        await getClient()
+      ).doctor();
+      return {
+        ...backend,
+        readiness: summarizeReadiness(backend),
+        localRunId: runId,
+        projectRoot: connection.projectRoot,
+        adapter: connection.adapter,
+      };
+    }),
   );
   server.registerTool(
     "yield_control",
@@ -178,7 +185,11 @@ export async function startMcp(options: {
       },
       annotations: { idempotentHint: true },
     },
-    guarded(async (args) => (await getClient()).requestAttention(args)),
+    guarded(async (args) => {
+      const client = await getClient();
+      requireAttentionReadiness(await client.doctor());
+      return client.requestAttention(args);
+    }),
   );
   server.registerTool(
     "attention_status",

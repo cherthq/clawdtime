@@ -155,3 +155,74 @@ message in the retained anchor or same page. It never executes as a command.
 Conflicting supplied line identity, another recipient, or future-only correlation
 is rejected. Validated cursor rows retain a fingerprint, allowing an administrative
 row to remain the next poll's anchor while detecting changed evidence.
+
+## Live setup preflight
+
+`NativeTransport.preflight()` performs GET-only checks of native `/api/v1/whoami`,
+the retained event anchor, project-scoped `/api/v1/lines`, and the independent media
+`/health`. It neither consumes messages nor advances a cursor, creates a room,
+places a call, captures a frame, or changes routing. The protected audit form
+`new NativeTransport(store, config, fetch, {readOnly:true})` permits diagnosis before
+a handoff is complete and rejects POST through all exposed provider clients.
+Incomplete ownership remains a failed readiness check.
+
+Required protected configuration remains `NativeTransportConfig` plus runtime
+`testers` entries (`memberId`, `recipient`, `deviceId`, `displayId`). The handoff now
+requires matching `phone`, `identityEvidence` and `sourcePauseEvidence` references
+in addition to owner, source-paused flag, logical/provider/instance IDs, retained
+baseline, finite non-future `checkedAt`, and `rollbackRecord`. References identify
+private reviewed evidence; do not put personal identities, numbers or secrets in
+tracked artifacts. The logical line is a UUID. The native `pl_` ID and native
+inventory UUID are different domains; do not substitute one for the logical ID.
+
+Calls inventory must contain the exact logical line, with confirmed worker identity
+and a recent heartbeat. A null inventory phone number is allowed because the
+reviewed private handoff supplies the native-to-logical join. A conflicting non-null
+phone is rejected. Missing or contradictory logical identity, stale worker heartbeat,
+foreign occupancy, or undeclared media capability blocks new effects. A raw
+`audio_ready:false` is accepted only when the automatic `system_audio_capture`
+check explicitly reports `at_call_start`; this is deferred verification, not audible
+handset evidence. A known owned call can remain ready for result messaging; a new
+allocation requires idle occupancy.
+
+Media health must identify `service: clawdtime-media`, be configured, and report a
+connected device gateway. Scoped helper metadata is read from
+`/devices/:device/readiness/:member/:display`. Exact member/display ACLs, attached
+display, permissions, availability and local Enable must agree. These are metadata
+reads only. They never arm a device or begin screen capture.
+
+`doctor()` reads cached checks no older than 30 seconds, bound to the exact pairing,
+member/display and current provider configuration fingerprint. It distinguishes
+simulation/standby from `readiness.liveReady`; pairing consent alone does not imply
+live readiness. Missing evidence is unknown, never assumed ready. The runtime must
+refresh preflight before ingestion and helper evidence for paired users. Call and
+message dispatch independently recheck applicable evidence before provider effects.
+A failure proven to be in read-only preflight leaves the existing effect pending
+with a blocked reason; no external attempt is marked unknown or retried. Once an
+external attempt is possible, the ordinary unknown-outcome rules still apply.
+
+### Source pause and resume mechanics
+
+At the audited Apple Teams commit, `LIVE_TRAFFIC_ENABLED=false` while preserving
+`APP_MODE=live`, credentials and the existing database stops native message polling
+and new worker scheduling/draining. New inbound calls are declined; owned-call
+polling continues cleanup. SIGTERM waits for the in-flight integration tick before
+closing storage. There is no per-line pause API; the deployment's dedicated-line
+ownership must be established before applying its process-wide gate.
+
+Verify `chert.enabled:false`, healthy subsequent heartbeats, zero pending/unknown
+jobs and closed owned calls through protected readiness. Review failed jobs rather
+than deleting them. Previously accepted incoming callbacks can retain their original
+nine-second replay window, so an idle handoff should observe at least ten seconds
+after the source pause before enabling another owner. Read the committed
+`messages:<logical-line-id>` operational-state cursor in place through protected
+operator access; the source does not expose a cursor mutation endpoint. Do not copy
+its database or message history. Resuming source ownership requires reconciling all
+intervening events and effects before any cursor update; source provisioning rejects
+replacement of an existing baseline.
+
+Target standby must call `pollCalls(observe,{cleanupOnly:true})`. This also handles
+a crash between provider allocation and domain-receipt commit: retained provider IDs
+are recovered only for cleanup, never media activation or question playback. Shutdown
+can pass `shouldStop` to `service.drain()` to finish the current effect without
+starting another. No deployment or routing changes are performed by these checks.

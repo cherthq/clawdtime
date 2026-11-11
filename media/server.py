@@ -11,6 +11,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -19,7 +20,7 @@ from aiohttp import web, ClientSession, ClientTimeout, WSMsgType
 from livekit import api, rtc
 
 from captions import CaptionScene, CaptionPublisher
-from devices import ScreenController
+from devices import ScreenController, gateway_request
 from device_actions import DeviceActions
 from device_relay import DeviceRelay
 from playback import SpeechLedger, TERMINAL
@@ -666,9 +667,24 @@ class Service:
         app=web.Application(client_max_size=16384,middlewares=[auth])
         async def health(request):
             devices_configured=self.env.get('MEDIA_DEVICES_ENABLED')=='true' and len(self.env.get('DEVICE_GATEWAY_KEY',''))>=32 and bool(self.env.get('DEVICE_GATEWAY_URL') or self.env.get('DEVICE_GATEWAY_RELAY')=='true')
-            return web.json_response({'ok':True,'configured':self.ready(),'activeSessions':sum(not s.closed for s in self.sessions.values()),'deviceGatewayConnected':self.device_relay.connected,'devicesConfigured':devices_configured})
+            return web.json_response({'ok':True,'service':'clawdtime-media','configured':self.ready(),'activeSessions':sum(not s.closed for s in self.sessions.values()),'deviceGatewayConnected':self.device_relay.connected,'devicesConfigured':devices_configured})
         app.router.add_get('/health',health)
         app.router.add_get('/internal/ledger-backup',self.ledger_backup, allow_head=False)
+        async def device_readiness(request):
+            device=request.match_info['device']
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',device):raise web.HTTPBadRequest()
+            member=request.match_info.get('member');display=request.match_info.get('display')
+            suffix=''
+            if member is not None or display is not None:
+                if not member or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',member) or not display or not re.fullmatch(r'[0-9]{1,10}',display) or not 0<int(display)<=0xffffffff:raise web.HTTPBadRequest()
+                suffix=f'/{member}/{display}'
+            status,raw,_=await gateway_request(self,'GET',f'/v1/devices/{device}/readiness'+suffix)
+            if status!=200:raise web.HTTPServiceUnavailable(text='Registered helper readiness unavailable.')
+            value=json.loads(raw)
+            if not isinstance(value,dict) or value.get('deviceId')!=device:raise web.HTTPBadGateway()
+            return web.json_response(value,headers={'Cache-Control':'no-store'})
+        app.router.add_get('/devices/{device}/readiness',device_readiness)
+        app.router.add_get('/devices/{device}/readiness/{member}/{display}',device_readiness)
         app.router.add_get('/device-gateway',self.device_relay.connect)
         app.router.add_post('/sessions',self.prepare)
         app.router.add_get('/sessions/{id}',self.status)

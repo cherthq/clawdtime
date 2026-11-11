@@ -2,9 +2,10 @@
 
 November 11, 2026 — America/New_York.
 
-**Implemented, runnable local pilot. Not a verified live demo.** The actual
+**Independently hosted pilot; controlled line handoff active. Not a verified live demo.** The actual
 call → screen → feedback/CUA → agent continuation → Messages-result path has not
-been observed on a handset. No ClawdTime live routing was enabled.
+been observed on a handset. Apple Teams traffic is paused; ClawdTime exclusively
+owns the confirmed test line while supervised onboarding is in progress.
 
 ## Source and release identities
 
@@ -13,15 +14,24 @@ been observed on a handset. No ClawdTime live routing was enabled.
 - ClawdTime local branch: `codex/implementation`; independent Git repository.
   Implementation release commit is the `feat: implement independent ClawdTime pilot`
   commit in this branch. No remote repository, public package or GitHub topics created.
-- Backend/media deployment IDs: **none**. No existing deployment was replaced.
+- Independent Railway project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
+- Backend live deployment: `3929b7a9-9272-493f-84ed-cfe87e4865dd`, from audited
+  standby build `aee250ae-90d3-438c-8aef-50ffa372da53`.
+- Media deployment: `4d18c8d9-1ce4-421a-abd0-5f3bb65daf6e`.
+- Source paused using its existing image: `e54088af-d19e-4378-8aa6-d2b4ac12acd4`.
+  No source code or sibling deployment was changed.
 - Companion: `com.clawdtime.companion`, internal 0.1.0, ad hoc signed.
-  Binary SHA-256: `201acb9c54cdeeaf4c9f2f5ab1ce324ae642bcfe3837e2ee89bfd54c84ca31a7`.
+  Binary SHA-256: `abfdeb7eb0228ac2b4ae9d1f35d1fdd89da3c3ac7b1d6aff226c312aa0e858dd`.
   `codesign --verify --deep --strict` passed. No Developer ID/TeamIdentifier or notarization.
 - Client versions: Claude Code **2.1.311**; Codex CLI **0.166.0-alpha.5.1**.
 - Validation runtime: Node **24.22.1**, Python **3.14.0**, Swift **6.2.4**.
-- No new companion installation/launch, permission grants, arming, capture, input,
-  telephony/media-provider calls or customer data migration occurred. Metadata-only display
-  discovery and generated-config validation ran on the actual Mac.
+- Companion installed at `/Users/garygao/Applications/ClawdTime Companion.app`.
+  Separate bootstrap configuration has empty display ACLs. The user granted the
+  initial build permissions; its relaunch repair changed the ad hoc signature.
+  Current-build TCC grants are being reconciled, not inferred from Settings switches.
+- Independent `com.clawdtime.gateway` LaunchAgent connected to the hosted media
+  service. Fresh helper/gateway/operator/media/encryption secrets and separate volumes.
+- No screen capture, input or FaceTime call has yet been accepted as physical evidence.
 
 ## Executed evidence
 
@@ -33,12 +43,12 @@ been observed on a handset. No ClawdTime live routing was enabled.
 | Claude Code → MCP → domain → continuation | Actual CLI print-mode model/tool run passed                     | register/yield/request/result/ack/resume/complete; one simulated call and one simulated result        |
 | Codex → MCP → domain → continuation       | Actual CLI exec-mode model/tool run passed                      | Same exact cooperative sequence; native client permission policy preserved                            |
 | Domain → device → completion              | HTTP E2E and simulation demo passed                             | click/type/scroll and injected single-action planner; exact response and epoch; one result            |
-| Media                                     | 56 Python tests passed                                          | Real migrated code, synthetic/fake transport; not handset delivery                                    |
-| Gateway                                   | 13 Python tests passed                                          | Leases, routing, replay, release and failure contracts                                                |
-| Setup generator                           | 3 Python tests passed                                           | Private independent config, refusal of overwrite, actual display selection                            |
-| Swift                                     | 7 policy/HTTP/receipt tests passed; release app built           | Permission/control/Stop policy and ad hoc packaging; not actual TCC/physical input                    |
+| Media                                     | 57 Python tests passed                                          | Real migrated code, synthetic/fake transport; not handset delivery                                    |
+| Gateway                                   | 18 Python tests passed                                          | Leases, routing, replay, release and failure contracts                                                |
+| Setup generator                           | 9 Python tests passed                                           | Private independent config, refusal of overwrite, actual display selection                            |
+| Swift                                     | 11 policy/HTTP/receipt/relaunch tests passed; release app built | Permission/control/Stop policy and ad hoc packaging; not actual TCC/physical input                    |
 | Backup                                    | Encrypted SQLite snapshot/restore regression passed             | Consistent snapshot, authenticated encryption, fresh destination, unknown receipts retained           |
-| Docker                                    | CLI available, daemon unavailable                               | Dockerfile prepared; container image build/run **not verified**                                       |
+| Docker                                    | Railway Docker builds and live process health passed            | Independent containers and volumes; backend DB owned by non-root UID 1000                             |
 | Actual phone/FaceTime/CUA/line rollback   | **Not run**                                                     | Required live acceptance remains open                                                                 |
 
 Synthetic Python failure tests intentionally log caption/media failure messages.
@@ -72,37 +82,39 @@ fresh independent keys and a configured model. No model fallback is implicit. Th
 single-action planner is tested with injected output and frame changes; a real
 provider acting on a physical fixture remains unverified.
 
-## Exact blockers and next actions
+## Exact remaining acceptance steps
 
-1. **Liam Davis identity unresolved.** Read-only native whoami was healthy and
-   matched the configured native line/phone/instance. Calls inventory matched the
-   configured logical line but labeled it **iPhone control test**. No Liam/Davis
-   match was returned. Resolve the intended identity through private operator
-   evidence before any transfer. No real number is committed.
-2. **Readiness credential issue resolved during diagnosis.** The previous 401
-   resulted from using the local demo key against production. The existing
-   production provisioning key returns HTTP 200. Fresh checks show a healthy
-   heartbeat, zero pending/unknown jobs, no active calls, and one recorded failed
-   job. Media is healthy, gateway connected and idle. Source health must be checked
-   again and the failed job reviewed before a controlled handoff; no live ownership
-   change occurred.
-3. **Independent live services/secrets not provisioned.** New backend/media hosting,
-   independent volumes and fresh application/media/gateway/provider credentials are
-   required. Start in standby; never replace Apple Teams. No new paid plan was opened.
-4. **Physical Mac/handset steps pending.** The new bundle identity needs its own
-   Screen Recording/Accessibility grants, configured gateway, local Enable and an
-   allowlisted consenting tester. Validate typing, click, scroll, AI action, lock,
-   sleep, Stop, call teardown and actual Messages delivery on disposable content.
-5. **Public distribution pending.** Internal ad hoc bundle exists; Developer ID,
-   notarization and clean external installation are unverified. npm namespace
-   ownership/publication is unverified; use the bundled CLI.
-6. **Container runtime unavailable.** Start the local Docker daemon to verify the
-   prepared independent container packaging; Node/Python/Swift run locally today.
+1. **Current installed Mac permissions and pairing.** Normal app reopening is fixed.
+   macOS retained old ad hoc signing requirements despite enabled Settings switches;
+   reset only this bundle's stale entries, re-add the installed app, and verify actual
+   `screenPermission`/`controlPermission` before capture. Empty bootstrap ACLs permit
+   no viewing/input. Verified Messages pairing must explicitly grant display access.
+2. **Supervised handset loop.** The user confirmed the Liam Davis alias against
+   the exact native/logical/inventory binding and selected a sole demo recipient.
+   The private handoff record preserves the source cursor and pause evidence.
+   Test call, visible screen, voice/text, click/type/scroll, bounded AI action,
+   exact agent continuation, Messages result, Stop and rollback are still pending.
+3. **AI action physical qualification.** A fresh independent Gateway key has a $1
+   non-renewing cap and 7-day expiry. The initially selected model required funded
+   credits, so the lead explicitly selected catalog-verified `openai/gpt-4o-mini`.
+   Its real structured-output connectivity test passed with existing credits;
+   no top-up or model fallback was enabled. Real image/action qualification remains.
 
-The controlled handoff/rollback procedure is in LINE_HANDOFF.md. No handoff,
-source pause, cursor transfer, live rollback or deployment was performed. Unknown
-allocation outcomes lacking a retained provider ID and uncertain text/input effects
-require evidence-based operator reconciliation; no automatic retry is provided.
+4. **Public distribution.** Developer ID, notarization, external clean installation
+   and npm namespace/publication remain unverified. Use the bundled internal CLI.
+
+Production operator authentication is resolved: the previous 401 used the demo
+key. Current native/logical identity, exact cursor, worker, independent media and
+connected gateway preflight checks all pass. Source pause was observed across an
+idle interval exceeding 10 seconds, with no pending/unknown jobs, no active calls,
+a stable retained cursor and no intervening events. One historical source failed
+start-call job remains preserved. No runtime/customer database was copied.
+
+Rollback must reconcile the complete handoff interval. Never advance the source
+past unrelated events. Prefer preserving its original cursor and marking only
+reconciled test-owned direct messages in its compatible event ledger; alternatively
+CAS-advance only when every intervening actionable event is fully reconciled.
+See LINE_HANDOFF.md and TRANSPORT.md. No physical rollback has yet been claimed.
 
 ## Timing and acceptance
 
@@ -120,16 +132,16 @@ Python/Swift commands and setup are in README.md and component READMEs.
 
 ## Final local release check
 
-- `npm run check`: **78 tests across 11 files**, TypeScript and production build passed.
+- `npm run check`: **108 tests across 14 files**, TypeScript and production build passed.
 - `npm run format:check`: passed.
 - Built browser/onboarding/compiled-CLI checks: passed.
 - Real Claude Code and Codex synthetic probes passed again with heartbeat enabled.
-- Python: 56 media + 13 gateway + 3 setup tests passed; Swift: 7 tests and release
+- Python: 57 media + 18 gateway + 9 setup tests passed; Swift: 11 tests and release
   packaging passed. No physical tests are included in those counts.
 - `npm run demo`: completed with one simulated call, input, response and Messages result.
 - Dependency audit: zero reported vulnerabilities at install; no source secret or
   real configured line number found in tracked/candidate files.
-- No Docker daemon was available, so image build/run remains unverified.
+- Independent Railway backend/media Docker builds, volumes and runtime health passed.
 
 ## Follow-up diagnosis — November 11, 2026
 
@@ -144,3 +156,20 @@ in Chrome. `/dashboard` returns 404: no operational dashboard has been implement
 For this diagnosis the lead started an in-memory simulation at
 `http://127.0.0.1:3310`; it has no live credentials and cannot use the test line.
 This is a temporary local preview, not a deployed public website.
+
+## Follow-up fixes and hosting — November 11, 2026
+
+Hosted landing: https://backend-production-ee686906.up.railway.app
+Private pairing route: `/pair`; no operational dashboard is implemented.
+The prior local-only diagnosis above records the earlier state, superseded here.
+
+Readiness now distinguishes pairing, real line/media/device evidence and physical
+acceptance. Tests cover missing handoff evidence before polling, stale/config-bound
+helper checks, cleanup-only recovery after interrupted call allocation, shutdown
+drain, malformed-secret error redaction, and rejection of falsy live config.
+Both actual CLI synthetic probes now explicitly verify their exact run identity.
+
+The Mac gateway's missing Python CA bundle was fixed with pinned trusted Certifi
+roots and mandatory TLS/hostname checks; no global trust or source gateway changed.
+Normal companion reopening now uses only its validated private default config and
+never re-arms automatically. A current-build permission reconciliation is required.

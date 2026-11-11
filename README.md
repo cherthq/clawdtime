@@ -13,13 +13,16 @@ calls when it needs attention, shows its screen, and receives your response. You
 can also direct computer actions while watching, then let the agent continue in
 the tools you already use.
 
-**Current status: implemented local pilot; not yet a verified live demo.** The
+**Current status: independently hosted pilot; not yet a verified live demo.** The
 backend, Mac companion, media/gateway, pairing page, agent tools and simulation
 are runnable. Real Claude Code and Codex CLI processes have completed cooperative
 attention workflows against simulated calls and synthetic feedback. The actual
 FaceTime → screen → voice/text/CUA → agent continuation → Messages result path
 still requires controlled line handoff and physical acceptance. See
 [STATUS](docs/STATUS.md) for current evidence and concrete blockers.
+
+[Open the landing page](https://backend-production-ee686906.up.railway.app).
+Private pairing is available at `/pair`; an operational dashboard is not implemented.
 
 ## Who this is for
 
@@ -196,7 +199,7 @@ Standby does not dispatch. `doctor`/health and passing mocks are not live readin
 
 ```sh
 python3 -m venv media/.venv
-media/.venv/bin/python -m pip install -r media/requirements.txt
+media/.venv/bin/python -m pip install -r media/requirements.txt -r gateway/requirements.txt
 media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'
 media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'
 python3 -m unittest discover -s mac/scripts -p 'test_*.py'

@@ -248,6 +248,38 @@ class Gateway:
             row = self.db.execute('SELECT state,receipt FROM actions WHERE id=?',(action_id,)).fetchone()
         return web.json_response({**json.loads(row[1]),'state':row[0]} if row[1] else {'id':action_id,'leaseId':lease_id,'state':'unknown'})
 
+    async def readiness(self, request):
+        """Metadata only; fixed helper origin and exact registered device identity."""
+        device_id=request.match_info['device']
+        config=self.devices.get(device_id)
+        if not ID.fullmatch(device_id) or not config:raise web.HTTPNotFound()
+        async def read(path):
+            async with self.http.get(config['url']+path,headers={'Authorization':'Bearer '+config['key']},allow_redirects=False) as response:
+                if response.status!=200:raise web.HTTPServiceUnavailable(text='Helper metadata unavailable.')
+                raw=await response.content.read(16385)
+                if len(raw)>16384:raise web.HTTPBadGateway()
+                return json.loads(raw)
+        status=await read('/v1/status')
+        if not isinstance(status,dict) or status.get('deviceId')!=device_id or any(type(status.get(k)) is not bool for k in ('armed','available','screenPermission','controlPermission')):
+            raise web.HTTPBadGateway(text='Helper readiness identity mismatch.')
+        displays=await read('/v1/displays')
+        if not isinstance(displays,list) or len(displays)>32 or any(not isinstance(d,dict) or set(d)!={'id','width','height'} or type(d['id']) is not int or not 0<=d['id']<=0xffffffff or any(type(d[k]) is not int or not 0<d[k]<=32768 for k in ('width','height')) for d in displays):
+            raise web.HTTPBadGateway(text='Helper display metadata invalid.')
+        scoped={}
+        member=request.match_info.get('member');display=request.match_info.get('display')
+        if member is not None or display is not None:
+            if not member or not ID.fullmatch(member) or not display or not display.isdecimal() or not 0<int(display)<=0xffffffff:raise web.HTTPBadRequest()
+            permissions=await read('/v1/permissions')
+            if not isinstance(permissions,list) or len(permissions)>32 or any(not isinstance(p,dict) or set(p)!={'displayId','viewers','controllers'} or type(p['displayId']) is not int or not isinstance(p['viewers'],list) or not isinstance(p['controllers'],list) or any(not isinstance(m,str) or not ID.fullmatch(m) for m in p['viewers']+p['controllers']) for p in permissions):
+                raise web.HTTPBadGateway(text='Helper permission metadata invalid.')
+            permission=next((p for p in permissions if p['displayId']==int(display)),None)
+            viewing=bool(permission and member in permission['viewers'])
+            scoped={'memberId':member,'displayId':display,'viewAllowed':viewing,
+                'controlAllowed':viewing and member in permission['controllers'],
+                'displayAttached':any(d['id']==int(display) for d in displays)}
+        return web.json_response({**{k:status[k] for k in ('deviceId','armed','available','screenPermission','controlPermission')},
+            'activeLease':bool(status.get('activeLeaseId')),'displays':displays,**scoped},headers={'Cache-Control':'no-store'})
+
     def app(self):
         @web.middleware
         async def auth(request,handler):
@@ -257,6 +289,8 @@ class Gateway:
             except web.HTTPException:raise
             except Exception:return web.json_response({'error':'Device operation uncertain; reconcile before retry.'},status=503)
         app=web.Application(middlewares=[auth],client_max_size=16384)
+        app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
+        app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)
         app.router.add_post('/v1/leases',self.create)
         app.router.add_post('/v1/leases/{id}/renew',self.renew)
         app.router.add_delete('/v1/leases/{id}',self.close)

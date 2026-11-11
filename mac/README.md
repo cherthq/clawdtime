@@ -88,16 +88,17 @@ provided. Requests are one HTTP/1.1 request per connection, JSON body at most
 16 KiB. Transfer encoding, duplicate headers and pipelining are rejected.
 Responses use `Cache-Control: no-store`; errors are JSON `{"error":"…"}`.
 
-| Route | Behavior |
-| --- | --- |
-| `GET /v1/status` | Device ID, boolean armed/available/permission flags, optional activeLeaseId. |
-| `GET /v1/displays` | `[{id,width,height}]`; metadata only, no capture permission prompt. |
-| `POST /v1/leases` | Full lease body below; one selected screen. Identical active request is idempotent. |
-| `POST /v1/leases/{id}/renew` | Same complete binding; only expiration can change. No upgrades, display switches or resurrecting stopped leases. |
-| `DELETE /v1/leases/{id}` | Stop the selected lease. A later request needs a new ID. |
-| `GET /v1/leases/{id}/frame` | JPEG bytes, max 2 MiB and 1280×720 bounds, max five requests/second. |
-| `POST /v1/leases/{id}/actions` | Bounded action body below; durable receipt. |
-| `GET /v1/leases/{id}/actions/{actionId}` | Receipt lookup works after lease expiry; never repeats input. |
+| Route                                    | Behavior                                                                                                         |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/status`                         | Device ID, boolean armed/available/permission flags, optional activeLeaseId.                                     |
+| `GET /v1/permissions`                    | Loaded display viewer/controller ACL metadata; authenticated, no capture or prompt.                              |
+| `GET /v1/displays`                       | `[{id,width,height}]`; metadata only, no capture permission prompt.                                              |
+| `POST /v1/leases`                        | Full lease body below; one selected screen. Identical active request is idempotent.                              |
+| `POST /v1/leases/{id}/renew`             | Same complete binding; only expiration can change. No upgrades, display switches or resurrecting stopped leases. |
+| `DELETE /v1/leases/{id}`                 | Stop the selected lease. A later request needs a new ID.                                                         |
+| `GET /v1/leases/{id}/frame`              | JPEG bytes, max 2 MiB and 1280×720 bounds, max five requests/second.                                             |
+| `POST /v1/leases/{id}/actions`           | Bounded action body below; durable receipt.                                                                      |
+| `GET /v1/leases/{id}/actions/{actionId}` | Receipt lookup works after lease expiry; never repeats input.                                                    |
 
 Lease body: `{id,deviceId,memberId,callId,displayId,mode,expiresAt}`. IDs contain
 letters, digits, underscores or hyphens, maximum 160 characters. `mode` is `view`
@@ -170,11 +171,10 @@ Rollback: stop locally, exit the app, preserve its owner-only action ledger unde
 then replace the app/config. Never remove receipts to make an uncertain action
 replayable. No Chert worker package or configuration changes are required.
 
-Apple API references: [ScreenCaptureKit captureImage](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager/captureimage(contentfilter:configuration:completionhandler:)),
+Apple API references: [ScreenCaptureKit captureImage](<https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager/captureimage(contentfilter:configuration:completionhandler:)>),
 [workspace session switching](https://developer.apple.com/documentation/appkit/nsworkspace/sessiondidresignactivenotification),
 [console session flag](https://developer.apple.com/documentation/coregraphics/kcgsessiononconsolekey),
-[Unicode keyboard events](https://developer.apple.com/documentation/coregraphics/cgevent/keyboardsetunicodestring(stringlength:unicodestring:)).
-
+[Unicode keyboard events](<https://developer.apple.com/documentation/coregraphics/cgevent/keyboardsetunicodestring(stringlength:unicodestring:)>).
 
 ## Guided private configuration
 
@@ -204,3 +204,28 @@ TCC, starts capture, installs over another app, or modifies Apple Teams. Disconn
 through ClawdTime and use local Stop before quitting the companion and gateway;
 retain their receipt ledgers for reconciliation. `configure.py` does not implement
 remote revocation by itself; active leases also expire within 30 seconds.
+
+For preparation before messaging pairing, use `configure.py --bootstrap-device`
+with a new registered ClawdTime device ID. This writes **empty display ACLs**.
+After receiving the real verified pairing claim, `--claim ... --activate-existing`
+changes only that never-paired bootstrap while preserving secrets and receipts.
+Relaunch ClawdTime to load the ACL; local Enable remains a separate step. Complete
+stable-path install, grant, gateway and read-only doctor commands are in
+[the installation follow-up](../docs/DEVICE.md#independent-installation-follow-up).
+
+## Normal reopening and macOS permission relaunch
+
+Finder and macOS **Quit & Reopen** omit the original `--config` arguments. With
+no `--config`, the companion now loads only
+`~/Library/Application Support/ClawdTimeCompanion/setup/helper.json`. The setup
+directory must belong to the current user with mode 0700; the regular configuration
+file must belong to that user with mode 0600. The loader opens the validated file
+descriptor with symlink protection and retains the exact configured ACL. An explicit
+invalid `--config` fails without falling back to another path.
+
+Opening the stable installed app normally therefore works for the standard setup
+location. Empty-ACL bootstrap opens the Setup window even after Screen Recording
+has been granted, keeping the Accessibility setup action discoverable. Every
+launch remains locally stopped; permissions and pairing never automatically arm it.
+An installation using a custom configuration path must continue supplying that
+explicit path or deliberately move to the standard setup workflow.

@@ -83,3 +83,23 @@ awaits confirmed helper release and only then returns `released:true`. Uncertain
 release stays unconfirmed until the longest sent expiry and prevents replacement.
 Policy must stop renewing the released lease; a later explicit action needs a new
 lease. The coordinator must block agent resume until its release/epoch handshake.
+
+## Read-only readiness (follow-up)
+
+`GET /health` includes `service:"clawdtime-media"` so a backend preflight can reject
+an accidental Apple Teams media origin even though its older API shape is similar.
+Authenticated `GET /devices/:deviceId/readiness/:memberId/:displayId` traverses
+only registered gateway origins and authenticated helper metadata. It returns
+`deviceId`, the exact requested `memberId`/string `displayId`, `viewAllowed`,
+`controlAllowed`, `displayAttached`, `armed`, `available`, `screenPermission`,
+`controlPermission`, `activeLease` and attached display IDs/dimensions. No lease,
+permission prompt, capture or input occurs. The helper's new `/v1/permissions`
+route supplies loaded display ACL metadata to the trusted gateway; only scoped
+booleans leave the gateway. A device-only readiness route is diagnostic and cannot
+establish member/display authorization. The API requires the media key; the gateway
+key cannot access it. The corresponding gateway route uses the gateway-only key.
+
+An independent helper bootstrap can deliberately return false ACL booleans before
+verified messaging pairing. Do not treat existing macOS grants or local Enable as
+an authorization substitute. Cache readiness only briefly and recheck actual call,
+lease, frame and pairing authority at dispatch.

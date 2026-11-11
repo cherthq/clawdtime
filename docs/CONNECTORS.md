@@ -160,3 +160,42 @@ After twenty seconds without a heartbeat the backend stops the session and begin
 call/control cleanup. Late heartbeats or a reused run identity cannot resurrect
 that stopped session. Response reads do not extend it. Start a new native client
 session after terminal loss and reconcile old effects; do not replay attention.
+
+## Actionable live readiness and supervised acceptance preparation
+
+`doctor` now reports `readiness.status`, `connectionReady`, `liveReady`, individual
+checks and next actions. A paired account or old `ready:true` flag cannot establish
+line/media/helper readiness. Live evidence must be fresh (30 seconds), and all
+reported checks must pass. Local checks verify the installed project entry, compiled
+launcher, scoped skill and current agent version. Changed configuration is reported
+and preserved. The backend reads provider/helper evidence separately; doctor does not
+place calls or grant permissions. Physical acceptance remains a separate observation.
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js doctor --agent codex --project /absolute/disposable/project --require-live true
+node /absolute/path/to/clawdtime/dist/cli/main.js acceptance-plan --agent codex --project /absolute/disposable/project --case-id codex-screen-feedback --output /absolute/private/codex-acceptance.json
+```
+
+`doctor --require-live true` exits 2 unless ready for a supervised live attempt.
+Default simulation doctor can exit 0 while clearly labeled `simulation_only`;
+failed local configuration or blocked live readiness exits 2. MCP `request_attention`
+also checks readiness before dispatch and refuses unready non-simulation backends.
+No client changes routing, permissions, local arming or live gates to fix readiness.
+
+`acceptance-plan` is inert: it writes a private JSON plan and `.prompt.txt`, and prints
+an ordinary interactive-client launch command as a command/argument array. It does
+not launch the client, invoke a tool or call a phone. The plan preserves one run ID,
+task ID and idempotency key for that case. The lead resolves readiness and completes
+the controlled handoff, launches the intended client, then pastes the saved prompt.
+Use `--agent claude-code` and a separate case/output for Claude Code.
+
+The prompt checks the exact local run identity, yields control, requests one call,
+waits for actual feedback/CUA, acknowledges the response and current control epoch,
+resumes under native policy, writes a disposable result file, and queues a factual
+Messages recap. It never supplies synthetic human feedback. The operator records
+actual handset observations, native receipts and delivery separately. A completed
+request or queued message is not itself handset delivery.
+
+Both real synthetic CLI probes now also assert that the backend's registered session
+matches the wrapper's exact run ID. This passed for the recorded Claude/Codex versions.
+No actual live acceptance was performed by these probes or plan preparation.

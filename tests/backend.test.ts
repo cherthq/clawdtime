@@ -347,6 +347,28 @@ describe("durable scoped attention domain", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("shutdown can stop a drain before starting the next committed pending effect", async () => {
+    const f = fixture(),
+      request = f.request();
+    await f.app.drain();
+    const response = f.answer(request.id);
+    f.app.ack(f.agent.token, request.id, response.id);
+    f.app.resume(f.agent.token, request.id, 0);
+    f.app.complete(f.agent.token, request.id, "Done");
+    let stopping = false;
+    const message = f.transport.message.bind(f.transport);
+    f.transport.message = async (...args) => {
+      const result = await message(...args);
+      stopping = true;
+      return result;
+    };
+    await f.app.drain({ shouldStop: () => stopping });
+    expect(f.transport.messages).toHaveLength(1);
+    expect(f.transport.ended).toHaveLength(0);
+    expect(f.store.effects("pending").map((e) => e.kind)).toEqual(["end_call"]);
+    await f.app.drain({ cleanupOnly: true });
+    expect(f.transport.ended).toHaveLength(1);
+  });
   it("heartbeats keep only their own session alive and reads do not extend session lifetime", () => {
     const f = fixture(),
       r = f.request();

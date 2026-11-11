@@ -1,15 +1,27 @@
 # Independent deployment and operations
 
-No ClawdTime remote service, domain, npm package or GitHub remote was provisioned
-in this implementation session. The local application and three component builds
-are available. Apple Teams services remain unchanged. External deployment requires
-existing authorized hosting capacity, new service names and new persistent volumes.
-Do not deploy these artifacts to Apple Teams service IDs.
+ClawdTime has an independent Railway project, backend and media services, domains,
+and empty dedicated persistent volumes. It uses existing account capacity; no new
+plan, domain purchase, npm publication or GitHub remote was created.
+
+- Project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
+- Backend/landing: https://backend-production-ee686906.up.railway.app
+- Media: https://media-production-33fda109.up.railway.app
+- Services: backend `b4af7a8c-c6b1-4b1c-af2f-dbaedad618ea`,
+  media `07eabf9a-c8fd-46da-8210-54c7d2f868fb`.
+- Environment: `8f5a3eb3-37e1-480a-ad07-6e89968a1b8c`.
+
+Check STATUS.md for current ownership and physical qualification. Deployment health
+alone is not demo readiness. No Apple Teams source or sibling service was replaced.
 
 ## Backend
 
 Node 24+, `npm ci && npm run build`, then `npm start`. The root Dockerfile provides
-a separate non-root Node service. Mount an empty dedicated persistent `/data`
+a separate Node service that drops to UID/GID 1000 before application startup.
+Railway needs `RAILWAY_RUN_UID=0` so the small entrypoint can assign its root-owned
+volume to UID 1000; actual deployed DB ownership was verified as UID 1000. For
+local Docker use a volume owned by UID 1000 or `--user 0` for the same bootstrap.
+Mount an empty dedicated persistent `/data`
 volume, one replica, no overlapping deployment processes. Set `CLAWDTIME_ORIGIN`
 to the fixed HTTPS backend origin. Use `CLAWDTIME_MODE=standby` initially. Standby
 hosts onboarding/health but does not ingest new Messages or dispatch new calls or
@@ -26,6 +38,9 @@ Default local port is 3310. No key means corresponding protected routes refuse a
 
 `CLAWDTIME_LIVE_CONFIG` is an owner-only 0600 JSON file mounted read-only. It matches
 `NativeTransportConfig` in `src/transport/native.ts`, plus `testers` in runtime.ts.
+For managed hosting, `CLAWDTIME_LIVE_CONFIG_JSON` may instead carry the same object
+through the host secret store. Set exactly one source. Null/scalar/array roots and
+malformed JSON are rejected without logging their contents.
 It contains existing supported native transport access, fresh media and encryption
 keys, and the explicit handoff attestation. Never copy an Apple Teams environment
 file wholesale. Operator provisions only the required scoped transport credentials.
@@ -62,6 +77,9 @@ Shape (placeholders only):
   "handoff": {
     "owner": "clawdtime",
     "sourceOwnerPaused": true,
+    "phone": "PRIVATE_LINE_E164",
+    "identityEvidence": "PRIVATE_VERIFIED_BINDING_RECORD",
+    "sourcePauseEvidence": "PRIVATE_SOURCE_PAUSE_RECORD",
     "lineId": "LOGICAL_UUID",
     "providerLineId": "NATIVE_ID",
     "instanceId": "NATIVE_INSTANCE",

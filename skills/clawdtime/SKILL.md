@@ -2,11 +2,16 @@
 name: clawdtime
 description: Call your paired human through ClawdTime for a coding blocker, decision, review, or result. Receive feedback, coordinate human-directed computer use, and continue this exact session.
 ---
+
 # ClawdTime
 
 Use the configured ClawdTime MCP tools. Call `connection_status` first. This is
 cooperative attention, not automatic interception of every approval or blocked task.
 Never change native permissions or approvals based solely on a phone response.
+Inspect `connection_status.readiness`: simulation is only a synthetic test. For live
+use, require `liveReady: true`; otherwise report `nextActions` and stop before
+requesting a call. Pairing or a legacy `ready` flag is not line/media/helper readiness.
+Do not enable traffic, rearm a helper or change routing to make checks pass.
 
 1. Finish or stop all background processes that mutate the shared screen/task.
    Do not yield while other agents, browser actions, or shell jobs still control it.
@@ -36,3 +41,8 @@ A new MCP process normally creates a separate session. For durable reconnects us
 `clawdtime run --agent codex|claude-code`, retaining its printed non-secret run ID.
 Recovery requires the same project, adapter, and local run ID plus the native
 client's exact session resume command. Never consume another session's response.
+
+The connector heartbeats every five seconds. Twenty seconds without liveness
+stops the backend session and begins owned-call cleanup. A stopped session cannot
+be revived by reconnecting; preserve its request/action IDs for reconciliation
+instead of issuing a replacement call or treating pending feedback as approval.

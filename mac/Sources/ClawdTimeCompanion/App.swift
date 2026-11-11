@@ -97,7 +97,7 @@ struct HelperStatus: Codable {
       showError("Unable to bind helper listener.")
     }
     updateIndicator()
-    if !CGPreflightScreenCaptureAccess()
+    if config.displays.isEmpty || !CGPreflightScreenCaptureAccess()
       || (config.displays.contains { !$0.controllers.isEmpty } && !AXIsProcessTrusted())
     {
       showSetup()
@@ -223,6 +223,10 @@ struct HelperStatus: Codable {
             screenPermission: CGPreflightScreenCaptureAccess(),
             controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id))
       }
+      if request.method == "GET", request.path == "/v1/permissions" {
+        // Authenticated metadata only: no TCC request, lease, frame or input.
+        return try .json(config.displays)
+      }
       if request.method == "GET", request.path == "/v1/displays" {
         return try .json(await capture.displays())
       }
@@ -344,29 +348,14 @@ struct HelperStatus: Codable {
         print(String(data: try JSONEncoder().encode(displays), encoding: .utf8)!)
         return
       }
-      guard let index = args.firstIndex(of: "--config"), args.count > index + 1 else {
-        throw HelperError(400, "Usage: ClawdTimeCompanion --config /absolute/private/config.json")
-      }
-      let path = args[index + 1]
-      guard path.hasPrefix("/") else {
-        throw HelperError(400, "Configuration path must be absolute.")
-      }
-      let attributes = try FileManager.default.attributesOfItem(atPath: path)
-      guard attributes[.type] as? FileAttributeType == .typeRegular,
-        (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600,
-        (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid()
-      else {
-        throw HelperError(403, "Configuration must be an owner-only regular file with mode 0600.")
-      }
-      let config = try JSONDecoder().decode(
-        HelperConfig.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
-      try config.validate()
+      let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      let config = try loadConfiguration(arguments: args, applicationSupport: applicationSupport)
       if args.contains("--check-config") {
         print("Configuration is valid. No listener, capture or input was started.")
         return
       }
-      let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("ClawdTimeCompanion", isDirectory: true).appendingPathComponent(
+      let base = applicationSupport.appendingPathComponent("ClawdTimeCompanion", isDirectory: true).appendingPathComponent(
           config.deviceId, isDirectory: true)
       let delegate = try DeviceApp(
         config: config, ledgerURL: base.appendingPathComponent("action-receipts.json"))

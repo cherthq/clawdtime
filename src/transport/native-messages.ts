@@ -150,6 +150,7 @@ export class NativeMessages {
     readonly store: Store,
     readonly binding: MessageBinding,
     readonly request: typeof fetch = fetch,
+    private readonly options: { readOnly?: boolean } = {},
   ) {
     const u = new URL(binding.origin);
     if (
@@ -161,6 +162,11 @@ export class NativeMessages {
       throw new Error("Native origin must be a bare HTTPS origin.");
   }
   async api(path: string, body?: unknown) {
+    if (this.options.readOnly && body !== undefined)
+      throw new DomainError(
+        403,
+        "Read-only native transport cannot dispatch effects.",
+      );
     const raw = body === undefined ? "" : JSON.stringify(body),
       ts = Math.floor(Date.now() / 1000);
     return jsonRequest(
@@ -197,6 +203,25 @@ export class NativeMessages {
   }
   cursor() {
     return this.store.state<EventAnchor>(`messages:${this.binding.lineId}`);
+  }
+  async verifyAnchor(anchor: EventAnchor): Promise<EventAnchor> {
+    if (
+      !Number.isSafeInteger(anchor.sequence) ||
+      anchor.sequence < 1 ||
+      !anchor.eventId
+    )
+      throw new DomainError(409, "Invalid retained event boundary.");
+    const row = rowSchema.parse(
+      await this.api(`/api/v1/events/${anchor.sequence}`),
+    );
+    if (row.sequence !== anchor.sequence || row.event_id !== anchor.eventId)
+      throw new DomainError(409, "Retained cursor anchor changed.");
+    const fingerprint = hash(JSON.stringify(row));
+    if (anchor.fingerprint) {
+      if (fingerprint !== anchor.fingerprint)
+        throw new DomainError(409, "Retained cursor evidence changed.");
+    } else identity(row, this.binding);
+    return { sequence: row.sequence, eventId: row.event_id, fingerprint };
   }
   async baseline(sequence: number, eventId: string) {
     await this.verify();

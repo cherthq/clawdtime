@@ -16,6 +16,70 @@ describe("runtime standby and mode boundaries", () => {
       createRuntime({ CLAWDTIME_MODE: "live", CLAWDTIME_LIVE_TRAFFIC: "true" }),
     ).toThrow("explicit handoff");
   });
+  it("cannot poll live traffic with incomplete ownership evidence even when other configuration exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawdtime-runtime-"));
+    try {
+      const path = join(dir, "config.json");
+      writeFileSync(
+        path,
+        JSON.stringify({
+          enabled: true,
+          binding: {
+            origin: "https://native.example.test",
+            token: "fixture",
+            signingSecret: "fixture",
+            lineId: "line",
+            providerLineId: "provider",
+            phone: "+15550000002",
+            instanceId: "instance",
+          },
+          callsOrigin: "https://calls.example.test",
+          projectId: "fixture",
+          projectKey: "fixture",
+          mediaOrigin: "https://media.example.test",
+          mediaKey: "fixture-independent-media-key-at-least-32",
+          encryptionKey: "1".repeat(64),
+          testerAllowlist: ["+15550000001"],
+          testers: [
+            {
+              memberId: "member",
+              recipient: "+15550000001",
+              deviceId: "mac",
+              displayId: "1",
+            },
+          ],
+          handoff: {
+            owner: "clawdtime",
+            sourceOwnerPaused: true,
+            lineId: "line",
+            providerLineId: "provider",
+            instanceId: "instance",
+            baseline: { sequence: 1, eventId: "fixture" },
+            checkedAt: Date.now(),
+            rollbackRecord: "fixture",
+          },
+        }),
+        { mode: 0o600 },
+      );
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      expect(() =>
+        createRuntime({
+          CLAWDTIME_MODE: "live",
+          CLAWDTIME_LIVE_TRAFFIC: "true",
+          CLAWDTIME_LIVE_CONFIG: path,
+          CLAWDTIME_DATABASE: join(dir, "state.sqlite"),
+          CLAWDTIME_ORIGIN: "https://clawdtime.example.test",
+          CLAWDTIME_OPERATOR_TOKEN: "fixture-operator-at-least-32-characters",
+          CLAWDTIME_MEDIA_TOKEN:
+            "fixture-media-callback-at-least-32-characters",
+        }),
+      ).toThrow("exclusive line handoff");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("standby ends owned calls and polls cleanup without ingesting messages or dispatching new calls", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clawdtime-runtime-"));
     try {
@@ -55,6 +119,9 @@ describe("runtime standby and mode boundaries", () => {
           handoff: {
             owner: "clawdtime",
             sourceOwnerPaused: true,
+            phone: "+15550000002",
+            identityEvidence: "private-fixture-identity",
+            sourcePauseEvidence: "private-fixture-pause",
             lineId: "line",
             providerLineId: "provider",
             instanceId: "instance",

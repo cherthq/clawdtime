@@ -1,8 +1,10 @@
 # Controlled test-line handoff
 
-**Current gate: not handed off.** No ClawdTime live poller, deployment or routing
-change has been activated. Apple Teams remains the existing owner. Do not equate
-a display name with the requested Liam Davis identity.
+**ClawdTime owns the confirmed test line.** The user confirmed the existing test
+line is Liam Davis. The lead paused Apple Teams traffic using its existing image,
+verified a stable retained cursor and an idle interval exceeding 10 seconds, and
+started ClawdTime from that exact non-replaying boundary. Source remains paused.
+Base live preflight passes; pairing and physical acceptance remain in progress.
 
 ## Evidence from this implementation session
 
@@ -83,6 +85,6 @@ Keep one backend process. Do not copy its database, messages or receipt ledgers.
 4. Verify source heartbeat/native identity read-only. Do not send unsolicited
    messages or place extra calls merely to prove health.
 
-No automatic production routing mutation script is provided: the source deployment
-and exact requested line identity remain unverified. Runtime handoff guards and
-cursor tests exercise the local contract; **live handoff and rollback are untested**.
+Only the lead operates routing. Production identity is now verified through native,
+logical and inventory evidence plus explicit user alias confirmation. Runtime guards
+and cursor tests do not substitute for the recorded physical handoff/rollback.

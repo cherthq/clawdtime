@@ -33,7 +33,7 @@ extension DeviceApp {
       }
       _ = text("Share this Mac on your terms.", bold: true)
       _ = text(
-        "Grant viewing and control separately. Nothing shares or clicks until you enable this Mac locally and send an authorized request in iMessage."
+        "Grant viewing and control separately. Nothing shares or clicks until you enable this Mac locally and your paired agent requests attention."
       )
       setupStateLabel = text("")
       func permissionRow(_ title: String, action: Selector) -> NSTextField {

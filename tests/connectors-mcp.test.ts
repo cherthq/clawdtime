@@ -37,6 +37,8 @@ it("MCP restart retains one call/answer; a different local session cannot consum
       allowControl: true,
     });
   let heartbeatCount = 0;
+  let liveWithoutEvidence = false,
+    attentionHttpCount = 0;
   const token = (c: any) => c.req.header("authorization").slice(7);
   app.onError((e, c) => c.json({ error: e.message }, 409));
   app.post("/api/sessions", async (c) =>
@@ -46,11 +48,19 @@ it("MCP restart retains one call/answer; a different local session cannot consum
     heartbeatCount++;
     return c.json({ session: service.heartbeat(token(c)) });
   });
-  app.get("/api/doctor", (c) => c.json(service.doctor(token(c))));
+  app.get("/api/doctor", (c) => {
+    const value = service.doctor(token(c));
+    return c.json(
+      liveWithoutEvidence
+        ? { ...value, mode: "live", readiness: undefined }
+        : value,
+    );
+  });
   app.post("/api/sessions/yield", (c) =>
     c.json({ session: service.yieldSession(token(c)) }),
   );
   app.post("/api/attention", async (c) => {
+    attentionHttpCount++;
     const request = service.requestAttention(token(c), await c.req.json());
     await service.drain();
     return c.json({ request });
@@ -139,6 +149,12 @@ it("MCP restart retains one call/answer; a different local session cannot consum
     const created = await call(first, "request_attention", input);
     expect(created.error).toBeFalsy();
     const requestId = created.value.request.id;
+    liveWithoutEvidence = true;
+    const blocked = await call(first, "request_attention", input);
+    expect(blocked.error).toBe(true);
+    expect(blocked.value.error).toContain("Live attention is blocked");
+    expect(attentionHttpCount).toBe(1);
+    liveWithoutEvidence = false;
     service.receiveResponse({
       eventId: "reply",
       requestId,

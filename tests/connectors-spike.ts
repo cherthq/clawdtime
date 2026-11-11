@@ -140,8 +140,7 @@ const mcpArgs = [
   "--connection",
   connection,
 ];
-const prompt =
-  'This is a synthetic ClawdTime compatibility test. Use ONLY ClawdTime MCP tools. There are no background actors. Call connection_status, yield_control(backgroundActorsStopped=true), request_attention(taskId="probe", idempotencyKey="probe-v1", reason="decision", question="Blue or green?"), attention_result, acknowledge_response, resume_agent with current epoch from result, then complete_attention with text "Used blue after synthetic feedback; compatibility probe complete." Return CLAWDTIME_PROBE_OK only after all steps succeed. Do not call a phone, use shell, inspect files, or use any other tools. This backend is simulation only.';
+const prompt = `This is a synthetic ClawdTime compatibility test. The expected localRunId is ${runId}. Call connection_status and stop if its localRunId differs. The expected adapter is ${adapter}. Use ONLY ClawdTime MCP tools. There are no background actors. Call connection_status, yield_control(backgroundActorsStopped=true), request_attention(taskId="probe", idempotencyKey="probe-v1", reason="decision", question="Blue or green?"), attention_result, acknowledge_response, resume_agent with current epoch from result, then complete_attention with text "Used blue after synthetic feedback; compatibility probe complete." Return CLAWDTIME_PROBE_OK only after all steps succeed. Do not call a phone, use shell, inspect files, or use any other tools. This backend is simulation only.`;
 let args: string[];
 if (adapter === "codex")
   args = [
@@ -160,6 +159,8 @@ if (adapter === "codex")
     `mcp_servers.clawdtime.args=${JSON.stringify(mcpArgs)}`,
     "-c",
     "mcp_servers.clawdtime.tool_timeout_sec=40",
+    "-c",
+    'mcp_servers.clawdtime.env_vars=["CLAWDTIME_RUN_ID"]',
     "-c",
     'mcp_servers.clawdtime.default_tools_approval_mode="approve"',
     prompt,
@@ -206,7 +207,11 @@ const exit = await new Promise<number | null>((r) => {
   child.on("error", () => r(127));
 });
 clearTimeout(timer);
+const exactRunIdentity =
+  store.all("session").length === 1 &&
+  store.all("session")[0]?.externalSessionId === runId;
 const completed =
+  exactRunIdentity &&
   events.includes("complete") &&
   events.includes("resume") &&
   events.includes("ack") &&
@@ -221,6 +226,7 @@ console.log(
       simulatedCalls: transport.calls.length,
       simulatedMessages: transport.messages.length,
       completed,
+      exactRunIdentity,
       marker: stdout.includes("CLAWDTIME_PROBE_OK"),
       failure: completed
         ? undefined

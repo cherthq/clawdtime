@@ -37,21 +37,35 @@ interface Notice {
   sealed: string;
   state: "pending" | "running" | "done" | "unknown";
 }
+function parseProtectedJSON<T>(value: string): T {
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("Configuration must be an object.");
+    return parsed as T;
+  } catch {
+    throw new Error(
+      "Protected configuration must be a valid JSON object; its contents were withheld.",
+    );
+  }
+}
 function privateJSON<T>(path: string): T {
   const st = statSync(path);
   if (!st.isFile() || (st.mode & 0o077) !== 0 || st.uid !== process.getuid?.())
     throw new Error("Live configuration must be an owner-only regular file.");
-  return JSON.parse(readFileSync(path, "utf8")) as T;
+  return parseProtectedJSON<T>(readFileSync(path, "utf8"));
 }
 export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   const mode = env.CLAWDTIME_MODE ?? "simulation";
   if (!["simulation", "standby", "live"].includes(mode))
     throw new Error("Unknown CLAWDTIME_MODE.");
   const live = mode === "live";
-  if (
-    live &&
-    (env.CLAWDTIME_LIVE_TRAFFIC !== "true" || !env.CLAWDTIME_LIVE_CONFIG)
-  )
+  if (env.CLAWDTIME_LIVE_CONFIG && env.CLAWDTIME_LIVE_CONFIG_JSON)
+    throw new Error("Choose one protected live configuration source.");
+  const hasConfig = !!(
+    env.CLAWDTIME_LIVE_CONFIG || env.CLAWDTIME_LIVE_CONFIG_JSON
+  );
+  if (live && (env.CLAWDTIME_LIVE_TRAFFIC !== "true" || !hasConfig))
     throw new Error(
       "Live mode requires an explicit handoff configuration and live traffic gate.",
     );
@@ -75,8 +89,10 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     throw new Error("Independent operator and media credentials required.");
   const store = new Store(env.CLAWDTIME_DATABASE ?? ".data/clawdtime.sqlite");
   const config =
-    mode !== "simulation" && env.CLAWDTIME_LIVE_CONFIG
-      ? privateJSON<LiveConfig>(env.CLAWDTIME_LIVE_CONFIG)
+    mode !== "simulation" && hasConfig
+      ? env.CLAWDTIME_LIVE_CONFIG
+        ? privateJSON<LiveConfig>(env.CLAWDTIME_LIVE_CONFIG)
+        : parseProtectedJSON<LiveConfig>(env.CLAWDTIME_LIVE_CONFIG_JSON!)
       : undefined;
   if (
     !config &&
@@ -104,6 +120,12 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   const transport = config
     ? new NativeTransport(store, config)
     : new SimulationTransport();
+  store.saveState("runtime:mode", mode);
+  if (transport instanceof NativeTransport)
+    store.saveState(
+      "native-binding-fingerprint",
+      transport.bindingFingerprint(),
+    );
   const service = new ClawdTime(store, transport);
   const device = config
     ? new MediaDevicePort(config.mediaOrigin, config.mediaKey)
@@ -130,8 +152,11 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   for (const n of store.all<Inbound>("inbound"))
     if (n.state === "running") store.put("inbound", { ...n, state: "unknown" });
   let ticking = false;
+  let stopping = false;
+  let finishTick: (() => void) | undefined;
+  let checkedReadinessAt = 0;
   async function tick() {
-    if (ticking) return;
+    if (ticking || stopping) return;
     ticking = true;
     try {
       service.expireSessions();
@@ -141,6 +166,38 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
             config.handoff.baseline.sequence,
             config.handoff.baseline.eventId,
           );
+        if (Date.now() - checkedReadinessAt >= 10_000) {
+          await transport.preflight();
+          for (const pairing of store.all<Pairing>("pairing"))
+            if (pairing.revokedAt === undefined)
+              await transport.preflightDevice(pairing);
+          checkedReadinessAt = Date.now();
+        }
+        const report = store.state<{
+          checks: { id: string; status: string }[];
+        }>("native-preflight");
+        const ownershipChecks = [
+          "live_gate",
+          "native_configuration",
+          "service_configuration",
+          "line_handoff",
+          "handoff_boundary",
+          "native_identity",
+          "native_cursor",
+          "logical_identity",
+          "line_occupancy",
+        ];
+        if (
+          !report ||
+          ownershipChecks.some(
+            (id) =>
+              !report.checks.some((c) => c.id === id && c.status === "pass"),
+          )
+        )
+          throw new Error(
+            "Inbound polling requires verified exclusive ownership and an exact retained boundary.",
+          );
+        if (stopping) return;
         // Commit encrypted inbound and cursor atomically. Async effects run afterward.
         await transport.messages.poll((event) => {
           if (!config.testers.some((t) => t.recipient === event.sender)) return;
@@ -151,9 +208,11 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
               state: "pending",
             });
         });
+        if (stopping) return;
         for (const item of store
           .all<Inbound>("inbound")
           .filter((i) => i.state === "pending")) {
+          if (stopping) break;
           const event = vault.open<NativeMessage>(item.sealed),
             tester = config.testers.find((t) => t.recipient === event.sender)!;
           store.put("inbound", { ...item, state: "running" });
@@ -251,6 +310,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
           }
         }
       }
+      if (stopping) return;
       if (mode === "standby") {
         for (const r of store.all<AttentionRequest>("attention"))
           if (
@@ -266,11 +326,12 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
             ].includes(r.state)
           )
             service.failCall(r.id);
-        await service.drain({ cleanupOnly: true });
-      } else await service.drain();
+        await service.drain({ cleanupOnly: true, shouldStop: () => stopping });
+      } else await service.drain({ shouldStop: () => stopping });
       if (transport instanceof NativeTransport)
-        await transport.pollCalls((id, state, qualified) =>
-          service.observeCall(id, state, qualified),
+        await transport.pollCalls(
+          (id, state, qualified) => service.observeCall(id, state, qualified),
+          { cleanupOnly: mode === "standby" || stopping },
         );
       await viewing.tick();
       store.saveState("heartbeat", { ok: true, at: Date.now() });
@@ -283,8 +344,9 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       }
       if (transport instanceof NativeTransport)
         try {
-          await transport.pollCalls((id, state, qualified) =>
-            service.observeCall(id, state, qualified),
+          await transport.pollCalls(
+            (id, state, qualified) => service.observeCall(id, state, qualified),
+            { cleanupOnly: true },
           );
         } catch {
           /* retain native reservation */
@@ -302,7 +364,15 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       });
     } finally {
       ticking = false;
+      finishTick?.();
     }
   }
-  return { app, store, service, control, human, transport, tick };
+  async function stop() {
+    stopping = true;
+    if (ticking)
+      await new Promise<void>((resolve) => {
+        finishTick = resolve;
+      });
+  }
+  return { app, store, service, control, human, transport, tick, stop };
 }

@@ -18,8 +18,9 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/skills ./skills
 COPY --from=build /app/package.json ./package.json
+COPY scripts/container-entrypoint.mjs ./scripts/container-entrypoint.mjs
 RUN mkdir /data && chown node:node /data
 USER node
 ENV CLAWDTIME_MODE=standby CLAWDTIME_DATABASE=/data/clawdtime.sqlite CLAWDTIME_PORT=3310 CLAWDTIME_HOST=0.0.0.0
 EXPOSE 3310
-CMD ["node","dist/src/server.js"]
+CMD ["node","scripts/container-entrypoint.mjs"]

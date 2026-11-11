@@ -91,3 +91,21 @@ class AttentionMediaTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class DeviceReadinessBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_media_requires_own_key_and_forwards_only_exact_readiness_path(self):
+        from unittest.mock import patch
+        from server import Service
+        with tempfile.TemporaryDirectory() as folder:
+            owner=Service({'MEDIA_DATABASE_PATH':str(Path(folder)/'media.sqlite'),'MEDIA_API_KEY':'m'*32,'DEVICE_GATEWAY_KEY':'g'*32})
+            client=TestClient(TestServer(owner.app()));await client.start_server()
+            try:
+                path='/devices/device_fixture/readiness/member_fixture/1'
+                self.assertEqual((await client.get(path,headers={'Authorization':'Bearer '+'g'*32})).status,401)
+                body={'deviceId':'device_fixture','memberId':'member_fixture','displayId':'1','viewAllowed':False,'controlAllowed':False}
+                import json
+                with patch('server.gateway_request',AsyncMock(return_value=(200,json.dumps(body).encode(),{}))) as request:
+                    response=await client.get(path,headers={'Authorization':'Bearer '+'m'*32})
+                    self.assertEqual(await response.json(),body)
+                    request.assert_awaited_once_with(owner,'GET','/v1/devices/device_fixture/readiness/member_fixture/1')
+            finally:await client.close()

@@ -137,4 +137,37 @@ describe("media device port", () => {
     );
     await expect(port.release(lease())).rejects.toThrow("not confirmed");
   });
+  it("readiness reads exact device/member/display metadata without a lease", async () => {
+    const paths: string[] = [];
+    let memberId = "member_a";
+    const port = new MediaDevicePort(
+      "http://127.0.0.1:4212",
+      "k".repeat(32),
+      (async (url, init) => {
+        paths.push(String(url));
+        expect(init?.method).toBe("GET");
+        expect(init?.body).toBeUndefined();
+        return json({
+          deviceId: "device_a",
+          memberId,
+          displayId: "123",
+          viewAllowed: false,
+          controlAllowed: false,
+        });
+      }) as typeof fetch,
+    );
+    expect(
+      (await port.readiness("device_a", "member_a", "123")).viewAllowed,
+    ).toBe(false);
+    expect(paths).toEqual([
+      "http://127.0.0.1:4212/devices/device_a/readiness/member_a/123",
+    ]);
+    memberId = "other";
+    await expect(port.readiness("device_a", "member_a", "123")).rejects.toThrow(
+      "member/display",
+    );
+    await expect(
+      port.readiness("device_a", "member_a", "../123"),
+    ).rejects.toThrow("binding");
+  });
 });

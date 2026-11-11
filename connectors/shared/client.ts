@@ -58,7 +58,11 @@ export class ClawdTimeClient {
       // Do not echo arbitrary provider response bodies or bearer credentials to an agent.
       throw new ApiError(
         response.status,
-        `ClawdTime request rejected (${response.status}); inspect doctor or the exact request status before retrying effects.`,
+        response.status === 401
+          ? "ClawdTime credential is invalid or revoked (401). Obtain a fresh authorized pairing; preserve pending request IDs and never redial to recover them."
+          : response.status === 403
+            ? "ClawdTime session or pairing is stopped or unauthorized (403). Inspect scoped status and reconcile pending work before reconnecting; native permissions are unchanged."
+            : `ClawdTime request rejected (${response.status}); inspect doctor or the exact request status before retrying effects.`,
       );
     }
     return response.json() as Promise<T>;

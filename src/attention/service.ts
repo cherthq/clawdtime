@@ -1,3 +1,10 @@
+import {
+  PreflightBlocked,
+  freshEvidence,
+  type TransportReadiness,
+  type DeviceReadiness,
+  type ReadinessCheck,
+} from "../transport/readiness.js";
 import { z } from "zod";
 import type {
   AgentSession,
@@ -709,7 +716,9 @@ export class ClawdTime {
         createdAt: this.clock(),
       });
   }
-  async drain(options: { cleanupOnly?: boolean } = {}) {
+  async drain(
+    options: { cleanupOnly?: boolean; shouldStop?: () => boolean } = {},
+  ) {
     if (this.draining) return;
     this.draining = true;
     try {
@@ -717,6 +726,7 @@ export class ClawdTime {
       for (const effect of this.store
         .effects("pending")
         .filter((e) => !options.cleanupOnly || e.kind === "end_call")) {
+        if (options.shouldStop?.()) break;
         const request = this.store.get<AttentionRequest>(
             "attention",
             String(effect.payload.requestId),
@@ -807,7 +817,18 @@ export class ClawdTime {
                 this.endOwnedCall(current);
             }
           });
-        } catch {
+        } catch (error) {
+          if (error instanceof PreflightBlocked) {
+            this.store.putEffect({
+              ...effect,
+              state: "pending",
+              result: {
+                reason:
+                  "Read-only readiness blocked dispatch; no external effect attempted.",
+              },
+            });
+            continue;
+          }
           this.store.putEffect({
             ...effect,
             state: "unknown",
@@ -837,16 +858,107 @@ export class ClawdTime {
     const c = this.credential(raw),
       session =
         c.kind === "session" ? this.authenticateSession(raw) : undefined;
-    const pairing = this.pairing(session?.pairingId ?? c.subjectId);
+    const pairing = this.pairing(session?.pairingId ?? c.subjectId),
+      now = this.clock();
+    const unknownEffects = this.store
+      .effects("unknown")
+      .filter((e) => e.payload.pairingId === pairing.id).length;
+    const checks: ReadinessCheck[] = [];
+    const mode =
+      this.store.state<string>("runtime:mode") ?? this.transport.mode;
+    if (mode === "live") {
+      const transport =
+        this.store.state<TransportReadiness>("native-preflight");
+      if (
+        transport &&
+        transport.bindingFingerprint ===
+          this.store.state<string>("native-binding-fingerprint") &&
+        freshEvidence(transport.checkedAt, now)
+      )
+        checks.push(...transport.checks);
+      else
+        checks.push({
+          id: "transport_evidence",
+          status: "unknown",
+          message:
+            "Fresh read-only transport preflight evidence is unavailable.",
+          nextAction:
+            "Run live preflight with the protected configuration; no call is needed.",
+        });
+      const device = this.store.state<DeviceReadiness>(
+        `device-readiness:${pairing.id}`,
+      );
+      if (
+        device &&
+        device.deviceId === pairing.deviceId &&
+        device.memberId === pairing.memberId &&
+        device.displayId === pairing.displayId &&
+        device.bindingFingerprint ===
+          this.store.state<string>("native-binding-fingerprint") &&
+        freshEvidence(device.checkedAt, now)
+      )
+        checks.push(...device.checks);
+      else
+        checks.push({
+          id: "paired_device",
+          status: "unknown",
+          message:
+            "Fresh evidence for this member's exact Mac/display is unavailable.",
+          nextAction:
+            "Run scoped helper readiness; grant permissions and enable locally if required.",
+        });
+    } else
+      checks.push({
+        id: "runtime_mode",
+        status: "fail",
+        message:
+          mode === "simulation"
+            ? "Simulation is available; no live line or handset delivery is verified."
+            : "Standby permits owned cleanup and read-only checks, not new live work.",
+        nextAction:
+          "Complete the controlled handoff and explicit live gates before live acceptance.",
+      });
+    checks.push({
+      id: "pairing_permission",
+      status: pairing.allowView ? "pass" : "fail",
+      message: "This pairing must explicitly authorize screen viewing.",
+    });
+    checks.push({
+      id: "unknown_effects",
+      status: unknownEffects === 0 ? "pass" : "fail",
+      message:
+        unknownEffects === 0
+          ? "No uncertain effects are retained for this pairing."
+          : "Uncertain effects require reconciliation before live readiness.",
+      ...(unknownEffects
+        ? {
+            nextAction:
+              "Inspect existing provider/action IDs; never retry with a new key.",
+          }
+        : {}),
+    });
+    checks.push({
+      id: "session_heartbeat",
+      status: !session
+        ? "not_applicable"
+        : now - (session.lastSeenAt ?? session.createdAt) < 20000
+          ? "pass"
+          : "fail",
+      message: session
+        ? "The exact connector session must maintain an explicit heartbeat."
+        : "Connect an agent session after pairing readiness is established.",
+    });
+    const liveReady =
+      mode === "live" &&
+      checks.every((c) => c.status === "pass" || c.status === "not_applicable");
     return {
-      mode: this.transport.mode,
+      mode,
       pairing,
       ...(session ? { session } : {}),
-      ready: pairing.allowView,
-      unknownEffects: this.store
-        .effects("unknown")
-        .filter((e) => e.payload.pairingId === pairing.id).length,
+      ready: mode === "simulation" ? pairing.allowView : liveReady,
+      unknownEffects,
       physicalAcceptance: false,
+      readiness: { checkedAt: now, mode, liveReady, checks },
     };
   }
 }

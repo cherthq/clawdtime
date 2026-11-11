@@ -21,7 +21,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_health_and_authenticated_standby(self):
         r=await self.client.get('/health')
-        self.assertEqual(await r.json(),{'ok':True,'configured':False,'activeSessions':0,'deviceGatewayConnected':False,'devicesConfigured':False})
+        self.assertEqual(await r.json(),{'ok':True,'service':'clawdtime-media','configured':False,'activeSessions':0,'deviceGatewayConnected':False,'devicesConfigured':False})
         r=await self.client.post('/sessions',json={})
         self.assertEqual(r.status,401)
         r=await self.client.post('/sessions',json={},headers={'Authorization':'Bearer '+'m'*32})

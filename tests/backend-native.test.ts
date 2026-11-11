@@ -11,28 +11,32 @@ import type {
   CallSession,
   Pairing,
 } from "../src/contracts.js";
+const logicalLineId = "00000000-0000-4000-8000-000000000099";
 const config: NativeTransportConfig = {
   enabled: true,
   binding: {
     origin: "https://native.example.test",
-    token: "fixture-token",
-    signingSecret: "fixture-signature",
-    lineId: "line",
+    token: "fixture-native-token-long-enough",
+    signingSecret: "fixture-native-signature-long-enough",
+    lineId: logicalLineId,
     providerLineId: "provider",
     phone: "+15550000002",
     instanceId: "instance",
   },
   callsOrigin: "https://calls.example.test",
   projectId: "fixture-project",
-  projectKey: "fixture-key",
+  projectKey: "fixture-project-key-long-enough",
   mediaOrigin: "https://media.example.test",
-  mediaKey: "fixture-media-key",
+  mediaKey: "fixture-independent-media-key-long-enough",
   encryptionKey: "1".repeat(64),
   testerAllowlist: ["+15550000001"],
   handoff: {
     owner: "clawdtime",
     sourceOwnerPaused: true,
-    lineId: "line",
+    phone: "+15550000002",
+    identityEvidence: "private-fixture-identity",
+    sourcePauseEvidence: "private-fixture-pause",
+    lineId: logicalLineId,
     providerLineId: "provider",
     instanceId: "instance",
     baseline: { sequence: 1, eventId: "recv:baseline" },
@@ -61,6 +65,73 @@ function fixture() {
           instance_id: "instance",
         },
       };
+    else if (path === "/api/v1/lines")
+      result = {
+        data: {
+          items: [
+            {
+              id: logicalLineId,
+              phone_number: null,
+              status: "available",
+              current_call_id: null,
+              worker_occupied: false,
+              session_health: {
+                line_id: logicalLineId,
+                identity_confirmed: true,
+                status: "accepting",
+                last_heartbeat_at: new Date().toISOString(),
+                readiness: {
+                  control_ready: true,
+                  facetime_signed_in: true,
+                  accessibility_ready: true,
+                  screen_capture_ready: true,
+                  audio_ready: false,
+                  video_ready: true,
+                  production_media_ready: true,
+                  automatic: {
+                    checks: [
+                      { id: "system_audio_capture", outcome: "at_call_start" },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+          total: 1,
+          limit: 100,
+          offset: 0,
+        },
+      };
+    else if (path === "/api/v1/events/1")
+      result = {
+        sequence: 1,
+        event_id: "recv:baseline",
+        type: "baseline",
+        phone_line_id: "provider",
+        payload: { phone_line_id: "provider" },
+      };
+    else if (path === "/health")
+      result = {
+        service: "clawdtime-media",
+        ok: true,
+        configured: true,
+        devicesConfigured: true,
+        deviceGatewayConnected: true,
+        activeSessions: 0,
+      };
+    else if (path.includes("/readiness/"))
+      result = {
+        deviceId: "mac",
+        memberId: "member",
+        displayId: "1",
+        available: true,
+        displayAttached: true,
+        screenPermission: true,
+        viewAllowed: true,
+        armed: true,
+        controlPermission: true,
+        controlAllowed: true,
+      };
     else if (path === "/sessions")
       result = {
         id: body.id,
@@ -68,12 +139,12 @@ function fixture() {
         videoPublisherReady: true,
         credentials: {
           livekit_url: "wss://fixture.example.test",
-          participant_token: "fixture-token".repeat(8),
+          participant_token: "fixture-native-token-long-enough".repeat(8),
           remote_participant_identity: `worker-${body.id}`,
         },
       };
     else if (path === "/api/v1/calls")
-      result = { data: { id: nativeCallId, line_id: "line" } };
+      result = { data: { id: nativeCallId, line_id: logicalLineId } };
     else if (path.endsWith("/events"))
       result = {
         data: {
@@ -107,14 +178,14 @@ function fixture() {
       result = { id: path.split("/")[2], alive: true };
     return new Response(JSON.stringify(result));
   };
-  store.saveState("messages:line", config.handoff.baseline);
+  store.saveState(`messages:${logicalLineId}`, config.handoff.baseline);
   const transport = new NativeTransport(store, config, request as typeof fetch),
     app = new ClawdTime(store, transport);
   const invite = app.createPairingInvite({
     memberId: "member",
     recipient: "+15550000001",
     conversationId: "iMessage;-;+15550000001",
-    lineId: "line",
+    lineId: logicalLineId,
     deviceId: "mac",
     displayId: "1",
   });
@@ -179,7 +250,7 @@ describe("native protocol integration without live traffic", () => {
     const call = f.requests.find(
       (r) => new URL(r.url).pathname === "/api/v1/calls",
     )!;
-    expect(call.body.line_id).toBe("line");
+    expect(call.body.line_id).toBe(logicalLineId);
     expect(call.body.mode).toBe("customer_managed");
     expect(call.body.livekit_url).toBe("wss://fixture.example.test");
     expect(call.body.media.video).toBe(true);
@@ -317,6 +388,43 @@ describe("native protocol integration without live traffic", () => {
     expect(
       f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
     ).toBe("ringing");
+  });
+  it("standby recovery of a committed allocation only recovers identifiers for cleanup, never activation or speech", async () => {
+    const f = fixture();
+    await f.app.drain();
+    const localId = mediaSessionId(f.attention.id),
+      effect = f.store.effects()[0]!;
+    f.store.putEffect({ ...effect, state: "unknown" });
+    f.store.put("attention", { ...f.attention, state: "unknown" });
+    const call = f.store.get<CallSession>("call", localId)!;
+    f.store.put("call", {
+      ...call,
+      providerCallId: undefined,
+      state: "prepared",
+    });
+    f.events(["bridge_ready"]);
+    await f.transport.pollCalls(
+      (id, state, qualified) => f.app.observeCall(id, state, qualified),
+      { cleanupOnly: true },
+    );
+    expect(
+      f.requests.some(
+        (r) => r.url.endsWith("/activate") || r.url.endsWith("/speak"),
+      ),
+    ).toBe(false);
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("expired");
+    expect(f.store.get<CallSession>("call", localId)?.providerCallId).toBe(
+      nativeCallId,
+    );
+    expect(
+      f.store.effects("pending").filter((e) => e.kind === "end_call"),
+    ).toHaveLength(1);
+    await f.app.drain({ cleanupOnly: true });
+    expect(
+      f.requests.filter((r) => r.url.endsWith(`/calls/${nativeCallId}/end`)),
+    ).toHaveLength(1);
   });
   it("does not activate media after attention is canceled and cleanup-only drain sends no new call", async () => {
     const f = fixture();

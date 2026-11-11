@@ -71,3 +71,42 @@ Run the media suite separately. Fake helper tests do not capture a Mac screen or
 send an input event. Physical acceptance requires an enrolled authorized Mac,
 local permissions/indicator/Stop, a consenting FaceTime recipient, and explicit
 verification of view, switching, stop, then control.
+
+## Protected local startup and readiness
+
+The ClawdTime setup generator now emits private `gateway.json`. Prefer
+`media/.venv/bin/python gateway/start.py --config /absolute/private/setup/gateway.json`
+for the local relay. `--check-config` validates without creating a ledger or making
+a network request. The wrapper locks `gateway-process.lock` before opening SQLite
+and refuses duplicate wrappers; do not start a direct `relay.py` process alongside
+it. `mac/scripts/prepare_launchagent.py` creates only `com.clawdtime.gateway` with
+paths, no embedded credentials, and prints lead-owned launch/stop commands.
+
+Authenticated `GET /v1/devices/:device/readiness/:member/:display` reads the fixed
+helper's `/v1/status`, `/v1/displays`, `/v1/permissions` only, verifies exact device
+identity and returns scoped ACL booleans/permission flags. No arbitrary helper
+origin, permission mutation or frame API is permitted by this route. The outbound
+relay permits GET only for these bounded readiness paths.
+
+### TLS and reconnect diagnosis
+
+The outbound WSS client uses `ssl.create_default_context(cafile=certifi.where())`
+with pinned `certifi==2026.10.23` and aiohttp's verified `TCPConnector`. This handles
+framework Python installations whose default CA file is absent. Hostname checking
+and `CERT_REQUIRED` remain enabled. This follows the
+[aiohttp SSL configuration guidance](https://docs.aiohttp.org/en/stable/client_advanced.html#ssl-control-for-tcp-sockets)
+and [Certifi's CA bundle API](https://pypi.org/project/certifi/).
+
+Install the independent gateway environment with `python -m pip install -r
+gateway/requirements.txt`. For combined media/gateway tests, install both component
+requirements into the test environment. Do not edit global Python trust settings,
+reuse another application's virtualenv, or turn TLS verification off.
+
+A failed reconnect emits at most one warning every 30 seconds:
+`gateway_reconnect_failed exception=TYPE http_status=STATUS suppressed=COUNT`.
+Only a validated class name, numeric HTTP status (or `none`) and count are logged.
+URLs, credentials, response bodies, exception messages and tracebacks are excluded.
+HTTP 401 indicates authentication rejection; 409 indicates an existing gateway
+socket; TLS exception classes indicate trust/hostname verification failure.
+A healthy gateway is confirmed through the independent media health/readiness
+endpoints. No input request, lease or action is replayed during reconnect.

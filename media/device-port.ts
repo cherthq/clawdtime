@@ -73,6 +73,37 @@ export class MediaDevicePort implements DevicePort {
       throw new Error("Malformed media response.");
     return result as Wire;
   }
+  /** Registered-helper metadata only: this does not grant, arm or capture. */
+  async readiness(
+    deviceId: string,
+    memberId?: string,
+    displayId?: string,
+  ): Promise<Record<string, unknown>> {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(deviceId))
+      throw new Error("Invalid device identifier.");
+    let suffix = "";
+    if (memberId !== undefined || displayId !== undefined) {
+      if (
+        !memberId ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(memberId) ||
+        !displayId ||
+        !/^[0-9]{1,10}$/.test(displayId) ||
+        Number(displayId) < 1 ||
+        Number(displayId) > 0xffffffff
+      )
+        throw new Error("Invalid readiness member/display binding.");
+      suffix = `/${memberId}/${displayId}`;
+    }
+    const result = await this.api(`/devices/${deviceId}/readiness${suffix}`);
+    if (
+      suffix &&
+      (result.memberId !== memberId || result.displayId !== displayId)
+    )
+      throw new Error("Readiness member/display identity mismatch.");
+    if (result.deviceId !== deviceId)
+      throw new Error("Readiness device identity mismatch.");
+    return result;
+  }
   async createLease(lease: ControlLease): Promise<void> {
     const result = await this.api(this.path(lease, "/lease"), {
       leaseId: lease.id,

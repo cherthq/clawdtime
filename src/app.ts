@@ -78,7 +78,11 @@ export function createApp(
   app.get("/health", (c) =>
     c.json({
       ok: true,
-      mode: options.simulation ? "simulation" : "standby-or-live",
+      mode: options.simulation
+        ? "simulation"
+        : options.dispatchEnabled === false
+          ? "standby"
+          : "live",
       physicalAcceptance: false,
     }),
   );

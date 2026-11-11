@@ -27,6 +27,9 @@ import {
 } from "../connectors/shared/state.js";
 import { startMcp } from "../connectors/shared/mcp.js";
 import { installConfiguration, uninstallConfiguration } from "./install.js";
+import { inspectInstallation } from "./doctor.js";
+import { acceptancePlan } from "./live-plan.js";
+import { summarizeReadiness } from "../connectors/shared/readiness.js";
 
 function options(args: string[]) {
   const values: Record<string, string> = {};
@@ -42,7 +45,7 @@ export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
   if (command === "help" || command === "--help") {
     console.log(
-      "ClawdTime internal build (no npm publication implied)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH]\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",
+      "ClawdTime internal build (no npm publication implied)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",
     );
     return;
   }
@@ -131,7 +134,7 @@ export async function main(args = process.argv.slice(2)) {
           adapter,
           project,
           version: connection.adapterVersion,
-          readiness,
+          readiness: summarizeReadiness(readiness),
           reload:
             "Restart/reload this project in the client and approve the project MCP server under existing policy. For durable reconnects use the run command.",
         },
@@ -143,22 +146,72 @@ export async function main(args = process.argv.slice(2)) {
   }
   const connection = loadConnection(connectionFile, project, adapter);
   const client = new ClawdTimeClient(connection.baseUrl, connection.token);
-  if (command === "doctor") {
+  if (command === "acceptance-plan") {
+    if (!flags["case-id"] || !flags.output)
+      throw new Error(
+        "Provide --case-id and --output; this command only prepares a plan and never calls or launches a client.",
+      );
+    const readiness = summarizeReadiness(await client.doctor());
+    const here = dirname(fileURLToPath(import.meta.url));
+    const executable = here.endsWith("/dist/cli")
+      ? resolve(here, "main.js")
+      : resolve(here, "../dist/cli/main.js");
+    const plan = acceptancePlan({
+      caseId: flags["case-id"],
+      adapter,
+      projectRoot: project,
+      executable,
+      output: flags.output,
+    });
     console.log(
       JSON.stringify(
         {
-          adapter,
-          version: connection.adapterVersion,
-          project,
-          backend: await client.doctor(),
-          configurationPresent:
-            !!connection.installed &&
-            existsSync(connection.installed.configPath),
+          prepared: true,
+          automaticEffects: false,
+          readiness,
+          planFile: resolve(flags.output),
+          promptFile: resolve(`${flags.output}.prompt.txt`),
+          launch: plan.launch,
+          next: "Lead only: resolve doctor blockers and finish the controlled line handoff. Then launch the ordinary interactive client using this command/args and paste the saved prompt. Nothing was launched or called by preparation; native approvals remain unchanged.",
         },
         null,
         2,
       ),
     );
+    return;
+  }
+  if (command === "doctor") {
+    const version = spawnSync(binary, ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    const localChecks = inspectInstallation(
+      connection,
+      version.status === 0 ? version.stdout.trim() : undefined,
+    );
+    const backend = await client.doctor();
+    const readiness = summarizeReadiness(backend, localChecks);
+    console.log(
+      JSON.stringify(
+        {
+          adapter,
+          version: version.status === 0 ? version.stdout.trim() : null,
+          project,
+          configurationPresent:
+            localChecks.find((c) => c.id === "mcp_configuration")?.status ===
+            "pass",
+          readiness,
+        },
+        null,
+        2,
+      ),
+    );
+    if (
+      !readiness.connectionReady ||
+      (readiness.mode === "live" && !readiness.liveReady) ||
+      (flags["require-live"] === "true" && !readiness.liveReady)
+    )
+      process.exitCode = 2;
     return;
   }
   if (command === "disconnect") {
