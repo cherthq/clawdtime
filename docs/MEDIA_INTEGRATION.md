@@ -103,3 +103,31 @@ An independent helper bootstrap can deliberately return false ACL booleans befor
 verified messaging pairing. Do not treat existing macOS grants or local Enable as
 an authorization substitute. Cache readiness only briefly and recheck actual call,
 lease, frame and pairing authority at dispatch.
+
+## Retained screen diagnostics
+
+Authenticated `GET /sessions/:id` includes `screenDiagnostics`, one bounded SQLite
+record per screen session, retained after close and process restart. It records
+fixed lifecycle phases, notice start/completion, first selection/lease/frame
+request times, frame counts and capture timestamps, gateway request duration/status
+and fixed error categories, and whether desktop pixels reached the LiveKit video
+source. It contains no screenshots, audio, screen text, request bodies, URLs,
+exception messages, or credentials. `videoFramesEmitted` includes startup/status
+video; only `screenVideoObserved` establishes desktop frames entered the publisher.
+Neither proves handset display. `lastGatewayFailure` survives later cleanup;
+gateway logs additionally distinguish the original helper HTTP refusal from its
+normalized relay status. No automatic retry follows a capture failure. Terminal
+release and stop notification run once in a tracked cleanup task, protected from
+capture-loop cancellation during policy refresh. Unconfirmed release still blocks
+replacement through the longest requested expiry.
+
+The privacy notice still completes before activation and policy-driven capture.
+Diagnostics do not grant capture authority. Old calls without this instrumentation
+cannot be reconstructed from cleared frame fields. A new physical diagnostic call
+requires separate approval; protocol tests are not physical acceptance.
+
+`media/.venv/bin/python -m unittest discover -s media -p 'test_screen_wire.py'`
+exercises real local HTTP and certificate-verified outbound WSS, the actual gateway
+and media routes, and actual LiveKit VideoFrame FFI. Only OS capture and room
+network publication are fixtures. Tests cover a valid frame, helper refusal,
+cold capture timeout, no automatic reacquisition, and diagnostics after close.

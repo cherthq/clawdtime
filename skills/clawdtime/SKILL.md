@@ -40,10 +40,15 @@ Send JSONL objects with `id`, `command`, and optional `args` to that same proces
 perform the authorized continuation → `complete` → `verify`. Use stable effect IDs.
 Keep using the native question tool while waiting for the human. A question-tool
 answer is not SMS approval: only backend `test.state=approved` permits start.
-While yielded, only bridge status/result/ack/resume/cancel and nonmutating human
+While yielded, only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack and nonmutating human
 questions are allowed. `result` needs the exact requestId and waitSeconds ≤20;
 `ack` needs responseId; `resume` needs current controlEpoch; `complete` needs a
 factual text. Never fabricate feedback or assert the screen was seen yourself.
+Use `diagnostics` with this exact test's requestId to inspect bounded metadata
+about call, helper, capture and media phases while paused. It is read-only, has no
+effect intent, and returns no images, audio or chat contents. Keep the bridge alive
+when investigating a missing screen. Diagnostic metadata never authorizes input;
+typing, clicking, scrolling and AI-directed actions still require human direction.
 Only backend `test.state=verified` proves its required physical evidence chain.
 For this setup test the human must actually confirm the selected screen with
 `answer: I can see my screen` by text or `ClawdTime answer I can see my screen`
@@ -54,9 +59,23 @@ Readiness, queued Messages output and simulated tests do not establish that chai
 On an unknown effect, read `status`/`result`; never change its command ID or run to
 retry. A definitive rejected command may be explicitly retried with the same ID
 after its prerequisite is corrected. Use `cancel` for an explicit cancellation.
+If the call fails or is canceled, keep this bridge alive. Send `cancel` if needed,
+then poll `result` for the original request. Confirm all leases are released and
+inputs/call/media cleanup are reconciled. Send `terminal-ack` with that requestId
+and its current controlEpoch; remain paused until the backend accepts it. This
+releases the same session for diagnosis only, with `humanApproval:false`: no human
+answer, success, new call, result message or permission approval is inferred.
+Continue diagnosis in this same chat before ending its heartbeat. A 409 rejection
+means cleanup is still incomplete; retry the same intent only after correcting
+that prerequisite. Unknown acknowledgement must be reconciled, never replayed.
+
 Closing stdin stops heartbeats and attempts one owned-test cancellation; preserve
-unknown cleanup until backend reconciliation. Never reopen a closed run to revive
-it. Full protocol and operator commands are in `docs/CONNECTORS.md`.
+unknown cleanup until backend reconciliation. Never reopen a stopped run to revive
+it. If it already stopped, the lead must establish known cleanup first. A recovery
+attempt needs explicit user authorization for another test and a new attempt ID
+recorded against the old request **in this same native chat**, never another coding
+client/chat. Do not create that attempt automatically or use it to escape an
+unknown effect. Full protocol and operator commands are in `docs/CONNECTORS.md`.
 
 ## Existing MCP sessions
 

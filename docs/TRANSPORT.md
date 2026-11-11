@@ -284,3 +284,35 @@ retirement count remain visible in preflight recovery metadata; every other
 uncertain notice, effect, call, submitted/unknown input and unknown lease remains
 blocking. This is supersession of a now-unusable pairing invitation, not evidence
 of failed delivery and not a general recovery or retry mechanism.
+
+### Agent acknowledgement after an unsuccessful request
+
+`ClawdTime.acknowledgeTerminal(sessionToken, requestId, controlEpoch)` explicitly
+releases the originating coding session after cancellation, failure, expiration,
+decline, unanswered call or disconnection. It is distinct from normal `resume`,
+which still requires an acknowledged human response. The unsuccessful request is
+unchanged; no answer, approval, completed result or Messages effect is created.
+
+Release requires the exact current epoch, confirmed ended calls and closed media,
+released screen leases, reconciled input receipts, and no competing session
+attention or uncertain call/end effect. An immutable acknowledgement records
+`humanApproval:false`; duplicate acknowledgement is idempotent while all cleanup
+conditions remain satisfied. Stopped or revoked sessions cannot be revived. This
+does not authorize retrying a setup test or placing another call; another test
+attempt requires its own explicit approval workflow.
+
+### Read-only screen diagnosis
+
+`NativeTransport.mediaStatus(requestId)` reads only the retained request's exact
+media-session ID. The HTTP layer must first authenticate ownership of that
+attention request. The result contains bounded lifecycle metadata: call/media
+state, caption availability, screen selection/frame metadata and persisted
+`screenDiagnostics`. It never returns credentials, caption text, pixels, raw
+provider errors or arbitrary nested fields. Missing or malformed provider state
+returns a fixed unavailable reason and never triggers preparation, activation,
+capture leases, redial, cleanup or other effects.
+
+Persisted diagnostic timestamps and counters distinguish notice playback, lease
+creation, first frame reception and screen-video emission after the live media
+object closes. Emission proves media processing, not rendering on the handset;
+the separate human confirmation and setup-verification gates still apply.

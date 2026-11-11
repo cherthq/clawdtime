@@ -99,7 +99,7 @@ be replaced just by choosing another run. The call request uses backend-stable I
 `result` waits at most 20 seconds of polling (each HTTP request has its own 12-second
 deadline). Check exact request/session, feedback and released control receipts;
 replace the example epoch with the actual current controlEpoch. While yielded,
-perform only bridge status/result/ack/resume/cancel and nonmutating human questions.
+perform only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack and nonmutating human questions.
 After successful `resume`, perform the authorized native continuation, then send
 `complete` once. A queued result is not handset delivery. Only `verify` returning
 `test.state=verified` establishes the backend's real call + observed screen +
@@ -110,6 +110,25 @@ The human's positive screen confirmation must be `answer: I can see my screen`
 in Messages or `ClawdTime answer I can see my screen` by qualified voice. Negative
 or unclear feedback is preserved and cannot pass verification. Report its actual
 meaning; do not substitute a positive response or claim setup succeeded.
+
+For a missing screen or failed media phase, inspect read-only bounded diagnostics
+without stopping the bridge or continuing conflicting work:
+
+```jsonl
+{
+  "id": "diagnostics-1",
+  "command": "diagnostics",
+  "args": {
+    "requestId": "RETURNED_REQUEST_ID"
+  }
+}
+```
+
+This GET is bound to the exact current setup test request. It creates no effect
+intent and changes no run/checkpoint state. The backend returns phase metadata,
+without screenshots, audio or chat content. It is permitted while yielded like
+status/result polling. Diagnostic phases are observations, never authorization to
+type, click, scroll or request an AI action; those inputs remain human-directed.
 
 Each registration and effect intent is protected before HTTP. A repeated completed
 command ID returns its stored result, without another effect. Unknown results
@@ -126,11 +145,44 @@ Never fabricate evidence or change a run to bypass an unknown result. Cancel wit
 ```
 
 Keep the bridge and chat alive while approval, call, feedback or verification is
-pending; never recommend a final response/stop as the next setup step. On explicit
-cancellation or verified completion, close stdin. EOF/SIGINT/SIGTERM stops heartbeats
+pending; never recommend a final response/stop as the next setup step. A failed or
+canceled call uses an explicit release path before diagnosis:
+
+```jsonl
+{"id":"cancel","command":"cancel"}
+{"id":"cleanup-status-1","command":"result","args":{"requestId":"ORIGINAL_REQUEST_ID","waitSeconds":0}}
+{"id":"terminal-ack","command":"terminal-ack","args":{"requestId":"ORIGINAL_REQUEST_ID","controlEpoch":0}}
+```
+
+Poll the original result until cleanup is known, replacing the example epoch with
+the current one. Check returned leases/actions; an empty response is not approval.
+`terminal-ack` requires a closed unsuccessful request, every owned call/media session
+ended, every screen lease released, no pending/unknown dispatch or input, the exact
+session and current epoch. The backend rejects unknown outcomes and stopped sessions.
+The acknowledgement leaves the unsuccessful request unchanged and returns
+`humanApproval:false`; it creates no answer, result message, new call or native
+permission. Only after it succeeds may this same chat diagnose the failure. Keep
+the heartbeat alive throughout cleanup and diagnosis instead of closing the bridge
+to regain control. A definitive rejection can be retried with the same command ID
+after its prerequisite is fixed. If the rejected epoch was wrong, use a distinct
+corrective intent ID for the newly observed epoch; an unknown acknowledgement may
+never be replaced by another intent.
+
+Once diagnosis is done and no setup work remains pending, or after verified
+completion, close stdin. EOF/SIGINT/SIGTERM stops heartbeats
 and attempts one owned-test cancellation when applicable. It never repeats an
 unknown cancellation; conservative backend expiry/cleanup remains in force. No
 daemon remains. A closed run cannot be silently reopened/revived.
+
+If the bridge already closed and the backend session stopped, preserve its receipt
+IDs and establish known cleanup with the lead. A recovery attempt is a separately
+authorized test, with a new attempt/run ID explicitly recorded against the prior
+request in **the same existing native coding chat**. Do not launch another coding
+client/chat. Setup tests remain immutable per session; there is no automatic new
+trial, retry loop, migration of an old token or revival of the stopped session.
+The user must explicitly approve another test, and the new invitation still
+requires authenticated SMS YES. Unknown call/input/cleanup forbids replacement
+attempts. No recovery-attempt automation is implemented.
 
 Validation: `npx vitest run tests/connectors-setup.test.ts` exercises same-process
 registration → invitation → synthetic authenticated approval → yield → one simulated

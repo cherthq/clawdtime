@@ -5,7 +5,7 @@ from pathlib import Path
 import ssl
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,AsyncMock
 
 from aiohttp import ClientSession, ClientConnectorCertificateError, TCPConnector, web
 from cryptography import x509
@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from relay import ReconnectLog, trusted_tls_context
+from service import Gateway
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -43,6 +44,18 @@ class DiagnosticTests(unittest.TestCase):
 
 
 class TLSVerificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_helper_failure_log_never_contains_exception_or_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            gateway=Gateway({'DEVICE_GATEWAY_DATABASE_PATH':str(Path(folder)/'gateway.sqlite')},devices={})
+            gateway._helper=AsyncMock(side_effect=TimeoutError('secret-token private-screen-text http://private-host'))
+            try:
+                with self.assertLogs(level='WARNING') as logs:
+                    with self.assertRaises(TimeoutError): await gateway.helper({'private':'body'},'GET','/secret-token/frame',frame=True)
+                self.assertIn('operation=frame error=timeout status=0',logs.output[0])
+                self.assertNotIn('secret',''.join(logs.output))
+                self.assertNotIn('private',''.join(logs.output))
+            finally: gateway.db.close()
+
     async def test_untrusted_local_certificate_is_still_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)

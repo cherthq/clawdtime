@@ -137,6 +137,53 @@ function harness(store = new Store(), device = new SimulatedDevice()) {
   };
 }
 describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
+  it("scopes read-only diagnostics and acknowledges a canceled call's confirmed cleanup without inventing approval", async () => {
+    const h = harness(),
+      a = await h.connect(),
+      r = await h.attention(a.token);
+    const other = await h.send("/api/sessions", a.pairToken, {
+      ...registration,
+      externalSessionId: "foreign-diagnostics",
+    });
+    expect(
+      (await h.send(`/api/attention/${r.id}/diagnostics`, other.body.token))
+        .status,
+    ).toBe(404);
+    const before = h.store.effects().length;
+    const diagnostic = await h.send(
+      `/api/attention/${r.id}/diagnostics`,
+      a.token,
+    );
+    expect(diagnostic.status).toBe(200);
+    expect(diagnostic.body.media.state).toBe("simulation");
+    expect(h.store.effects()).toHaveLength(before);
+    h.service.failCall(r.id);
+    h.store.put("attention", {
+      ...h.service.status(a.token, r.id),
+      state: "canceled",
+    });
+    expect(
+      (
+        await h.send(`/api/attention/${r.id}/terminal-ack`, a.token, {
+          controlEpoch: 0,
+        })
+      ).status,
+    ).toBe(409);
+    await h.service.drain();
+    const cleanup = await h.send(
+      `/api/attention/${r.id}/terminal-ack`,
+      a.token,
+      { controlEpoch: 0 },
+    );
+    expect(cleanup.status).toBe(200);
+    expect(cleanup.body.session.id).toBe(a.session.id);
+    expect(cleanup.body.session.state).toBe("active");
+    expect(cleanup.body.acknowledgement.humanApproval).toBe(false);
+    expect(cleanup.body.request.state).toBe("canceled");
+    expect(h.transport.messages).toHaveLength(0);
+    h.store.close();
+  });
+
   it("keeps the approved setup test bound to one HTTP session through screen, feedback and result without claiming physical verification", async () => {
     const h = harness(),
       a = await h.connect();

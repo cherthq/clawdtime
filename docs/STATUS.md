@@ -296,3 +296,33 @@ skill, preserved the installed companion and confirmed both actual macOS grants.
 The user executed the exact-target provider maintenance; before was
 `reply_map_thread/accepted:false`, repair and independent after inspection were
 `accepted:true`. No message was sent and provider journals were untouched.
+
+## First supervised call and capture investigation
+
+Release `848102c` deployed as backend
+`0d4075e0-160a-43b6-a0a8-35c8f12d9a83`. Canonical www HTTPS and all public setup
+routes return 200; legacy Railway origins remain accepted. GoDaddy HTTP apex
+forwarding is verified; apex HTTPS/deep-link forwarding is not qualified, so use
+www directly. The old notice was retired through its exact immutable evidence
+checks; its delivery stays unknown and no resend occurred. The new setup invitation
+has an acknowledged Chert receipt and read-only receipt lookup returned HTTP 200.
+The user's authenticated SMS YES approved exactly one test from the current Codex
+chat, with its stable run identity and a yielded coding session.
+
+The actual FaceTime call reached the intended handset. The user saw ClawdTime's
+connecting/status video and heard speech, but did not see the Mac screen. No fresh
+Mac frame was recorded by backend setup verification, and no input actions ran.
+The lead canceled the test, observed native call ended/media closed, view lease
+released and all three current effects done. No redial occurred. The native coding
+chat stayed active for diagnosis; the first bridge was closed after cleanup because
+the original protocol lacked an unsuccessful-request cleanup acknowledgement.
+
+Follow-up implements explicit terminal-ack so future failed tests can release the
+same connector session after confirmed cleanup without inventing human approval,
+completion or another call. Read-only diagnostics are scoped to the exact request.
+Media retains only bounded phases, timestamps, counts and error categories, never
+screen pixels or audio. A deterministic test exposed policy refresh canceling the
+pending screen-stop notification; tracked, shielded cleanup now delivers it once.
+This is a confirmed cleanup bug, not proof of the original capture failure.
+Real HTTP and TLS/WebSocket synthetic-frame tests pass, including refusal and cold
+capture timeout. A separately approved further diagnostic call is still required.

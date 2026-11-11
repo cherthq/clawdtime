@@ -150,7 +150,7 @@ export async function main(args = process.argv.slice(2)) {
         if (flags[flag]) helperArgs.push(`--${flag}`, flags[flag]);
       const result = spawnSync("python3", helperArgs, {
         encoding: "utf8",
-        timeout: 30_000,
+        timeout: 240_000,
         maxBuffer: 64 * 1024,
       });
       try {

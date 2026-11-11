@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -118,6 +119,18 @@ class Gateway:
         self.db.commit()
 
     async def helper(self, body, method, suffix, payload=None, frame=False):
+        started=time.monotonic()
+        try:
+            return await self._helper(body,method,suffix,payload,frame)
+        except Exception as error:
+            # Fixed categories only: never log a URL, body, token, typed input or exception message.
+            category='timeout' if isinstance(error,TimeoutError) else 'http' if isinstance(error,web.HTTPException) else 'connection' if isinstance(error,ConnectionError) else 'other'
+            logging.warning('helper_request_failed operation=%s error=%s status=%s duration_ms=%s',
+                'frame' if frame else 'lease',category,error.status if isinstance(error,web.HTTPException) else 0,
+                min(999999,max(0,round((time.monotonic()-started)*1000))))
+            raise
+
+    async def _helper(self, body, method, suffix, payload=None, frame=False):
         config = self.devices.get(body['deviceId'])
         if not config:
             raise web.HTTPForbidden()
@@ -132,6 +145,7 @@ class Gateway:
                 chunks.append(chunk)
             raw = b''.join(chunks)
             if response.status >= 300:
+                logging.warning('helper_response_refused operation=%s status=%s','frame' if frame else 'lease',response.status)
                 if response.status in (403,404,409,410,423):
                     self.stop(body['id'])
                     raise web.HTTPGone(text='Device lease stopped; request a fresh lease explicitly.')

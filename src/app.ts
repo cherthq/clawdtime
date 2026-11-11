@@ -28,6 +28,7 @@ export interface AppOptions {
     pairingId: string;
     evidenceReference: string;
   }) => unknown;
+  callDiagnostics?: (requestId: string) => Promise<unknown>;
 }
 const bearer = (value?: string) =>
   value?.startsWith("Bearer ") ? value.slice(7) : "";
@@ -209,6 +210,22 @@ export function createApp(
         .filter((a) => leases.some((l) => l.id === a.leaseId)),
     });
   });
+  app.get("/api/attention/:id/diagnostics", async (c) => {
+    const request = service.status(
+      bearer(c.req.header("authorization")),
+      c.req.param("id"),
+    );
+    return c.json({
+      requestId: request.id,
+      call: request.callId
+        ? service.store.get<CallSession>("call", request.callId)
+        : null,
+      capturedFrame: service.store.state(`setup-view:${request.id}`) ?? null,
+      media: options.callDiagnostics
+        ? await options.callDiagnostics(request.id)
+        : { state: "simulation", physicalAcceptance: false },
+    });
+  });
   app.post("/api/attention/:id/ack", async (c) =>
     c.json({
       response: service.ack(
@@ -227,6 +244,19 @@ export function createApp(
       ),
     ),
   );
+  app.post("/api/attention/:id/terminal-ack", async (c) => {
+    const { controlEpoch } = z
+      .object({ controlEpoch: z.number().int().nonnegative() })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      service.acknowledgeTerminal(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        controlEpoch,
+      ),
+    );
+  });
   app.post("/api/attention/:id/complete", async (c) =>
     c.json({
       request: service.complete(

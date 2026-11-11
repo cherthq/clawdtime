@@ -76,6 +76,11 @@ run identity/checkpoint and disclose that limit; never promise an immortal sessi
    Synthetic tests never qualify as physical acceptance. If live testing is
    blocked, keep the setup question/workflow pending, explain the exact blocker,
    and continue independent work. Cancellation ends the test and releases access.
+   For a failed/canceled call, poll the original result until cleanup is confirmed,
+   then send terminal-ack with the current control epoch before continuing diagnosis
+   in this same session. This acknowledges cleanup, never human approval. Keep the
+   foreground bridge alive. Read-only diagnostics are allowed while yielded.
+   A further test needs separate explicit human approval; never redial automatically.
 
 Screen/audio remain transient. Preserve cursors, original effect IDs, unknown
 outcomes and receipts. One lead owns live integration; never run two services

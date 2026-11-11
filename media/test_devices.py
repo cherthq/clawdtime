@@ -26,6 +26,34 @@ class ScreenTests(unittest.IsolatedAsyncioTestCase):
         session=SimpleNamespace(owner=owner,id='session',call_id='call',active=True,closing=False)
         screen=ScreenController(session);screen.release=AsyncMock();return screen
 
+    async def test_terminal_notification_survives_policy_cancelling_capture(self):
+        screen=self.make()
+        selected=selection()
+        entered=asyncio.Event();finish=asyncio.Event()
+        async def release(_):
+            entered.set()
+            await finish.wait()
+            return True
+        screen.release=AsyncMock(side_effect=release)
+        screen.selection=selected;screen.created.add(selected['leaseId'])
+        old=asyncio.create_task(screen.terminal(selected,'helper_stopped'))
+        screen.task=old
+        await asyncio.wait_for(entered.wait(),1)
+        screen.update(policy(selected))
+        await asyncio.sleep(0)
+        self.assertTrue(old.cancelled())
+        self.assertIsNone(screen.frame)
+        self.assertIsNone(screen.selection)
+        finish.set()
+        await asyncio.wait_for(screen.terminal_tasks[selected['leaseId']],1)
+        await screen.terminal(selected,'helper_stopped')
+        screen.owner.backend.assert_awaited_once_with('/media/session/screen-stopped',{'leaseId':'lease-1','reason':'helper_stopped'})
+        screen.release.assert_awaited_once_with(selected)
+        self.assertIsNone(screen.task)
+        screen.update(policy(selected))
+        self.assertIsNone(screen.selection)
+        await screen.close()
+
     async def test_switch_revoke_and_stale_frame_clear_without_auto_reacquire(self):
         screen=self.make();screen.poll=AsyncMock()
         first=selection();screen.update(policy(first));screen.frame=Image.new('RGB',(100,100),'red')

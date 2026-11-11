@@ -82,6 +82,11 @@ export class ClawdTimeClient {
       `/api/attention/${encodeURIComponent(id)}`,
     );
   }
+  diagnostics(id: string) {
+    return this.api<Record<string, unknown>>(
+      `/api/attention/${encodeURIComponent(id)}/diagnostics`,
+    );
+  }
   result(id: string) {
     return this.api<{
       request: AttentionRequest;
@@ -105,6 +110,21 @@ export class ClawdTimeClient {
       `/api/attention/${encodeURIComponent(id)}/resume`,
       { controlEpoch },
     );
+  }
+  acknowledgeTerminal(id: string, controlEpoch: number) {
+    return this.api<{
+      session: AgentSession;
+      request: AttentionRequest;
+      acknowledgement: {
+        humanApproval: false;
+        requestId: string;
+        sessionId: string;
+        controlEpoch: number;
+        acknowledgedAt: number;
+      };
+    }>(`/api/attention/${encodeURIComponent(id)}/terminal-ack`, {
+      controlEpoch,
+    });
   }
   complete(id: string, text: string) {
     return this.api(`/api/attention/${encodeURIComponent(id)}/complete`, {

@@ -1,4 +1,5 @@
 import { noticeRetirementValid } from "../control/obsolete-notice.js";
+import { mediaStatusSchema } from "./media-diagnostics.js";
 import { z } from "zod";
 import type {
   AttentionRequest,
@@ -579,6 +580,39 @@ export class NativeTransport implements Transport {
       },
       this.request,
     );
+  }
+  async mediaStatus(requestId: string) {
+    const attention = this.store.get<AttentionRequest>("attention", requestId);
+    if (!attention)
+      throw new DomainError(404, "Attention request is unavailable.");
+    const id = mediaSessionId(requestId),
+      owned = this.store.get<MediaRecord>("media", id);
+    const unavailable = (
+      reason:
+        | "not_allocated"
+        | "binding_mismatch"
+        | "media_not_found"
+        | "invalid_status"
+        | "media_unavailable",
+    ) => ({ id, alive: false as const, state: "unavailable" as const, reason });
+    if (!owned) return unavailable("not_allocated");
+    if (owned.id !== id || owned.requestId !== attention.id)
+      return unavailable("binding_mismatch");
+    try {
+      const result = mediaStatusSchema.safeParse(
+        await this.media(`/sessions/${id}`),
+      );
+      if (!result.success || result.data.id !== id)
+        return unavailable("invalid_status");
+      return result.data;
+    } catch (error) {
+      return unavailable(
+        error instanceof Error &&
+          error.message === "Provider returned HTTP 404."
+          ? "media_not_found"
+          : "media_unavailable",
+      );
+    }
   }
   async call(attention: AttentionRequest, pairing: Pairing, effectId: string) {
     this.guard(pairing);

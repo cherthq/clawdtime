@@ -205,6 +205,8 @@ class CaptionPublisher:
             self.frame = self.sdk.VideoFrame(WIDTH, HEIGHT, self.sdk.VideoBufferType.RGBA, image.tobytes())
             self.last_revision = revision
         self.source.capture_frame(self.frame)
+        if self.screen:
+            self.screen.diagnostics.emitted(screen=bool(self.screen.frame))
 
     async def start(self):
         if self.source or self.closed:

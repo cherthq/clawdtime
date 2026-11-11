@@ -295,6 +295,206 @@ describe("durable scoped attention domain", () => {
     });
     expect(f.app.resume(f.agent.token, r.id, 1).session.state).toBe("active");
   });
+  it.each([
+    "canceled",
+    "failed",
+    "expired",
+    "declined",
+    "unanswered",
+    "disconnected",
+  ] as const)(
+    "explicitly releases the same session after %s cleanup without human approval or completion",
+    async (state) => {
+      const f = fixture(),
+        r = f.request();
+      await f.app.drain();
+      f.app.failCall(r.id);
+      f.store.put("attention", {
+        ...f.store.get<AttentionRequest>("attention", r.id)!,
+        state,
+      });
+      expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+        "confirmed terminal cleanup",
+      );
+      await f.app.drain();
+      const before = f.store.get<AttentionRequest>("attention", r.id)!;
+      const released = f.app.acknowledgeTerminal(f.agent.token, r.id, 0);
+      expect(released.session.state).toBe("active");
+      expect(released.request).toEqual(before);
+      expect(released.request.state).toBe(state);
+      expect(released.acknowledgement.humanApproval).toBe(false);
+      expect(f.app.acknowledgeTerminal(f.agent.token, r.id, 0)).toEqual(
+        released,
+      );
+      expect(f.store.all("response")).toHaveLength(0);
+      expect(f.store.effects().some((e) => e.kind === "message")).toBe(false);
+      expect(() => f.app.complete(f.agent.token, r.id, "success")).toThrow(
+        "acknowledge continuation",
+      );
+      expect(() => f.app.resume(f.agent.token, r.id, 0)).toThrow(
+        "acknowledged human response",
+      );
+      f.app.yieldSession(f.agent.token);
+      f.app.requestAttention(f.agent.token, {
+        ...input,
+        idempotencyKey: "another",
+      });
+      expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+        "confirmed terminal cleanup",
+      );
+      f.store.close();
+    },
+  );
+  it("releases cancellation before allocation only after the queued effect definitively closes", async () => {
+    const f = fixture(),
+      r = f.request();
+    f.app.failCall(r.id);
+    expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "confirmed terminal cleanup",
+    );
+    await f.app.drain();
+    expect(f.transport.calls).toHaveLength(0);
+    expect(f.store.effect(`${r.id}:call`)?.state).toBe("failed");
+    expect(
+      f.app.acknowledgeTerminal(f.agent.token, r.id, 0).acknowledgement
+        .humanApproval,
+    ).toBe(false);
+    // Legacy preallocation state may lack a local call row, but can never hide
+    // a successful provider-allocation receipt or an uncertain dispatch.
+    f.store.db.prepare("DELETE FROM entities WHERE kind='call'").run();
+    expect(
+      f.app.acknowledgeTerminal(f.agent.token, r.id, 0).session.state,
+    ).toBe("active");
+    const effect = f.store.effect(`${r.id}:call`)!;
+    f.store.putEffect({
+      ...effect,
+      state: "done",
+      result: { accepted: true, callId: "unaccounted-provider-call" },
+    });
+    expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "confirmed terminal cleanup",
+    );
+    f.store.close();
+  });
+  it("terminal acknowledgement requires exact session, epoch, released leases and reconciled inputs", async () => {
+    const f = fixture(),
+      r = f.request();
+    await f.app.drain();
+    f.app.failCall(r.id);
+    await f.app.drain();
+    const other = f.app.registerSession(f.pair.token, {
+      ...registration,
+      externalSessionId: "other",
+    });
+    expect(() => f.app.acknowledgeTerminal(other.token, r.id, 0)).toThrow(
+      "does not belong",
+    );
+    f.store.put("session", {
+      ...f.agent.session,
+      state: "yielded",
+      controlEpoch: 1,
+    });
+    expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "context changed",
+    );
+    const lease: ControlLease = {
+      id: "terminal-lease",
+      requestId: r.id,
+      sessionId: f.agent.session.id,
+      pairingId: f.pair.pairing.id,
+      callId: "fixture",
+      deviceId: "mac",
+      displayId: "display",
+      memberId: "member",
+      mode: "control",
+      epoch: 1,
+      expiresAt: 0,
+      state: "active",
+    };
+    for (const state of ["active", "unknown", "revoked"] as const) {
+      f.store.put("lease", { ...lease, state });
+      expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 1)).toThrow(
+        "All screen leases",
+      );
+    }
+    f.store.put("lease", { ...lease, state: "released" });
+    for (const state of ["pending", "submitted", "unknown"]) {
+      f.store.put("action", {
+        id: "uncertain-input",
+        leaseId: lease.id,
+        state,
+      });
+      expect(() => f.app.acknowledgeTerminal(f.agent.token, r.id, 1)).toThrow(
+        "uncertain inputs",
+      );
+    }
+    f.store.put("action", {
+      id: "uncertain-input",
+      leaseId: lease.id,
+      state: "observed",
+    });
+    expect(
+      f.app.acknowledgeTerminal(f.agent.token, r.id, 1).session.state,
+    ).toBe("active");
+    f.store.close();
+  });
+  it("terminal acknowledgement cannot bypass native media cleanup, unknown dispatch or stopped sessions", async () => {
+    const f = fixture(),
+      r = f.request();
+    await f.app.drain();
+    f.app.failCall(r.id);
+    await f.app.drain();
+    const live = new ClawdTime(f.store, {
+      mode: "live",
+      call: (...a) => f.transport.call(...a),
+      message: (...a) => f.transport.message(...a),
+      endCall: (...a) => f.transport.endCall(...a),
+    });
+    expect(() => live.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "confirmed terminal cleanup",
+    );
+    const call = f.store.all<CallSession>("call")[0]!;
+    f.store.put("media", {
+      id: "fixture-media",
+      requestId: r.id,
+      providerCallId: call.providerCallId,
+      state: "closing",
+    });
+    expect(() => live.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "confirmed terminal cleanup",
+    );
+    f.store.put("media", {
+      id: "fixture-media",
+      requestId: r.id,
+      providerCallId: call.providerCallId,
+      state: "closed",
+    });
+    const effect = f.store.effect(`${r.id}:call`)!;
+    f.store.putEffect({ ...effect, state: "unknown" });
+    expect(() => live.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "confirmed terminal cleanup",
+    );
+    f.store.putEffect(effect);
+    f.store.put("attention", {
+      ...f.store.get<AttentionRequest>("attention", r.id)!,
+      state: "unknown",
+    });
+    expect(() => live.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "closed unsuccessful",
+    );
+    f.store.put("attention", {
+      ...f.store.get<AttentionRequest>("attention", r.id)!,
+      state: "failed",
+    });
+    expect(live.acknowledgeTerminal(f.agent.token, r.id, 0).session.state).toBe(
+      "active",
+    );
+    f.store.put("session", { ...f.agent.session, state: "stopped" });
+    expect(() => live.acknowledgeTerminal(f.agent.token, r.id, 0)).toThrow(
+      "stopped",
+    );
+    f.store.close();
+  });
   it("revocation cancels pending work, revokes sessions and never revives on registration", async () => {
     const f = fixture();
     f.request();

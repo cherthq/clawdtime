@@ -224,6 +224,160 @@ function fixture() {
   };
 }
 describe("native protocol integration without live traffic", () => {
+  it("reads only the owned media session and returns bounded diagnostic metadata without credentials or pixels", async () => {
+    const f = fixture(),
+      id = mediaSessionId(f.attention.id),
+      requests: string[] = [];
+    const at = "2026-11-11T19:00:00.123456+00:00";
+    const body: Record<string, unknown> = {
+      id,
+      alive: true,
+      state: "prepared",
+      credentials: { token: "PRIVATE_TOKEN" },
+      captions: {
+        enabled: true,
+        state: "listening",
+        failed: false,
+        text: "PRIVATE_CAPTION",
+      },
+      screen: {
+        leaseId: "lease",
+        deviceId: "mac",
+        displayId: 1,
+        mode: "view",
+        frameId: "frame",
+        capturedAt: at,
+        state: "viewing",
+        jpegBase64: "PRIVATE_PIXELS",
+      },
+      screenDiagnostics: {
+        version: 1,
+        phase: "viewing",
+        updatedAt: at,
+        framesReceived: 1,
+        videoFramesEmitted: 2,
+        screenVideoObserved: true,
+        firstFrameAt: at,
+        lastGatewayResult: {
+          phase: "frame_request",
+          at,
+          durationMs: 25,
+          httpStatus: 200,
+          url: "PRIVATE_URL",
+        },
+        lastFailure: {
+          phase: "lease_create",
+          reason: "lease_refused",
+          at,
+          httpStatus: 409,
+          exception: "PRIVATE_EXCEPTION",
+        },
+        text: "PRIVATE_TEXT",
+      },
+    };
+    const transport = new NativeTransport(f.store, config, (async (
+      url,
+      init,
+    ) => {
+      expect(init?.method).toBe("GET");
+      requests.push(String(url));
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch);
+    expect((await transport.mediaStatus(f.attention.id)).state).toBe(
+      "unavailable",
+    );
+    expect(requests).toHaveLength(0);
+    f.store.put("media", {
+      id,
+      requestId: f.attention.id,
+      state: "active",
+      credentials: "PRIVATE_STORED_SECRET",
+    });
+    const before = f.store.query("SELECT * FROM entities"),
+      effects = f.store.effects();
+    const result = await transport.mediaStatus(f.attention.id);
+    expect(result).toMatchObject({
+      id,
+      alive: true,
+      screenDiagnostics: {
+        phase: "viewing",
+        framesReceived: 1,
+        screenVideoObserved: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+    expect(requests).toEqual([`${config.mediaOrigin}/sessions/${id}`]);
+    expect(f.store.query("SELECT * FROM entities")).toEqual(before);
+    expect(f.store.effects()).toEqual(effects);
+    body.alive = false;
+    body.state = "closed";
+    delete body.screen;
+    delete body.captions;
+    expect(await transport.mediaStatus(f.attention.id)).toMatchObject({
+      id,
+      alive: false,
+      state: "closed",
+      screenDiagnostics: { framesReceived: 1, updatedAt: at },
+    });
+    body.id = mediaSessionId("foreign");
+    expect(await transport.mediaStatus(f.attention.id)).toMatchObject({
+      state: "unavailable",
+      reason: "invalid_status",
+    });
+    await expect(transport.mediaStatus("foreign-request")).rejects.toThrow(
+      "unavailable",
+    );
+    f.store.close();
+  });
+  it.each([
+    "missing",
+    "error",
+    "oversized",
+    "invalid-category",
+    "foreign-record",
+  ])(
+    "fails closed with safe read-only metadata for %s diagnostics",
+    async (kind) => {
+      const f = fixture(),
+        id = mediaSessionId(f.attention.id);
+      let reads = 0;
+      f.store.put("media", {
+        id,
+        requestId: kind === "foreign-record" ? "foreign" : f.attention.id,
+        state: "closed",
+      });
+      const transport = new NativeTransport(f.store, config, (async () => {
+        reads++;
+        if (kind === "error") throw new Error("PRIVATE_PROVIDER_EXCEPTION");
+        if (kind === "missing")
+          return new Response("PRIVATE_BODY", { status: 404 });
+        return new Response(
+          JSON.stringify({
+            id,
+            alive: false,
+            state: "closed",
+            screenDiagnostics: {
+              version: 1,
+              phase:
+                kind === "invalid-category"
+                  ? "PRIVATE_PROVIDER_EXCEPTION"
+                  : "closed",
+              updatedAt: new Date().toISOString(),
+              framesReceived: kind === "oversized" ? 1e10 : 0,
+              videoFramesEmitted: 0,
+            },
+          }),
+        );
+      }) as typeof fetch);
+      const result = await transport.mediaStatus(f.attention.id);
+      expect(result.state).toBe("unavailable");
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+      expect(reads).toBe(kind === "foreign-record" ? 0 : 1);
+      if (kind === "missing")
+        expect(result).toMatchObject({ reason: "media_not_found" });
+      f.store.close();
+    },
+  );
   it("requires exact exclusive handoff and never enables via credentials alone", () => {
     expect(
       () => new NativeTransport(new Store(), { ...config, enabled: false }),

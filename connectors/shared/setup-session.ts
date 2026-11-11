@@ -47,6 +47,7 @@ const effects = new Set([
   "complete",
   "verify",
   "cancel",
+  "terminal-ack",
 ]);
 const textArg = (args: Record<string, unknown>, key: string, max = 200) => {
   const value = args[key];
@@ -217,9 +218,14 @@ export async function startSetupSession(options: {
         if (typeof args !== "object" || Array.isArray(args))
           throw new Error("args must be an object.");
         // Validate before persisting any effect intent.
-        const requestId = ["result", "ack", "resume", "complete"].includes(
-          command.command,
-        )
+        const requestId = [
+          "result",
+          "diagnostics",
+          "ack",
+          "resume",
+          "complete",
+          "terminal-ack",
+        ].includes(command.command)
           ? textArg(args, "requestId")
           : undefined;
         const responseId =
@@ -244,7 +250,7 @@ export async function startSetupSession(options: {
             "Stop/join all conflicting actors and explicitly set backgroundActorsStopped=true.",
           );
         if (
-          command.command === "resume" &&
+          ["resume", "terminal-ack"].includes(command.command) &&
           (!Number.isSafeInteger(args.controlEpoch) ||
             Number(args.controlEpoch) < 0)
         )
@@ -290,6 +296,18 @@ export async function startSetupSession(options: {
             throw new Error(
               "Use the original command id; this operation already has a saved intent.",
             );
+          if (
+            command.command === "terminal-ack" &&
+            Object.entries(bridge.effects).some(
+              ([id, effect]) =>
+                id !== command!.id &&
+                effect.command === "terminal-ack" &&
+                !effect.rejected,
+            )
+          )
+            throw new Error(
+              "Terminal acknowledgement already has a saved intent; use its original id or inspect status. A different epoch requires a definitive rejection first.",
+            );
           // Local/read-only readiness failures have no effect intent and may be corrected safely.
           if (["invite", "start"].includes(command.command))
             requireAttentionReadiness(await client.doctor());
@@ -302,6 +320,14 @@ export async function startSetupSession(options: {
         }
         let result: any;
         switch (command.command) {
+          case "diagnostics":
+            // Read-only metadata: no effect intent, run update or bridge checkpoint mutation.
+            emit({
+              id: command.id,
+              ok: true,
+              result: await client.diagnostics(requestId!),
+            });
+            continue;
           case "status": {
             const backend = await client.doctor();
             const status = await client.setupStatus();
@@ -355,6 +381,12 @@ export async function startSetupSession(options: {
           case "resume":
             result = await client.resume(requestId!, Number(args.controlEpoch));
             break;
+          case "terminal-ack":
+            result = await client.acknowledgeTerminal(
+              requestId!,
+              Number(args.controlEpoch),
+            );
+            break;
           case "complete":
             result = await client.complete(requestId!, completeText!);
             break;
@@ -366,7 +398,7 @@ export async function startSetupSession(options: {
             break;
           default:
             throw new Error(
-              "Unknown command. Use status, invite, yield, start, result, ack, resume, complete, verify or cancel.",
+              "Unknown command. Use status, diagnostics, invite, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
             );
         }
         if (result && Object.hasOwn(result, "test")) bridge.test = result.test;
@@ -382,9 +414,10 @@ export async function startSetupSession(options: {
         // Only a definitive backend rejection permits a later explicit retry of this same command.
         if (
           command &&
+          effects.has(command.command) &&
           error instanceof ApiError &&
           [400, 401, 403, 404, 409, 422].includes(error.status) &&
-          bridge.effects[command.id]
+          bridge.effects[command.id]?.command === command.command
         ) {
           bridge.effects[command.id]!.rejected = true;
           secureWrite(bridgePath, bridge);

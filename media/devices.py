@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, ImageDraw
 
 from captions import WIDTH, HEIGHT, CaptionRenderer
 from policy import capture_allowed
+from screen_diagnostics import ScreenDiagnostics
 
 
 def timestamp(value):
@@ -70,6 +71,7 @@ class ScreenController:
         self.created=set()
         self.task=None
         self.cleanup_tasks=set()
+        self.terminal_tasks={}
         self.closed=False
         self.frame_lock=asyncio.Lock()
         self.hold_until=0
@@ -81,6 +83,8 @@ class ScreenController:
         self.transition_task=None
         self.release_blocked_until=0
         self.requested_expiry={}
+        persist=getattr(self.owner,'record_screen_diagnostic',None)
+        self.diagnostics=ScreenDiagnostics((lambda data: persist(self.session.id,data)) if callable(persist) else None)
 
     def clear(self,state):
         self.frame=None;self.frame_id=None;self.captured_at=None
@@ -135,6 +139,10 @@ class ScreenController:
 
     def update(self,policy):
         selected=self.valid_selection(policy)
+        if selected and not self.selection:
+            self.diagnostics.phase('selection_received')
+        elif not selected and not self.selection and self.session.active:
+            self.diagnostics.phase('waiting_selection')
         if self.starting and selected:
             self.starting=False
             self.revision+=1
@@ -158,8 +166,11 @@ class ScreenController:
                     await asyncio.shield(previous_transition)
                 if old_task:
                     await asyncio.gather(old_task,return_exceptions=True)
-                if old and old['leaseId'] in self.created and await self.release(old) is not True:
-                    self.release_blocked_until=max(self.release_blocked_until,timestamp(old['expiresAt']),self.requested_expiry.get(old['leaseId'],0))
+                if old and old['leaseId'] in self.created:
+                    terminal=self.terminal_tasks.get(old['leaseId'])
+                    released=await asyncio.shield(terminal) if terminal else await self.release(old)
+                    if released is not True:
+                        self.release_blocked_until=max(self.release_blocked_until,timestamp(old['expiresAt']),self.requested_expiry.get(old['leaseId'],0))
                 if self.closed or generation!=self.generation or not selected:return
                 if time.time()<self.release_blocked_until:
                     await self.terminal(selected,'previous_release_unconfirmed')
@@ -175,7 +186,17 @@ class ScreenController:
         return task
 
     async def request(self,method,path,body=None,frame=False):
-        return await gateway_request(self.owner,method,path,body,frame)
+        phase='frame_request' if frame else 'lease_renew' if path.endswith('/renew') else 'lease_create' if method=='POST' else None
+        started=time.monotonic()
+        try:
+            result=await gateway_request(self.owner,method,path,body,frame)
+        except Exception as error:
+            if phase:
+                category='timeout' if isinstance(error,TimeoutError) else 'connection' if isinstance(error,ConnectionError) else 'invalid_response' if isinstance(error,ValueError) else 'other'
+                self.diagnostics.request_result(phase,started,error=category)
+            raise
+        if phase: self.diagnostics.request_result(phase,started,http_status=result[0])
+        return result
 
     async def release(self,selection):
         try:
@@ -185,12 +206,21 @@ class ScreenController:
         except Exception:
             return False
 
-    async def terminal(self,selection,reason):
-        self.stopped.add(selection['leaseId'])
-        self.clear('stopped')
-        if selection['leaseId'] in self.created:await self.release(selection)
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(self.owner.backend(f'/media/{self.session.id}/screen-stopped',{'leaseId':selection['leaseId'],'reason':reason}),2)
+    async def terminal(self,selection,reason,http_status=None):
+        lease_id=selection['leaseId']
+        if lease_id not in self.terminal_tasks:
+            self.diagnostics.phase('stopped',reason,http_status)
+            self.stopped.add(lease_id)
+            self.clear('stopped')
+            async def finish():
+                released=await self.release(selection) if lease_id in self.created else True
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.owner.backend(f'/media/{self.session.id}/screen-stopped',{'leaseId':lease_id,'reason':reason}),2)
+                return released
+            self.terminal_tasks[lease_id]=self.cleanup(finish())
+        # Policy updates cancel the capture task. They must not cancel its
+        # already-committed release/notification, nor dispatch either twice.
+        await asyncio.shield(self.terminal_tasks[lease_id])
 
     async def poll(self,generation):
         try:
@@ -204,19 +234,23 @@ class ScreenController:
                 route='/v1/leases'
                 if selection['leaseId'] in self.created:route+='/'+selection['leaseId']+'/renew'
                 else:self.created.add(selection['leaseId'])  # never repeat uncertain creation
+                self.diagnostics.phase('lease_renew' if route.endswith('/renew') else 'lease_create')
                 # Keep the longest expiry we sent, including an in-flight renew
                 # whose response is lost/cancelled or a later shorter policy.
                 self.requested_expiry[selection['leaseId']]=max(self.requested_expiry.get(selection['leaseId'],0),timestamp(selection['expiresAt']))
                 status,_,_=await self.request('POST',route,body)
                 if status>=300:
-                    await self.terminal(selection,'helper_stopped');return
+                    await self.terminal(selection,'helper_stopped',status);return
                 async with self.frame_lock:
                     if self.hold_until>time.monotonic():continue
+                    self.diagnostics.phase('frame_request',http_status=status)
                     status,raw,headers=await self.request('GET','/v1/leases/'+selection['leaseId']+'/frame',frame=True)
                     if generation!=self.generation:return
                     if status in (403,404,409,410,423):
-                        await self.terminal(selection,'helper_stopped');return
-                    if status!=200:raise ValueError('Device frame unavailable')
+                        await self.terminal(selection,'helper_stopped',status);return
+                    if status!=200:
+                        self.diagnostics.phase('frame_request','frame_unavailable',status)
+                        raise ValueError('Device frame unavailable')
                     captured=headers['x-captured-at'];frame_id=headers['x-frame-id']
                     if headers.get('content-type','').split(';')[0]!='image/jpeg' or not -.5<=time.time()-timestamp(captured)<2 or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',frame_id):raise ValueError('Stale frame')
                     width,height=int(headers['x-frame-width']),int(headers['x-frame-height'])
@@ -229,6 +263,7 @@ class ScreenController:
                     if time.monotonic()-self.policy_at>=2:return
                     if self.frame_id!=frame_id:
                         self.frame=frame;self.frame_id=frame_id;self.captured_at=captured;self.received_at=time.monotonic();self.revision+=1
+                        self.diagnostics.frame(captured)
                     self.state='viewing'
                 await asyncio.sleep(.2)
         except asyncio.CancelledError:raise
@@ -268,6 +303,10 @@ class ScreenController:
         self.closed=True;self.starting=False;self.clear('stopped');self.generation+=1
         if self.task:
             self.task.cancel();await asyncio.gather(self.task,return_exceptions=True)
-        if self.selection:await self.release(self.selection)
+        if self.selection:
+            terminal=self.terminal_tasks.get(self.selection['leaseId'])
+            if terminal: await asyncio.shield(terminal)
+            else: await self.release(self.selection)
         with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(asyncio.gather(*list(self.cleanup_tasks),return_exceptions=True),3)
+            await asyncio.wait_for(asyncio.gather(*list(self.cleanup_tasks),return_exceptions=True),4.5)
+        self.diagnostics.phase('closed')

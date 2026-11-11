@@ -476,6 +476,155 @@ export class ClawdTime {
       }),
     }));
   }
+  /** A closed unsuccessful attention request can release the coding session,
+   * without treating its outcome as an answer, approval, or completed work. */
+  acknowledgeTerminal(raw: string, requestId: string, controlEpoch: number) {
+    return this.store.transaction(() => {
+      const { session, request } = this.owned(raw, requestId);
+      if (
+        ![
+          "canceled",
+          "failed",
+          "expired",
+          "declined",
+          "unanswered",
+          "disconnected",
+        ].includes(request.state)
+      )
+        throw new DomainError(
+          409,
+          "Only a closed unsuccessful request can acknowledge terminal cleanup.",
+        );
+      if (
+        !Number.isSafeInteger(controlEpoch) ||
+        controlEpoch !== session.controlEpoch
+      )
+        throw new DomainError(
+          409,
+          "Screen context changed; fetch the current control epoch.",
+        );
+      const key = `terminal-ack:${session.id}:${request.id}:${controlEpoch}`;
+      const prior = this.store.event<{
+        sessionId: string;
+        requestId: string;
+        controlEpoch: number;
+        state: AttentionRequest["state"];
+        acknowledgedAt: number;
+        humanApproval: false;
+      }>(key);
+      if (session.state !== "yielded" && !prior)
+        throw new DomainError(
+          409,
+          "Yield the agent session before acknowledging terminal cleanup.",
+        );
+      const requests = this.store
+        .all<AttentionRequest>("attention")
+        .filter((r) => r.sessionId === session.id);
+      const calls = this.store
+        .all<CallSession>("call")
+        .filter((c) => requests.some((r) => r.id === c.requestId));
+      const leases = this.store
+        .all<ControlLease>("lease")
+        .filter((l) => l.sessionId === session.id);
+      const media = this.store
+        .all<{ requestId: string; providerCallId?: string; state: string }>(
+          "media",
+        )
+        .filter((m) => requests.some((r) => r.id === m.requestId));
+      if (
+        requests.some(
+          (r) =>
+            r.callId &&
+            !calls.some((c) => c.id === r.callId && c.requestId === r.id),
+        ) ||
+        this.store
+          .effects()
+          .some(
+            (e) =>
+              e.kind === "call" &&
+              e.state === "done" &&
+              requests.some((r) => r.id === e.payload.requestId) &&
+              !calls.some(
+                (c) =>
+                  c.requestId === e.payload.requestId &&
+                  c.providerCallId === e.result?.callId &&
+                  c.state === "ended",
+              ),
+          ) ||
+        calls.some((c) => c.state !== "ended" || !Number.isFinite(c.endedAt)) ||
+        requests.some((r) => !terminal.has(r.state) || r.state === "unknown") ||
+        media.some((m) => m.state !== "closed") ||
+        (this.transport.mode === "live" &&
+          calls.some(
+            (c) =>
+              c.providerCallId &&
+              !media.some(
+                (m) =>
+                  m.requestId === c.requestId &&
+                  m.providerCallId === c.providerCallId &&
+                  m.state === "closed",
+              ),
+          )) ||
+        this.store
+          .effects()
+          .some(
+            (e) =>
+              ["call", "end_call"].includes(e.kind) &&
+              requests.some((r) => r.id === e.payload.requestId) &&
+              ["pending", "running", "unknown"].includes(e.state),
+          )
+      )
+        throw new DomainError(
+          409,
+          "Every owned call and media session must have confirmed terminal cleanup before releasing the agent.",
+        );
+      if (
+        leases.some((l) => l.state !== "released") ||
+        this.store
+          .all<ActionReceipt>("action")
+          .some(
+            (a) =>
+              leases.some((l) => l.id === a.leaseId) &&
+              ["pending", "submitted", "unknown", "running"].includes(a.state),
+          )
+      )
+        throw new DomainError(
+          409,
+          "All screen leases must be released and uncertain inputs reconciled before releasing the agent.",
+        );
+      const acknowledgement = prior?.result ?? {
+        sessionId: session.id,
+        requestId: request.id,
+        controlEpoch,
+        state: request.state,
+        acknowledgedAt: this.clock(),
+        humanApproval: false as const,
+      };
+      if (
+        prior &&
+        (prior.fingerprint !== hash(JSON.stringify(prior.result)) ||
+          prior.result.state !== request.state)
+      )
+        throw new DomainError(
+          409,
+          "Terminal acknowledgement no longer matches the retained request.",
+        );
+      if (!prior)
+        this.store.recordEvent(
+          key,
+          hash(JSON.stringify(acknowledgement)),
+          acknowledgement,
+        );
+      return {
+        session: this.store.put<AgentSession>("session", {
+          ...session,
+          state: "active",
+        }),
+        request,
+        acknowledgement,
+      };
+    });
+  }
   complete(raw: string, requestId: string, text: string) {
     const { request } = this.owned(raw, requestId),
       result = textSchema.parse(text);

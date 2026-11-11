@@ -210,6 +210,14 @@ function backendFixture() {
       session: service.authenticateSession(token(c)),
     }),
   );
+  app.get("/api/attention/:id/diagnostics", (c) => {
+    const owned = service.status(token(c), c.req.param("id"));
+    return c.json({
+      requestId: owned.id,
+      phases: { call: owned.state, screen: "fixture_no_capture" },
+      physicalAcceptance: false,
+    });
+  });
   app.post("/api/attention/:id/ack", async (c) =>
     c.json({
       response: service.ack(
@@ -222,6 +230,15 @@ function backendFixture() {
   app.post("/api/attention/:id/resume", async (c) =>
     c.json(
       service.resume(
+        token(c),
+        c.req.param("id"),
+        (await c.req.json()).controlEpoch,
+      ),
+    ),
+  );
+  app.post("/api/attention/:id/terminal-ack", async (c) =>
+    c.json(
+      service.acknowledgeTerminal(
         token(c),
         c.req.param("id"),
         (await c.req.json()).controlEpoch,
@@ -447,6 +464,207 @@ it("upgrades only unchanged owned skills and reports interrupted or edited insta
       )?.status,
     ).toBe("fail");
   } finally {
+    f.store.close();
+  }
+});
+
+it("acknowledges a failed setup only after confirmed cleanup, then continues the same chat without approval or another call", async () => {
+  const f = backendFixture(),
+    b = bridge(f);
+  try {
+    const ready = await b.wait((value) => value.event === "ready");
+    await b.send("invite", "invite");
+    f.setup.receive({
+      id: "yes",
+      sender: f.binding.recipient,
+      conversationId: f.binding.conversationId,
+      lineId: f.binding.lineId,
+      text: "YES",
+    });
+    await b.send("yield", "yield", { backgroundActorsStopped: true });
+    const started = await b.send("start", "start");
+    const requestId = started.result.request.id;
+    expect(
+      (
+        await b.send("bad-epoch", "terminal-ack", {
+          requestId,
+          controlEpoch: -1,
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await b.send("wrong-request", "terminal-ack", {
+          requestId: "other",
+          controlEpoch: 0,
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      f.calls.filter((path) => path.endsWith("/terminal-ack")),
+    ).toHaveLength(0);
+    // A connected/pending outcome is not a failed terminal outcome.
+    expect(
+      (await b.send("terminal", "terminal-ack", { requestId, controlEpoch: 0 }))
+        .ok,
+    ).toBe(false);
+    await b.send("cancel", "cancel");
+    const canceled = await b.send("result-canceled", "result", {
+      requestId,
+      waitSeconds: 0,
+    });
+    expect(canceled.result.request.state).toBe("canceled");
+    expect(canceled.result.response).toBeUndefined();
+    // Cancellation requests cleanup; it does not prove end-call reconciliation.
+    expect(
+      (await b.send("terminal", "terminal-ack", { requestId, controlEpoch: 0 }))
+        .ok,
+    ).toBe(false);
+    await f.service.drain();
+    const released = await b.send("terminal", "terminal-ack", {
+      requestId,
+      controlEpoch: 0,
+    });
+    expect(released.ok).toBe(true);
+    expect(released.result.session.id).toBe(ready.sessionId);
+    expect(released.result.session.state).toBe("active");
+    expect(released.result.request.state).toBe("canceled");
+    expect(released.result.acknowledgement.humanApproval).toBe(false);
+    expect(
+      (await b.send("terminal", "terminal-ack", { requestId, controlEpoch: 0 }))
+        .replayed,
+    ).toBe(true);
+    expect(
+      (
+        await b.send("complete", "complete", {
+          requestId,
+          text: "Cannot falsely mark complete",
+        })
+      ).ok,
+    ).toBe(false);
+    expect(f.transport.calls).toHaveLength(1);
+    expect(f.transport.messages).toHaveLength(1);
+    expect(f.store.all("response")).toHaveLength(0);
+    expect(f.store.all("session")).toHaveLength(1);
+    expect((await b.send("status-after", "status")).result.session.state).toBe(
+      "active",
+    );
+  } finally {
+    b.input.end();
+    await b.done;
+    f.store.close();
+  }
+});
+
+it("preserves an unknown terminal acknowledgement and forbids a replacement intent", async () => {
+  const f = backendFixture();
+  const request: typeof fetch = async (url, init) => {
+    const response = await f.request(url, init);
+    if (String(url).endsWith("/terminal-ack") && response.ok)
+      throw new Error("synthetic response lost after commit");
+    return response;
+  };
+  const b = bridge(f, request);
+  try {
+    await b.wait((value) => value.event === "ready");
+    await b.send("invite", "invite");
+    f.setup.receive({
+      id: "yes",
+      sender: f.binding.recipient,
+      conversationId: f.binding.conversationId,
+      lineId: f.binding.lineId,
+      text: "YES",
+    });
+    await b.send("yield", "yield", { backgroundActorsStopped: true });
+    const started = await b.send("start", "start");
+    const requestId = started.result.request.id;
+    await b.send("cancel", "cancel");
+    await f.service.drain();
+    expect(
+      (await b.send("terminal", "terminal-ack", { requestId, controlEpoch: 0 }))
+        .ok,
+    ).toBe(false);
+    expect(
+      (await b.send("terminal", "terminal-ack", { requestId, controlEpoch: 0 }))
+        .error,
+    ).toContain("outcome is unknown");
+    expect(
+      (
+        await b.send("replacement", "terminal-ack", {
+          requestId,
+          controlEpoch: 0,
+        })
+      ).error,
+    ).toContain("saved intent");
+    expect(
+      f.calls.filter((path) => path.endsWith("/terminal-ack")),
+    ).toHaveLength(1);
+    const status = await b.send("inspect", "status");
+    expect(status.result.session.state).toBe("active");
+    expect(status.result.test.state).toBe("canceled");
+    expect(f.transport.calls).toHaveLength(1);
+    expect(f.transport.messages).toHaveLength(1);
+  } finally {
+    b.input.end();
+    await b.done;
+    f.store.close();
+  }
+});
+
+it("reads only current-test diagnostics while yielded without checkpoint writes or effects", async () => {
+  const f = backendFixture();
+  let rejectDiagnostic = false;
+  const request: typeof fetch = async (url, init) =>
+    String(url).endsWith("/diagnostics") && rejectDiagnostic
+      ? new Response("{}", { status: 409 })
+      : f.request(url, init);
+  const b = bridge(f, request);
+  try {
+    await b.wait((value) => value.event === "ready");
+    await b.send("invite", "invite");
+    f.setup.receive({
+      id: "yes",
+      sender: f.binding.recipient,
+      conversationId: f.binding.conversationId,
+      lineId: f.binding.lineId,
+      text: "YES",
+    });
+    await b.send("yield", "yield", { backgroundActorsStopped: true });
+    const started = await b.send("start", "start");
+    const requestId = started.result.request.id;
+    const path = join(dirname(f.connection), "runs", `${b.runId}.setup.json`);
+    const checkpoint = readFileSync(path, "utf8"),
+      mtime = statSync(path).mtimeMs;
+    const effectCount = f.store.effects().length;
+    const diagnostic = await b.send("diagnostics-1", "diagnostics", {
+      requestId,
+    });
+    expect(diagnostic.ok).toBe(true);
+    expect(diagnostic.result.requestId).toBe(requestId);
+    expect(diagnostic.result.phases.screen).toBe("fixture_no_capture");
+    expect(
+      (await b.send("wrong-diag", "diagnostics", { requestId: "other" })).ok,
+    ).toBe(false);
+    expect(
+      f.calls.filter((path) => path.endsWith("/diagnostics")),
+    ).toHaveLength(1);
+    expect(f.calls.find((path) => path.endsWith("/diagnostics"))).toMatch(
+      /^GET /,
+    );
+    // Even a rejected read sharing an earlier effect's ID cannot alter that effect's intent.
+    rejectDiagnostic = true;
+    expect((await b.send("start", "diagnostics", { requestId })).ok).toBe(
+      false,
+    );
+    expect(readFileSync(path, "utf8")).toBe(checkpoint);
+    expect(statSync(path).mtimeMs).toBe(mtime);
+    expect(f.store.effects()).toHaveLength(effectCount);
+    expect(f.store.all<any>("session")[0].state).toBe("yielded");
+    expect(f.transport.calls).toHaveLength(1);
+    expect(f.transport.messages).toHaveLength(1);
+  } finally {
+    b.input.end();
+    await b.done;
     f.store.close();
   }
 });

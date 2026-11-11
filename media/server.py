@@ -179,6 +179,7 @@ class Session:
                     self.owner.cancel_speech(self.id)
                     if self.screen:
                         self.screen.update({})
+                        self.screen.diagnostics.phase('policy_unavailable','backend_unavailable')
                     if self.caption_scene:
                         self.caption_scene.clear('reconnecting')
                 if not self.allowed:
@@ -331,7 +332,9 @@ class Session:
             async def begin():
                 try:
                     if self.recording:
+                        if self.screen: self.screen.diagnostics.phase('notice_playing')
                         await self.say(NOTICE)
+                        if self.screen: self.screen.diagnostics.phase('notice_completed')
                     self.active = True
                     self.policy_wakeup.set()
                 except Exception:
@@ -406,11 +409,17 @@ class Service:
         self.db = sqlite3.connect(path)
         os.chmod(path,0o600)
         self.db.executescript('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS speech(id TEXT PRIMARY KEY,session TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL);')
+        self.db.execute('CREATE TABLE IF NOT EXISTS screen_diagnostics(id TEXT PRIMARY KEY,body TEXT NOT NULL)')
         self.db.execute("UPDATE sessions SET state='interrupted' WHERE state!='closed'")
         self.db.commit()
         self.speech = SpeechLedger(self.db)
         self.device_actions = DeviceActions(self)
         self.device_relay = DeviceRelay()
+
+    def record_screen_diagnostic(self,sid,data):
+        self.db.execute('INSERT INTO screen_diagnostics(id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',
+                        (sid,json.dumps(data,separators=(',',':'))))
+        self.db.commit()
 
     def ready(self):
         return all(self.env.get(k) for k in ['MEDIA_API_KEY','BACKEND_URL','LIVEKIT_URL','LIVEKIT_API_KEY','LIVEKIT_API_SECRET','DEEPGRAM_API_KEY'])
@@ -458,12 +467,15 @@ class Service:
             raise web.HTTPNotFound()
         session=self.sessions.get(sid)
         result = {'id':sid,'alive':bool(session and not session.closing),'state':row[0]}
+        diagnostic=self.db.execute('SELECT body FROM screen_diagnostics WHERE id=?',(sid,)).fetchone()
+        if diagnostic:
+            result['screenDiagnostics']=json.loads(diagnostic[0])
         if session and session.caption_scene:
             result['captions'] = {'enabled':session.spec.get('captions') is True, 'state':session.caption_scene.snapshot()['state'],
                                   'failed':bool(session.caption_publisher and session.caption_publisher.failed)}
         if session and session.screen:
             result['screen'] = session.screen.status()
-        return web.json_response(result)
+        return web.json_response(result,headers={'Cache-Control':'no-store'})
 
     async def prepare(self,request):
         if not self.ready():
