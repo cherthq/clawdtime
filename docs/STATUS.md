@@ -56,10 +56,36 @@ cleanup may dispatch. Voice Stop can bypass serial transcript handling while
 listening; agent TTS still suspends listening. A helper grant cannot be reused
 before its acknowledgement, and Stop during grant creation prevents readiness.
 
-Release identifiers are recorded after deployment below. This revision has
-**no new handset acceptance**: the user requested no further call.
-Earlier physical results do not establish this revised voice/CUA flow. Historical
-unknown outcomes, event cursors and receipts were preserved.
+Deployed release: **`e08eca1`**, including the conversational harness in `0672468`.
+
+- Backend: `f395c13f-0054-4f05-9950-af69732b1872` — SUCCESS.
+- Media: `acf01bae-c9c5-471d-85e7-cbe0c21b355a` — SUCCESS.
+- Both public health checks return HTTP 200. Canonical `/agents` serves the new
+  natural-language setup protocol. Media reports zero active sessions and a
+  connected device gateway; transport preflight and backend heartbeat pass.
+- Local companion reports `armed:false`, `available:false`, both macOS permissions
+  true, and no active lease. Device readiness is therefore blocked until the Mac
+  is available and locally enabled; it was not silently rearmed. No reinstall or
+  permission reset was performed.
+- Before/after metadata matches: five ended calls, four retained observed input
+  receipts, 23 released leases, and the same historical unknown notice/inbound/
+  effect states. No new message invitation, phone call or screen input was sent.
+- Deployment packaging correction: candidate `f8006440-7db0-42e5-8a60-fb0978898369`
+  used the wrong build context and was canceled before replacing the active media
+  image. Media must upload the archived **media/** directory; backend uploads
+  the archived root. Candidate `c45b1447-cefc-4b38-9a32-29aa66a9f1d7` was superseded
+  during rollout to include the natural-speech introduction. The media restart
+  window had no active calls; final gateway reconnection was verified.
+- Prior rollback images remain identified: backend
+  `70698b6a-1994-4d74-8d93-74da1d813a62` (code `4550c12`) and media
+  `62fe9a11-63e6-4f42-a705-7b7cf00ef2aa` (code `b93b28b`). Restore code/images only
+  if necessary; preserve current ledgers/cursors and never restore an old DB.
+
+This revision has **no new handset acceptance**: the user requested no further
+call. Earlier physical results do not establish this revised voice/CUA flow.
+Historical unknown outcomes, event cursors and receipts were preserved. Voice is
+turn-based; native helper frame protection can hold a fresh video frame briefly
+while authorizing input, although ordinary actions no longer blank the stream.
 
 ## Source and release identities
 
