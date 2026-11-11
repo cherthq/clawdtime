@@ -51,10 +51,29 @@ participantIdentity:"worker-"+mediaId}`. Reply `{captured:boolean}`. IDs are sta
   A stopped lease cannot be silently reacquired; require a fresh explicit selection.
 
 A private endpoint does not authenticate a biological speaker or distinguish all
-background audio. Backend must accept only explicit wake-addressed feedback, require
-clarification for ambiguity, and never interpret native blanket approval or agent
-TTS as human authorization. The notice explains this. “Hey ClawdTime, stop
-listening” latches capture off locally in media; the backend must also pause policy.
+background audio. Qualified callers can speak naturally or send authenticated text;
+no wake phrase or command prefix is required. The conversation agent uses the
+pending question and asks for clarification when intent is ambiguous. Agent TTS
+is excluded from transcription and never grants native approval. Literal “Stop”
+or “Stop listening” takes the fail-safe path described below.
+
+Audio uses streaming transcription followed by bounded model turns and synthesized
+replies. It is half-duplex: listening pauses during synthesized speech, including
+the introduction, and resumes afterward only while policy permits it. This is
+not a full-duplex realtime voice session and does not support voice barge-in.
+Authenticated text Stop and local Stop remain available while speech plays.
+
+The implemented call workflow is agent-initiated outbound FaceTime. ClawdTime does
+not implement inbound FaceTime handling or an `auto_reject` route. Historical
+Apple Teams source-pause behavior does not establish either capability here.
+
+A screen-only setup test needs no click, typing or scroll exercise. A natural
+visibility report records handset evidence without ending ordinary conversation.
+When the human gives substantive feedback or asks to return to coding, the agent
+releases screen control and delivers the original utterance to the waiting coding
+session. That session acknowledges, resumes and completes its result; completion
+queues the Messages recap. A visibility report alone is not agent continuation or
+proof of result delivery. CUA acceptance remains a separate supervised test.
 
 ## Control adapter
 

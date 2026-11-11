@@ -479,9 +479,10 @@
             </summary>
             <p>
               The local pilot has tested cooperative Claude Code and Codex CLI
-              flows with simulated calls. Real handset calls are still awaiting
-              validation. Cursor and OpenClaw integrations are coming later;
-              existing desktop sessions aren’t automatically taken over.
+              flows. The basic Codex screen and text-return loop has passed on a
+              handset; natural voice still needs live qualification. Cursor and
+              OpenClaw integrations are coming later; existing desktop sessions
+              aren’t automatically taken over.
             </p>
           </details>
           <details>
@@ -489,10 +490,23 @@
               Can I try a real call right now? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              This is a pilot preview. The public number, signed Mac download,
-              and live call demo aren’t available yet. Our goal is a first call
-              within a minute once you’re paired and connected; that timing
-              hasn’t been measured yet.
+              Invited testers can text ClawdTime and give the returned setup
+              prompt to their coding agent. Setup stays in that chat through
+              permissions, one approved screen-sharing call, and a Messages
+              follow-up. Public Mac downloads aren’t ready yet.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Can I call or text it to start work?
+              <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              Your coding agent starts calls and sends a follow-up. During a
+              call, talk or text naturally to ask questions or direct the work.
+              Calling ClawdTime yourself or starting new work from Messages is
+              planned. Voice currently takes turns: listening pauses while the
+              agent speaks.
             </p>
           </details>
         </div>
@@ -506,10 +520,12 @@
         ><span class="micro-label">SAY HELLO. THEN GO DO YOUR THING.</span>
       </section>
       <section id="text-it" class="text-fallback section-wrap">
+        <!-- TEXT_CONTACT -->
         <p>
-          Public texting opens soon. This preview doesn’t place calls or send
-          messages.
+          Texting is not enabled on this instance. The live pilot is available
+          to invited testers.
         </p>
+        <!-- /TEXT_CONTACT -->
       </section>
     </main>
     <footer class="site-footer section-wrap">
@@ -533,12 +549,12 @@
       </div>
       <h2 id="text-dialog-title">A hello starts it all.</h2>
       <p>
-        Our public number isn’t live yet. When it is, this button will open a
-        prefilled iMessage, with a scannable QR code for desktop.
+        Texting is not enabled on this instance. Use the live ClawdTime website
+        and your invited test handset to start setup.
       </p>
       <div class="message-preview">
         <span>YOUR FIRST MESSAGE</span>
-        <p>Hey ClawdTime, give my agent a FaceTime.</p>
+        <p>Hey ClawdTime</p>
       </div>
       <p class="dialog-note">
         Preview mode. Nothing is sent, and no call is placed.

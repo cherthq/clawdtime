@@ -134,7 +134,35 @@ it("never retries an uncertain one-use claim or prints its private body", async 
   ).not.toContain("synthetic-one-use");
 });
 
-function backendFixture() {
+it("preserves a prior line's connection and claim instead of transferring a fresh setup link", async () => {
+  const f = claimFixture();
+  const request = vi.fn(
+    async () => new Response(JSON.stringify(f.claim)),
+  ) as unknown as typeof fetch;
+  await prepareSetup({ ...f.options, request });
+  const before = readFileSync(f.options.connectionFile, "utf8");
+  const checkpoint = readFileSync(
+    join(dirname(f.options.connectionFile), "setup-claim.json"),
+    "utf8",
+  );
+  writeFileSync(
+    f.linkFile,
+    `${f.options.origin}/setup#token=new-line-grant&device=mac&display=1`,
+  );
+  await expect(prepareSetup({ ...f.options, request })).rejects.toThrow(
+    "different setup checkpoint",
+  );
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(readFileSync(f.options.connectionFile, "utf8")).toBe(before);
+  expect(
+    readFileSync(
+      join(dirname(f.options.connectionFile), "setup-claim.json"),
+      "utf8",
+    ),
+  ).toBe(checkpoint);
+});
+
+function backendFixture(allowControl = true) {
   const project = root(),
     connection = join(root(), "connection.json");
   const store = new Store(),
@@ -155,7 +183,7 @@ function backendFixture() {
     deviceId: "mac",
     displayId: "1",
     allowView: true,
-    allowControl: true,
+    allowControl,
   });
   secureWrite(connection, {
     schemaVersion: 1,
@@ -379,132 +407,137 @@ it.each(["lost", "foreign"])(
     }
   },
 );
-it("keeps setup, approved call, result acknowledgement and continuation in the same foreground bridge", async () => {
-  const f = backendFixture(),
-    b = bridge(f);
-  try {
-    const ready = await b.wait((value) => value.event === "ready");
-    expect(ready.currentChat).toBe(true);
-    f.block(true);
-    expect((await b.send("invite", "invite")).ok).toBe(false);
-    expect(
-      f.calls.filter((path) => path === "POST /api/setup/test"),
-    ).toHaveLength(0);
-    f.block(false);
-    const invitation = await b.send("invite", "invite");
-    expect(invitation.result.test.sessionId).toBe(ready.sessionId);
-    expect((await b.send("invite", "invite")).replayed).toBe(true);
-    expect(f.transport.messages).toHaveLength(1);
-    expect((await b.send("start", "start")).ok).toBe(false);
-    expect(f.transport.calls).toHaveLength(0);
-    const testId = invitation.result.test.id;
-    expect((await b.send("authorize", "authorize", { testId })).ok).toBe(false);
-    expect(
-      (
-        await b.send("authorize-foreign", "authorize", {
-          testId: "other",
-          userAuthorizedCall: true,
-        })
-      ).ok,
-    ).toBe(false);
-    expect(
-      f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
-    ).toHaveLength(0);
-    const approved = await b.send("authorize", "authorize", {
-      testId,
-      userAuthorizedCall: true,
-    });
-    expect(approved.result.test).toMatchObject({
-      id: testId,
-      state: "approved",
-      approvalSource: "native_session",
-    });
-    expect(
-      (
-        await b.send("authorize", "authorize", {
-          testId,
-          userAuthorizedCall: true,
-        })
-      ).replayed,
-    ).toBe(true);
-    expect(
-      f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
-    ).toHaveLength(1);
-    expect((await b.send("yield-invalid", "yield")).ok).toBe(false);
-    expect(
-      (await b.send("yield", "yield", { backgroundActorsStopped: true })).ok,
-    ).toBe(true);
-    const started = await b.send("start", "start");
-    expect(started.ok).toBe(true);
-    const requestId = started.result.request.id;
-    expect(f.transport.calls).toHaveLength(1);
-    expect(
-      (await b.send("pending", "result", { requestId, waitSeconds: 0 })).result
-        .response,
-    ).toBeUndefined();
-    expect(
-      (await b.send("wrong", "result", { requestId: "different" })).ok,
-    ).toBe(false);
-    const response = f.service.receiveResponse({
-      eventId: "synthetic-human-feedback",
-      requestId,
-      memberId: f.binding.memberId,
-      conversationId: f.binding.conversationId,
-      lineId: f.binding.lineId,
-      channel: "text",
-      text: "Synthetic screen observed",
-    });
-    const result = await b.send("result", "result", {
-      requestId,
-      waitSeconds: 0,
-    });
-    expect(result.result.session.id).toBe(ready.sessionId);
-    expect(
-      (await b.send("ack", "ack", { requestId, responseId: response.id })).ok,
-    ).toBe(true);
-    expect(
-      (
-        await b.send("resume", "resume", {
-          requestId,
-          controlEpoch: result.result.session.controlEpoch,
-        })
-      ).ok,
-    ).toBe(true);
-    expect(
-      (
-        await b.send("complete", "complete", {
-          requestId,
-          text: "Synthetic continuation complete",
-        })
-      ).ok,
-    ).toBe(true);
-    expect((await b.send("verify", "verify")).ok).toBe(false); // Simulations never establish physical acceptance.
-    expect((await b.send("verify", "verify")).ok).toBe(false);
-    expect(
-      f.calls.filter((path) => path === "POST /api/setup/test/verify"),
-    ).toHaveLength(2);
-    expect(f.transport.messages).toHaveLength(2);
-    expect(f.store.all("session")).toHaveLength(1);
-    expect(
-      f.calls.filter((path) => path === "POST /api/sessions"),
-    ).toHaveLength(1);
-    await b.send("cancel", "cancel");
-    b.input.end();
-    await b.done;
-    expect(
-      f.calls.filter((path) => path === "POST /api/setup/test/cancel"),
-    ).toHaveLength(1);
-    expect(
-      secureRead<any>(
-        join(dirname(f.connection), "runs", `${b.runId}.setup.json`),
-      ).closedAt,
-    ).toBeGreaterThan(0);
-  } finally {
-    b.input.end();
-    await b.done;
-    f.store.close();
-  }
-});
+it.each([false, true])(
+  "keeps setup, approved call, feedback and continuation in the same bridge with allowControl=%s and no CUA",
+  async (allowControl) => {
+    const f = backendFixture(allowControl),
+      b = bridge(f);
+    try {
+      const ready = await b.wait((value) => value.event === "ready");
+      expect(ready.currentChat).toBe(true);
+      f.block(true);
+      expect((await b.send("invite", "invite")).ok).toBe(false);
+      expect(
+        f.calls.filter((path) => path === "POST /api/setup/test"),
+      ).toHaveLength(0);
+      f.block(false);
+      const invitation = await b.send("invite", "invite");
+      expect(invitation.result.test.sessionId).toBe(ready.sessionId);
+      expect((await b.send("invite", "invite")).replayed).toBe(true);
+      expect(f.transport.messages).toHaveLength(1);
+      expect((await b.send("start", "start")).ok).toBe(false);
+      expect(f.transport.calls).toHaveLength(0);
+      const testId = invitation.result.test.id;
+      expect((await b.send("authorize", "authorize", { testId })).ok).toBe(
+        false,
+      );
+      expect(
+        (
+          await b.send("authorize-foreign", "authorize", {
+            testId: "other",
+            userAuthorizedCall: true,
+          })
+        ).ok,
+      ).toBe(false);
+      expect(
+        f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
+      ).toHaveLength(0);
+      const approved = await b.send("authorize", "authorize", {
+        testId,
+        userAuthorizedCall: true,
+      });
+      expect(approved.result.test).toMatchObject({
+        id: testId,
+        state: "approved",
+        approvalSource: "native_session",
+      });
+      expect(
+        (
+          await b.send("authorize", "authorize", {
+            testId,
+            userAuthorizedCall: true,
+          })
+        ).replayed,
+      ).toBe(true);
+      expect(
+        f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
+      ).toHaveLength(1);
+      expect((await b.send("yield-invalid", "yield")).ok).toBe(false);
+      expect(
+        (await b.send("yield", "yield", { backgroundActorsStopped: true })).ok,
+      ).toBe(true);
+      const started = await b.send("start", "start");
+      expect(started.ok).toBe(true);
+      const requestId = started.result.request.id;
+      expect(f.transport.calls).toHaveLength(1);
+      expect(
+        (await b.send("pending", "result", { requestId, waitSeconds: 0 }))
+          .result.response,
+      ).toBeUndefined();
+      expect(
+        (await b.send("wrong", "result", { requestId: "different" })).ok,
+      ).toBe(false);
+      const response = f.service.receiveResponse({
+        eventId: "synthetic-human-feedback",
+        requestId,
+        memberId: f.binding.memberId,
+        conversationId: f.binding.conversationId,
+        lineId: f.binding.lineId,
+        channel: "text",
+        text: "Synthetic screen observed",
+      });
+      const result = await b.send("result", "result", {
+        requestId,
+        waitSeconds: 0,
+      });
+      expect(result.result.session.id).toBe(ready.sessionId);
+      expect(
+        (await b.send("ack", "ack", { requestId, responseId: response.id })).ok,
+      ).toBe(true);
+      expect(
+        (
+          await b.send("resume", "resume", {
+            requestId,
+            controlEpoch: result.result.session.controlEpoch,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await b.send("complete", "complete", {
+            requestId,
+            text: "Synthetic continuation complete",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await b.send("verify", "verify")).ok).toBe(false); // Simulations never establish physical acceptance.
+      expect((await b.send("verify", "verify")).ok).toBe(false);
+      expect(
+        f.calls.filter((path) => path === "POST /api/setup/test/verify"),
+      ).toHaveLength(2);
+      expect(f.transport.messages).toHaveLength(2);
+      expect(f.store.all("session")).toHaveLength(1);
+      expect(
+        f.calls.filter((path) => path === "POST /api/sessions"),
+      ).toHaveLength(1);
+      await b.send("cancel", "cancel");
+      b.input.end();
+      await b.done;
+      expect(
+        f.calls.filter((path) => path === "POST /api/setup/test/cancel"),
+      ).toHaveLength(1);
+      expect(
+        secureRead<any>(
+          join(dirname(f.connection), "runs", `${b.runId}.setup.json`),
+        ).closedAt,
+      ).toBeGreaterThan(0);
+    } finally {
+      b.input.end();
+      await b.done;
+      f.store.close();
+    }
+  },
+);
 
 it("upgrades only unchanged owned skills and reports interrupted or edited installations", () => {
   const f = backendFixture();

@@ -10,9 +10,9 @@
 
 You step away. Your agent gets stuck. Your phone rings.
 
-ClawdTime gives Claude Code and Codex a way to call you on FaceTime, show their
-Mac screen, and get your input. Talk naturally or direct a few clicks, then let
-the agent keep working. The result arrives in Messages.
+ClawdTime gives Claude Code and Codex a way to call you on FaceTime, show your
+Mac screen, and get your input. Talk or text naturally, then let the agent keep
+working. After you help, the result arrives in Messages.
 
 ## The flow
 
@@ -26,19 +26,24 @@ editor and workflow.
 
 ## Get started
 
-1. **Text ClawdTime.** Click [Text it](https://www.clawdtime.com) and send a message.
-2. **Give your agent the prompt you receive.** Paste it into your current Claude
-   Code or Codex chat. It sets up the Mac companion and skill/tool integration.
-3. **Grant permissions once.** Allow screen sharing and computer control on your
-   Mac. Setup stays in the same chat, including questions and one authorized test call.
-4. **Keep coding.** Your agent can request a call when it needs a decision or review.
-   Answer, help it out, and receive the result in Messages.
+1. **Say hey.** Click [Text it](https://www.clawdtime.com) to open Messages with
+   “Hey ClawdTime,” then send it from your invited iMessage handset.
+2. **Give your agent the reply’s setup prompt.** Paste it into your current
+   Claude Code or Codex chat. The agent sets up the companion and project skill.
+   That same chat stays active through installation and permission questions.
+3. **Take one test call.** Grant screen access, answer the approved FaceTime call,
+   see your Mac, and talk or text back. Your agent continues and sends a Messages
+   follow-up. Computer control is optional; setup has no clicking exercise.
+4. **Go do your thing.** Keep using your agent normally. Its project skill lets it
+   call for a decision or review and send the follow-up. Help it out from your phone.
 
 No command prefixes or confirmation codes. Local **Stop** always stays available.
 
-**Internal pilot:** requires an available, locally enabled Mac. Public app
-installation is not ready; voice is turn-based. The basic screen/text-return loop
-has passed on a handset; revised voice and compound control still need physical
-verification. Starting new tasks from Messages is planned.
+**Internal pilot:** an available, locally enabled Mac and an operator-provided
+build are required; public app downloads aren’t ready. Voice takes turns rather
+than supporting interruptions. Screen/text return has passed on a handset;
+natural voice still needs live verification. Automatic message likes, standalone progress texts, calling
+the agent yourself, and starting work or asking it questions from Messages
+outside an active request are not available yet. During a call, ask naturally.
 
 [Setup & development](docs/GUIDE.md) · [Current status](docs/STATUS.md) · [Architecture](docs/ARCHITECTURE.md)

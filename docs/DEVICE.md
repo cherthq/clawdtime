@@ -38,10 +38,12 @@ python3 -m unittest discover -s mac/scripts -p 'test_*.py'
 
 Passing source tests do not establish Screen Recording, Accessibility, lock/sleep
 notifications on this OS, actual input delivery, a visible FaceTime screen or phone
-feedback. Fresh bundle identity requires fresh local grants. Physical acceptance
-must observe viewing/Stop first, then typing/click/scroll and one bounded AI action
-on a disposable fixture; repeat lock, sleep, disconnect and hangup. Keep capture
-disarmed when not testing. No physical acceptance or installation is claimed here.
+feedback. Fresh bundle identity requires fresh local grants. Screen-only setup
+acceptance observes viewing, natural voice/text feedback, exact agent continuation,
+the Messages result and sharing cleanup; it requires no click test. Full CUA
+acceptance separately covers typing/click/scroll and one bounded AI action on a
+disposable fixture, plus lock, sleep, disconnect and hangup. Keep capture disarmed
+when not testing. Tests alone establish no physical acceptance or installation.
 
 Stop/disconnect before rollback. Preserve helper/gateway/media ledgers and reconcile
 unknown input by the same ID. Never import Apple Teams data or reset receipts to

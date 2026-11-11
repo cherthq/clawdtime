@@ -330,7 +330,7 @@ describe("runtime standby and mode boundaries", () => {
             recipient: tester,
             chat_id: `iMessage;-;${tester}`,
             is_group: false,
-            parts: [{ type: "text", text: "pair" }],
+            parts: [{ type: "text", text: "Hey agent" }],
           },
         },
       };
@@ -518,15 +518,24 @@ describe("runtime standby and mode boundaries", () => {
           expect(notices[0]!.pairing).not.toHaveProperty("authorization");
           expect(sends).toHaveLength(1);
           expect(sends[0]!.to).toBe(tester);
+          expect(String(sends[0]!.text)).toContain("Hey! I'm ClawdTime.");
+          expect(String(sends[0]!.text)).toContain("chat you're already using");
           expect(String(sends[0]!.text)).toMatch(
-            /^Set up ClawdTime for this project\. Follow https:\/\/clawdtime\.example\.test\/agents using my setup link: https:\/\/clawdtime\.example\.test\/setup#token=/,
+            /Set up ClawdTime for this project\. Follow https:\/\/clawdtime\.example\.test\/agents using my setup link: https:\/\/clawdtime\.example\.test\/setup#token=/,
           );
+          expect(String(sends[0]!.text)).not.toMatch(
+            /liked|tapback|call (?:placed|started)/i,
+          );
+          // Provider replay at a later sequence keeps the exact same native event identity.
+          feed.push({ ...inbound, sequence: 3 });
           await runtime.tick();
           expect(sends).toHaveLength(1);
           expect(runtime.store.all("invite")).toHaveLength(1);
           if (outcome === "acknowledged") {
             const setupUrl = new URL(
-              String(sends[0]!.text).split("using my setup link: ")[1]!,
+              String(sends[0]!.text).match(
+                /https:\/\/clawdtime\.example\.test\/setup#\S+/,
+              )![0],
             );
             const params = new URLSearchParams(setupUrl.hash.slice(1));
             const paired = runtime.service.claimPairing({
@@ -536,6 +545,28 @@ describe("runtime standby and mode boundaries", () => {
               allowView: true,
               allowControl: true,
             });
+            const noPending = {
+              id: "fixture-paired-no-pending",
+              lineId,
+              sender: tester,
+              conversationId: `iMessage;-;${tester}`,
+              text: "Can you call me now?",
+            };
+            runtime.store.put("inbound", {
+              id: noPending.id,
+              sealed: new Vault(config.encryptionKey).seal(noPending),
+              state: "pending",
+            });
+            await runtime.tick();
+            expect(sends).toHaveLength(2);
+            expect(String(sends[1]!.text)).not.toContain("/setup#token=");
+            expect(runtime.store.all("invite")).toHaveLength(1);
+            expect(runtime.store.all("pairing")).toHaveLength(1);
+            expect(runtime.store.all("attention")).toHaveLength(0);
+            expect(runtime.store.all("call")).toHaveLength(0);
+            expect(runtime.store.effects()).toHaveLength(0);
+            await runtime.tick();
+            expect(sends).toHaveLength(2);
             const agent = runtime.service.registerSession(paired.token, {
               adapter: "codex",
               adapterVersion: "fixture",
@@ -558,7 +589,7 @@ describe("runtime standby and mode boundaries", () => {
             expect(runtime.store.effect(test.invitationEffectId)?.state).toBe(
               "done",
             );
-            expect(sends).toHaveLength(2);
+            expect(sends).toHaveLength(3);
             const approval = {
               id: "fixture-verified-yes",
               lineId,
@@ -578,8 +609,8 @@ describe("runtime standby and mode boundaries", () => {
                 ?.state,
             ).toBe("done");
             expect(runtime.store.all("attention")).toHaveLength(0);
-            expect(runtime.store.all("notice")).toHaveLength(1);
-            expect(sends).toHaveLength(2); // Approval is consumed before generic response handling.
+            expect(runtime.store.all("notice")).toHaveLength(2);
+            expect(sends).toHaveLength(3); // Approval is consumed before generic response handling.
             // A typed planner preflight refusal has sent no input. It should be
             // acknowledged to the human, not stranded as an unknown inbound.
             runtime.service.yieldSession(agent.token);
@@ -637,12 +668,12 @@ describe("runtime standby and mode boundaries", () => {
                 `${command.id}:notice`,
               )?.state,
             ).toBe("done");
-            expect(sends).toHaveLength(3);
-            expect(sends[2]?.text).toContain("couldn't safely act");
-            expect(sends[2]?.text).not.toContain("do:");
+            expect(sends).toHaveLength(4);
+            expect(sends[3]?.text).toContain("couldn't safely act");
+            expect(sends[3]?.text).not.toContain("do:");
             expect(runtime.store.all("action")).toHaveLength(0);
             await runtime.tick();
-            expect(sends).toHaveLength(3);
+            expect(sends).toHaveLength(4);
 
             // A model turn must not block the native inbox from delivering Stop.
             let began!: () => void, finish!: () => void;
@@ -689,7 +720,7 @@ describe("runtime standby and mode boundaries", () => {
             await modelBegan;
             feed.push({
               ...inbound,
-              sequence: 3,
+              sequence: 4,
               event_id: "recv:fixture-priority-stop",
               payload: {
                 ...inbound.payload,
@@ -702,7 +733,7 @@ describe("runtime standby and mode boundaries", () => {
             });
             feed.push({
               ...inbound,
-              sequence: 4,
+              sequence: 5,
               event_id: "recv:fixture-ordinary-queued",
               payload: {
                 ...inbound.payload,

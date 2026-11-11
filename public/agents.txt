@@ -63,6 +63,9 @@ run identity/checkpoint and disclose that limit; never promise an immortal sessi
    backgroundActorsStopped=true. Start the single authorized test through the
    bridge. No automatic redial. The human can talk naturally over FaceTime or
    text normally, including compound requests like clicking a textbox and typing.
+   This setup test is screen sharing plus voice or text feedback; no click,
+   typing, scroll, or AI-action exercise is required. Control is optional and
+   needs its own permission. Voice currently takes turns, without barge-in.
    Do not prescribe command prefixes or a screen-confirmation phrase. Ask for
    honest screen feedback and suggest landscape if the desktop looks small.
    Separate screen/control consent, fresh frames, exclusive input, action receipts
@@ -84,4 +87,7 @@ run identity/checkpoint and disclose that limit; never promise an immortal sessi
 
 Screen/audio remain transient. Preserve cursors, original effect IDs, unknown
 outcomes and receipts. One lead owns live integration; never run two services
-on the same phone line. No Mode 2 task initiation or cloud sandbox is involved.
+on the same phone line. The installed skill supports future agent-initiated
+calls and request-completion Messages in this project. Incoming FaceTime and general work/questions from
+Messages outside an active request are not implemented. No Mode 2 task initiation
+or cloud sandbox is involved.

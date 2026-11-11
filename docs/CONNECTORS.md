@@ -23,7 +23,7 @@ is accepted. Redirects, query credentials, duplicate fields and a different orig
 are rejected.
 
 ```sh
-node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --setup-link-file /absolute/private/setup-link.txt --origin https://www.clawdtime.com --allow-view true --allow-control true
+node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --setup-link-file /absolute/private/setup-link.txt --origin https://www.clawdtime.com --allow-view true --allow-control false
 ```
 
 Use `--agent claude-code` for Claude Code. Explicit view/control flags must reflect
@@ -31,6 +31,11 @@ the user's permission. `--allow-control false` pairs view only. The claim intent
 saved before its single HTTP attempt; its result is saved mode 0600 before any
 configuration. Interrupted/unknown claims are never automatically retried. The
 lead must reconcile the saved checkpoint. A successful checkpoint is reused safely.
+
+The first test requires screen sharing and feedback by voice or text, followed by
+same-chat continuation and a Messages recap. It does not require a clicking,
+typing, scrolling or AI-control exercise. Request control only if the user wants
+that capability; enabling it is not permission to exercise it during setup.
 
 For an existing authorized connection, omit the link and use `--existing true`:
 
@@ -55,6 +60,50 @@ does not count as installed: missing files fail the local checks. Resolve the ex
 reported issue in this chat, using its native question/user-input tool for human
 permission/local Enable steps. Ask an ordinary question only if that client lacks
 such a tool. Do not end the interaction or call setup complete while waiting.
+
+### Existing Mac, fresh line pairing
+
+An installed companion can be reused, but a pairing belongs to its original line,
+member, device and display. A fresh line requires its own newly texted setup link.
+`--existing true` means the same pairing, not merely the same app or project.
+The CLI refuses a fresh link over a prior connection/checkpoint; the companion
+also refuses replacing a different claimed binding. Neither token is transferable.
+
+Before the lead replaces an old project's owned entries, preserve its protected
+connection/run checkpoints and companion configuration/receipts, and establish
+known cleanup and revocation of the old authorization. The normal `disconnect`
+command revokes and removes its local connection directory, so archival must
+precede it. Do not delete an unknown claim, use another config root to bypass an
+owned project entry, or rewrite the old token. This migration is an operator
+prerequisite, not something the setup prompt silently performs.
+
+After the lead has prepared that clean project binding, the fresh setup command
+can reuse the existing explicitly trusted pilot app and a new private companion
+directory:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --setup-link-file /absolute/private/new-line-setup.txt --origin https://www.clawdtime.com --allow-view true --allow-control false --pilot-installed true --app "/absolute/ClawdTime Companion.app" --directory /absolute/private/new-companion --relay-url wss://TRUSTED_MEDIA_ORIGIN/device-gateway --gateway-python /absolute/path/to/clawdtime/gateway/.venv/bin/python
+```
+
+Use the actual trusted link origin if it is the compatible legacy origin. Keep
+the same permissions when rerunning `setup --existing true` with the same companion
+arguments. Setup prepares configuration, not a running gateway: the lead must
+stop the old owned helper/gateway, preserve their state, provision the new device
+gateway mapping, and activate the new configuration without concurrent ownership.
+The installed app needs an explicit `--config NEW_DIRECTORY/helper.json` launch
+for a nondefault directory; ordinary Quit/Reopen does not select it. Follow the
+companion report for native permission and local Enable steps. No reinstall or
+TCC reset is implied. See [device setup](DEVICE.md) for the Mac-owned procedure.
+
+Then run the foreground `setup-session` below in this same coding chat, with a
+fresh stable run ID for this authorized attempt. No native client restart, new
+chat, `run` wrapper or separate acceptance client is needed. Preserve old runs;
+do not revive a stopped one. The installed project skill remains reusable after
+setup. Codex discovers project skills from `.agents/skills`; in a multi-folder
+desktop project, automatic discovery uses the primary folder. The current chat
+can read the installed skill directly and use the bridge without claiming MCP
+hot reload. [Official skill guidance](https://learn.chatgpt.com/docs/customization/overview#skills),
+[project discovery](https://learn.chatgpt.com/docs/projects#use-local-projects-for-folders-and-codebases).
 
 ### Foreground setup-session protocol
 
@@ -490,12 +539,34 @@ the controlled handoff, launches the intended client, then pastes the saved prom
 Use `--agent claude-code` and a separate case/output for Claude Code.
 
 The prompt checks the exact local run identity, yields control, requests one call,
-waits for actual feedback/CUA, acknowledges the response and current control epoch,
+waits for actual screen feedback by voice or text, acknowledges the response and current control epoch,
 resumes under native policy, writes a disposable result file, and queues a factual
 Messages recap. It never supplies synthetic human feedback. The operator records
 actual handset observations, native receipts and delivery separately. A completed
 request or queued message is not itself handset delivery.
 
+This separate client qualification helper is not required for same-chat setup.
+Its default prompt requires no CUA exercise; any previously saved plan retains its
+original instructions and must be reviewed before use. Control qualification and
+an untested voice/text channel remain separate evidence.
+
 Both real synthetic CLI probes now also assert that the backend's registered session
 matches the wrapper's exact run ID. This passed for the recorded Claude/Codex versions.
 No actual live acceptance was performed by these probes or plan preparation.
+
+## Incoming surfaces and limits
+
+Incoming Messages can establish onboarding and supply authenticated feedback to
+an owned active request/call. They do not create arbitrary coding tasks in a
+desktop chat or resume a stopped agent session. The skill is cooperative: the
+active coding agent invokes its tools when attention is needed; it does not
+intercept every native approval automatically. User-initiated inbound FaceTime
+is not the supported setup path. Mode 2, which starts work from the phone, remains
+deferred.
+
+The outbound setup test must record actual handset screen rendering, the feedback
+channel used, same-session continuation and Messages delivery. Passing it does not
+qualify CUA, the other feedback channel, all client surfaces, or inbound FaceTime.
+Voice currently uses half-duplex replies: listening pauses while the service
+speaks. Local Stop and supported phone Stop remain available; voice barge-in while
+speech is playing is not claimed.

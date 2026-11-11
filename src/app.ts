@@ -15,6 +15,7 @@ import type {
 } from "./contracts.js";
 import { HumanRouter, isImmediateStop } from "./control/human-router.js";
 import { SetupService } from "./pairing/setup.js";
+import { publicPage } from "./public-page.js";
 import {
   setupRetirementInput,
   type SetupRetirementInput,
@@ -27,6 +28,7 @@ export interface AppOptions {
   mediaToken?: string;
   simulation: boolean;
   dispatchEnabled?: boolean;
+  publicTextNumber?: string;
   retireObsoleteNotice?: (input: {
     noticeId: string;
     pairingId: string;
@@ -106,7 +108,12 @@ export function createApp(
   );
   app.get("/", (c) =>
     c.html(
-      readFileSync(new URL("../public/index.html", import.meta.url), "utf8"),
+      publicPage(
+        readFileSync(new URL("../public/index.html", import.meta.url), "utf8"),
+        !options.simulation && options.dispatchEnabled === true
+          ? options.publicTextNumber
+          : undefined,
+      ),
     ),
   );
   app.get("/pricing", (c) =>

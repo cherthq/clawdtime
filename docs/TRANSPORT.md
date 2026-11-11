@@ -229,36 +229,60 @@ starting another. No deployment or routing changes are performed by these checks
 
 ### Same-session setup test
 
-The initial private Messages response is an agent prompt linking `/agents` and an
-expiring `/setup#token=...&device=...&display=...` link. Tokens remain in the URL
-fragment. The agent claims the existing one-use pairing and registers its own
-session; possession of an arbitrary phone number never grants pairing authority.
+An authenticated, allowlisted first private iMessage such as “Hey agent” receives
+one warm welcome containing a copyable `/agents` instruction and expiring
+`/setup#token=...&device=...&display=...` link. The human pastes the instruction
+into the Claude Code or Codex chat already doing the work. Tokens remain in the URL
+fragment. The existing one-use invite binds the member, line, conversation, Mac
+and display; an arbitrary phone number never grants pairing authority.
 
-`SetupService` stores one `setup_test` per session. A new live invitation requires
-fresh passing doctor evidence before claiming configuration is complete. Inviting
-queues a normal durable message effect with a stable ID. Repeated invitation calls return the same test,
-including canceled/expired attempts. Another session cannot create an ambiguous
-pending invitation for the same sender, line and conversation. One test expires
-after ten minutes; a new attempt requires a new agent session and human approval.
+The welcome is one durable notice, not multiple independently retried texts.
+Native event identity and the committed cursor suppress repeated feed deliveries;
+repeated polling does not create another invitation or send. An uncertain notice
+stays unknown and is never automatically resent. A genuinely new inbound message
+is a new event; before pairing it can create another scoped one-use invitation.
+Once paired, a message with no pending attention request receives guidance back to
+the connected coding agent, rather than creating a new agent or placing a call.
 
-Only an exact authenticated native DM `YES` after the invitation's committed
-receipt approves the test. Event IDs and fingerprints are retained, so an early,
-duplicate, or conflicting event cannot later become a new approval. Wrong sender,
-line, conversation and unrelated text do not approve. `NO` or `CANCEL` closes the
-test. Approval alone never places a call: the originating session must yield and
-explicitly invoke start. Repeated start returns the same attention request and
-ordinary call effect. Cancel, expiry, revocation and session loss retain uncertain
-outcomes and initiate owned-call cleanup without replaying effects.
+A like/tapback is **not implemented or claimed** in this welcome. Chert source has
+strict once-only reaction routes, but they require separate receipt-journal and
+exact target qualification. In particular, reaction dispatch still uses its own
+strict chat-context predicate; a repaired text path is not reaction qualification.
+No unreceipted `/react` fallback or cosmetic resend is permitted. Native ingestion
+currently accepts private iMessage text only; ordinary carrier SMS, groups and
+attachments are not a supported onboarding channel. Calling the number inbound is
+not implemented: the test call originates from the exact connected agent session.
 
-Verification is a separate evidence gate. It requires live transport, a retained
-qualified connected-call observation, a bound fresh screen-frame observation,
-subsequent explicit “I can see my screen” feedback acknowledged by the same
-session (case/terminal punctuation ignored), normal continuation,
-completed work and an acknowledged Messages result receipt. Simulation cannot
-produce a verified setup. Screens remain transient; the gate retains frame
-metadata only. Unknown invitations and the existing global unknown-outcome gate
-remain blocking except for the exact operator supersession described below; setup
-never retries or clears an existing unknown notice.
+`SetupService` stores a setup test bound to the originating session. A new live
+invitation requires fresh passing doctor evidence, and queues a normal durable
+message with a stable ID. Repeated invitation calls return the same test, including
+canceled/expired attempts. Another session cannot create an ambiguous pending test
+for the same member, line and conversation. Normal setup never replaces an old
+attempt; the narrow historical retirement/retry mechanism below remains separate.
+
+New tests use native-session authorization: the originating connector attests the
+human's actual explicit permission for one exact, unexpired test through
+`POST /api/setup/test/authorize`. The welcome, a tapback, general setup intent and
+an old call permission do not themselves authorize a new call. No new SMS code or
+confirmation phrase is required. Existing coded and uncoded SMS approvals remain
+supported only for their historical test records. Approval never dials on its own:
+the same coding session must yield and explicitly start. Repeated start returns
+the same attention request and call effect. The initial approval window is ten
+minutes; authenticated approval starts a ten-minute readiness/start window, and
+starting the call binds test expiration to its attention deadline. Duplicate
+approval/start does not extend these windows. Cancellation, expiry, revocation and
+session loss initiate owned cleanup while preserving unknown outcomes.
+
+Verification is a separate evidence gate: live transport, qualified connected call,
+a bound fresh screen frame, the authenticated human's later visibility report,
+feedback to the originating session, normal continuation, completed work and an
+acknowledged Messages result receipt. A visibility report alone does not end the
+call. Its event, request, call, pairing, session and admission time are retained as
+metadata; a later explicit report that the screen is not visible supersedes it.
+Model latency cannot make an earlier human report count as post-frame evidence.
+No exact spoken sentence is required. Simulation cannot produce a verified setup,
+and screenshots remain transient. Unknown outcomes remain blocking except for
+separately validated immutable supersession audits; setup never clears them.
 
 During an origin migration, `CLAWDTIME_COMPATIBLE_ORIGINS` may contain at most eight
 comma-separated exact HTTPS origins. The canonical `CLAWDTIME_ORIGIN` remains the
@@ -345,8 +369,8 @@ replaces a test. The new record preserves `previousTestId`; status chooses the
 newest attempt deterministically. A duplicate retry is rejected rather than
 creating another attempt; clients reconcile through GET status after uncertainty.
 
-Every newly created setup invitation includes an independent eight-character
-approval code and requires the exact verified DM `YES <code>` (case-insensitive).
+Historical coded setup invitations include an independent eight-character
+approval code and require the exact verified DM `YES <code>` (case-insensitive).
 An old bare `YES`, wrong code, reused event, unrelated sender/line/conversation or
 reply before acknowledgement of the new invitation cannot approve it. Bare YES
 remains compatible only with existing legacy uncoded tests. Exact NO/CANCEL stops

@@ -17,6 +17,10 @@ PRIVATE_FILE --origin TRUSTED_HTTPS_ORIGIN --allow-view true --allow-control
 true|false`, only after explicit user permission for the selected capabilities.
 Use `--existing true` without a link for an already paired project. Preserve any
 unknown claim outcome and its checkpoint; do not consume the token again.
+An existing companion app is not an existing pairing. A different line or member
+requires a fresh setup link and pairing. Never rewrite an old connection token,
+claim checkpoint or companion binding to point at the new line; the lead must
+preserve and reconcile the old installation before replacing its owned entries.
 
 Follow the companion report. For each required macOS permission or local Enable
 step, use this client's native question/user-input tool when available and remain
@@ -64,6 +68,14 @@ must come from the qualified remote participant. Screen visibility and a request
 to continue are different: seeing the screen does not release the coding agent.
 A click receipt does not prove correct focus; keep the visual-verification warning
 before typing. Stop remains available locally and through the call/conversation.
+
+The setup test is one approved outbound video call: the human confirms the selected
+screen, speaks or texts feedback, and asks this same coding chat to continue.
+Then acknowledge, resume, perform the agreed continuation and send its factual
+Messages recap. No clicking, typing, scrolling or bounded AI action is required.
+Control permission is optional and does not authorize a control exercise. Keep a
+view-only pairing view-only; qualify CUA separately only when requested. Do not
+claim voice was tested if the human used only text, or vice versa.
 
 Use `diagnostics` with this exact test's requestId for bounded metadata about call,
 helper, capture and media phases. It is read-only and returns no images, audio or
@@ -161,3 +173,9 @@ The connector heartbeats every five seconds. Twenty seconds without liveness
 stops the backend session and begins owned-call cleanup. A stopped session cannot
 be revived by reconnecting; preserve its request/action IDs for reconciliation
 instead of issuing a replacement call or treating pending feedback as approval.
+
+The installed skill supports future cooperative attention in this project; it is
+not a background coding agent or a universal approval hook. Incoming Messages can
+onboard and feed an owned active call/request, but do not start arbitrary new coding
+work. User-initiated inbound FaceTime and autonomous phone-originated coding are
+not established by this outbound setup test.

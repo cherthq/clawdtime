@@ -1,5 +1,6 @@
 import { retireObsoleteNotice as retireNotice } from "./control/obsolete-notice.js";
 import { SetupService } from "./pairing/setup.js";
+import { welcomeMessage } from "./pairing/welcome.js";
 import { readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { Store } from "./storage/store.js";
@@ -237,6 +238,10 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     mediaToken: env.CLAWDTIME_MEDIA_TOKEN,
     simulation: mode === "simulation",
     dispatchEnabled: mode !== "standby",
+    publicTextNumber:
+      live && env.CLAWDTIME_PUBLIC_TEXTING === "true"
+        ? config?.binding.phone
+        : undefined,
   });
   for (const n of store.all<Notice>("notice"))
     if (n.state === "running")
@@ -462,7 +467,12 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                 lineId: event.lineId,
                 conversationId: event.conversationId,
               });
-              reply = `Set up ClawdTime for this project. Follow ${origin}/agents using my setup link: ${origin}/setup#token=${encodeURIComponent(invite.token)}&device=${encodeURIComponent(tester.deviceId)}&display=${encodeURIComponent(tester.displayId)}`;
+              reply = welcomeMessage({
+                origin,
+                token: invite.token,
+                deviceId: tester.deviceId,
+                displayId: tester.displayId,
+              });
             } else {
               const pending = store
                 .all<AttentionRequest>("attention")

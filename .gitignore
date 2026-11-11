@@ -14,3 +14,5 @@ artifacts/
 *.log
 .clawdtime/
 .mcp.json
+.codex/config.toml
+.agents/skills/clawdtime/
