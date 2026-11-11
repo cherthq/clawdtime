@@ -526,3 +526,32 @@ retained in its audit, and `nativeEndAcknowledgementUnknown:true`. Readiness now
 passes. A fresh read-only ownership audit confirms Apple Teams disabled, no active
 source calls or pending/unknown source jobs, provider idle and the original source
 cursor retained. No additional call has been placed under this release.
+
+## User-requested wrap-up — November 11
+
+The final authorized diagnostic call on `4550c12` again delivered a live screen,
+authenticated Messages feedback and continuation in the same native Codex chat.
+Three input receipts reached observed state, but correct fixture targeting remains
+unverified. The user initially reported direct actions appeared to work; subsequent
+local calibration established that the user was using the in-app browser fixture
+while the operator inspected a separate Chrome copy. Coordinates grounded to that
+Chrome layout therefore cannot establish correct targeting in the in-app pane.
+No direct-control physical pass is inferred from confirmation texts or receipts.
+
+The bounded AI action refused before inference during screen settling: 2,374 decoded
+pixels changed across five coarse regions in a 1,108-by-720 frame over 4,641ms.
+This rules out encoding-only variation for that comparison. The changing coding
+chat beside the in-app fixture is a possible contributor, not a proven sole cause.
+The authenticated response was acknowledged, all leases released, the exact session
+resumed at epoch 4, and a real continuation artifact was updated. A factual recap
+was queued. The test's basic verifier was called after its deadline and returned
+expired; it was not reopened. Earlier verified basic-loop acceptance remains valid.
+
+The user requested no further tests and asked to wrap up. No additional call is
+authorized or scheduled. The last native call is ended, media closed, sharing
+stopped and the foreground transport bridge closed. The installed companion and
+backend remain available for explicitly authorized future use. The separately
+hosted pilot is runnable. Full CUA, spoken-feedback and Claude Code physical-loop
+acceptance remain unverified; no full demo-readiness claim is made. Current code
+validation remains 308 passing TypeScript tests plus typecheck/build/format and
+independent review.
