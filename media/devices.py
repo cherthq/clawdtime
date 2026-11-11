@@ -90,6 +90,16 @@ class ScreenController:
         self.frame=None;self.frame_id=None;self.captured_at=None
         self.state=state;self.revision+=1
 
+    def invalidate_input(self,frame_id,lease_id):
+        # An ordinary action consumes its input frame. Keep its still-fresh
+        # pixels only for continuous video until the next capture; it cannot
+        # authorize another input or be returned as a post-action observation.
+        if (not self.selection or self.selection['leaseId']!=lease_id or
+                self.frame_id!=frame_id): return
+        self.frame_id=None
+        self.state='awaiting_frame'
+        self.hold_until=0
+
     def expire(self):
         if self.selection and (time.monotonic()-self.policy_at>=2 or timestamp(self.selection['expiresAt'])<=time.time()):
             self.clear('unavailable')
@@ -107,7 +117,7 @@ class ScreenController:
     async def observed(self, include_frame=False):
         async with self.frame_lock:
             current=self.status()
-            if self.frame:
+            if self.frame and self.frame_id and self.state=='viewing':
                 # The helper validates inputs against its most recent frame.
                 # Freeze polling briefly while the backend submits one explicit
                 # action, rather than racing a new capture against that action.

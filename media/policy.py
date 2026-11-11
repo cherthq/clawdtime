@@ -31,5 +31,10 @@ def pause_requested(text):
     return bool(re.fullmatch(r'hey clawdtime[,!:]?\s+(?:pause|stop) (?:notes|recording|listening|sharing)[.!]?', text, re.I))
 
 
+def priority_stop_requested(text):
+    return isinstance(text,str) and bool(re.fullmatch(
+        r'(?:(?:hey\s+)?clawdtime[,!:]?\s+)?stop(?:\s+(?:sharing|control|listening))?[.!]?',text.strip(),re.I))
+
+
 def validate_session_id(value):
     return isinstance(value, str) and bool(re.fullmatch(r'ct_[a-f0-9]{40}', value))

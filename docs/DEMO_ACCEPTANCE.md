@@ -58,11 +58,12 @@ For each documented Claude Code/Codex CLI surface, use a disposable coding proje
    attention. Record request-created and handset-ringing timestamps.
 3. Answer FaceTime. Hear the request question and see the correct live Mac display.
    Record answer-to-visible-screen latency. Prove no unrelated display is shown.
-4. Say "Hey ClawdTime, answer: ..." and verify text fallback. The exact session sees
+4. Speak naturally without a wake phrase or prefix, and verify text fallback. The exact session sees
    one response, acknowledges it and resumes with the current control epoch.
-5. While watching, perform click, printable typing, scroll and one bounded AI action
+5. While watching, request clicking, printable typing, scrolling and a bounded compound action
    in the disposable fixture. Observe the application state, not merely a submitted
-   receipt. Verify no coding-agent/background action races control.
+   receipt. Verify smooth video through each action and no coding-agent/background
+   action races control. Confirm spoken replies and a useful landscape suggestion.
 6. Verify one factual completion in the same Messages conversation. Record
    human-response-to-agent-continuation latency.
 7. Hang up and test local Stop, lock, sleep, helper/gateway loss and pairing revocation.

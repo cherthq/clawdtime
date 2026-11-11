@@ -18,8 +18,8 @@ The physical Codex chat → FaceTime → Mac screen → authenticated Messages f
 → same-chat continuation → Messages recap path passed on the intended handset.
 Computer control did not pass: typing reached the Codex reply box after the planned
 focus click failed. A planner/failure-handling repair is locally verified; correct
-click/type/scroll/AI targeting still needs physical acceptance. Voice feedback and
-the Claude Code physical call loop remain unverified. See [STATUS](docs/STATUS.md).
+click/type/scroll/AI targeting still needs physical acceptance. Natural conversational voice/text and continuous viewing during actions are implemented and locally tested; their updated physical flow and the Claude Code call loop remain
+unverified. See [STATUS](docs/STATUS.md).
 
 [Open the landing page](https://backend-production-ee686906.up.railway.app).
 Agent instructions are at `/agents`, and personal setup links use `/setup`.
@@ -49,15 +49,16 @@ The setup message does the handoff to your existing coding agent:
    display, grant Screen Recording, separately grant Accessibility for computer
    control, and enable sharing locally. The workflow stays active while waiting
    for your answers or permissions until verified or explicitly canceled.
-4. **Approve one real test.** Once readiness passes, the agent texts:
-   “ClawdTime is configured. Ready for one FaceTime video test showing this Mac’s
-   selected screen? Reply YES followed by the code in this invitation.” It waits for that authenticated reply,
-   yields conflicting work, and initiates one call through the integration.
-5. **Confirm the screen and continue.** While viewing the screen, say
-   “ClawdTime, answer I can see my screen” or text “answer: I can see my screen”.
-   The same agent acknowledges feedback, resumes after control is released, and
-   sends its result through Messages. Only the full live evidence chain verifies
-   setup. A failed test is reported accurately; there is no automatic redial.
+4. **Run the one authorized setup call.** The agent uses your explicit authorization
+   in the current setup chat, texts a heads-up, yields conflicting work and calls.
+   There is no additional SMS code or repeated confirmation for ordinary control.
+5. **Talk naturally while watching.** Ask “Click that textbox and type hello,”
+   “Scroll down,” or give the coding agent your decision. The same conversational
+   agent chooses tools and observes between actions. It can suggest landscape for
+   a larger view. When you are ready to continue coding, it returns your feedback
+   to the exact session, releases control, and sends the result through Messages.
+   Setup verification requires actual positive screen feedback and the full live
+   evidence chain; there is no prescribed phrase or automatic redial.
 
 The current pilot uses a trusted local checkout and the approved installed Mac
 companion. A public signed/notarized download and automatic fresh-device gateway
@@ -123,7 +124,7 @@ clean installation check. See [device setup](mac/README.md).
 When blocked, needing a decision/approval/review, or ready to show a result, it
 explicitly invokes ClawdTime. It yields conflicting activity, calls the paired
 human, and shows the intended screen. Respond by voice or text, or direct typing,
-clicking, scrolling or one bounded AI-directed screen action. After feedback is
+clicking, scrolling or a bounded sequence of human-directed screen actions. After feedback is
 acknowledged and control released, the exact agent session continues under its
 native permission policy and sends a factual completion recap through Messages.
 
@@ -137,16 +138,16 @@ pending attention request belongs to Mode 1.
 
 ## Features and evidence
 
-| Feature                                                | Implementation status                                                                                             |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| Private agent-initiated FaceTime attention             | Physical outbound video call answered on the intended handset                                                     |
-| Screen viewing from the paired Mac                     | Physical fixture video confirmed on handset; full fresh-install distribution acceptance pending                   |
-| Voice and text feedback for the exact task             | Authenticated Messages feedback resumed the exact Codex session; spoken feedback unverified                       |
-| Human-directed click/type/scroll and bounded AI action | Implemented with fresh frames and exclusive leases; wrong-target typing observed, full control acceptance pending |
-| Claude Code and Codex MCP tools/skills                 | Both CLI synthetic workflows passed; physical Codex same-chat loop passed, Claude physical loop pending           |
-| Durable requests, responses and action receipts        | SQLite/backend and migrated helper/gateway/media ledgers; replay/restart tests                                    |
-| Visible state, local Stop, revocation/disconnect       | Implemented with fail-closed policy tests; physical lock/sleep/Stop verification required                         |
-| iMessage completion result                             | Factual completion recap confirmed received on the intended handset                                               |
+| Feature                                                       | Implementation status                                                                                             |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Private agent-initiated FaceTime attention                    | Physical outbound video call answered on the intended handset                                                     |
+| Screen viewing from the paired Mac                            | Physical fixture video confirmed on handset; full fresh-install distribution acceptance pending                   |
+| Voice and text feedback for the exact task                    | Authenticated Messages feedback resumed the exact Codex session; spoken feedback unverified                       |
+| Human-directed click/type/scroll and bounded compound actions | Implemented with fresh frames and exclusive leases; wrong-target typing observed, full control acceptance pending |
+| Claude Code and Codex MCP tools/skills                        | Both CLI synthetic workflows passed; physical Codex same-chat loop passed, Claude physical loop pending           |
+| Durable requests, responses and action receipts               | SQLite/backend and migrated helper/gateway/media ledgers; replay/restart tests                                    |
+| Visible state, local Stop, revocation/disconnect              | Implemented with fail-closed policy tests; physical lock/sleep/Stop verification required                         |
+| iMessage completion result                                    | Factual completion recap confirmed received on the intended handset                                               |
 
 Verified client probes: **Claude Code 2.1.311** terminal print mode and **Codex CLI
 0.166.0-alpha.5.1** exec mode. Both invoked actual MCP tools, consumed synthetic
@@ -165,6 +166,11 @@ Phone / FaceTime ←────────────────────
                                                                     ↕
 Paired Mac companion ← loopback helper API ← outbound authenticated WSS gateway
 ```
+
+Live conversational feedback requires `CLAWDTIME_AI_ACTIONS=true`, an explicit
+`CLAWDTIME_AI_PROVIDER`/`CLAWDTIME_AI_MODEL`, and its independent provider key.
+When disabled, natural-language interpretation fails closed; local Stop remains
+available. `npm run demo` uses an explicitly scripted simulation without a model.
 
 The helper stays on loopback; the gateway makes an outbound WSS connection to the
 media service. Tailscale is optional for an explicitly configured private route,

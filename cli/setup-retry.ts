@@ -260,7 +260,7 @@ export async function retryExistingSetup(options: {
     return {
       ...result,
       invitationDelivery: "unverified",
-      next: "Keep the existing coding chat and foreground bridge alive. Send status to that bridge to learn the new test; wait using the native question tool for the exact YES code sent by the backend. Nothing was registered or restarted.",
+      next: "Keep the existing coding chat and foreground bridge alive. Send status to that bridge to learn the new test; obtain explicit user consent for this one test and record it through the current test authorization flow before starting. An old bridge without authorize cannot hot reload; the lead must use a reviewed exact-session path. Nothing was registered or restarted.",
     };
   } finally {
     rmSync(effectLock, { recursive: true });

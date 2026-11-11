@@ -84,6 +84,5 @@ class DeviceActions:
             self.db.execute("UPDATE device_actions SET state='unknown' WHERE id=?",(body['id'],));self.db.commit()
             raise
         finally:
-            session.screen.clear('unavailable')
-            session.screen.hold_until=0
+            session.screen.invalidate_input(body['frameId'],body['leaseId'])
         return web.json_response(self.receipt(sid,body['id']))

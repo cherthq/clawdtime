@@ -44,8 +44,11 @@ export function validateRetryResult(
     test.sessionId !== sessionId ||
     test.pairingId !== pairingId ||
     test.state !== "awaiting_approval" ||
-    typeof test.approvalCode !== "string" ||
-    !/^[A-F0-9]{8}$/.test(test.approvalCode) ||
+    !(test.approvalMode === "native_session"
+      ? test.approvalCode === undefined
+      : test.approvalMode === undefined &&
+        typeof test.approvalCode === "string" &&
+        /^[A-F0-9]{8}$/.test(test.approvalCode)) ||
     typeof test.invitationEffectId !== "string" ||
     !test.invitationEffectId ||
     test.approvedAt !== undefined ||

@@ -1,8 +1,4 @@
-import { randomBytes } from "node:crypto";
-import {
-  legacySetupInvitation,
-  setupInvitationReplacementAllowed,
-} from "./retired-setup.js";
+import { setupInvitationReplacementAllowed } from "./retired-setup.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -14,11 +10,8 @@ import { ClawdTime } from "../attention/service.js";
 import { DomainError, hash, id } from "../storage/security.js";
 import type { NativeMessage } from "../transport/native-messages.js";
 
-const invitation = (code: string) =>
-  legacySetupInvitation.replace(
-    "Reply YES when ready.",
-    `Reply YES ${code} when ready.`,
-  );
+const invitation =
+  "ClawdTime setup is ready. Your coding agent can place one FaceTime video test once you authorize it in your setup chat. You can speak naturally during the call.";
 const open = new Set<SetupTest["state"]>([
   "awaiting_approval",
   "approved",
@@ -116,14 +109,6 @@ export class SetupService {
             .filter((t) => t.sessionId === session.id)
             .map((t) => t.createdAt + 1),
         );
-      let approvalCode: string;
-      do {
-        approvalCode = randomBytes(4).toString("hex").toUpperCase();
-      } while (
-        this.store
-          .all<SetupTest>("setup_test")
-          .some((t) => t.approvalCode === approvalCode)
-      );
       const next: SetupTest = {
         id: testId,
         sessionId: session.id,
@@ -131,7 +116,7 @@ export class SetupService {
         createdAt,
         expiresAt: createdAt + 600_000,
         state: "awaiting_approval",
-        approvalCode,
+        approvalMode: "native_session",
         ...(previousTestId ? { previousTestId } : {}),
         invitationEffectId: `${testId}:invite`,
       };
@@ -144,10 +129,55 @@ export class SetupService {
         payload: {
           setupTestId: next.id,
           pairingId: pairing.id,
-          text: invitation(approvalCode),
+          text: invitation,
         },
       });
       return { test: next };
+    });
+  }
+  authorize(raw: string, testId: string, userAuthorizedCall: true) {
+    const { session, test } = this.current(raw);
+    const now = this.service.clock();
+    if (
+      userAuthorizedCall !== true ||
+      !test ||
+      test.id !== testId ||
+      test.approvalMode !== "native_session" ||
+      !["awaiting_approval", "approved"].includes(test.state) ||
+      test.requestId ||
+      !["active", "yielded"].includes(session.state) ||
+      now - (session.lastSeenAt ?? session.createdAt) > 20_000 ||
+      (session.lastSeenAt ?? session.createdAt) > now + 1000
+    )
+      throw new DomainError(
+        409,
+        "A current unexpired test in this originating session and explicit one-call authorization are required.",
+      );
+    this.service.pairing(session.pairingId);
+    if (test.state === "approved") return { test };
+    const eventId = `native-setup-consent:${test.id}`;
+    return this.store.transaction(() => {
+      const approved = this.store.put<SetupTest>("setup_test", {
+        ...test,
+        state: "approved",
+        approvalSource: "native_session",
+        approvedAt: now,
+        approvalEventId: eventId,
+        expiresAt: now + 600_000,
+      });
+      this.store.recordEvent(
+        eventId,
+        hash(
+          JSON.stringify({ testId, sessionId: session.id, userAuthorizedCall }),
+        ),
+        {
+          testId,
+          sessionId: session.id,
+          source: "native_session",
+          approvedAt: now,
+        },
+      );
+      return { test: approved };
     });
   }
   start(raw: string) {
@@ -166,7 +196,15 @@ export class SetupService {
     )
       throw new DomainError(
         409,
-        "Wait for the exact human YES before starting the test.",
+        "Record explicit authorization for this one test from the originating chat before starting.",
+      );
+    if (
+      test.approvalMode === "native_session" &&
+      this.store.effect(test.invitationEffectId)?.state !== "done"
+    )
+      throw new DomainError(
+        409,
+        "Wait for the setup notice delivery receipt; do not resend an uncertain notice.",
       );
     if (session.state !== "yielded")
       throw new DomainError(
@@ -180,7 +218,7 @@ export class SetupService {
         reason: "review",
         timeoutSeconds: 300,
         question:
-          "ClawdTime setup test: if you can see this Mac’s selected screen, say ClawdTime answer I can see my screen, or text answer: I can see my screen. Otherwise tell us what failed.",
+          "We are testing your Mac screen connection. Tell me what you see or ask me to help with this screen. We can keep working until you ask to return to coding. You can speak naturally. Turning your phone to landscape may give you a larger view.",
       });
       return {
         test: this.store.put<SetupTest>("setup_test", {
@@ -217,6 +255,15 @@ export class SetupService {
     const response = request.responseId
       ? this.store.get<HumanResponse>("response", request.responseId)
       : undefined;
+    const screenFeedback = this.store.state<{
+      eventId: string;
+      requestId: string;
+      sessionId: string;
+      pairingId: string;
+      callId: string;
+      visible: boolean;
+      reportedAt: number;
+    }>(`screen-feedback:${request.id}`);
     const result = this.store.effect(`${request.id}:result`);
     if (
       this.service.transport.mode !== "live" ||
@@ -236,12 +283,24 @@ export class SetupService {
       response.requestId !== request.id ||
       response.acknowledgedSessionId !== session.id ||
       response.acknowledgedAt === undefined ||
-      response.text
-        .trim()
-        .toLowerCase()
-        .replace(/[.!?]+$/, "")
-        .trim()
-        .replace(/\s+/g, " ") !== "i can see my screen" ||
+      (test.approvalMode === "native_session"
+        ? !(
+            screenFeedback?.visible === true &&
+            !!screenFeedback.eventId &&
+            screenFeedback.requestId === request.id &&
+            screenFeedback.sessionId === session.id &&
+            screenFeedback.pairingId === session.pairingId &&
+            screenFeedback.callId === connected.callId &&
+            Number.isFinite(screenFeedback.reportedAt) &&
+            screenFeedback.reportedAt >= view.observedAt &&
+            screenFeedback.reportedAt <= response.createdAt
+          )
+        : response.text
+            .trim()
+            .toLowerCase()
+            .replace(/[.!?]+$/, "")
+            .trim()
+            .replace(/\s+/g, " ") !== "i can see my screen") ||
       response.createdAt < view.observedAt ||
       request.state !== "completed" ||
       result?.state !== "done" ||
@@ -332,6 +391,7 @@ export class SetupService {
       const candidates = this.store.all<SetupTest>("setup_test").filter((t) => {
         const p = this.store.get<Pairing>("pairing", t.pairingId);
         return (
+          t.approvalMode !== "native_session" &&
           open.has(t.state) &&
           p?.revokedAt === undefined &&
           p?.recipient === event.sender &&

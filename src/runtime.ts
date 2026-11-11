@@ -13,10 +13,10 @@ import {
 import type { NativeMessage } from "./transport/native-messages.js";
 import { SimulationTransport } from "./transport/simulation.js";
 import { ControlCoordinator, SimulatedDevice } from "./control/coordinator.js";
-import { HumanRouter } from "./control/human-router.js";
+import { HumanRouter, isImmediateStop } from "./control/human-router.js";
 import { Viewing } from "./control/viewing.js";
 import { MediaDevicePort } from "../media/device-port.js";
-import { configuredPlanner } from "./control/planner.js";
+import { configuredConversationAgent } from "./control/conversation.js";
 import { createApp } from "./app.js";
 import type { AttentionRequest, Pairing } from "./contracts.js";
 
@@ -210,8 +210,9 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     service,
     control,
     device instanceof MediaDevicePort
-      ? configuredPlanner(device, env)
+      ? configuredConversationAgent(device, env)
       : undefined,
+    maintainConversation,
   );
   const vault = config ? new Vault(config.encryptionKey) : undefined;
   const app = createApp(service, control, human, {
@@ -254,6 +255,159 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   let stopping = false;
   let finishTick: (() => void) | undefined;
   let checkedReadinessAt = 0;
+  let inboxPoll: Promise<void> | undefined;
+  let maintenance: Promise<void> | undefined;
+  function requireOwnership() {
+    const report = store.state<{ checks: { id: string; status: string }[] }>(
+      "native-preflight",
+    );
+    const required = [
+      "live_gate",
+      "native_configuration",
+      "service_configuration",
+      "line_handoff",
+      "handoff_boundary",
+      "native_identity",
+      "native_cursor",
+      "logical_identity",
+      "line_occupancy",
+    ];
+    if (
+      !report ||
+      required.some(
+        (id) => !report.checks.some((c) => c.id === id && c.status === "pass"),
+      )
+    )
+      throw new Error(
+        "Inbound polling requires verified exclusive ownership and an exact retained boundary.",
+      );
+  }
+  async function pollInbox() {
+    if (
+      stopping ||
+      !live ||
+      !(transport instanceof NativeTransport) ||
+      !config ||
+      !vault
+    )
+      return;
+    if (inboxPoll) return inboxPoll;
+    requireOwnership();
+    inboxPoll = transport.messages
+      .poll((event) => {
+        if (!config.testers.some((t) => t.recipient === event.sender)) return;
+        if (!store.get("inbound", event.id))
+          store.put<Inbound>("inbound", {
+            id: event.id,
+            sealed: vault.seal(event),
+            state: "pending",
+          });
+      })
+      .then(() => {})
+      .finally(() => {
+        inboxPoll = undefined;
+      });
+    return inboxPoll;
+  }
+  async function maintainConversation() {
+    if (stopping) return;
+    // Renew/release the existing display independently of the ordinary inbox worker.
+    await viewing.tick();
+    if (maintenance) return maintenance;
+    maintenance = (async () => {
+      service.expireSessions();
+      setup.expire();
+      if (!live || !(transport instanceof NativeTransport) || !config || !vault)
+        return;
+      try {
+        await pollInbox();
+        for (const item of store
+          .all<Inbound>("inbound")
+          .filter((i) => i.state === "pending")) {
+          if (stopping) return;
+          const event = vault.open<NativeMessage>(item.sealed);
+          if (!isImmediateStop(event.text)) continue;
+          const tester = config.testers.find(
+            (t) => t.recipient === event.sender,
+          );
+          const pairing =
+            tester &&
+            store
+              .all<Pairing>("pairing")
+              .find(
+                (p) =>
+                  p.revokedAt === undefined &&
+                  p.memberId === tester.memberId &&
+                  p.recipient === event.sender &&
+                  p.lineId === event.lineId &&
+                  p.conversationId === event.conversationId,
+              );
+          const requests = pairing
+            ? store
+                .all<AttentionRequest>("attention")
+                .filter(
+                  (r) =>
+                    r.pairingId === pairing.id &&
+                    ["ringing", "connected", "awaiting_input"].includes(
+                      r.state,
+                    ),
+                )
+            : [];
+          if (
+            !pairing ||
+            requests.length !== 1 ||
+            store.get<Inbound>("inbound", item.id)?.state !== "pending"
+          )
+            continue;
+          store.put("inbound", { ...item, state: "running" });
+          try {
+            await human.receive({
+              eventId: event.id,
+              requestId: requests[0]!.id,
+              memberId: pairing.memberId,
+              lineId: event.lineId,
+              conversationId: event.conversationId,
+              channel: "text",
+              text: event.text,
+            });
+            store.transaction(() => {
+              store.put<Notice>("notice", {
+                id: `${event.id}:notice`,
+                pairing,
+                sealed: vault.seal("Screen sharing and control stopped."),
+                state: "pending",
+              });
+              store.put("inbound", { ...item, state: "done" });
+            });
+          } catch {
+            store.put("inbound", { ...item, state: "unknown" });
+          }
+        }
+      } finally {
+        // Read-only call observations keep remote hangup authoritative during model work.
+        // An inbox failure must not prevent expiry or release of owned control.
+        if (!stopping) {
+          await transport.pollCalls(
+            (id, state, qualified) => service.observeCall(id, state, qualified),
+            {
+              observeOnly: true,
+              onTerminalPending: (id) => {
+                service.failCall(id);
+              },
+            },
+          );
+          await service.drain({
+            cleanupOnly: true,
+            shouldStop: () => stopping,
+          });
+          await viewing.tick();
+        }
+      }
+    })().finally(() => {
+      maintenance = undefined;
+    });
+    return maintenance;
+  }
   async function tick() {
     if (ticking || stopping) return;
     ticking = true;
@@ -273,46 +427,16 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
               await transport.preflightDevice(pairing);
           checkedReadinessAt = Date.now();
         }
-        const report = store.state<{
-          checks: { id: string; status: string }[];
-        }>("native-preflight");
-        const ownershipChecks = [
-          "live_gate",
-          "native_configuration",
-          "service_configuration",
-          "line_handoff",
-          "handoff_boundary",
-          "native_identity",
-          "native_cursor",
-          "logical_identity",
-          "line_occupancy",
-        ];
-        if (
-          !report ||
-          ownershipChecks.some(
-            (id) =>
-              !report.checks.some((c) => c.id === id && c.status === "pass"),
-          )
-        )
-          throw new Error(
-            "Inbound polling requires verified exclusive ownership and an exact retained boundary.",
-          );
+        requireOwnership();
         if (stopping) return;
-        // Commit encrypted inbound and cursor atomically. Async effects run afterward.
-        await transport.messages.poll((event) => {
-          if (!config.testers.some((t) => t.recipient === event.sender)) return;
-          if (!store.get("inbound", event.id))
-            store.put<Inbound>("inbound", {
-              id: event.id,
-              sealed: vault.seal(event),
-              state: "pending",
-            });
-        });
+        await pollInbox();
         if (stopping) return;
         for (const item of store
           .all<Inbound>("inbound")
           .filter((i) => i.state === "pending")) {
           if (stopping) break;
+          if (store.get<Inbound>("inbound", item.id)?.state !== "pending")
+            continue;
           const event = vault.open<NativeMessage>(item.sealed),
             tester = config.testers.find((t) => t.recipient === event.sender)!;
           store.put("inbound", { ...item, state: "running" });
@@ -363,17 +487,19 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                   text: event.text,
                 })) as {
                   accepted?: boolean;
+                  reply?: string;
                   clarification?: string;
                   stopped?: boolean;
                   receipt?: unknown;
                 };
-                reply = result.accepted
-                  ? result.stopped
-                    ? "Screen control stopped."
-                    : result.receipt
-                      ? "Input submitted; a subsequent screen frame was observed. Visually verify the intended textbox before typing; observation does not prove correct focus. Send answer: when ready for the agent to continue."
-                      : "Your response is available to the exact waiting agent session."
-                  : (result.clarification ?? "Please clarify your response.");
+                reply =
+                  result.reply ??
+                  result.clarification ??
+                  (result.stopped
+                    ? "Screen sharing and control stopped."
+                    : result.accepted
+                      ? "Your response is available to the waiting coding agent."
+                      : "I couldn't finish that request safely.");
               }
             }
             const destination: Pairing = pairing ?? {
@@ -502,6 +628,8 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   }
   async function stop() {
     stopping = true;
+    if (maintenance) await maintenance.catch(() => {});
+    if (inboxPoll) await inboxPoll.catch(() => {});
     if (ticking)
       await new Promise<void>((resolve) => {
         finishTick = resolve;

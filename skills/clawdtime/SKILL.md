@@ -35,30 +35,45 @@ another coding agent. Keep stdin open and this process alive; never background i
 with a daemon/nohup or finalize/stop this chat while setup is pending.
 
 Send JSONL objects with `id`, `command`, and optional `args` to that same process:
-`status` → `invite` → wait for the real authenticated SMS `YES <approvalCode>` → `yield` with
-`backgroundActorsStopped:true` → `start` → bounded `result` → `ack` → `resume` →
-perform the authorized continuation → `complete` → `verify`. Use stable effect IDs.
-Keep using the native question tool while waiting for the human. A question-tool
-answer is not SMS approval: only backend `test.state=approved` permits start.
-New invitations include their exact eight-character approvalCode; the human replies
-with the exact `YES <code>` shown in that invitation. Bare YES is accepted only for
-a legacy test with no approvalCode. Never substitute a previous code or manufacture
-an approval event. Keep waiting with the native question tool and poll status.
-While yielded, only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack and nonmutating human
-questions are allowed. `result` needs the exact requestId and waitSeconds ≤20;
-`ack` needs responseId; `resume` needs current controlEpoch; `complete` needs a
-factual text. Never fabricate feedback or assert the screen was seen yourself.
-Use `diagnostics` with this exact test's requestId to inspect bounded metadata
-about call, helper, capture and media phases while paused. It is read-only, has no
-effect intent, and returns no images, audio or chat contents. Keep the bridge alive
-when investigating a missing screen. Diagnostic metadata never authorizes input;
-typing, clicking, scrolling and AI-directed actions still require human direction.
-Only backend `test.state=verified` proves its required physical evidence chain.
-For this setup test the human must actually confirm the selected screen with
-`answer: I can see my screen` by text or `ClawdTime answer I can see my screen`
-by qualified voice. Negative/unclear feedback leaves setup incomplete; do not
-rewrite it, prompt a false confirmation, or report success before verification.
-Readiness, queued Messages output and simulated tests do not establish that chain.
+`status` → `invite` → `authorize` for this exact test after explicit user consent →
+`yield` with `backgroundActorsStopped:true` → `start` → bounded `result` → `ack` →
+`resume` → authorized continuation → `complete` → `verify`. Use stable effect IDs.
+The invitation is an informational notice, not an extra confirmation ritual.
+`authorize` needs `testId` from the current test and `userAuthorizedCall:true`.
+Use it only when the actual user has explicitly authorized this one call in this
+native chat. Honor already-given authorization; do not ask again. Setup intent,
+readiness, silence, model interpretation and approval for a previous call are not
+consent. Only backend `test.state=approved` permits start. This records a native
+session's attestation, not independently received SMS approval. Legacy stored
+invitations keep their existing approval rules; do not reinterpret them.
+
+While yielded, use only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack
+and nonmutating human questions, plus this setup test's explicitly authorized
+`authorize`/`start` transition. These exceptions do not permit coding or local UI work. During a call, let the human speak or text naturally
+through the phone. Do not pop a Mac question tool, refocus the coding client, or
+operate its UI while the human uses the shared screen. Pre-call permission steps
+can still use the native question tool. Keep this exact chat and bridge alive.
+`result` needs the exact requestId and waitSeconds ≤20; `ack` needs responseId;
+`resume` needs current controlEpoch; `complete` needs factual text.
+
+The human can ask to click a textbox, type text or scroll in ordinary language,
+report whether the screen is visible, ask a question, or tell the agent to continue.
+Do not prescribe command prefixes, a wake phrase or an exact visibility sentence.
+Suggest rotating the phone to landscape when helpful; never require it. Voice
+must come from the qualified remote participant. Screen visibility and a request
+to continue are different: seeing the screen does not release the coding agent.
+A click receipt does not prove correct focus; keep the visual-verification warning
+before typing. Stop remains available locally and through the call/conversation.
+
+Use `diagnostics` with this exact test's requestId for bounded metadata about call,
+helper, capture and media phases. It is read-only and returns no images, audio or
+chat contents. Diagnostic metadata never authorizes input. Only backend
+`test.state=verified` establishes its required physical evidence chain. The real
+human must report visibility; the conversation service may record that meaning as
+structured evidence, but the coding agent must never set or invent it itself.
+Negative, uncertain or absent feedback leaves setup incomplete. Readiness, emitted
+video, queued Messages output and simulated tests do not prove handset rendering
+or successful CUA. Report only the actual observed result.
 
 On an unknown effect, read `status`/`result`; never change its command ID or run to
 retry. A definitive rejected command may be explicitly retried with the same ID
@@ -90,7 +105,7 @@ retry automatically. After reading the current owned test, a new bridge accepts
 `retry` with `previousTestId`, `authorizeNewInvitation:true` and
 `operatorRetirementConfirmed:true`, using one stable command ID. The backend still
 enforces the audit; a changed id cannot retry an unknown effect. Wait for the new
-test's exact SMS code before yielding/starting a call.
+test's explicit one-call authorization before yielding/starting a call. Authorization for a new invitation alone does not authorize its call.
 
 An already-running old bridge cannot hot reload this command. Only after the same
 explicit authorization, the lead may use the narrow one-shot CLI `setup-retry`

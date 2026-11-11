@@ -65,16 +65,24 @@ arming remain authoritative. The helper starts stopped, even after restart.
 ## Voice and model authority
 
 Only the exact worker audio publisher is subscribed. TTS suspends STT. The backend
-requires fresh, wake-addressed "Hey ClawdTime" segments and exact active call
-binding. Ambiguous text is clarified. Private audio context is not biometric
-speaker authentication, and spoken feedback never changes native agent approval
-policy. Text is the fallback. Administrative or broad approval commands are absent.
+requires fresh segments and exact active call binding, without a wake phrase.
+Private audio context is not biometric speaker authentication; spoken feedback
+never changes the coding agent's native approval policy.
 
-Direct click/type/scroll and the optional single-action vision planner enter the
-same deterministic authorization path. The planner has no tools, runs once, and
-returns a validated action or refusal. Pixels are transient; refreshed pixels must
-match before dispatch. The provider/model is explicitly configured using independent
-credentials; no model migration or fallback is implicit.
+One conversational tool agent handles qualified speech and authenticated text.
+It chooses observation, click/type/scroll, clarification, feedback or Stop tools;
+compound requests run as bounded sequential actions with a fresh observation
+between steps. Screens are untrusted data, never new instructions. A deterministic
+harness enforces identity, permissions, freshness, receipts, time/action bounds,
+exclusive control and unknown-outcome handling. Text intent has no prefix parser.
+The provider/model remains explicitly configured; no fallback is implicit.
+
+An authorized continuous session lease keeps video active during ordinary input.
+Only the yielded coding session's controller may dispatch input. Feedback, Stop,
+expiry, revocation, loss of heartbeat or call closure still releases sharing.
+Setup uses explicit one-call authorization already given in the native chat; the
+connector records its scoped attestation, not independent handset consent. Old
+SMS consent records remain recoverable but new setup does not require a code.
 
 ## Data and identities
 

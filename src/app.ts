@@ -13,7 +13,7 @@ import type {
   Pairing,
   ActionReceipt,
 } from "./contracts.js";
-import { HumanRouter } from "./control/human-router.js";
+import { HumanRouter, isImmediateStop } from "./control/human-router.js";
 import { SetupService } from "./pairing/setup.js";
 import {
   setupRetirementInput,
@@ -172,6 +172,22 @@ export function createApp(
   app.get("/api/setup/test", (c) =>
     c.json(setup.get(bearer(c.req.header("authorization")))),
   );
+  app.post("/api/setup/test/authorize", async (c) => {
+    const { testId, userAuthorizedCall } = z
+      .object({
+        testId: z.string().min(1).max(200),
+        userAuthorizedCall: z.literal(true),
+      })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      setup.authorize(
+        bearer(c.req.header("authorization")),
+        testId,
+        userAuthorizedCall,
+      ),
+    );
+  });
   app.post("/api/setup/test/retry", async (c) => {
     const { previousTestId } = z
       .object({ previousTestId: z.string().min(1).max(200) })
@@ -448,21 +464,17 @@ export function createApp(
     )
       throw new DomainError(403, "Unqualified audio source.");
     const heard = z.string().min(1).max(8000).parse(b.text);
-    if (!/^(?:hey )?clawdtime[, :]+/i.test(heard))
-      return c.json({
-        captured: false,
-        reason: "Say Hey ClawdTime, then answer or a control instruction.",
-      });
     if (
       Math.abs(Date.now() - Date.parse(b.at)) > 10_000 ||
       !Number.isFinite(Date.parse(b.at))
     )
       throw new DomainError(409, "Stale speech.");
-    const command = heard.replace(/^(?:hey )?clawdtime[, :]+/i, "");
-    if (/^stop listening[.!]?$/i.test(command)) {
+    // The qualified private-call participant speaks naturally. Intent belongs
+    // to the conversation agent; a wake phrase is not authentication.
+    const command = heard;
+    const immediateStop = isImmediateStop(command);
+    if (immediateStop) {
       service.store.saveState(`listening-stopped:${request.id}`, true);
-      await control.stopPairing(pairing.id);
-      return c.json({ captured: false, stopped: true });
     }
     const result = (await human.receive({
       eventId: `voice:${c.req.param("id")}:${b.id}`,
@@ -474,8 +486,13 @@ export function createApp(
       text: command,
       callId: call.id,
       qualifiedRemoteAudio: true,
-    })) as { accepted?: boolean };
-    return c.json({ ...result, captured: result.accepted === true });
+    })) as { accepted?: boolean; reply?: string; clarification?: string };
+    return c.json({
+      ...result,
+      captured:
+        !immediateStop &&
+        (result.accepted === true || !!result.reply || !!result.clarification),
+    });
   });
   app.post("/media/:id/screen-stopped", async (c) => {
     const { request, session } = mediaContext(c.req.param("id")),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { Store } from "../src/storage/store.js";
 import { ClawdTime } from "../src/attention/service.js";
@@ -7,10 +7,7 @@ import {
   ControlCoordinator,
   SimulatedDevice,
 } from "../src/control/coordinator.js";
-import {
-  HumanRouter,
-  type SingleActionPlanner,
-} from "../src/control/human-router.js";
+import { HumanRouter, isImmediateStop } from "../src/control/human-router.js";
 import {
   ControlPreflightError,
   sanitizeControlPreflightDiagnostics,
@@ -18,16 +15,19 @@ import {
   type ControlPreflightCode,
 } from "../src/control/errors.js";
 import { Viewing } from "../src/control/viewing.js";
-import { createApp } from "../src/app.js";
 import type { ActionReceipt, ControlLease } from "../src/contracts.js";
-
-async function fixture(planner?: SingleActionPlanner) {
+import type { ConversationTurn } from "../src/control/conversation.js";
+import { ScriptedConversationAgent } from "./backend-conversation-fixture.js";
+async function fixture(
+  script?: (turn: ConversationTurn) => Promise<{ reply: string }>,
+) {
   const store = new Store(),
     service = new ClawdTime(store, new SimulationTransport()),
     device = new SimulatedDevice(),
     control = new ControlCoordinator(store, device),
-    human = new HumanRouter(service, control, planner),
     viewing = new Viewing(store, device);
+  const conversation = new ScriptedConversationAgent(device, script);
+  const human = new HumanRouter(service, control, conversation);
   const binding = {
     memberId: "member",
     recipient: "+15550000001",
@@ -57,20 +57,21 @@ async function fixture(planner?: SingleActionPlanner) {
     taskId: "task",
     idempotencyKey: "one",
     reason: "decision",
-    question: "fixture",
+    question: "What should the title be?",
   });
   await service.drain();
   service.observeCall(request.id, "connected", true);
+  const input = (eventId: string, text: string) => ({
+    eventId,
+    text,
+    requestId: request.id,
+    memberId: binding.memberId,
+    lineId: binding.lineId,
+    conversationId: binding.conversationId,
+    channel: "text" as const,
+  });
   const send = (eventId: string, text: string) =>
-    human.receive({
-      eventId,
-      text,
-      requestId: request.id,
-      memberId: binding.memberId,
-      lineId: binding.lineId,
-      conversationId: binding.conversationId,
-      channel: "text",
-    }) as Promise<any>;
+    human.receive(input(eventId, text));
   const command = (id: string) => store.state<any>(`human-command:${id}`);
   return {
     store,
@@ -79,11 +80,13 @@ async function fixture(planner?: SingleActionPlanner) {
     control,
     human,
     viewing,
+    conversation,
     agent,
     request,
     binding,
     send,
     command,
+    input,
   };
 }
 function barrier() {
@@ -91,99 +94,388 @@ function barrier() {
   const promise = new Promise<void>((r) => (resolve = r));
   return { promise, resolve };
 }
-const codes: ControlPreflightCode[] = [
-  "planning_refused",
-  "planner_unavailable",
-  "planning_timeout",
-  "frame_unavailable",
-  "screen_changed",
-  "invalid_plan",
-  "context_expired",
-];
+const click = async (t: ConversationTurn) => {
+  const view = await t.tools.observe();
+  await t.tools.act(view.frame.id, { kind: "click", x: 0.5, y: 0.5 });
+  return { reply: "The button now appears selected." };
+};
+const focus = `focus-unverified:${createHash("sha256")
+  .update(JSON.stringify(["mac", "1"]))
+  .digest("hex")}`;
 
-describe("known CUA preflight failures and focus safety", () => {
-  it("retains only whitelisted diagnostics on a proven pre-input failure", async () => {
-    const dirty = {
-      phase: "planning",
-      elapsedMs: 1200,
-      frameAgeMs: 50,
-      prompt: "PRIVATE_PROMPT",
-      url: "https://private.invalid",
-      pixels: "PRIVATE_PIXELS",
-      comparison: {
-        kind: "pixels_changed",
-        changedPixels: 7,
-        changedTiles: [0, 4, 11],
-        width: 640,
-        height: 360,
-        jpegBase64: "PRIVATE_JPEG",
-        error: "PRIVATE_PROVIDER_ERROR",
-      },
-    };
-    const error = new ControlPreflightError(
-      "screen_changed",
-      dirty as ControlPreflightDiagnostics,
-    );
-    dirty.comparison.changedTiles.push(9);
-    Object.assign(error.diagnostics!, {
-      rawError: "PRIVATE_ERROR_AFTER_CONSTRUCTION",
-    });
-    Object.assign(error.diagnostics!.comparison!, {
-      image: "PRIVATE_IMAGE_AFTER_CONSTRUCTION",
-    });
-    const f = await fixture({
-      plan: async () => {
-        throw error;
-      },
+describe("one conversational agent with bounded screen tools", () => {
+  it("executes compound natural request with one continuous lease and fresh observation between each action", async () => {
+    const f = await fixture(async (t) => {
+      expect(t.text).toBe(
+        "Click the title field and type Hello, then scroll down a little.",
+      );
+      let view = await t.tools.observe();
+      view = await t.tools.act(view.frame.id, {
+        kind: "click",
+        x: 0.5,
+        y: 0.4,
+      });
+      view = await t.tools.act(view.frame.id, { kind: "type", text: "Hello" });
+      await t.tools.act(view.frame.id, {
+        kind: "scroll",
+        x: 0.5,
+        y: 0.5,
+        deltaY: 100,
+      });
+      return {
+        reply: "The title now reads Hello, and the next section is visible.",
+      };
     });
     await f.viewing.tick();
-    const result = await f.send("diagnostics", "do: focus textbox");
-    const expected = {
-      phase: "planning",
-      elapsedMs: 1200,
-      frameAgeMs: 50,
-      comparison: {
-        kind: "pixels_changed",
-        changedPixels: 7,
-        changedTiles: [0, 4, 11],
-        width: 640,
-        height: 360,
-      },
-    };
-    expect(result).toMatchObject({
-      state: "not_started",
-      diagnostics: expected,
-    });
-    expect(result.diagnostics).toEqual(expected);
-    expect(f.command("diagnostics").result.diagnostics).toEqual(expected);
-    const app = createApp(f.service, f.control, f.human, {
-      origin: "http://127.0.0.1:3310",
-      simulation: true,
-    });
-    const authorized = await app.request(
-      `/api/attention/${f.request.id}/diagnostics`,
-      {
-        headers: { authorization: `Bearer ${f.agent.token}` },
-      },
+    const before = f.store.all<ControlLease>("lease")[0]!;
+    const result = await f.send(
+      "compound",
+      "Click the title field and type Hello, then scroll down a little.",
     );
-    expect((await authorized.json()).controlPreflight).toEqual({
-      actionId: result.actionId,
-      code: "screen_changed",
-      diagnostics: expected,
-    });
-    const unauthorized = await app.request(
-      `/api/attention/${f.request.id}/diagnostics`,
-    );
-    expect(unauthorized.status).toBe(401);
-    expect(await unauthorized.text()).not.toContain("changedTiles");
+    expect(result.accepted).toBe(true);
+    expect(f.device.inputs).toHaveLength(3);
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+    expect(f.store.get<ControlLease>("lease", before.id)?.state).toBe("active");
+    expect(
+      f.store.all<ActionReceipt>("action").every((a) => a.state === "observed"),
+    ).toBe(true);
     expect(
       JSON.stringify(f.store.query("SELECT body FROM operational_state")),
-    ).not.toContain("PRIVATE_");
-    expect(await f.send("diagnostics", "do: focus textbox")).toEqual(result);
-    expect(f.device.inputs).toHaveLength(0);
+    ).not.toContain("Hello");
+    await f.send(
+      "compound",
+      "Click the title field and type Hello, then scroll down a little.",
+    );
+    expect(f.device.inputs).toHaveLength(3);
     f.store.close();
   });
-
+  it("provides a changed screen to the same agent without input or stale-plan rebinding", async () => {
+    let first = true;
+    const f = await fixture(async (t) => {
+      const initial = await t.tools.observe();
+      const changed = await t.tools.act(initial.frame.id, {
+        kind: "click",
+        x: 0.2,
+        y: 0.3,
+      });
+      expect(changed.changed).toBe(true);
+      expect(changed.receipt).toBeUndefined();
+      expect(f.device.inputs).toHaveLength(0);
+      await t.tools.act(changed.frame.id, { kind: "click", x: 0.7, y: 0.6 });
+      return {
+        reply: "I used the updated screen and observed the new selection.",
+      };
+    });
+    const observe = f.conversation.observe.bind(f.conversation);
+    f.conversation.observe = async (l) => ({
+      ...(await observe(l)),
+      dataUrl: first
+        ? ((first = false), "data:image/jpeg;base64,AQ==")
+        : "data:image/jpeg;base64,Ag==",
+    });
+    await f.send("changed", "Select the visible result.");
+    expect(f.device.inputs).toHaveLength(1);
+    f.store.close();
+  });
+  it("clarifies conversationally without returning coding control or interrupting viewing", async () => {
+    const f = await fixture(async (t) => ({
+      reply: t.history.length
+        ? "The left field you mentioned?"
+        : "Which of the two title fields do you mean?",
+    }));
+    await f.viewing.tick();
+    const leases = f.store.all("lease");
+    expect((await f.send("q1", "Change the title.")).reply).toContain("Which");
+    expect((await f.send("q2", "The left one.")).reply).toContain("left");
+    expect(f.store.all("lease")).toEqual(leases);
+    expect(f.store.all("response")).toHaveLength(0);
+    f.store.close();
+  });
+  it("commits original authenticated feedback, structured visibility and confirmed release", async () => {
+    const f = await fixture(async (t) => {
+      await t.tools.feedback({ screenVisible: true });
+      return { reply: "I passed your answer to the coding agent." };
+    });
+    await f.viewing.tick();
+    const result = await f.send(
+      "answer",
+      "I can see it. Use Hello for the title, and continue.",
+    );
+    expect(result.response?.text).toBe(
+      "I can see it. Use Hello for the title, and continue.",
+    );
+    expect(f.store.state(`screen-feedback:${f.request.id}`)).toMatchObject({
+      eventId: "answer",
+      requestId: f.request.id,
+      sessionId: f.request.sessionId,
+      pairingId: f.request.pairingId,
+      visible: true,
+    });
+    expect(
+      f.store.all<ControlLease>("lease").every((l) => l.state === "released"),
+    ).toBe(true);
+    f.store.close();
+  });
+  it("does not invent a visibility attestation for ordinary feedback", async () => {
+    const f = await fixture(async (t) => {
+      await t.tools.feedback({});
+      return { reply: "Passed on." };
+    });
+    await f.send("answer", "Use the left version.");
+    expect(f.store.state(`screen-feedback:${f.request.id}`)).toBeUndefined();
+    f.store.close();
+  });
+  it("authenticates exact sender and qualified voice before invoking the model", async () => {
+    let calls = 0;
+    const f = await fixture(async () => {
+      calls++;
+      return { reply: "Hello" };
+    });
+    await expect(
+      f.human.receive({ ...f.input("bad", "hello"), memberId: "other" }),
+    ).rejects.toThrow("binding");
+    await expect(
+      f.human.receive({
+        ...f.input("voice", "hello"),
+        channel: "voice",
+        callId: f.request.callId,
+        qualifiedRemoteAudio: false,
+      }),
+    ).rejects.toThrow("Unqualified");
+    expect(calls).toBe(0);
+    f.store.close();
+  });
+  it("fails closed without a model while literal Stop remains available", async () => {
+    const f = await fixture();
+    const h = new HumanRouter(f.service, f.control);
+    expect(
+      (await h.receive(f.input("no-model", "Click the title."))).code,
+    ).toBe("planner_unavailable");
+    await f.viewing.tick();
+    expect((await h.receive(f.input("stop", "Stop"))).stopped).toBe(true);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.device.leases.size).toBe(0);
+    f.store.close();
+  });
+  it.each([
+    "planning_refused",
+    "planner_unavailable",
+    "planning_timeout",
+    "frame_unavailable",
+    "screen_changed",
+    "invalid_plan",
+    "context_expired",
+  ] as ControlPreflightCode[])(
+    "retains continuous viewing after proven %s, without re-running a duplicate",
+    async (code) => {
+      let runs = 0;
+      const f = await fixture(async (t) => {
+        runs++;
+        await t.tools.observe();
+        throw new ControlPreflightError(code);
+      });
+      await f.viewing.tick();
+      expect((await f.send("fail", "Focus the title.")).state).toBe(
+        "not_started",
+      );
+      expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("active");
+      expect(f.device.inputs).toHaveLength(0);
+      await f.send("fail", "Focus the title.");
+      expect(runs).toBe(1);
+      await expect(f.send("fail", "Different content.")).rejects.toThrow(
+        "changed",
+      );
+      f.store.close();
+    },
+  );
+  it("blocks typing after failed planning until an observed explicit click", async () => {
+    const f = await fixture(async (t) => {
+      if (t.text === "Focus it.")
+        throw new ControlPreflightError("planning_refused");
+      const v = await t.tools.observe();
+      await t.tools.act(
+        v.frame.id,
+        t.text === "Click the title."
+          ? { kind: "click", x: 0.5, y: 0.5 }
+          : { kind: "type", text: "Hello" },
+      );
+      return { reply: "I observed the result." };
+    });
+    await f.viewing.tick();
+    await f.send("failed", "Focus it.");
+    expect((await f.send("type1", "Type Hello.")).state).toBe("not_started");
+    expect(f.device.inputs).toHaveLength(0);
+    await f.send("click", "Click the title.");
+    expect(f.store.state(focus)).toBe(false);
+    await f.send("type2", "Type Hello.");
+    expect(f.device.inputs).toHaveLength(2);
+    f.store.close();
+  });
+  it("unknown dispatch permanently blocks further tools even when the agent catches the error", async () => {
+    const f = await fixture(async (t) => {
+      const v = await t.tools.observe();
+      await t.tools
+        .act(v.frame.id, { kind: "click", x: 0.5, y: 0.5 })
+        .catch(() => {});
+      await t.tools
+        .act(v.frame.id, { kind: "click", x: 0.2, y: 0.3 })
+        .catch(() => {});
+      return { reply: "untrusted success" };
+    });
+    f.device.action = async (_l, _f, _a, id) => {
+      f.device.inputs.push(id);
+      throw new ControlPreflightError("screen_changed");
+    };
+    expect((await f.send("unknown", "Click twice.")).state).toBe("unknown");
+    expect(f.device.inputs).toHaveLength(1);
+    expect(f.store.all<ActionReceipt>("action")[0]?.state).toBe("unknown");
+    await f.send("unknown", "Click twice.");
+    expect(f.device.inputs).toHaveLength(1);
+    f.store.close();
+  });
+  it("submitted without a post-input frame remains uncertain", async () => {
+    const f = await fixture(click),
+      frame = f.device.frame.bind(f.device);
+    let frames = 0;
+    f.device.frame = async (l) => {
+      if (++frames === 3) throw new Error("PRIVATE_FRAME");
+      return frame(l);
+    };
+    expect((await f.send("submitted", "Click the field.")).state).toBe(
+      "unknown",
+    );
+    expect(f.store.all<ActionReceipt>("action")[0]?.state).toBe("submitted");
+    await expect(
+      f.control.acquire(f.request.id, f.binding.memberId),
+    ).rejects.toThrow("reconciled");
+    f.store.close();
+  });
+  it("refuses feedback until every release is confirmed", async () => {
+    const f = await fixture(async (t) => {
+      await t.tools.feedback({});
+      return { reply: "Done" };
+    });
+    await f.viewing.tick();
+    f.device.release = async () => {
+      throw new Error("PRIVATE_RELEASE");
+    };
+    expect((await f.send("feedback", "Continue.")).state).toBe("unknown");
+    expect(f.store.all("response")).toHaveLength(0);
+    f.store.close();
+  });
+  it("Stop interrupts an in-flight model turn and prevents its later input", async () => {
+    const began = barrier(),
+      finish = barrier();
+    const f = await fixture(async (t) => {
+      const v = await t.tools.observe();
+      began.resolve();
+      await finish.promise;
+      await t.tools.act(v.frame.id, { kind: "click", x: 0.5, y: 0.5 });
+      return { reply: "Done" };
+    });
+    await f.viewing.tick();
+    const pending = f.send("pending", "Click the title.");
+    await began.promise;
+    await f.send("stop", "Stop");
+    finish.resolve();
+    expect((await pending).code).toBe("stopped");
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.device.leases.size).toBe(0);
+    await f.viewing.tick();
+    expect(f.device.leases.size).toBe(0);
+    f.store.close();
+  });
+  it("late callbacks cannot act or return feedback after a completed turn", async () => {
+    let captured!: ConversationTurn;
+    const f = await fixture(async (t) => {
+      captured = t;
+      await t.tools.observe();
+      return { reply: "Which field?" };
+    });
+    await f.viewing.tick();
+    await f.send("done", "Change the title.");
+    await expect(captured.tools.observe()).rejects.toMatchObject({
+      code: "stopped",
+    });
+    await expect(captured.tools.feedback({})).rejects.toMatchObject({
+      code: "stopped",
+    });
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("response")).toHaveLength(0);
+    f.store.close();
+  });
+  it("parallel tool rejection latches the entire turn", async () => {
+    const began = barrier(),
+      finish = barrier();
+    const f = await fixture(async (t) => {
+      const first = t.tools.observe();
+      await began.promise;
+      await t.tools.observe().catch(() => {});
+      finish.resolve();
+      await first.catch(() => {});
+      await t.tools.feedback({}).catch(() => {});
+      return { reply: "Untrusted success" };
+    });
+    const original = f.conversation.observe.bind(f.conversation);
+    f.conversation.observe = async (l) => {
+      began.resolve();
+      await finish.promise;
+      return original(l);
+    };
+    expect((await f.send("parallel", "Change it.")).code).toBe("invalid_plan");
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("response")).toHaveLength(0);
+    f.store.close();
+  });
+  it("maintains viewing while a model turn awaits, without blocking Stop", async () => {
+    vi.useFakeTimers();
+    const began = barrier(),
+      finish = barrier();
+    const f = await fixture(async () => {
+      began.resolve();
+      await finish.promise;
+      return { reply: "Which field?" };
+    });
+    const ticks = vi.fn(async () => {});
+    const h = new HumanRouter(f.service, f.control, f.conversation, ticks);
+    const pending = h.receive(f.input("wait", "Change the title."));
+    await began.promise;
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(ticks).toHaveBeenCalledTimes(3);
+    finish.resolve();
+    await pending;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ticks).toHaveBeenCalledTimes(3);
+    f.store.close();
+    vi.useRealTimers();
+  });
+  it("sanitizes pre-input diagnostics without persisting model text or arbitrary fields", async () => {
+    const dirty = {
+      phase: "planning",
+      elapsedMs: 100,
+      frameAgeMs: 10,
+      private: "PRIVATE",
+      comparison: {
+        kind: "pixels_changed",
+        changedPixels: 2,
+        changedTiles: [1],
+        raw: "PRIVATE",
+      },
+    };
+    const f = await fixture(async () => {
+      throw new ControlPreflightError(
+        "screen_changed",
+        dirty as ControlPreflightDiagnostics,
+      );
+    });
+    await f.send("diagnostics", "PRIVATE_USER_PROMPT");
+    const saved = f.store.state<any>(`control-preflight:${f.request.id}`);
+    expect(saved.diagnostics.comparison.changedPixels).toBe(2);
+    expect(
+      JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+    ).not.toContain("PRIVATE");
+    f.store.close();
+  });
   it.each([
     { phase: "other" },
     { elapsedMs: -1 },
@@ -249,354 +541,183 @@ describe("known CUA preflight failures and focus safety", () => {
       }),
     ).toBeUndefined();
   });
+});
 
-  it("never persists planning diagnostics as proof after an input dispatch", async () => {
-    const f = await fixture();
-    f.device.action = async () => {
-      throw new ControlPreflightError("screen_changed", {
-        phase: "planning",
-        elapsedMs: 100,
-        frameAgeMs: 0,
-        comparison: { kind: "identical" },
-      });
-    };
-    await expect(
-      f.send("dispatch-diagnostics", "click 0.5 0.5"),
-    ).rejects.toThrow("uncertain");
-    expect(f.command("dispatch-diagnostics").result.state).toBe("unknown");
-    expect(f.command("dispatch-diagnostics").result).not.toHaveProperty(
-      "diagnostics",
-    );
-    f.store.close();
-  });
-
-  it.each(codes)(
-    "settles %s with no input, confirmed release and view restoration; duplicate never replans",
-    async (code) => {
-      let plans = 0;
-      const f = await fixture({
-        plan: async () => {
-          plans++;
-          throw new ControlPreflightError(code);
-        },
-      });
-      await f.viewing.tick();
-      const result = await f.send("plan", "do: focus the intended textbox");
-      expect(result).toMatchObject({
-        accepted: false,
-        state: "not_started",
-        code,
-      });
-      expect(result.clarification).toContain("No input was sent.");
-      expect(result.clarification).toContain("visually verify");
-      expect(f.store.all("action")).toHaveLength(0);
-      expect(f.device.inputs).toHaveLength(0);
-      expect(
-        f.store.all<ControlLease>("lease").every((l) => l.state === "released"),
-      ).toBe(true);
-      expect(f.command("plan")).toMatchObject({
-        phase: "not_started",
-        actionId: `input_${createHash("sha256").update("plan").digest("hex").slice(0, 40)}`,
-      });
-      expect(await f.send("plan", "do: focus the intended textbox")).toEqual(
-        result,
-      );
-      expect(plans).toBe(1);
-      await f.viewing.tick();
-      expect([...f.device.leases.values()].map((l) => l.mode)).toEqual([
-        "view",
-      ]);
-      f.store.close();
-    },
-  );
-  it("blocks typing after failed planning until a separate explicit observed click, without claiming focus success", async () => {
-    const f = await fixture({
-      plan: async () => {
-        throw new ControlPreflightError("planner_unavailable");
-      },
-    });
-    await f.viewing.tick();
-    await f.send("plan", "do: focus intended textbox");
-    await f.viewing.tick();
-    const blocked = await f.send("typing", "type: private text");
-    expect(blocked.state).toBe("not_started");
-    expect(blocked.clarification).toContain("explicit click");
-    expect(f.device.inputs).toHaveLength(0);
-    const clicked = await f.send("click", "click 0.5 0.5");
-    expect(clicked.receipt.state).toBe("observed");
-    expect(clicked.note).toContain("does not prove");
-    expect(f.device.inputs).toHaveLength(1);
-    expect((await f.send("new-type", "type: private text")).receipt.state).toBe(
-      "observed",
-    );
-    expect(f.device.inputs).toHaveLength(2);
-    expect(await f.send("typing", "type: private text")).toEqual(blocked);
-    expect(f.device.inputs).toHaveLength(2);
-    expect(
-      JSON.stringify(f.store.query("SELECT body FROM operational_state")),
-    ).not.toContain("private text");
-    f.store.close();
-  });
-  it("does not substitute an AI typing plan for the required explicit click", async () => {
-    let calls = 0;
-    const f = await fixture({
-      plan: async () => {
-        if (++calls === 1) throw new ControlPreflightError("planning_refused");
-        return {
-          action: { kind: "type", text: "unintended" },
-          frame: {
-            id: "fresh",
-            capturedAt: Date.now(),
-            width: 100,
-            height: 100,
-          },
-        };
-      },
-    });
-    await f.send("failed", "do: focus textbox");
-    expect((await f.send("ai-type", "do: type now")).state).toBe("not_started");
-    expect(f.device.inputs).toHaveLength(0);
-    f.store.close();
-  });
-  it.each([false, true])(
-    "a separately requested planned click clears focus only after observed input and release (uncertain=%s)",
-    async (uncertain) => {
-      let plans = 0;
-      const f = await fixture({
-        plan: async () => {
-          if (++plans === 1) throw new ControlPreflightError("screen_changed");
-          return {
-            action: { kind: "click", x: 0.5, y: 0.5 },
-            frame: {
-              id: "fresh",
-              capturedAt: Date.now(),
-              width: 100,
-              height: 100,
-            },
-          };
-        },
-      });
-      await f.send("failed", "do: focus textbox");
-      const focusKey = `focus-unverified:${createHash("sha256")
-        .update(JSON.stringify(["mac", "1"]))
-        .digest("hex")}`;
-      if (uncertain)
-        f.device.action = async () => {
-          throw new Error("Input outcome unknown");
-        };
-      if (uncertain) {
-        await expect(
-          f.send("new-click", "do: click the textbox"),
-        ).rejects.toThrow("uncertain");
-        expect(f.store.state(focusKey)).toBe(true);
-        expect((await f.send("type", "type: fixture")).state).toBe(
-          "not_started",
-        );
-      } else {
-        expect(
-          (await f.send("new-click", "do: click the textbox")).receipt.state,
-        ).toBe("observed");
-        expect(f.store.state(focusKey)).toBe(false);
-        expect((await f.send("type", "type: fixture")).receipt.state).toBe(
-          "observed",
-        );
-        expect(f.device.inputs).toHaveLength(2);
+describe("conversation lifecycle edges", () => {
+  it("retains an explicit visibility report through compound CUA and later continuation", async () => {
+    const f = await fixture(async (t) => {
+      if (t.text === "I can see the screen.") {
+        await t.tools.screenFeedback({ visible: true });
+        return { reply: "What would you like to do on it?" };
       }
-      f.store.close();
-    },
-  );
-  it("does not create viewing consent when no view was previously active", async () => {
-    const f = await fixture({
-      plan: async () => {
-        throw new ControlPreflightError("planning_timeout");
-      },
+      if (t.text === "Continue coding.") {
+        await t.tools.feedback({});
+        return { reply: "Back to your coding agent." };
+      }
+      return click(t);
     });
-    expect((await f.send("plan", "do: focus textbox")).state).toBe(
-      "not_started",
-    );
-    expect(f.store.state(`view-restore:${f.request.id}`)).toBeUndefined();
     await f.viewing.tick();
+    await f.send("visible", "I can see the screen.");
+    const evidence = f.store.state(`screen-feedback:${f.request.id}`);
+    expect(f.store.all("response")).toHaveLength(0);
+    expect(f.device.leases.size).toBe(1);
+    await f.send("click", "Click the title.");
+    const result = await f.send("continue", "Continue coding.");
+    expect(result.response?.text).toBe("Continue coding.");
+    expect(f.store.state(`screen-feedback:${f.request.id}`)).toEqual(evidence);
     expect(f.device.leases.size).toBe(0);
     f.store.close();
   });
-  it("keeps uncertain old-view release unknown without input or rearm", async () => {
-    const f = await fixture({
-      plan: async () => {
-        throw new Error("must not plan");
-      },
+  it("a later explicit invisible report replaces earlier visible evidence without ending the conversation", async () => {
+    const f = await fixture(async (t) => {
+      await t.tools.screenFeedback({ visible: t.text === "I see it." });
+      return { reply: "Let's look at that." };
     });
-    await f.viewing.tick();
-    let releases = 0;
-    f.device.release = async () => {
-      releases++;
-      throw new Error("PRIVATE_HELPER_ERROR");
-    };
-    await expect(f.send("plan", "do: focus textbox")).rejects.toThrow(
-      "uncertain",
+    await f.send("yes", "I see it.");
+    await f.send("no", "Now I cannot see it.");
+    expect(f.store.state<any>(`screen-feedback:${f.request.id}`).visible).toBe(
+      false,
     );
-    expect(f.command("plan").result.state).toBe("unknown");
-    expect(f.store.all("action")).toHaveLength(0);
-    expect(f.store.state(`view-restore:${f.request.id}`)).not.toBe(true);
-    await f.send("plan", "do: focus textbox");
-    expect(releases).toBe(1);
-    expect(JSON.stringify(f.command("plan"))).not.toContain(
-      "PRIVATE_HELPER_ERROR",
-    );
+    expect(f.store.all("response")).toHaveLength(0);
     f.store.close();
   });
-  it("does not settle no-input or restore viewing if control release is uncertain", async () => {
-    const f = await fixture({
-      plan: async () => {
-        throw new ControlPreflightError("screen_changed");
-      },
+  it("view-only consent permits existing screen observations but never input", async () => {
+    const f = await fixture(async (t) => {
+      const v = await t.tools.observe();
+      expect(v.frame.id).toBeTruthy();
+      if (t.text === "Click the title.")
+        await t.tools.act(v.frame.id, { kind: "click", x: 0.5, y: 0.5 });
+      return { reply: "The title field is visible." };
+    });
+    f.store.put("pairing", {
+      ...f.service.pairing(f.request.pairingId),
+      allowControl: false,
     });
     await f.viewing.tick();
-    const release = f.device.release.bind(f.device);
-    f.device.release = async (l) => {
-      if (l.mode === "control") throw new Error("lost release");
-      await release(l);
-    };
-    await expect(f.send("plan", "do: focus textbox")).rejects.toThrow(
-      "uncertain",
+    expect((await f.send("view", "What can you see?")).accepted).toBe(true);
+    expect((await f.send("click", "Click the title.")).code).toBe(
+      "planning_refused",
     );
-    expect(f.command("plan").result).toMatchObject({
-      state: "unknown",
-      cleanup: "unknown",
-    });
-    expect(
-      f.store
-        .all<ControlLease>("lease")
-        .some((l) => l.mode === "control" && l.state === "unknown"),
-    ).toBe(true);
-    expect(f.store.all("action")).toHaveLength(0);
-    expect(f.store.state(`view-restore:${f.request.id}`)).not.toBe(true);
-    f.store.close();
-  });
-  it("honors Stop while releasing the old view, before a control lease exists", async () => {
-    const f = await fixture(),
-      began = barrier(),
-      finish = barrier();
-    await f.viewing.tick();
-    const release = f.device.release.bind(f.device);
-    let first = true;
-    f.device.release = async (l) => {
-      if (first) {
-        first = false;
-        began.resolve();
-        await finish.promise;
-      }
-      await release(l);
-    };
-    const input = f.send("click", "click 0.5 0.5");
-    await began.promise;
-    await f.send("stop", "stop");
-    finish.resolve();
-    expect(await input).toMatchObject({
-      state: "not_started",
-      code: "stopped",
-    });
-    expect(
-      f.store.all<ControlLease>("lease").filter((l) => l.mode === "control"),
-    ).toHaveLength(0);
     expect(f.device.inputs).toHaveLength(0);
-    await f.viewing.tick();
-    expect(f.device.leases.size).toBe(0);
-    expect((await f.send("after-stop", "click 0.5 0.5")).code).toBe("stopped");
-    expect(f.store.state(`view-stopped:${f.request.id}`)).toBe(true);
+    expect(f.store.all<ControlLease>("lease")[0]?.mode).toBe("view");
+    expect(f.device.leases.size).toBe(1);
     f.store.close();
   });
-  it("honors Stop during planning and never restores the latched screen", async () => {
+  it("busy turns are durable no-input events rather than deferred commands", async () => {
     const began = barrier(),
       finish = barrier();
-    const f = await fixture({
-      plan: async () => {
-        began.resolve();
-        await finish.promise;
-        return {
-          action: { kind: "click", x: 0.5, y: 0.5 },
-          frame: {
-            id: "fresh",
-            capturedAt: Date.now(),
-            width: 100,
-            height: 100,
-          },
-        };
-      },
+    let runs = 0;
+    const f = await fixture(async () => {
+      runs++;
+      began.resolve();
+      await finish.promise;
+      return { reply: "Which title?" };
     });
-    await f.viewing.tick();
-    const input = f.send("plan", "do: focus textbox");
+    const first = f.send("first", "Change it.");
     await began.promise;
-    await f.send("stop", "stop");
+    expect((await f.send("busy", "Click it.")).state).toBe("busy");
     finish.resolve();
-    expect(await input).toMatchObject({
-      state: "not_started",
-      code: "stopped",
-    });
-    expect(f.device.inputs).toHaveLength(0);
-    await f.viewing.tick();
-    expect(f.device.leases.size).toBe(0);
-    expect(f.store.state(`view-restore:${f.request.id}`)).not.toBe(true);
+    await first;
+    expect((await f.send("busy", "Click it.")).state).toBe("busy");
+    expect(runs).toBe(1);
     f.store.close();
   });
-  it("does not restore after Stop wins during final release of an observed click", async () => {
-    const f = await fixture(),
-      began = barrier(),
+  it("replay of an ordinary reply never claims feedback was delivered", async () => {
+    const f = await fixture(async () => ({ reply: "Which title?" }));
+    await f.send("reply", "Change it.");
+    const repeated = await f.send("reply", "Change it.");
+    expect(repeated.reply).not.toContain("waiting coding agent");
+    expect(f.store.all("response")).toHaveLength(0);
+    f.store.close();
+  });
+  it("ignoring an aborted model cannot supersede Stop with a success reply", async () => {
+    const began = barrier(),
       finish = barrier();
-    await f.viewing.tick();
-    const release = f.device.release.bind(f.device);
-    let firstControl = true;
-    f.device.release = async (l) => {
-      if (l.mode === "control" && firstControl) {
-        firstControl = false;
-        began.resolve();
-        await finish.promise;
-      }
-      await release(l);
-    };
-    const input = f.send("click", "click 0.5 0.5");
+    const f = await fixture(async () => {
+      began.resolve();
+      await finish.promise;
+      return { reply: "Everything succeeded!" };
+    });
+    const pending = f.send("first", "Change the title.");
     await began.promise;
-    await f.send("stop", "stop");
+    await f.send("stop", "Stop");
     finish.resolve();
-    expect((await input).receipt.state).toBe("observed");
-    await f.viewing.tick();
-    expect(f.device.leases.size).toBe(0);
-    expect(f.store.state(`view-restore:${f.request.id}`)).not.toBe(true);
+    const result = await pending;
+    expect(result.accepted).toBe(false);
+    expect(result.reply).not.toContain("succeeded");
     f.store.close();
   });
-  it("retains post-dispatch unknown and never repeats input even if the thrown error is typed", async () => {
-    const f = await fixture();
-    await f.viewing.tick();
-    f.device.action = async (_l, _f, _a, id) => {
-      f.device.inputs.push(id);
-      throw new ControlPreflightError("planner_unavailable");
-    };
-    await expect(f.send("click", "click 0.5 0.5")).rejects.toThrow("uncertain");
-    expect(f.store.all<ActionReceipt>("action")[0]?.state).toBe("unknown");
-    expect((await f.send("click", "click 0.5 0.5")).state).toBe("unknown");
-    expect(f.device.inputs).toHaveLength(1);
-    expect(f.store.state(`view-restore:${f.request.id}`)).not.toBe(true);
-    f.store.close();
-  });
-  it("keeps submitted input blocked when its post-action frame fails", async () => {
-    const f = await fixture(),
-      frame = f.device.frame.bind(f.device);
-    await f.viewing.tick();
-    let frames = 0;
-    f.device.frame = async (l) => {
-      if (++frames > 1) throw new Error("PRIVATE_FRAME_ERROR");
-      return frame(l);
-    };
-    await expect(f.send("click", "click 0.5 0.5")).rejects.toThrow("uncertain");
-    expect(f.store.all<ActionReceipt>("action")[0]?.state).toBe("submitted");
-    f.device.frame = frame;
-    await expect(
-      f.control.acquire(f.request.id, f.binding.memberId),
-    ).rejects.toThrow("reconciled");
-    expect(f.device.inputs).toHaveLength(1);
-    expect(f.store.state(`view-restore:${f.request.id}`)).not.toBe(true);
-    expect(JSON.stringify(f.command("click"))).not.toContain(
-      "PRIVATE_FRAME_ERROR",
+  it("enforces the input budget even when the agent asks for a fifth action", async () => {
+    const f = await fixture(async (t) => {
+      let v = await t.tools.observe();
+      for (let i = 0; i < 5; i++)
+        v = await t.tools.act(v.frame.id, { kind: "click", x: 0.5, y: 0.5 });
+      return { reply: "Done" };
+    });
+    expect((await f.send("budget", "Select the five fields.")).state).toBe(
+      "partial",
     );
+    expect(f.device.inputs).toHaveLength(4);
     f.store.close();
+  });
+});
+
+describe("screen report evidence timing", () => {
+  it("uses authenticated utterance admission time, never later model execution time", async () => {
+    vi.useFakeTimers();
+    const admitted = Date.now();
+    const f = await fixture(async (t) => {
+      await vi.advanceTimersByTimeAsync(1000);
+      f.store.saveState(`setup-view:${f.request.id}`, {
+        observedAt: Date.now(),
+      });
+      await t.tools.screenFeedback({ visible: true });
+      return { reply: "What next?" };
+    });
+    await f.send("early", "I see it.");
+    expect(
+      f.store.state<any>(`screen-feedback:${f.request.id}`).reportedAt,
+    ).toBe(admitted);
+    expect(
+      f.store.state<any>(`screen-feedback:${f.request.id}`).reportedAt,
+    ).toBeLessThan(f.store.state<any>(`setup-view:${f.request.id}`).observedAt);
+    f.store.close();
+    vi.useRealTimers();
+  });
+});
+
+describe("literal emergency stop without conversational inference", () => {
+  it.each([
+    "Stop listening",
+    "ClawdTime, stop sharing.",
+    "Hey ClawdTime stop!",
+  ])("interrupts %s without any model", async (text) => {
+    const f = await fixture(async () => {
+      throw new Error("Model must not interpret emergency Stop");
+    });
+    await f.viewing.tick();
+    expect((await f.send("emergency", text)).stopped).toBe(true);
+    expect(f.device.leases.size).toBe(0);
+    f.store.close();
+  });
+});
+
+describe("cross-channel emergency stop grammar", () => {
+  it.each([
+    "Stop",
+    "stop   sharing",
+    "STOP\tcontrol!",
+    "Hey   ClawdTime, stop  listening.",
+    "ClawdTime: stop sharing",
+  ])("accepts media priority phrase %s", (text) => {
+    expect(isImmediateStop(text)).toBe(true);
+  });
+  it.each([
+    "stop by the shop",
+    "don't stop",
+    "type stop",
+    "please stop and click",
+  ])("does not parse ordinary intent %s", (text) => {
+    expect(isImmediateStop(text)).toBe(false);
   });
 });

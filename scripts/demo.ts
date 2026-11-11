@@ -11,7 +11,25 @@ const store = new Store(),
   service = new ClawdTime(store, transport),
   device = new SimulatedDevice(),
   control = new ControlCoordinator(store, device),
-  human = new HumanRouter(service, control);
+  // An explicitly scripted fixture, never the production conversation agent.
+  human = new HumanRouter(service, control, {
+    observe: async (lease) => ({
+      frame: await device.frame(lease),
+      dataUrl: "data:image/jpeg;base64,c3ludGhldGlj",
+    }),
+    run: async (turn) => {
+      if (demoTurn++ === 0) {
+        const { frame } = await turn.tools.observe();
+        await turn.tools.act(frame.id, { kind: "click", x: 0.5, y: 0.5 });
+        return {
+          reply: "Synthetic input observed; this is not physical acceptance.",
+        };
+      }
+      await turn.tools.feedback({ kind: "answer" });
+      return { reply: "Returning your answer to the same simulated session." };
+    },
+  });
+let demoTurn = 0;
 const binding = {
   memberId: "demo_member",
   recipient: "+15555550100",
@@ -55,14 +73,14 @@ await human.receive({
   eventId: "demo_click",
   requestId: request.id,
   channel: "text",
-  text: "click 0.5 0.5",
+  text: "Click the center of the fixture.",
 });
 await human.receive({
   ...sender,
   eventId: "demo_answer",
   requestId: request.id,
   channel: "text",
-  text: "answer: Use green.",
+  text: "Use green.",
 });
 const response = service.result(connected.token, request.id).response!;
 service.ack(connected.token, request.id, response.id);

@@ -5,7 +5,7 @@ import { SetupService } from "../src/pairing/setup.js";
 import { SimulationTransport } from "../src/transport/simulation.js";
 import type { SetupTest, Transport } from "../src/contracts.js";
 
-function fixture(mode: "simulation" | "live" = "simulation") {
+function fixture(mode: "simulation" | "live" = "simulation", legacy = true) {
   let now = 100_000;
   const store = new Store(),
     simulated = new SimulationTransport();
@@ -24,6 +24,21 @@ function fixture(mode: "simulation" | "live" = "simulation") {
         };
   const service = new ClawdTime(store, transport, { clock: () => now }),
     setup = new SetupService(service);
+  // Historical fixtures exercise persisted SMS consent without retaining the old
+  // creation workflow in production. New-flow cases pass legacy=false below.
+  if (legacy) {
+    const invite = setup.invite.bind(setup);
+    setup.invite = (raw) => {
+      const result = invite(raw);
+      if (result.test.approvalMode !== "native_session") return result;
+      const { approvalMode: _mode, ...old } = result.test;
+      const test = store.put<SetupTest>("setup_test", {
+        ...old,
+        approvalCode: "AABBCCDD",
+      });
+      return { test };
+    };
+  }
   const binding = {
     memberId: "member",
     recipient: "+15550000001",
@@ -225,7 +240,7 @@ describe("same-session approved setup test", () => {
     },
   );
 
-  it("uses a unique exact challenge for new tests while preserving legacy bare-YES compatibility", async () => {
+  it("recognizes persisted exact challenges and legacy bare-YES consent", async () => {
     const f = fixture(),
       test = f.setup.invite(f.agent.token).test;
     expect(test.approvalCode).toMatch(/^[A-F0-9]{8}$/);
@@ -275,7 +290,9 @@ describe("same-session approved setup test", () => {
     expect(f.setup.invite(f.agent.token).test).toEqual(test);
     expect(f.store.effects()).toHaveLength(1);
     expect(f.setup.receive(f.event)).toBe(false);
-    expect(() => f.setup.start(f.agent.token)).toThrow("exact human YES");
+    expect(() => f.setup.start(f.agent.token)).toThrow(
+      "explicit authorization",
+    );
     await f.service.drain();
     expect(f.simulated.messages).toHaveLength(1);
     // A previously seen early YES must never become approval after delivery.
@@ -331,7 +348,9 @@ describe("same-session approved setup test", () => {
     expect(() => f.setup.start(other.token)).toThrow("Invite the human");
     f.advance(600_001);
     expect(f.setup.get(f.agent.token).test?.state).toBe("expired");
-    expect(() => f.setup.start(f.agent.token)).toThrow("exact human YES");
+    expect(() => f.setup.start(f.agent.token)).toThrow(
+      "explicit authorization",
+    );
     expect(f.setup.receive({ ...f.event, id: "late" })).toBe(false);
     expect(f.setup.invite(f.agent.token).test.state).toBe("expired");
     expect(f.simulated.calls).toHaveLength(0);
@@ -402,64 +421,164 @@ describe("same-session approved setup test", () => {
     f.store.close();
   });
 
-  it("verifies only the complete live-evidence chain after screen feedback, continuation and result receipt", async () => {
-    const f = fixture("live");
-    f.setup.invite(f.agent.token);
+  it.each([true, false])(
+    "verifies only the complete live-evidence chain (legacy=%s)",
+    async (legacy) => {
+      const f = fixture("live", legacy);
+      const test = f.setup.invite(f.agent.token).test;
+      await f.service.drain();
+      if (legacy) f.setup.receive(f.event);
+      else f.setup.authorize(f.agent.token, test.id, true);
+      f.service.yieldSession(f.agent.token);
+      const { request } = f.setup.start(f.agent.token);
+      await f.service.drain();
+      const call = f.service.observeCall(request.id, "connected", true);
+      const view = {
+        requestId: request.id,
+        callId: call.id,
+        sessionId: f.agent.session.id,
+        pairingId: f.pairing.pairing.id,
+        leaseId: "fixture",
+        frameId: "frame",
+        capturedAt: f.now(),
+        observedAt: f.now(),
+        live: true,
+      };
+      f.store.saveState(`setup-view:${request.id}`, view);
+      f.advance(100);
+      const response = f.service.receiveResponse({
+        eventId: "feedback",
+        requestId: request.id,
+        memberId: f.binding.memberId,
+        lineId: f.binding.lineId,
+        conversationId: f.binding.conversationId,
+        channel: "text",
+        text: legacy
+          ? "I can see my screen."
+          : "All done. Carry on with coding.",
+      });
+      const visibility = {
+        eventId: "earlier-visibility",
+        requestId: request.id,
+        sessionId: f.agent.session.id,
+        pairingId: f.pairing.pairing.id,
+        callId: call.id,
+        visible: true,
+        reportedAt: view.observedAt,
+      };
+      if (!legacy)
+        f.store.saveState(`screen-feedback:${request.id}`, visibility);
+      f.service.ack(f.agent.token, request.id, response.id);
+      f.service.resume(f.agent.token, request.id, 0);
+      f.service.complete(
+        f.agent.token,
+        request.id,
+        "Screen feedback received; this session continued.",
+      );
+      expect(() => f.setup.verify(f.agent.token)).toThrow(
+        "Messages result receipt",
+      );
+      await f.service.drain();
+      f.store.saveState(`setup-view:${request.id}`, {
+        ...view,
+        sessionId: "other",
+      });
+      expect(() => f.setup.verify(f.agent.token)).toThrow(
+        "real qualified call",
+      );
+      f.store.saveState(`setup-view:${request.id}`, view);
+      const acknowledged = f.store.get<typeof response>(
+        "response",
+        response.id,
+      )!;
+      f.store.put("response", {
+        ...acknowledged,
+        text: "I cannot see my screen.",
+      });
+      if (!legacy)
+        f.store.saveState(`screen-feedback:${request.id}`, {
+          ...visibility,
+          visible: false,
+        });
+      expect(() => f.setup.verify(f.agent.token)).toThrow(
+        "real qualified call",
+      );
+      if (!legacy) {
+        for (const mismatch of [
+          { callId: "other" },
+          { sessionId: "other" },
+          { pairingId: "other" },
+          { requestId: "other" },
+          { reportedAt: view.observedAt - 1 },
+          { reportedAt: response.createdAt + 1 },
+        ]) {
+          f.store.saveState(`screen-feedback:${request.id}`, {
+            ...visibility,
+            ...mismatch,
+          });
+          expect(() => f.setup.verify(f.agent.token)).toThrow(
+            "real qualified call",
+          );
+        }
+        f.store.saveState(`screen-feedback:${request.id}`, visibility);
+      }
+      f.store.put("response", acknowledged);
+      f.service.observeCall(request.id, "ended");
+      expect(f.setup.verify(f.agent.token).test.state).toBe("verified");
+      expect(f.setup.verify(f.agent.token).test.state).toBe("verified");
+      f.store.close();
+    },
+  );
+});
+
+describe("natural setup with existing native-chat consent", () => {
+  it("announces setup without a code and requires scoped explicit consent once", async () => {
+    const f = fixture("simulation", false);
+    const test = f.setup.invite(f.agent.token).test;
+    expect(test.approvalMode).toBe("native_session");
+    expect(test.approvalCode).toBeUndefined();
+    expect(f.setup.receive(f.event)).toBe(false);
+    expect(() => f.setup.start(f.agent.token)).toThrow(
+      "explicit authorization",
+    );
+    expect(() => f.setup.authorize(f.agent.token, "other", true)).toThrow();
+    const other = f.register("other");
+    expect(() => f.setup.authorize(other.token, test.id, true)).toThrow();
+    expect(() =>
+      f.setup.authorize(f.agent.token, test.id, false as true),
+    ).toThrow();
+    const approved = f.setup.authorize(f.agent.token, test.id, true).test;
+    expect(approved.approvalSource).toBe("native_session");
+    f.advance(1000);
+    expect(f.setup.authorize(f.agent.token, test.id, true).test).toEqual(
+      approved,
+    );
+    expect(() => f.setup.start(f.agent.token)).toThrow("notice delivery");
     await f.service.drain();
-    f.setup.receive(f.event);
+    expect(f.simulated.messages[0]?.text).not.toMatch(/YES|code|answer:/);
     f.service.yieldSession(f.agent.token);
-    const { request } = f.setup.start(f.agent.token);
+    const started = f.setup.start(f.agent.token);
+    expect(started.request.question).not.toMatch(/answer:|ClawdTime answer/);
+    expect(() => f.setup.authorize(f.agent.token, test.id, true)).toThrow();
     await f.service.drain();
-    const call = f.service.observeCall(request.id, "connected", true);
-    const view = {
-      requestId: request.id,
-      callId: call.id,
-      sessionId: f.agent.session.id,
-      pairingId: f.pairing.pairing.id,
-      leaseId: "fixture",
-      frameId: "frame",
-      capturedAt: f.now(),
-      observedAt: f.now(),
-      live: true,
-    };
-    f.store.saveState(`setup-view:${request.id}`, view);
-    f.advance(100);
-    const response = f.service.receiveResponse({
-      eventId: "feedback",
-      requestId: request.id,
-      memberId: f.binding.memberId,
-      lineId: f.binding.lineId,
-      conversationId: f.binding.conversationId,
-      channel: "text",
-      text: "I can see my screen.",
-    });
-    f.service.ack(f.agent.token, request.id, response.id);
-    f.service.resume(f.agent.token, request.id, 0);
-    f.service.complete(
-      f.agent.token,
-      request.id,
-      "Screen feedback received; this session continued.",
-    );
-    expect(() => f.setup.verify(f.agent.token)).toThrow(
-      "Messages result receipt",
-    );
+    f.setup.start(f.agent.token);
     await f.service.drain();
-    f.store.saveState(`setup-view:${request.id}`, {
-      ...view,
-      sessionId: "other",
-    });
-    expect(() => f.setup.verify(f.agent.token)).toThrow("real qualified call");
-    f.store.saveState(`setup-view:${request.id}`, view);
-    const acknowledged = f.store.get<typeof response>("response", response.id)!;
-    f.store.put("response", {
-      ...acknowledged,
-      text: "I cannot see my screen.",
-    });
-    expect(() => f.setup.verify(f.agent.token)).toThrow("real qualified call");
-    f.store.put("response", acknowledged);
-    f.service.observeCall(request.id, "ended");
-    expect(f.setup.verify(f.agent.token).test.state).toBe("verified");
-    expect(f.setup.verify(f.agent.token).test.state).toBe("verified");
+    expect(f.simulated.calls).toHaveLength(1);
     f.store.close();
   });
+  it.each(["expired", "stale", "revoked", "canceled"])(
+    "does not authorize %s setup",
+    (kind) => {
+      const f = fixture("simulation", false);
+      const test = f.setup.invite(f.agent.token).test;
+      if (kind === "expired") f.advance(600001);
+      if (kind === "stale") f.advance(20001);
+      if (kind === "canceled") f.setup.cancel(f.agent.token);
+      if (kind === "revoked")
+        f.store.put("pairing", { ...f.pairing.pairing, revokedAt: f.now() });
+      expect(() => f.setup.authorize(f.agent.token, test.id, true)).toThrow();
+      expect(f.simulated.calls).toHaveLength(0);
+      f.store.close();
+    },
+  );
 });

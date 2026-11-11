@@ -161,7 +161,7 @@ export interface SessionRegistration {
   capabilities: AgentSession["capabilities"];
 }
 
-/** Setup stays with the originating agent; a text approval authorizes one test. */
+/** Setup stays with the originating agent; consent authorizes one exact test. */
 export interface SetupTest {
   id: string;
   sessionId: string;
@@ -176,7 +176,10 @@ export interface SetupTest {
     | "canceled"
     | "expired";
   invitationEffectId: string;
-  /** Fresh attempts bind SMS approval to this code; absent only for legacy tests. */
+  /** New tests use consent already given in the originating native chat. */
+  approvalMode?: "native_session";
+  approvalSource?: "native_session";
+  /** Retained for historical SMS-approved tests, never reused for new tests. */
   approvalCode?: string;
   /** Explicit recovery preserves the expired predecessor and its unknown receipt. */
   previousTestId?: string;

@@ -79,6 +79,7 @@ repeated status reads. The bridge does not accept shell commands or arbitrary UR
 {"id":"status-1","command":"status"}
 {"id":"invite","command":"invite"}
 {"id":"status-2","command":"status"}
+{"id":"authorize","command":"authorize","args":{"testId":"RETURNED_TEST_ID","userAuthorizedCall":true}}
 {"id":"yield","command":"yield","args":{"backgroundActorsStopped":true}}
 {"id":"start","command":"start"}
 {"id":"result-1","command":"result","args":{"requestId":"RETURNED_REQUEST_ID","waitSeconds":20}}
@@ -89,30 +90,63 @@ repeated status reads. The bridge does not accept shell commands or arbitrary UR
 ```
 
 These are sequential examples, not a script to blindly feed at startup. `invite`
-queues one invitation SMS; it does not call. Wait with the native question tool
-and read `status` until the backend has received the real authenticated SMS
-`YES <approvalCode>` matching the code in that invitation. New initial and recovery
-tests use a unique eight-character hexadecimal code. Bare `YES` applies only to a
-legacy test without `approvalCode`; previous codes never authorize a new test.
-An answer in the coding chat cannot substitute for that approval. Stop/join all
-conflicting actors before `yield`; `start` requires backend approval and the same
-yielded session. Only the lead may initiate the live pilot. A closed test cannot
-be replaced just by choosing another run. The call request uses backend-stable IDs.
+queues one informational setup notice; it does not call or require a handset code.
+New tests use `approvalMode=native_session`. Once the user has explicitly authorized
+this one call in the originating coding chat, send `authorize` with that exact
+test ID and `userAuthorizedCall:true`. Honor existing explicit authorization without
+asking again. Never infer it from setup intent, readiness, silence or a previous
+call's permission. If it is missing, ask through the native question tool before
+calling. Backend approval records `approvalSource=native_session`; it is a client
+attestation of the actual user's request, not independent SMS evidence.
+
+The command is bound to the current unexpired test, session and pairing. It has a
+durable stable intent and cannot authorize a consumed or replacement test. Only
+backend `test.state=approved` permits start; legacy stored tests retain their old
+SMS approval semantics. The backend also requires the informational notice's
+confirmed receipt before starting a live test. Stop/join conflicting actors before
+`yield`; `start` requires that same yielded session. Only the lead initiates the
+live pilot. A closed test cannot be replaced by choosing another run. Call request
+IDs remain backend-stable; no confirmation change permits replaying unknown effects.
 
 `result` waits at most 20 seconds of polling (each HTTP request has its own 12-second
 deadline). Check exact request/session, feedback and released control receipts;
 replace the example epoch with the actual current controlEpoch. While yielded,
-perform only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack and nonmutating human questions.
+perform only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack and
+nonmutating human questions, plus the explicitly authorized `authorize`/`start`
+transition for this setup test. These exceptions permit no coding or local UI work.
 After successful `resume`, perform the authorized native continuation, then send
 `complete` once. A queued result is not handset delivery. Only `verify` returning
 `test.state=verified` establishes the backend's real call + observed screen +
 acknowledged human feedback + continuation + Messages delivery evidence chain.
 Simulation cannot verify. Physical click/type/scroll/AI-action qualification is
 additional evidence; this setup test does not silently establish all CUA coverage.
-The human's positive screen confirmation must be `answer: I can see my screen`
-in Messages or `ClawdTime answer I can see my screen` by qualified voice. Negative
-or unclear feedback is preserved and cannot pass verification. Report its actual
-meaning; do not substitute a positive response or claim setup succeeded.
+The human describes screen visibility in their own words. The conversation service
+can record `screenVisible` only from authentic feedback bound to this call; the
+coding agent must not submit or invent that evidence. A model interpretation is
+not proof that video rendered. Verification still requires actual capture, qualified
+call, human feedback, acknowledged continuation and a confirmed Messages receipt.
+Negative or unclear feedback cannot pass by being rewritten into a positive phrase.
+
+### Natural conversation during the call
+
+The human speaks or texts ordinary requests, such as “click the textbox,” “scroll
+down a little,” “I can see the page,” or “use the blue version and continue.” No
+command prefix, wake phrase or prescribed confirmation sentence is needed. A
+visibility report does not itself request agent continuation. Each computer action
+still needs human direction, explicit paired control permission, fresh-frame checks
+and a single-action receipt. Observation does not prove application success or
+correct focus; visually verify the intended textbox before typing. Local Stop and
+conversation Stop remain authoritative. Suggest landscape orientation when useful.
+
+Keep the coding chat/bridge active, but conduct in-call dialogue through the phone.
+Do not open a native question UI on the shared Mac or refocus the coding client
+while CUA is active. Use the native question tool for pre-call setup/permission
+steps. Qualified remote voice and authenticated Messages share the conversational
+intent path; a screen, transcript, model output or unrelated participant cannot
+supply permission. Continuous video is a presentation requirement, not permission
+to issue another action while an input or release outcome is unknown. These are
+implementation contracts; physical qualification remains recorded separately in
+`docs/STATUS.md` and `docs/DEMO_ACCEPTANCE.md`.
 
 For a missing screen or failed media phase, inspect read-only bounded diagnostics
 without stopping the bridge or continuing conflicting work:
@@ -184,7 +218,7 @@ request in **the same existing native coding chat**. Do not launch another codin
 client/chat. Existing test records remain immutable; there is no automatic new
 trial, retry loop, migration of an old token or revival of the stopped session.
 The user must explicitly approve another test, and the new invitation still
-requires its exact authenticated SMS approval code. Unknown call/input/cleanup
+requires its own explicit one-call authorization. Unknown call/input/cleanup
 forbids replacement attempts. The narrow operator-audited invitation exception
 below does not change those call/control rules.
 
@@ -218,8 +252,9 @@ It persists one stable intent before POST and updates its test binding only afte
 a valid same-session successor response. Keep the same command ID after a definite
 rejection has been corrected; unknown outcomes require read-only status inspection
 and cannot be retried under a replacement ID. A new invitation still requires
-the exact `YES <approvalCode>` sent in that new invitation. Use the native question
-tool while waiting; a coding-chat response is not that SMS approval. Never invoke
+explicit authorization for this one test from the actual user in the same chat.
+Authorization to resend an invitation is not authorization to call. Record the
+current test's consent with `authorize`; do not reuse consumed consent. Never invoke
 `retry` automatically merely because an invitation timed out.
 
 For a foreground bridge already running code without `retry`, there is no hot
@@ -242,7 +277,10 @@ invitation delivery unverified.
 
 After the helper returns, send `status` to the **original** bridge; that old code
 already learns the backend's current test from status. Keep waiting in this chat
-for the new SMS code, then use its existing yield/start/result flow. Do not call
+for explicit one-call consent, then use its existing yield/start/result flow only
+after backend approval. An old bridge lacks `authorize`; it cannot hot reload or
+self-authorize. The lead must arrange a reviewed exact-session authorization path
+or report that compatibility limitation. Do not call
 the old bridge's cached `invite` to learn the successor. Do not close stdin or
 restart anything. The one-shot operation is restricted to a live original bridge
 and cannot revive a stopped session. The human/lead must keep concurrent mutation
@@ -257,7 +295,7 @@ unchanged cursor/unknown predecessor, and no restart. These are synthetic protoc
 tests, not a native coding-client, live line, delivery or screen acceptance claim.
 
 Validation: `npx vitest run tests/connectors-setup.test.ts` exercises same-process
-registration → invitation → synthetic authenticated approval → yield → one simulated
+registration → informational notice → explicit synthetic native-session consent → yield → one simulated
 call → feedback → ack/resume → Messages result, along with rejected physical
 verification, EOF cleanup and unknown-outcome recovery. It starts no coding client
 and does not establish physical acceptance or current-chat native question-tool
@@ -418,7 +456,8 @@ every five seconds, with no overlapping request. Closing stdio stops the timer.
 After twenty seconds without a heartbeat the backend stops the session and begins
 call/control cleanup. Late heartbeats or a reused run identity cannot resurrect
 that stopped session. Response reads do not extend it. Start a new native client
-session after terminal loss and reconcile old effects; do not replay attention.
+run in the same native chat only after known cleanup and explicit new-attempt
+authorization; reconcile old effects and do not replay attention.
 
 ## Actionable live readiness and supervised acceptance preparation
 

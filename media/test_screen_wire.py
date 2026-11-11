@@ -36,6 +36,7 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
         self.frames = 0
         self.fail_frames = False
         self.slow_frames = False
+        self.frame_gate = None
         image = io.BytesIO()
         Image.new('RGB', (320, 180), '#8d17cb').save(image, 'JPEG')
         self.jpeg = image.getvalue()
@@ -43,6 +44,10 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
         async def helper(request):
             self.assertEqual(request.headers.get('Authorization'), 'Bearer ' + 'h'*32)
             self.received.append((request.method, request.path))
+            if request.method == 'POST' and request.path.endswith('/actions'):
+                action=await request.json()
+                return web.json_response({'id':action['id'],'leaseId':self.lease['id'],'state':'submitted',
+                    **{key:self.lease[key] for key in ('deviceId','memberId','callId')}})
             if request.method == 'POST':
                 self.lease = await request.json()
                 self.assertEqual(set(self.lease), {'id','deviceId','memberId','callId','displayId','mode','expiresAt'})
@@ -51,6 +56,7 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
                 self.lease = None
                 return web.json_response({'stopped': True})
             if request.path.endswith('/frame') and self.lease:
+                if self.frame_gate: await self.frame_gate.wait()
                 if self.slow_frames: await asyncio.sleep(1.7)
                 if self.fail_frames:
                     raise web.HTTPForbidden()
@@ -225,6 +231,36 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(failure['durationMs'],1000)
         self.assertTrue(failure.get('httpStatus')==503 or failure.get('error')=='timeout')
         self.assertEqual(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),1)
+
+    async def test_action_retains_video_but_requires_new_input_observation_without_recreate(self):
+        self.selection['mode']='control'
+        response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+        self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.screen.frame_id:break
+            await asyncio.sleep(.01)
+        before=self.screen.frame_id
+        response=await self.client.get(f'/sessions/{self.sid}/screen/frame',headers=self.headers)
+        self.assertEqual(response.status,200)
+        self.frame_gate=asyncio.Event()
+        try:
+            response=await self.client.post(f'/sessions/{self.sid}/screen/actions',headers=self.headers,json={
+                'id':'action_fixture','leaseId':'view_fixture','callId':self.sid,'memberId':'fixture_member',
+                'deviceId':'fixture_mac','displayId':1,'frameId':before,'type':'click','x':.5,'y':.5})
+            self.assertEqual(response.status,200)
+            self.assertEqual((await response.json())['state'],'submitted')
+            self.assertIsNotNone(self.screen.frame)
+            self.assertIsNone(self.screen.frame_id)
+            self.assertEqual((await self.client.get(f'/sessions/{self.sid}/screen/frame',headers=self.headers)).status,409)
+        finally:self.frame_gate.set()
+        for _ in range(100):
+            if self.screen.frame_id and self.screen.frame_id!=before:break
+            await asyncio.sleep(.01)
+        self.assertIsNotNone(self.screen.frame_id)
+        self.assertNotEqual(self.screen.frame_id,before)
+        self.assertEqual(self.screen.selection['leaseId'],'view_fixture')
+        self.assertFalse(any(method=='DELETE' for method,_ in self.received))
+        self.assertEqual(sum(1 for method,path in self.received if method=='POST' and path=='/v1/leases'),1)
 
 
 class OutboundScreenWireTests(ScreenWireTests):

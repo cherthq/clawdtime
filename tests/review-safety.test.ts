@@ -7,6 +7,7 @@ import {
   ControlCoordinator,
   SimulatedDevice,
 } from "../src/control/coordinator.js";
+import { ScriptedConversationAgent } from "./backend-conversation-fixture.js";
 import { HumanRouter } from "../src/control/human-router.js";
 import { Viewing } from "../src/control/viewing.js";
 import { VisionPlanner } from "../src/control/planner.js";
@@ -61,7 +62,11 @@ async function controlFixture(device = new SimulatedDevice()) {
   const store = new Store(),
     service = new ClawdTime(store, new SimulationTransport());
   const control = new ControlCoordinator(store, device),
-    human = new HumanRouter(service, control),
+    human = new HumanRouter(
+      service,
+      control,
+      new ScriptedConversationAgent(device),
+    ),
     viewing = new Viewing(store, device);
   const fixture = pair(service);
   await service.drain();
@@ -134,14 +139,14 @@ describe("independent final safety review", () => {
     }
   });
 
-  it("restores viewing after successful CUA but preserves the stop latch", async () => {
+  it("retains continuous viewing after successful CUA but preserves the stop latch", async () => {
     const f = await controlFixture();
     try {
       await f.viewing.tick();
       const before = f.store
         .all<ControlLease>("lease")
         .find((l) => l.state === "active")!;
-      expect(before.mode).toBe("view");
+      expect(before.mode).toBe("control");
       await f.human.receive({
         ...f.input,
         eventId: "type",
@@ -151,8 +156,8 @@ describe("independent final safety review", () => {
       const after = f.store
         .all<ControlLease>("lease")
         .find((l) => l.state === "active")!;
-      expect(after.mode).toBe("view");
-      expect(after.id).not.toBe(before.id);
+      expect(after.mode).toBe("control");
+      expect(after.id).toBe(before.id);
       await f.human.receive({ ...f.input, eventId: "stop", text: "stop" });
       await f.viewing.tick();
       await f.viewing.tick();

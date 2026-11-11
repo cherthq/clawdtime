@@ -26,6 +26,32 @@ class ScreenTests(unittest.IsolatedAsyncioTestCase):
         session=SimpleNamespace(owner=owner,id='session',call_id='call',active=True,closing=False)
         screen=ScreenController(session);screen.release=AsyncMock();return screen
 
+    async def test_input_consumes_frame_authority_without_flashing_video(self):
+        screen=self.make();screen.poll=AsyncMock();screen.update(policy(selection()))
+        screen.frame=Image.new('RGB',(640,360),'blue');screen.frame_id='before';screen.state='viewing'
+        screen.received_at=time.monotonic();screen.captured_at=datetime.now(timezone.utc).isoformat()
+        before=screen.render().tobytes()
+        screen.invalidate_input('before','lease-1')
+        self.assertEqual(screen.render().tobytes(),before)
+        self.assertIsNone(screen.frame_id)
+        self.assertEqual(screen.state,'awaiting_frame')
+        with self.assertRaises(ValueError):await screen.observed(include_frame=True)
+        self.assertEqual(screen.hold_until,0)
+        screen.received_at=time.monotonic()-2.1
+        screen.expire();self.assertIsNone(screen.frame)
+        await screen.close()
+
+    async def test_late_action_response_cannot_invalidate_new_frame_or_overwrite_stop(self):
+        screen=self.make();screen.poll=AsyncMock();screen.update(policy(selection()))
+        screen.frame=Image.new('RGB',(100,100),'blue');screen.frame_id='after';screen.state='viewing'
+        screen.received_at=time.monotonic();screen.captured_at=datetime.now(timezone.utc).isoformat()
+        screen.invalidate_input('before','lease-1')
+        self.assertEqual(screen.frame_id,'after');self.assertEqual(screen.state,'viewing')
+        screen.update({})
+        screen.invalidate_input('after','lease-1')
+        self.assertIsNone(screen.frame);self.assertEqual(screen.state,'stopped')
+        await screen.close()
+
     async def test_terminal_notification_survives_policy_cancelling_capture(self):
         screen=self.make()
         selected=selection()

@@ -2,10 +2,64 @@
 
 November 11, 2026 — America/New_York.
 
-**Independently hosted pilot; controlled line handoff active. Not a verified live demo.** The actual
-call → screen → feedback/CUA → agent continuation → Messages-result path has not
-been observed on a handset. Apple Teams traffic is paused; ClawdTime exclusively
-owns the confirmed test line while supervised onboarding is in progress.
+**Independently hosted pilot; controlled line handoff active. Full CUA and voice acceptance remain pending.**
+The physical Codex → FaceTime → Mac screen → authenticated Messages feedback →
+same-chat continuation → Messages recap path passed in the earlier supervised run.
+Correct control targeting, natural voice and the Claude Code physical call loop
+remain unverified. Apple Teams stays paused for the retained test line. Dated
+entries below retain historical evidence; the latest change is summarized first.
+
+## Conversational harness revision — November 11
+
+User feedback requested natural voice/text, compound tool use, continuous video,
+landscape guidance and removal of scripted confirmations. Implemented with three
+parallel specialists and independent review:
+
+- One model tool loop interprets qualified voice and authenticated Messages. No
+  production command-prefix parser or required wake phrase. Observe, click, type,
+  scroll, nonterminal visibility reporting, feedback and Stop are tools. Turns
+  are bounded to eight model steps, four input attempts and 45 seconds. Each
+  action is validated independently; changed images return to the same model for
+  reconsideration before input. Unknown outcomes never replay.
+- Screen capture uses one continuous authorized lease while the coding agent
+  stays yielded. Input consumes its frame identity without blanking still-fresh
+  video. Permission/identity/expiry checks, local Stop and confirmed release
+  before continuation remain mandatory. No installed companion replacement or
+  permission reset is required.
+- Qualified speech reaches the conversation agent without a wake phrase; bounded
+  model replies use durable at-most-once speech receipts. Speech remains
+  half-duplex: listening pauses during synthesized speech, so barge-in is not
+  implemented. Stale/busy/uncertain speech is not replayed.
+- The agent can suggest landscape when the desktop looks small; it does not
+  claim access to handset orientation telemetry.
+- New setup notices do not contain SMS approval codes. The originating connector
+  attests actual explicit authorization for one exact, unexpired test already
+  given in the native chat. This does not invent approval or reuse a consumed
+  one-call authorization. Historical SMS tests/receipts remain compatible.
+- Natural visibility reports stay bound to their original authenticated turn,
+  request, call, pairing and session. They do not end the call; later feedback
+  can return to coding without repeating an exact confirmation phrase. Model
+  delay cannot move a pre-capture report after capture for verification.
+
+Validation: `npm run check` passes **365 tests in 23 files**, TypeScript and build;
+format checking passes. The media suite passes **82 tests**, including synthetic
+HTTP/WSS and priority voice Stop. Swift's **13 tests** pass with no native source
+change. The built onboarding browser check and scripted simulation demo pass.
+Independent review covered authorization, unknown effects, interrupted tool turns,
+voice/text Stop, visibility evidence and cursor concurrency. Live read-only checks
+found all prior calls ended, all leases released, and the existing explicit
+conversation provider/model/key configured; no provider-generation test was run.
+
+Long model turns maintain viewing and service priority Stop ingress with serialized
+cursor polling. Call-end observation remains read-only; only durably queued owned
+cleanup may dispatch. Voice Stop can bypass serial transcript handling while
+listening; agent TTS still suspends listening. A helper grant cannot be reused
+before its acknowledgement, and Stop during grant creation prevents readiness.
+
+Release identifiers are recorded after deployment below. This revision has
+**no new handset acceptance**: the user requested no further call.
+Earlier physical results do not establish this revised voice/CUA flow. Historical
+unknown outcomes, event cursors and receipts were preserved.
 
 ## Source and release identities
 

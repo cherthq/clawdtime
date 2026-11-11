@@ -66,7 +66,7 @@ export class ControlCoordinator {
         store.put("action", { ...receipt, state: "unknown" });
     }
   }
-  context(requestId: string, memberId: string) {
+  private captureContext(requestId: string, memberId: string) {
     if (this.store.state(`view-stopped:${requestId}`))
       throw new ControlPreflightError("stopped");
     const request = this.store.get<AttentionRequest>("attention", requestId);
@@ -81,20 +81,30 @@ export class ControlCoordinator {
       !pairing ||
       !session ||
       !call ||
-      pairing.revokedAt ||
+      pairing.revokedAt !== undefined ||
       pairing.memberId !== memberId ||
+      session.pairingId !== pairing.id ||
+      call.requestId !== request.id ||
+      call.pairingId !== pairing.id ||
       !pairing.allowView ||
-      !pairing.allowControl ||
       !liveStates.includes(request.state) ||
       request.deadline <= this.now() ||
       call.state !== "connected" ||
       !call.remoteParticipantQualified ||
       session.state !== "yielded" ||
+      !Number.isFinite(session.lastSeenAt ?? session.createdAt) ||
+      (session.lastSeenAt ?? session.createdAt) > this.now() + 1000 ||
       this.now() - (session.lastSeenAt ?? session.createdAt) > 20_000
     ) {
       throw new ControlPreflightError("context_expired");
     }
     return { request, pairing, session, call };
+  }
+  context(requestId: string, memberId: string) {
+    const context = this.captureContext(requestId, memberId);
+    if (!context.pairing.allowControl)
+      throw new ControlPreflightError("context_expired");
+    return context;
   }
   async acquire(requestId: string, memberId: string): Promise<ControlLease> {
     const { request, pairing, session, call } = this.context(
@@ -119,17 +129,43 @@ export class ControlCoordinator {
       throw new Error(
         "Prior input outcome must be reconciled before another action.",
       );
+    const reserved = ownedLeases.filter(
+      (l) =>
+        ["active", "unknown"].includes(l.state) && l.expiresAt > this.now(),
+    );
+    const continuous = reserved.length === 1 ? reserved[0] : undefined;
     if (
-      this.store
-        .all<ControlLease>("lease")
-        .some(
-          (l) =>
-            l.deviceId === pairing.deviceId &&
-            l.displayId === pairing.displayId &&
-            (l.state === "active" || l.state === "unknown") &&
-            l.expiresAt > this.now(),
-        )
+      continuous &&
+      this.store.state(`continuous-view:${continuous.id}`) === true &&
+      continuous.state === "active" &&
+      continuous.mode === "control" &&
+      continuous.requestId === request.id &&
+      continuous.sessionId === session.id &&
+      continuous.pairingId === pairing.id &&
+      continuous.memberId === memberId &&
+      continuous.callId === call.id &&
+      continuous.epoch === session.controlEpoch
+    ) {
+      this.check(continuous.id, memberId);
+      // Authorization renewal only: media refreshes the same helper lease. No
+      // capture stream reset or input dispatch, and expired grants never revive.
+      if (continuous.expiresAt - this.now() < 12_000) {
+        return this.store.put<ControlLease>("lease", {
+          ...continuous,
+          expiresAt: Math.min(this.now() + 20_000, request.deadline),
+        });
+      }
+      return continuous;
+    }
+    if (
+      ownedLeases.some(
+        (l) =>
+          l.requestId === request.id &&
+          this.store.state(`continuous-view:${l.id}`) === true,
+      )
     )
+      throw new ControlPreflightError("stopped");
+    if (reserved.length)
       throw new Error(
         "Display control is already reserved or release is uncertain.",
       );
@@ -166,16 +202,41 @@ export class ControlCoordinator {
     }
   }
   check(leaseId: string, memberId: string) {
+    return this.checkMode(leaseId, memberId, "control");
+  }
+  /** Existing read-only capture grant only; never allocates or upgrades control. */
+  checkView(leaseId: string, memberId: string) {
+    return this.checkMode(leaseId, memberId, "view");
+  }
+  private checkMode(
+    leaseId: string,
+    memberId: string,
+    mode: "view" | "control",
+  ) {
     const lease = this.store.get<ControlLease>("lease", leaseId);
     if (
       !lease ||
       lease.memberId !== memberId ||
       lease.state !== "active" ||
+      (this.store.state(`continuous-view:${lease.id}`) === true &&
+        this.store.state(`view-device-ready:${lease.id}`) !== true) ||
+      !Number.isFinite(lease.expiresAt) ||
       lease.expiresAt <= this.now()
     )
       throw new ControlPreflightError("stopped");
-    const { session } = this.context(lease.requestId, memberId);
-    if (session.controlEpoch !== lease.epoch)
+    const { session, pairing, call } =
+      mode === "control"
+        ? this.context(lease.requestId, memberId)
+        : this.captureContext(lease.requestId, memberId);
+    if (
+      session.controlEpoch !== lease.epoch ||
+      lease.mode !== mode ||
+      lease.sessionId !== session.id ||
+      lease.pairingId !== pairing.id ||
+      lease.callId !== call.id ||
+      lease.deviceId !== pairing.deviceId ||
+      lease.displayId !== pairing.displayId
+    )
       throw new ControlPreflightError("context_expired");
     return lease;
   }

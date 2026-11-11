@@ -914,7 +914,9 @@ export class ClawdTime {
           setup &&
           setup.invitationEffectId === effect.id &&
           setup.pairingId === pairing?.id &&
-          setup.state === "awaiting_approval" &&
+          (setup.state === "awaiting_approval" ||
+            (setup.approvalMode === "native_session" &&
+              setup.state === "approved")) &&
           setup.expiresAt > this.clock() &&
           setupSession &&
           setupSession.pairingId === setup.pairingId &&

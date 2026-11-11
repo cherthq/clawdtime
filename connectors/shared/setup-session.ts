@@ -20,6 +20,10 @@ import {
 import { startHeartbeat } from "./heartbeat.js";
 import { requireAttentionReadiness, summarizeReadiness } from "./readiness.js";
 import { requireRetryPredecessor, validateRetryResult } from "./setup-retry.js";
+import {
+  requireSetupAuthorization,
+  validateSetupAuthorization,
+} from "./setup-authorization.js";
 
 type Command = { id: string; command: string; args?: Record<string, unknown> };
 interface BridgeState {
@@ -41,6 +45,7 @@ interface BridgeState {
 }
 const effects = new Set([
   "invite",
+  "authorize",
   "yield",
   "start",
   "ack",
@@ -192,7 +197,7 @@ export async function startSetupSession(options: {
       projectRoot: connection.projectRoot,
       adapter: connection.adapter,
       currentChat: true,
-      next: "Keep this foreground bridge alive. Use this chat's native question tool while waiting; do not finalize or stop while setup is pending.",
+      next: "Keep this foreground bridge alive. Use this chat's native question tool for pre-call setup; during a call keep dialogue on the phone so Mac focus stays unchanged. Do not finalize or stop while setup is pending.",
     });
     const lines = createInterface({
       input,
@@ -240,6 +245,20 @@ export async function startSetupSession(options: {
           command.command === "retry"
             ? textArg(args, "previousTestId")
             : undefined;
+        const authorizationTestId =
+          command.command === "authorize" ? textArg(args, "testId") : undefined;
+        if (command.command === "authorize") {
+          if (args.userAuthorizedCall !== true)
+            throw new Error(
+              "Authorize only after the user explicitly requested this one call in the current native chat; set userAuthorizedCall=true. Setup intent, readiness and silence are not consent.",
+            );
+          requireSetupAuthorization(
+            bridge.test,
+            authorizationTestId!,
+            run.session!.id,
+            connection.pairing.id,
+          );
+        }
         if (
           command.command === "retry" &&
           (args.authorizeNewInvitation !== true ||
@@ -319,9 +338,14 @@ export async function startSetupSession(options: {
           }
           // Each setup operation has a single stable intent, even if caller changes its id.
           if (
-            ["invite", "start", "complete", "verify", "cancel"].includes(
-              command.command,
-            ) &&
+            [
+              "invite",
+              "authorize",
+              "start",
+              "complete",
+              "verify",
+              "cancel",
+            ].includes(command.command) &&
             Object.entries(bridge.effects).some(
               ([id, effect]) =>
                 id !== command!.id && effect.command === command!.command,
@@ -376,6 +400,14 @@ export async function startSetupSession(options: {
           }
           case "invite":
             result = await client.setupInvite();
+            break;
+          case "authorize":
+            result = validateSetupAuthorization(
+              await client.setupAuthorize(authorizationTestId!, true),
+              authorizationTestId!,
+              run.session!.id,
+              connection.pairing.id,
+            );
             break;
           case "retry":
             result = validateRetryResult(
@@ -440,7 +472,7 @@ export async function startSetupSession(options: {
             break;
           default:
             throw new Error(
-              "Unknown command. Use status, diagnostics, invite, retry, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
+              "Unknown command. Use status, diagnostics, invite, authorize, retry, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
             );
         }
         if (result && Object.hasOwn(result, "test")) bridge.test = result.test;

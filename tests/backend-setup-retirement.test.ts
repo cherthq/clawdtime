@@ -475,7 +475,8 @@ describe("expired legacy setup invitation supersession", () => {
       pairingId: f.pairing.id,
       state: "awaiting_approval",
     });
-    expect(next.approvalCode).toMatch(/^[A-F0-9]{8}$/);
+    expect(next.approvalMode).toBe("native_session");
+    expect(next.approvalCode).toBeUndefined();
     expect(() => f.setup.retry(f.agent.token, f.test.id)).toThrow("retired");
     expect(f.setup.invite(f.agent.token).test).toEqual(next);
     expect(f.setup.get(f.agent.token).test).toEqual(next);
@@ -485,7 +486,7 @@ describe("expired legacy setup invitation supersession", () => {
     await f.service.drain();
     expect(f.sim.messages).toHaveLength(1);
     expect(f.store.effect(f.effect.id)).toEqual(f.effect);
-    expect(f.sim.messages[0]?.text).toContain(`YES ${next.approvalCode}`);
+    expect(f.sim.messages[0]?.text).not.toContain("YES");
     for (const text of [
       "YES",
       "YES 00000000",
@@ -500,8 +501,9 @@ describe("expired legacy setup invitation supersession", () => {
       false,
     );
     expect(f.setup.receive(f.event(`YES ${next.approvalCode}`, "fresh"))).toBe(
-      true,
+      false,
     );
+    f.setup.authorize(f.agent.token, next.id, true);
     expect(f.sim.calls).toHaveLength(0);
     expect(() => f.setup.start(f.agent.token)).toThrow("Yield");
     f.service.yieldSession(f.agent.token);
@@ -510,7 +512,7 @@ describe("expired legacy setup invitation supersession", () => {
     expect(started.request.sessionId).toBe(f.agent.session.id);
     expect(f.sim.calls).toHaveLength(1);
     expect(f.store.get("setup_test", f.test.id)).toEqual(f.test);
-    f.setup.receive(f.event("CANCEL", "cancel"));
+    f.setup.cancel(f.agent.token);
     expect(f.setup.get(f.agent.token).test?.state).toBe("canceled");
     f.store.close();
   });

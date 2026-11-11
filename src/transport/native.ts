@@ -1024,7 +1024,11 @@ export class NativeTransport implements Transport {
         | "ended",
       qualified?: boolean,
     ) => unknown,
-    options: { cleanupOnly?: boolean } = {},
+    options: {
+      cleanupOnly?: boolean;
+      observeOnly?: boolean;
+      onTerminalPending?: (requestId: string) => void;
+    } = {},
   ) {
     if (this.polling) return;
     this.polling = true;
@@ -1157,6 +1161,13 @@ export class NativeTransport implements Transport {
             ["ended", "failed", "rejected", "cleanup_complete"].includes(t),
           )
         ) {
+          if (options.observeOnly) {
+            // Worker termination revokes control now, but does not prove media cleanup.
+            // The coordinator queues ordinary durable cleanup; this read pass never POSTs.
+            this.store.put("media", { ...session, state: "closing" });
+            options.onTerminalPending?.(session.requestId);
+            continue;
+          }
           await this.media(`/sessions/${session.id}/close`, {});
           const outcome = types.includes("rejected")
             ? "declined"
@@ -1181,6 +1192,7 @@ export class NativeTransport implements Transport {
           continue; // receipt must commit first
         if (
           !options.cleanupOnly &&
+          !options.observeOnly &&
           types.includes("bridge_ready") &&
           session.state === "allocated"
         ) {
@@ -1209,7 +1221,11 @@ export class NativeTransport implements Transport {
           this.store.put("media", { ...session, state: "active" });
           await this.question(session);
         }
-        if (!options.cleanupOnly && session.state === "active") {
+        if (
+          !options.cleanupOnly &&
+          !options.observeOnly &&
+          session.state === "active"
+        ) {
           await this.question(session);
           const health = await this.media(`/sessions/${session.id}`);
           if (health.id !== session.id || health.alive !== true) {

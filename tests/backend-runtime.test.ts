@@ -334,6 +334,10 @@ describe("runtime standby and mode boundaries", () => {
           },
         },
       };
+      const feed = [inbound];
+      let catchupGate: Promise<void> | undefined;
+      let activePolls = 0,
+        maxPolls = 0;
       const sends: Record<string, unknown>[] = [];
       vi.stubGlobal(
         "fetch",
@@ -351,15 +355,24 @@ describe("runtime standby and mode boundaries", () => {
               },
             };
           else if (u.pathname === "/api/v1/events/1") result = anchor;
-          else if (u.pathname === "/api/v1/events/2") result = inbound;
-          else if (u.pathname === "/api/v1/events/catchup")
+          else if (/^\/api\/v1\/events\/[2-9]$/.test(u.pathname))
+            result = feed.find(
+              (e) => e.sequence === Number(u.pathname.split("/").at(-1)),
+            );
+          else if (u.pathname === "/api/v1/events/catchup") {
+            activePolls++;
+            maxPolls = Math.max(maxPolls, activePolls);
+            if (catchupGate) await catchupGate;
+            activePolls--;
             result = {
-              events:
-                u.searchParams.get("since_sequence") === "1" ? [inbound] : [],
-              head_sequence: 2,
+              events: feed.filter(
+                (e) =>
+                  e.sequence > Number(u.searchParams.get("since_sequence")),
+              ),
+              head_sequence: feed.at(-1)!.sequence,
               has_more: false,
             };
-          else if (u.pathname === "/api/v1/lines")
+          } else if (u.pathname === "/api/v1/lines")
             result = {
               data: {
                 items: [
@@ -535,6 +548,12 @@ describe("runtime standby and mode boundaries", () => {
             if ("preflightDevice" in runtime.transport)
               await runtime.transport.preflightDevice(paired.pairing);
             const test = setup.invite(agent.token).test;
+            // Persisted legacy SMS approval records remain supported.
+            runtime.store.put("setup_test", {
+              ...test,
+              approvalMode: undefined,
+              approvalCode: "ABCDEF12",
+            });
             await runtime.tick();
             expect(runtime.store.effect(test.invitationEffectId)?.state).toBe(
               "done",
@@ -545,7 +564,7 @@ describe("runtime standby and mode boundaries", () => {
               lineId,
               sender: tester,
               conversationId: `iMessage;-;${tester}`,
-              text: `YES ${test.approvalCode}`,
+              text: "YES ABCDEF12",
             };
             runtime.store.put("inbound", {
               id: approval.id,
@@ -592,7 +611,7 @@ describe("runtime standby and mode boundaries", () => {
             const command = {
               ...approval,
               id: "fixture-plan-refusal",
-              text: "do: focus the intended textbox",
+              text: "Focus the intended textbox.",
             };
             runtime.store.put("inbound", {
               id: command.id,
@@ -619,11 +638,149 @@ describe("runtime standby and mode boundaries", () => {
               )?.state,
             ).toBe("done");
             expect(sends).toHaveLength(3);
-            expect(sends[2]?.text).toContain("No input was sent.");
-            expect(sends[2]?.text).toContain("visually verify");
+            expect(sends[2]?.text).toContain("couldn't safely act");
+            expect(sends[2]?.text).not.toContain("do:");
             expect(runtime.store.all("action")).toHaveLength(0);
             await runtime.tick();
             expect(sends).toHaveLength(3);
+
+            // A model turn must not block the native inbox from delivering Stop.
+            let began!: () => void, finish!: () => void;
+            const modelBegan = new Promise<void>(
+              (resolve) => (began = resolve),
+            );
+            const modelFinish = new Promise<void>(
+              (resolve) => (finish = resolve),
+            );
+            let modelRuns = 0;
+            Object.defineProperty(runtime.human, "conversation", {
+              value: {
+                observe: async () => {
+                  throw new Error(
+                    "No screen input should be attempted after Stop",
+                  );
+                },
+                run: async (
+                  turn: import("../src/control/conversation.js").ConversationTurn,
+                ) => {
+                  modelRuns++;
+                  began();
+                  await modelFinish;
+                  await turn.tools.act("unseen", {
+                    kind: "click",
+                    x: 0.5,
+                    y: 0.5,
+                  });
+                  return { reply: "Untrusted late success" };
+                },
+              },
+            });
+            const waiting = {
+              ...command,
+              id: "fixture-waiting-model",
+              text: "Click the title field.",
+            };
+            runtime.store.put("inbound", {
+              id: waiting.id,
+              sealed: new Vault(config.encryptionKey).seal(waiting),
+              state: "pending",
+            });
+            const processing = runtime.tick();
+            await modelBegan;
+            feed.push({
+              ...inbound,
+              sequence: 3,
+              event_id: "recv:fixture-priority-stop",
+              payload: {
+                ...inbound.payload,
+                message: {
+                  ...inbound.payload.message,
+                  guid: "fixture-priority-stop",
+                  parts: [{ type: "text", text: "Stop" }],
+                },
+              },
+            });
+            feed.push({
+              ...inbound,
+              sequence: 4,
+              event_id: "recv:fixture-ordinary-queued",
+              payload: {
+                ...inbound.payload,
+                message: {
+                  ...inbound.payload.message,
+                  guid: "fixture-ordinary-queued",
+                  parts: [{ type: "text", text: "Type later" }],
+                },
+              },
+            });
+            try {
+              await vi.waitFor(
+                () =>
+                  expect(runtime.store.state(`view-stopped:${requestId}`)).toBe(
+                    true,
+                  ),
+                { timeout: 2500 },
+              );
+            } catch (error) {
+              finish();
+              await processing;
+              throw error;
+            }
+            const decoded = runtime.store
+              .all<{ id: string; sealed: string; state: string }>("inbound")
+              .map((i) => ({
+                ...i,
+                message: new Vault(config.encryptionKey).open<{ text: string }>(
+                  i.sealed,
+                ),
+              }));
+            const stopId = decoded.find((i) => i.message.text === "Stop")!.id;
+            const ordinaryId = decoded.find(
+              (i) => i.message.text === "Type later",
+            )!.id;
+            const stopState = runtime.store.get<{ state: string }>(
+              "inbound",
+              stopId,
+            )?.state;
+            const ordinaryState = runtime.store.get<{ state: string }>(
+              "inbound",
+              ordinaryId,
+            )?.state;
+            const queuedStopState = runtime.store.get<{ state: string }>(
+              "notice",
+              `${stopId}:notice`,
+            )?.state;
+            finish();
+            await processing;
+            expect(stopState).toBe("done");
+            expect(ordinaryState).toBe("pending");
+            expect(queuedStopState).toBe("pending");
+            expect(modelRuns).toBe(1);
+            expect(runtime.store.all("action")).toHaveLength(0);
+            expect(
+              runtime.store.state<any>(`human-command:${waiting.id}`).result
+                .accepted,
+            ).toBe(false);
+            expect(
+              runtime.store.get<{ state: string }>("notice", `${stopId}:notice`)
+                ?.state,
+            ).toBe("done");
+
+            // A voice-triggered maintenance pass and normal tick share one inbox read.
+            let releasePoll!: () => void;
+            catchupGate = new Promise<void>(
+              (resolve) => (releasePoll = resolve),
+            );
+            const maintenance = runtime.human.maintainViewing!();
+            await vi.waitFor(() => expect(activePolls).toBe(1));
+            const normal = runtime.tick();
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            expect(activePolls).toBe(1);
+            expect(maxPolls).toBe(1);
+            releasePoll();
+            catchupGate = undefined;
+            await Promise.all([maintenance, normal]);
+            expect(modelRuns).toBe(1);
           }
         } finally {
           await runtime.stop();

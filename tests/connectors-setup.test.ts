@@ -197,6 +197,12 @@ function backendFixture() {
     await service.drain();
     return c.json(result);
   });
+  app.post("/api/setup/test/authorize", async (c) => {
+    const body = await c.req.json();
+    return c.json(
+      setup.authorize(token(c), body.testId, body.userAuthorizedCall),
+    );
+  });
   app.post("/api/setup/test/start", async (c) => {
     const result = setup.start(token(c));
     await service.drain();
@@ -268,12 +274,6 @@ function backendFixture() {
     binding,
     calls,
     request,
-    approval: () => {
-      const test = store
-        .all<any>("setup_test")
-        .sort((a, b) => b.createdAt - a.createdAt)[0];
-      return test?.approvalCode ? `YES ${test.approvalCode}` : "YES";
-    },
     block: (value: boolean) => {
       blocked = value;
     },
@@ -330,6 +330,55 @@ function bridge(
   };
   return { input, done, messages, wait, send, runId };
 }
+it.each(["lost", "foreign"])(
+  "preserves an uncertain %s authorization response without replay or rebinding",
+  async (failure) => {
+    const f = backendFixture();
+    const request: typeof fetch = async (url, init) => {
+      const response = await f.request(url, init);
+      if (String(url).endsWith("/authorize") && response.ok) {
+        if (failure === "lost")
+          throw new Error("Synthetic lost authorization response");
+        const value = await response.json();
+        value.test.sessionId = "foreign-session";
+        return new Response(JSON.stringify(value));
+      }
+      return response;
+    };
+    const b = bridge(f, request);
+    try {
+      const ready = await b.wait((value) => value.event === "ready");
+      const invited = await b.send("invite", "invite");
+      const args = { testId: invited.result.test.id, userAuthorizedCall: true };
+      expect((await b.send("authorize", "authorize", args)).ok).toBe(false);
+      const path = join(dirname(f.connection), "runs", `${b.runId}.setup.json`);
+      const checkpoint = secureRead<any>(path);
+      expect(checkpoint.test).toMatchObject({
+        sessionId: ready.sessionId,
+        state: "awaiting_approval",
+      });
+      expect(checkpoint.effects.authorize).not.toHaveProperty("result");
+      expect((await b.send("authorize", "authorize", args)).ok).toBe(false);
+      expect((await b.send("replacement", "authorize", args)).ok).toBe(false);
+      expect(
+        f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
+      ).toHaveLength(1);
+      const status = await b.send("reconcile", "status");
+      expect(status.result.test).toMatchObject({
+        id: args.testId,
+        sessionId: ready.sessionId,
+        state: "approved",
+        approvalSource: "native_session",
+      });
+      expect(f.transport.calls).toHaveLength(0);
+      expect(f.store.all("session")).toHaveLength(1);
+    } finally {
+      b.input.end();
+      await b.done;
+      f.store.close();
+    }
+  },
+);
 it("keeps setup, approved call, result acknowledgement and continuation in the same foreground bridge", async () => {
   const f = backendFixture(),
     b = bridge(f);
@@ -348,15 +397,39 @@ it("keeps setup, approved call, result acknowledgement and continuation in the s
     expect(f.transport.messages).toHaveLength(1);
     expect((await b.send("start", "start")).ok).toBe(false);
     expect(f.transport.calls).toHaveLength(0);
+    const testId = invitation.result.test.id;
+    expect((await b.send("authorize", "authorize", { testId })).ok).toBe(false);
     expect(
-      f.setup.receive({
-        id: "human-yes",
-        sender: f.binding.recipient,
-        conversationId: f.binding.conversationId,
-        lineId: f.binding.lineId,
-        text: f.approval(),
-      }),
+      (
+        await b.send("authorize-foreign", "authorize", {
+          testId: "other",
+          userAuthorizedCall: true,
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
+    ).toHaveLength(0);
+    const approved = await b.send("authorize", "authorize", {
+      testId,
+      userAuthorizedCall: true,
+    });
+    expect(approved.result.test).toMatchObject({
+      id: testId,
+      state: "approved",
+      approvalSource: "native_session",
+    });
+    expect(
+      (
+        await b.send("authorize", "authorize", {
+          testId,
+          userAuthorizedCall: true,
+        })
+      ).replayed,
     ).toBe(true);
+    expect(
+      f.calls.filter((path) => path === "POST /api/setup/test/authorize"),
+    ).toHaveLength(1);
     expect((await b.send("yield-invalid", "yield")).ok).toBe(false);
     expect(
       (await b.send("yield", "yield", { backgroundActorsStopped: true })).ok,
@@ -479,13 +552,10 @@ it("acknowledges a failed setup only after confirmed cleanup, then continues the
     b = bridge(f);
   try {
     const ready = await b.wait((value) => value.event === "ready");
-    await b.send("invite", "invite");
-    f.setup.receive({
-      id: "yes",
-      sender: f.binding.recipient,
-      conversationId: f.binding.conversationId,
-      lineId: f.binding.lineId,
-      text: f.approval(),
+    const invited = await b.send("invite", "invite");
+    await b.send("authorize", "authorize", {
+      testId: invited.result.test.id,
+      userAuthorizedCall: true,
     });
     await b.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await b.send("start", "start");
@@ -573,13 +643,10 @@ it("preserves an unknown terminal acknowledgement and forbids a replacement inte
   const b = bridge(f, request);
   try {
     await b.wait((value) => value.event === "ready");
-    await b.send("invite", "invite");
-    f.setup.receive({
-      id: "yes",
-      sender: f.binding.recipient,
-      conversationId: f.binding.conversationId,
-      lineId: f.binding.lineId,
-      text: f.approval(),
+    const invited = await b.send("invite", "invite");
+    await b.send("authorize", "authorize", {
+      testId: invited.result.test.id,
+      userAuthorizedCall: true,
     });
     await b.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await b.send("start", "start");
@@ -627,13 +694,10 @@ it("reads only current-test diagnostics while yielded without checkpoint writes 
   const b = bridge(f, request);
   try {
     await b.wait((value) => value.event === "ready");
-    await b.send("invite", "invite");
-    f.setup.receive({
-      id: "yes",
-      sender: f.binding.recipient,
-      conversationId: f.binding.conversationId,
-      lineId: f.binding.lineId,
-      text: f.approval(),
+    const invited = await b.send("invite", "invite");
+    await b.send("authorize", "authorize", {
+      testId: invited.result.test.id,
+      userAuthorizedCall: true,
     });
     await b.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await b.send("start", "start");

@@ -25,7 +25,7 @@ from device_actions import DeviceActions
 from device_relay import DeviceRelay
 from playback import SpeechLedger, TERMINAL
 from ledger_backup import encrypted_snapshot
-from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, validate_session_id
+from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, priority_stop_requested, validate_session_id
 
 RATE = 48000
 SAMPLES = 960
@@ -68,6 +68,9 @@ class Session:
         self.pause_latched = False
         self.seen_pause = False
         self.speech_cancelled = False
+        self.priority_stop_id = None
+        self.priority_stop_state = None
+        self.priority_stop_task = None
         self.caption_scene = CaptionScene(spec['meetingId']) if spec.get('captions') is True or spec.get('screen') is True else None
         self.screen = ScreenController(self) if self.caption_scene and owner.env.get('MEDIA_DEVICES_ENABLED') == 'true' and (owner.env.get('DEVICE_GATEWAY_URL') or owner.env.get('DEVICE_GATEWAY_RELAY')=='true') and len(owner.env.get('DEVICE_GATEWAY_KEY','')) >= 32 else None
         self.caption_publisher = None
@@ -158,7 +161,7 @@ class Session:
                         self.owner.cancel_speech(self.id)
                     if policy.get('state') == 'paused':
                         self.seen_pause = True
-                    elif self.seen_pause and policy.get('state') == 'listening':
+                    elif self.seen_pause and policy.get('state') == 'listening' and self.priority_stop_id is None:
                         self.pause_latched = False
                         self.seen_pause = False
                     self.allowed = authorized and not self.speaking and not self.pause_latched
@@ -224,7 +227,7 @@ class Session:
                             if text and self.allowed and generation == self.generation:
                                 self.segment_count += 1
                                 segment = {'id':f'{self.segment_count}', 'text':text, 'at':datetime.now(timezone.utc).isoformat().replace('+00:00','Z'), 'source':'remote_participant', 'callId':self.call_id, 'participantIdentity':self.worker_identity}
-                                self.queue_segment(segment)
+                                if self.queue_segment(segment): return
                                 if pause_requested(text):
                                     self.allowed = False
                                     self.pause_latched = True
@@ -258,18 +261,64 @@ class Session:
             await asyncio.sleep(.1)
 
     def queue_segment(self, segment):
+        if self.priority_stop_id is not None:
+            return True  # A local voice Stop never automatically resumes capture or queued work.
+        if self.priority_stop_allowed(segment):
+            self.priority_stop_id=segment['id']
+            self.priority_stop_state='pending'
+            self.allowed=False
+            self.pause_latched=True
+            self.generation+=1
+            self.owner.cancel_speech(self.id)
+            if self.caption_scene:self.caption_scene.clear('paused')
+            if self.screen:self.screen.update({})
+            while not self.segments.empty():
+                self.segments.get_nowait();self.segments.task_done()
+            # One fixed fail-safe bypass, never an ordinary parallel model/action turn.
+            self.priority_stop_task=self.task(self.deliver_priority_stop(dict(segment)))
+            return True
+        segment = {**segment, '_capture_generation': self.generation}
         if self.caption_scene:
             self.caption_scene.snapshot()  # expire any stale authorization first
             segment = {**segment, '_caption_epoch': self.caption_scene.epoch}
         self.segments.put_nowait(segment)
+        return False
+
+    def priority_stop_allowed(self,segment):
+        if (not priority_stop_requested(segment.get('text')) or not self.active or
+                not self.allowed or self.speaking or self.closing or not self.track_sid or
+                time.monotonic()-self.policy_at>=2 or segment.get('source')!='remote_participant' or
+                segment.get('participantIdentity')!=self.worker_identity or segment.get('callId')!=self.call_id or
+                not isinstance(segment.get('id'),str) or not re.fullmatch(r'[1-9][0-9]{0,7}',segment['id'])):
+            return False
+        try:
+            at=datetime.fromisoformat(segment['at'].replace('Z','+00:00'))
+            return at.tzinfo is not None and abs((datetime.now(timezone.utc)-at).total_seconds())<=10
+        except (KeyError,ValueError,TypeError,AttributeError):return False
+
+    async def deliver_priority_stop(self,segment):
+        try:
+            # Exactly one dispatch. A lost acknowledgement remains unknown; do
+            # not retry or manufacture another segment/action identity.
+            result=await asyncio.wait_for(self.owner.backend(f'/media/{self.id}/segments',segment),5)
+            self.priority_stop_state='acknowledged' if result.get('stopped') is True else 'unknown'
+        except asyncio.CancelledError:
+            self.priority_stop_state='unknown'
+            raise
+        except Exception:
+            self.priority_stop_state='unknown'
+            logging.warning('priority_voice_stop_unconfirmed session=%s',self.id)
 
     async def deliver(self):
         while not self.closed:
             segment = await self.segments.get()
             caption_epoch = segment.pop('_caption_epoch', None)
+            capture_generation = segment.pop('_capture_generation', None)
             try:
+                result=None
                 # Stable IDs permit safe retry of transcript delivery, never audio replay.
                 for attempt in range(4):
+                    if self.priority_stop_id is not None:break
                     try:
                         result = await self.owner.backend(f'/media/{self.id}/segments', segment)
                         if self.caption_scene and not self.closing:
@@ -282,9 +331,13 @@ class Session:
                                 self.caption_scene.clear('paused')
                         break
                     except Exception:
+                        if self.priority_stop_id is not None:break
                         if attempt == 3:
                             raise
                         await asyncio.sleep(.25 * (2**attempt))
+                if (isinstance(result,dict) and capture_generation == self.generation and
+                        (not self.caption_scene or caption_epoch == self.caption_scene.epoch)):
+                    self.owner.reply_to_segment(self, segment, result)
             finally:
                 self.segments.task_done()
 
@@ -425,7 +478,11 @@ class Service:
         return all(self.env.get(k) for k in ['MEDIA_API_KEY','BACKEND_URL','LIVEKIT_URL','LIVEKIT_API_KEY','LIVEKIT_API_SECRET','DEEPGRAM_API_KEY'])
 
     async def backend(self,path,body=None):
-        async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY']},**({} if body is None else {'json':body}),allow_redirects=False) as response:
+        # A bounded conversational turn may legitimately await several tools.
+        # Its single callback response must outlive that 45-second turn; other
+        # policy and cleanup requests retain their existing shorter deadlines.
+        segment_timeout={'timeout':ClientTimeout(total=60,connect=5,sock_read=55)} if re.fullmatch(r'/media/ct_[a-f0-9]{40}/segments',path) else {}
+        async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY']},**({} if body is None else {'json':body}),allow_redirects=False,**segment_timeout) as response:
             if response.status >= 300:
                 raise RuntimeError('Backend request refused')
             raw=await response.content.read(128*1024+1)
@@ -557,7 +614,7 @@ class Service:
     async def play_speech(self, session, utterance_id, text):
         try:
             policy = await self.backend(f'/media/{session.id}/policy')
-            if session.closing or not session.active or not capture_allowed(policy) or policy.get('callId') != session.call_id:
+            if session.closing or session.pause_latched or not session.active or not capture_allowed(policy) or policy.get('callId') != session.call_id:
                 self.speech.set(utterance_id, 'cancelled', 'authorization_closed')
                 return
             self.speech.set(utterance_id, 'playing')
@@ -581,6 +638,22 @@ class Service:
                 session.source.clear_queue()
         finally:
             self.speech_tasks.pop(utterance_id, None)
+
+    def reply_to_segment(self, session, segment, result):
+        """At-most-once bounded spoken feedback; text stays transient, receipts do not."""
+        text=result.get('reply')
+        if (result.get('captured') is not True or not isinstance(text,str) or
+                not text.strip() or len(text)>1000 or
+                not isinstance(segment.get('id'),str) or not re.fullmatch(r'[1-9][0-9]{0,7}',segment['id']) or
+                segment.get('callId')!=session.call_id or not session.active or
+                session.closing or session.pause_latched): return
+        utterance_id='reply_'+hashlib.sha256((session.id+':'+segment['id']).encode()).hexdigest()
+        if self.speech.get(utterance_id): return  # completed, failed and unknown never replay
+        self.speech.accept(utterance_id,session.id,hashlib.sha256(text.encode()).hexdigest())
+        if session.speaking or any(self.speech.get(key)['sessionId']==session.id for key in self.speech_tasks):
+            self.speech.set(utterance_id,'cancelled','speech_busy')
+            return
+        self.speech_tasks[utterance_id]=asyncio.create_task(self.play_speech(session,utterance_id,text))
 
     async def action(self,request):
         sid,action=request.match_info['id'],request.match_info['action']

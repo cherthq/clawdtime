@@ -51,23 +51,22 @@ run identity/checkpoint and disclose that limit; never promise an immortal sessi
    require restarting this session to discover newly installed MCP tools.
    Keep the returned run identity private and bound to this exact session.
 
-6. Only once local and remote readiness pass, send the setup invitation through
-   the bridge's invite command. It texts: "ClawdTime is configured. Ready for
-   one FaceTime video test showing this Mac’s selected screen? Reply YES <code> when
-   ready." Use the actual code from the invitation. Wait for that exact authenticated
-   SMS reply; bare YES or a code from an older attempt is not approval.
-   Never bypass pending unknown sends/calls or blindly retry external effects.
+6. Only once local and remote readiness pass, send the informational setup notice
+   through the bridge's invite command. If this user has already explicitly
+   authorized this one call in the current setup chat, record it using authorize
+   with the current testId and userAuthorizedCall=true. Otherwise use the native
+   question UI once and wait in this same chat. Never invent consent from silence
+   or readiness, reuse consumed consent, or require an additional SMS code.
+   Wait for the notice receipt; never blindly retry unknown sends/calls.
 
 7. Stop conflicting coding activity and background actors, then yield using
-   backgroundActorsStopped=true. Start the single approved test through the
-   bridge. No automatic redial. Ask the human to answer FaceTime and inspect
-   the selected screen. While still connected, they can say:
-   "ClawdTime, answer I can see my screen"
-   or text: "answer: I can see my screen"
-   Only say this if the screen is actually visible. Human-directed click, type,
-   scroll and bounded AI actions require separate control consent, fresh frames,
-   exclusive leases, action receipts, and post-action observation. A submitted
-   input is not proof of UI success. Local Stop always wins.
+   backgroundActorsStopped=true. Start the single authorized test through the
+   bridge. No automatic redial. The human can talk naturally over FaceTime or
+   text normally, including compound requests like clicking a textbox and typing.
+   Do not prescribe command prefixes or a screen-confirmation phrase. Ask for
+   honest screen feedback and suggest landscape if the desktop looks small.
+   Separate screen/control consent, fresh frames, exclusive input, action receipts
+   and post-action observation remain mandatory. Local Stop always wins.
 
 8. Receive the exact response, acknowledge it, wait for control release, and
    resume this same session at the current control epoch. Continue the task,

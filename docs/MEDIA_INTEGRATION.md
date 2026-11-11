@@ -58,6 +58,21 @@ listening” latches capture off locally in media; the backend must also pause p
 
 ## Control adapter
 
+Ordinary human actions retain one exact call/session/display capture lease. A
+pairing with explicit control permission uses a marked continuous control lease;
+viewer-only pairings remain view-only. Reuse does not dispatch input. Every input
+still requires a fresh frame, its own receipt, the current yielded agent epoch,
+and exclusive action ownership. Background viewing and each screen tool may renew
+an unexpired lease up to the existing 20-second bound. Expiry, local Stop, stale
+heartbeat, revoked permissions, changed epoch, or call termination never renew or
+recreate that grant. Uncertain input must be reconciled before another action.
+
+An action consumes its input frame immediately. The video publisher can retain
+that frame's pixels only while they remain within the existing two-second freshness
+bound, while the next capture arrives. The consumed frame cannot authorize input
+or satisfy post-action observation. This avoids a deliberate placeholder flash
+without freezing an old screen or resetting the stream for each action.
+
 `MediaDevicePort` implements the shared DevicePort. `createLease()` calls
 `POST /sessions/:id/screen/lease {leaseId}`; this refreshes backend policy and rejects
 any selection except the exact currently authorized lease. It does not bypass
@@ -77,6 +92,26 @@ All IDs and payload fingerprints are durable before dispatch. Unknown means
 read-only reconcile with `GET /sessions/:id/screen/actions/:actionId`, not retry.
 A submitted receipt means OS events were posted, not successful application change.
 Observe afterward and deliver context before the agent resumes.
+
+Authenticated segment callbacks may return a bounded `reply` string (at most
+1,000 characters) with `captured:true`. Media rechecks current call policy and
+speaks it once using a durable session/segment-derived utterance receipt. The
+receipt retains a hash, never reply text. Closed or paused calls, replies crossing
+a capture-generation boundary, and replies colliding with existing speech do not
+play. Failed, cancelled, completed, or uncertain utterances are never replayed;
+spoken output is not proof that the handset rendered or heard it.
+
+Literal voice `Stop`, `Stop sharing`, `Stop control`, and `Stop listening`
+(optionally addressed to ClawdTime) have a separate fail-safe lane. Only a fresh
+final transcript from the qualified remote audio track and currently authorized
+call can use it. Media immediately pauses capture, clears the screen selection,
+discards queued ordinary segments, and sends the original segment exactly once
+through the same authenticated callback route, with a five-second deadline. It
+does not wait behind a conversational turn or invoke a model. An uncertain Stop
+acknowledgement is never retried; local capture remains stopped. Other utterances
+remain serialized. TTS is still half-duplex, so this does not promise voice
+barge-in while ClawdTime is speaking; local Stop and authenticated text Stop
+remain available independently.
 
 `POST /sessions/:id/screen/stop {leaseId}` tombstones the selection, cancels polling,
 awaits confirmed helper release and only then returns `released:true`. Uncertain

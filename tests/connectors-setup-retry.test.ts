@@ -136,6 +136,12 @@ async function fixture() {
   app.post("/api/sessions/yield", (c) =>
     c.json({ session: service.yieldSession(token(c)) }),
   );
+  app.post("/api/setup/test/authorize", async (c) => {
+    const body = await c.req.json();
+    return c.json(
+      setup.authorize(token(c), body.testId, body.userAuthorizedCall),
+    );
+  });
   app.post("/api/setup/test/start", async (c) => {
     const value = setup.start(token(c));
     await service.drain();
@@ -315,7 +321,15 @@ it("adds explicit guarded bridge retry in the same session and preserves unknown
     await f.service.drain();
     expect(f.approve(retried.result.test, "YES")).toBe(false);
     expect(f.approve(retried.result.test, "YES FFFFFFFF")).toBe(false);
-    expect(f.approve(retried.result.test)).toBe(true);
+    expect(f.approve(retried.result.test)).toBe(false);
+    expect(
+      (
+        await ch.send("authorize", "authorize", {
+          testId: retried.result.test.id,
+          userAuthorizedCall: true,
+        })
+      ).result.test.state,
+    ).toBe("approved");
     expect(f.store.all("session")).toHaveLength(1);
   } finally {
     input.end();
@@ -477,10 +491,16 @@ it("one-shot recovery leaves the frozen f57798c bridge alive and its old status/
     const learned = await ch.send("new-status", "status");
     expect(learned.result.test.id).toBe(recovered.test.id);
     expect(secureRead<any>(checkpointPath).test.id).toBe(recovered.test.id);
-    expect((await ch.send("start", "start")).ok).toBe(false); // no SMS approval
+    expect((await ch.send("start", "start")).ok).toBe(false); // no scoped native-session authorization
     await f.service.drain();
     expect(f.approve(recovered.test, "YES")).toBe(false);
-    expect(f.approve(recovered.test)).toBe(true);
+    expect(f.approve(recovered.test)).toBe(false);
+    // Frozen old code cannot gain a new command through hot reload. This explicit
+    // synthetic backend authorization only tests its existing status/start interoperability.
+    const existingRun = secureRead<any>(runPath);
+    expect(
+      f.setup.authorize(existingRun.token, recovered.test.id, true).test.state,
+    ).toBe("approved");
     await ch.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await ch.send("start", "start");
     expect(started.ok).toBe(true);

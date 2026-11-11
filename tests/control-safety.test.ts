@@ -6,6 +6,7 @@ import {
   ControlCoordinator,
   SimulatedDevice,
 } from "../src/control/coordinator.js";
+import { ScriptedConversationAgent } from "./backend-conversation-fixture.js";
 import { HumanRouter } from "../src/control/human-router.js";
 import { Viewing } from "../src/control/viewing.js";
 import type { ActionReceipt, ControlLease } from "../src/contracts.js";
@@ -14,7 +15,11 @@ async function setup() {
     service = new ClawdTime(store, new SimulationTransport()),
     device = new SimulatedDevice(),
     control = new ControlCoordinator(store, device),
-    human = new HumanRouter(service, control),
+    human = new HumanRouter(
+      service,
+      control,
+      new ScriptedConversationAgent(device),
+    ),
     viewing = new Viewing(store, device);
   const binding = {
     memberId: "m",
@@ -128,20 +133,21 @@ describe("control safety across async boundaries", () => {
     };
     const a = h.send("a", "click 0.5 0.5");
     await began;
-    await expect(h.send("b", "type: raced")).rejects.toThrow("progress");
+    expect(await h.send("b", "type: raced")).toMatchObject({ accepted: false });
     expect(h.device.leases.size).toBe(1);
     expect(h.device.inputs).toHaveLength(1);
     finish();
     await a;
     expect(h.device.leases.size).toBe(0);
   });
-  it("restores viewing after observed CUA, but never after Stop", async () => {
+  it("retains continuous capture after observed CUA, but never after Stop", async () => {
     const h = await setup();
     await h.viewing.tick();
-    expect([...h.device.leases.values()][0]?.mode).toBe("view");
+    const original = [...h.device.leases.values()][0]!;
+    expect(original.mode).toBe("control");
     await h.send("a", "click 0.5 0.5");
     await h.viewing.tick();
-    expect([...h.device.leases.values()][0]?.mode).toBe("view");
+    expect([...h.device.leases.values()][0]?.id).toBe(original.id);
     await h.send("stop", "stop");
     await h.viewing.tick();
     expect(h.device.leases.size).toBe(0);
@@ -167,21 +173,23 @@ describe("control safety across async boundaries", () => {
       raw = h.device.frame.bind(h.device);
     let count = 0;
     h.device.frame = async (l) => {
-      if (++count > 1) throw new Error("capture lost");
+      if (++count > 2) throw new Error("capture lost");
       return raw(l);
     };
-    await expect(h.send("a", "click 0.5 0.5")).rejects.toThrow();
+    expect(await h.send("a", "click 0.5 0.5")).toMatchObject({
+      accepted: false,
+      state: "unknown",
+    });
     expect(h.store.all<ActionReceipt>("action")[0]?.state).toBe("submitted");
     await h.send("answer", "answer: continue");
-    const response = h.service.result(h.s.token, h.r.id).response!;
-    h.service.ack(h.s.token, h.r.id, response.id);
+    expect(h.service.result(h.s.token, h.r.id).response).toBeUndefined();
     expect(() =>
       h.service.resume(
         h.s.token,
         h.r.id,
         h.service.authenticateSession(h.s.token).controlEpoch,
       ),
-    ).toThrow("Control");
+    ).toThrow();
   });
   it("refuses stale frames and a stop during input cannot permit continuation", async () => {
     const h = await setup(),

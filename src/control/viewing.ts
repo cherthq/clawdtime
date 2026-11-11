@@ -31,14 +31,38 @@ export class Viewing {
     return (
       current?.state === "active" &&
       current.expiresAt > now &&
+      current.mode === lease.mode &&
+      current.epoch === lease.epoch &&
+      current.requestId === lease.requestId &&
+      current.sessionId === lease.sessionId &&
+      current.pairingId === lease.pairingId &&
+      current.callId === lease.callId &&
+      current.memberId === lease.memberId &&
+      current.deviceId === lease.deviceId &&
+      current.displayId === lease.displayId &&
       session?.state === "yielded" &&
+      Number.isFinite(session.lastSeenAt ?? session.createdAt) &&
+      (session.lastSeenAt ?? session.createdAt) <= now + 1000 &&
       now - (session.lastSeenAt ?? session.createdAt) <= 20_000 &&
       session.controlEpoch === lease.epoch &&
       pairing?.revokedAt === undefined &&
       pairing?.allowView &&
+      (lease.mode === "view" ||
+        (lease.mode === "control" &&
+          pairing.allowControl &&
+          this.store.state(`continuous-view:${lease.id}`) === true)) &&
+      session.pairingId === pairing.id &&
+      lease.memberId === pairing.memberId &&
+      lease.deviceId === pairing.deviceId &&
+      lease.displayId === pairing.displayId &&
       call?.state === "connected" &&
       call.remoteParticipantQualified &&
       request &&
+      request.sessionId === session.id &&
+      request.pairingId === pairing.id &&
+      request.callId === call.id &&
+      call.requestId === request.id &&
+      call.pairingId === pairing.id &&
       !request.responseId &&
       request.deadline > now &&
       ["connected", "awaiting_input"].includes(request.state) &&
@@ -72,6 +96,7 @@ export class Viewing {
         !Number.isFinite(frame.capturedAt) ||
         frame.capturedAt > now ||
         now - frame.capturedAt > 2000 ||
+        !this.captureAllowed(lease) ||
         current?.state !== "active" ||
         current.expiresAt <= now ||
         session?.state !== "yielded" ||
@@ -118,6 +143,8 @@ export class Viewing {
           p.revokedAt === undefined &&
           p.allowView &&
           s?.state === "yielded" &&
+          Number.isFinite(s.lastSeenAt ?? s.createdAt) &&
+          (s.lastSeenAt ?? s.createdAt) <= this.now() + 1000 &&
           this.now() - (s.lastSeenAt ?? s.createdAt) <= 20_000 &&
           c?.state === "connected" &&
           c.remoteParticipantQualified &&
@@ -143,11 +170,22 @@ export class Viewing {
           continue;
         }
         const view = leases.find(
-          (l) => l.mode === "view" && l.state === "active",
+          (l) =>
+            l.state === "active" &&
+            (l.mode === "view" ||
+              (l.mode === "control" &&
+                this.store.state(`continuous-view:${l.id}`) === true)),
         );
         if (view) {
-          if (view.expiresAt <= this.now()) {
+          if (!this.captureAllowed(view)) {
             this.store.put("lease", { ...view, state: "unknown" });
+            this.store.saveState(`view-restore:${r.id}`, false);
+            try {
+              await this.device.release(view);
+              this.store.put("lease", { ...view, state: "released" });
+            } catch {
+              /* Never renew or replace an expired/invalid grant. */
+            }
             continue;
           }
           if (view.expiresAt - this.now() < 12_000)
@@ -184,14 +222,20 @@ export class Viewing {
           deviceId: p.deviceId,
           displayId: p.displayId,
           memberId: p.memberId,
-          mode: "view",
-          epoch: s.controlEpoch,
+          mode: p.allowControl ? "control" : "view",
+          epoch: s.controlEpoch + (p.allowControl ? 1 : 0),
           expiresAt: Math.min(this.now() + 20_000, r.deadline),
           state: "active",
         };
-        this.store.saveState(`view-started:${r.id}`, true);
-        this.store.saveState(`view-restore:${r.id}`, false);
-        this.store.put("lease", lease);
+        this.store.transaction(() => {
+          if (lease.mode === "control")
+            this.store.put("session", { ...s, controlEpoch: lease.epoch });
+          this.store.saveState(`view-started:${r.id}`, true);
+          this.store.saveState(`view-restore:${r.id}`, false);
+          this.store.put("lease", lease);
+          this.store.saveState(`continuous-view:${lease.id}`, true);
+          this.store.saveState(`view-device-ready:${lease.id}`, false);
+        });
         try {
           await this.device.createLease(lease);
           if (!this.captureAllowed(lease)) {
@@ -200,6 +244,7 @@ export class Viewing {
             this.store.put("lease", { ...lease, state: "released" });
             continue;
           }
+          this.store.saveState(`view-device-ready:${lease.id}`, true);
           await this.observeSetupFrame(lease);
         } catch {
           this.store.put("lease", { ...lease, state: "unknown" });

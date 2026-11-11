@@ -917,3 +917,57 @@ describe("read-only unknown end-call reconciliation", () => {
     f.store.close();
   });
 });
+
+describe("conversation read-only call maintenance", () => {
+  it("does not activate, speak or end while observing a bridge-ready call", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    const before = f.requests.length;
+    await f.transport.pollCalls(
+      (id, state, qualified) => f.app.observeCall(id, state, qualified),
+      { observeOnly: true },
+    );
+    expect(f.requests.slice(before).every((r) => r.method === "GET")).toBe(
+      true,
+    );
+    expect(
+      f.store.get<any>("media", mediaSessionId(f.attention.id))?.state,
+    ).toBe("allocated");
+    expect(f.store.effect(`${f.attention.id}:end`)).toBeUndefined();
+    f.store.close();
+  });
+  it("propagates worker termination without claiming media cleanup or sending POSTs", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    await f.transport.pollCalls((id, state, qualified) =>
+      f.app.observeCall(id, state, qualified),
+    );
+    f.events(["bridge_ready", "ended", "cleanup_complete"]);
+    const before = f.requests.length;
+    const observed: string[] = [];
+    await f.transport.pollCalls(
+      (id, state, qualified) => f.app.observeCall(id, state, qualified),
+      {
+        observeOnly: true,
+        onTerminalPending: (id) => {
+          observed.push(id);
+          f.app.failCall(id);
+        },
+      },
+    );
+    expect(observed).toEqual([f.attention.id]);
+    expect(f.requests.slice(before).every((r) => r.method === "GET")).toBe(
+      true,
+    );
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("failed");
+    expect(
+      f.store.get<CallSession>("call", mediaSessionId(f.attention.id))?.state,
+    ).toBe("connected");
+    expect(f.store.effect(`${f.attention.id}:end`)?.state).toBe("pending");
+    f.store.close();
+  });
+});

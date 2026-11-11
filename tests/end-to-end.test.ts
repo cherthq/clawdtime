@@ -13,6 +13,8 @@ import {
 } from "../src/control/coordinator.js";
 import { SetupService } from "../src/pairing/setup.js";
 import { Viewing } from "../src/control/viewing.js";
+import { ScriptedConversationAgent } from "./backend-conversation-fixture.js";
+import type { ConversationTurn } from "../src/control/conversation.js";
 import { HumanRouter } from "../src/control/human-router.js";
 import type {
   ActionReceipt,
@@ -38,16 +40,24 @@ const registration = {
   hostId: "mac",
   capabilities: { cooperativePause: true, polling: true },
 };
-function harness(store = new Store(), device = new SimulatedDevice()) {
+function harness(
+  store = new Store(),
+  device = new SimulatedDevice(),
+  script?: (turn: ConversationTurn) => Promise<{ reply: string }>,
+) {
   const transport = new SimulationTransport(),
     service = new ClawdTime(store, transport),
     control = new ControlCoordinator(store, device),
-    human = new HumanRouter(service, control, {
-      plan: async (_task, lease) => ({
-        action: { kind: "click", x: 0.5, y: 0.5 },
-        frame: await control.frame(lease.id, lease.memberId),
+    human = new HumanRouter(
+      service,
+      control,
+      new ScriptedConversationAgent(device, script, {
+        plan: async (_task, lease) => ({
+          action: { kind: "click", x: 0.5, y: 0.5 },
+          frame: await control.frame(lease.id, lease.memberId),
+        }),
       }),
-    });
+    );
   const app = createApp(service, control, human, {
     origin: "http://127.0.0.1:3310",
     operatorToken: operator,
@@ -202,14 +212,13 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
       409,
     );
     expect(
-      setup.receive({
-        id: "setup-yes",
-        sender: binding.recipient,
-        lineId: binding.lineId,
-        conversationId: binding.conversationId,
-        text: `YES ${invitation.body.test.approvalCode}`,
-      }),
-    ).toBe(true);
+      (
+        await h.send("/api/setup/test/authorize", a.token, {
+          testId: invitation.body.test.id,
+          userAuthorizedCall: true,
+        })
+      ).status,
+    ).toBe(200);
     await h.send("/api/sessions/yield", a.token, {});
     const started = await h.send("/api/setup/test/start", a.token, {});
     expect(started.status).toBe(200);
@@ -277,7 +286,7 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
     const answer = await h.feedback(r.id, "answer-event", "answer: Use blue.");
     expect(answer.status).toBe(200);
     const result = await h.send(`/api/attention/${r.id}/result`, agent.token);
-    expect(result.body.response.text).toBe("Use blue.");
+    expect(result.body.response.text).toBe("answer: Use blue.");
     expect(result.body.actions).toHaveLength(4);
     expect(result.body.session.controlEpoch).toBe(4);
     expect(
@@ -380,9 +389,9 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
         throw new Error("Input committed but response lost");
       };
       expect(
-        (await next.feedback(r.id, "uncertain-input", "type: uncertain"))
-          .status,
-      ).toBe(409);
+        (await next.feedback(r.id, "uncertain-input", "type: uncertain")).body
+          .state,
+      ).toBe("unknown");
       const uncertain = next.store
         .all<ActionReceipt>("action")
         .find((a) => a.state === "unknown");
@@ -394,9 +403,8 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
       );
       expect(again.body.state).toBe("unknown");
       const answer = await next.feedback(r.id, "answer", "answer: continue");
-      await next.send(`/api/attention/${r.id}/ack`, agent.token, {
-        responseId: answer.body.response.id,
-      });
+      expect(answer.body.response).toBeUndefined();
+      expect(answer.body.state).toBe("unknown");
       const state = await next.send(
         `/api/attention/${r.id}/result`,
         agent.token,
@@ -429,8 +437,11 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
     expect(policy.body.state).toBe("ended");
     expect(policy.body.screenSelection).toBeUndefined();
   });
-  it("drops incidental, stale or foreign audio before feedback can reach the agent", async () => {
-    const h = harness(),
+  it("accepts natural voice without a wake word and rejects stale, TTS or foreign audio", async () => {
+    const h = harness(undefined, undefined, async (turn) => {
+        await turn.tools.feedback({ kind: "answer" });
+        return { reply: "I will pass that on." };
+      }),
       agent = await h.connect(),
       r = await h.attention(agent.token),
       id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
@@ -442,13 +453,16 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
       callId: id,
       participantIdentity: `worker-${id}`,
     };
-    const incidental = await h.send(`/media/${id}/segments`, media, speech);
-    expect(incidental.body.captured).toBe(false);
+    const foreign = await h.send(`/media/${id}/segments`, media, {
+      ...speech,
+      participantIdentity: "other",
+    });
+    expect(foreign.status).toBe(403);
     expect(
       (
         await h.send(`/media/${id}/segments`, media, {
           ...speech,
-          text: "ClawdTime, answer: blue",
+          text: "Use blue.",
           source: "agent_tts",
         })
       ).status,
@@ -457,7 +471,7 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
       (
         await h.send(`/media/${id}/segments`, media, {
           ...speech,
-          text: "ClawdTime, answer: blue",
+          text: "Use blue.",
           at: "2000-01-01T00:00:00Z",
         })
       ).status,
@@ -468,13 +482,13 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
     ).toBeUndefined();
     const response = await h.send(`/media/${id}/segments`, media, {
       ...speech,
-      text: "ClawdTime, answer: blue",
+      text: "Use blue.",
     });
     expect(response.status).toBe(200);
     expect(
       (await h.send(`/api/attention/${r.id}/result`, agent.token)).body.response
         .text,
-    ).toBe("blue");
+    ).toBe("Use blue.");
   });
   it("lost helper release blocks agent continuation until release is confirmed", async () => {
     const h = harness(),
@@ -487,9 +501,8 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
     await expect(h.control.release(lease.id)).rejects.toThrow("disconnected");
     expect(h.store.get<ControlLease>("lease", lease.id)?.state).toBe("unknown");
     const a = await h.feedback(r.id, "answer", "answer: proceed");
-    await h.send(`/api/attention/${r.id}/ack`, agent.token, {
-      responseId: a.body.response.id,
-    });
+    expect(a.body.response).toBeUndefined();
+    expect(a.body.state).toBe("unknown");
     expect(
       (
         await h.send(`/api/attention/${r.id}/resume`, agent.token, {
@@ -499,6 +512,14 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
     ).toBe(409);
     h.device.release = async () => {};
     await h.control.release(lease.id);
+    const freshAnswer = await h.feedback(
+      r.id,
+      "answer-after-cleanup",
+      "answer: proceed",
+    );
+    await h.send(`/api/attention/${r.id}/ack`, agent.token, {
+      responseId: freshAnswer.body.response.id,
+    });
     expect(
       (
         await h.send(`/api/attention/${r.id}/resume`, agent.token, {
