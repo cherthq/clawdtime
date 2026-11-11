@@ -9,6 +9,28 @@ pilot line. Correct control targeting, natural voice and the Claude Code physica
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
 
+## Website-to-agent setup alignment — November 11
+
+The live website now publishes the explicitly enabled service line as a Messages
+link with “Hey ClawdTime.” It remains an invited iMessage pilot, not public signup.
+A first message receives a warm welcome and the setup prompt in one durable reply.
+The current-chat integration stays pending through permissions; its default test
+is one approved video call, screen visibility, natural voice or text, same-session
+continuation, and a Messages recap. Computer-control exercises are optional.
+
+Backend deployment `3bd86acc-df4d-4627-b595-35b52c5c21e4` (code `51761ba`) succeeded;
+the previous deployment is removed. TypeScript/build and 376 tests pass, as do the
+built-app onboarding browser checks and 14 focused media checks. A live browser
+check confirms four prefilled Messages links, no preview interception and no JS
+errors. Native Messages greeting prefill and the fresh Mia handset loop still
+require human observation; browser links alone are not delivery evidence.
+
+The README and setup skill now distinguish limitations: no automatic tapback,
+standalone progress-message tool, inbound FaceTime, or general phone-originated
+questions/work outside an active request. Audio is half-duplex. Public signed Mac
+downloads and automatic fresh-device gateway provisioning are not available.
+The current test uses the existing approved companion and lead-managed gateway.
+
 ## Dedicated-line migration — November 11
 
 - The original Lucas line returned exclusively to Apple Teams after ClawdTime's

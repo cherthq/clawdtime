@@ -41,6 +41,9 @@ describe("public Messages entry point", () => {
         expect(html.includes('href="#text-it" data-text-it')).toBe(
           !mode.published,
         );
+        expect(html.includes('id="text-it" data-text-ready')).toBe(
+          mode.published,
+        );
         expect(store.effects()).toHaveLength(0);
         expect(store.all("pairing")).toHaveLength(0);
       } finally {

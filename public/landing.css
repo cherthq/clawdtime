@@ -1136,7 +1136,7 @@ p {
   font: 10px var(--mono);
   color: var(--muted);
 }
-.js .text-fallback {
+.js .text-fallback:not([data-text-ready]) {
   display: none;
 }
 .site-footer {

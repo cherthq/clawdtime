@@ -5,6 +5,10 @@ export function publicPage(html: string, phone?: string) {
     throw new Error("Public texting requires an E.164 service number.");
   const href = `sms:${phone}?body=${encodeURIComponent("Hey ClawdTime")}`;
   return html
+    .replace(
+      'id="text-it" class="text-fallback',
+      'id="text-it" data-text-ready class="text-fallback',
+    )
     .replaceAll('href="#text-it" data-text-it', `href="${href}" data-sms`)
     .replace(
       /<!-- TEXT_CONTACT -->[\s\S]*?<!-- \/TEXT_CONTACT -->/,

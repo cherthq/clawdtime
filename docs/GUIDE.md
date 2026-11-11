@@ -56,16 +56,17 @@ The setup message does the handoff to your existing coding agent:
    companion, keeping the private binding internal. The agent runs the connection
    command for you. There is no separate pairing-file download in this flow.
 3. **Answer the setup questions in that same session.** Verify the selected attached
-   display, grant Screen Recording, separately grant Accessibility for computer
+   display, grant Screen Recording, optionally grant Accessibility for computer
    control, and enable sharing locally. The workflow stays active while waiting
    for your answers or permissions until verified or explicitly canceled.
 4. **Run the one authorized setup call.** The agent uses your explicit authorization
    in the current setup chat, texts a heads-up, yields conflicting work and calls.
    There is no additional SMS code or repeated confirmation for ordinary control.
-5. **Talk naturally while watching.** Ask “Click that textbox and type hello,”
-   “Scroll down,” or give the coding agent your decision. The same conversational
-   agent chooses tools and observes between actions. It can suggest landscape for
-   a larger view. When you are ready to continue coding, it returns your feedback
+5. **Talk or text naturally while watching.** Tell it whether you see the screen,
+   ask a question, and give the coding agent your decision. This setup test has no
+   clicking exercise; computer control is optional and qualified separately. Voice
+   takes turns, and the agent can suggest landscape for a larger view. When you
+   are ready to continue coding, it returns your feedback
    to the exact session, releases control, and sends the result through Messages.
    Setup verification requires actual positive screen feedback and the full live
    evidence chain; there is no prescribed phrase or automatic redial.
