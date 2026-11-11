@@ -102,14 +102,15 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       "Owned live calls require their protected configuration for standby cleanup.",
     );
   if (config) {
-    z.array(
-      z.object({
-        memberId: z.string().min(1),
-        recipient: z.string().regex(/^\+[1-9]\d{7,14}$/),
-        deviceId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
-        displayId: z.string().regex(/^\d+$/),
-      }),
-    )
+    config.testers = z
+      .array(
+        z.object({
+          memberId: z.string().min(1),
+          recipient: z.string().regex(/^\+[1-9]\d{7,14}$/),
+          deviceId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
+          displayId: z.string().regex(/^\d+$/),
+        }),
+      )
       .min(1)
       .parse(config.testers);
     if (
