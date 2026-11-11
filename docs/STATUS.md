@@ -2,7 +2,7 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot; Mia onboarding is paused for a service-number correction. Full CUA and voice acceptance remain pending.**
+**Independent pilot, live on Mia's corrected service number. Fresh onboarding, full CUA and voice acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
@@ -19,18 +19,27 @@ checks established configuration agreement and receipt availability, not handset
 delivery to the correct number. The user subsequently confirmed that an unsent
 draft to the corrected number shows blue/iMessage; no greeting was sent.
 
-ClawdTime is in standby with public texting disabled, deployment
-`40bb37b6-8441-494a-b456-46d79a1c7b6b` (existing `f6177c0` image). The obsolete
-website number is no longer published. Mia has no pairing, message effect or call;
-its exact cursor 5 and fingerprint remain retained. The native feed has no backlog
-beyond that boundary. Provider sender configuration and the application binding
-must be corrected together before restoring the link. No message or call was sent.
+ClawdTime was put in standby and its obsolete public link removed before the
+correction. The user ran the reviewed configuration-only installer with local
+administrator authentication. It updated the existing worker/helper sender,
+retained the installed binaries and original settings, and verified unchanged
+native state, operation journals and event head before leaving admission paused.
+The same provider inventory row and ClawdTime binding were then corrected; the
+logical line, account, credentials, database and exact cursor 5 remained intact.
+The original Lucas archive and historical hashes were also rechecked unchanged.
 
-The scoped configuration correction passed independent review and 43 offline
-checks. It retains the installed binaries, saves the original sender settings,
-preserves native state and operation journals, and leaves admission paused after
-success or rollback. Installation is awaiting local administrator authentication;
-these checks do not establish installation or handset acceptance.
+Deployment `2337484e-815d-4b9d-8191-4783f0a3f79f` succeeded using the existing
+`f6177c0` image; prior standby deployments are removed. The exact owned maintenance
+fence was released once. Transport checks pass, and the live browser verifies all
+four prefilled Messages links and the visible fallback use the corrected number.
+The pre-reopening audit had no pairing, message effect, call or native backlog.
+No message or call was sent by the correction. The fresh greeting/welcome and
+setup-call path still require handset acceptance.
+
+The correction passed independent review and 43 offline checks. Physical
+installation is confirmed by its bounded success receipt and fresh API identity;
+this is not proof of message delivery or FaceTime acceptance. No sibling source,
+other account, tunnel, local companion permission or receipt journal was replaced.
 
 ## Website-to-agent setup alignment — November 11
 
