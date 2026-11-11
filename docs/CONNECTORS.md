@@ -14,14 +14,16 @@ the current chat uses a foreground JSONL command bridge through its own shell to
 The setup URL is a short-lived one-use pairing authorization, not a global service
 credential. The agent writes it to a private owner-only file using native file
 tools, without echoing it or placing its token in a command argument/history. The
-caller supplies an independently trusted HTTPS origin. The internal hosted pilot's
-current origin is `https://backend-production-ee686906.up.railway.app`; no ownership
-or deployment of `clawdtime.com` is implied. Only `/setup` (or legacy `/pair`) with
-fragment `token`, `device` and `display` is accepted. Redirects, query credentials,
-duplicate fields and a different origin are rejected.
+caller supplies an independently trusted HTTPS origin. The canonical setup origin
+is `https://www.clawdtime.com`. The legacy Railway origin,
+`https://backend-production-ee686906.up.railway.app`, remains compatible for existing
+links and connections; use the independently trusted origin matching the supplied
+link. Only `/setup` (or legacy `/pair`) with fragment `token`, `device` and `display`
+is accepted. Redirects, query credentials, duplicate fields and a different origin
+are rejected.
 
 ```sh
-node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --setup-link-file /absolute/private/setup-link.txt --origin https://backend-production-ee686906.up.railway.app --allow-view true --allow-control true
+node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --setup-link-file /absolute/private/setup-link.txt --origin https://www.clawdtime.com --allow-view true --allow-control true
 ```
 
 Use `--agent claude-code` for Claude Code. Explicit view/control flags must reflect

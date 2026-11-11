@@ -91,9 +91,12 @@ while authorizing input, although ordinary actions no longer blank the stream.
 
 - Apple Teams audited and inspected baseline: `be47b11fe1317c4747db4121bec37896998b5201`.
   Source main stayed clean at that commit; its five existing worktrees were preserved.
-- ClawdTime local branch: `codex/implementation`; independent Git repository.
-  Implementation release commit is the `feat: implement independent ClawdTime pilot`
-  commit in this branch. No remote repository, public package or GitHub topics created.
+- ClawdTime canonical repository: https://github.com/cherthq/clawdtime, with
+  releases integrated into `main`. Implementation was developed on
+  `codex/implementation` with its history preserved. The user explicitly authorized
+  publishing to this remote and `main`. No public npm package or GitHub topics
+  have been published. The README covers the product hook, complete setup and
+  everyday user flow, two modes, requirements and remaining acceptance gaps.
 - Independent Railway project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
 - Backend live deployment: `bc0f8032-d316-4b7f-a952-927160d0a38d`, from
   clean commit `f1f1320cc2d64d053871355aa55ea3292cad77ea`.

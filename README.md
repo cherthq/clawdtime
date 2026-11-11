@@ -1,29 +1,36 @@
 # ClawdTime
 
-Your agent can FaceTime you.
+Your coding agent can FaceTime you.
+
+Keep using Claude Code or Codex as usual. When your agent needs a decision,
+gets stuck, or has something to show you, it can call you on FaceTime with its
+Mac screen. Talk to it naturally, direct computer actions while watching, then
+let it continue the original task. The result comes back through Messages.
+
+**The hook: “My coding agent FaceTimed me.”**
 
 **Tags:** AI agents · FaceTime · iMessage · human-in-the-loop · computer use · CUA · MCP · Claude Code · Codex · macOS · remote work
+
+## Why ClawdTime
 
 I wanted to keep working while away from my desk, but my agents kept getting
 stuck: a coding decision, an email that needed review, a video edit, a marketing
 task, or an automation that needed someone to look at the screen.
 
-ClawdTime connects those agents to you through iMessage and FaceTime. Your agent
-calls when it needs attention, shows its screen, and receives your response. You
-can also direct computer actions while watching, then let the agent continue in
-the tools you already use.
+ClawdTime gives an existing agent a way to bring that moment to its human.
+You keep your editor, project and coding session. The integration adds a skill/tool
+for requesting attention, showing the work, receiving feedback and continuing.
+The first release focuses on coding; the other use cases are future integrations.
 
-**Current status: independently hosted pilot; full control acceptance is pending.**
-The physical Codex chat → FaceTime → Mac screen → authenticated Messages feedback
-→ same-chat continuation → Messages recap path passed on the intended handset.
-Computer control did not pass: typing reached the Codex reply box after the planned
-focus click failed. A planner/failure-handling repair is locally verified; correct
-click/type/scroll/AI targeting still needs physical acceptance. Natural conversational voice/text and continuous viewing during actions are implemented and locally tested; their updated physical flow and the Claude Code call loop remain
-unverified. See [STATUS](docs/STATUS.md).
+**Status: deployed internal pilot, with partial physical verification.** The
+Codex → FaceTime → Mac screen → Messages feedback → same-session continuation →
+Messages recap path has passed on a handset. The updated conversational voice and
+compound-control flow is implemented and tested locally; its complete handset
+acceptance is still pending. See [features and evidence](#features-and-evidence)
+and [release status](docs/STATUS.md).
 
-[Open the landing page](https://backend-production-ee686906.up.railway.app).
-Agent instructions are at `/agents`, and personal setup links use `/setup`.
-The legacy `/pair` page remains compatible; an operational dashboard is not implemented.
+[Landing page](https://www.clawdtime.com) ·
+[Agent setup instructions](https://www.clawdtime.com/agents)
 
 ## Who this is for
 
@@ -36,16 +43,18 @@ Coding is the initial supported integration target. Email, video editing,
 marketing, reports/articles, browsing/buying, watchers/schedulers and groups explain
 the longer-term motivation; they are not finished ClawdTime integrations.
 
-## Onboarding
+## Set up once
 
 The setup message does the handoff to your existing coding agent:
 
-1. **Text the pilot number.** ClawdTime replies with the prompt itself:
-   “Set up ClawdTime for this project. Follow [service]/agents using my setup link: [personal link].”
+1. **Click “Text it” on the landing page and send a text to ClawdTime.**
+   ClawdTime replies in Messages with the setup prompt itself:
+   “Set up ClawdTime for this project. Follow https://www.clawdtime.com/agents using my setup link: [personal link].”
 2. **Paste it into your current Claude Code or Codex session.** Your agent installs
-   the integration and prepares the Mac companion, keeping the private binding
-   internal. There is no separate pairing-file download in this flow.
-3. **Answer the setup questions in that same session.** Choose the actual attached
+   the official ClawdTime integration as a skill/tool and prepares the Mac
+   companion, keeping the private binding internal. The agent runs the connection
+   command for you. There is no separate pairing-file download in this flow.
+3. **Answer the setup questions in that same session.** Verify the selected attached
    display, grant Screen Recording, separately grant Accessibility for computer
    control, and enable sharing locally. The workflow stays active while waiting
    for your answers or permissions until verified or explicitly canceled.
@@ -59,6 +68,47 @@ The setup message does the handoff to your existing coding agent:
    to the exact session, releases control, and sends the result through Messages.
    Setup verification requires actual positive screen feedback and the full live
    evidence chain; there is no prescribed phrase or automatic redial.
+
+## Every day: your agent calls you
+
+1. **Code normally.** Work in your existing Claude Code or Codex project. When
+   the agent needs help, approval or review, it invokes the ClawdTime skill/tool.
+2. **Answer FaceTime.** The agent asks its question and shows the selected Mac
+   display. It yields conflicting computer activity before remote control starts.
+3. **Speak or text naturally.** Say “Skip that test,” “Use the second design,” or
+   ask about what you see. No wake word, command prefix or scripted reply is needed.
+4. **Direct the screen when useful.** For example: “Click the title field, type
+   Hello, then scroll down.” One conversational agent selects tools, observes the
+   result between steps, and keeps viewing active during ordinary actions. It can
+   suggest landscape for a larger view. Local Stop is always available.
+5. **Return to coding.** Say that you are ready for the agent to continue. Your
+   feedback returns to the exact waiting session; control is released and
+   acknowledged before that agent resumes. Its normal permission policy still applies.
+6. **Receive the result in Messages.** The same conversation gets a factual recap
+   and any relevant artifact or link, so you can review the outcome away from your desk.
+
+Setup stays active in the same coding session while waiting for permission or an
+answer, until verified or explicitly canceled. Routine screen actions do not need
+repeated confirmations. A new outbound test call still needs its own authorization;
+silence does not authorize a call or an action.
+
+## The catch: what you need today
+
+This is an **internal Mac pilot**, with installation and explicit permissions.
+The companion must be running on an available Mac, with its selected display and
+local sharing enabled. The existing coding session must remain connected and
+cooperate with yielding control. General work started from Messages is a later mode.
+
+Voice is currently turn-based: listening pauses while ClawdTime speaks, so you
+cannot interrupt its synthesized reply by talking over it. Computer actions are
+bounded and checked against fresh frames; capture may briefly hold a fresh video
+frame while authorizing input. Physical targeting and the revised natural-voice
+flow still need acceptance; automated tests do not establish those outcomes.
+
+Personal setup links use `/setup`. The older `/pair` page remains compatible;
+an operational dashboard is not implemented.
+
+### Run the internal pilot from this checkout
 
 The current pilot uses a trusted local checkout and the approved installed Mac
 companion. A public signed/notarized download and automatic fresh-device gateway
@@ -80,8 +130,10 @@ setup-link option; it preserves grants, credentials and receipt ledgers.
 
 The installed skill uses the foreground `setup-session` JSONL bridge in the
 **current agent session**, with a stable run ID, heartbeats and durable intents.
-It needs no new coding client or MCP reload. The agent uses its native question
-UI while waiting and continues after the answer. A host crash or hard session
+It needs no new coding client or MCP reload. During installation and pre-call
+setup, the agent uses its native question UI while waiting and continues after the
+answer. During screen-control work, use your phone for dialogue so the Mac keeps
+focus on the intended app. A host crash or hard session
 limit remains possible; saved identity and receipts prevent an unsafe replacement
 or blind retry. Future agent sessions can use the installed MCP/skill normally.
 
@@ -124,8 +176,8 @@ clean installation check. See [device setup](mac/README.md).
 When blocked, needing a decision/approval/review, or ready to show a result, it
 explicitly invokes ClawdTime. It yields conflicting activity, calls the paired
 human, and shows the intended screen. Respond by voice or text, or direct typing,
-clicking, scrolling or a bounded sequence of human-directed screen actions. After feedback is
-acknowledged and control released, the exact agent session continues under its
+clicking, scrolling or a bounded sequence of human-directed screen actions. After
+feedback is acknowledged and control released, the exact agent session continues under its
 native permission policy and sends a factual completion recap through Messages.
 
 The demo story is: **“My coding agent FaceTimed me because it needed me.”** A skill
@@ -138,16 +190,16 @@ pending attention request belongs to Mode 1.
 
 ## Features and evidence
 
-| Feature                                                       | Implementation status                                                                                             |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Private agent-initiated FaceTime attention                    | Physical outbound video call answered on the intended handset                                                     |
-| Screen viewing from the paired Mac                            | Physical fixture video confirmed on handset; full fresh-install distribution acceptance pending                   |
-| Voice and text feedback for the exact task                    | Authenticated Messages feedback resumed the exact Codex session; spoken feedback unverified                       |
-| Human-directed click/type/scroll and bounded compound actions | Implemented with fresh frames and exclusive leases; wrong-target typing observed, full control acceptance pending |
-| Claude Code and Codex MCP tools/skills                        | Both CLI synthetic workflows passed; physical Codex same-chat loop passed, Claude physical loop pending           |
-| Durable requests, responses and action receipts               | SQLite/backend and migrated helper/gateway/media ledgers; replay/restart tests                                    |
-| Visible state, local Stop, revocation/disconnect              | Implemented with fail-closed policy tests; physical lock/sleep/Stop verification required                         |
-| iMessage completion result                                    | Factual completion recap confirmed received on the intended handset                                               |
+| Feature                                                       | Implementation status                                                                                                         |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Private agent-initiated FaceTime attention                    | Physical outbound video call answered on the intended handset                                                                 |
+| Screen viewing from the paired Mac                            | Physical fixture video confirmed on handset; full fresh-install distribution acceptance pending                               |
+| Voice and text feedback for the exact task                    | Authenticated Messages feedback resumed the exact Codex session; spoken feedback unverified                                   |
+| Human-directed click/type/scroll and bounded compound actions | Implemented with fresh frames and exclusive leases; earlier wrong-target typing observed, revised physical acceptance pending |
+| Claude Code and Codex MCP tools/skills                        | Both CLI synthetic workflows passed; physical Codex same-chat loop passed, Claude physical loop pending                       |
+| Durable requests, responses and action receipts               | SQLite/backend and migrated helper/gateway/media ledgers; replay/restart tests                                                |
+| Visible state, local Stop, revocation/disconnect              | Implemented with fail-closed policy tests; physical lock/sleep/Stop verification required                                     |
+| iMessage completion result                                    | Factual completion recap confirmed received on the intended handset                                                           |
 
 Verified client probes: **Claude Code 2.1.311** terminal print mode and **Codex CLI
 0.166.0-alpha.5.1** exec mode. Both invoked actual MCP tools, consumed synthetic
@@ -216,7 +268,8 @@ npx tsx tests/connectors-spike.ts codex
 Copy only the example configuration for local customization; never load an Apple
 Teams `.env` or copy customer databases. Default state is `.data/clawdtime.sqlite`.
 Live dispatch requires an explicit handoff configuration and separate live gate.
-Standby does not dispatch. `doctor`/health and passing mocks are not live readiness.
+Standby does not start new calls or work; it can dispatch cleanup for calls it
+already owns. `doctor`/health and passing mocks are not physical acceptance.
 
 ```sh
 python3 -m venv media/.venv
