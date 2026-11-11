@@ -235,6 +235,8 @@ export function createApp(
         ? service.store.get<CallSession>("call", request.callId)
         : null,
       capturedFrame: service.store.state(`setup-view:${request.id}`) ?? null,
+      controlPreflight:
+        service.store.state(`control-preflight:${request.id}`) ?? null,
       media: options.callDiagnostics
         ? await options.callDiagnostics(request.id)
         : { state: "simulation", physicalAcceptance: false },

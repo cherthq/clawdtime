@@ -18,6 +18,7 @@ import {
   type ControlPreflightCode,
 } from "../src/control/errors.js";
 import { Viewing } from "../src/control/viewing.js";
+import { createApp } from "../src/app.js";
 import type { ActionReceipt, ControlLease } from "../src/contracts.js";
 
 async function fixture(planner?: SingleActionPlanner) {
@@ -155,6 +156,26 @@ describe("known CUA preflight failures and focus safety", () => {
     });
     expect(result.diagnostics).toEqual(expected);
     expect(f.command("diagnostics").result.diagnostics).toEqual(expected);
+    const app = createApp(f.service, f.control, f.human, {
+      origin: "http://127.0.0.1:3310",
+      simulation: true,
+    });
+    const authorized = await app.request(
+      `/api/attention/${f.request.id}/diagnostics`,
+      {
+        headers: { authorization: `Bearer ${f.agent.token}` },
+      },
+    );
+    expect((await authorized.json()).controlPreflight).toEqual({
+      actionId: result.actionId,
+      code: "screen_changed",
+      diagnostics: expected,
+    });
+    const unauthorized = await app.request(
+      `/api/attention/${f.request.id}/diagnostics`,
+    );
+    expect(unauthorized.status).toBe(401);
+    expect(await unauthorized.text()).not.toContain("changedTiles");
     expect(
       JSON.stringify(f.store.query("SELECT body FROM operational_state")),
     ).not.toContain("PRIVATE_");
@@ -337,6 +358,53 @@ describe("known CUA preflight failures and focus safety", () => {
     expect(f.device.inputs).toHaveLength(0);
     f.store.close();
   });
+  it.each([false, true])(
+    "a separately requested planned click clears focus only after observed input and release (uncertain=%s)",
+    async (uncertain) => {
+      let plans = 0;
+      const f = await fixture({
+        plan: async () => {
+          if (++plans === 1) throw new ControlPreflightError("screen_changed");
+          return {
+            action: { kind: "click", x: 0.5, y: 0.5 },
+            frame: {
+              id: "fresh",
+              capturedAt: Date.now(),
+              width: 100,
+              height: 100,
+            },
+          };
+        },
+      });
+      await f.send("failed", "do: focus textbox");
+      const focusKey = `focus-unverified:${createHash("sha256")
+        .update(JSON.stringify(["mac", "1"]))
+        .digest("hex")}`;
+      if (uncertain)
+        f.device.action = async () => {
+          throw new Error("Input outcome unknown");
+        };
+      if (uncertain) {
+        await expect(
+          f.send("new-click", "do: click the textbox"),
+        ).rejects.toThrow("uncertain");
+        expect(f.store.state(focusKey)).toBe(true);
+        expect((await f.send("type", "type: fixture")).state).toBe(
+          "not_started",
+        );
+      } else {
+        expect(
+          (await f.send("new-click", "do: click the textbox")).receipt.state,
+        ).toBe("observed");
+        expect(f.store.state(focusKey)).toBe(false);
+        expect((await f.send("type", "type: fixture")).receipt.state).toBe(
+          "observed",
+        );
+        expect(f.device.inputs).toHaveLength(2);
+      }
+      f.store.close();
+    },
+  );
   it("does not create viewing consent when no view was previously active", async () => {
     const f = await fixture({
       plan: async () => {

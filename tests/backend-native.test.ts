@@ -609,3 +609,311 @@ describe("native protocol integration without live traffic", () => {
     expect(f.store.effects("unknown")).toHaveLength(1);
   });
 });
+
+async function cleanupReconciliationFixture(
+  state: "closed" | "closing" = "closed",
+) {
+  const f = fixture();
+  await f.app.drain();
+  const localId = mediaSessionId(f.attention.id);
+  if (state === "closed") f.app.observeCall(f.attention.id, "ended");
+  const request = f.store.get<AttentionRequest>("attention", f.attention.id)!;
+  f.store.put("attention", {
+    ...request,
+    state: "completed",
+    result: "Fixture completed result",
+  });
+  f.store.put("media", {
+    id: localId,
+    requestId: request.id,
+    providerCallId: nativeCallId,
+    state,
+  });
+  const effect = f.store.putEffect({
+    id: `${request.id}:end`,
+    kind: "end_call",
+    state: "unknown",
+    createdAt: Date.now(),
+    payload: {
+      requestId: request.id,
+      pairingId: request.pairingId,
+      callId: nativeCallId,
+    },
+    result: { reason: "Original end acknowledgement unknown" },
+  });
+  f.events(["ended", "cleanup_complete"]);
+  const rawMedia = f.transport.media.bind(f.transport);
+  f.transport.media = async (path, body) => {
+    const result = await rawMedia(path, body);
+    return path === `/sessions/${localId}` && body === undefined
+      ? {
+          ...result,
+          id: localId,
+          alive: false,
+          state: "closed",
+          privateDiagnostic: "DO_NOT_RETAIN",
+        }
+      : result;
+  };
+  const poll = () =>
+    f.transport.pollCalls((id, state, qualified) =>
+      f.app.observeCall(id, state, qualified),
+    );
+  return {
+    ...f,
+    localId,
+    effect,
+    poll,
+    auditId: `end-call-reconciliation:${effect.id}`,
+  };
+}
+
+describe("read-only unknown end-call reconciliation", () => {
+  it.each(["closed", "closing"] as const)(
+    "reconciles exact %s cleanup using only GET and retains the original unknown acknowledgement",
+    async (state) => {
+      const f = await cleanupReconciliationFixture(state);
+      f.store.putEffect({
+        id: "unrelated-unknown",
+        kind: "message",
+        state: "unknown",
+        createdAt: 1,
+        payload: { text: "untouched" },
+      });
+      f.store.saveState("unrelated-state", { untouched: true });
+      const cursor = f.transport.messages.cursor(),
+        other = f.store.effect("unrelated-unknown"),
+        original = f.store.effect(f.effect.id),
+        before = f.requests.length;
+      await f.poll();
+      expect(f.store.effect(f.effect.id)).toMatchObject({
+        state: "done",
+        result: {
+          accepted: true,
+          cleanupConfirmed: true,
+          mediaClosed: true,
+          cleanupPending: false,
+          recovered: true,
+          nativeEndAcknowledgementUnknown: true,
+        },
+      });
+      const audit = f.store.event<any>(f.auditId)!;
+      expect(audit.result.originalEffect).toEqual(original);
+      expect(audit.result.nativeEvent).toMatchObject({
+        id: "event-1",
+        source: "worker",
+        type: "cleanup_complete",
+      });
+      expect(audit.result.mediaEvidence).toEqual({
+        id: f.localId,
+        alive: false,
+        state: "closed",
+      });
+      expect(JSON.stringify(audit)).not.toContain("DO_NOT_RETAIN");
+      expect(f.store.get<CallSession>("call", f.localId)?.state).toBe("ended");
+      expect(
+        f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+      ).toBe("completed");
+      expect(f.store.get<{ state: string }>("media", f.localId)?.state).toBe(
+        "closed",
+      );
+      expect(f.requests.slice(before).map((r) => r.method)).toEqual([
+        "GET",
+        "GET",
+      ]);
+      expect(f.store.effect("unrelated-unknown")).toEqual(other);
+      expect(f.transport.messages.cursor()).toEqual(cursor);
+      expect(f.store.state("unrelated-state")).toEqual({ untouched: true });
+      const reads = f.requests.length,
+        effects = f.store.effects(),
+        events = f.store.query("SELECT * FROM events");
+      await f.poll();
+      expect(f.requests).toHaveLength(reads);
+      expect(f.store.effects()).toEqual(effects);
+      expect(f.store.query("SELECT * FROM events")).toEqual(events);
+      f.store.close();
+    },
+  );
+  it.each([
+    "forged-source",
+    "no-cleanup",
+    "wrong-call",
+    "duplicate-event",
+    "media-alive",
+    "media-open",
+    "wrong-media",
+    "media-unavailable",
+    "events-unavailable",
+  ])("preserves unknown with %s evidence", async (failure) => {
+    const f = await cleanupReconciliationFixture(),
+      calls = f.transport.calls.bind(f.transport),
+      media = f.transport.media.bind(f.transport);
+    f.transport.calls = async (path, body, key) => {
+      const response = await calls(path, body, key);
+      const data = response.data as {
+        call_id: string;
+        events: { id: string; type: string; source: string }[];
+      };
+      if (path.endsWith("/events")) {
+        if (failure === "events-unavailable")
+          throw new Error("private event failure");
+        if (failure === "wrong-call")
+          response.data = { ...data, call_id: "other" };
+        if (failure === "forged-source")
+          data.events = data.events.map((e: any) => ({ ...e, source: "api" }));
+        if (failure === "no-cleanup")
+          data.events = data.events.filter(
+            (e: any) => e.type !== "cleanup_complete",
+          );
+        if (failure === "duplicate-event")
+          data.events.push({ ...data.events[1]! });
+      }
+      return response;
+    };
+    f.transport.media = async (path, body) => {
+      const response = await media(path, body);
+      if (failure === "media-unavailable")
+        throw new Error("private media failure");
+      if (failure === "media-alive") response.alive = true;
+      if (failure === "media-open") response.state = "active";
+      if (failure === "wrong-media") response.id = "other";
+      return response;
+    };
+    const before = f.requests.length,
+      original = f.store.effect(f.effect.id);
+    await f.poll();
+    expect(f.store.effect(f.effect.id)).toEqual(original);
+    expect(f.store.event(f.auditId)).toBeUndefined();
+    expect(f.requests.slice(before).every((r) => r.method === "GET")).toBe(
+      true,
+    );
+    f.store.close();
+  });
+  it.each([
+    "kind",
+    "request-payload",
+    "pairing-payload",
+    "call-payload",
+    "request-call",
+    "call-request",
+    "call-pairing",
+    "call-provider",
+    "media-id",
+    "line",
+  ])("refuses a mismatched %s before provider reads", async (mismatch) => {
+    const f = await cleanupReconciliationFixture();
+    if (mismatch === "kind")
+      f.store.putEffect({ ...f.effect, kind: "message" });
+    if (mismatch === "request-payload")
+      f.store.putEffect({
+        ...f.effect,
+        payload: { ...f.effect.payload, requestId: "other" },
+      });
+    if (mismatch === "pairing-payload")
+      f.store.putEffect({
+        ...f.effect,
+        payload: { ...f.effect.payload, pairingId: "other" },
+      });
+    if (mismatch === "call-payload")
+      f.store.putEffect({
+        ...f.effect,
+        payload: { ...f.effect.payload, callId: "other" },
+      });
+    const call = f.store.get<CallSession>("call", f.localId)!;
+    if (mismatch === "request-call")
+      f.store.put("attention", {
+        ...f.store.get<AttentionRequest>("attention", f.attention.id)!,
+        callId: "other",
+      });
+    if (mismatch === "call-request")
+      f.store.put("call", { ...call, requestId: "other" });
+    if (mismatch === "call-pairing")
+      f.store.put("call", { ...call, pairingId: "other" });
+    if (mismatch === "call-provider")
+      f.store.put("call", { ...call, providerCallId: "other" });
+    if (mismatch === "media-id")
+      f.store.db
+        .prepare(
+          "UPDATE entities SET body=json_set(body,'$.id','other') WHERE kind='media' AND id=?",
+        )
+        .run(f.localId);
+    if (mismatch === "line")
+      f.store.put("pairing", { ...f.pair.pairing, lineId: "other" });
+    const before = f.requests.length,
+      original = f.store.effect(f.effect.id);
+    await f.poll();
+    expect(f.requests).toHaveLength(before);
+    expect(f.store.effect(f.effect.id)).toEqual(original);
+    expect(f.store.event(f.auditId)).toBeUndefined();
+    f.store.close();
+  });
+  it.each(["effect", "request", "pairing", "call", "media"])(
+    "CAS refuses concurrent %s mutation during GET evidence",
+    async (kind) => {
+      const f = await cleanupReconciliationFixture(),
+        media = f.transport.media.bind(f.transport);
+      f.transport.media = async (path, body) => {
+        const response = await media(path, body);
+        if (kind === "effect")
+          f.store.putEffect({
+            ...f.effect,
+            result: { reason: "concurrent writer" },
+          });
+        else {
+          const id =
+            kind === "request"
+              ? f.attention.id
+              : kind === "pairing"
+                ? f.pair.pairing.id
+                : f.localId;
+          const entityKind = kind === "request" ? "attention" : kind;
+          f.store.put(entityKind, {
+            ...f.store.get(entityKind, id)!,
+            id,
+            changed: true,
+          });
+        }
+        return response;
+      };
+      await f.poll();
+      expect(f.store.effect(f.effect.id)?.state).toBe("unknown");
+      expect(f.store.event(f.auditId)).toBeUndefined();
+      f.store.close();
+    },
+  );
+  it("rolls back when insert-only audit persistence fails and never overwrites an existing audit", async () => {
+    const f = await cleanupReconciliationFixture("closing"),
+      call = f.store.get("call", f.localId),
+      media = f.store.get("media", f.localId);
+    f.store.db.exec(
+      "CREATE TRIGGER reject_cleanup_audit BEFORE INSERT ON events WHEN NEW.id LIKE 'end-call-reconciliation:%' BEGIN SELECT RAISE(ABORT,'fixture audit refusal'); END",
+    );
+    await f.poll();
+    expect(f.store.effect(f.effect.id)).toEqual(f.effect);
+    expect(f.store.event(f.auditId)).toBeUndefined();
+    expect(f.store.get("call", f.localId)).toEqual(call);
+    expect(f.store.get("media", f.localId)).toEqual(media);
+    f.store.db.exec("DROP TRIGGER reject_cleanup_audit");
+    f.store.recordEvent(f.auditId, "original", { retained: true });
+    const before = f.requests.length;
+    await f.poll();
+    expect(f.requests).toHaveLength(before);
+    expect(f.store.effect(f.effect.id)).toEqual(f.effect);
+    expect(f.store.event(f.auditId)?.result).toEqual({ retained: true });
+    f.store.close();
+  });
+  it("rolls back audit and partially observed cleanup when the synchronous observer fails", async () => {
+    const f = await cleanupReconciliationFixture("closing"),
+      call = f.store.get("call", f.localId),
+      media = f.store.get("media", f.localId);
+    await f.transport.pollCalls((id, state) => {
+      f.app.observeCall(id, state);
+      throw new Error("fixture observer failure");
+    });
+    expect(f.store.effect(f.effect.id)).toEqual(f.effect);
+    expect(f.store.event(f.auditId)).toBeUndefined();
+    expect(f.store.get("call", f.localId)).toEqual(call);
+    expect(f.store.get("media", f.localId)).toEqual(media);
+    f.store.close();
+  });
+});

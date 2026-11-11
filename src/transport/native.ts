@@ -9,6 +9,7 @@ import { z } from "zod";
 import type {
   AttentionRequest,
   Pairing,
+  EffectReceipt,
   Transport,
   CallSession,
 } from "../contracts.js";
@@ -778,6 +779,175 @@ export class NativeTransport implements Transport {
       cleanupPending: true,
     };
   }
+  /** An unknown POST acknowledgement is never retried or fabricated. Only the
+   * independently observed cleanup goal can be reconciled, using GET evidence. */
+  private async reconcileEndedCall(
+    session: MediaRecord,
+    observe: (requestId: string, state: "ended") => unknown,
+  ) {
+    const effectId = `${session.requestId}:end`;
+    const effect = this.store.effect(effectId),
+      request = this.store.get<AttentionRequest>(
+        "attention",
+        session.requestId,
+      ),
+      call = this.store.get<CallSession>("call", session.id),
+      pairing =
+        request && this.store.get<Pairing>("pairing", request.pairingId);
+    if (
+      !effect ||
+      effect.id !== effectId ||
+      effect.kind !== "end_call" ||
+      effect.state !== "unknown" ||
+      !effect.payload ||
+      typeof effect.payload !== "object" ||
+      Array.isArray(effect.payload) ||
+      !request ||
+      !call ||
+      !pairing ||
+      !["closed", "closing"].includes(session.state) ||
+      session.id !== mediaSessionId(request.id) ||
+      session.requestId !== request.id ||
+      !session.providerCallId ||
+      call.id !== session.id ||
+      call.requestId !== request.id ||
+      call.pairingId !== pairing.id ||
+      call.providerCallId !== session.providerCallId ||
+      request.callId !== call.id ||
+      request.pairingId !== pairing.id ||
+      pairing.lineId !== this.config.binding.lineId ||
+      ![
+        `iMessage;-;${pairing.recipient}`,
+        `any;-;${pairing.recipient}`,
+      ].includes(pairing.conversationId) ||
+      effect.payload.requestId !== request.id ||
+      effect.payload.pairingId !== pairing.id ||
+      effect.payload.callId !== session.providerCallId ||
+      Object.keys(effect.payload).sort().join(",") !==
+        "callId,pairingId,requestId"
+    )
+      return false;
+    const auditId = `end-call-reconciliation:${effectId}`;
+    if (this.store.event(auditId)) return false;
+    const entityBody = (kind: string, id: string) =>
+      this.store.query(
+        "SELECT body FROM entities WHERE kind=? AND id=?",
+        kind,
+        id,
+      )[0]?.body;
+    const effectBody = () =>
+      this.store.query("SELECT body FROM effects WHERE id=?", effectId)[0]
+        ?.body;
+    const original = {
+      effect: effectBody(),
+      request: entityBody("attention", request.id),
+      pairing: entityBody("pairing", pairing.id),
+      call: entityBody("call", call.id),
+      media: entityBody("media", session.id),
+    };
+    const bindingFingerprint = this.bindingFingerprint();
+    try {
+      const response = await this.calls(
+        `/api/v1/calls/${encodeURIComponent(session.providerCallId)}/events`,
+      );
+      const data = z
+        .object({
+          call_id: z.literal(session.providerCallId),
+          events: z
+            .array(
+              z.object({
+                id: z.string().min(1).max(200),
+                type: z.string().min(1).max(100),
+                source: z.string().min(1).max(100),
+              }),
+            )
+            .max(10000),
+        })
+        .parse(response.data);
+      const cleanup = data.events.find(
+        (e) => e.source === "worker" && e.type === "cleanup_complete",
+      );
+      if (
+        !cleanup ||
+        data.events.filter((e) => e.id === cleanup.id).length !== 1
+      )
+        return false;
+      const media = z
+        .object({
+          id: z.literal(session.id),
+          alive: z.literal(false),
+          state: z.literal("closed"),
+        })
+        .parse(await this.media(`/sessions/${session.id}`));
+      return this.store.transaction(() => {
+        if (
+          effectBody() !== original.effect ||
+          entityBody("attention", request.id) !== original.request ||
+          entityBody("pairing", pairing.id) !== original.pairing ||
+          entityBody("call", call.id) !== original.call ||
+          entityBody("media", session.id) !== original.media ||
+          this.bindingFingerprint() !== bindingFingerprint ||
+          this.store.event(auditId)
+        )
+          return false;
+        const reconciledAt = Date.now();
+        const result = {
+          accepted: true,
+          actionId: effectId,
+          callId: session.providerCallId,
+          cleanupConfirmed: true,
+          mediaClosed: true,
+          cleanupPending: false,
+          recovered: true,
+          nativeEndAcknowledgementUnknown: true,
+          auditId,
+        };
+        const audit = {
+          version: 1,
+          effectId,
+          requestId: request.id,
+          callId: call.id,
+          providerCallId: session.providerCallId,
+          originalEffect: effect,
+          originalEffectBody: original.effect,
+          bindingFingerprint,
+          bindingHashes: Object.fromEntries(
+            Object.entries(original).map(([k, v]) => [k, hash(String(v))]),
+          ),
+          nativeEvent: cleanup,
+          mediaEvidence: media,
+          reconciledAt,
+          result,
+        };
+        this.store.recordEvent(auditId, hash(JSON.stringify(audit)), audit);
+        if (call.state !== "ended") {
+          observe(request.id, "ended");
+          if (this.store.get<CallSession>("call", call.id)?.state !== "ended")
+            throw new Error(
+              "Cleanup observation did not settle the owned call.",
+            );
+        }
+        if (session.state !== "closed")
+          this.store.put<MediaRecord>("media", {
+            id: session.id,
+            requestId: request.id,
+            providerCallId: session.providerCallId,
+            state: "closed",
+            ...(session.outcome ? { outcome: session.outcome } : {}),
+          });
+        const final: EffectReceipt = { ...effect, state: "done", result };
+        const update = this.store.db
+          .prepare("UPDATE effects SET body=? WHERE id=? AND body=?")
+          .run(JSON.stringify(final), effectId, String(original.effect));
+        if (update.changes !== 1)
+          throw new Error("Cleanup receipt changed during reconciliation.");
+        return true;
+      });
+    } catch {
+      // Unavailable or contradictory evidence preserves the original unknown.
+      return false;
+    }
+  }
   private async question(session: MediaRecord) {
     const attention = this.store.get<AttentionRequest>(
       "attention",
@@ -861,7 +1031,19 @@ export class NativeTransport implements Transport {
     try {
       for (const session of this.store
         .all<MediaRecord>("media")
-        .filter((s) => !!s.providerCallId && s.state !== "closed")) {
+        .filter(
+          (s) =>
+            !!s.providerCallId &&
+            (s.state !== "closed" ||
+              this.store.effect(`${s.requestId}:end`)?.state === "unknown"),
+        )) {
+        if (
+          ["closed", "closing"].includes(session.state) &&
+          this.store.effect(`${session.requestId}:end`)?.state === "unknown"
+        ) {
+          await this.reconcileEndedCall(session, observe);
+          continue; // Reconciliation never repeats native end or media close POSTs.
+        }
         if (
           options.cleanupOnly &&
           !this.store.effect(`${session.requestId}:end`)

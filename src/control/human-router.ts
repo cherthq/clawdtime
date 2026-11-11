@@ -117,7 +117,6 @@ export class HumanRouter {
     const focusKey = `focus-unverified:${createHash("sha256")
       .update(JSON.stringify([pairing.deviceId, pairing.displayId]))
       .digest("hex")}`;
-    const explicitClick = !task && action?.kind === "click";
     const originalLeases = this.service.store.all<ControlLease>("lease");
     const priorView = originalLeases.some(
       (l) =>
@@ -238,7 +237,10 @@ export class HumanRouter {
           !storedReceipt &&
           releasesKnown;
         const observed = receipt?.state === "observed" && releasesKnown;
-        if (explicitClick && observed)
+        // Every action here belongs to a separate authenticated human command.
+        // A bounded planned click has the same receipt/release requirements as
+        // a direct click; neither proves semantic focus without human observation.
+        if (action?.kind === "click" && observed)
           this.service.store.saveState(focusKey, false);
         // Restoration only resumes the previously selected screen. It never
         // clears Stop, grants new consent or bypasses an uncertain input/release.
@@ -295,9 +297,16 @@ export class HumanRouter {
             code: (failure as ControlPreflightError).code,
             ...(diagnostics ? { diagnostics } : {}),
             clarification: focusBlocked
-              ? "No input was sent. The earlier screen action did not establish focus. Send an explicit click command, visually verify the intended textbox, then send typing as a separate command."
+              ? "No input was sent. The earlier screen action did not establish focus. Send a separate explicit click command (click X Y or do: click the textbox), visually verify the intended textbox, then send typing."
               : `No input was sent. ${(failure as ControlPreflightError).message}${focusWarning ? " Before typing, send an explicit click command and visually verify the intended textbox." : " Review the screen before issuing a new command."}`,
           };
+          // Exact-request metadata lets the yielded agent inspect refusal causes
+          // through its normal read-only diagnostic tool, without screen content.
+          this.service.store.saveState(`control-preflight:${request.id}`, {
+            actionId,
+            code: result.code,
+            ...(diagnostics ? { diagnostics } : {}),
+          });
           remember("not_started", result);
           return result;
         }

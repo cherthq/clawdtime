@@ -501,3 +501,20 @@ Bounded-settling/diagnostic release `bcd4b23` deployed successfully as backend
 change was made. Read-only prior control metadata contains two `planning_refused`
 and two `screen_changed` results, all `not_started`, with zero action receipts.
 No model clarification or changed-pixel evidence was retained for those attempts.
+
+Readiness after the settling deployment exposed an unknown `end_call` effect for
+the completed retest. The recap was independently acknowledged under its original
+native operation ID; it was not the unknown effect. Exact Calls GET events confirmed
+worker `cleanup_complete`, and media diagnostics confirmed closed/alive false.
+The existing poller had closed local media without reconciling the unknown hangup
+acknowledgement, then skipped closed sessions forever.
+
+A reviewed repair reconciles only the independently proven cleanup goal using
+GET-only exact call/media evidence. It atomically preserves the original unknown
+effect and binding/evidence audit, then records cleanup confirmed while explicitly
+retaining `nativeEndAcknowledgementUnknown`. It never resends hangup or rewrites
+unrelated unknown outcomes. Negative, concurrent-change, idempotency and rollback
+tests pass. The exact-session diagnostics endpoint now exposes the last sanitized
+pre-input failure. A separately requested observed/released bounded AI click can
+clear the typing latch; uncertain clicks and AI typing cannot. Integrated validation:
+308 tests, typecheck/build, independent review. No new physical test is claimed.
