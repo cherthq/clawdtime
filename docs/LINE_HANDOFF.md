@@ -12,14 +12,27 @@ and instance. The project Calls inventory includes the configured logical line,
 currently labeled **iPhone control test**. No Liam/Davis label was found in those
 responses. This does not prove it is the user-requested Liam Davis line.
 
-The existing local operator credential received HTTP 401 from Apple Teams'
-`/internal/readiness`. Therefore current source calls, pending jobs, unknown
-effects and cursor cannot be certified using that credential. Provider availability
-alone is insufficient. No private identity/number/token is recorded in this file.
+### Diagnosis correction — November 11, 2026
 
-Required next evidence: resolve Liam Davis to the exact native and logical line
-using authorized private operator inventory, and obtain current read-only source
-readiness access. Do not change routing until both are established.
+The earlier HTTP 401 was caused by using `.data/local-secrets.json`, which the
+source configuration loads only in demo mode. The existing production provisioning
+credential works: a fresh GET returned HTTP 200, a healthy integration heartbeat,
+zero pending/unknown jobs and no active calls. One failed job remains recorded.
+Media returned healthy/configured, gateway connected and zero active sessions.
+No credential was missing or rotated by this investigation; the wrong credential
+was selected in the initial implementation session.
+
+The private transfer record, native inventory record and current native whoami
+agree on the configured source line. Native `pl_` identifiers and cloud inventory
+UUIDs are different ID domains and join through the existing inventory record.
+The Calls record has a null phone-number field, so direct comparison to that field
+cannot establish a mismatch. Its logical ID matches the transfer record. These
+checks establish consistent Apple Teams line identity, but the available scoped
+inventory still does not establish the user-supplied Liam Davis alias.
+
+Current source health is only a snapshot, not permission to start a competing
+owner. Recheck the idle window and review the recorded failed job immediately
+before any handoff. Routing, source ownership, cursors and receipts were unchanged.
 
 ## Preflight record (private, mode 0600)
 

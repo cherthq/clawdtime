@@ -79,10 +79,13 @@ provider acting on a physical fixture remains unverified.
    configured logical line but labeled it **iPhone control test**. No Liam/Davis
    match was returned. Resolve the intended identity through private operator
    evidence before any transfer. No real number is committed.
-2. **Source idle-window evidence unavailable.** The existing local operator key
-   received HTTP 401 from Apple Teams `/internal/readiness`. Obtain current
-   read-only operator access to verify jobs, unknown outcomes, calls and cursor.
-   Provider line availability is not enough. Apple Teams remains owner.
+2. **Readiness credential issue resolved during diagnosis.** The previous 401
+   resulted from using the local demo key against production. The existing
+   production provisioning key returns HTTP 200. Fresh checks show a healthy
+   heartbeat, zero pending/unknown jobs, no active calls, and one recorded failed
+   job. Media is healthy, gateway connected and idle. Source health must be checked
+   again and the failed job reviewed before a controlled handoff; no live ownership
+   change occurred.
 3. **Independent live services/secrets not provisioned.** New backend/media hosting,
    independent volumes and fresh application/media/gateway/provider credentials are
    required. Start in standby; never replace Apple Teams. No new paid plan was opened.
@@ -127,3 +130,17 @@ Python/Swift commands and setup are in README.md and component READMEs.
 - Dependency audit: zero reported vulnerabilities at install; no source secret or
   real configured line number found in tracked/candidate files.
 - No Docker daemon was available, so image build/run remains unverified.
+
+## Follow-up diagnosis — November 11, 2026
+
+The live path was never attempted; no failed phone call or screen session was
+observed. The implementation remained in simulation without independent hosted
+services or installed/authorized ClawdTime companion configuration. The initial
+readiness authentication failure was an investigator credential-selection error,
+not an unavailable production key. See LINE_HANDOFF.md for corrected evidence.
+
+Landing page `/` and private pairing page `/pair` return HTTP 200 and were checked
+in Chrome. `/dashboard` returns 404: no operational dashboard has been implemented.
+For this diagnosis the lead started an in-memory simulation at
+`http://127.0.0.1:3310`; it has no live credentials and cannot use the test line.
+This is a temporary local preview, not a deployed public website.
