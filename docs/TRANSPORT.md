@@ -226,3 +226,61 @@ a crash between provider allocation and domain-receipt commit: retained provider
 are recovered only for cleanup, never media activation or question playback. Shutdown
 can pass `shouldStop` to `service.drain()` to finish the current effect without
 starting another. No deployment or routing changes are performed by these checks.
+
+### Same-session setup test
+
+The initial private Messages response is an agent prompt linking `/agents` and an
+expiring `/setup#token=...&device=...&display=...` link. Tokens remain in the URL
+fragment. The agent claims the existing one-use pairing and registers its own
+session; possession of an arbitrary phone number never grants pairing authority.
+
+`SetupService` stores one `setup_test` per session. A new live invitation requires
+fresh passing doctor evidence before claiming configuration is complete. Inviting
+queues a normal durable message effect with a stable ID. Repeated invitation calls return the same test,
+including canceled/expired attempts. Another session cannot create an ambiguous
+pending invitation for the same sender, line and conversation. One test expires
+after ten minutes; a new attempt requires a new agent session and human approval.
+
+Only an exact authenticated native DM `YES` after the invitation's committed
+receipt approves the test. Event IDs and fingerprints are retained, so an early,
+duplicate, or conflicting event cannot later become a new approval. Wrong sender,
+line, conversation and unrelated text do not approve. `NO` or `CANCEL` closes the
+test. Approval alone never places a call: the originating session must yield and
+explicitly invoke start. Repeated start returns the same attention request and
+ordinary call effect. Cancel, expiry, revocation and session loss retain uncertain
+outcomes and initiate owned-call cleanup without replaying effects.
+
+Verification is a separate evidence gate. It requires live transport, a retained
+qualified connected-call observation, a bound fresh screen-frame observation,
+subsequent explicit “I can see my screen” feedback acknowledged by the same
+session (case/terminal punctuation ignored), normal continuation,
+completed work and an acknowledged Messages result receipt. Simulation cannot
+produce a verified setup. Screens remain transient; the gate retains frame
+metadata only. Unknown invitations and the existing global unknown-outcome gate
+remain blocking; setup never retries or clears an existing unknown notice.
+
+During an origin migration, `CLAWDTIME_COMPATIBLE_ORIGINS` may contain at most eight
+comma-separated exact HTTPS origins. The canonical `CLAWDTIME_ORIGIN` remains the
+origin used in new setup prompts. Explicitly listed legacy origins retain their
+pairing response base URL; arbitrary Host/Origin values never become connection
+destinations. Outside live mode, HTTP `127.0.0.1` origins are also permitted. Paths,
+credentials, query strings, fragments and wildcard origins are rejected.
+
+### Obsolete pilot onboarding notice supersession
+
+The lead-only retirement operation recognizes only the original installation-link
+notice template. It proves the embedded token identifies a consumed, expired
+invite, the full identity/device/display binding matches one successful pairing,
+and the original authenticated `pair` inbound was handled. It refuses while
+another external operation or unresolved control action may be in flight. Future
+pairing claims also record the resulting pairing ID on the invite.
+
+Retirement inserts an immutable audit; it never edits the notice, cursor, invite,
+pairing or provider. The old delivery remains **unknown**, its stable origin and
+sealed payload remain retained, and replay is forbidden. Readiness exempts only
+the exact audited notice while its notice/invite/pairing hashes and eligibility
+still match. Mutation or invalid audit restores blocking. Unknown counts and the
+retirement count remain visible in preflight recovery metadata; every other
+uncertain notice, effect, call, submitted/unknown input and unknown lease remains
+blocking. This is supersession of a now-unusable pairing invitation, not evidence
+of failed delivery and not a general recovery or retry mechanism.

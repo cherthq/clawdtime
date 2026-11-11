@@ -14,6 +14,11 @@ export interface ReadinessCheck {
   nextAction?: string;
 }
 export interface TransportReadiness {
+  recovery?: {
+    unknownNoticeCount: number;
+    retiredObsoleteNoticeCount: number;
+    blockingUncertainCount: number;
+  };
   checkedAt: number;
   mode: "live";
   liveReady: boolean;

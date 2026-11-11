@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 import type {
   AgentSession,
+  SetupTest,
   Pairing,
   AttentionRequest,
   HumanResponse,
@@ -66,6 +67,7 @@ interface Invite {
   binding: InviteInput;
   expiresAt: number;
   consumedAt?: number;
+  pairingId?: string;
 }
 export interface InviteInput {
   memberId: string;
@@ -195,7 +197,11 @@ export class ClawdTime {
         allowView: claim.allowView,
         allowControl: claim.allowControl,
       });
-      this.store.put("invite", { ...invite, consumedAt: this.clock() });
+      this.store.put("invite", {
+        ...invite,
+        consumedAt: this.clock(),
+        pairingId: pairing.id,
+      });
       return { pairing, token: this.issue("pairing", pairing.id) };
     });
   }
@@ -615,6 +621,15 @@ export class ClawdTime {
           callId: call.id,
           state: request.responseId ? request.state : "awaiting_input",
         });
+        if (qualified)
+          this.store.saveState(`call-connected:${request.id}`, {
+            callId: call.id,
+            requestId: request.id,
+            sessionId: request.sessionId,
+            pairingId: request.pairingId,
+            connectedAt: this.clock(),
+            live: this.transport.mode === "live",
+          });
         return this.store.put<CallSession>("call", {
           ...call,
           state: "connected",
@@ -735,11 +750,30 @@ export class ClawdTime {
             "pairing",
             String(effect.payload.pairingId),
           );
+        const setup =
+          effect.kind === "message" && effect.payload.setupTestId
+            ? this.store.get<SetupTest>(
+                "setup_test",
+                String(effect.payload.setupTestId),
+              )
+            : undefined;
+        const setupSession = setup
+          ? this.store.get<AgentSession>("session", setup.sessionId)
+          : undefined;
+        const setupAuthorized =
+          setup &&
+          setup.invitationEffectId === effect.id &&
+          setup.pairingId === pairing?.id &&
+          setup.state === "awaiting_approval" &&
+          setup.expiresAt > this.clock() &&
+          setupSession &&
+          setupSession.pairingId === setup.pairingId &&
+          setupSession.state !== "stopped";
         if (
-          !request ||
+          (!request && !setupAuthorized) ||
           !pairing ||
           (effect.kind !== "end_call" && pairing.revokedAt !== undefined) ||
-          (effect.kind === "call" && request.state !== "queued")
+          (effect.kind === "call" && request?.state !== "queued")
         ) {
           this.store.putEffect({
             ...effect,
@@ -769,7 +803,7 @@ export class ClawdTime {
         try {
           let result: Record<string, unknown>;
           if (effect.kind === "call")
-            result = await this.transport.call(request, pairing, effect.id);
+            result = await this.transport.call(request!, pairing, effect.id);
           else if (effect.kind === "message")
             result = await this.transport.message(
               pairing,
@@ -781,13 +815,20 @@ export class ClawdTime {
               String(effect.payload.callId),
               effect.id,
             );
+          if (
+            effect.kind === "message" &&
+            (result.accepted !== true ||
+              typeof result.receiptId !== "string" ||
+              !result.receiptId)
+          )
+            throw new Error("Message acknowledgement receipt missing.");
           this.store.transaction(() => {
             this.store.putEffect({ ...effect, state: "done", result });
             if (
               effect.kind === "end_call" &&
               this.transport.mode === "simulation"
             )
-              this.observeCall(request.id, "ended");
+              this.observeCall(request!.id, "ended");
             if (effect.kind === "call") {
               if (result.accepted !== true || typeof result.callId !== "string")
                 throw new Error("Call acceptance receipt missing.");
@@ -802,7 +843,7 @@ export class ClawdTime {
               });
               const current = this.store.get<AttentionRequest>(
                 "attention",
-                request.id,
+                request!.id,
               )!;
               this.store.put("attention", {
                 ...current,
@@ -839,7 +880,7 @@ export class ClawdTime {
           });
           if (effect.kind === "call") {
             this.store.put("attention", {
-              ...this.store.get<AttentionRequest>("attention", request.id)!,
+              ...this.store.get<AttentionRequest>("attention", request!.id)!,
               state: "unknown",
             });
             const call = this.store.get<CallSession>(

@@ -62,6 +62,59 @@ async function setup() {
   return { store, service, device, control, human, viewing, s, r, send };
 }
 describe("control safety across async boundaries", () => {
+  it("releases a view grant if Stop wins while the device grants it", async () => {
+    const h = await setup();
+    h.store.put("setup_test", { id: "setup-fixture", requestId: h.r.id });
+    const grant = h.device.createLease.bind(h.device);
+    let captured = false;
+    h.device.createLease = async (l) => {
+      await grant(l);
+      h.store.saveState(`view-stopped:${h.r.id}`, true);
+    };
+    h.device.frame = async () => {
+      captured = true;
+      throw new Error("unexpected capture");
+    };
+    await h.viewing.tick();
+    expect(captured).toBe(false);
+    expect(h.device.leases.size).toBe(0);
+    expect(h.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+    h.store.close();
+  });
+
+  it("records only fresh setup capture metadata and rejects Stop during capture", async () => {
+    const h = await setup();
+    h.store.put("setup_test", { id: "setup-fixture", requestId: h.r.id });
+    const raw = h.device.frame.bind(h.device);
+    h.device.frame = async (l) => ({
+      ...(await raw(l)),
+      capturedAt: Date.now() - 3000,
+      jpegBase64: "PRIVATE_PIXELS",
+    });
+    await h.viewing.tick();
+    expect(h.store.state(`setup-view:${h.r.id}`)).toBeUndefined();
+    h.device.frame = async (l) => {
+      const frame = await raw(l);
+      h.store.saveState(`view-stopped:${h.r.id}`, true);
+      return frame;
+    };
+    await h.viewing.tick();
+    expect(h.store.state(`setup-view:${h.r.id}`)).toBeUndefined();
+    h.store.saveState(`view-stopped:${h.r.id}`, false);
+    h.device.frame = async (l) => ({
+      ...(await raw(l)),
+      jpegBase64: "PRIVATE_PIXELS",
+    });
+    await h.viewing.tick();
+    expect(h.store.state<{ live: boolean }>(`setup-view:${h.r.id}`)?.live).toBe(
+      false,
+    );
+    expect(
+      JSON.stringify(h.store.query("SELECT body FROM operational_state")),
+    ).not.toContain("PRIVATE_PIXELS");
+    h.store.close();
+  });
+
   it("blocks a second command without releasing input in flight", async () => {
     const h = await setup();
     let finish!: () => void, started!: () => void;

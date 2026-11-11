@@ -91,3 +91,23 @@ Keep one backend process. Do not copy its database, messages or receipt ledgers.
 Only the lead operates routing. Production identity is now verified through native,
 logical and inventory evidence plus explicit user alias confirmation. Runtime guards
 and cursor tests do not substitute for the recorded physical handoff/rollback.
+
+### Obsolete onboarding notification retirement
+
+The original pilot setup notice may remain `unknown` because its provider RPC
+reply was consumed without an authoritative journal receipt. Do not infer failed
+or successful delivery from a missing journal or a current target inspection.
+For a pairing-only notice whose exact invitation is consumed and expired, the
+lead may use the operator-authenticated `/internal/obsolete-notices/retire` action
+with immutable private evidence. The validator checks exact legacy payload,
+token/invite hash, unique pairing/binding/time, original inbound and idle work.
+Its insert-only audit retains the notice hash, invitation/pairing hashes, original
+native origin, cursor snapshot, evidence digest and residual unknown outcome.
+
+This retires only the notice's blocking role, never its delivery fact. There is
+no resend or retry. All hashes are revalidated on readiness; mismatch fails closed.
+The original notice, encrypted payload, event cursor and receipts stay intact.
+Unknown calls, inputs, result messages and new setup invitations cannot use this
+exception. A new setup test still needs fresh readiness and a separate authenticated
+YES. Rollback reports must retain the unknown retired notice and must not replay
+its source inbound or claim all outcomes are reconciled.

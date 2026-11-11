@@ -464,7 +464,12 @@ describe("durable scoped attention domain", () => {
         allowView: true,
         allowControl: false,
       };
-    f.app.claimPairing(claim);
+    const claimed = f.app.claimPairing(claim);
+    expect(
+      f.store
+        .all<{ pairingId?: string }>("invite")
+        .some((i) => i.pairingId === claimed.pairing.id),
+    ).toBe(true);
     expect(() => f.app.claimPairing(claim)).toThrow("already used");
   });
 });

@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   NativeTransport,
   type NativeTransportConfig,
@@ -7,6 +10,11 @@ import { Store } from "../src/storage/store.js";
 import { ClawdTime } from "../src/attention/service.js";
 import { configurationChecks } from "../src/transport/readiness.js";
 import type { Pairing, CallSession } from "../src/contracts.js";
+import { Vault, hash } from "../src/storage/security.js";
+import {
+  retireObsoleteNotice,
+  noticeRetirementValid,
+} from "../src/control/obsolete-notice.js";
 const line = "00000000-0000-4000-8000-000000000099";
 function config(): NativeTransportConfig {
   return {
@@ -42,9 +50,8 @@ function config(): NativeTransportConfig {
     },
   };
 }
-function fixture(readOnly = false) {
-  const store = new Store(),
-    c = config(),
+function fixture(readOnly = false, store = new Store()) {
+  const c = config(),
     requests: { url: string; method: string }[] = [];
   const lineRecord: Record<string, any> = {
     id: line,
@@ -136,7 +143,257 @@ function fixture(readOnly = false) {
   };
   return { store, c, requests, lineRecord, media, device, transport, pairing };
 }
+function obsoleteNoticeFixture(store?: Store) {
+  const f = fixture(false, store),
+    vault = new Vault(f.c.encryptionKey),
+    now = Date.now();
+  const pairing = { ...f.pairing, createdAt: now - 600_000 },
+    rawToken = "fixture-old-single-use-pairing-token",
+    origin = "https://clawdtime.example.test";
+  const binding = Object.fromEntries(
+    [
+      "memberId",
+      "recipient",
+      "lineId",
+      "conversationId",
+      "deviceId",
+      "displayId",
+    ].map((k) => [k, pairing[k as keyof Pairing]]),
+  );
+  f.store.put("pairing", pairing);
+  f.store.put("invite", {
+    id: hash(rawToken),
+    binding,
+    expiresAt: now - 1,
+    consumedAt: pairing.createdAt,
+    pairingId: pairing.id,
+  });
+  const inbound = {
+    id: "fixture-original-pair",
+    sender: pairing.recipient,
+    lineId: pairing.lineId,
+    conversationId: pairing.conversationId,
+    text: "pair",
+  };
+  f.store.put("inbound", {
+    id: inbound.id,
+    state: "done",
+    sealed: vault.seal(inbound),
+  });
+  const notice = {
+    id: `${inbound.id}:notice`,
+    state: "unknown",
+    pairing: {
+      ...pairing,
+      id: "onboarding-fixture",
+      allowView: false,
+      allowControl: false,
+    },
+    sealed: vault.seal(
+      `Install and pair your Mac: ${origin}/pair#token=${rawToken}&device=${pairing.deviceId}&display=${pairing.displayId} . This private link expires in 10 minutes.`,
+    ),
+  };
+  f.store.put("notice", notice);
+  const input = {
+    noticeId: notice.id,
+    pairingId: pairing.id,
+    evidenceReference: `sha256:${"a".repeat(64)}`,
+    allowedOrigins: [origin],
+  };
+  return {
+    ...f,
+    vault,
+    notice,
+    input,
+    retire: () => retireObsoleteNotice(f.store, vault, input, now),
+  };
+}
 describe("read-only live preflight", () => {
+  it("treats a malformed null audit as invalid without throwing or clearing unknown delivery", async () => {
+    const f = obsoleteNoticeFixture();
+    f.store.recordEvent(
+      `obsolete-notice-retirement:${f.notice.id}`,
+      hash("null"),
+      null,
+    );
+    expect(noticeRetirementValid(f.store, f.notice)).toBe(false);
+    expect((await f.transport.preflight()).liveReady).toBe(false);
+    expect(f.store.get("notice", f.notice.id)).toEqual(f.notice);
+    f.store.close();
+  });
+  it("retains the exact obsolete notice and audit across restart without requeueing", () => {
+    const directory = mkdtempSync(join(tmpdir(), "clawdtime-retirement-")),
+      path = join(directory, "state.sqlite");
+    try {
+      const f = obsoleteNoticeFixture(new Store(path));
+      f.retire();
+      const cursor = f.transport.messages.cursor();
+      f.store.close();
+      const reopened = new Store(path);
+      try {
+        const notice = reopened.get<typeof f.notice>("notice", f.notice.id)!;
+        expect(notice).toEqual(f.notice);
+        expect(noticeRetirementValid(reopened, notice)).toBe(true);
+        expect(reopened.state(`messages:${line}`)).toEqual(cursor);
+        expect(reopened.effects()).toHaveLength(0);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    "unconsumed",
+    "unexpired",
+    "foreign-binding",
+    "unproven-inbound",
+    "different-message",
+    "running-notice",
+    "malformed-timestamp",
+  ])("refuses obsolete notice retirement with %s evidence", (kind) => {
+    const f = obsoleteNoticeFixture();
+    const invite = f.store.all<{
+      id: string;
+      consumedAt?: number;
+      expiresAt: number;
+      binding: Record<string, unknown>;
+    }>("invite")[0]!;
+    if (kind === "unconsumed")
+      f.store.put("invite", { ...invite, consumedAt: undefined });
+    if (kind === "unexpired")
+      f.store.put("invite", { ...invite, expiresAt: Date.now() + 100_000 });
+    if (kind === "foreign-binding")
+      f.store.put("invite", {
+        ...invite,
+        binding: { ...invite.binding, lineId: "other" },
+      });
+    if (kind === "unproven-inbound")
+      f.store.put("inbound", { id: "fixture-original-pair", state: "unknown" });
+    if (kind === "different-message")
+      f.store.put("notice", {
+        ...f.notice,
+        sealed: f.vault.seal("A different unknown message"),
+      });
+    if (kind === "running-notice")
+      f.store.put("notice", { id: "other-in-flight", state: "running" });
+    if (kind === "malformed-timestamp")
+      f.store.put("pairing", {
+        ...f.store.get<Pairing>("pairing", f.input.pairingId)!,
+        createdAt: undefined,
+      });
+    expect(() => f.retire()).toThrow("incomplete");
+    expect(
+      f.store.event(`obsolete-notice-retirement:${f.notice.id}`),
+    ).toBeUndefined();
+    expect(f.store.effects()).toHaveLength(0);
+    f.store.close();
+  });
+  it("exempts only an immutable obsolete invitation audit while retaining unknown delivery and cursor", async () => {
+    const f = obsoleteNoticeFixture(),
+      cursor = f.transport.messages.cursor();
+    expect((await f.transport.preflight()).liveReady).toBe(false);
+    const audit = f.retire();
+    expect(audit.deliveryOutcome).toBe("unknown");
+    expect(audit.replayAllowed).toBe(false);
+    expect(f.retire()).toEqual(audit);
+    expect(() =>
+      retireObsoleteNotice(f.store, f.vault, {
+        ...f.input,
+        evidenceReference: `sha256:${"b".repeat(64)}`,
+      }),
+    ).toThrow("incomplete");
+    const report = await f.transport.preflight();
+    expect(report.liveReady).toBe(true);
+    expect(report.recovery).toEqual({
+      unknownNoticeCount: 1,
+      retiredObsoleteNoticeCount: 1,
+      blockingUncertainCount: 0,
+    });
+    expect(f.store.get("notice", f.notice.id)).toEqual(f.notice);
+    expect(f.transport.messages.cursor()).toEqual(cursor);
+    expect(f.store.effects()).toHaveLength(0);
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    f.store.close();
+  });
+  it.each(["notice", "invite", "pairing", "audit"])(
+    "invalidates obsolete notice exemption after %s mutation",
+    async (kind) => {
+      const f = obsoleteNoticeFixture();
+      const audit = f.retire();
+      if (kind === "notice")
+        f.store.put("notice", {
+          ...f.notice,
+          sealed: `${f.notice.sealed}changed`,
+        });
+      if (kind === "invite")
+        f.store.put("invite", {
+          ...f.store.get<{ id: string }>("invite", audit.inviteId)!,
+          expiresAt: Date.now() + 100_000,
+        });
+      if (kind === "pairing")
+        f.store.put("pairing", {
+          ...f.store.get<Pairing>("pairing", audit.pairingId)!,
+          deviceId: "foreign",
+        });
+      if (kind === "audit")
+        f.store.db
+          .prepare("UPDATE events SET fingerprint=? WHERE id=?")
+          .run("corrupted", `obsolete-notice-retirement:${f.notice.id}`);
+      const notice = f.store.get<typeof f.notice>("notice", f.notice.id)!;
+      expect(noticeRetirementValid(f.store, notice)).toBe(false);
+      expect((await f.transport.preflight()).liveReady).toBe(false);
+      f.store.close();
+    },
+  );
+  it.each(["notice", "effect", "call", "lease", "action"])(
+    "keeps every other unknown %s blocking after obsolete notice retirement",
+    async (kind) => {
+      const f = obsoleteNoticeFixture();
+      f.retire();
+      if (kind === "effect")
+        f.store.putEffect({
+          id: "other",
+          kind: "message",
+          state: "unknown",
+          payload: {},
+          createdAt: Date.now(),
+        });
+      else f.store.put(kind, { id: "other", state: "unknown" });
+      const report = await f.transport.preflight();
+      expect(report.liveReady).toBe(false);
+      expect(report.recovery?.retiredObsoleteNoticeCount).toBe(1);
+      expect(report.recovery?.blockingUncertainCount).toBe(1);
+      f.store.close();
+    },
+  );
+  it.each([
+    ["lease", "unknown"],
+    ["action", "unknown"],
+    ["action", "submitted"],
+    ["action", "running"],
+  ])("retains recovery blocking for %s state %s", async (kind, state) => {
+    const f = fixture();
+    f.store.put(kind, { id: "uncertain-control", state });
+    const report = await f.transport.preflight();
+    expect(report.checks.find((c) => c.id === "local_recovery")?.status).toBe(
+      "fail",
+    );
+    expect(report.liveReady).toBe(false);
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    f.store.close();
+  });
+  it("does not confuse active leases and observed actions with unresolved recovery", async () => {
+    const f = fixture();
+    f.store.put("lease", { id: "active-view", state: "active" });
+    f.store.put("action", { id: "observed", state: "observed" });
+    expect(
+      (await f.transport.preflight()).checks.find(
+        (c) => c.id === "local_recovery",
+      )?.status,
+    ).toBe("pass");
+    f.store.close();
+  });
   it("accepts null logical phone only with exact logical/native evidence and explicitly deferred audio capture", async () => {
     const f = fixture(),
       before = f.transport.messages.cursor();

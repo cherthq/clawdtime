@@ -87,6 +87,12 @@ export async function startMcp(options: {
     if (!connecting)
       connecting = (async () => {
         if (!run.token) {
+          if (run.registrationIntentAt)
+            throw new Error(
+              "Previous registration outcome is unknown. Preserve this run and reconcile it; do not register again.",
+            );
+          run.registrationIntentAt = Date.now();
+          secureWrite(statePath, run);
           const result = await new ClawdTimeClient(
             connection.baseUrl,
             connection.token,

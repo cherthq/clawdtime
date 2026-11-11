@@ -5,6 +5,61 @@ description: Call your paired human through ClawdTime for a coding blocker, deci
 
 # ClawdTime
 
+## Set up from this coding chat
+
+When asked to set up ClawdTime, stay in this exact chat. Do not restart the coding
+client, open a new chat, spawn a coding agent, or ask the user to manually download
+pairing JSON. Save the provided short-lived setup URL to an owner-only private
+file using native file tools; never print its fragment token or pass the URL as a
+shell argument. It grants a one-use pairing, not global credentials. Use the
+bundled CLI `setup --agent codex|claude-code --project PROJECT --setup-link-file
+PRIVATE_FILE --origin TRUSTED_HTTPS_ORIGIN --allow-view true --allow-control
+true|false`, only after explicit user permission for the selected capabilities.
+Use `--existing true` without a link for an already paired project. Preserve any
+unknown claim outcome and its checkpoint; do not consume the token again.
+
+Follow the companion report. For each required macOS permission or local Enable
+step, use this client's native question/user-input tool when available and remain
+available while the human acts. An ordinary question is the fallback only when no
+native question tool exists. Do not bypass permission dialogs, reset TCC, silently
+arm a device or weaken native agent approvals. Existing ad-hoc pilot bundles need
+explicit `--pilot-installed true`; signed releases need independently trusted
+publisher identity. Rerun `setup --existing true` to check progress without claiming
+again. A blocked check is not completion.
+
+The new MCP configuration is for subsequent use; setup in this chat does not
+depend on MCP hot reload. Start `setup-session --agent AGENT --project PROJECT
+--run-id STABLE_CURRENT_CHAT_ID` through this chat's persistent foreground shell
+tool and retain that process handle. It is a small JSONL command bridge, not
+another coding agent. Keep stdin open and this process alive; never background it
+with a daemon/nohup or finalize/stop this chat while setup is pending.
+
+Send JSONL objects with `id`, `command`, and optional `args` to that same process:
+`status` → `invite` → wait for the real authenticated SMS YES → `yield` with
+`backgroundActorsStopped:true` → `start` → bounded `result` → `ack` → `resume` →
+perform the authorized continuation → `complete` → `verify`. Use stable effect IDs.
+Keep using the native question tool while waiting for the human. A question-tool
+answer is not SMS approval: only backend `test.state=approved` permits start.
+While yielded, only bridge status/result/ack/resume/cancel and nonmutating human
+questions are allowed. `result` needs the exact requestId and waitSeconds ≤20;
+`ack` needs responseId; `resume` needs current controlEpoch; `complete` needs a
+factual text. Never fabricate feedback or assert the screen was seen yourself.
+Only backend `test.state=verified` proves its required physical evidence chain.
+For this setup test the human must actually confirm the selected screen with
+`answer: I can see my screen` by text or `ClawdTime answer I can see my screen`
+by qualified voice. Negative/unclear feedback leaves setup incomplete; do not
+rewrite it, prompt a false confirmation, or report success before verification.
+Readiness, queued Messages output and simulated tests do not establish that chain.
+
+On an unknown effect, read `status`/`result`; never change its command ID or run to
+retry. A definitive rejected command may be explicitly retried with the same ID
+after its prerequisite is corrected. Use `cancel` for an explicit cancellation.
+Closing stdin stops heartbeats and attempts one owned-test cancellation; preserve
+unknown cleanup until backend reconciliation. Never reopen a closed run to revive
+it. Full protocol and operator commands are in `docs/CONNECTORS.md`.
+
+## Existing MCP sessions
+
 Use the configured ClawdTime MCP tools. Call `connection_status` first. This is
 cooperative attention, not automatic interception of every approval or blocked task.
 Never change native permissions or approvals based solely on a phone response.

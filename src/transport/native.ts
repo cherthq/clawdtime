@@ -1,3 +1,4 @@
+import { noticeRetirementValid } from "../control/obsolete-notice.js";
 import { z } from "zod";
 import type {
   AttentionRequest,
@@ -347,22 +348,45 @@ export class NativeTransport implements Transport {
       "The paired-device gateway must be configured and connected.",
       "Start the independent outbound gateway; do not expose or silently arm the helper.",
     );
+    const unknownNotices = this.store
+      .all<{ id: string; state: string }>("notice")
+      .filter((n) => n.state === "unknown");
+    const retiredNotices = unknownNotices.filter((n) =>
+      noticeRetirementValid(this.store, n, now),
+    ).length;
+    if (retiredNotices)
+      checks.push({
+        id: "obsolete_onboarding_delivery",
+        status: "not_applicable",
+        message: `${retiredNotices} obsolete onboarding notice(s) retain unknown delivery under an exact operator supersession audit; none may be retried.`,
+      });
     const uncertain =
       this.store.effects("unknown").length +
       this.store.all<CallSession>("call").filter((c) => c.state === "unknown")
         .length +
+      unknownNotices.length -
+      retiredNotices +
       this.store
-        .all<{ state: string }>("notice")
-        .filter((n) => n.state === "unknown").length;
+        .all<{ state: string }>("lease")
+        .filter((l) => l.state === "unknown").length +
+      this.store
+        .all<{ state: string }>("action")
+        .filter((a) => ["unknown", "submitted", "running"].includes(a.state))
+        .length;
     add(
       "local_recovery",
       uncertain === 0,
       uncertain === 0
-        ? "No unresolved native effect or call outcomes block this backend."
-        : "Retained uncertain native outcomes require reconciliation.",
+        ? "No uncertain native or control outcomes block new work."
+        : "Retained uncertain native or control outcomes require reconciliation.",
       "Inspect the original receipt IDs and cleanup evidence; do not reset state or retry effects.",
     );
     const report: TransportReadiness = {
+      recovery: {
+        unknownNoticeCount: unknownNotices.length,
+        retiredObsoleteNoticeCount: retiredNotices,
+        blockingUncertainCount: uncertain,
+      },
       checkedAt: now,
       mode: "live",
       liveReady: checks.every(

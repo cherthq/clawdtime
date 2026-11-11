@@ -37,6 +37,7 @@ export interface RunState {
   adapter: Adapter;
   session?: AgentSession;
   token?: string;
+  registrationIntentAt?: number;
 }
 export function canonicalProject(project: string) {
   return realpathSync(project);
@@ -80,7 +81,15 @@ export function secureRead<T>(file: string): T {
     throw new Error(
       "Credential file must be a regular owner-only file (chmod 600).",
     );
-  return JSON.parse(readFileSync(file, "utf8")) as T;
+  if (process.getuid && stat.uid !== process.getuid())
+    throw new Error("Credential file must belong to the current user.");
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as T;
+  } catch {
+    throw new Error(
+      "Protected state contains invalid JSON; preserve it for recovery.",
+    );
+  }
 }
 export function loadConnection(
   file: string,

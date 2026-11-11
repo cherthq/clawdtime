@@ -1,3 +1,5 @@
+import { retireObsoleteNotice as retireNotice } from "./control/obsolete-notice.js";
+import { SetupService } from "./pairing/setup.js";
 import { readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { Store } from "./storage/store.js";
@@ -115,16 +117,41 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       "Live mode requires an explicit handoff configuration and live traffic gate.",
     );
   const origin = env.CLAWDTIME_ORIGIN ?? "http://127.0.0.1:3310";
-  const url = new URL(origin);
-  if (
-    url.origin !== origin ||
-    url.username ||
-    url.password ||
-    !(url.protocol === "https:" || (!live && url.hostname === "127.0.0.1"))
-  )
-    throw new Error(
-      "Use a fixed HTTPS origin for live or loopback for simulation.",
-    );
+  const validateOrigin = (value: string) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(
+        "Use exact HTTPS origins, or HTTP loopback origins outside live mode.",
+      );
+    }
+    if (
+      url.origin !== value ||
+      url.username ||
+      url.password ||
+      !(
+        url.protocol === "https:" ||
+        (!live && url.protocol === "http:" && url.hostname === "127.0.0.1")
+      )
+    )
+      throw new Error(
+        "Use exact HTTPS origins, or HTTP loopback origins outside live mode.",
+      );
+    return value;
+  };
+  validateOrigin(origin);
+  const compatibleOrigins = env.CLAWDTIME_COMPATIBLE_ORIGINS
+    ? [
+        ...new Set(
+          env.CLAWDTIME_COMPATIBLE_ORIGINS.split(",").map((value) =>
+            validateOrigin(value.trim()),
+          ),
+        ),
+      ]
+    : [];
+  if (compatibleOrigins.length > 8)
+    throw new Error("At most eight exact compatible origins are allowed.");
   if (
     live &&
     (!env.CLAWDTIME_OPERATOR_TOKEN ||
@@ -173,11 +200,12 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       transport.bindingFingerprint(),
     );
   const service = new ClawdTime(store, transport);
+  const setup = new SetupService(service);
   const device = config
     ? new MediaDevicePort(config.mediaOrigin, config.mediaKey)
     : new SimulatedDevice();
   const control = new ControlCoordinator(store, device),
-    viewing = new Viewing(store, device);
+    viewing = new Viewing(store, device, Date.now, transport.mode === "live");
   const human = new HumanRouter(
     service,
     control,
@@ -185,14 +213,22 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       ? configuredPlanner(device, env)
       : undefined,
   );
+  const vault = config ? new Vault(config.encryptionKey) : undefined;
   const app = createApp(service, control, human, {
     origin,
+    compatibleOrigins,
+    retireObsoleteNotice: vault
+      ? (input) =>
+          retireNotice(store, vault, {
+            ...input,
+            allowedOrigins: [origin, ...compatibleOrigins],
+          })
+      : undefined,
     operatorToken: env.CLAWDTIME_OPERATOR_TOKEN,
     mediaToken: env.CLAWDTIME_MEDIA_TOKEN,
     simulation: mode === "simulation",
     dispatchEnabled: mode !== "standby",
   });
-  const vault = config ? new Vault(config.encryptionKey) : undefined;
   for (const n of store.all<Notice>("notice"))
     if (n.state === "running")
       store.put<Notice>("notice", {
@@ -215,6 +251,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     ticking = true;
     try {
       service.expireSessions();
+      setup.expire();
       if (live && transport instanceof NativeTransport && config && vault) {
         if (!transport.messages.cursor())
           await transport.messages.baseline(
@@ -283,13 +320,17 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                   p.lineId === event.lineId &&
                   p.revokedAt === undefined,
               );
+            if (setup.receive(event)) {
+              store.put("inbound", { ...item, state: "done" });
+              continue;
+            }
             if (!pairing || /^pair$/i.test(event.text.trim())) {
               const invite = service.createPairingInvite({
                 ...tester,
                 lineId: event.lineId,
                 conversationId: event.conversationId,
               });
-              reply = `Install and pair your Mac: ${origin}/pair#token=${encodeURIComponent(invite.token)}&device=${encodeURIComponent(tester.deviceId)}&display=${encodeURIComponent(tester.displayId)} . This private link expires in 10 minutes.`;
+              reply = `Set up ClawdTime for this project. Follow ${origin}/agents using my setup link: ${origin}/setup#token=${encodeURIComponent(invite.token)}&device=${encodeURIComponent(tester.deviceId)}&display=${encodeURIComponent(tester.displayId)}`;
             } else {
               const pending = store
                 .all<AttentionRequest>("attention")

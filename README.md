@@ -18,11 +18,12 @@ backend, Mac companion, media/gateway, pairing page, agent tools and simulation
 are runnable. Real Claude Code and Codex CLI processes have completed cooperative
 attention workflows against simulated calls and synthetic feedback. The actual
 FaceTime → screen → voice/text/CUA → agent continuation → Messages result path
-still requires controlled line handoff and physical acceptance. See
+still requires physical acceptance; the controlled test-line handoff is active. See
 [STATUS](docs/STATUS.md) for current evidence and concrete blockers.
 
 [Open the landing page](https://backend-production-ee686906.up.railway.app).
-Private pairing is available at `/pair`; an operational dashboard is not implemented.
+Agent instructions are at `/agents`, and personal setup links use `/setup`.
+The legacy `/pair` page remains compatible; an operational dashboard is not implemented.
 
 ## Who this is for
 
@@ -37,47 +38,61 @@ the longer-term motivation; they are not finished ClawdTime integrations.
 
 ## Onboarding
 
-The intended live flow is:
+The setup message does the handoff to your existing coding agent:
 
-1. **Text the pilot number.** Its authenticated messaging flow sends a private,
-   expiring pairing link. The number is shared privately after the controlled
-   handoff; this repository does not publish a signup line.
-2. **Install and pair the Mac companion.** Choose the actual attached display,
-   grant Screen Recording, separately grant Accessibility for computer control,
-   and explicitly enable locally. The companion starts stopped. Pairing alone
-   does not grant macOS permissions or start screen capture.
-3. **Connect Claude Code or Codex with one command.** Download the pairing file
-   and run the bundled command below. It installs only its project MCP entry and
-   skill, preserves other configuration, and checks scoped readiness.
+1. **Text the pilot number.** ClawdTime replies with the prompt itself:
+   “Set up ClawdTime for this project. Follow [service]/agents using my setup link: [personal link].”
+2. **Paste it into your current Claude Code or Codex session.** Your agent installs
+   the integration and prepares the Mac companion, keeping the private binding
+   internal. There is no separate pairing-file download in this flow.
+3. **Answer the setup questions in that same session.** Choose the actual attached
+   display, grant Screen Recording, separately grant Accessibility for computer
+   control, and enable sharing locally. The workflow stays active while waiting
+   for your answers or permissions until verified or explicitly canceled.
+4. **Approve one real test.** Once readiness passes, the agent texts:
+   “ClawdTime is configured. Ready for one FaceTime video test showing this Mac’s
+   selected screen? Reply YES when ready.” It waits for your authenticated YES,
+   yields conflicting work, and initiates one call through the integration.
+5. **Confirm the screen and continue.** While viewing the screen, say
+   “ClawdTime, answer I can see my screen” or text “answer: I can see my screen”.
+   The same agent acknowledges feedback, resumes after control is released, and
+   sends its result through Messages. Only the full live evidence chain verifies
+   setup. A failed test is reported accurately; there is no automatic redial.
 
-This internal build uses a pinned local checkout. The proposed public command
-`npx clawdtime connect` is not published or namespace-verified. Do not install a
-package with that name by assumption.
+The current pilot uses a trusted local checkout and the approved installed Mac
+companion. A public signed/notarized download and automatic fresh-device gateway
+enrollment are **not available yet**. The proposed npm package is not published
+or namespace-verified; do not install a package named `clawdtime` by assumption.
+The personal link is an expiring credential; keep it in an owner-only private
+file, never a command argument, project file, or log.
 
 ```sh
 npm ci
 npm run build
-node /absolute/path/to/clawdtime/dist/cli/main.js connect --agent codex --project /absolute/path/to/your/project --pairing-file /absolute/path/to/clawdtime-pairing.json
+node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/path/to/project --setup-link-file /absolute/private/setup-link.txt --origin https://TRUSTED-SERVICE --allow-view true --allow-control true --pilot-installed true
 ```
 
-Use `--agent claude-code` for Claude Code. The pairing file contains a credential;
-keep it private. The CLI protects it with mode 0600 and stores local credentials
-in `~/.local/share/clawdtime/`. It never writes a credential into the project's
-MCP configuration or changes native sandbox/approval settings. Reload the client
-and approve the project MCP server through its normal trust flow.
+Use `--agent claude-code` for Claude Code. Permission flags must reflect explicit
+user consent. `--pilot-installed true` is only for the operator-approved existing
+internal build. For an existing connection, use `--existing true` in place of the
+setup-link option; it preserves grants, credentials and receipt ledgers.
+
+The installed skill uses the foreground `setup-session` JSONL bridge in the
+**current agent session**, with a stable run ID, heartbeats and durable intents.
+It needs no new coding client or MCP reload. The agent uses its native question
+UI while waiting and continues after the answer. A host crash or hard session
+limit remains possible; saved identity and receipts prevent an unsafe replacement
+or blind retry. Future agent sessions can use the installed MCP/skill normally.
 
 ```sh
-node /absolute/path/to/clawdtime/dist/cli/main.js doctor --agent codex --project /absolute/path/to/your/project
-node /absolute/path/to/clawdtime/dist/cli/main.js run --agent codex --project /absolute/path/to/your/project
-node /absolute/path/to/clawdtime/dist/cli/main.js disconnect --agent codex --project /absolute/path/to/your/project
+node /absolute/path/to/clawdtime/dist/cli/main.js setup-session --agent codex --project /absolute/path/to/project --run-id CURRENT_CHAT_STABLE_ID
+node /absolute/path/to/clawdtime/dist/cli/main.js doctor --agent codex --project /absolute/path/to/project
 ```
 
-`run` launches the usual client with a durable local run identity for MCP
-reconnects. Recovery requires that ID and the native client's exact resume
-arguments; a different chat must not reuse it. `disconnect` first revokes remote
-access, then removes only unchanged ClawdTime config/skills and local credentials.
-Use local Stop before quitting the companion. Preserve action ledgers for recovery.
-[Connector documentation](docs/CONNECTORS.md) covers reconnects and uninstall.
+Legacy `connect --pairing-file`, `run` and `disconnect` remain supported.
+`disconnect` revokes remote access before removing unchanged ClawdTime-owned
+configuration. Use local Stop before quitting the companion and retain action
+ledgers for recovery. See [connector documentation](docs/CONNECTORS.md).
 
 ### Mac installation for the internal pilot
 

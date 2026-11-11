@@ -230,3 +230,22 @@ can cause TCC problems in its [development signing guidance](https://developer.a
 A stable Apple Development or Developer ID identity is the durable distribution
 fix; switching identities during this acceptance attempt would require another
 explicit grant cycle. See also Apple's [scoped permission reset documentation](https://developer.apple.com/documentation/xcode/resetting-access-to-protected-resources-in-macos).
+
+### Same-session onboarding orchestration
+
+`mac/scripts/onboard.py` is the CLI-facing local setup boundary. It consumes the
+CLI's owner-only verified claim file, uses the existing installed app, activates
+an empty-ACL bootstrap or accepts an identical prior claim, and reports a
+structured blocked/ready result. The CLI keeps its current agent session and
+retries the same claim after the user completes a local permission step; neither
+manual JSON transfer nor repeated TCC reset is part of this path. Details and
+release-manifest contract are in [the Mac README](../mac/README.md#resumable-same-session-onboarding).
+
+The orchestrator deliberately leaves local Enable to the person and gateway
+start/provisioning to the lead. Its success is scoped to the local companion;
+the backend doctor must confirm remote identity, ACL and gateway readiness too.
+Twenty-one isolated Python script tests passed after the orchestration change,
+including refusal to mark a running broader-than-paired ACL ready.
+This change needs no companion rebuild or installed binary replacement: retain
+the currently granted app hash and its stable path. No physical acceptance is
+added by these tests.

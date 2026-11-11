@@ -242,3 +242,57 @@ journal to erase uncertainty, or report an acknowledged/delivered message.
 
 The diagnostic changed no provider service, journal, permission or routing.
 ClawdTime remains paired, with its Mac locally stopped and no call placed.
+
+## Same-session setup implementation — November 11, 2026
+
+The revised onboarding sends the setup prompt itself by Messages. The prompt links
+`/agents` and a private `/setup` link. The CLI claims and stores the binding
+internally, configures the existing project, and reports native permission/local
+Enable steps. The foreground JSONL setup bridge keeps the current coding chat's
+identity and heartbeat; native question UI handles waiting. No client restart or
+replacement coding agent is required. Host process/session failure remains a real
+limit; unknown registration/effects are preserved, never automatically replayed.
+
+The setup invitation requires fresh readiness and an authenticated SMS YES before
+one call. Verification requires qualified live connection evidence, a fresh frame,
+explicit positive screen confirmation, same-session acknowledgement/continuation,
+and an acknowledged Messages result. Simulation cannot mark setup verified.
+Public signed/notarized downloads and automatic new-device gateway enrollment are
+still unavailable; the existing approved pilot companion is supported without
+replacement or TCC reset. Legacy `/pair` and Railway origins remain compatible.
+
+Independent review found and fixed explicit pilot-build trust, local readiness
+failures being recorded as unknown effects, missing owned-skill refresh, exact
+loaded ACL checks, capture-after-Stop races, and recovery audit preconditions.
+The approved landing-page work from the parallel website chat is included in the
+coordinated release; canonical setup origin is `https://www.clawdtime.com`.
+
+The latest exact-target Chert diagnostic returned `reply_map_thread` refusal.
+This is a stale per-chat reply-thread reference rejected before the strict send
+opens its journal. The provider's RPC client consumes/deletes the original reply,
+and its strict HTTP adapter drops non-acknowledged dispositions; the historical
+message outcome therefore remains unknown. The existing dedicated-worker
+maintenance action can clear only the exact stale map entry when no Messages
+window is visible. It never sends, touches drafts, or changes the journal.
+
+A lead-only obsolete-notice retirement is implemented for this exact historical
+case. It proves the original legacy pairing-only payload, token hash, consumed
+and expired invite, unique resulting pairing/binding/timestamp, original inbound,
+and absence of other in-flight work. An insert-only audit hashes those records.
+It preserves the original `unknown` notice byte-for-byte and never resends it.
+Only that exact spent-link notice can stop blocking new work. Every other unknown
+notice/effect/call/control uncertainty continues blocking; readiness reports the
+retained unknown and retired count separately. A late old text is still possible,
+but its link cannot grant authority. Retirement is not delivery reconciliation.
+
+Live maintenance, retirement, deployment and physical acceptance outcomes are
+recorded below as they occur; this implementation section alone proves none of them.
+
+Current release validation: **152 tests across 16 TypeScript test files**, typecheck,
+production build and formatting passed. Revised built-browser overview/protocol
+checks and legacy browser/compiled-CLI regression passed. **21 Mac Python tests**
+passed. Current-chat CLI setup reused the actual pilot pairing, refreshed its owned
+skill, preserved the installed companion and confirmed both actual macOS grants.
+The user executed the exact-target provider maintenance; before was
+`reply_map_thread/accepted:false`, repair and independent after inspection were
+`accepted:true`. No message was sent and provider journals were untouched.

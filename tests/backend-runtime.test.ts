@@ -4,11 +4,54 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRuntime } from "../src/runtime.js";
 import { Store } from "../src/storage/store.js";
-import { hash } from "../src/storage/security.js";
+import { hash, Vault } from "../src/storage/security.js";
+import { SetupService } from "../src/pairing/setup.js";
 import { mediaSessionId } from "../src/transport/native.js";
 import type { AttentionRequest, CallSession } from "../src/contracts.js";
 afterEach(() => vi.unstubAllGlobals());
 describe("runtime standby and mode boundaries", () => {
+  it("accepts only exact configured compatible origins without broadening network schemes", async () => {
+    const runtime = createRuntime({
+      CLAWDTIME_DATABASE: ":memory:",
+      CLAWDTIME_ORIGIN: "https://clawdtime.example.test",
+      CLAWDTIME_COMPATIBLE_ORIGINS:
+        "https://legacy.example.test, http://127.0.0.1:3310",
+    });
+    try {
+      expect(
+        (
+          await runtime.app.request("https://clawdtime.example.test/health", {
+            headers: { Origin: "https://legacy.example.test" },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await runtime.app.request("https://clawdtime.example.test/health", {
+            headers: { Origin: "https://unrelated.example.test" },
+          })
+        ).status,
+      ).toBe(403);
+    } finally {
+      await runtime.stop();
+      runtime.store.close();
+    }
+    for (const invalid of [
+      "https://legacy.example.test/",
+      "https://user:pass@legacy.example.test",
+      "https://legacy.example.test/path",
+      "https://legacy.example.test#fragment",
+      "http://external.example.test",
+      "ftp://127.0.0.1:3310",
+      "https://legacy.example.test,",
+    ])
+      expect(() =>
+        createRuntime({
+          CLAWDTIME_DATABASE: ":memory:",
+          CLAWDTIME_COMPATIBLE_ORIGINS: invalid,
+        }),
+      ).toThrow("exact HTTPS origins");
+  });
   it("rejects live startup without both handoff configuration and traffic gate", () => {
     expect(() => createRuntime({ CLAWDTIME_MODE: "live" })).toThrow(
       "explicit handoff",
@@ -353,8 +396,22 @@ describe("runtime standby and mode boundaries", () => {
               service: "clawdtime-media",
               ok: true,
               configured: true,
-              devicesConfigured: false,
-              deviceGatewayConnected: false,
+              devicesConfigured: true,
+              deviceGatewayConnected: true,
+            };
+          else if (u.pathname === "/devices/mac/readiness/member/1")
+            result = {
+              deviceId: "mac",
+              memberId: "member",
+              displayId: "1",
+              available: true,
+              displayAttached: true,
+              screenPermission: true,
+              viewAllowed: true,
+              armed: true,
+              controlPermission: true,
+              controlAllowed: true,
+              activeLease: false,
             };
           else if (u.pathname === "/api/v1/text-operations/v1") {
             sends.push(body);
@@ -448,10 +505,63 @@ describe("runtime standby and mode boundaries", () => {
           expect(notices[0]!.pairing).not.toHaveProperty("authorization");
           expect(sends).toHaveLength(1);
           expect(sends[0]!.to).toBe(tester);
-          expect(String(sends[0]!.text)).toContain("/pair#token=");
+          expect(String(sends[0]!.text)).toMatch(
+            /^Set up ClawdTime for this project\. Follow https:\/\/clawdtime\.example\.test\/agents using my setup link: https:\/\/clawdtime\.example\.test\/setup#token=/,
+          );
           await runtime.tick();
           expect(sends).toHaveLength(1);
           expect(runtime.store.all("invite")).toHaveLength(1);
+          if (outcome === "acknowledged") {
+            const setupUrl = new URL(
+              String(sends[0]!.text).split("using my setup link: ")[1]!,
+            );
+            const params = new URLSearchParams(setupUrl.hash.slice(1));
+            const paired = runtime.service.claimPairing({
+              token: params.get("token")!,
+              deviceId: "mac",
+              displayId: "1",
+              allowView: true,
+              allowControl: true,
+            });
+            const agent = runtime.service.registerSession(paired.token, {
+              adapter: "codex",
+              adapterVersion: "fixture",
+              projectRoot: "/fixture",
+              externalSessionId: "setup-session",
+              hostId: "mac",
+              capabilities: { cooperativePause: true, polling: true },
+            });
+            const setup = new SetupService(runtime.service);
+            if ("preflightDevice" in runtime.transport)
+              await runtime.transport.preflightDevice(paired.pairing);
+            const test = setup.invite(agent.token).test;
+            await runtime.tick();
+            expect(runtime.store.effect(test.invitationEffectId)?.state).toBe(
+              "done",
+            );
+            expect(sends).toHaveLength(2);
+            const approval = {
+              id: "fixture-verified-yes",
+              lineId,
+              sender: tester,
+              conversationId: `iMessage;-;${tester}`,
+              text: "YES",
+            };
+            runtime.store.put("inbound", {
+              id: approval.id,
+              sealed: new Vault(config.encryptionKey).seal(approval),
+              state: "pending",
+            });
+            await runtime.tick();
+            expect(setup.get(agent.token).test?.state).toBe("approved");
+            expect(
+              runtime.store.get<{ state: string }>("inbound", approval.id)
+                ?.state,
+            ).toBe("done");
+            expect(runtime.store.all("attention")).toHaveLength(0);
+            expect(runtime.store.all("notice")).toHaveLength(1);
+            expect(sends).toHaveLength(2); // Approval is consumed before generic response handling.
+          }
         } finally {
           await runtime.stop();
           runtime.store.close();

@@ -100,3 +100,27 @@ export function uninstallConfiguration(connection: Connection) {
   if (changed !== undefined) writeFileSync(configPath, changed);
   if (existsSync(skillPath)) unlinkSync(skillPath);
 }
+
+/** Upgrade only an unchanged skill we previously installed. User edits stay untouched. */
+export function refreshOwnedSkill(
+  connection: Connection,
+  connectionFile: string,
+  skill: string,
+) {
+  if (!connection.installed) return connection;
+  const { skillPath, skillHash } = connection.installed;
+  regular(skillPath);
+  if (
+    !existsSync(skillPath) ||
+    hash(readFileSync(skillPath, "utf8")) !== skillHash
+  )
+    return connection;
+  if (hash(skill) === skillHash) return connection;
+  writeFileSync(skillPath, skill, { mode: 0o600 });
+  const updated = {
+    ...connection,
+    installed: { ...connection.installed, skillHash: hash(skill) },
+  };
+  secureWrite(connectionFile, updated);
+  return updated;
+}

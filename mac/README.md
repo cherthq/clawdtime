@@ -192,7 +192,10 @@ python3 mac/scripts/configure.py --claim /absolute/private/pairing.json \
 `--list-displays` returns only IDs/dimensions, starts no listener, and requests no
 capture permissions. Pair the observed display. The generator verifies it remains
 attached, writes mode-0600 files in a new mode-0700 directory, and prints launch
-commands without secrets. Existing configuration is refused rather than overwritten.
+commands without secrets. Conflicting configuration is refused rather than
+overwritten. Repeating activation of the exact same claim is a no-op; interrupted
+activation can finish only when the original bootstrap backup and staged files
+match that same claim.
 A new gateway-only key is saved in `media-gateway-secret.json`; the operator must
 provision that key on the independent media service through protected configuration.
 A public self-service gateway-key enrollment service is not implemented. The helper
@@ -229,3 +232,77 @@ has been granted, keeping the Accessibility setup action discoverable. Every
 launch remains locally stopped; permissions and pairing never automatically arm it.
 An installation using a custom configuration path must continue supplying that
 explicit path or deliberately move to the standard setup workflow.
+
+## Resumable same-session onboarding
+
+The CLI writes its authenticated pairing claim to a private file and invokes
+`mac/scripts/onboard.py`; the tester does not download or edit JSON. The script
+uses the installed `~/Applications/ClawdTime Companion.app` by default and never
+replaces an existing app. The internal pilot requires explicit `--pilot-installed`
+to use its existing ad-hoc signed app. The signature is checked before running
+metadata-only display discovery or configuration validation.
+
+```sh
+python3 mac/scripts/onboard.py --claim /absolute/private/claim.json --pilot-installed
+```
+
+`--directory`, `--app`, and `--relay-url` are available for an explicitly selected
+installation. A new setup requires the independent `wss://.../device-gateway`
+relay URL. Existing bootstrap or paired configurations retain helper/gateway
+secrets and ledgers. Another device/member/display/control grant is refused.
+`--check-only` validates and checks metadata without activating pairing, installing
+an app, or preparing a gateway definition. No mode captures screens, sends input,
+resets macOS grants, launches/restarts the helper, or enables sharing.
+
+Stdout contains one JSON object with `schema: clawdtime.onboarding/1`,
+`scope: local_companion`, `status`, `code`, `nextAction`, and `instructions`.
+Exit 2 / `status: blocked` / `nextAction: ask_user` means the current person must
+finish a specific step: grant Screen Recording, grant Accessibility for a control
+pairing, reload the exact companion configuration, unlock the intended session,
+attach the already-paired display, or choose Enable locally. Missing release
+artifacts require the pilot operator. Exit 1 / `status: error` refuses unsafe or
+conflicting setup without printing exception bodies or credentials. Exit 0 /
+`status: ready` establishes local permissions, loaded ACLs, attached display,
+active console, and local Enable only. `remoteVerificationRequired: true` remains:
+the CLI must also verify its backend/gateway binding before reporting setup done.
+No setup status establishes physical call/media/CUA acceptance.
+
+When the gateway Python environment exists, setup prepares only
+`setup/com.clawdtime.gateway.plist`. Repeating setup preserves the same matching
+file. It never loads that LaunchAgent or restarts an existing gateway. Public
+self-service gateway enrollment is not implemented: a fresh pilot device still
+needs the operator to provision its independent media mapping through protected
+configuration. Existing provisioned devices keep that mapping and its credentials.
+
+An optional `--manifest /path/release.json --trusted-team-id TEAMID` installs a
+release **only if the app is absent**. The operator supplies the publisher team
+identifier independently of the manifest. The manifest schema is:
+
+```json
+{
+  "schema": "clawdtime.companion-release/1",
+  "bundleId": "com.clawdtime.companion",
+  "artifact": "/absolute/path/ClawdTime.zip",
+  "sha256": "64 lowercase hexadecimal characters",
+  "teamId": "TRUSTEDTEAM"
+}
+```
+
+The installer verifies the ZIP checksum, bounded safe archive paths, exact bundle
+identity, strict code signature, trusted team, and Gatekeeper assessment before
+installation; it checks the installed copy again. Links inside archives are
+currently refused. This supports a separately supplied signed/notarized release;
+no official public artifact, download domain, signing identity, or notarization
+receipt is asserted to exist. The pilot installed app is never rebuilt or replaced
+by this flow, so its established TCC identity is preserved.
+
+Run the isolated script tests with:
+
+```sh
+python3 -m unittest discover -s mac/scripts -p 'test_*.py'
+```
+
+Tests cover idempotent activation, interrupted binding publication, preserved
+credentials/unknown receipts, conflicting claims, check-only behavior, missing
+permissions versus success, signature/team/checksum/archive refusal, and sanitized
+unreachable-helper results. They use fixtures and never launch an installed app.

@@ -1,0 +1,309 @@
+import { describe, expect, it } from "vitest";
+import { Store } from "../src/storage/store.js";
+import { ClawdTime } from "../src/attention/service.js";
+import { SetupService } from "../src/pairing/setup.js";
+import { SimulationTransport } from "../src/transport/simulation.js";
+import type { Transport } from "../src/contracts.js";
+
+function fixture(mode: "simulation" | "live" = "simulation") {
+  let now = 100_000;
+  const store = new Store(),
+    simulated = new SimulationTransport();
+  const transport: Transport =
+    mode === "simulation"
+      ? simulated
+      : {
+          mode,
+          call: (...args) => simulated.call(...args),
+          endCall: (...args) => simulated.endCall(...args),
+          message: async (...args) => ({
+            ...(await simulated.message(...args)),
+            simulated: false,
+            status: "acknowledged",
+          }),
+        };
+  const service = new ClawdTime(store, transport, { clock: () => now }),
+    setup = new SetupService(service);
+  const binding = {
+    memberId: "member",
+    recipient: "+15550000001",
+    conversationId: "iMessage;-;+15550000001",
+    lineId: "line",
+    deviceId: "mac",
+    displayId: "1",
+  };
+  const invite = service.createPairingInvite(binding);
+  const pairing = service.claimPairing({
+    token: invite.token,
+    deviceId: "mac",
+    displayId: "1",
+    allowView: true,
+    allowControl: true,
+  });
+  const register = (externalSessionId: string) =>
+    service.registerSession(pairing.token, {
+      adapter: "codex",
+      adapterVersion: "fixture",
+      projectRoot: "/fixture",
+      externalSessionId,
+      hostId: "mac",
+      capabilities: { cooperativePause: true, polling: true },
+    });
+  const agent = register("one");
+  if (mode === "live") {
+    store.saveState("native-binding-fingerprint", "fixture-binding");
+    store.saveState("native-preflight", {
+      checkedAt: now,
+      mode: "live",
+      liveReady: true,
+      bindingFingerprint: "fixture-binding",
+      checks: [
+        {
+          id: "fixture_transport",
+          status: "pass",
+          message: "Unit-test evidence only",
+        },
+      ],
+    });
+    store.saveState(`device-readiness:${pairing.pairing.id}`, {
+      checkedAt: now,
+      deviceId: "mac",
+      memberId: "member",
+      displayId: "1",
+      bindingFingerprint: "fixture-binding",
+      checks: [
+        {
+          id: "fixture_device",
+          status: "pass",
+          message: "Unit-test evidence only",
+        },
+      ],
+    });
+  }
+  const event = {
+    id: "yes-one",
+    sender: binding.recipient,
+    lineId: binding.lineId,
+    conversationId: binding.conversationId,
+    text: "YES",
+  };
+  return {
+    store,
+    service,
+    setup,
+    simulated,
+    pairing,
+    agent,
+    register,
+    event,
+    binding,
+    now: () => now,
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
+describe("same-session approved setup test", () => {
+  it("requires fresh live readiness before claiming the setup is configured", () => {
+    const f = fixture("live");
+    f.store.saveState(`device-readiness:${f.pairing.pairing.id}`, null);
+    expect(() => f.setup.invite(f.agent.token)).toThrow("doctor readiness");
+    expect(f.store.effects()).toHaveLength(0);
+    f.store.close();
+  });
+
+  it("queues one invitation, requires delivered invitation and exact human YES, then yields and starts one call", async () => {
+    const f = fixture(),
+      test = f.setup.invite(f.agent.token).test;
+    expect(f.setup.invite(f.agent.token).test).toEqual(test);
+    expect(f.store.effects()).toHaveLength(1);
+    expect(f.setup.receive(f.event)).toBe(false);
+    expect(() => f.setup.start(f.agent.token)).toThrow("exact human YES");
+    await f.service.drain();
+    expect(f.simulated.messages).toHaveLength(1);
+    // A previously seen early YES must never become approval after delivery.
+    expect(f.setup.receive(f.event)).toBe(false);
+    expect(
+      f.setup.receive({
+        ...f.event,
+        id: "wrong-sender",
+        sender: "+15550000009",
+      }),
+    ).toBe(false);
+    expect(
+      f.setup.receive({ ...f.event, id: "wrong-line", lineId: "other" }),
+    ).toBe(false);
+    expect(
+      f.setup.receive({
+        ...f.event,
+        id: "wrong-chat",
+        conversationId: "other",
+      }),
+    ).toBe(false);
+    expect(
+      f.setup.receive({
+        ...f.event,
+        id: "unrelated",
+        text: "yesterday was good",
+      }),
+    ).toBe(false);
+    expect(f.setup.receive({ ...f.event, id: "yes-two" })).toBe(true);
+    expect(f.simulated.calls).toHaveLength(0);
+    expect(() => f.setup.start(f.agent.token)).toThrow("Yield");
+    f.service.yieldSession(f.agent.token);
+    const started = f.setup.start(f.agent.token);
+    expect(f.setup.start(f.agent.token)).toEqual(started);
+    await f.service.drain();
+    expect(f.simulated.calls).toHaveLength(1);
+    expect(f.setup.receive({ ...f.event, id: "yes-two" })).toBe(true);
+    expect(() =>
+      f.setup.receive({ ...f.event, id: "yes-two", text: "NO" }),
+    ).toThrow("changed");
+    expect(() => f.setup.verify(f.agent.token)).toThrow("real qualified call");
+    f.store.close();
+  });
+
+  it("binds approval to one session, prevents ambiguous invitations, and expires without calling", async () => {
+    const f = fixture(),
+      other = f.register("two");
+    f.setup.invite(f.agent.token);
+    expect(f.setup.get(other.token)).toEqual({ test: null });
+    expect(() => f.setup.invite(other.token)).toThrow("Another session");
+    await f.service.drain();
+    f.setup.receive(f.event);
+    expect(() => f.setup.start(other.token)).toThrow("Invite the human");
+    f.advance(600_001);
+    expect(f.setup.get(f.agent.token).test?.state).toBe("expired");
+    expect(() => f.setup.start(f.agent.token)).toThrow("exact human YES");
+    expect(f.setup.receive({ ...f.event, id: "late" })).toBe(false);
+    expect(f.setup.invite(f.agent.token).test.state).toBe("expired");
+    expect(f.simulated.calls).toHaveLength(0);
+    f.store.close();
+  });
+
+  it("cancels pending invitations and active calls without replaying either", async () => {
+    const f = fixture();
+    f.setup.invite(f.agent.token);
+    expect(f.setup.receive({ ...f.event, text: "NO" })).toBe(true);
+    await f.service.drain();
+    expect(f.simulated.messages).toHaveLength(0);
+    const second = f.register("two");
+    f.setup.invite(second.token);
+    await f.service.drain();
+    f.setup.receive({ ...f.event, id: "second-yes" });
+    f.service.yieldSession(second.token);
+    const { request } = f.setup.start(second.token);
+    await f.service.drain();
+    f.setup.receive({ ...f.event, id: "cancel", text: "cancel" });
+    expect(f.setup.get(second.token).test?.state).toBe("canceled");
+    expect(f.service.status(second.token, request.id).state).toBe("canceled");
+    await f.service.drain();
+    expect(f.simulated.ended).toHaveLength(1);
+    expect(() => f.setup.start(second.token)).toThrow("closed");
+    f.setup.cancel(second.token);
+    await f.service.drain();
+    expect(f.simulated.calls).toHaveLength(1);
+    f.store.close();
+  });
+
+  it("preserves uncertain invitation without replay after service restart", async () => {
+    const f = fixture(),
+      test = f.setup.invite(f.agent.token).test;
+    f.simulated.message = async () => {
+      throw new Error("uncertain network response");
+    };
+    await f.service.drain();
+    expect(f.store.effect(test.invitationEffectId)?.state).toBe("unknown");
+    const service = new ClawdTime(f.store, f.simulated, { clock: f.now }),
+      restarted = new SetupService(service);
+    expect(restarted.invite(f.agent.token).test.id).toBe(test.id);
+    expect(restarted.receive(f.event)).toBe(false);
+    await service.drain();
+    expect(f.store.effects()).toHaveLength(1);
+    expect(f.store.effect(test.invitationEffectId)?.state).toBe("unknown");
+    f.store.close();
+  });
+
+  it("cancels a lost originating session and cleans up its call without granting another session approval", async () => {
+    const f = fixture();
+    const test = f.setup.invite(f.agent.token).test;
+    await f.service.drain();
+    f.setup.receive(f.event);
+    f.service.yieldSession(f.agent.token);
+    f.setup.start(f.agent.token);
+    await f.service.drain();
+    f.advance(20_001);
+    f.service.expireSessions();
+    f.setup.expire();
+    expect(f.store.get<{ state: string }>("setup_test", test.id)?.state).toBe(
+      "canceled",
+    );
+    expect(() => f.setup.start(f.agent.token)).toThrow("stopped");
+    await f.service.drain();
+    expect(f.simulated.ended).toHaveLength(1);
+    expect(f.simulated.calls).toHaveLength(1);
+    f.store.close();
+  });
+
+  it("verifies only the complete live-evidence chain after screen feedback, continuation and result receipt", async () => {
+    const f = fixture("live");
+    f.setup.invite(f.agent.token);
+    await f.service.drain();
+    f.setup.receive(f.event);
+    f.service.yieldSession(f.agent.token);
+    const { request } = f.setup.start(f.agent.token);
+    await f.service.drain();
+    const call = f.service.observeCall(request.id, "connected", true);
+    const view = {
+      requestId: request.id,
+      callId: call.id,
+      sessionId: f.agent.session.id,
+      pairingId: f.pairing.pairing.id,
+      leaseId: "fixture",
+      frameId: "frame",
+      capturedAt: f.now(),
+      observedAt: f.now(),
+      live: true,
+    };
+    f.store.saveState(`setup-view:${request.id}`, view);
+    f.advance(100);
+    const response = f.service.receiveResponse({
+      eventId: "feedback",
+      requestId: request.id,
+      memberId: f.binding.memberId,
+      lineId: f.binding.lineId,
+      conversationId: f.binding.conversationId,
+      channel: "text",
+      text: "I can see my screen.",
+    });
+    f.service.ack(f.agent.token, request.id, response.id);
+    f.service.resume(f.agent.token, request.id, 0);
+    f.service.complete(
+      f.agent.token,
+      request.id,
+      "Screen feedback received; this session continued.",
+    );
+    expect(() => f.setup.verify(f.agent.token)).toThrow(
+      "Messages result receipt",
+    );
+    await f.service.drain();
+    f.store.saveState(`setup-view:${request.id}`, {
+      ...view,
+      sessionId: "other",
+    });
+    expect(() => f.setup.verify(f.agent.token)).toThrow("real qualified call");
+    f.store.saveState(`setup-view:${request.id}`, view);
+    const acknowledged = f.store.get<typeof response>("response", response.id)!;
+    f.store.put("response", {
+      ...acknowledged,
+      text: "I cannot see my screen.",
+    });
+    expect(() => f.setup.verify(f.agent.token)).toThrow("real qualified call");
+    f.store.put("response", acknowledged);
+    f.service.observeCall(request.id, "ended");
+    expect(f.setup.verify(f.agent.token).test.state).toBe("verified");
+    expect(f.setup.verify(f.agent.token).test.state).toBe("verified");
+    f.store.close();
+  });
+});

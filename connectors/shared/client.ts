@@ -4,6 +4,7 @@ import type {
   HumanResponse,
   SessionRegistration,
   RequestAttentionInput,
+  SetupTest,
 } from "../../src/contracts.js";
 
 export class ApiError extends Error {
@@ -115,5 +116,23 @@ export class ClawdTimeClient {
   }
   disconnect() {
     return this.api("/api/disconnect", {});
+  }
+  setupStatus() {
+    return this.api<{ test: SetupTest | null }>("/api/setup/test");
+  }
+  setupInvite() {
+    return this.api<{ test: SetupTest }>("/api/setup/test", {});
+  }
+  setupStart() {
+    return this.api<{ test: SetupTest; request: AttentionRequest }>(
+      "/api/setup/test/start",
+      {},
+    );
+  }
+  setupVerify() {
+    return this.api<{ test: SetupTest }>("/api/setup/test/verify", {});
+  }
+  setupCancel() {
+    return this.api<{ test: SetupTest | null }>("/api/setup/test/cancel", {});
   }
 }

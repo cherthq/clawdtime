@@ -16,7 +16,95 @@ export class Viewing {
     readonly store: Store,
     readonly device: DevicePort,
     readonly now = Date.now,
+    readonly live = false,
   ) {}
+  private captureAllowed(lease: ControlLease) {
+    const current = this.store.get<ControlLease>("lease", lease.id);
+    const session = this.store.get<AgentSession>("session", lease.sessionId);
+    const call = this.store.get<CallSession>("call", lease.callId);
+    const pairing = this.store.get<Pairing>("pairing", lease.pairingId);
+    const request = this.store.get<AttentionRequest>(
+      "attention",
+      lease.requestId,
+    );
+    const now = this.now();
+    return (
+      current?.state === "active" &&
+      current.expiresAt > now &&
+      session?.state === "yielded" &&
+      now - (session.lastSeenAt ?? session.createdAt) <= 20_000 &&
+      session.controlEpoch === lease.epoch &&
+      pairing?.revokedAt === undefined &&
+      pairing?.allowView &&
+      call?.state === "connected" &&
+      call.remoteParticipantQualified &&
+      request &&
+      !request.responseId &&
+      request.deadline > now &&
+      ["connected", "awaiting_input"].includes(request.state) &&
+      !this.store.state(`view-stopped:${lease.requestId}`)
+    );
+  }
+  private async observeSetupFrame(lease: ControlLease) {
+    if (
+      !this.captureAllowed(lease) ||
+      this.store.state(`setup-view:${lease.requestId}`) ||
+      !this.store
+        .all<{ requestId?: string }>("setup_test")
+        .some((test) => test.requestId === lease.requestId)
+    )
+      return;
+    try {
+      const frame = await this.device.frame(lease);
+      const current = this.store.get<ControlLease>("lease", lease.id);
+      const session = this.store.get<AgentSession>("session", lease.sessionId);
+      const call = this.store.get<CallSession>("call", lease.callId);
+      const pairing = this.store.get<Pairing>("pairing", lease.pairingId);
+      const request = this.store.get<AttentionRequest>(
+        "attention",
+        lease.requestId,
+      );
+      const now = this.now();
+      if (
+        !frame.id ||
+        frame.width <= 0 ||
+        frame.height <= 0 ||
+        !Number.isFinite(frame.capturedAt) ||
+        frame.capturedAt > now ||
+        now - frame.capturedAt > 2000 ||
+        current?.state !== "active" ||
+        current.expiresAt <= now ||
+        session?.state !== "yielded" ||
+        now - (session.lastSeenAt ?? session.createdAt) > 20_000 ||
+        session.controlEpoch !== lease.epoch ||
+        pairing?.revokedAt !== undefined ||
+        !pairing?.allowView ||
+        call?.state !== "connected" ||
+        !call.remoteParticipantQualified ||
+        request?.responseId ||
+        !request ||
+        request.deadline <= now ||
+        !["connected", "awaiting_input"].includes(request.state) ||
+        this.store.state(`view-stopped:${lease.requestId}`)
+      )
+        return;
+      // Metadata proves capture, not handset rendering; verified human feedback
+      // and the result receipt remain separate setup acceptance requirements.
+      this.store.saveState(`setup-view:${lease.requestId}`, {
+        requestId: lease.requestId,
+        callId: lease.callId,
+        sessionId: lease.sessionId,
+        pairingId: lease.pairingId,
+        leaseId: lease.id,
+        frameId: frame.id,
+        capturedAt: frame.capturedAt,
+        observedAt: now,
+        live: this.live,
+      });
+    } catch {
+      /* A later fresh observation may succeed; no input is replayed. */
+    }
+  }
   async tick() {
     if (this.busy) return;
     this.busy = true;
@@ -67,6 +155,7 @@ export class Viewing {
               ...view,
               expiresAt: Math.min(this.now() + 20_000, r.deadline),
             });
+          await this.observeSetupFrame(view);
           continue;
         }
         if (
@@ -105,6 +194,13 @@ export class Viewing {
         this.store.put("lease", lease);
         try {
           await this.device.createLease(lease);
+          if (!this.captureAllowed(lease)) {
+            this.store.put("lease", { ...lease, state: "unknown" });
+            await this.device.release(lease);
+            this.store.put("lease", { ...lease, state: "released" });
+            continue;
+          }
+          await this.observeSetupFrame(lease);
         } catch {
           this.store.put("lease", { ...lease, state: "unknown" });
         }

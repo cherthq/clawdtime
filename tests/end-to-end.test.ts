@@ -11,6 +11,8 @@ import {
   ControlCoordinator,
   SimulatedDevice,
 } from "../src/control/coordinator.js";
+import { SetupService } from "../src/pairing/setup.js";
+import { Viewing } from "../src/control/viewing.js";
 import { HumanRouter } from "../src/control/human-router.js";
 import type {
   ActionReceipt,
@@ -135,6 +137,78 @@ function harness(store = new Store(), device = new SimulatedDevice()) {
   };
 }
 describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
+  it("keeps the approved setup test bound to one HTTP session through screen, feedback and result without claiming physical verification", async () => {
+    const h = harness(),
+      a = await h.connect();
+    const setup = new SetupService(h.service);
+    expect((await h.app.request("/agents")).status).toBe(200);
+    expect((await h.app.request("/setup")).status).toBe(200);
+    expect((await h.send("/api/setup/test", undefined)).status).toBe(401);
+    expect(
+      (await h.send("/api/setup/test", a.token, { extra: true })).status,
+    ).toBe(400);
+    const invitation = await h.send("/api/setup/test", a.token, {});
+    expect(invitation.status).toBe(200);
+    await h.service.drain();
+    expect(h.transport.messages).toHaveLength(1);
+    expect((await h.send("/api/setup/test/start", a.token, {})).status).toBe(
+      409,
+    );
+    expect(
+      setup.receive({
+        id: "setup-yes",
+        sender: binding.recipient,
+        lineId: binding.lineId,
+        conversationId: binding.conversationId,
+        text: "YES",
+      }),
+    ).toBe(true);
+    await h.send("/api/sessions/yield", a.token, {});
+    const started = await h.send("/api/setup/test/start", a.token, {});
+    expect(started.status).toBe(200);
+    const requestId = started.body.request.id;
+    await h.service.drain();
+    h.service.observeCall(requestId, "connected", true);
+    const viewing = new Viewing(h.store, h.device);
+    await viewing.tick();
+    expect(h.store.state(`setup-view:${requestId}`)).toBeDefined();
+    const answer = await h.feedback(
+      requestId,
+      "screen-confirmation",
+      "answer: I can see my screen",
+    );
+    await viewing.tick();
+    await h.send(`/api/attention/${requestId}/ack`, a.token, {
+      responseId: answer.body.response.id,
+    });
+    const state = await h.send(`/api/attention/${requestId}/result`, a.token);
+    expect(state.body.session.id).toBe(a.session.id);
+    expect(
+      (
+        await h.send(`/api/attention/${requestId}/resume`, a.token, {
+          controlEpoch: state.body.session.controlEpoch,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await h.send(`/api/attention/${requestId}/complete`, a.token, {
+          text: "Same session continued; simulated result.",
+        })
+      ).status,
+    ).toBe(200);
+    await h.service.drain();
+    expect(h.transport.messages).toHaveLength(2);
+    expect(h.transport.calls).toHaveLength(1);
+    expect((await h.send("/api/setup/test/verify", a.token, {})).status).toBe(
+      409,
+    );
+    expect((await h.send("/api/setup/test", a.token)).body.test.state).toBe(
+      "call_requested",
+    );
+    h.store.close();
+  });
+
   it("pairs, binds agent, rings once, performs click/type/scroll/single AI action, returns exact response and sends one result", async () => {
     const h = harness(),
       agent = await h.connect(),

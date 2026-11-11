@@ -160,3 +160,24 @@ export interface SessionRegistration {
   hostId: string;
   capabilities: AgentSession["capabilities"];
 }
+
+/** Setup stays with the originating agent; a text approval authorizes one test. */
+export interface SetupTest {
+  id: string;
+  sessionId: string;
+  pairingId: string;
+  createdAt: number;
+  expiresAt: number;
+  state:
+    | "awaiting_approval"
+    | "approved"
+    | "call_requested"
+    | "verified"
+    | "canceled"
+    | "expired";
+  invitationEffectId: string;
+  approvedAt?: number;
+  approvalEventId?: string;
+  requestId?: string;
+  verifiedAt?: number;
+}

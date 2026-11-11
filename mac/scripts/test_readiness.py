@@ -87,7 +87,9 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual((empty / 'gateway.json').read_bytes(), gateway)
         self.assertEqual(after['displays'][0]['controllers'], ['verified_member'])
         self.assertEqual(json.loads((empty / 'helper.pre-pair.json').read_text()), before)
-        with self.assertRaises(ValueError): configure.activate(claim, [{'id':1}], empty)
+        saved = (empty / 'helper.json').read_bytes()
+        configure.activate(claim, [{'id':1}], empty)
+        self.assertEqual((empty / 'helper.json').read_bytes(), saved)
 
     def test_legacy_helper_target_or_symlink_ledger_is_refused(self):
         mapping = self.directory / 'devices.json'

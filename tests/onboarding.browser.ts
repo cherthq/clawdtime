@@ -65,12 +65,26 @@ try {
   let response = await page.goto(origin);
   assert.equal(response?.status(), 200);
   await page
-    .getByRole("heading", { name: "Your agent can FaceTime you." })
+    .getByRole("heading", { name: "Your coding agent can FaceTime you now." })
     .waitFor();
   await page.screenshot({
     path: resolve(folder, "landing-desktop.png"),
     fullPage: true,
   });
+  await page.goto(
+    `${origin}/setup#token=fixture-private-link&device=fixture-mac&display=1`,
+  );
+  await page
+    .getByRole("heading", { name: "Your coding agent handles setup." })
+    .waitFor();
+  assert.equal(await page.getByRole("button").count(), 0);
+  assert(
+    !(await page.locator("body").innerText()).includes("fixture-private-link"),
+  );
+  const guide = await context.request.get(`${origin}/agents`);
+  assert.equal(guide.status(), 200);
+  assert((await guide.text()).includes("SAME coding-agent session"));
+  assert.equal(runtime.store.all("pairing").length, 0);
   await page.goto(`${origin}/pair`);
   await page
     .getByRole("status")
@@ -219,6 +233,8 @@ try {
       builtApp: true,
       checks: [
         "landing",
+        "agent-setup-overview",
+        "agent-protocol",
         "fragment-cleared",
         "same-tab-invite",
         "explicit-view-consent",

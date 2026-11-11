@@ -4,6 +4,141 @@ ClawdTime 0.1.0 implements project-scoped stdio MCP tools and a bundled CLI for
 cooperative attention in Claude Code and Codex. It leaves the coding task in the
 client and never types into an arbitrary terminal or takes over a desktop chat.
 
+## Prompt-driven setup in the current chat
+
+Setup stays in the coding chat that received the user's request. It requires no
+coding-client restart, new chat, child coding agent or manual pairing JSON download.
+The installed project MCP configuration/skill remains available for future use;
+the current chat uses a foreground JSONL command bridge through its own shell tool.
+
+The setup URL is a short-lived one-use pairing authorization, not a global service
+credential. The agent writes it to a private owner-only file using native file
+tools, without echoing it or placing its token in a command argument/history. The
+caller supplies an independently trusted HTTPS origin. The internal hosted pilot's
+current origin is `https://backend-production-ee686906.up.railway.app`; no ownership
+or deployment of `clawdtime.com` is implied. Only `/setup` (or legacy `/pair`) with
+fragment `token`, `device` and `display` is accepted. Redirects, query credentials,
+duplicate fields and a different origin are rejected.
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --setup-link-file /absolute/private/setup-link.txt --origin https://backend-production-ee686906.up.railway.app --allow-view true --allow-control true
+```
+
+Use `--agent claude-code` for Claude Code. Explicit view/control flags must reflect
+the user's permission. `--allow-control false` pairs view only. The claim intent is
+saved before its single HTTP attempt; its result is saved mode 0600 before any
+configuration. Interrupted/unknown claims are never automatically retried. The
+lead must reconcile the saved checkpoint. A successful checkpoint is reused safely.
+
+For an existing authorized connection, omit the link and use `--existing true`:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup --agent codex --project /absolute/project --existing true --allow-view true --allow-control true --pilot-installed true
+```
+
+`--pilot-installed true` is an explicit trust choice for the already-installed
+local ad-hoc pilot bundle. It is never injected automatically. Official release
+setup instead accepts `--manifest LOCAL_MANIFEST --trusted-team-id TEAM_ID` where
+the signing team is obtained independently from that manifest. Optional `--app`,
+`--directory`, `--relay-url` and `--gateway-python` select local companion inputs.
+`--check-only true` makes the companion phase read-only; pairing/CLI configuration
+still follow the requested setup operation. The Mac script never silently enables
+permissions, arms a device, starts a helper or replaces the running pilot.
+
+The structured result includes the local companion report plus remote readiness
+and config-integrity checks. A backend failure retains the actionable companion
+report. Existing unchanged owned skills can upgrade safely; user-modified skills
+and configuration are preserved and reported. An interrupted installation marker
+does not count as installed: missing files fail the local checks. Resolve the exact
+reported issue in this chat, using its native question/user-input tool for human
+permission/local Enable steps. Ask an ordinary question only if that client lacks
+such a tool. Do not end the interaction or call setup complete while waiting.
+
+### Foreground setup-session protocol
+
+Choose and retain one non-secret run ID for this existing chat (16–100 letters,
+digits, underscores or hyphens), then use the chat's persistent shell process tool:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup-session --agent codex --project /absolute/project --run-id current-chat-unique-identifier
+```
+
+This starts only a Node command bridge. It does not spawn Codex, Claude, a shell
+executor, another agent or a daemon. Retain its shell process handle and keep stdin
+open. For a PTY-based shell tool, send JSONL lines with its write-stdin operation;
+ignore terminal input echo and parse the JSON response objects. Do not use a closed
+pipe, `nohup`, background daemon, new coding chat or client restart. The ready event
+contains the exact localRunId/sessionId. Heartbeats run every five seconds while
+the foreground process lives; backend expiry remains authoritative after loss.
+
+Each input is one JSON object per line. Responses are `{id,ok,result}` or
+`{id,ok:false,error,retryPolicy}`. Use stable IDs for effects and fresh IDs for
+repeated status reads. The bridge does not accept shell commands or arbitrary URLs.
+
+```jsonl
+{"id":"status-1","command":"status"}
+{"id":"invite","command":"invite"}
+{"id":"status-2","command":"status"}
+{"id":"yield","command":"yield","args":{"backgroundActorsStopped":true}}
+{"id":"start","command":"start"}
+{"id":"result-1","command":"result","args":{"requestId":"RETURNED_REQUEST_ID","waitSeconds":20}}
+{"id":"ack","command":"ack","args":{"requestId":"RETURNED_REQUEST_ID","responseId":"RETURNED_RESPONSE_ID"}}
+{"id":"resume","command":"resume","args":{"requestId":"RETURNED_REQUEST_ID","controlEpoch":0}}
+{"id":"complete","command":"complete","args":{"requestId":"RETURNED_REQUEST_ID","text":"Factual result after this same chat resumed."}}
+{"id":"verify","command":"verify"}
+```
+
+These are sequential examples, not a script to blindly feed at startup. `invite`
+queues one invitation SMS; it does not call. Wait with the native question tool
+and read `status` until the backend has received the real authenticated SMS YES.
+An answer in the coding chat cannot substitute for that approval. Stop/join all
+conflicting actors before `yield`; `start` requires backend approval and the same
+yielded session. Only the lead may initiate the live pilot. A closed test cannot
+be replaced just by choosing another run. The call request uses backend-stable IDs.
+
+`result` waits at most 20 seconds of polling (each HTTP request has its own 12-second
+deadline). Check exact request/session, feedback and released control receipts;
+replace the example epoch with the actual current controlEpoch. While yielded,
+perform only bridge status/result/ack/resume/cancel and nonmutating human questions.
+After successful `resume`, perform the authorized native continuation, then send
+`complete` once. A queued result is not handset delivery. Only `verify` returning
+`test.state=verified` establishes the backend's real call + observed screen +
+acknowledged human feedback + continuation + Messages delivery evidence chain.
+Simulation cannot verify. Physical click/type/scroll/AI-action qualification is
+additional evidence; this setup test does not silently establish all CUA coverage.
+The human's positive screen confirmation must be `answer: I can see my screen`
+in Messages or `ClawdTime answer I can see my screen` by qualified voice. Negative
+or unclear feedback is preserved and cannot pass verification. Report its actual
+meaning; do not substitute a positive response or claim setup succeeded.
+
+Each registration and effect intent is protected before HTTP. A repeated completed
+command ID returns its stored result, without another effect. Unknown results
+require `status`/`result` reconciliation; a changed ID cannot retry the same setup
+operation. Definitive 400/401/403/404/409/422 rejection allows an explicit same-ID
+retry after its prerequisite is fixed, including `verify` while delivery is pending.
+Never fabricate evidence or change a run to bypass an unknown result. Cancel with:
+
+```jsonl
+{
+  "id": "cancel",
+  "command": "cancel"
+}
+```
+
+Keep the bridge and chat alive while approval, call, feedback or verification is
+pending; never recommend a final response/stop as the next setup step. On explicit
+cancellation or verified completion, close stdin. EOF/SIGINT/SIGTERM stops heartbeats
+and attempts one owned-test cancellation when applicable. It never repeats an
+unknown cancellation; conservative backend expiry/cleanup remains in force. No
+daemon remains. A closed run cannot be silently reopened/revived.
+
+Validation: `npx vitest run tests/connectors-setup.test.ts` exercises same-process
+registration → invitation → synthetic authenticated approval → yield → one simulated
+call → feedback → ack/resume → Messages result, along with rejected physical
+verification, EOF cleanup and unknown-outcome recovery. It starts no coding client
+and does not establish physical acceptance or current-chat native question-tool
+qualification; the lead records those actual-client observations separately.
+
 ## Verified compatibility — November 11, 2026
 
 | Surface                              | Installed version                       | Evidence                                                                                         |
@@ -37,7 +172,7 @@ under noninteractive `approval_policy=never`. Real users retain their native too
 approval flow. The first Claude probe exposed an overbroad synthetic response
 fixture rejected by strict backend validation; the corrected probe passed.
 
-## Connect an existing project
+## Legacy downloaded-file connection (optional)
 
 Complete the private Mac pairing page first and download its connection JSON.
 The file contains a credential: never paste it into a chat or shell argument.

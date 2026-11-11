@@ -24,6 +24,8 @@ def private_write(path, value):
 
 
 def paired_acl(claim, displays):
+    if not isinstance(claim, dict) or not isinstance(displays, list) or any(not isinstance(item, dict) for item in displays):
+        raise ValueError('Pairing receipt or display metadata is malformed.')
     pairing = claim.get('pairing', claim)
     if not isinstance(pairing, dict):
         raise ValueError('Pairing receipt is malformed.')
@@ -100,13 +102,28 @@ def activate(claim, displays, destination):
     if helper.get('deviceId') != pairing['deviceId'] or helper.get('bind') != '127.0.0.1' or helper.get('port') != 4213 or not isinstance(helper.get('secret'), str) or len(helper['secret']) < 32:
         raise ValueError('Pairing differs from the independent bootstrap identity.')
     old_binding = private_read(destination / 'pairing-binding.json')
-    if helper.get('displays') != [] or old_binding != {'deviceId': pairing['deviceId'], 'paired': False}:
+    if helper.get('displays') == acl and old_binding == binding:
+        return destination
+    bootstrap_binding = {'deviceId': pairing['deviceId'], 'paired': False}
+    if helper.get('displays') not in ([], acl) or old_binding != bootstrap_binding:
         raise ValueError('Only a never-paired empty-ACL bootstrap may be activated; preserve existing grants/configuration.')
-    private_write(destination / 'helper.pre-pair.json', json.dumps(helper, indent=2) + '\n')
+    original = {**helper, 'displays': []}
+    backup = destination / 'helper.pre-pair.json'
+    if backup.exists() or backup.is_symlink():
+        if private_read(backup) != original:
+            raise ValueError('Bootstrap backup differs; preserve interrupted setup for review.')
+    elif helper.get('displays') == []:
+        private_write(backup, json.dumps(original, indent=2) + '\n')
+    else:
+        raise ValueError('Interrupted activation has no original bootstrap evidence.')
     new_helper = destination / 'helper.claimed.json'
     new_binding = destination / 'pairing.claimed.json'
-    private_write(new_helper, json.dumps({**helper, 'displays': acl}, indent=2) + '\n')
-    private_write(new_binding, json.dumps(binding) + '\n')
+    for path, value in ((new_helper, {**helper, 'displays': acl}), (new_binding, binding)):
+        if path.exists() or path.is_symlink():
+            if private_read(path) != value:
+                raise ValueError('Interrupted activation differs; preserve staged files for review.')
+        else:
+            private_write(path, json.dumps(value, indent=2) + '\n')
     os.replace(new_helper, helper_path)
     os.replace(new_binding, destination / 'pairing-binding.json')
     return destination

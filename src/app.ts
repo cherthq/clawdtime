@@ -14,13 +14,20 @@ import type {
   ActionReceipt,
 } from "./contracts.js";
 import { HumanRouter } from "./control/human-router.js";
+import { SetupService } from "./pairing/setup.js";
 
 export interface AppOptions {
   origin: string;
+  compatibleOrigins?: string[];
   operatorToken?: string;
   mediaToken?: string;
   simulation: boolean;
   dispatchEnabled?: boolean;
+  retireObsoleteNotice?: (input: {
+    noticeId: string;
+    pairingId: string;
+    evidenceReference: string;
+  }) => unknown;
 }
 const bearer = (value?: string) =>
   value?.startsWith("Bearer ") ? value.slice(7) : "";
@@ -41,6 +48,11 @@ export function createApp(
   options: AppOptions,
 ) {
   const app = new Hono();
+  const setup = new SetupService(service);
+  const allowedOrigins = new Set([
+    options.origin,
+    ...(options.compatibleOrigins ?? []),
+  ]);
   app.use("*", bodyLimit({ maxSize: 32_768 }));
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
@@ -51,7 +63,7 @@ export function createApp(
       "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     const origin = c.req.header("origin");
-    if (origin && origin !== options.origin)
+    if (origin && !allowedOrigins.has(origin))
       return c.json({ error: "Origin is not allowed." }, 403);
     if (
       ["POST", "PUT", "DELETE", "PATCH"].includes(c.req.method) &&
@@ -91,14 +103,39 @@ export function createApp(
       readFileSync(new URL("../public/index.html", import.meta.url), "utf8"),
     ),
   );
+  app.get("/pricing", (c) =>
+    c.html(
+      readFileSync(new URL("../public/pricing.html", import.meta.url), "utf8"),
+    ),
+  );
   app.get("/pair", (c) =>
     c.html(
       readFileSync(new URL("../public/pair.html", import.meta.url), "utf8"),
     ),
   );
+  app.get("/setup", (c) =>
+    c.html(
+      readFileSync(new URL("../public/setup.html", import.meta.url), "utf8"),
+    ),
+  );
+  app.get("/agents", (c) => {
+    c.header("Content-Type", "text/plain; charset=utf-8");
+    return c.body(
+      readFileSync(new URL("../public/agents.txt", import.meta.url), "utf8"),
+    );
+  });
   app.get("/assets/:name", (c) => {
     const name = c.req.param("name");
-    if (!["style.css", "pair.js"].includes(name)) return c.notFound();
+    if (name === "chert-logo.png") {
+      c.header("Content-Type", "image/png");
+      return c.body(
+        new Uint8Array(
+          readFileSync(new URL("../public/chert-logo.png", import.meta.url)),
+        ),
+      );
+    }
+    if (!["style.css", "pair.js", "landing.css", "landing.js"].includes(name))
+      return c.notFound();
     c.header(
       "Content-Type",
       name.endsWith("css") ? "text/css" : "text/javascript",
@@ -109,7 +146,9 @@ export function createApp(
   });
   app.post("/api/pairing/claim", async (c) =>
     c.json({
-      baseUrl: options.origin,
+      baseUrl: allowedOrigins.has(new URL(c.req.url).origin)
+        ? new URL(c.req.url).origin
+        : options.origin,
       ...service.claimPairing(await c.req.json()),
     }),
   );
@@ -124,6 +163,21 @@ export function createApp(
   app.get("/api/doctor", (c) =>
     c.json(service.doctor(bearer(c.req.header("authorization")))),
   );
+  app.get("/api/setup/test", (c) =>
+    c.json(setup.get(bearer(c.req.header("authorization")))),
+  );
+  for (const [path, action] of [
+    ["/api/setup/test", (token: string) => setup.invite(token)],
+    ["/api/setup/test/start", (token: string) => setup.start(token)],
+    ["/api/setup/test/verify", (token: string) => setup.verify(token)],
+    ["/api/setup/test/cancel", (token: string) => setup.cancel(token)],
+  ] as const)
+    app.post(path, async (c) => {
+      z.object({})
+        .strict()
+        .parse(await c.req.json());
+      return c.json(action(bearer(c.req.header("authorization"))));
+    });
   app.post("/api/attention", async (c) => {
     const request = service.requestAttention(
       bearer(c.req.header("authorization")),
@@ -203,6 +257,24 @@ export function createApp(
     if (!matches(bearer(c.req.header("authorization")), options.operatorToken))
       return c.json({ error: "Operator authentication required." }, 401);
     await next();
+  });
+  app.post("/internal/obsolete-notices/retire", async (c) => {
+    if (!options.retireObsoleteNotice) return c.notFound();
+    const { acknowledgeUnknown: _ack, ...input } = z
+      .object({
+        noticeId: z.string().min(1).max(200),
+        pairingId: z.string().min(1).max(200),
+        evidenceReference: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        acknowledgeUnknown: z.literal(true),
+      })
+      .strict()
+      .parse(await c.req.json());
+    options.retireObsoleteNotice(input);
+    return c.json({
+      retiredFromGating: true,
+      deliveryOutcome: "unknown",
+      replayAllowed: false,
+    });
   });
   app.get("/internal/readiness", (c) =>
     c.json({
