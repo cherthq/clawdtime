@@ -25,7 +25,18 @@ export a synthetic pairing, exercise compiled CLI connect/doctor/disconnect, and
 preserve unrelated configuration in a temporary home/project. They never enroll
 the actual user's device or modify live agent configuration.
 
-## Physical Mode 1 matrix — all pending
+## Current physical onboarding evidence
+
+The intended tester’s authenticated inbound reached ClawdTime. Both actual Mac
+permission checks pass after scoped TCC repair. The user completed explicit
+view/control pairing. Its private file was saved and applied; the companion reports
+the selected display attached and both ACLs loaded. Both connectors are configured
+in the disposable project. Local Enable remains off.
+The outgoing pairing notice has an unknown native outcome; its stable-origin
+read-only journal lookup returns HTTP 503. No retry or call was issued. Resolve
+that provider prerequisite before live acceptance; see STATUS.md.
+
+## Physical Mode 1 matrix — call loop pending
 
 For each documented Claude Code/Codex CLI surface, use a disposable coding project:
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Store } from "./storage/store.js";
 import { Vault, hash } from "./storage/security.js";
 import { ClawdTime } from "./attention/service.js";
+import { PreflightBlocked } from "./transport/readiness.js";
 import {
   NativeTransport,
   type NativeTransportConfig,
@@ -36,6 +37,50 @@ interface Notice {
   pairing: Pairing;
   sealed: string;
   state: "pending" | "running" | "done" | "unknown";
+  dispatch?: { startedAt: number; operationOrigin: string };
+  receipt?: {
+    accepted: true;
+    receiptId: string;
+    status: "acknowledged";
+    operationOrigin: string;
+    acknowledgedAt: number;
+  };
+  failure?: {
+    phase:
+      | "payload_decryption"
+      | "transport_dispatch"
+      | "acknowledgement_validation"
+      | "receipt_persistence"
+      | "process_interrupted";
+    code: string;
+    at: number;
+    httpStatus?: number;
+  };
+}
+function noticeFailure(
+  error: unknown,
+  phase: NonNullable<Notice["failure"]>["phase"],
+): NonNullable<Notice["failure"]> {
+  const status =
+    error instanceof Error
+      ? /^Provider returned HTTP (\d{3})\.$/.exec(error.message)
+      : null;
+  const code =
+    error instanceof PreflightBlocked
+      ? "preflight_blocked"
+      : phase === "payload_decryption"
+        ? "payload_unavailable"
+        : phase === "acknowledgement_validation"
+          ? "acknowledgement_unavailable"
+          : phase === "receipt_persistence"
+            ? "receipt_persistence_failed"
+            : "transport_outcome_unknown";
+  return {
+    phase,
+    code,
+    at: Date.now(),
+    ...(status ? { httpStatus: Number(status[1]) } : {}),
+  };
 }
 function parseProtectedJSON<T>(value: string): T {
   try {
@@ -149,7 +194,16 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   });
   const vault = config ? new Vault(config.encryptionKey) : undefined;
   for (const n of store.all<Notice>("notice"))
-    if (n.state === "running") store.put("notice", { ...n, state: "unknown" });
+    if (n.state === "running")
+      store.put<Notice>("notice", {
+        ...n,
+        state: "unknown",
+        failure: {
+          phase: "process_interrupted",
+          code: "process_interrupted",
+          at: Date.now(),
+        },
+      });
   for (const n of store.all<Inbound>("inbound"))
     if (n.state === "running") store.put("inbound", { ...n, state: "unknown" });
   let ticking = false;
@@ -298,16 +352,45 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
         for (const n of store
           .all<Notice>("notice")
           .filter((n) => n.state === "pending")) {
-          store.put("notice", { ...n, state: "running" });
+          const dispatch = {
+            startedAt: Date.now(),
+            operationOrigin: `text_${hash(n.id).slice(0, 32)}`,
+          };
+          store.put<Notice>("notice", { ...n, dispatch, state: "running" });
+          let phase: NonNullable<Notice["failure"]>["phase"] =
+            "payload_decryption";
+          let receipt: Notice["receipt"];
           try {
-            await transport.message(
-              n.pairing,
-              vault.open<string>(n.sealed),
-              n.id,
-            );
-            store.put("notice", { ...n, state: "done" });
-          } catch {
-            store.put("notice", { ...n, state: "unknown" });
+            const text = vault.open<string>(n.sealed);
+            phase = "transport_dispatch";
+            const result = await transport.message(n.pairing, text, n.id);
+            phase = "acknowledgement_validation";
+            const acknowledgement = z
+              .object({
+                accepted: z.literal(true),
+                receiptId: z.string().regex(/^[a-f0-9-]{36}$/i),
+                status: z.literal("acknowledged"),
+                operationOrigin: z.literal(dispatch.operationOrigin),
+              })
+              .parse(result);
+            receipt = { ...acknowledgement, acknowledgedAt: Date.now() };
+            phase = "receipt_persistence";
+            store.put<Notice>("notice", {
+              ...n,
+              dispatch,
+              receipt,
+              state: "done",
+            });
+          } catch (error) {
+            // No unknown notice is requeued. A provider error or absent lookup
+            // cannot prove whether the native once-only operation was applied.
+            store.put<Notice>("notice", {
+              ...n,
+              dispatch,
+              ...(receipt ? { receipt } : {}),
+              failure: noticeFailure(error, phase),
+              state: "unknown",
+            });
           }
         }
       }

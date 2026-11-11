@@ -4,7 +4,10 @@
 line is Liam Davis. The lead paused Apple Teams traffic using its existing image,
 verified a stable retained cursor and an idle interval exceeding 10 seconds, and
 started ClawdTime from that exact non-replaying boundary. Source remains paused.
-Base live preflight passes; pairing and physical acceptance remain in progress.
+Identity/ownership checks pass. Live dispatch is now blocked by one uncertain
+pairing reply: its stable-origin provider receipt lookup returns HTTP 503. Preserve
+that notice and reconcile it before new dispatch or rollback. Pairing and physical
+acceptance remain in progress.
 
 ## Evidence from this implementation session
 

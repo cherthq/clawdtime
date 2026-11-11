@@ -15,8 +15,8 @@ owns the confirmed test line while supervised onboarding is in progress.
   Implementation release commit is the `feat: implement independent ClawdTime pilot`
   commit in this branch. No remote repository, public package or GitHub topics created.
 - Independent Railway project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
-- Backend live deployment: `1edc651e-68ac-4498-9905-57a2452525d9`, from audited
-  standby build `aee250ae-90d3-438c-8aef-50ffa372da53`.
+- Backend live deployment: `bc0f8032-d316-4b7f-a952-927160d0a38d`, from
+  clean commit `f1f1320cc2d64d053871355aa55ea3292cad77ea`.
 - Media deployment: `4d18c8d9-1ce4-421a-abd0-5f3bb65daf6e`.
 - Source paused using its existing image: `e54088af-d19e-4378-8aa6-d2b4ac12acd4`.
   No source code or sibling deployment was changed.
@@ -28,7 +28,10 @@ owns the confirmed test line while supervised onboarding is in progress.
 - Companion installed at `/Users/garygao/Applications/ClawdTime Companion.app`.
   Separate bootstrap configuration has empty display ACLs. The user granted the
   initial build permissions; its relaunch repair changed the ad hoc signature.
-  Current-build TCC grants are being reconciled, not inferred from Settings switches.
+  The user authorized replacing only ClawdTime’s stale entries. Current-build
+  Screen Recording and Accessibility now report true through the authenticated
+  companion doctor; local Enable remains off. The verified browser pairing was applied to display 1;
+  both view/control ACLs are now loaded and the display is attached.
 - Independent `com.clawdtime.gateway` LaunchAgent connected to the hosted media
   service. Fresh helper/gateway/operator/media/encryption secrets and separate volumes.
 - No screen capture, input or FaceTime call has yet been accepted as physical evidence.
@@ -84,11 +87,14 @@ provider acting on a physical fixture remains unverified.
 
 ## Exact remaining acceptance steps
 
-1. **Current installed Mac permissions and pairing.** Normal app reopening is fixed.
-   macOS retained old ad hoc signing requirements despite enabled Settings switches;
-   reset only this bundle's stale entries, re-add the installed app, and verify actual
-   `screenPermission`/`controlPermission` before capture. Empty bootstrap ACLs permit
-   no viewing/input. Verified Messages pairing must explicitly grant display access.
+1. **Pairing and native reply reconciliation.** Actual current-build Mac permission
+   checks now pass. The verified inbound created an invite after the configuration
+   normalization fix. Its outgoing notice has an unknown outcome; the existing
+   provider receipt lookup returns HTTP 503, `text operation unavailable`. No retry
+   was sent. Browser pairing succeeded and its private file was recovered through the browser
+   download API after the in-app download UI stopped. The companion has both ACLs
+   loaded; Codex and Claude Code connections were installed in the disposable project.
+   Only native receipt recovery and explicit local Enable block live readiness.
 2. **Supervised handset loop.** The user confirmed the Liam Davis alias against
    the exact native/logical/inventory binding and selected a sole demo recipient.
    The private handoff record preserves the source cursor and pause evidence.
@@ -132,7 +138,7 @@ Python/Swift commands and setup are in README.md and component READMEs.
 
 ## Final local release check
 
-- `npm run check`: **108 tests across 14 files**, TypeScript and production build passed.
+- `npm run check`: **111 tests across 14 files**, TypeScript and production build passed.
 - `npm run format:check`: passed.
 - Built browser/onboarding/compiled-CLI checks: passed.
 - Real Claude Code and Codex synthetic probes passed again with heartbeat enabled.
@@ -172,16 +178,45 @@ Both actual CLI synthetic probes now explicitly verify their exact run identity.
 The Mac gateway's missing Python CA bundle was fixed with pinned trusted Certifi
 roots and mandatory TLS/hostname checks; no global trust or source gateway changed.
 Normal companion reopening now uses only its validated private default config and
-never re-arms automatically. A current-build permission reconciliation is required.
+never re-arms automatically. Current-build permission reconciliation is complete.
 
-Current handoff pause point: both hosted services are healthy, the independent
-gateway is connected, and base live transport preflight passes. No FaceTime call
-has been placed. Awaiting user confirmation to replace stale macOS permission
-entries with the current installed bundle and an inbound `pair` from the sole
-explicitly selected demo handset. The user's later handset correction supersedes
-the initial tester choice; only the corrected recipient is allowlisted.
+Current handoff pause point: both hosted services and the independent gateway are
+healthy. The original verified `pair` inbound initially failed strict invite parsing
+because protected tester metadata was spread into the binding. Commit `f1f1320`
+assigns the schema-normalized tester list. Recovery used a transaction requiring
+exactly that one unknown inbound, no invite/notice/effect, and the exact allowlisted
+sender, line, direct conversation and command. It retained the original encrypted
+payload and cursor and recorded recovery evidence.
+
+The inbound is now done and an invite exists. The outgoing notice is unknown;
+read-only lookup of its stable native origin returns HTTP 503 (`text operation
+unavailable`). This does **not** prove the send was absent. No notice was resent,
+no cursor was reset and no FaceTime call was placed. `local_recovery` correctly
+blocks new live dispatch. The provider must restore a valid read-only journal result
+for that original origin before a lead can reconcile it. No sibling source or service
+was modified. The private link was opened directly from the verified inbound's
+encrypted notice. The user selected view/control and paired successfully. The
+private Blob download initially stopped in the in-app browser; its download API
+saved the existing file, now owner-only, without a second pairing request. The
+claim was applied preserving secrets/ledgers. Relaunch retained both actual Mac
+permissions and loaded display 1 view/control ACLs. Both connector installations
+succeeded in the disposable project; doctor reports only `local_recovery` and
+`local_arm` failures. No agent client, capture, input or call was started.
+
+The user's later handset correction supersedes the initial tester choice; only the
+corrected recipient is allowlisted. Apple Teams remains paused. Its retained cursor
+and all ClawdTime unknown outcomes must be reconciled before any ownership reversal.
 
 Implementation fixes are committed as `4f6e540`. Separate concurrent landing/pricing
 changes in the working tree were preserved and excluded from that commit and the
 audited hosted backend image. Disposable acceptance fixture is available locally
 at `http://127.0.0.1:3315`; it is not a screenshot or input acceptance result.
+
+## Notice audit follow-up
+
+Local follow-up retains sanitized native acknowledgement receipts and the stable
+operation origin for pairing notices. Failures retain phase/code and HTTP status
+without raw provider errors or content. Interrupted notices remain unknown; no
+automatic retry was added. Seven runtime cases and the full 111-test check pass.
+The pre-existing live unknown remains unresolved; local receipt improvements do
+not establish its outcome. Hosted release identity above remains authoritative.
