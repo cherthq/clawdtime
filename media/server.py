@@ -29,7 +29,7 @@ from policy import call_only_allowed, capture_allowed, final_transcript, pause_r
 
 RATE = 48000
 SAMPLES = 960
-NOTICE = 'ClawdTime is sharing your paired screen and listening for your feedback. Say Hey ClawdTime before an instruction. Say Hey ClawdTime, stop listening, or use Stop on your Mac to stop.'
+NOTICE = 'ClawdTime is sharing your paired screen and listening for your feedback. You can speak naturally or send a text. Say Stop, or use Stop on your Mac, to end sharing and control.'
 
 
 class Session:
