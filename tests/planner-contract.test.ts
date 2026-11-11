@@ -3,11 +3,17 @@ import { VisionPlanner } from "../src/control/planner.js";
 import type { ControlLease } from "../src/contracts.js";
 
 describe("live vision provider contract", () => {
+  let sequence = 0;
   const device = {
     async frameImage() {
       return {
         dataUrl: "data:image/jpeg;base64,AA==",
-        frame: { id: "fresh", capturedAt: Date.now(), width: 640, height: 360 },
+        frame: {
+          id: `fresh-${++sequence}`,
+          capturedAt: Date.now(),
+          width: 640,
+          height: 360,
+        },
       };
     },
   };
@@ -24,10 +30,14 @@ describe("live vision provider contract", () => {
         },
       };
     }) as never;
-    const result = await new VisionPlanner(device, {} as never, generate).plan(
-      "Click the fixture",
-      {} as ControlLease,
-    );
+    const result = await new VisionPlanner(
+      device,
+      {} as never,
+      generate,
+      async () => {},
+    ).plan("Click the fixture", {
+      expiresAt: Date.now() + 20_000,
+    } as ControlLease);
     expect(result.action).toEqual({ kind: "click", x: 0.5, y: 0.5 });
   });
   it.each(["throwing", "missing"])(
@@ -47,15 +57,15 @@ describe("live vision provider contract", () => {
         },
       })) as never;
       await expect(
-        new VisionPlanner(counted, {} as never, generate).plan(
+        new VisionPlanner(counted, {} as never, generate, async () => {}).plan(
           "Act",
-          {} as ControlLease,
+          { expiresAt: Date.now() + 20_000 } as ControlLease,
         ),
       ).rejects.toMatchObject({
         name: "ControlPreflightError",
         code: mode === "throwing" ? "planner_unavailable" : "planning_refused",
       });
-      expect(frames).toBe(1);
+      expect(frames).toBe(2);
     },
   );
   it.each([
@@ -77,12 +87,12 @@ describe("live vision provider contract", () => {
         output: { action, clarification: "" },
       })) as never;
       await expect(
-        new VisionPlanner(counted, {} as never, generate).plan(
+        new VisionPlanner(counted, {} as never, generate, async () => {}).plan(
           "Act",
-          {} as ControlLease,
+          { expiresAt: Date.now() + 20_000 } as ControlLease,
         ),
       ).rejects.toThrow();
-      expect(frames).toBe(1);
+      expect(frames).toBe(2);
     },
   );
 });

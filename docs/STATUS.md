@@ -475,3 +475,23 @@ CUA repair release `8cd5621` deployed successfully as backend
 bridge was closed before deployment; no live call or lease remained. The Mac app
 and media service were unchanged. Further physical calls require fresh approval;
 no additional control pass is implied by this deployment.
+
+A further explicitly authorized call on `8cd5621` again showed the fixture. The
+user reported repeated `screen_changed` refusals; no action receipts were created.
+The refusal notices and view restoration worked. Authenticated screen confirmation
+returned to the exact native chat, leases released, control resumed at epoch 4,
+an actual continuation artifact was updated and a factual recap was queued. The
+basic setup verifier passed again; native call ended, media closed and 237 frames
+were received. This is not successful computer control.
+
+The exact changed pixels were not retained. Cursor/caret/clock changes and control
+indicator compositing are hypotheses, not established causes. Static synthetic
+JPEG re-encoding is deterministic. The next bounded diagnostic change requires
+two distinct identical captures before planning, waits at most twice for capture
+settling, and still requires exact image equality after planning. Remaining lease
+time bounds waits and inference; existing two-second input freshness is unchanged.
+Failure telemetry contains only whitelisted timing, pixel counts and a coarse
+4-by-3 tile map; screenshots, image hashes, text, prompts and raw provider errors
+are not retained. Diagnostics never authorize input, including when pixels match
+but encoding differs. Independent review and 278 TypeScript tests, typecheck/build
+pass. Live qualification remains pending; no new call is implicit.

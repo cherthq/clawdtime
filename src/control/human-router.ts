@@ -8,7 +8,10 @@ import type {
   InputAction,
 } from "../contracts.js";
 import { actionSchema, ControlCoordinator } from "./coordinator.js";
-import { ControlPreflightError } from "./errors.js";
+import {
+  ControlPreflightError,
+  sanitizeControlPreflightDiagnostics,
+} from "./errors.js";
 
 export interface SingleActionPlanner {
   plan(
@@ -281,11 +284,16 @@ export class HumanRouter {
         }
         if (notStarted) {
           const focusWarning = !!this.service.store.state(focusKey);
+          // Sanitize again at persistence: error objects can be changed after construction.
+          const diagnostics = sanitizeControlPreflightDiagnostics(
+            (failure as ControlPreflightError).diagnostics,
+          );
           const result = {
             accepted: false,
             state: "not_started",
             actionId,
             code: (failure as ControlPreflightError).code,
+            ...(diagnostics ? { diagnostics } : {}),
             clarification: focusBlocked
               ? "No input was sent. The earlier screen action did not establish focus. Send an explicit click command, visually verify the intended textbox, then send typing as a separate command."
               : `No input was sent. ${(failure as ControlPreflightError).message}${focusWarning ? " Before typing, send an explicit click command and visually verify the intended textbox." : " Review the screen before issuing a new command."}`,

@@ -13,6 +13,8 @@ import {
 } from "../src/control/human-router.js";
 import {
   ControlPreflightError,
+  sanitizeControlPreflightDiagnostics,
+  type ControlPreflightDiagnostics,
   type ControlPreflightCode,
 } from "../src/control/errors.js";
 import { Viewing } from "../src/control/viewing.js";
@@ -99,6 +101,154 @@ const codes: ControlPreflightCode[] = [
 ];
 
 describe("known CUA preflight failures and focus safety", () => {
+  it("retains only whitelisted diagnostics on a proven pre-input failure", async () => {
+    const dirty = {
+      phase: "planning",
+      elapsedMs: 1200,
+      frameAgeMs: 50,
+      prompt: "PRIVATE_PROMPT",
+      url: "https://private.invalid",
+      pixels: "PRIVATE_PIXELS",
+      comparison: {
+        kind: "pixels_changed",
+        changedPixels: 7,
+        changedTiles: [0, 4, 11],
+        width: 640,
+        height: 360,
+        jpegBase64: "PRIVATE_JPEG",
+        error: "PRIVATE_PROVIDER_ERROR",
+      },
+    };
+    const error = new ControlPreflightError(
+      "screen_changed",
+      dirty as ControlPreflightDiagnostics,
+    );
+    dirty.comparison.changedTiles.push(9);
+    Object.assign(error.diagnostics!, {
+      rawError: "PRIVATE_ERROR_AFTER_CONSTRUCTION",
+    });
+    Object.assign(error.diagnostics!.comparison!, {
+      image: "PRIVATE_IMAGE_AFTER_CONSTRUCTION",
+    });
+    const f = await fixture({
+      plan: async () => {
+        throw error;
+      },
+    });
+    await f.viewing.tick();
+    const result = await f.send("diagnostics", "do: focus textbox");
+    const expected = {
+      phase: "planning",
+      elapsedMs: 1200,
+      frameAgeMs: 50,
+      comparison: {
+        kind: "pixels_changed",
+        changedPixels: 7,
+        changedTiles: [0, 4, 11],
+        width: 640,
+        height: 360,
+      },
+    };
+    expect(result).toMatchObject({
+      state: "not_started",
+      diagnostics: expected,
+    });
+    expect(result.diagnostics).toEqual(expected);
+    expect(f.command("diagnostics").result.diagnostics).toEqual(expected);
+    expect(
+      JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+    ).not.toContain("PRIVATE_");
+    expect(await f.send("diagnostics", "do: focus textbox")).toEqual(result);
+    expect(f.device.inputs).toHaveLength(0);
+    f.store.close();
+  });
+
+  it.each([
+    { phase: "other" },
+    { elapsedMs: -1 },
+    { elapsedMs: 60_001 },
+    { elapsedMs: Infinity },
+    { frameAgeMs: -501 },
+    { frameAgeMs: 60_001 },
+    { frameAgeMs: NaN },
+    { comparison: { kind: "raw_error" } },
+    { comparison: { kind: "pixels_changed", changedPixels: 921601 } },
+    { comparison: { kind: "pixels_changed", changedPixels: -1 } },
+    { comparison: { kind: "pixels_changed", changedPixels: 1.5 } },
+    { comparison: { kind: "pixels_changed", changedTiles: [12] } },
+    { comparison: { kind: "pixels_changed", changedTiles: [-1] } },
+    { comparison: { kind: "pixels_changed", changedTiles: [1, 1] } },
+    { comparison: { kind: "pixels_changed", changedTiles: Array(13).fill(1) } },
+    { comparison: { kind: "geometry_changed", width: 1281, height: 720 } },
+    { comparison: { kind: "geometry_changed", width: 1280, height: 721 } },
+    { comparison: { kind: "geometry_changed", width: 0, height: 720 } },
+    {
+      comparison: {
+        kind: "pixels_changed",
+        width: 10,
+        height: 10,
+        changedPixels: 101,
+      },
+    },
+  ])(
+    "drops invalid diagnostic fields %# without exposing their contents",
+    (invalid) => {
+      const error = new ControlPreflightError("screen_changed", {
+        phase: "settling",
+        elapsedMs: 0,
+        frameAgeMs: 0,
+        ...invalid,
+      } as ControlPreflightDiagnostics);
+      expect(error.diagnostics).toBeUndefined();
+      expect(error.code).toBe("screen_changed");
+      expect(error.message).toBe("The screen changed while planning.");
+    },
+  );
+
+  it("keeps fixed metadata bounds and safely discards throwing getters", () => {
+    expect(
+      sanitizeControlPreflightDiagnostics({
+        phase: "settling",
+        elapsedMs: 60_000,
+        frameAgeMs: -500,
+        comparison: {
+          kind: "pixels_changed",
+          width: 1280,
+          height: 720,
+          changedPixels: 921600,
+          changedTiles: Array.from({ length: 12 }, (_, i) => i),
+        },
+      }),
+    ).toBeDefined();
+    expect(
+      sanitizeControlPreflightDiagnostics({
+        get phase() {
+          throw new Error("PRIVATE_GETTER");
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("never persists planning diagnostics as proof after an input dispatch", async () => {
+    const f = await fixture();
+    f.device.action = async () => {
+      throw new ControlPreflightError("screen_changed", {
+        phase: "planning",
+        elapsedMs: 100,
+        frameAgeMs: 0,
+        comparison: { kind: "identical" },
+      });
+    };
+    await expect(
+      f.send("dispatch-diagnostics", "click 0.5 0.5"),
+    ).rejects.toThrow("uncertain");
+    expect(f.command("dispatch-diagnostics").result.state).toBe("unknown");
+    expect(f.command("dispatch-diagnostics").result).not.toHaveProperty(
+      "diagnostics",
+    );
+    f.store.close();
+  });
+
   it.each(codes)(
     "settles %s with no input, confirmed release and view restoration; duplicate never replans",
     async (code) => {

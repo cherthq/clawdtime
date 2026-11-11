@@ -223,7 +223,7 @@ describe("independent final safety review", () => {
         return {
           frame: frame(`frame_${++index}`),
           dataUrl:
-            index === 1
+            index <= 2
               ? "data:image/jpeg;base64,AA=="
               : "data:image/jpeg;base64,AB==",
         };
@@ -232,19 +232,25 @@ describe("independent final safety review", () => {
     const generate = (async () => ({
       output: { action: { kind: "click", x: 0.5, y: 0.5 }, clarification: "" },
     })) as never;
-    const planner = new VisionPlanner(device, {} as never, generate);
+    const planner = new VisionPlanner(
+      device,
+      {} as never,
+      generate,
+      async () => {},
+    );
     await expect(
-      planner.plan("Click the fixture button", {} as ControlLease),
+      planner.plan("Click the fixture button", {
+        expiresAt: Date.now() + 20_000,
+      } as ControlLease),
     ).rejects.toThrow("screen changed");
     index = 0;
     device.frameImage = async () => ({
       frame: frame(`frame_${++index}`),
       dataUrl: "data:image/jpeg;base64,AA==",
     });
-    const planned = await planner.plan(
-      "Click the fixture button",
-      {} as ControlLease,
-    );
-    expect(planned.frame.id).toBe("frame_2");
+    const planned = await planner.plan("Click the fixture button", {
+      expiresAt: Date.now() + 20_000,
+    } as ControlLease);
+    expect(planned.frame.id).toBe("frame_3");
   });
 });

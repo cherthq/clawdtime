@@ -27,6 +27,7 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "ai": "7.0.165",
     "hono": "4.13.17",
+    "jpeg-js": "0.4.4",
     "zod": "4.6.7"
   },
   "devDependencies": {

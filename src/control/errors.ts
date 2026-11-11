@@ -21,8 +21,83 @@ const messages: Record<ControlPreflightCode, string> = {
 
 /** Only trusted local pre-dispatch code raises this. Never wrap input dispatch failures. */
 export class ControlPreflightError extends Error {
-  constructor(readonly code: ControlPreflightCode) {
+  readonly diagnostics?: ControlPreflightDiagnostics;
+  constructor(
+    readonly code: ControlPreflightCode,
+    diagnostics?: ControlPreflightDiagnostics,
+  ) {
     super(messages[code]);
     this.name = "ControlPreflightError";
+    this.diagnostics = sanitizeControlPreflightDiagnostics(diagnostics);
+  }
+}
+import { z } from "zod";
+
+export interface ControlPreflightDiagnostics {
+  phase: "settling" | "planning";
+  elapsedMs: number;
+  frameAgeMs: number;
+  comparison?: {
+    kind:
+      | "identical"
+      | "pixels_changed"
+      | "encoding_only"
+      | "geometry_changed"
+      | "unavailable";
+    changedPixels?: number;
+    /** Unique zero-based tile indexes in a 4-column by 3-row grid. */
+    changedTiles?: number[];
+    width?: number;
+    height?: number;
+  };
+}
+
+const diagnosticsSchema = z.object({
+  phase: z.enum(["settling", "planning"]),
+  elapsedMs: z.number().finite().min(0).max(60_000),
+  frameAgeMs: z.number().finite().min(-500).max(60_000),
+  comparison: z
+    .object({
+      kind: z.enum([
+        "identical",
+        "pixels_changed",
+        "encoding_only",
+        "geometry_changed",
+        "unavailable",
+      ]),
+      changedPixels: z
+        .number()
+        .int()
+        .min(0)
+        .max(1280 * 720)
+        .optional(),
+      changedTiles: z
+        .array(z.number().int().min(0).max(11))
+        .max(12)
+        .refine((values) => new Set(values).size === values.length)
+        .optional(),
+      width: z.number().int().min(1).max(1280).optional(),
+      height: z.number().int().min(1).max(720).optional(),
+    })
+    .refine(
+      (value) =>
+        value.changedPixels === undefined ||
+        value.width === undefined ||
+        value.height === undefined ||
+        value.changedPixels <= value.width * value.height,
+    )
+    .optional(),
+});
+
+/** Copy only bounded telemetry; no arbitrary strings or nested values survive. */
+export function sanitizeControlPreflightDiagnostics(
+  value: unknown,
+): ControlPreflightDiagnostics | undefined {
+  try {
+    const parsed = diagnosticsSchema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    // Malformed diagnostic getters must not change the safe failure outcome.
+    return undefined;
   }
 }
