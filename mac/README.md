@@ -107,7 +107,8 @@ from the helper clock. Renew before expiry. Stop the old lease before switching
 mode/display. Local Stop requires a new local Enable; remote requests cannot undo
 it. Fresh helper starts retain receipts but start with no active lease.
 
-JPEG response headers: `X-Frame-Id`, `X-Captured-At` (capture request start),
+JPEG response headers: `X-Frame-Id`, `X-Captured-At` (capture request start as
+fractional-second ISO 8601, conservatively floored to milliseconds),
 `X-Frame-Width`, `X-Frame-Height`. A frame completing more than two seconds after
 capture began is rejected. Capture checks lease/generation both before and after
 awaiting macOS. The gateway must immediately clear displayed frames on any

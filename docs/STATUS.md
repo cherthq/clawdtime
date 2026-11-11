@@ -326,3 +326,37 @@ pending screen-stop notification; tracked, shielded cleanup now delivers it once
 This is a confirmed cleanup bug, not proof of the original capture failure.
 Real HTTP and TLS/WebSocket synthetic-frame tests pass, including refusal and cold
 capture timeout. A separately approved further diagnostic call is still required.
+
+Follow-up release `b93b28b` deployed successfully as backend
+`41bf01a8-34cb-4aae-a5d3-4fb833fb4aec` and media
+`62fe9a11-63e6-4f42-a705-7b7cf00ef2aa`. The independent gateway was restarted
+after confirmed call cleanup to load sanitized diagnostics; the installed Mac
+companion was preserved. Existing-project setup checks confirm both macOS grants,
+local enablement, no active helper lease, matching installed skill and live
+transport readiness. Validation passed 171 TypeScript tests, typecheck, build and
+formatting, plus 66 media and 19 gateway Python tests. These checks do not establish
+screen delivery.
+
+The user approved one additional diagnostic call in this same native chat. The
+new attempt's invitation failed before any call: its retained provider receipt
+returns HTTP 200, `found:true`, `state:attempted`; exact native GUID evidence and
+message lookup both return 404. The user reports no invitation received. The
+effect remains unknown, was not resent, and the second call has not been placed.
+The foreground connector remains active while diagnosis continues. This is
+distinct from the earlier missing-journal 503 and stale pre-journal target refusal.
+Chert reserves the receipt before constructing/sending the message, and retains
+no stage information distinguishing construction failure from post-send GUID or
+acknowledgement failure. A 404 does not prove no send. Existing read-only target
+inspection cannot recover that historical distinction; another administrator
+password check would not resolve it. Narrow upstream diagnostic/repair scope is
+requested because project instructions prohibit sibling source modification.
+
+Independent Mac review reproduced a timestamp precision bug: default Swift ISO
+formatting removed fractional seconds from capture-start time, potentially adding
+almost one second of apparent age and rejecting a genuinely fresh frame at the
+gateway's two-second limit. Source now preserves fractional capture-start time,
+conservatively floored to milliseconds. The age limit remains unchanged. All 13
+Swift tests and the release build pass, including precision/boundary regressions.
+The installed companion has not been replaced; macOS grants remain intact. This
+reproduction identifies a real defect but does not prove it caused the first call's
+missing screen. Slow first capture remains another unproven possibility.

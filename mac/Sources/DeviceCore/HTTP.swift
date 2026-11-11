@@ -1,5 +1,15 @@
 import Foundation
 
+/// Preserve capture-start precision on the wire. Flooring to milliseconds never
+/// makes a capture appear newer; whole-second formatting can add almost one
+/// second to its apparent age and wrongly fail the two-second freshness check.
+public func frameCaptureTimestamp(_ capturedAt: Date) -> String {
+  let milliseconds = floor(capturedAt.timeIntervalSince1970 * 1000)
+  let formatter = ISO8601DateFormatter()
+  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  return formatter.string(from: Date(timeIntervalSince1970: milliseconds / 1000))
+}
+
 public struct HTTPRequest {
   public var method: String
   public var path: String

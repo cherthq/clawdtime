@@ -316,7 +316,7 @@ struct HelperStatus: Codable {
           contentType: "image/jpeg",
           headers: [
             "X-Frame-Id": stamp.id,
-            "X-Captured-At": ISO8601DateFormatter().string(from: stamp.capturedAt),
+            "X-Captured-At": frameCaptureTimestamp(stamp.capturedAt),
             "X-Frame-Width": String(frame.width), "X-Frame-Height": String(frame.height),
           ], body: frame.jpeg)
       }
