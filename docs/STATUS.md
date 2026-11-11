@@ -495,3 +495,9 @@ Failure telemetry contains only whitelisted timing, pixel counts and a coarse
 are not retained. Diagnostics never authorize input, including when pixels match
 but encoding differs. Independent review and 278 TypeScript tests, typecheck/build
 pass. Live qualification remains pending; no new call is implicit.
+
+Bounded-settling/diagnostic release `bcd4b23` deployed successfully as backend
+`3d8423d9-3f4f-4f62-8ffd-78570564107d`. No helper/media update or permission
+change was made. Read-only prior control metadata contains two `planning_refused`
+and two `screen_changed` results, all `not_started`, with zero action receipts.
+No model clarification or changed-pixel evidence was retained for those attempts.
