@@ -469,3 +469,9 @@ receipt. Stop races, uncertain releases and submitted/unobserved input prevent
 restoration or reacquisition. Historical unknown records remain unchanged.
 This repair is not physical CUA acceptance. Subsequent tests must leave the Mac
 fixture foregrounded and use handset feedback to avoid desktop-chat focus changes.
+
+CUA repair release `8cd5621` deployed successfully as backend
+`16b9297b-3f31-449f-8553-32e3512a0c46`. The preceding verified transport
+bridge was closed before deployment; no live call or lease remained. The Mac app
+and media service were unchanged. Further physical calls require fresh approval;
+no additional control pass is implied by this deployment.
