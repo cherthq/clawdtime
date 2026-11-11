@@ -2,26 +2,49 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot, live on its dedicated Mia line. Full CUA and voice acceptance remain pending.**
+**Independent pilot; Mia onboarding is paused for a service-number correction. Full CUA and voice acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
 
+## Service-number correction — November 11
+
+The user identified Mia's current number as different from the configured number.
+Read-only checks confirmed that the provider inventory, running native API and
+ClawdTime binding still reported the previous number. The Mac account lists both
+aliases; that alone does not establish current Apple reachability. Earlier healthy
+checks established configuration agreement and receipt availability, not handset
+delivery to the correct number. The user subsequently confirmed that an unsent
+draft to the corrected number shows blue/iMessage; no greeting was sent.
+
+ClawdTime is in standby with public texting disabled, deployment
+`40bb37b6-8441-494a-b456-46d79a1c7b6b` (existing `f6177c0` image). The obsolete
+website number is no longer published. Mia has no pairing, message effect or call;
+its exact cursor 5 and fingerprint remain retained. The native feed has no backlog
+beyond that boundary. Provider sender configuration and the application binding
+must be corrected together before restoring the link. No message or call was sent.
+
+The scoped configuration correction passed independent review and 43 offline
+checks. It retains the installed binaries, saves the original sender settings,
+preserves native state and operation journals, and leaves admission paused after
+success or rollback. Installation is awaiting local administrator authentication;
+these checks do not establish installation or handset acceptance.
+
 ## Website-to-agent setup alignment — November 11
 
-The live website now publishes the explicitly enabled service line as a Messages
+Before the pause, the website published the explicitly enabled service line as a Messages
 link with “Hey ClawdTime.” It remains an invited iMessage pilot, not public signup.
 A first message receives a warm welcome and the setup prompt in one durable reply.
 The current-chat integration stays pending through permissions; its default test
 is one approved video call, screen visibility, natural voice or text, same-session
 continuation, and a Messages recap. Computer-control exercises are optional.
 
-Backend deployment `3bd86acc-df4d-4627-b595-35b52c5c21e4` (code `51761ba`) succeeded;
-the previous deployment is removed. TypeScript/build and 376 tests pass, as do the
+Backend deployment `38fecab0-bb83-46b2-b447-b23a119fd7d8` (code `f6177c0`) succeeded
+before the standby correction above. TypeScript/build and 376 tests pass, as do the
 built-app onboarding browser checks and 14 focused media checks. A live browser
-check confirms four prefilled Messages links, no preview interception and no JS
+check before the pause confirmed four prefilled Messages links, no preview interception and no JS
 errors. Native Messages greeting prefill and the fresh Mia handset loop still
 require human observation; browser links alone are not delivery evidence.
 
