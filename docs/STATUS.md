@@ -15,7 +15,7 @@ owns the confirmed test line while supervised onboarding is in progress.
   Implementation release commit is the `feat: implement independent ClawdTime pilot`
   commit in this branch. No remote repository, public package or GitHub topics created.
 - Independent Railway project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
-- Backend live deployment: `3929b7a9-9272-493f-84ed-cfe87e4865dd`, from audited
+- Backend live deployment: `1edc651e-68ac-4498-9905-57a2452525d9`, from audited
   standby build `aee250ae-90d3-438c-8aef-50ffa372da53`.
 - Media deployment: `4d18c8d9-1ce4-421a-abd0-5f3bb65daf6e`.
 - Source paused using its existing image: `e54088af-d19e-4378-8aa6-d2b4ac12acd4`.
@@ -173,3 +173,15 @@ The Mac gateway's missing Python CA bundle was fixed with pinned trusted Certifi
 roots and mandatory TLS/hostname checks; no global trust or source gateway changed.
 Normal companion reopening now uses only its validated private default config and
 never re-arms automatically. A current-build permission reconciliation is required.
+
+Current handoff pause point: both hosted services are healthy, the independent
+gateway is connected, and base live transport preflight passes. No FaceTime call
+has been placed. Awaiting user confirmation to replace stale macOS permission
+entries with the current installed bundle and an inbound `pair` from the sole
+explicitly selected demo handset. The user's later handset correction supersedes
+the initial tester choice; only the corrected recipient is allowlisted.
+
+Implementation fixes are committed as `4f6e540`. Separate concurrent landing/pricing
+changes in the working tree were preserved and excluded from that commit and the
+audited hosted backend image. Disposable acceptance fixture is available locally
+at `http://127.0.0.1:3315`; it is not a screenshot or input acceptance result.
