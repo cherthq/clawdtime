@@ -430,3 +430,42 @@ automatically. A stage-specific timer fix preserves the initial approval window,
 starts a bounded ten-minute ready window at the first authenticated YES, and uses
 the call request's five-minute deadline once started. Duplicate YES/start requests
 must not extend timers; expired tests and prior receipts remain unchanged.
+
+Release `5880c38` (223 TypeScript tests, typecheck/build, independent review) was
+successfully deployed as backend `1e762fb9-2b5a-4927-ab53-ecd2426faffd`. With new
+explicit call authorization and an authenticated coded reply, the next physical
+call showed the disposable fixture on the intended handset. Media recorded 302
+fresh frames and emitted screen video; the first screen video was approximately
+27.7 seconds after the attention request, after the spoken introduction. The user
+confirmed the screen in this chat and through authenticated Messages feedback.
+All view/control leases were released, the exact backend session acknowledged the
+response and resumed at its current control epoch, and this native coding chat
+wrote a real continuation artifact. A factual completion recap was acknowledged
+by the provider and the user confirmed receiving it on the handset. Setup's basic
+screen/feedback/continuation/result verifier passed. The call ended and media closed.
+
+CUA acceptance did not pass. The first AI focus request acquired/released control
+without an action receipt. A later direct typing request has an observed receipt
+and post-action frame, but the user confirmed the text landed in the Codex reply
+textbox. Do not describe this as correct targeting or completed control acceptance.
+A static synthetic-image reproduction against the configured AI provider returns
+HTTP 400 because Zod's discriminated union emits unsupported `oneOf` in the
+structured-output schema. The actual historical exception was discarded, so its
+specific provider error was not retained. This is a concrete failure of the same
+configured planning path. The corrected provider schema must retain strict local
+action validation; failed planning must explicitly report no input and prevent
+follow-on typing from silently using old focus. No click/scroll/AI-action physical
+pass, spoken-feedback pass, or full Claude Code physical loop is claimed.
+
+The CUA repair passed independent review and 247 TypeScript tests, typecheck and
+build. Provider output now uses supported `anyOf` with unchanged strict local
+validation and exact fresh-frame comparison. A live synthetic-image probe returned
+one bounded click in about 1.8 seconds; it executed no computer input. Missing or
+throwing SDK output becomes a sanitized pre-input failure. Proven pre-input failures
+produce an explanatory Messages notice, preserve deterministic command IDs and
+restore prior viewing only after confirmed releases in the same active context.
+Failed planning blocks typing until a separate explicit click has an observed
+receipt. Stop races, uncertain releases and submitted/unobserved input prevent
+restoration or reacquisition. Historical unknown records remain unchanged.
+This repair is not physical CUA acceptance. Subsequent tests must leave the Mac
+fixture foregrounded and use handset feedback to avoid desktop-chat focus changes.

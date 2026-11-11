@@ -371,7 +371,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                   ? result.stopped
                     ? "Screen control stopped."
                     : result.receipt
-                      ? "Input submitted; a subsequent screen frame was observed. Send answer: when ready for the agent to continue."
+                      ? "Input submitted; a subsequent screen frame was observed. Visually verify the intended textbox before typing; observation does not prove correct focus. Send answer: when ready for the agent to continue."
                       : "Your response is available to the exact waiting agent session."
                   : (result.clarification ?? "Please clarify your response.");
               }

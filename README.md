@@ -13,13 +13,13 @@ calls when it needs attention, shows its screen, and receives your response. You
 can also direct computer actions while watching, then let the agent continue in
 the tools you already use.
 
-**Current status: independently hosted pilot; not yet a verified live demo.** The
-backend, Mac companion, media/gateway, pairing page, agent tools and simulation
-are runnable. Real Claude Code and Codex CLI processes have completed cooperative
-attention workflows against simulated calls and synthetic feedback. The actual
-FaceTime → screen → voice/text/CUA → agent continuation → Messages result path
-still requires physical acceptance; the controlled test-line handoff is active. See
-[STATUS](docs/STATUS.md) for current evidence and concrete blockers.
+**Current status: independently hosted pilot; full control acceptance is pending.**
+The physical Codex chat → FaceTime → Mac screen → authenticated Messages feedback
+→ same-chat continuation → Messages recap path passed on the intended handset.
+Computer control did not pass: typing reached the Codex reply box after the planned
+focus click failed. A planner/failure-handling repair is locally verified; correct
+click/type/scroll/AI targeting still needs physical acceptance. Voice feedback and
+the Claude Code physical call loop remain unverified. See [STATUS](docs/STATUS.md).
 
 [Open the landing page](https://backend-production-ee686906.up.railway.app).
 Agent instructions are at `/agents`, and personal setup links use `/setup`.
@@ -137,16 +137,16 @@ pending attention request belongs to Mode 1.
 
 ## Features and evidence
 
-| Feature                                                | Implementation status                                                                                                |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| Private agent-initiated FaceTime attention             | Durable backend and live transport adapter implemented; physical delivery pending                                    |
-| Screen viewing from the paired Mac                     | Swift capture, authenticated gateway and media video migrated; fresh ClawdTime install/handset qualification pending |
-| Voice and text feedback for the exact task             | Authenticated routing and isolated response receipts implemented; real voice/call qualification pending              |
-| Human-directed click/type/scroll and bounded AI action | Explicit permissions, fresh frames, leases, receipts and planner implemented; physical qualification pending         |
-| Claude Code and Codex MCP tools/skills                 | Actual CLI cooperative synthetic workflows verified on versions below                                                |
-| Durable requests, responses and action receipts        | SQLite/backend and migrated helper/gateway/media ledgers; replay/restart tests                                       |
-| Visible state, local Stop, revocation/disconnect       | Implemented with fail-closed policy tests; physical lock/sleep/Stop verification required                            |
-| iMessage completion result                             | Durable queued adapter and simulated result verified; live handset result pending                                    |
+| Feature                                                | Implementation status                                                                                             |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| Private agent-initiated FaceTime attention             | Physical outbound video call answered on the intended handset                                                     |
+| Screen viewing from the paired Mac                     | Physical fixture video confirmed on handset; full fresh-install distribution acceptance pending                   |
+| Voice and text feedback for the exact task             | Authenticated Messages feedback resumed the exact Codex session; spoken feedback unverified                       |
+| Human-directed click/type/scroll and bounded AI action | Implemented with fresh frames and exclusive leases; wrong-target typing observed, full control acceptance pending |
+| Claude Code and Codex MCP tools/skills                 | Both CLI synthetic workflows passed; physical Codex same-chat loop passed, Claude physical loop pending           |
+| Durable requests, responses and action receipts        | SQLite/backend and migrated helper/gateway/media ledgers; replay/restart tests                                    |
+| Visible state, local Stop, revocation/disconnect       | Implemented with fail-closed policy tests; physical lock/sleep/Stop verification required                         |
+| iMessage completion result                             | Factual completion recap confirmed received on the intended handset                                               |
 
 Verified client probes: **Claude Code 2.1.311** terminal print mode and **Codex CLI
 0.166.0-alpha.5.1** exec mode. Both invoked actual MCP tools, consumed synthetic

@@ -27,16 +27,27 @@ the actual user's device or modify live agent configuration.
 
 ## Current physical onboarding evidence
 
-The intended tester’s authenticated inbound reached ClawdTime. Both actual Mac
-permission checks pass after scoped TCC repair. The user completed explicit
-view/control pairing. Its private file was saved and applied; the companion reports
-the selected display attached and both ACLs loaded. Both connectors are configured
-in the disposable project. Local Enable remains off.
-The outgoing pairing notice has an unknown native outcome; its stable-origin
-read-only journal lookup returns HTTP 503. No retry or call was issued. Resolve
-that provider prerequisite before live acceptance; see STATUS.md.
+The intended tester completed authenticated onboarding and explicit view/control
+consent. Both actual Mac permissions pass, and the owner enabled the companion
+locally. The Chert test-line sender repair is installed; new invitation and recap
+receipts were acknowledged and handset delivery confirmed. Historical unknown
+notices remain preserved under exact retirement audits and must not be replayed.
 
-## Physical Mode 1 matrix — call loop pending
+A physical Codex same-chat call showed the disposable fixture, returned authenticated
+Messages feedback to the exact session, released sharing, resumed actual work and
+delivered the factual recap. Computer control failed qualification: a planned focus
+click produced no action receipt, then direct typing reached the Codex reply textbox.
+The configured planner's unsupported schema is reproduced and repaired; physical
+click/type/scroll/AI targeting, spoken feedback and the Claude Code call loop remain
+pending. See STATUS.md for release evidence and limitations.
+
+## Physical Mode 1 matrix — remaining qualification
+
+During control testing, keep the fixture foregrounded and respond from the handset.
+Answering desktop chat questions can move focus to the coding app. After each click,
+visually verify the intended target before typing; an input receipt alone is not
+proof of correct focus. If planning fails, typing is blocked until a separately
+submitted explicit click is observed. No failed command is automatically replayed.
 
 For each documented Claude Code/Codex CLI surface, use a disposable coding project:
 

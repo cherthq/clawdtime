@@ -561,6 +561,69 @@ describe("runtime standby and mode boundaries", () => {
             expect(runtime.store.all("attention")).toHaveLength(0);
             expect(runtime.store.all("notice")).toHaveLength(1);
             expect(sends).toHaveLength(2); // Approval is consumed before generic response handling.
+            // A typed planner preflight refusal has sent no input. It should be
+            // acknowledged to the human, not stranded as an unknown inbound.
+            runtime.service.yieldSession(agent.token);
+            const requestId = "fixture-connected-control-request",
+              callId = "fixture-connected-call",
+              now = Date.now();
+            runtime.store.put<AttentionRequest>("attention", {
+              id: requestId,
+              sessionId: agent.session.id,
+              pairingId: paired.pairing.id,
+              taskId: "control-fixture",
+              idempotencyKey: "control-fixture",
+              reason: "decision",
+              question: "fixture",
+              createdAt: now,
+              deadline: now + 300_000,
+              state: "connected",
+              callId,
+            });
+            runtime.store.put<CallSession>("call", {
+              id: callId,
+              requestId,
+              pairingId: paired.pairing.id,
+              state: "connected",
+              remoteParticipantQualified: true,
+              createdAt: now,
+            });
+            runtime.store.saveState(`view-started:${requestId}`, true);
+            const command = {
+              ...approval,
+              id: "fixture-plan-refusal",
+              text: "do: focus the intended textbox",
+            };
+            runtime.store.put("inbound", {
+              id: command.id,
+              sealed: new Vault(config.encryptionKey).seal(command),
+              state: "pending",
+            });
+            await runtime.tick();
+            expect(
+              runtime.store.get<{ state: string }>("inbound", command.id)
+                ?.state,
+            ).toBe("done");
+            expect(
+              runtime.store.state<{ result: { state: string; code: string } }>(
+                `human-command:${command.id}`,
+              )?.result,
+            ).toMatchObject({
+              state: "not_started",
+              code: "planner_unavailable",
+            });
+            expect(
+              runtime.store.get<{ state: string }>(
+                "notice",
+                `${command.id}:notice`,
+              )?.state,
+            ).toBe("done");
+            expect(sends).toHaveLength(3);
+            expect(sends[2]?.text).toContain("No input was sent.");
+            expect(sends[2]?.text).toContain("visually verify");
+            expect(runtime.store.all("action")).toHaveLength(0);
+            await runtime.tick();
+            expect(sends).toHaveLength(3);
           }
         } finally {
           await runtime.stop();

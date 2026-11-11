@@ -12,6 +12,7 @@ import type {
   Pairing,
 } from "../contracts.js";
 import type { Store } from "../storage/store.js";
+import { ControlPreflightError } from "./errors.js";
 
 export const actionSchema = z.discriminatedUnion("kind", [
   z
@@ -66,6 +67,8 @@ export class ControlCoordinator {
     }
   }
   context(requestId: string, memberId: string) {
+    if (this.store.state(`view-stopped:${requestId}`))
+      throw new ControlPreflightError("stopped");
     const request = this.store.get<AttentionRequest>("attention", requestId);
     const pairing =
       request && this.store.get<Pairing>("pairing", request.pairingId);
@@ -89,9 +92,7 @@ export class ControlCoordinator {
       session.state !== "yielded" ||
       this.now() - (session.lastSeenAt ?? session.createdAt) > 20_000
     ) {
-      throw new Error(
-        "Control requires this paired member, an active private call and a cooperatively yielded agent.",
-      );
+      throw new ControlPreflightError("context_expired");
     }
     return { request, pairing, session, call };
   }
@@ -112,7 +113,7 @@ export class ControlCoordinator {
         .some(
           (a) =>
             ownedLeases.some((l) => l.id === a.leaseId) &&
-            ["pending", "unknown"].includes(a.state),
+            ["pending", "submitted", "unknown"].includes(a.state),
         )
     )
       throw new Error(
@@ -172,15 +173,21 @@ export class ControlCoordinator {
       lease.state !== "active" ||
       lease.expiresAt <= this.now()
     )
-      throw new Error("Control lease expired or stopped.");
+      throw new ControlPreflightError("stopped");
     const { session } = this.context(lease.requestId, memberId);
     if (session.controlEpoch !== lease.epoch)
-      throw new Error("Control ownership changed.");
+      throw new ControlPreflightError("context_expired");
     return lease;
   }
   async frame(leaseId: string, memberId: string) {
     const lease = this.check(leaseId, memberId);
-    const raw = await this.device.frame(lease);
+    let raw: Frame;
+    try {
+      raw = await this.device.frame(lease);
+    } catch {
+      this.check(leaseId, memberId);
+      throw new ControlPreflightError("frame_unavailable");
+    }
     const frame: Frame = {
       id: raw.id,
       capturedAt: raw.capturedAt,
@@ -201,7 +208,7 @@ export class ControlCoordinator {
       frame.width <= 0 ||
       frame.height <= 0
     )
-      throw new Error("A fresh frame is required.");
+      throw new ControlPreflightError("frame_unavailable");
   }
   async act(
     leaseId: string,
@@ -209,7 +216,7 @@ export class ControlCoordinator {
     actionId: string,
     frameId: string,
     input: InputAction,
-  ) {
+  ): Promise<ActionReceipt> {
     const lease = this.check(leaseId, memberId);
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(actionId))
       throw new Error("Invalid action ID.");
@@ -256,7 +263,7 @@ export class ControlCoordinator {
         afterFrame.capturedAt < frame.capturedAt
       )
         throw new Error("Post-action frame was not fresh.");
-      return this.store.put("action", {
+      return this.store.put<ActionReceipt>("action", {
         ...receipt,
         state: "observed",
         afterFrame,

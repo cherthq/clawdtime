@@ -5,6 +5,14 @@ import type { ControlLease, Frame } from "../contracts.js";
 import type { MediaDevicePort } from "../../media/device-port.js";
 import { actionSchema } from "./coordinator.js";
 import type { SingleActionPlanner } from "./human-router.js";
+import { ControlPreflightError } from "./errors.js";
+
+// Zod's discriminatedUnion emits oneOf, which this provider rejects. Ordinary
+// union emits supported anyOf; the strict local action schema still governs input.
+const modelPlanSchema = z.object({
+  action: z.union([...actionSchema.options, z.null()]),
+  clarification: z.string().max(500),
+});
 
 /** Model/provider selection retained from source agent-model.ts; no implicit fallback. */
 export class VisionPlanner implements SingleActionPlanner {
@@ -15,8 +23,10 @@ export class VisionPlanner implements SingleActionPlanner {
   ) {}
   async plan(task: string, lease: ControlLease) {
     z.string().trim().min(1).max(1000).parse(task);
-    const observed = await this.device.frameImage(lease);
-    const result = await this.generate({
+    const observed = await this.device.frameImage(lease).catch(() => {
+      throw new ControlPreflightError("frame_unavailable");
+    });
+    const output = await this.generate({
       model: this.model,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(12_000),
@@ -34,30 +44,35 @@ export class VisionPlanner implements SingleActionPlanner {
         },
       ],
       output: Output.object({
-        schema: z.object({
-          action: actionSchema.nullable(),
-          clarification: z.string().max(500),
-        }),
+        schema: modelPlanSchema,
       }),
-    });
-    if (!result.output.action)
-      throw new Error(
-        "The screen action needs clarification. Use a direct bounded action after reviewing the screen.",
-      );
+    })
+      .then((result) => result.output)
+      .catch((error: unknown) => {
+        const name = error instanceof Error ? error.name : "";
+        throw new ControlPreflightError(
+          ["TimeoutError", "AbortError"].includes(name)
+            ? "planning_timeout"
+            : "planner_unavailable",
+        );
+      });
+    if (!output?.action) throw new ControlPreflightError("planning_refused");
+    const parsed = actionSchema.safeParse(output.action);
+    if (!parsed.success) throw new ControlPreflightError("invalid_plan");
     // Reobserve once after planning and require identical pixels. Never bind an old plan
     // to a changed screen. The fresh frame's ID, not the planning frame, authorizes input.
-    const fresh = await this.device.frameImage(lease);
+    const fresh = await this.device.frameImage(lease).catch(() => {
+      throw new ControlPreflightError("frame_unavailable");
+    });
     if (fresh.dataUrl !== observed.dataUrl)
-      throw new Error(
-        "The screen changed while planning. Request a new action.",
-      );
+      throw new ControlPreflightError("screen_changed");
     const frame: Frame = {
       id: fresh.frame.id,
       capturedAt: fresh.frame.capturedAt,
       width: fresh.frame.width,
       height: fresh.frame.height,
     };
-    return { action: actionSchema.parse(result.output.action), frame };
+    return { action: parsed.data, frame };
   }
 }
 export function configuredPlanner(
