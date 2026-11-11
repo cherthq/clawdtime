@@ -220,3 +220,25 @@ without raw provider errors or content. Interrupted notices remain unknown; no
 automatic retry was added. Seven runtime cases and the full 111-test check pass.
 The pre-existing live unknown remains unresolved; local receipt improvements do
 not establish its outcome. Hosted release identity above remains authoritative.
+
+## Provider receipt diagnosis — November 11, 2026
+
+The user ran a scoped read-only administrator diagnostic on the exact provider
+account. Its `.chert-rpc` directory exists, is canonical, and has the required
+owner and mode 0700. The helper readiness marker names a live process and bridge
+version 1. **`text-operations.sqlite` and its WAL/SHM files do not exist.**
+This establishes the immediate receipt-lookup failure: Chert's read-only opener
+requires an existing secure journal, returns nil when it is absent, and the HTTP
+route maps that to 503 (`text operation unavailable`). General provider health
+does not verify this journal. This is distinct from an existing journal with no
+matching receipt, which would return 404.
+
+The helper log contains a `send-text-once` invocation, but the original response
+was not retained by the initial ClawdTime notice implementation. The send code
+checks request/account/chat identity before opening the journal. An early refusal
+is consistent with these observations; the exact failed send predicate is not
+proven. Do not infer safe resend from a currently absent journal, create an empty
+journal to erase uncertainty, or report an acknowledged/delivered message.
+
+The diagnostic changed no provider service, journal, permission or routing.
+ClawdTime remains paired, with its Mac locally stopped and no call placed.
