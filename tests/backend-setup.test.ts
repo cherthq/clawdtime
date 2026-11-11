@@ -108,6 +108,123 @@ function fixture(mode: "simulation" | "live" = "simulation") {
 }
 
 describe("same-session approved setup test", () => {
+  it("gives a late exact YES a bounded start window and a started call its full deadline", async () => {
+    const f = fixture(),
+      initial = f.setup.invite(f.agent.token).test;
+    await f.service.drain();
+    const advanceAlive = (ms: number) => {
+      for (let remaining = ms; remaining > 0;) {
+        const step = Math.min(remaining, 5000);
+        f.advance(step);
+        remaining -= step;
+        f.service.heartbeat(f.agent.token);
+        f.service.expire();
+        f.setup.expire();
+      }
+    };
+    expect(initial.expiresAt).toBe(initial.createdAt + 600_000);
+    advanceAlive(535_000);
+    const approvedAt = f.now();
+    expect(f.setup.receive(f.event)).toBe(true);
+    const approved = f.setup.get(f.agent.token).test!;
+    expect(approved.expiresAt).toBe(approvedAt + 600_000);
+    advanceAlive(60_000);
+    expect(f.setup.receive(f.event)).toBe(true);
+    expect(f.setup.receive({ ...f.event, id: "duplicate-yes" })).toBe(true);
+    expect(f.setup.get(f.agent.token).test).toEqual(approved);
+    f.service.yieldSession(f.agent.token);
+    const started = f.setup.start(f.agent.token);
+    expect(started.test.expiresAt).toBe(started.request.deadline);
+    expect(started.request.deadline).toBe(f.now() + 300_000);
+    await f.service.drain();
+    advanceAlive(6_000); // The original invitation expired five seconds after call start.
+    expect(f.now()).toBeGreaterThan(initial.expiresAt);
+    expect(f.setup.get(f.agent.token).test?.state).toBe("call_requested");
+    expect(f.service.status(f.agent.token, started.request.id).state).toBe(
+      "ringing",
+    );
+    expect(f.simulated.ended).toHaveLength(0);
+    expect(f.setup.receive({ ...f.event, id: "yes-during-call" })).toBe(false);
+    expect(f.setup.start(f.agent.token)).toMatchObject({
+      test: started.test,
+      request: { id: started.request.id, deadline: started.request.deadline },
+    });
+    expect(f.setup.get(f.agent.token).test?.expiresAt).toBe(
+      started.request.deadline,
+    );
+    advanceAlive(294_000);
+    expect(f.setup.get(f.agent.token).test?.state).toBe("expired");
+    await f.service.drain();
+    expect(f.simulated.ended).toHaveLength(1);
+    expect(f.setup.receive({ ...f.event, id: "yes-after-call-expiry" })).toBe(
+      false,
+    );
+    expect(() => f.setup.start(f.agent.token)).toThrow("closed");
+    expect(f.simulated.calls).toHaveLength(1);
+    f.store.close();
+  });
+
+  it("does not expire a started call when the approved start window subsequently closes", async () => {
+    const f = fixture();
+    f.setup.invite(f.agent.token);
+    await f.service.drain();
+    f.setup.receive(f.event);
+    const approved = f.setup.get(f.agent.token).test!;
+    for (let step = 0; step < 119; step++) {
+      f.advance(5000);
+      f.service.heartbeat(f.agent.token);
+      f.setup.expire();
+    }
+    f.service.yieldSession(f.agent.token);
+    const started = f.setup.start(f.agent.token);
+    await f.service.drain();
+    f.advance(5000);
+    f.service.heartbeat(f.agent.token);
+    f.setup.expire();
+    expect(f.now()).toBe(approved.expiresAt);
+    expect(f.setup.get(f.agent.token).test?.state).toBe("call_requested");
+    expect(f.setup.get(f.agent.token).test?.expiresAt).toBe(
+      started.request.deadline,
+    );
+    f.service.observeCall(started.request.id, "ended");
+    const before = f.store.all("call")[0];
+    f.setup.receive({ ...f.event, id: "yes-after-end" });
+    f.setup.start(f.agent.token);
+    await f.service.drain();
+    expect(f.store.all("call")[0]).toEqual(before);
+    expect(f.simulated.calls).toHaveLength(1);
+    f.store.close();
+  });
+
+  it.each([true, false])(
+    "keeps the unapproved deadline and never revives an expired invitation (legacy=%s)",
+    async (isLegacy) => {
+      const f = fixture(),
+        initial = f.setup.invite(f.agent.token).test;
+      const { approvalCode: _code, ...legacy } = initial;
+      const unapproved = isLegacy ? legacy : initial;
+      f.store.put("setup_test", unapproved);
+      await f.service.drain();
+      f.advance(599_999);
+      expect(
+        f.setup.receive({ ...f.event, id: "wrong", text: "YES WRONG" }),
+      ).toBe(false);
+      expect(f.setup.get(f.agent.token).test?.expiresAt).toBe(
+        initial.expiresAt,
+      );
+      f.advance(1);
+      expect(f.setup.receive({ ...f.event, id: "late-legacy" })).toBe(false);
+      const closed = f.store.get<SetupTest>("setup_test", unapproved.id)!;
+      expect(closed).toEqual({ ...unapproved, state: "expired" });
+      f.advance(1_000_000);
+      f.setup.expire();
+      expect(f.setup.receive({ ...f.event, id: "much-later" })).toBe(false);
+      expect(f.store.get("setup_test", unapproved.id)).toEqual(closed);
+      expect(f.simulated.calls).toHaveLength(0);
+      f.store.close();
+    },
+  );
+
   it("uses a unique exact challenge for new tests while preserving legacy bare-YES compatibility", async () => {
     const f = fixture(),
       test = f.setup.invite(f.agent.token).test;

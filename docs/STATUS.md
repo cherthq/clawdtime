@@ -417,3 +417,16 @@ registered in that same chat, preserving all prior checkpoints and unknown recei
 This is native-chat continuity, not preservation of the expired backend session.
 The user's explicitly authorized fresh invitation has a provider-acknowledged
 receipt; a new exact-code reply is still required before the approved second call.
+
+The second physical call attempt was acknowledged by the provider and rang, but
+ended automatically as the user answered. Diagnostics recorded zero Mac frames,
+no input actions and no view lease. The exact cause is reproducible: setup expiry
+remained ten minutes from invitation creation after authenticated approval and call
+start. Approval arrived near that boundary, so the setup timer canceled a new call
+that still had almost its entire five-minute request deadline remaining. Native
+call ended and media closed; terminal acknowledgement returned the same transport
+session to active without fabricating a human answer. No further call is authorized
+automatically. A stage-specific timer fix preserves the initial approval window,
+starts a bounded ten-minute ready window at the first authenticated YES, and uses
+the call request's five-minute deadline once started. Duplicate YES/start requests
+must not extend timers; expired tests and prior receipts remain unchanged.

@@ -187,6 +187,7 @@ export class SetupService {
           ...test,
           state: "call_requested",
           requestId: request.id,
+          expiresAt: request.deadline,
         }),
         request,
       };
@@ -352,10 +353,12 @@ export class SetupService {
           test.state === "awaiting_approval" &&
           this.store.effect(test.invitationEffectId)?.state === "done"
         ) {
+          const approvedAt = this.service.clock();
           this.store.put<SetupTest>("setup_test", {
             ...test,
             state: "approved",
-            approvedAt: this.service.clock(),
+            approvedAt,
+            expiresAt: approvedAt + 600_000,
             approvalEventId: event.id,
           });
           handled = true;
