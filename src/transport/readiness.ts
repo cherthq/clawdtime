@@ -17,6 +17,8 @@ export interface TransportReadiness {
   recovery?: {
     unknownNoticeCount: number;
     retiredObsoleteNoticeCount: number;
+    unknownEffectCount: number;
+    retiredSetupInvitationCount: number;
     blockingUncertainCount: number;
   };
   checkedAt: number;

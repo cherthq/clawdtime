@@ -360,3 +360,48 @@ Swift tests and the release build pass, including precision/boundary regressions
 The installed companion has not been replaced; macOS grants remain intact. This
 reproduction identifies a real defect but does not prove it caused the first call's
 missing screen. Slow first capture remains another unproven possibility.
+
+The user explicitly extended scope to repair Chert's strict text path for the
+approved test line. Subsequent deployment inspection found that a separate task
+installed Chert `f1f186ed` on that account at 19:01 UTC, between our two attempts.
+Its reservation-before-target change means `attempted` also covers initial target
+refusal. The running executable path matches that candidate. A fresh read-only
+inspection at 14:25 Eastern returned `reply_map_thread/accepted:false` again.
+That stage alone does not distinguish ordinary account-qualified DM routing from
+a real reply thread. Independent source tests reproduced rejection of an exact
+ordinary account/peer mapping. Candidate `742b4068` in isolated
+`/Users/garygao/chert-clawdtime-text-path` fixes only strict text acceptance while
+preserving all bridge checks and non-text behavior. Tests failed before and pass
+after; independent review, signed paired build and isolated target contracts pass.
+Guarded account-only installation is being prepared; no new message/call occurred.
+The failed invitation expired without approval or a call, and its unknown effect
+remains unchanged. The original foreground bridge is still heartbeating in this
+same native coding chat.
+
+## Scoped text repair and same-chat recovery follow-up
+
+Chert candidate `742b4068` was installed by the owner using the guarded account-only
+installer. Its exact-target inspection now accepts the ordinary DM route; receipt
+health and identity checks pass. The installer reported unchanged journals and
+other-account job PIDs, with the previous paired artifacts retained for rollback.
+The stopped ingress job required one recorded kickstart. Its command exceeded the
+script's twelve-second wait, but subsequent independent read-only inspection found
+the tunnel process running and public status/identity endpoints returning healthy
+HTTP 200 responses. No second kickstart, message or call was used for this check.
+The old attempted invitation remains unknown and must never be replayed.
+
+A narrowly audited retirement can now exclude that exact expired, never-approved
+legacy invitation from readiness while preserving its original effect, receipt and
+cursor. Recovery creates a distinct invitation in the same active backend session
+only after explicit new-invitation authorization, current readiness and immutable
+identity checks. Each new invitation requires its own authenticated `YES <code>`;
+a delayed old YES cannot authorize it. The one-shot helper preserves the original
+foreground bridge and its heartbeat. Tests include running the frozen prior bridge
+against the recovery API, lost-response reconciliation and unknown-outcome refusal.
+
+The fractional capture timestamp fix `f57798c` is installed in the existing
+companion path with a stable signing identity and a retained rollback bundle.
+Sharing was stopped before replacement and stays stopped. The signature transition
+requires fresh macOS grants, which the owner has been asked to provide. This is an
+internal signed pilot build, not notarized public distribution. No second physical
+call or screen/control/continuation/result acceptance has occurred.

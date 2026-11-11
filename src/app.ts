@@ -15,6 +15,10 @@ import type {
 } from "./contracts.js";
 import { HumanRouter } from "./control/human-router.js";
 import { SetupService } from "./pairing/setup.js";
+import {
+  setupRetirementInput,
+  type SetupRetirementInput,
+} from "./pairing/retired-setup.js";
 
 export interface AppOptions {
   origin: string;
@@ -29,6 +33,7 @@ export interface AppOptions {
     evidenceReference: string;
   }) => unknown;
   callDiagnostics?: (requestId: string) => Promise<unknown>;
+  retireSetupInvitation?: (input: SetupRetirementInput) => unknown;
 }
 const bearer = (value?: string) =>
   value?.startsWith("Bearer ") ? value.slice(7) : "";
@@ -167,6 +172,15 @@ export function createApp(
   app.get("/api/setup/test", (c) =>
     c.json(setup.get(bearer(c.req.header("authorization")))),
   );
+  app.post("/api/setup/test/retry", async (c) => {
+    const { previousTestId } = z
+      .object({ previousTestId: z.string().min(1).max(200) })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      setup.retry(bearer(c.req.header("authorization")), previousTestId),
+    );
+  });
   for (const [path, action] of [
     ["/api/setup/test", (token: string) => setup.invite(token)],
     ["/api/setup/test/start", (token: string) => setup.start(token)],
@@ -302,6 +316,18 @@ export function createApp(
     options.retireObsoleteNotice(input);
     return c.json({
       retiredFromGating: true,
+      deliveryOutcome: "unknown",
+      replayAllowed: false,
+    });
+  });
+  app.post("/internal/setup-invitations/retire", async (c) => {
+    if (!options.retireSetupInvitation) return c.notFound();
+    const result = options.retireSetupInvitation(
+      setupRetirementInput.parse(await c.req.json()),
+    );
+    return c.json({
+      retiredFromGating: true,
+      result,
       deliveryOutcome: "unknown",
       replayAllowed: false,
     });

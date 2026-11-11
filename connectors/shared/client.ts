@@ -143,6 +143,11 @@ export class ClawdTimeClient {
   setupInvite() {
     return this.api<{ test: SetupTest }>("/api/setup/test", {});
   }
+  setupRetry(previousTestId: string) {
+    return this.api<{ test: SetupTest }>("/api/setup/test/retry", {
+      previousTestId,
+    });
+  }
   setupStart() {
     return this.api<{ test: SetupTest; request: AttentionRequest }>(
       "/api/setup/test/start",

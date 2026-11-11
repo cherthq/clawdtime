@@ -35,11 +35,15 @@ another coding agent. Keep stdin open and this process alive; never background i
 with a daemon/nohup or finalize/stop this chat while setup is pending.
 
 Send JSONL objects with `id`, `command`, and optional `args` to that same process:
-`status` → `invite` → wait for the real authenticated SMS YES → `yield` with
+`status` → `invite` → wait for the real authenticated SMS `YES <approvalCode>` → `yield` with
 `backgroundActorsStopped:true` → `start` → bounded `result` → `ack` → `resume` →
 perform the authorized continuation → `complete` → `verify`. Use stable effect IDs.
 Keep using the native question tool while waiting for the human. A question-tool
 answer is not SMS approval: only backend `test.state=approved` permits start.
+New invitations include their exact eight-character approvalCode; the human replies
+with the exact `YES <code>` shown in that invitation. Bare YES is accepted only for
+a legacy test with no approvalCode. Never substitute a previous code or manufacture
+an approval event. Keep waiting with the native question tool and poll status.
 While yielded, only bridge status/diagnostics/result/ack/resume/cancel/terminal-ack and nonmutating human
 questions are allowed. `result` needs the exact requestId and waitSeconds ≤20;
 `ack` needs responseId; `resume` needs current controlEpoch; `complete` needs a
@@ -76,6 +80,28 @@ attempt needs explicit user authorization for another test and a new attempt ID
 recorded against the old request **in this same native chat**, never another coding
 client/chat. Do not create that attempt automatically or use it to escape an
 unknown effect. Full protocol and operator commands are in `docs/CONNECTORS.md`.
+
+One narrow exception can preserve the current live bridge/session: an expired,
+never-approved legacy invitation with no call may be superseded only after the
+lead records an immutable retirement audit and the user explicitly authorizes a
+new invitation. Retirement leaves the original delivery unknown and never permits
+resending it. Do not infer approval or delivery, delete its receipt, or invoke
+retry automatically. After reading the current owned test, a new bridge accepts
+`retry` with `previousTestId`, `authorizeNewInvitation:true` and
+`operatorRetirementConfirmed:true`, using one stable command ID. The backend still
+enforces the audit; a changed id cannot retry an unknown effect. Wait for the new
+test's exact SMS code before yielding/starting a call.
+
+An already-running old bridge cannot hot reload this command. Only after the same
+explicit authorization, the lead may use the narrow one-shot CLI `setup-retry`
+with the existing project/adapter/run and previous test IDs plus
+`--authorize-new-invitation true`. It proves the existing live bridge PID and session,
+uses its protected token, and writes only a separate recovery intent. It never
+registers, heartbeats, stops/restarts the bridge, or launches a coding client. Keep
+the old process alive, then send its existing `status` command so it learns the
+new binding. Continue this same chat. Lost recovery replies reconcile through GET
+status only; no second POST is sent. Do not use this operation for stopped sessions,
+approved/called attempts, unrelated unknown effects or general retries.
 
 ## Existing MCP sessions
 

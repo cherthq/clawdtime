@@ -207,7 +207,7 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
         sender: binding.recipient,
         lineId: binding.lineId,
         conversationId: binding.conversationId,
-        text: "YES",
+        text: `YES ${invitation.body.test.approvalCode}`,
       }),
     ).toBe(true);
     await h.send("/api/sessions/yield", a.token, {});

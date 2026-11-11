@@ -19,6 +19,7 @@ import {
 } from "./state.js";
 import { startHeartbeat } from "./heartbeat.js";
 import { requireAttentionReadiness, summarizeReadiness } from "./readiness.js";
+import { requireRetryPredecessor, validateRetryResult } from "./setup-retry.js";
 
 type Command = { id: string; command: string; args?: Record<string, unknown> };
 interface BridgeState {
@@ -48,6 +49,7 @@ const effects = new Set([
   "verify",
   "cancel",
   "terminal-ack",
+  "retry",
 ]);
 const textArg = (args: Record<string, unknown>, key: string, max = 200) => {
   const value = args[key];
@@ -234,6 +236,18 @@ export async function startSetupSession(options: {
           command.command === "complete"
             ? textArg(args, "text", 8000)
             : undefined;
+        const previousTestId =
+          command.command === "retry"
+            ? textArg(args, "previousTestId")
+            : undefined;
+        if (
+          command.command === "retry" &&
+          (args.authorizeNewInvitation !== true ||
+            args.operatorRetirementConfirmed !== true)
+        )
+          throw new Error(
+            "Retry requires explicit user authorization for a new invitation and lead confirmation of the immutable retirement audit. Never retry automatically or infer delivery from retirement.",
+          );
         const waitSeconds = args.waitSeconds ?? 0;
         if (
           command.command === "result" &&
@@ -283,6 +297,26 @@ export async function startSetupSession(options: {
               continue;
             }
           }
+          if (command.command === "retry") {
+            requireRetryPredecessor(
+              bridge.test,
+              previousTestId!,
+              run.session!.id,
+              connection.pairing.id,
+            );
+            if (
+              Object.entries(bridge.effects).some(
+                ([id, effect]) =>
+                  id !== command!.id &&
+                  effect.command === "retry" &&
+                  !effect.rejected &&
+                  !Object.hasOwn(effect, "result"),
+              )
+            )
+              throw new Error(
+                "A retry intent has an unknown outcome. Reconcile status; never replace it with another command id.",
+              );
+          }
           // Each setup operation has a single stable intent, even if caller changes its id.
           if (
             ["invite", "start", "complete", "verify", "cancel"].includes(
@@ -309,7 +343,7 @@ export async function startSetupSession(options: {
               "Terminal acknowledgement already has a saved intent; use its original id or inspect status. A different epoch requires a definitive rejection first.",
             );
           // Local/read-only readiness failures have no effect intent and may be corrected safely.
-          if (["invite", "start"].includes(command.command))
+          if (["invite", "start", "retry"].includes(command.command))
             requireAttentionReadiness(await client.doctor());
           bridge.effects[command.id] = {
             command: command.command,
@@ -342,6 +376,14 @@ export async function startSetupSession(options: {
           }
           case "invite":
             result = await client.setupInvite();
+            break;
+          case "retry":
+            result = validateRetryResult(
+              await client.setupRetry(previousTestId!),
+              previousTestId!,
+              run.session!.id,
+              connection.pairing.id,
+            );
             break;
           case "yield":
             result = await client.yield();
@@ -398,7 +440,7 @@ export async function startSetupSession(options: {
             break;
           default:
             throw new Error(
-              "Unknown command. Use status, diagnostics, invite, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
+              "Unknown command. Use status, diagnostics, invite, retry, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
             );
         }
         if (result && Object.hasOwn(result, "test")) bridge.test = result.test;

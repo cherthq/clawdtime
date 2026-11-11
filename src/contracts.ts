@@ -176,6 +176,10 @@ export interface SetupTest {
     | "canceled"
     | "expired";
   invitationEffectId: string;
+  /** Fresh attempts bind SMS approval to this code; absent only for legacy tests. */
+  approvalCode?: string;
+  /** Explicit recovery preserves the expired predecessor and its unknown receipt. */
+  previousTestId?: string;
   approvedAt?: number;
   approvalEventId?: string;
   requestId?: string;

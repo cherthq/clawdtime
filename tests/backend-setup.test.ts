@@ -3,7 +3,7 @@ import { Store } from "../src/storage/store.js";
 import { ClawdTime } from "../src/attention/service.js";
 import { SetupService } from "../src/pairing/setup.js";
 import { SimulationTransport } from "../src/transport/simulation.js";
-import type { Transport } from "../src/contracts.js";
+import type { SetupTest, Transport } from "../src/contracts.js";
 
 function fixture(mode: "simulation" | "live" = "simulation") {
   let now = 100_000;
@@ -85,7 +85,10 @@ function fixture(mode: "simulation" | "live" = "simulation") {
     sender: binding.recipient,
     lineId: binding.lineId,
     conversationId: binding.conversationId,
-    text: "YES",
+    get text() {
+      const test = store.all<SetupTest>("setup_test").at(-1);
+      return test?.approvalCode ? `YES ${test.approvalCode}` : "YES";
+    },
   };
   return {
     store,
@@ -105,6 +108,42 @@ function fixture(mode: "simulation" | "live" = "simulation") {
 }
 
 describe("same-session approved setup test", () => {
+  it("uses a unique exact challenge for new tests while preserving legacy bare-YES compatibility", async () => {
+    const f = fixture(),
+      test = f.setup.invite(f.agent.token).test;
+    expect(test.approvalCode).toMatch(/^[A-F0-9]{8}$/);
+    await f.service.drain();
+    for (const text of [
+      "YES",
+      "YES DEADBEEF",
+      "YES",
+      "YES BAD",
+      "NO other",
+      "CANCEL other",
+    ])
+      expect(f.setup.receive({ ...f.event, id: `new:${text}`, text })).toBe(
+        false,
+      );
+    expect(f.setup.get(f.agent.token).test?.state).toBe("awaiting_approval");
+    expect(
+      f.setup.receive({
+        ...f.event,
+        id: "exact",
+        text: `yes ${test.approvalCode!.toLowerCase()}`,
+      }),
+    ).toBe(true);
+    f.setup.cancel(f.agent.token);
+    const other = f.register("legacy"),
+      legacy = f.setup.invite(other.token).test;
+    const { approvalCode: _code, ...old } = legacy;
+    f.store.put("setup_test", old);
+    await f.service.drain();
+    expect(
+      f.setup.receive({ ...f.event, id: "legacy-bare", text: "YES" }),
+    ).toBe(true);
+    expect(f.setup.get(other.token).test?.state).toBe("approved");
+    f.store.close();
+  });
   it("requires fresh live readiness before claiming the setup is configured", () => {
     const f = fixture("live");
     f.store.saveState(`device-readiness:${f.pairing.pairing.id}`, null);

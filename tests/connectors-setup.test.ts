@@ -268,6 +268,12 @@ function backendFixture() {
     binding,
     calls,
     request,
+    approval: () => {
+      const test = store
+        .all<any>("setup_test")
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      return test?.approvalCode ? `YES ${test.approvalCode}` : "YES";
+    },
     block: (value: boolean) => {
       blocked = value;
     },
@@ -348,7 +354,7 @@ it("keeps setup, approved call, result acknowledgement and continuation in the s
         sender: f.binding.recipient,
         conversationId: f.binding.conversationId,
         lineId: f.binding.lineId,
-        text: "YES",
+        text: f.approval(),
       }),
     ).toBe(true);
     expect((await b.send("yield-invalid", "yield")).ok).toBe(false);
@@ -479,7 +485,7 @@ it("acknowledges a failed setup only after confirmed cleanup, then continues the
       sender: f.binding.recipient,
       conversationId: f.binding.conversationId,
       lineId: f.binding.lineId,
-      text: "YES",
+      text: f.approval(),
     });
     await b.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await b.send("start", "start");
@@ -573,7 +579,7 @@ it("preserves an unknown terminal acknowledgement and forbids a replacement inte
       sender: f.binding.recipient,
       conversationId: f.binding.conversationId,
       lineId: f.binding.lineId,
-      text: "YES",
+      text: f.approval(),
     });
     await b.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await b.send("start", "start");
@@ -627,7 +633,7 @@ it("reads only current-test diagnostics while yielded without checkpoint writes 
       sender: f.binding.recipient,
       conversationId: f.binding.conversationId,
       lineId: f.binding.lineId,
-      text: "YES",
+      text: f.approval(),
     });
     await b.send("yield", "yield", { backgroundActorsStopped: true });
     const started = await b.send("start", "start");

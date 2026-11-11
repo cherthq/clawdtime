@@ -1,3 +1,4 @@
+import { setupInvitationRetirementValid } from "../pairing/retired-setup.js";
 import {
   PreflightBlocked,
   freshEvidence,
@@ -1050,9 +1051,14 @@ export class ClawdTime {
         c.kind === "session" ? this.authenticateSession(raw) : undefined;
     const pairing = this.pairing(session?.pairingId ?? c.subjectId),
       now = this.clock();
-    const unknownEffects = this.store
+    const unknown = this.store
       .effects("unknown")
-      .filter((e) => e.payload.pairingId === pairing.id).length;
+      .filter((e) => e.payload.pairingId === pairing.id);
+    const unknownEffects = unknown.length;
+    const retiredSetupInvitationCount = unknown.filter((e) =>
+      setupInvitationRetirementValid(this.store, e, now),
+    ).length;
+    const blockingUnknownEffects = unknownEffects - retiredSetupInvitationCount;
     const checks: ReadinessCheck[] = [];
     const mode =
       this.store.state<string>("runtime:mode") ?? this.transport.mode;
@@ -1115,12 +1121,14 @@ export class ClawdTime {
     });
     checks.push({
       id: "unknown_effects",
-      status: unknownEffects === 0 ? "pass" : "fail",
+      status: blockingUnknownEffects === 0 ? "pass" : "fail",
       message:
-        unknownEffects === 0
-          ? "No uncertain effects are retained for this pairing."
+        blockingUnknownEffects === 0
+          ? retiredSetupInvitationCount
+            ? "Only exactly retired expired setup invitations retain unknown delivery; none may be retried."
+            : "No uncertain effects are retained for this pairing."
           : "Uncertain effects require reconciliation before live readiness.",
-      ...(unknownEffects
+      ...(blockingUnknownEffects
         ? {
             nextAction:
               "Inspect existing provider/action IDs; never retry with a new key.",
@@ -1147,6 +1155,8 @@ export class ClawdTime {
       ...(session ? { session } : {}),
       ready: mode === "simulation" ? pairing.allowView : liveReady,
       unknownEffects,
+      retiredSetupInvitationCount,
+      blockingUnknownEffects,
       physicalAcceptance: false,
       readiness: { checkedAt: now, mode, liveReady, checks },
     };

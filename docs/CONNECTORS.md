@@ -90,7 +90,10 @@ repeated status reads. The bridge does not accept shell commands or arbitrary UR
 
 These are sequential examples, not a script to blindly feed at startup. `invite`
 queues one invitation SMS; it does not call. Wait with the native question tool
-and read `status` until the backend has received the real authenticated SMS YES.
+and read `status` until the backend has received the real authenticated SMS
+`YES <approvalCode>` matching the code in that invitation. New initial and recovery
+tests use a unique eight-character hexadecimal code. Bare `YES` applies only to a
+legacy test without `approvalCode`; previous codes never authorize a new test.
 An answer in the coding chat cannot substitute for that approval. Stop/join all
 conflicting actors before `yield`; `start` requires backend approval and the same
 yielded session. Only the lead may initiate the live pilot. A closed test cannot
@@ -178,11 +181,80 @@ If the bridge already closed and the backend session stopped, preserve its recei
 IDs and establish known cleanup with the lead. A recovery attempt is a separately
 authorized test, with a new attempt/run ID explicitly recorded against the prior
 request in **the same existing native coding chat**. Do not launch another coding
-client/chat. Setup tests remain immutable per session; there is no automatic new
+client/chat. Existing test records remain immutable; there is no automatic new
 trial, retry loop, migration of an old token or revival of the stopped session.
 The user must explicitly approve another test, and the new invitation still
-requires authenticated SMS YES. Unknown call/input/cleanup forbids replacement
-attempts. No recovery-attempt automation is implemented.
+requires its exact authenticated SMS approval code. Unknown call/input/cleanup
+forbids replacement attempts. The narrow operator-audited invitation exception
+below does not change those call/control rules.
+
+### Explicit recovery of an expired legacy invitation
+
+An **expired, never-approved legacy invitation with no call** can have a successor
+in the same live session only when the lead has inserted the backend's immutable,
+identity-bound retirement audit and the user explicitly authorizes a new invitation.
+Retirement retains the original effect as unknown, preserves its receipt and event
+cursor, and does not establish either delivery or non-delivery. It never permits
+resending that effect. This is not a general retry, a way around an uncertain call
+or input, or permission to start another coding client/chat.
+
+After `status` identifies the exact current predecessor, new bridge code accepts:
+
+```jsonl
+{
+  "id": "retry-invitation-1",
+  "command": "retry",
+  "args": {
+    "previousTestId": "EXPIRED_OWNED_TEST_ID",
+    "authorizeNewInvitation": true,
+    "operatorRetirementConfirmed": true
+  }
+}
+```
+
+The command refuses a different owner/test, any approval or call request, absent
+explicit authorization, missing retirement evidence or failed live readiness.
+It persists one stable intent before POST and updates its test binding only after
+a valid same-session successor response. Keep the same command ID after a definite
+rejection has been corrected; unknown outcomes require read-only status inspection
+and cannot be retried under a replacement ID. A new invitation still requires
+the exact `YES <approvalCode>` sent in that new invitation. Use the native question
+tool while waiting; a coding-chat response is not that SMS approval. Never invoke
+`retry` automatically merely because an invitation timed out.
+
+For a foreground bridge already running code without `retry`, there is no hot
+reload. With the same explicit authorization and audit, the lead can execute the
+following one-shot helper while retaining the existing bridge process handle:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup-retry --agent codex --project /absolute/project --run-id EXISTING_CHAT_RUN_ID --previous-test-id EXPIRED_OWNED_TEST_ID --authorize-new-invitation true
+```
+
+This helper verifies the private PID lock, an alive same-user `setup-session`
+process whose command includes the exact run ID, protected run/checkpoint identity,
+and a fresh matching backend session. It sends only the scoped recovery POST using
+the existing session credential. It never registers a session, sends heartbeats,
+launches another coding client, stops the bridge or writes the old bridge's files.
+A separate fingerprinted owner-only intent records the existing native identity
+and predecessor. A lost POST reply is reconciled via GET status; a second POST is
+never sent while that outcome remains unknown. Its output explicitly leaves
+invitation delivery unverified.
+
+After the helper returns, send `status` to the **original** bridge; that old code
+already learns the backend's current test from status. Keep waiting in this chat
+for the new SMS code, then use its existing yield/start/result flow. Do not call
+the old bridge's cached `invite` to learn the successor. Do not close stdin or
+restart anything. The one-shot operation is restricted to a live original bridge
+and cannot revive a stopped session. The human/lead must keep concurrent mutation
+commands out of this narrow recovery window.
+
+`tests/connectors-setup-retry.test.ts` freezes the pre-retry bridge source from
+`f57798c`, runs that Node bridge against an in-memory synthetic backend, loses the
+accepted retry response, and proves GET-only reconciliation followed by old
+status/yield/start on the new test in the same session. It checks unchanged old
+checkpoint/run files until the old process handles status, one registration,
+unchanged cursor/unknown predecessor, and no restart. These are synthetic protocol
+tests, not a native coding-client, live line, delivery or screen acceptance claim.
 
 Validation: `npx vitest run tests/connectors-setup.test.ts` exercises same-process
 registration → invitation → synthetic authenticated approval → yield → one simulated

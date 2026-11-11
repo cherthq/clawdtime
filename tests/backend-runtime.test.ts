@@ -545,7 +545,7 @@ describe("runtime standby and mode boundaries", () => {
               lineId,
               sender: tester,
               conversationId: `iMessage;-;${tester}`,
-              text: "YES",
+              text: `YES ${test.approvalCode}`,
             };
             runtime.store.put("inbound", {
               id: approval.id,

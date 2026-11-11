@@ -51,7 +51,7 @@ The setup message does the handoff to your existing coding agent:
    for your answers or permissions until verified or explicitly canceled.
 4. **Approve one real test.** Once readiness passes, the agent texts:
    “ClawdTime is configured. Ready for one FaceTime video test showing this Mac’s
-   selected screen? Reply YES when ready.” It waits for your authenticated YES,
+   selected screen? Reply YES followed by the code in this invitation.” It waits for that authenticated reply,
    yields conflicting work, and initiates one call through the integration.
 5. **Confirm the screen and continue.** While viewing the screen, say
    “ClawdTime, answer I can see my screen” or text “answer: I can see my screen”.

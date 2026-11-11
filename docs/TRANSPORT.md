@@ -257,7 +257,8 @@ session (case/terminal punctuation ignored), normal continuation,
 completed work and an acknowledged Messages result receipt. Simulation cannot
 produce a verified setup. Screens remain transient; the gate retains frame
 metadata only. Unknown invitations and the existing global unknown-outcome gate
-remain blocking; setup never retries or clears an existing unknown notice.
+remain blocking except for the exact operator supersession described below; setup
+never retries or clears an existing unknown notice.
 
 During an origin migration, `CLAWDTIME_COMPATIBLE_ORIGINS` may contain at most eight
 comma-separated exact HTTPS origins. The canonical `CLAWDTIME_ORIGIN` remains the
@@ -316,3 +317,40 @@ Persisted diagnostic timestamps and counters distinguish notice playback, lease
 creation, first frame reception and screen-video emission after the live media
 object closes. Emission proves media processing, not rendering on the handset;
 the separate human confirmation and setup-verification gates still apply.
+
+### Expired legacy setup invitation supersession
+
+The operator-authenticated `POST /internal/setup-invitations/retire` recognizes
+only the original uncoded setup invitation. Its test must be expired, never
+approved and never called. The exact session/pairing identity, historical message
+payload, stable origin, provider `attempted` receipt fingerprint/GUID, retained
+cursor and operator evidence digest must match. Retirement refuses other pending,
+running or uncertain external operations and unresolved control, except an
+independently validated obsolete onboarding notice. It does not contact providers.
+
+The operation inserts an audit without modifying the original test, effect,
+receipt, cursor or provider state. Delivery stays **unknown** and the original
+origin must never be resent. The native preflight and session doctor exempt only
+the unchanged audited effect; malformed or mutated evidence restores blocking.
+Both retain total unknown counts and separately report
+`retiredSetupInvitationCount`. Session heartbeat, control epoch and cooperative
+state changes do not alter the immutable session identity proof.
+
+After explicit user authorization, `POST /api/setup/test/retry` with
+`{previousTestId}` may create one new invitation in the same active, freshly
+heartbeating live session. It requires the exact current retired test, fresh
+readiness and no other uncertain work. It does not re-register the agent, revive
+stopped sessions, change the old record or place a call. Ordinary `invite` never
+replaces a test. The new record preserves `previousTestId`; status chooses the
+newest attempt deterministically. A duplicate retry is rejected rather than
+creating another attempt; clients reconcile through GET status after uncertainty.
+
+Every newly created setup invitation includes an independent eight-character
+approval code and requires the exact verified DM `YES <code>` (case-insensitive).
+An old bare `YES`, wrong code, reused event, unrelated sender/line/conversation or
+reply before acknowledgement of the new invitation cannot approve it. Bare YES
+remains compatible only with existing legacy uncoded tests. Exact NO/CANCEL stops
+the current test; additional text is not a command. An approved test still needs
+explicit agent yielding before a single call and the existing physical acceptance
+chain before verification. Coded invitations are outside this narrow legacy
+retirement mechanism.

@@ -1,4 +1,9 @@
 import { noticeRetirementValid } from "../control/obsolete-notice.js";
+import {
+  retireSetupInvitation,
+  setupInvitationRetirementValid,
+  type SetupRetirementInput,
+} from "../pairing/retired-setup.js";
 import { mediaStatusSchema } from "./media-diagnostics.js";
 import { z } from "zod";
 import type {
@@ -104,6 +109,23 @@ export class NativeTransport implements Transport {
   readonly messages: NativeMessages;
   readonly vault: Vault;
   private polling = false;
+  retireSetupInvitation(input: SetupRetirementInput) {
+    const pairing = this.store.get<Pairing>("pairing", input.pairingId);
+    if (!pairing) throw new DomainError(409, "Setup pairing is unavailable.");
+    this.guard(pairing);
+    const b = this.config.binding;
+    return retireSetupInvitation(
+      this.store,
+      {
+        lineId: b.lineId,
+        providerLineId: b.providerLineId,
+        phone: b.phone,
+        instanceId: b.instanceId,
+        fingerprint: this.bindingFingerprint(),
+      },
+      input,
+    );
+  }
   constructor(
     readonly store: Store,
     readonly config: NativeTransportConfig,
@@ -361,8 +383,19 @@ export class NativeTransport implements Transport {
         status: "not_applicable",
         message: `${retiredNotices} obsolete onboarding notice(s) retain unknown delivery under an exact operator supersession audit; none may be retried.`,
       });
+    const unknownEffects = this.store.effects("unknown");
+    const retiredSetupInvitations = unknownEffects.filter((e) =>
+      setupInvitationRetirementValid(this.store, e, now),
+    ).length;
+    if (retiredSetupInvitations)
+      checks.push({
+        id: "expired_setup_invitation_delivery",
+        status: "not_applicable",
+        message: `${retiredSetupInvitations} expired setup invitation(s) retain unknown delivery under an exact operator supersession audit; none may be retried.`,
+      });
     const uncertain =
-      this.store.effects("unknown").length +
+      unknownEffects.length -
+      retiredSetupInvitations +
       this.store.all<CallSession>("call").filter((c) => c.state === "unknown")
         .length +
       unknownNotices.length -
@@ -386,6 +419,8 @@ export class NativeTransport implements Transport {
       recovery: {
         unknownNoticeCount: unknownNotices.length,
         retiredObsoleteNoticeCount: retiredNotices,
+        unknownEffectCount: unknownEffects.length,
+        retiredSetupInvitationCount: retiredSetupInvitations,
         blockingUncertainCount: uncertain,
       },
       checkedAt: now,

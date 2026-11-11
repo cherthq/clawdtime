@@ -53,8 +53,9 @@ run identity/checkpoint and disclose that limit; never promise an immortal sessi
 
 6. Only once local and remote readiness pass, send the setup invitation through
    the bridge's invite command. It texts: "ClawdTime is configured. Ready for
-   one FaceTime video test showing this Mac’s selected screen? Reply YES when
-   ready." Wait for the authenticated SMS YES. Do not treat elapsed time as YES.
+   one FaceTime video test showing this Mac’s selected screen? Reply YES <code> when
+   ready." Use the actual code from the invitation. Wait for that exact authenticated
+   SMS reply; bare YES or a code from an older attempt is not approval.
    Never bypass pending unknown sends/calls or blindly retry external effects.
 
 7. Stop conflicting coding activity and background actors, then yield using

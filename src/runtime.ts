@@ -217,6 +217,10 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   const app = createApp(service, control, human, {
     origin,
     compatibleOrigins,
+    retireSetupInvitation:
+      transport instanceof NativeTransport
+        ? (input) => transport.retireSetupInvitation(input)
+        : undefined,
     callDiagnostics:
       transport instanceof NativeTransport
         ? (requestId) => transport.mediaStatus(requestId)

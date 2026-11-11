@@ -1,3 +1,8 @@
+import { randomBytes } from "node:crypto";
+import {
+  legacySetupInvitation,
+  setupInvitationReplacementAllowed,
+} from "./retired-setup.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -9,8 +14,11 @@ import { ClawdTime } from "../attention/service.js";
 import { DomainError, hash, id } from "../storage/security.js";
 import type { NativeMessage } from "../transport/native-messages.js";
 
-const invitation =
-  "ClawdTime is configured. Ready for one FaceTime video test showing this Mac’s selected screen? Reply YES when ready.";
+const invitation = (code: string) =>
+  legacySetupInvitation.replace(
+    "Reply YES when ready.",
+    `Reply YES ${code} when ready.`,
+  );
 const open = new Set<SetupTest["state"]>([
   "awaiting_approval",
   "approved",
@@ -29,7 +37,10 @@ export class SetupService {
     const test =
       this.store
         .all<SetupTest>("setup_test")
-        .find((t) => t.sessionId === session.id) ?? null;
+        .filter((t) => t.sessionId === session.id)
+        .sort(
+          (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id),
+        )[0] ?? null;
     return { session, test };
   }
   get(raw: string) {
@@ -38,9 +49,38 @@ export class SetupService {
   invite(raw: string) {
     const { session, test } = this.current(raw);
     if (test) return { test };
+    return this.create(session, undefined, raw);
+  }
+  retry(raw: string, previousTestId: string) {
+    const { session, test } = this.current(raw);
+    const effect = test
+      ? this.store.effect(test.invitationEffectId)
+      : undefined;
+    if (
+      this.service.transport.mode !== "live" ||
+      !test ||
+      test.id !== previousTestId ||
+      !effect ||
+      session.state !== "active" ||
+      !Number.isFinite(session.lastSeenAt) ||
+      this.service.clock() - session.lastSeenAt! > 20_000 ||
+      session.lastSeenAt! > this.service.clock() + 1000 ||
+      !setupInvitationReplacementAllowed(
+        this.store,
+        effect,
+        this.service.clock(),
+      )
+    )
+      throw new DomainError(
+        409,
+        "An exact retired expired invitation in this live session is required before a new attempt.",
+      );
+    return this.create(session, previousTestId, raw);
+  }
+  private create(session: AgentSession, previousTestId?: string, raw?: string) {
     if (
       this.service.transport.mode === "live" &&
-      !this.service.doctor(raw).readiness.liveReady
+      !this.service.doctor(raw!).readiness.liveReady
     )
       throw new DomainError(
         409,
@@ -69,7 +109,21 @@ export class SetupService {
           "Another session already owns the setup test for this conversation.",
         );
       const testId = id("setup"),
-        createdAt = this.service.clock();
+        createdAt = Math.max(
+          this.service.clock(),
+          ...this.store
+            .all<SetupTest>("setup_test")
+            .filter((t) => t.sessionId === session.id)
+            .map((t) => t.createdAt + 1),
+        );
+      let approvalCode: string;
+      do {
+        approvalCode = randomBytes(4).toString("hex").toUpperCase();
+      } while (
+        this.store
+          .all<SetupTest>("setup_test")
+          .some((t) => t.approvalCode === approvalCode)
+      );
       const next: SetupTest = {
         id: testId,
         sessionId: session.id,
@@ -77,6 +131,8 @@ export class SetupService {
         createdAt,
         expiresAt: createdAt + 600_000,
         state: "awaiting_approval",
+        approvalCode,
+        ...(previousTestId ? { previousTestId } : {}),
         invitationEffectId: `${testId}:invite`,
       };
       this.store.put("setup_test", next);
@@ -88,7 +144,7 @@ export class SetupService {
         payload: {
           setupTestId: next.id,
           pairingId: pairing.id,
-          text: invitation,
+          text: invitation(approvalCode),
         },
       });
       return { test: next };
@@ -258,7 +314,11 @@ export class SetupService {
   receive(event: NativeMessage): boolean {
     this.expire();
     const command = event.text.trim().toUpperCase();
-    if (!["YES", "NO", "CANCEL"].includes(command)) return false;
+    if (
+      !["YES", "NO", "CANCEL"].includes(command) &&
+      !/^YES [A-F0-9]{8}$/.test(command)
+    )
+      return false;
     return this.store.transaction(() => {
       const key = `setup-approval:${event.id}`,
         fingerprint = hash(JSON.stringify(event));
@@ -281,10 +341,14 @@ export class SetupService {
       let handled = false;
       if (candidates.length === 1) {
         const test = candidates[0]!;
-        if (command !== "YES") {
+        const yes = test.approvalCode
+          ? command === `YES ${test.approvalCode}`
+          : command === "YES";
+        if (command === "NO" || command === "CANCEL") {
           this.close(test, "canceled");
           handled = true;
         } else if (
+          yes &&
           test.state === "awaiting_approval" &&
           this.store.effect(test.invitationEffectId)?.state === "done"
         ) {
@@ -295,7 +359,7 @@ export class SetupService {
             approvalEventId: event.id,
           });
           handled = true;
-        } else if (test.state === "approved") handled = true;
+        } else if (yes && test.state === "approved") handled = true;
       }
       this.store.recordEvent(key, fingerprint, handled);
       return handled;

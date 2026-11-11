@@ -1,3 +1,4 @@
+import { legacySetupInvitation } from "../src/pairing/retired-setup.js";
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -147,7 +148,7 @@ function obsoleteNoticeFixture(store?: Store) {
   const f = fixture(false, store),
     vault = new Vault(f.c.encryptionKey),
     now = Date.now();
-  const pairing = { ...f.pairing, createdAt: now - 600_000 },
+  const pairing = { ...f.pairing, createdAt: now - 700_000 },
     rawToken = "fixture-old-single-use-pairing-token",
     origin = "https://clawdtime.example.test";
   const binding = Object.fromEntries(
@@ -308,6 +309,8 @@ describe("read-only live preflight", () => {
     expect(report.recovery).toEqual({
       unknownNoticeCount: 1,
       retiredObsoleteNoticeCount: 1,
+      unknownEffectCount: 0,
+      retiredSetupInvitationCount: 0,
       blockingUncertainCount: 0,
     });
     expect(f.store.get("notice", f.notice.id)).toEqual(f.notice);
@@ -563,4 +566,134 @@ describe("read-only live preflight", () => {
     expect(f.store.effects("unknown")).toHaveLength(0);
     expect(f.requests.every((r) => r.method === "GET")).toBe(true);
   });
+});
+
+function expiredSetupFixture(
+  readOnly = false,
+  existing?: ReturnType<typeof fixture>,
+) {
+  const f = existing ?? fixture(readOnly),
+    now = Date.now();
+  const pairing = f.store.get<Pairing>("pairing", f.pairing.id) ?? {
+    ...f.pairing,
+    createdAt: now - 700_000,
+  };
+  f.store.put("pairing", pairing);
+  f.store.put("session", {
+    id: "session",
+    pairingId: pairing.id,
+    adapter: "codex",
+    adapterVersion: "fixture",
+    projectRoot: "/fixture",
+    externalSessionId: "chat",
+    hostId: "mac",
+    createdAt: now - 700_000,
+    capabilities: { cooperativePause: true, polling: true },
+    state: "active",
+    controlEpoch: 0,
+    lastSeenAt: now,
+  });
+  const test = {
+    id: "setup_legacy",
+    sessionId: "session",
+    pairingId: pairing.id,
+    createdAt: now - 650_000,
+    expiresAt: now - 50_000,
+    state: "expired",
+    invitationEffectId: "setup_legacy:invite",
+  };
+  f.store.put("setup_test", test);
+  const effect = f.store.putEffect({
+    id: test.invitationEffectId,
+    kind: "message",
+    state: "unknown",
+    createdAt: test.createdAt,
+    payload: {
+      setupTestId: test.id,
+      pairingId: pairing.id,
+      text: legacySetupInvitation,
+    },
+  });
+  const input = {
+    testId: test.id,
+    effectId: effect.id,
+    pairingId: pairing.id,
+    evidenceReference: `sha256:${"a".repeat(64)}`,
+    acknowledgeUnknown: true as const,
+    receipt: {
+      origin: `text_${hash(effect.id).slice(0, 32)}`,
+      fingerprint: hash(
+        JSON.stringify([
+          "chert-text-once-v1",
+          f.c.binding.phone,
+          pairing.recipient,
+          legacySetupInvitation,
+        ]).replaceAll("/", "\\/"),
+      ),
+      preparedGuid: "11111111-2222-4333-8444-555555555555",
+      state: "attempted" as const,
+      found: true as const,
+    },
+  };
+  return { ...f, test, effect, input };
+}
+describe("native expired setup recovery gate", () => {
+  it("allows only an independently validated obsolete onboarding exception alongside the exact expired setup invitation", async () => {
+    const original = obsoleteNoticeFixture();
+    original.retire();
+    const f = expiredSetupFixture(false, original);
+    f.transport.retireSetupInvitation(f.input);
+    expect((await f.transport.preflight()).recovery).toMatchObject({
+      unknownNoticeCount: 1,
+      retiredObsoleteNoticeCount: 1,
+      unknownEffectCount: 1,
+      retiredSetupInvitationCount: 1,
+      blockingUncertainCount: 0,
+    });
+    expect(f.store.get("notice", original.notice.id)).toEqual(original.notice);
+    f.store.put("notice", { id: "other-unknown", state: "unknown" });
+    expect((await f.transport.preflight()).liveReady).toBe(false);
+    f.store.close();
+  });
+
+  it("exempts the exact retired invitation but preserves unknown count and every other uncertain effect", async () => {
+    const f = expiredSetupFixture();
+    expect((await f.transport.preflight()).liveReady).toBe(false);
+    const count = f.requests.length;
+    f.transport.retireSetupInvitation(f.input);
+    expect(f.requests).toHaveLength(count);
+    const report = await f.transport.preflight();
+    expect(report.liveReady).toBe(true);
+    expect(report.recovery).toMatchObject({
+      unknownEffectCount: 1,
+      retiredSetupInvitationCount: 1,
+      blockingUncertainCount: 0,
+    });
+    f.store.putEffect({ ...f.effect, id: "other-unknown" });
+    expect((await f.transport.preflight()).liveReady).toBe(false);
+    expect(f.store.effect(f.effect.id)).toEqual(f.effect);
+    f.store.putEffect({ ...f.effect, id: "other-unknown", state: "failed" });
+    f.store.putEffect({
+      ...f.effect,
+      payload: { ...f.effect.payload, text: "tampered" },
+    });
+    expect((await f.transport.preflight()).recovery).toMatchObject({
+      retiredSetupInvitationCount: 0,
+      blockingUncertainCount: 1,
+    });
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    f.store.close();
+  });
+  it.each(["read-only", "not-allowlisted", "wrong-line"])(
+    "refuses retirement for %s transport binding",
+    (kind) => {
+      const f = expiredSetupFixture(kind === "read-only");
+      if (kind === "not-allowlisted") f.c.testerAllowlist = [];
+      if (kind === "wrong-line")
+        f.store.put("pairing", { ...f.pairing, lineId: "other" });
+      expect(() => f.transport.retireSetupInvitation(f.input)).toThrow();
+      expect(f.requests).toHaveLength(0);
+      f.store.close();
+    },
+  );
 });
