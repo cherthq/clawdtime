@@ -518,3 +518,11 @@ tests pass. The exact-session diagnostics endpoint now exposes the last sanitize
 pre-input failure. A separately requested observed/released bounded AI click can
 clear the typing latch; uncertain clicks and AI typing cannot. Integrated validation:
 308 tests, typecheck/build, independent review. No new physical test is claimed.
+
+Release `4550c12` deployed successfully as backend
+`70698b6a-1994-4d74-8d93-74da1d813a62`. The old end-call effect reconciled
+through the reviewed GET-only path: cleanup confirmed, original unknown body
+retained in its audit, and `nativeEndAcknowledgementUnknown:true`. Readiness now
+passes. A fresh read-only ownership audit confirms Apple Teams disabled, no active
+source calls or pending/unknown source jobs, provider idle and the original source
+cursor retained. No additional call has been placed under this release.
