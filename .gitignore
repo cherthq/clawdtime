@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.data/
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.build/
+.DS_Store
+artifacts/
+*.sqlite*
+*.log
+.clawdtime/
+.mcp.json

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Pair your Mac · ClawdTime</title
+  ><link rel="stylesheet" href="/assets/style.css" />
+  <script src="/assets/pair.js" defer></script>
+  <main>
+    <div class="eyebrow">CLAWDTIME · PRIVATE PAIRING</div>
+    <h1>Bring your Mac<br />into the call.</h1>
+    <p>
+      Your link connects the intended messaging identity to one Mac and display.
+      Screen Recording and Accessibility still require permission on that Mac.
+    </p>
+    <form id="pair-form">
+      <label>Device<input id="device" readonly required /></label
+      ><label>Display<input id="display" readonly required /></label
+      ><label class="choice"
+        ><input id="view" type="checkbox" required /> Allow this paired session
+        to show the selected screen during attention calls.</label
+      ><label class="choice"
+        ><input id="control" type="checkbox" /> Allow human-directed click,
+        type, scroll and bounded AI actions after the coding agent
+        yields.</label
+      >
+      <p>
+        Local Stop, lock, sleep and disconnect end access. Restarting does not
+        re-enable sharing.
+      </p>
+      <button type="submit">Pair this Mac</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <a id="download" hidden>Download private pairing file</a>
+    <section id="next" hidden>
+      <h2>Finish on your Mac</h2>
+      <p>
+        Keep the pairing file private. Run the companion setup, then connect
+        your agent using that file. The companion starts stopped; enable sharing
+        locally after granting permissions.
+      </p>
+      <pre>
+python3 mac/scripts/configure.py --help
+npm run cli -- connect --agent codex --pairing-file /path/to/clawdtime-pairing.json --project /path/to/project</pre>
+      <p>
+        Use <code>--agent claude-code</code> for Claude Code. This internal
+        pilot uses a local build; public package distribution and notarization
+        are pending.
+      </p>
+    </section>
+  </main>
+</html>

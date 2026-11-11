@@ -1,0 +1,43 @@
+{
+  "name": "clawdtime-internal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Your agent can FaceTime you — internal pilot",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "node dist/src/server.js",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "demo": "tsx scripts/demo.ts",
+    "cli": "tsx cli/index.ts",
+    "test:onboarding:browser": "npm run build && tsx tests/onboarding.browser.ts",
+    "test:connectors:real": "tsx tests/connectors-spike.ts claude-code && tsx tests/connectors-spike.ts codex",
+    "backup": "tsx scripts/backup.ts",
+    "format:check": "prettier --check src cli connectors scripts tests public media/device-port.ts package.json tsconfig.json tsconfig.build.json docs README.md AGENTS.md"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "4.0.114",
+    "@hono/node-server": "2.1.6",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ai": "7.0.165",
+    "hono": "4.13.17",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "26.6.6",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "bin": {
+    "clawdtime": "dist/cli/main.js"
+  }
+}

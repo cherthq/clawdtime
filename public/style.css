@@ -1,0 +1,117 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  background: #111713;
+  color: #edf3ed;
+}
+* {
+  box-sizing: border-box;
+}
+main {
+  max-width: 790px;
+  margin: 8vh auto;
+  padding: 28px;
+}
+.eyebrow {
+  letter-spacing: 0.16em;
+  color: #a5c7ab;
+  font-size: 12px;
+  font-weight: 700;
+}
+h1 {
+  font-size: clamp(42px, 8vw, 78px);
+  line-height: 1.05;
+  letter-spacing: -0.06em;
+  margin: 30px 0;
+}
+p {
+  line-height: 1.6;
+  color: #bfcdc1;
+}
+.lede {
+  font-size: 22px;
+  max-width: 650px;
+}
+ol {
+  padding-left: 22px;
+  margin: 44px 0;
+}
+li {
+  padding: 12px 0;
+}
+li p {
+  margin: 6px 0;
+}
+aside {
+  border: 1px solid #38553e;
+  border-radius: 16px;
+  padding: 22px;
+}
+footer {
+  font-size: 13px;
+  color: #9aad9d;
+  margin-top: 40px;
+}
+form {
+  margin-top: 32px;
+}
+label {
+  display: block;
+  margin: 18px 0;
+  font-size: 15px;
+}
+input:not([type="checkbox"]) {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  background: #1e2a21;
+  color: #edf3ed;
+  border: 1px solid #415d48;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  vertical-align: middle;
+  margin-right: 10px;
+}
+.choice {
+  line-height: 1.6;
+}
+button,
+a#download {
+  background: #b4e7b7;
+  color: #112015;
+  border: 0;
+  border-radius: 9px;
+  padding: 14px 20px;
+  font-weight: 650;
+  font-size: 16px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+a#download {
+  display: inline-block;
+}
+a#download[hidden] {
+  display: none;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #1e2a21;
+  padding: 18px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+h2 {
+  margin-top: 40px;
+  font-size: 25px;
+}

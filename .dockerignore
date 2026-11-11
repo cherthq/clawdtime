@@ -1,0 +1,13 @@
+.git
+node_modules
+dist
+.data
+.env*
+!.env.example
+artifacts
+mac
+gateway
+media
+!media/device-port.ts
+**/.venv
+**/__pycache__
