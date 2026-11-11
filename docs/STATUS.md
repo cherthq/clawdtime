@@ -405,3 +405,15 @@ Sharing was stopped before replacement and stays stopped. The signature transiti
 requires fresh macOS grants, which the owner has been asked to provide. This is an
 internal signed pilot build, not notarized public distribution. No second physical
 call or screen/control/continuation/result acceptance has occurred.
+
+Recovery release `5e54a68` passed 219 TypeScript tests, typecheck and build and
+was deployed successfully as backend `894ad81e-3c4f-40d1-b935-023b02776e7a`.
+Both actual Mac permissions now pass after replacing only ClawdTime's stale
+entries, and the owner enabled the app locally. During deployment the old backend
+session stopped after a heartbeat gap; it was not resurrected. The native coding
+chat remained active. After exact audited invitation retirement and confirmed
+idle cleanup, the obsolete bridge closed and a new foreground transport session
+registered in that same chat, preserving all prior checkpoints and unknown receipts.
+This is native-chat continuity, not preservation of the expired backend session.
+The user's explicitly authorized fresh invitation has a provider-acknowledged
+receipt; a new exact-code reply is still required before the approved second call.
