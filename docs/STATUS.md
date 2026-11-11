@@ -2,12 +2,48 @@
 
 November 11, 2026 — America/New_York.
 
-**Independently hosted pilot; controlled line handoff active. Full CUA and voice acceptance remain pending.**
-The physical Codex → FaceTime → Mac screen → authenticated Messages feedback →
-same-chat continuation → Messages recap path passed in the earlier supervised run.
-Correct control targeting, natural voice and the Claude Code physical call loop
-remain unverified. Apple Teams stays paused for the retained test line. Dated
-entries below retain historical evidence; the latest change is summarized first.
+**Independent pilot, live on its dedicated Mia line. Full CUA and voice acceptance remain pending.**
+The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
+feedback → same-chat continuation → Messages recap path passed on the original
+pilot line. Correct control targeting, natural voice and the Claude Code physical
+call loop remain unverified. Historical evidence below does not qualify the new
+line or the later conversational harness.
+
+## Dedicated-line migration — November 11
+
+- The original Lucas line returned exclusively to Apple Teams after ClawdTime's
+  dispatcher stopped. All five calls ended, all 23 leases released, and original
+  entities/effects/events hashes remained unchanged. Its cursor, unknown outcomes,
+  private configuration and encrypted consistent backup are preserved.
+- Mia is assigned to an independent ClawdTime provider project with a scoped
+  credential. Native identity matches the assigned logical line. A fresh database
+  and encryption key isolate it from the historical Lucas runtime; event baseline
+  5 was verified without replaying retained messages.
+- Backend deployment `2313e4ae-fe0a-4031-bb9d-1341bc696d5a` is SUCCESS using the
+  existing `e08eca1` image, live on Mia's separate database. Prior standby deployment
+  `695f2901-4f62-488b-92cb-e588a7c43596` is REMOVED. Media and the installed local
+  companion were unchanged. The provider acknowledged activation generation 6.
+- Fixed provider receipt 503: the old helper lacked a text journal and its launch
+  configuration lacked the sender field required by strict sending. The scoped
+  installed worker/helper update uses reviewed source
+  `742b40685d80eaba6fe584e135e1732c4153499f`; first-use initialization uses the same
+  production journal implementation with zero operation rows. Original absence
+  evidence and launch files remain available; no historical outcome was inferred.
+- Receipt status/whoami now report available and the unused-origin lookup returns
+  404/found=false. All transport preflight checks pass. Live runtime inspection
+  reports zero pending/unknown effects and active calls, with no migrated pairing.
+  No message, call or screen input was sent for this migration. Fresh Mia onboarding
+  and handset acceptance remain unperformed; prior permissions and Stop are intact.
+- Installation receipt: `FT-INSTALL-CLAWDTIME-MIA-REPAIR-20261111`. The reviewed
+  installer passed 52 offline recovery tests; the separate journal initializer
+  passed seven tests. Existing journals, other account PIDs and unchanged ingress
+  were verified after installation. Rollback preserves the initialized journal.
+  Two initial preflight refusals made no live changes; the final verified installer
+  supports the documented per-account database path and a missing sender field.
+  No sibling source or other account was modified.
+
+See [the ownership and recovery record](LINE_HANDOFF.md). This migration does not
+repeat handset acceptance or reuse an earlier one-call authorization.
 
 ## Conversational harness revision — November 11
 
@@ -56,7 +92,8 @@ cleanup may dispatch. Voice Stop can bypass serial transcript handling while
 listening; agent TTS still suspends listening. A helper grant cannot be reused
 before its acknowledgement, and Stop during grant creation prevents readiness.
 
-Deployed release: **`e08eca1`**, including the conversational harness in `0672468`.
+Historical pre-migration deployment snapshot: **`e08eca1`**, including the
+conversational harness in `0672468`. The current line/deployment state is above.
 
 - Backend: `f395c13f-0054-4f05-9950-af69732b1872` — SUCCESS.
 - Media: `acf01bae-c9c5-471d-85e7-cbe0c21b355a` — SUCCESS.
@@ -87,7 +124,10 @@ Historical unknown outcomes, event cursors and receipts were preserved. Voice is
 turn-based; native helper frame protection can hold a fresh video frame briefly
 while authorizing input, although ordinary actions no longer blank the stream.
 
-## Source and release identities
+## Historical implementation baseline and source identities
+
+This section records initial installation and release evidence. Later entries and
+the current migration summary supersede its deployment and acceptance state.
 
 - Apple Teams audited and inspected baseline: `be47b11fe1317c4747db4121bec37896998b5201`.
   Source main stayed clean at that commit; its five existing worktrees were preserved.

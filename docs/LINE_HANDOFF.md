@@ -1,13 +1,58 @@
 # Controlled test-line handoff
 
-**ClawdTime owns the confirmed test line.** The user confirmed the existing test
-line is Liam Davis. The lead paused Apple Teams traffic using its existing image,
-verified a stable retained cursor and an idle interval exceeding 10 seconds, and
-started ClawdTime from that exact non-replaying boundary. Source remains paused.
-Identity/ownership checks pass. Live dispatch is now blocked by one uncertain
-pairing reply: its stable-origin provider receipt lookup returns HTTP 503. Preserve
-that notice and reconcile it before new dispatch or rollback. Pairing and physical
-acceptance remain in progress.
+## Current ownership — November 11, 2026
+
+Lucas (the original pilot line, previously confirmed under the Liam Davis alias)
+has returned exclusively to Apple Teams. ClawdTime stopped dispatch first, verified
+all five calls ended and all 23 leases released, and preserved its committed event
+boundary at sequence 539. The return handoff identified each ClawdTime-owned event
+instead of skipping the entire interval. Apple Teams subsequently reported a
+healthy restoration with its groups/history intact and no pending or unknown jobs.
+ClawdTime's separate historical unknown outcomes remain recorded as unknown.
+
+Mia is now assigned to a dedicated ClawdTime provider project. Exact native and
+logical identity checks pass. ClawdTime is deployed **live on Mia only**, with a
+separate database, encryption key and project credential. Mia's retained
+baseline is sequence 5. Existing Lucas pairings and receipts were not copied,
+revoked or relabeled; a new Mia setup must establish its own session binding.
+
+Mia's installed Messages helper was updated to the reviewed `742b4068` candidate.
+The missing sender field was filled from the already-verified native identity,
+and an absent receipt journal was initialized with zero operation rows. Receipt
+lookup now returns the expected 404/found=false for an unused sentinel; status and
+whoami report receipt health available. Other account and ingress PIDs, existing
+journals and the original environment file remained unchanged. The original launch
+files and binaries are retained for rollback.
+
+The provider acknowledged activation generation 6; all transport preflight checks
+pass. Backend deployment `2313e4ae-fe0a-4031-bb9d-1341bc696d5a` is SUCCESS and its
+prior standby deployment is REMOVED. Runtime inspection confirms the Mia-only
+binding and database, live mode, cursor 5 and zero effects or calls. No test message
+or FaceTime call was sent. Fresh Mia onboarding and handset acceptance have not
+been performed; prior Lucas pairing/session grants were not transferred.
+
+### Isolation and recovery
+
+Do not change the binding inside the old database. Transport binding metadata,
+historical cleanup and obsolete-notice audits depend on its original credentials
+and identity. Keep the original database/configuration together and offline.
+
+- Historical runtime: `/data/clawdtime.sqlite`; encrypted consistent backup and
+  protected configuration under `/data/operator-line-archives/20261111-lucas/`.
+- New runtime: `/data/clawdtime-mia.sqlite`; no migrated pairings, calls or effects.
+- Private handoff records retain event IDs, fingerprints and exact provider IDs.
+  They are not documentation fixtures or evidence that an unknown send failed.
+- To roll Mia back, stop its dispatcher and reconcile its own receipts/cursor.
+  Do not restore Lucas configuration while Apple Teams owns Lucas.
+- Provision an absent journal only while the exact account's sender/helper is
+  stopped and admission drained. Preserve original absence evidence, use the
+  reviewed production schema, create zero operation rows, and never replay a
+  message to establish readiness. Preserve the initialized journal on rollback.
+
+## Historical original-line handoff
+
+The entries below describe the original pilot migration and its diagnosis. They
+do not describe current line ownership or authorize resuming the archived runtime.
 
 ## Evidence from this implementation session
 
