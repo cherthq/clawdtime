@@ -1,5 +1,11 @@
 # Agent connectors
 
+Current as of November 12, 2026. The v2 backend/media (`8efbacc`) are deployed;
+the installed companion is 0.2.1 (`d10c801`) and the project skill is updated. One
+voice-directed native Messages task passed in the originating Codex desktop chat
+through the foreground bridge. See [STATUS.md](STATUS.md) for the release and
+physical evidence; the client/surface limits below still apply.
+
 ## Agent-owned protocol v2 (default for new sessions)
 
 ClawdTime transports human turns and speaks replies authored by the exact existing
@@ -108,8 +114,10 @@ registration, not pairing `setup` or the `run` wrapper. Check the returned
 After `transfer_execution(executor=native, ...)` succeeds, use the chat's ordinary
 native tool directly, verify its result, then release ownership with the current
 epoch and actual outcome. Foreground fallback refusal does not prohibit native
-CUA. Existing runs retain their original capabilities: changing flags cannot
-upgrade them, and an active session must not be patched/replaced to evade a
+CUA. The tested native desktop tool blocks control of the Codex app itself; a
+Codex input box is not a supported demo target. Respect that tool restriction and
+use an allowed surface for an authorized task. Existing runs retain their original
+capabilities: changing flags cannot upgrade them, and an active session must not be patched/replaced to evade a
 refusal or unknown outcome. Reconcile it before a later authorized call.
 
 ### Foreground setup v2
@@ -117,28 +125,39 @@ refusal or unknown outcome. Reconcile it before a later authorized call.
 The existing `setup-session` command stays in this chat and defaults v2 for new
 runs. Supply the matching initial native capability flags above and keep its
 foreground process/stdin alive. Read `status` to confirm the registered
-capabilities, then use `invite` and `authorize` with the exact testId and actual one-call user authorization, then `start` (without
-`yield`). Continue with the conversation operations above, using JSONL command
-names identical to MCP. Each effect needs a stable `id`; turn/reply/action IDs are
+capabilities, then use `invite` and `authorize` with the exact testId and actual
+one-call user authorization, then `start` (without `yield`). Continue with the
+conversation operations above, using JSONL command names identical to MCP. Each effect needs a stable `id`; turn/reply/action IDs are
 separate durable identities. Unknown effects are never resubmitted. EOF stops
 heartbeats and attempts owned-test cancellation once.
 
+Human speech can arrive as several ordered transcript segments for one
+instruction. Keep their context in this coding chat, acknowledge in sequence, and
+resolve earlier segments before marking a later one executing. A repeated or
+trailing fragment does not authorize repeating an already completed action.
+
 Setup `verify` deliberately refuses to apply the old v1 response/resume evidence
-chain to v2. A separately authorized physical test and recorded human observations
-are still required. The v2 protocol's synthetic success does not qualify a call,
-handset rendering, visible native input, or sustained connection beyond five
-minutes. This release does not install/restart the user's companion or alter live
-configuration. Existing setup/pairing privacy and fresh-call authorization rules
-in the reference below continue to apply.
+chain to v2. Current physical acceptance is recorded from the actual test and
+human observations. In the latest separately approved test, this same Codex chat
+claimed native ownership, used its ordinary computer tool to send the requested
+message once, observed it in Messages and released ownership. The human confirmed
+seeing the send on the handset and intentionally hanging up. This qualifies that
+native task and observed screen outcome, not recipient readership, every desktop
+app, or Claude. The call lasted under two minutes; connection beyond five minutes
+remains unqualified. The last spoken reply was canceled during cleanup, so its
+complete playback is not established. Earlier v2 replies completed in a separate
+voice/viewing test. Each future call still needs its own applicable authorization;
+the completed runs and their consent must not be reused.
 
 ### Client capability evidence — November 12, 2026
 
-| Client/surface                                                              | Observed locally                                                                                                                           | Unverified or unsupported boundary                                                                                                                            |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Codex CLI 0.166.0-alpha.5.1 (`exec`, disposable project, read-only sandbox) | Three synthetic ordered MCP turns in one client process, two context-preserving replies, native disposable file read, explicit end.        | Physical shared display, visible browser/desktop input, tool cancellation, client process resume/reconnect while a live call persists, unsolicited injection. |
-| Claude Code 2.1.311 (`-p`, isolated MCP configuration, native Read tool)    | Same three-turn/two-reply sequence with native Read invocation and retained context, explicit end.                                         | Same physical/control/cancellation boundaries; no claim about arbitrary interactive/desktop sessions.                                                         |
-| Codex/Claude existing chat with foreground bridge                           | Implemented request-driven bridge, exact protected run binding, bounded reads and durable local effect markers; deterministic local tests. | No fresh physical acceptance on either client; a shell bridge does not prove universal interruption or computer-use capability.                               |
-| Codex Desktop / IDE, Claude interactive / desktop                           | No automatic takeover; use already available MCP or the current chat's foreground tool bridge.                                             | Current v2 real-client surface qualification has not been performed; CLI evidence is not desktop evidence.                                                    |
+| Client/surface                                                                    | Observed                                                                                                                                                                                                                                                              | Unverified or unsupported boundary                                                                                                                                                                   |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex desktop, originating chat with foreground v2 bridge and native desktop tool | Live voice segments reached the same chat; native ownership claim → one requested Messages send → observed UI result → release. Human confirmed visible send on handset and intentional hangup. Earlier same-chat v2 voice/viewing test had completed spoken replies. | Tested tool blocks the Codex app itself. Latest call under two minutes; no >5-minute qualification. Last reply canceled at cleanup. Native interruption and live client reconnect remain unverified. |
+| Codex CLI 0.166.0-alpha.5.1 (`exec`, disposable project, read-only sandbox)       | Three synthetic ordered MCP turns, two context-preserving replies, native disposable file read, explicit end.                                                                                                                                                         | No physical CLI call/shared-input qualification; desktop evidence does not qualify the CLI.                                                                                                          |
+| Claude Code 2.1.311 (`-p`, isolated MCP configuration, native Read tool)          | Same synthetic three-turn/two-reply sequence with native Read and retained context, explicit end.                                                                                                                                                                     | No Claude physical call, visible control, native cancellation or live reconnect qualification.                                                                                                       |
+| Codex IDE and other interactive/desktop client surfaces                           | Integration uses that existing chat's available MCP or foreground bridge; no arbitrary chat takeover.                                                                                                                                                                 | Each surface needs its own evidence. The tested Codex desktop chat does not establish universal native tools or permission support.                                                                  |
+| ClawdTime fallback through image-capable MCP                                      | Implemented scoped observation/input, explicit local opt-in and durable receipts; deterministic local tests.                                                                                                                                                          | Not physically qualified. Foreground JSONL has no fallback image/input/ownership path; it can coordinate native tools.                                                                               |
 
 `tests/connectors-conversation-spike.ts` is an opt-in disposable real-client
 feasibility probe (`npx tsx tests/connectors-conversation-spike.ts codex` or
@@ -147,29 +166,30 @@ configuration, or retain transcripts. Its MCP fixture models sharing as a boolea
 that is explicitly synthetic, not video evidence. The checked-in MCP integration
 regression additionally reconnects the connector with the same run and proves
 ordered delivery, separate ack/execution, session isolation and no repeated speech.
-Real-client native tool denial and physical cancellation remain acceptance items;
-no approval policy is weakened by installation.
+The native tool's Codex-app denial was observed in the desktop test. Broader
+native approval behavior, physical cancellation and live reconnect remain
+acceptance items; no approval policy is weakened by installation.
 
 Official references checked for the supported request/permission boundaries:
 [Codex MCP](https://developers.openai.com/codex/mcp/),
 [Claude Code MCP](https://code.claude.com/docs/en/mcp), and
 [Claude Code permissions](https://code.claude.com/docs/en/permissions).
-These establish MCP configuration and native policies, not ClawdTime's physical
-integration. Product capability claims above rely on the separately listed tests.
+These establish MCP configuration and native policies, not physical acceptance.
+Capability claims above rely on the separately listed tests and human observations.
 
 ## Legacy v1 setup and recovery reference
 
-The remainder documents the retained v1 workflow and existing pairing/recovery
-operations. Its yield/result/ack/resume/completion sequence applies **only to v1**;
-use the v2 sequence above for new default sessions. Legacy capabilities are not
+The remainder is the historical v1 workflow/reference, including its dated
+compatibility evidence and pairing/recovery operations. Its
+yield/result/ack/resume/completion sequence applies **only to v1**; use the v2 sequence above for new default sessions. Legacy capabilities are not
 silently upgraded, and the standalone controller is never used as a hidden v2
 fallback.
 
-ClawdTime 0.1.0 implements project-scoped stdio MCP tools and a bundled CLI for
+ClawdTime 0.1.0 introduced project-scoped stdio MCP tools and a bundled CLI for
 cooperative attention in Claude Code and Codex. It leaves the coding task in the
 client and never types into an arbitrary terminal or takes over a desktop chat.
 
-## Prompt-driven setup in the current chat
+### Prompt-driven setup in the current chat
 
 Setup stays in the coding chat that received the user's request. It requires no
 coding-client restart, new chat, child coding agent or manual pairing JSON download.
@@ -226,7 +246,7 @@ reported issue in this chat, using its native question/user-input tool for human
 permission/local Enable steps. Ask an ordinary question only if that client lacks
 such a tool. Do not end the interaction or call setup complete while waiting.
 
-### Existing Mac, fresh line pairing
+#### Existing Mac, fresh line pairing
 
 An installed companion can be reused, but a pairing belongs to its original line,
 member, device and display. A fresh line requires its own newly texted setup link.
@@ -270,7 +290,7 @@ can read the installed skill directly and use the bridge without claiming MCP
 hot reload. [Official skill guidance](https://learn.chatgpt.com/docs/customization/overview#skills),
 [project discovery](https://learn.chatgpt.com/docs/projects#use-local-projects-for-folders-and-codebases).
 
-### Foreground setup-session protocol
+#### Foreground setup-session protocol
 
 Choose and retain one non-secret run ID for this existing chat (16–100 letters,
 digits, underscores or hyphens), then use the chat's persistent shell process tool:
@@ -343,7 +363,7 @@ not proof that video rendered. Verification still requires actual capture, quali
 call, human feedback, acknowledged continuation and a confirmed Messages receipt.
 Negative or unclear feedback cannot pass by being rewritten into a positive phrase.
 
-### Natural conversation during the call
+#### Natural conversation during the call
 
 The human speaks or texts ordinary requests, such as “click the textbox,” “scroll
 down a little,” “I can see the page,” or “use the blue version and continue.” No
@@ -438,7 +458,7 @@ requires its own explicit one-call authorization. Unknown call/input/cleanup
 forbids replacement attempts. The narrow operator-audited invitation exception
 below does not change those call/control rules.
 
-#### User-requested handoff to another chat
+##### User-requested handoff to another chat
 
 An explicit user request to move the work to a new chat is a narrow exception to
 the same-chat recovery rule. It does not transfer the old live session or its
@@ -464,7 +484,7 @@ original live session. If ordinary new-run readiness or ownership guards refuse
 the handoff, diagnose the exact remaining state; never rewrite identity fields,
 delete receipts or change run IDs again to bypass the refusal.
 
-### Explicit recovery of an expired legacy invitation
+#### Explicit recovery of an expired legacy invitation
 
 An **expired, never-approved legacy invitation with no call** can have a successor
 in the same live session only when the lead has inserted the backend's immutable,
@@ -543,7 +563,7 @@ verification, EOF cleanup and unknown-outcome recovery. It starts no coding clie
 and does not establish physical acceptance or current-chat native question-tool
 qualification; the lead records those actual-client observations separately.
 
-## Verified compatibility — November 11, 2026
+### Verified compatibility — November 11, 2026
 
 | Surface                              | Installed version                       | Evidence                                                                                         |
 | ------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -576,7 +596,7 @@ under noninteractive `approval_policy=never`. Real users retain their native too
 approval flow. The first Claude probe exposed an overbroad synthetic response
 fixture rejected by strict backend validation; the corrected probe passed.
 
-## Legacy downloaded-file connection (optional)
+### Legacy downloaded-file connection (optional)
 
 Complete the private Mac pairing page first and download its connection JSON.
 The file contains a credential: never paste it into a chat or shell argument.
@@ -611,7 +631,7 @@ node /absolute/path/to/clawdtime/dist/cli/main.js doctor --agent codex --project
 not evidence of Mac permissions, display readiness, call delivery or a working
 handset. A connection registration is not an automatic blocked-process detector.
 
-## Session identity and reconnects
+### Session identity and reconnects
 
 Every MCP process gets its own random local session identity. This prevents two
 simultaneously opened chats in the same project from sharing answers. Tokens are
@@ -635,7 +655,7 @@ restart receives a new identity and cannot read the old process's responses.
 Those responses remain durable on the backend; never redial to replace them.
 Automatic client-to-thread rebinding is deliberately not claimed.
 
-## Cooperative tool contract
+### Cooperative tool contract
 
 - `connection_status`: scoped readiness, local run ID and current session.
 - `yield_control`: explicit attestation that background actors have stopped; the
@@ -657,7 +677,7 @@ The skill forbids shell/file/computer mutations and delegation while yielded.
 Native approval policy still decides whether subsequent agent operations may run.
 A spoken “yes” is not a global permission bypass.
 
-## Disconnect and uninstall
+### Disconnect and uninstall
 
 ```sh
 node /absolute/path/to/clawdtime/dist/cli/main.js disconnect --agent codex --project /absolute/path/to/your/project
@@ -671,7 +691,7 @@ remote revocation, `uninstall` can finish cleanup once the local edits are resol
 Offline uninstall is refused while remote access remains unrevoked. Do not simply
 delete credentials as a substitute for revocation.
 
-## Source and documentation decisions
+### Source and documentation decisions
 
 The connectors are new ClawdTime code, not copied from Apple Teams. Current official
 references were fetched on November 11, 2026:
@@ -691,7 +711,7 @@ No Cursor/OpenClaw adapter, desktop-session takeover, or automatic permission ho
 is part of this release. Full physical acceptance and clean tester onboarding
 remain separate gates in DEMO_ACCEPTANCE.md and STATUS.md.
 
-## Connector liveness
+### Connector liveness
 
 The stdio server sends an immediate authenticated session heartbeat and then one
 every five seconds, with no overlapping request. Closing stdio stops the timer.
@@ -701,7 +721,7 @@ that stopped session. Response reads do not extend it. Start a new native client
 run in the same native chat only after known cleanup and explicit new-attempt
 authorization; reconcile old effects and do not replay attention.
 
-## Actionable live readiness and supervised acceptance preparation
+### Actionable live readiness and supervised acceptance preparation
 
 `doctor` now reports `readiness.status`, `connectionReady`, `liveReady`, individual
 checks and next actions. A paired account or old `ready:true` flag cannot establish
@@ -729,23 +749,22 @@ task ID and idempotency key for that case. The lead resolves readiness and compl
 the controlled handoff, launches the intended client, then pastes the saved prompt.
 Use `--agent claude-code` and a separate case/output for Claude Code.
 
-The prompt checks the exact local run identity, yields control, requests one call,
-waits for actual screen feedback by voice or text, acknowledges the response and current control epoch,
-resumes under native policy, writes a disposable result file, and queues a factual
-Messages recap. It never supplies synthetic human feedback. The operator records
-actual handset observations, native receipts and delivery separately. A completed
-request or queued message is not itself handset delivery.
+The historical v1 prompt used yield/result/ack/resume and a Messages recap.
+Current `acceptance-plan` generates v2 instructions: it checks protocol and exact
+run identity, receives ordered turns, uses normal native tools, publishes replies
+and ends explicitly. Existing legacy plan files are preserved and rejected rather
+than silently rewritten as v2. It never supplies synthetic human feedback.
+Actual handset observations, native outcomes and delivery are separate evidence.
 
-This separate client qualification helper is not required for same-chat setup.
-Its default prompt requires no CUA exercise; any previously saved plan retains its
-original instructions and must be reviewed before use. Control qualification and
-an untested voice/text channel remain separate evidence.
+This separate-client qualification helper is not required for an existing chat's
+foreground bridge. Use the current v2 guidance at the top of this document for
+same-chat operation. Control qualification and untested channels remain separate.
 
 Both real synthetic CLI probes now also assert that the backend's registered session
 matches the wrapper's exact run ID. This passed for the recorded Claude/Codex versions.
 No actual live acceptance was performed by these probes or plan preparation.
 
-## Incoming surfaces and limits
+### Incoming surfaces and limits
 
 Incoming Messages can establish onboarding and supply authenticated feedback to
 an owned active request/call. They do not create arbitrary coding tasks in a

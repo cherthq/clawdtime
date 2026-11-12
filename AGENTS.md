@@ -22,8 +22,10 @@ Parallel file ownership for this implementation:
   Request shared contract changes from the lead. Do not edit another owner's files.
 
 Explicit session/identity authorization, local Stop, frame freshness and exclusive
-control are mandatory. A cooperative agent must yield before CUA and acknowledge
-released control before continuation. Model output is an untrusted single-action plan.
+control are mandatory. For v2, claim exclusive native/fallback execution before
+shared-screen input and release it afterward; ordinary reasoning/file work stays
+active during sharing. Only legacy v1 uses global yield/acknowledge/resume. Model
+output is an untrusted single-action plan.
 Never claim submitted input proves UI success. Keep screens/audio transient.
 
 Node 24+, TypeScript, Python, Swift. npm run check verifies the backend/connectors;

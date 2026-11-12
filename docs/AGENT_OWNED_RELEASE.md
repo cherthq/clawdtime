@@ -2,11 +2,18 @@
 
 Prepared November 12, 2026 (America/New_York). Version 0.2.0.
 
-**Rollout update:** the user subsequently approved the exact release `8efbacc`
-and all listed component updates. Deployment is complete; see [STATUS.md](STATUS.md)
-for exact deployments, preserved state, signing correction and the historical-input
-reconciliation blocker. No live call has been performed. The preparation and
-approval rules below remain the release record.
+**Current release:** backend/media/gateway source `8efbacc` is deployed; companion
+0.2.1/build 3 and the updated skill from `d10c801` are installed. The historical
+receipt migration is complete. A real Codex desktop call demonstrated spoken
+instructions driving native typing/send, confirmed visible on the handset. The
+user intentionally hung up before two minutes. Fallback, Claude physical use,
+reconnect and duration beyond five minutes remain unqualified. See [STATUS.md](STATUS.md)
+and [NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md).
+
+The user has now authorized promotion to remote production `main`. Hosted runtime
+source has not changed since its successful deployment; repository promotion
+includes the installed companion repair and current documentation. The preparation
+scope below is historical, not a statement that deployment or installation is pending.
 
 ## Prepared scope
 
@@ -99,13 +106,15 @@ installation are approved and verified. Qualify Codex and Claude independently:
 
 Synthetic tests and observed input receipts do not establish handset rendering,
 intended UI success, real native cancellation or sustained physical connection.
-The later historical call reported by the user ended intentionally before five
-minutes; it does not qualify this redesign. No further call is authorized here.
+The latest v2 call qualifies one visible native-control task, not the full matrix
+above. Further physical testing needs its own scoped call authorization; repository
+promotion is not permission to redial.
 
 ## Validation and review
 
 `npm run check`: 561 tests / 33 files, typecheck and build passed. Media: 138;
-gateway: 29; Swift: 19 plus build; Mac onboarding scripts: 21. Built-app browser
+gateway: 29; Swift: 28 plus build (including nine migration regressions); Mac
+onboarding scripts: 21. Built-app browser
 onboarding and formatting passed. Both installed CLI synthetic probes passed;
 see the exact surface/version matrix in CONNECTORS.md.
 
@@ -115,8 +124,8 @@ ownership, local Stop/ACL, speech reconciliation and panel-status findings were
 fixed with regressions. See STATUS.md for the review record.
 
 The originally prepared ad-hoc companion artifact is preserved. The installed
-release uses the original installed Apple Distribution identity, with unchanged
-executable code and restored permission recognition. It is not notarized. Public
+companion repair uses the original installed Apple Distribution identity with
+permission recognition preserved. It is not notarized. Public
 distribution still requires notarization and clean-install verification. Source
 archives contain tracked files only. The local release manifest records both
 companion artifacts, source hashes and deployment verification. Exact prior helper

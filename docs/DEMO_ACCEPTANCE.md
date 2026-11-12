@@ -1,7 +1,16 @@
 # Acceptance evidence and remaining live gate
 
-**Not demo-ready.** Local/client/component tests passed as recorded in STATUS.md.
-Simulation receipts prove code behavior, not phone delivery or physical input.
+**One Codex desktop native-control task is physically verified; full acceptance
+remains incomplete.** The November 12 v2 call carried spoken instructions into
+the originating chat, used native input, and produced a result the human confirmed
+seeing on the phone. Companion 0.2.1 resolves the historical receipt blocker.
+
+The [short filmed demo](FILMED_DEMO.md) uses this native path with a disposable
+TextEdit draft; that exact scenario has not yet been rehearsed end to end. Fallback,
+Claude physical use, broader native actions, reconnect and calls beyond five
+minutes remain unqualified. A 2-second screen relay timeout occurred near the last
+intentional hangup. See [current evidence](STATUS.md) for the limits. Local tests
+and simulation receipts do not prove phone delivery or physical input.
 
 ## Reproducible local checks
 
@@ -25,7 +34,7 @@ export a synthetic pairing, exercise compiled CLI connect/doctor/disconnect, and
 preserve unrelated configuration in a temporary home/project. They never enroll
 the actual user's device or modify live agent configuration.
 
-## Current physical onboarding evidence
+## Earlier physical onboarding evidence — legacy v1
 
 The intended tester completed authenticated onboarding and explicit view/control
 consent. Both actual Mac permissions pass, and the owner enabled the companion
@@ -41,7 +50,13 @@ The configured planner's unsupported schema is reproduced and repaired; physical
 click/type/scroll/AI targeting, spoken feedback and the Claude Code call loop remain
 pending. See STATUS.md for release evidence and limitations.
 
-## Physical Mode 1 matrix — remaining qualification
+## Legacy v1 physical Mode 1 matrix — remaining qualification
+
+This matrix describes the legacy yield/acknowledge/resume and completion-message
+flow. Current v2 uses ordered conversation turns and exclusive input ownership,
+with no automatic completion message; follow [CONNECTORS.md](CONNECTORS.md) and
+qualify each architecture separately. The newer native task above does not
+retroactively pass this matrix.
 
 During control testing, keep the fixture foregrounded and respond from the handset.
 Answering desktop chat questions can move focus to the coding app. After each click,

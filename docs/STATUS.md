@@ -8,6 +8,31 @@ The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Production promotion and documentation — November 12
+
+The user approved promoting the completed release and documentation to remote
+`main`. The README now describes agent-owned conversations, native computer use,
+optional image-capable MCP fallback and the Mac Control Panel. The setup guide,
+connector matrix and acceptance record distinguish current v2 behavior from
+legacy v1. A [short filmed demo prompt](FILMED_DEMO.md) uses a fresh same-chat run,
+one explicitly authorized call and a disposable TextEdit headline decision.
+
+Fresh read-only production verification found both existing deployments successful,
+all 60 compiled backend files identical to the local release, and selected media
+source hashes matching. Protected configuration hashes are preserved. The backend
+is live with zero active calls, pending effects or unknown effects; media is healthy,
+has zero active sessions and reports the gateway connected. Hosted runtime source
+still matches `8efbacc`; these documentation changes require no service restart.
+Companion 0.2.1 and the updated installed skill remain the approved local versions.
+The exact remote promotion commit and sanitized checks are retained in private
+operator evidence. Broad physical acceptance remains false, as intended.
+
+Documentation received independent review, formatting and relative-link checks.
+The previous code validation remains applicable: 561 TypeScript tests, 138 media,
+29 gateway, 28 Swift and 21 Mac script tests, plus browser onboarding. No new live
+call or full rehearsal of the filmed TextEdit scenario was performed for this
+promotion. The one successful native task and remaining limits are recorded below.
+
 ## Approved repair installation and native-control test — November 12
 
 The user approved companion source `d10c801`, its audited migration, the skill
@@ -45,7 +70,7 @@ idle with routing unchanged; no native executor remains active. The helper has n
 active lease and zero input blockers; local Enable remains as the user selected.
 No second call, fallback-control test or Claude physical test is implied.
 
-## Live v2 test and native-control repair preparation — November 12
+## Earlier v2 test and repair preparation — November 12 (historical)
 
 The user approved one six-minute voice/viewing/coding test, enabled sharing locally,
 and then agreed during the call to end it early to repair native control. The
@@ -64,7 +89,7 @@ receipts forever, and the view-only test bridge registered immutable native
 capability `none` despite a native desktop tool being available in this chat.
 A new chat alone does not clear the device-wide historical receipt block.
 
-Source repair is prepared, not installed: an explicit offline audited
+At this preparation checkpoint, the source repair was not yet installed: an explicit offline audited
 retirement separates closed historical ownership from pending/unknown input,
 preserves original receipts and records backend-observed versus unobserved history
 separately. Exact retained evidence closes all 41 historical ownership records:
@@ -73,8 +98,8 @@ leases and ended calls in retained ClawdTime handoff evidence, without a matchin
 backend observation. None is claimed to prove application success. Skill guidance
 now checks this chat's actual native tool/surface before initial registration;
 native actions still use that same tool directly under exclusive ownership.
-Installing the repaired companion and applying its reviewed migration require
-approval of the specific new source. Swift build and all 28 tests pass, including
+Installation and migration at that checkpoint still required approval; the later
+approved installation and physical task are recorded above. Swift build and all 28 tests pass, including
 nine migration regressions independently rerun by the reviewer. The isolated
 41-record rehearsal passed with the live journal unchanged. See
 [NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md) for the concrete installation
@@ -117,7 +142,7 @@ legacy tool catalog did not hot reload; its foreground v2 bridge remains the
 same-chat route. Claude connector code is updated, but no Claude project pairing
 was present and none was created.
 
-**Input-control migration blocker:** the helper retains 41 historical submitted
+**Historical migration blocker (resolved by 0.2.1 above):** the helper retained 41 submitted
 receipts with the old `cg_event_posted_not_application_verified` evidence. The new
 release correctly counts them as unresolved rather than guessing successful
 outcomes. Thirty-seven match observed backend receipts; four lack a match in the

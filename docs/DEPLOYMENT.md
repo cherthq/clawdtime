@@ -1,8 +1,9 @@
 # Independent deployment and operations
 
 ClawdTime has an independent Railway project, backend and media services, domains,
-and empty dedicated persistent volumes. It uses existing account capacity; no new
-plan, domain purchase, npm publication or GitHub remote was created.
+and dedicated persistent volumes containing retained production state. It uses
+existing account capacity. Never treat those volumes as empty or restore an old
+cursor to retry a call. Source is maintained in `cherthq/clawdtime`.
 
 - Project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
 - Backend/landing: https://backend-production-ee686906.up.railway.app
