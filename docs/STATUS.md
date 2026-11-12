@@ -8,6 +8,29 @@ The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Local speech and setup fixes — November 12 (not deployed)
+
+Branch `codex/setup-reservation-cleanup` assembles stable transcription fragments
+through a complete boundary plus a continuation window. V2 replies require fresh
+acknowledged context; resumed human speech cancels pending playback without
+replaying its receipt. Caption state distinguishes speaking from listening, and
+allowlisted assembly timing contains no speech text. Audio remains half duplex;
+handset timing, echo and barge-in are not physically qualified by local tests.
+
+One shared reservation predicate now serves readiness, setup creation and call
+start. Confirmed v2 cleanup releases an old setup reservation before its deadline
+without rewriting history. Expiry cannot hide unresolved invitation delivery,
+call/media cleanup, leases, actions or native input ownership. Structured conflicts
+give safe recovery instructions without copying server response bodies.
+
+Local validation: `npm run check` passes typecheck, 569 TypeScript tests and build.
+All 156 media tests pass, covering synthetic provider-event replay and local HTTP callback/
+playback races; no provider, handset or native input is exercised by these tests.
+The checked-in skill documents context draining and the new reply cursor. Its
+frontmatter is unchanged and reviewed; the optional skill-creator validator could
+not run because local Python lacks PyYAML. No dependency was installed to run it.
+No deployment, companion/installed-skill update or additional call was performed.
+
 ## Production promotion and documentation — November 12
 
 The user approved promoting the completed release and documentation to remote

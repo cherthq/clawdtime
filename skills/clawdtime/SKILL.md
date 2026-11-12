@@ -34,14 +34,25 @@ permissions or arm capture/control to make checks pass without authorization.
 3. Read the returned ordered turns and reply receipts. Acknowledge each exact
    turn with `acknowledge_turn`; this records delivery only. It does not end the
    call, stop sharing, complete the turn or authorize any tool.
+   Process all returned continuations and corrections together. Before a reply
+   or external action, poll again with `waitSeconds:0` and drain/acknowledge newer
+   turns. An unfinished phrase is not a request for clarification by itself.
 4. Report `conversation_progress` as `executing` or `pending_approval`. Use this
    session's normal file, coding and suitable computer tools under native policy.
    Ordinary reasoning/file work needs no screen-input executor and may continue
    while sharing. Speech arriving during work waits in sequence for the next poll.
-5. Return a direct spoken answer using `conversation_reply` with stable turnId,
-   replyId and text (≤900 characters). Reconcile the same reply receipt after any
+5. Return one concise spoken answer per turn using `conversation_reply` with
+   stable turnId, replyId, the latest poll's `expectedCursor`, and text (≤900
+   characters). A `reply_context_stale` rejection means no speech was submitted:
+   read/acknowledge the newer turns and reconsider the answer. For a changed
+   reply after this definitive rejection, use a fresh bridge command ID with
+   the same uncommitted replyId, or reply to the newer turn. A `reply_exists`
+   rejection requires reconciling that turn's original reply, not another ID.
+   Reconcile the same reply receipt after any
    uncertainty; never create a new ID to replay speech. Playback is half duplex;
    no full-duplex interruption or barge-in is promised.
+   A canceled reply must not be replayed. Poll for new context; a continuation
+   before playback can cancel pending speech. Answer the newer turn when needed.
 6. Mark the turn `completed`, `canceled` or `uncertain` with
    `conversation_progress`. Completion is an execution fact, not delivery ack.
    A correction is a new ordered human turn. Respect cancellation requests and

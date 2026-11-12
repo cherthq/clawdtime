@@ -345,7 +345,7 @@ describe("native protocol integration without live traffic", () => {
       credentials: { token: "PRIVATE_TOKEN" },
       captions: {
         enabled: true,
-        state: "listening",
+        state: "speaking",
         failed: false,
         text: "PRIVATE_CAPTION",
       },
@@ -361,6 +361,15 @@ describe("native protocol integration without live traffic", () => {
       },
       lifecycleDiagnostics: {
         version: 1,
+        lastUtterance: {
+          at,
+          elapsedMs: 13000,
+          fragments: 3,
+          assemblyMs: 2400,
+          settleMs: 600,
+          discarded: false,
+          text: "PRIVATE_UTTERANCE",
+        },
         firstFailure: {
           reason: "room_disconnected",
           category: "room_event",
@@ -434,7 +443,16 @@ describe("native protocol integration without live traffic", () => {
     expect(result).toMatchObject({
       id,
       alive: true,
+      captions: { state: "speaking" },
       lifecycleDiagnostics: {
+        lastUtterance: {
+          at,
+          elapsedMs: 13000,
+          fragments: 3,
+          assemblyMs: 2400,
+          settleMs: 600,
+          discarded: false,
+        },
         lastSegmentFailure: {
           reason: "callback_stale",
           at,

@@ -434,7 +434,12 @@ export class ConversationService {
   async reply(
     raw: string,
     requestId: string,
-    input: { turnId: string; replyId: string; text: string },
+    input: {
+      turnId: string;
+      replyId: string;
+      text: string;
+      expectedCursor?: number;
+    },
   ) {
     const { request, session } = this.owned(raw, requestId);
     const value = z
@@ -446,6 +451,7 @@ export class ConversationService {
           .max(120)
           .regex(/^[A-Za-z0-9_-]+$/),
         text: z.string().trim().min(1).max(900),
+        expectedCursor: z.number().int().nonnegative().safe().optional(),
       })
       .strict()
       .parse(input);
@@ -468,6 +474,7 @@ export class ConversationService {
       throw new DomainError(
         409,
         "This turn already has a reply; reconcile its original identity.",
+        "reply_exists",
       );
     if (
       previous &&
@@ -476,6 +483,19 @@ export class ConversationService {
       return previous;
     if (!previous) {
       this.open(session, request);
+      // Check synchronously before reserving a speech receipt. A refusal has no
+      // speech effect; an existing receipt must always remain reconcilable.
+      const turns = this.turns(requestId);
+      if (
+        (value.expectedCursor ?? turn.sequence) !==
+          (turns.at(-1)?.sequence ?? 0) ||
+        turns.some((t) => t.delivery !== "acknowledged")
+      )
+        throw new DomainError(
+          409,
+          "Newer conversation context must be read and acknowledged before replying.",
+          "reply_context_stale",
+        );
       if (turn.state === "canceled")
         throw new DomainError(409, "Canceled turns cannot dispatch speech.");
       const call = this.service.store.get<CallSession>(
@@ -514,6 +534,7 @@ export class ConversationService {
         throw new DomainError(
           409,
           "This turn already has a reply; reconcile its original identity.",
+          "reply_exists",
         );
       const record: ConversationReply = retained ?? {
         id: replyId,

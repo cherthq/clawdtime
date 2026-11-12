@@ -90,6 +90,9 @@ export function createApp(
   app.onError((err, c) =>
     c.json(
       {
+        ...(err instanceof DomainError && err.code
+          ? { errorCode: err.code }
+          : {}),
         error:
           err instanceof DomainError || err instanceof z.ZodError
             ? err.message
@@ -316,6 +319,7 @@ export function createApp(
         turnId: z.string().min(1),
         replyId: z.string().min(1),
         text: z.string().min(1).max(900),
+        expectedCursor: z.number().int().nonnegative().safe().optional(),
       })
       .strict()
       .parse(await c.req.json());

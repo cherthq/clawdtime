@@ -37,7 +37,7 @@ text or a file.
 | `conversation_turns`    | requestId, after sequence (default 0), waitSeconds (0–20). Returns ordered turns, cursor and existing reply receipts. Reads never consume. Re-read from an earlier cursor to reconcile changed outcomes. |
 | `acknowledge_turn`      | requestId, turnId. Delivery acknowledgement only; does not execute, complete, stop sharing, or end call.                                                                                                 |
 | `conversation_progress` | requestId, turnId, state: executing, pending_approval, completed, canceled, uncertain. Never report a native tool as canceled/completed without evidence.                                                |
-| `conversation_reply`    | requestId, turnId, stable replyId, text ≤900 characters. Reply remains agent-authored; one reply per turn, stable durable receipt, no blind replay.                                                      |
+| `conversation_reply`    | requestId, turnId, stable replyId, text ≤900 characters, expectedCursor from the latest poll. One reply per turn; stale context is rejected before speech. Reconcile existing receipts without replay.   |
 | `cancel_turn`           | requestId, turnId. Cooperative cancellation; running tool outcomes may remain unresolved.                                                                                                                |
 | `end_conversation`      | requestId. Explicit conversation/call cleanup; inspect final receipts.                                                                                                                                   |
 | `execution_status`      | requestId. Current executor, epoch and unresolved state.                                                                                                                                                 |
@@ -49,6 +49,24 @@ REST uses `/api/attention/:id/conversation/turns?after=N` and POST siblings
 `ack`, `progress`, `reply`, `cancel`, `end`, `execution`, `observe`, `act`.
 GET `execution` reads ownership. REST callers still need the exact session bearer.
 No new global credential or automatic authorization is introduced.
+
+Before replying or performing an external action, drain a zero-wait poll and
+acknowledge all queued continuations/corrections. A new reply requires the latest
+`expectedCursor` and no unacknowledged turns. Older clients omitting the cursor
+can reply only when their target is the latest turn and all turns are acknowledged.
+An HTTP 409 `reply_context_stale` reserves no receipt and submits no speech: read
+the new context before deciding what to say. An existing receipt remains
+reconcilable with its original arguments after more turns arrive. `reply_exists`
+means reconcile that turn's original reply, never replace it with another ID.
+Native tool approval and execution ownership remain separate requirements.
+
+Readiness now includes `setup_reservation`. For v2, a terminal request stops
+blocking a fresh same-chat run only after call, media, effect, lease and input
+cleanup are confirmed. Expiry alone cannot release an unresolved call or
+invitation. Setup creation and direct call start check the same reservation
+predicate; only the exact approved setup test can start its reserved call.
+History is preserved. A structured `setup_reserved` conflict tells the connector
+to reconcile cleanup, without exposing arbitrary server errors or retrying a call.
 
 Acknowledge turns in order, report execution, use normal tools and publish replies,
 then poll again. Sharing and the call survive an individual acknowledgement,

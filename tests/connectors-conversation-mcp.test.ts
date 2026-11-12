@@ -185,6 +185,16 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
       (await call(first, "conversation_turns", { requestId, after: 0 })).value
         .turns[0].state,
     ).toBe("received");
+    const stale = await call(first, "conversation_reply", {
+      requestId,
+      turnId: one.id,
+      replyId: "reply-one",
+      text: "Blue chosen.",
+      expectedCursor: 1,
+    });
+    expect(stale.error).toBe(true);
+    expect(transport.spoken).toHaveLength(0);
+    await call(first, "acknowledge_turn", { requestId, turnId: two.id });
     await call(first, "conversation_progress", {
       requestId,
       turnId: one.id,
@@ -194,7 +204,8 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
       requestId,
       turnId: one.id,
       replyId: "reply-one",
-      text: "Blue chosen.",
+      text: "Green chosen.",
+      expectedCursor: batch.value.cursor,
     });
     expect(spoken.error).toBeFalsy();
     await call(first, "conversation_progress", {
@@ -216,7 +227,8 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
       requestId,
       turnId: one.id,
       replyId: "reply-one",
-      text: "Blue chosen.",
+      text: "Green chosen.",
+      expectedCursor: batch.value.cursor,
     });
     expect(repeat.error).toBeFalsy();
     expect(transport.spoken).toHaveLength(1);

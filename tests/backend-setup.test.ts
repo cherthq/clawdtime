@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import { Store } from "../src/storage/store.js";
 import { ClawdTime } from "../src/attention/service.js";
 import { SetupService } from "../src/pairing/setup.js";
+import { setupReservationBlocks } from "../src/pairing/setup-reservation.js";
 import { SimulationTransport } from "../src/transport/simulation.js";
 import type { SetupTest, Transport } from "../src/contracts.js";
 
-function fixture(mode: "simulation" | "live" = "simulation", legacy = true) {
+function fixture(
+  mode: "simulation" | "live" = "simulation",
+  legacy = true,
+  protocolVersion: 1 | 2 = 1,
+) {
   let now = 100_000;
   const store = new Store(),
     simulated = new SimulationTransport();
@@ -62,6 +67,7 @@ function fixture(mode: "simulation" | "live" = "simulation", legacy = true) {
       projectRoot: "/fixture",
       externalSessionId,
       hostId: "mac",
+      protocolVersion,
       capabilities: { cooperativePause: true, polling: true },
     });
   const agent = register("one");
@@ -123,6 +129,171 @@ function fixture(mode: "simulation" | "live" = "simulation", legacy = true) {
 }
 
 describe("same-session approved setup test", () => {
+  it("does not release an expired v2 invitation with unresolved delivery", () => {
+    const f = fixture("simulation", false, 2);
+    const test = f.setup.invite(f.agent.token).test;
+    const effect = f.store.effect(test.invitationEffectId)!;
+    const expired = { ...test, state: "expired" as const };
+    for (const state of ["pending", "running", "unknown"] as const) {
+      f.store.putEffect({ ...effect, state });
+      expect(setupReservationBlocks(f.store, expired, false)).toBe(true);
+    }
+    f.store.putEffect({ ...effect, state: "done" });
+    expect(setupReservationBlocks(f.store, expired, false)).toBe(false);
+    f.store.close();
+  });
+
+  it("reserves setup atomically and refuses a competing direct call before any call effect", () => {
+    const f = fixture("simulation", false, 2),
+      other = f.register("other");
+    f.setup.invite(f.agent.token);
+    expect(() => f.setup.invite(other.token)).toThrow("Another session");
+    for (const agent of [f.agent, other])
+      expect(() =>
+        f.service.requestAttention(agent.token, {
+          taskId: "direct",
+          idempotencyKey: "direct",
+          reason: "review",
+          question: "Synthetic request",
+        }),
+      ).toThrow("setup reservation");
+    expect(f.store.effects().filter((e) => e.kind === "call")).toHaveLength(0);
+    f.store.close();
+  });
+
+  it("does not let expiry hide unknown native input from readiness or a new call", async () => {
+    const f = fixture("simulation", false, 2);
+    const test = f.setup.invite(f.agent.token).test;
+    await f.service.drain();
+    f.setup.authorize(f.agent.token, test.id, true);
+    const { request } = f.setup.start(f.agent.token);
+    await f.service.drain();
+    f.service.observeCall(request.id, "connected", true);
+    f.service.observeCall(request.id, "ended");
+    f.store.put("execution", {
+      id: request.id,
+      executor: "native",
+      state: "uncertain",
+    });
+    f.advance(300001);
+    f.setup.expire();
+    const next = f.register("next");
+    expect(f.store.get<SetupTest>("setup_test", test.id)?.state).toBe(
+      "expired",
+    );
+    expect(f.service.doctor(next.token).readiness.checks).toContainEqual(
+      expect.objectContaining({ id: "setup_reservation", status: "fail" }),
+    );
+    expect(() => f.setup.invite(next.token)).toThrow("Another session");
+    expect(() =>
+      f.service.requestAttention(next.token, {
+        taskId: "new",
+        idempotencyKey: "new",
+        reason: "review",
+        question: "Synthetic request",
+      }),
+    ).toThrow("setup reservation");
+    f.store.put("execution", {
+      id: request.id,
+      executor: "none",
+      state: "idle",
+    });
+    await f.service.drain();
+    expect(f.setup.invite(next.token).test.state).toBe("awaiting_approval");
+    expect(f.simulated.calls).toHaveLength(1);
+    f.store.close();
+  });
+  it("releases a cleaned-up v2 reservation before its deadline without rewriting history or redialing", async () => {
+    const f = fixture("simulation", false, 2);
+    const test = f.setup.invite(f.agent.token).test;
+    await f.service.drain();
+    f.setup.authorize(f.agent.token, test.id, true);
+    const started = f.setup.start(f.agent.token);
+    await f.service.drain();
+    const next = f.register("next");
+    expect(f.service.doctor(next.token).readiness.checks).toContainEqual(
+      expect.objectContaining({ id: "setup_reservation", status: "fail" }),
+    );
+    expect(() => f.setup.invite(next.token)).toThrow("Another session");
+    f.service.observeCall(started.request.id, "connected", true);
+    f.service.observeCall(started.request.id, "ended");
+    expect(f.now()).toBeLessThan(started.test.expiresAt);
+    expect(f.service.doctor(next.token).readiness.checks).toContainEqual(
+      expect.objectContaining({ id: "setup_reservation", status: "pass" }),
+    );
+    expect(f.setup.invite(next.token).test.state).toBe("awaiting_approval");
+    expect(f.store.get("setup_test", test.id)).toEqual(started.test);
+    expect(f.simulated.calls).toHaveLength(1);
+    f.store.close();
+  });
+
+  it("retains the reservation until media, effects, leases and native input are reconciled", async () => {
+    const f = fixture("simulation", false, 2);
+    const test = f.setup.invite(f.agent.token).test;
+    await f.service.drain();
+    f.setup.authorize(f.agent.token, test.id, true);
+    const { test: started, request } = f.setup.start(f.agent.token);
+    await f.service.drain();
+    f.service.observeCall(request.id, "connected", true);
+    f.service.observeCall(request.id, "ended");
+    const call =
+      f.store.all<import("../src/contracts.js").CallSession>("call")[0]!;
+    const blocked = () => setupReservationBlocks(f.store, started, true);
+    expect(blocked()).toBe(true); // Live calls require confirmed media cleanup.
+    f.store.put("media", {
+      id: call.id,
+      requestId: request.id,
+      providerCallId: call.providerCallId,
+      state: "closed",
+    });
+    expect(blocked()).toBe(false);
+    const effect = f.store.effect(`${request.id}:call`)!;
+    f.store.putEffect({ ...effect, state: "unknown" });
+    expect(blocked()).toBe(true);
+    f.store.putEffect(effect);
+    f.store.put("lease", {
+      id: "lease",
+      requestId: request.id,
+      state: "active",
+    });
+    expect(blocked()).toBe(true);
+    f.store.put("lease", {
+      id: "lease",
+      requestId: request.id,
+      state: "released",
+    });
+    f.store.put("action", {
+      id: "action",
+      leaseId: "lease",
+      state: "submitted",
+    });
+    expect(blocked()).toBe(true);
+    f.store.put("action", {
+      id: "action",
+      leaseId: "lease",
+      state: "observed",
+    });
+    f.store.put("execution", {
+      id: request.id,
+      executor: "native",
+      state: "executing",
+    });
+    expect(blocked()).toBe(true);
+    f.store.put("execution", {
+      id: request.id,
+      executor: "none",
+      state: "uncertain",
+    });
+    expect(blocked()).toBe(true);
+    f.store.put("execution", {
+      id: request.id,
+      executor: "none",
+      state: "idle",
+    });
+    expect(blocked()).toBe(false);
+    f.store.close();
+  });
+
   it("rolls connected setup and attention deadlines together without another consent or call", async () => {
     const f = fixture();
     f.setup.invite(f.agent.token);

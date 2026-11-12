@@ -81,6 +81,16 @@ export const mediaFailureSchema = z.object({
 const lifecycleDiagnosticsSchema = z.object({
   version: z.literal(1),
   firstFailure: mediaFailureSchema.optional(),
+  lastUtterance: z
+    .object({
+      at: timestamp,
+      elapsedMs: z.number().int().min(0).max(86400000),
+      fragments: z.number().int().min(0).max(129),
+      assemblyMs: z.number().int().min(0).max(86400000),
+      settleMs: z.number().int().min(0).max(86400000),
+      discarded: z.boolean(),
+    })
+    .optional(),
   lastSegmentFailure: z
     .object({
       reason: z.enum([
@@ -138,6 +148,7 @@ export const mediaStatusSchema = z.object({
         "ended",
         "paused",
         "listening",
+        "speaking",
       ]),
       failed: z.boolean(),
     })

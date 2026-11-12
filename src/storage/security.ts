@@ -45,6 +45,7 @@ export class DomainError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: "setup_reserved" | "reply_context_stale" | "reply_exists",
   ) {
     super(message);
   }

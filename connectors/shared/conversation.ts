@@ -37,12 +37,13 @@ export const conversationCommands = {
   },
   conversation_reply: {
     description:
-      "Speak this coding agent's reply through the current call. Keep one stable replyId per reply; after uncertainty inspect turns and existing reply receipts, never use a new ID to replay speech.",
+      "Speak one reply per turn after reading and acknowledging all queued turns. Pass the latest poll cursor as expectedCursor; stale context is rejected before speech. Keep stable IDs and reconcile uncertain receipts without replay.",
     schema: z.object({
       requestId: id,
       turnId: id,
       replyId: id,
       text: z.string().min(1).max(900),
+      expectedCursor: z.number().int().nonnegative().safe().optional(),
     }),
   },
   cancel_turn: {

@@ -60,3 +60,12 @@ class LifecycleDiagnostics:
             value['httpStatus'] = http_status
         self.data['lastSegmentFailure'] = value
         self.save()
+
+    def utterance(self, result):
+        # Explicit numeric/boolean projection: never retain text or audio.
+        self.data['lastUtterance'] = {**self.timing(),
+            'fragments': max(0, min(129, int(result['fragments']))),
+            'assemblyMs': max(0, min(86400000, int(result['assemblyMs']))),
+            'settleMs': max(0, min(86400000, int(result['settleMs']))),
+            'discarded': result['discarded'] is True}
+        self.save()

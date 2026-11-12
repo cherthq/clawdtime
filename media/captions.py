@@ -157,7 +157,7 @@ class CaptionRenderer:
                 text=text[:-1]
             draw.text((640-draw.textlength(text,font=font)/2,y),text,font=font,fill=color)
         centered('CLAWDTIME', 78, self.label_font, '#b5c3d7')
-        labels = {'listening': 'Live captions', 'connecting': 'Connecting', 'paused': 'Paused',
+        labels = {'listening': 'Listening', 'speaking': 'Agent speaking · mic paused', 'connecting': 'Connecting', 'paused': 'Paused',
                   'reconnecting': 'Reconnecting', 'ended': 'Call ended', 'unavailable': 'Unavailable'}
         centered(labels.get(state,'Unavailable'),104,self.label_font,'#46d28d' if active else '#b5c3d7')
         centered(snapshot['title'] if active else 'ClawdTime attention', 134,self.title_font,'#ffffff')
@@ -166,6 +166,7 @@ class CaptionRenderer:
             lines=self.lines(snapshot['segments']) or ['Listening for the', 'next sentence.']
         else:
             lines={'connecting':['Captions begin after','the recording notice.'],
+                   'speaking':['Please wait until','listening resumes.'],
                    'paused':['Audio capture and','captions are paused.'],
                    'reconnecting':['Waiting for a fresh','connection.'],
                    'ended':['Your agent’s result will','arrive in Messages.'],

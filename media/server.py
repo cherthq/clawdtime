@@ -24,6 +24,7 @@ from devices import ScreenController, gateway_request
 from device_actions import DeviceActions
 from device_relay import DeviceRelay
 from playback import SpeechLedger, TERMINAL
+from utterances import UtteranceAssembler
 from ledger_backup import encrypted_snapshot
 from lifecycle_diagnostics import LifecycleDiagnostics, CATEGORIES
 from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, priority_stop_requested, validate_session_id
@@ -77,6 +78,8 @@ class Session:
         self.policy_at = 0.0
         self.policy_wakeup = asyncio.Event()
         self.segment_count = 0
+        self.utterances = UtteranceAssembler()
+        self.delivering = False
         self.generation = 0
         self.credentials = None
         self.pause_latched = False
@@ -211,6 +214,8 @@ class Session:
                             self.caption_scene.clear('unavailable')
                         elif self.pause_latched:
                             self.caption_scene.clear('paused')
+                        elif self.speaking:
+                            self.caption_scene.clear('speaking')
                         else:
                             self.caption_scene.apply_policy(policy)
                     if policy.get('state') == 'ended':
@@ -234,6 +239,7 @@ class Session:
 
     async def stop_stt(self):
         self.generation += 1
+        self.utterances.reset()
         if self.ws:
             await self.ws.close()
         for t in list(self.stt_tasks):
@@ -250,7 +256,8 @@ class Session:
                 continue
             generation = self.generation
             try:
-                async with self.owner.http.ws_connect('wss://api.deepgram.com/v1/listen', params={'model':self.owner.env.get('DEEPGRAM_STT_MODEL','nova-3'),'encoding':'linear16','sample_rate':str(RATE),'channels':'1','interim_results':'false','smart_format':'true','mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},heartbeat=5,max_msg_size=128*1024) as ws:
+                self.utterances.reset()
+                async with self.owner.http.ws_connect('wss://api.deepgram.com/v1/listen', params={'model':self.owner.env.get('DEEPGRAM_STT_MODEL','nova-3'),'encoding':'linear16','sample_rate':str(RATE),'channels':'1','interim_results':'true','endpointing':'400','utterance_end_ms':'1000','vad_events':'true','smart_format':'true','mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},heartbeat=5,max_msg_size=128*1024) as ws:
                     self.ws = ws
                     self.stream = rtc.AudioStream(self.track, capacity=5, sample_rate=RATE, num_channels=1)
                     async def send_audio():
@@ -262,29 +269,23 @@ class Session:
                         async for msg in ws:
                             if msg.type != WSMsgType.TEXT:
                                 continue
-                            text = final_transcript(json.loads(msg.data))
-                            if text and self.allowed and generation == self.generation:
-                                self.segment_count += 1
-                                segment = {'id':f'{self.segment_count}', 'text':text, 'at':datetime.now(timezone.utc).isoformat().replace('+00:00','Z'), 'source':'remote_participant', 'callId':self.call_id, 'participantIdentity':self.worker_identity}
-                                if self.queue_segment(segment): return
-                                if pause_requested(text):
-                                    self.allowed = False
-                                    self.pause_latched = True
-                                    if self.caption_scene:
-                                        self.caption_scene.clear('paused')
-                                    return
-                    a,b = asyncio.create_task(send_audio()),asyncio.create_task(receive_text())
-                    self.stt_tasks.update([a,b])
+                            if self.accept_transcript(json.loads(msg.data), generation): return
+                    async def flush_utterance():
+                        while self.allowed and generation == self.generation and not self.closing:
+                            self.flush_utterance(generation)
+                            await asyncio.sleep(.05)
+                    a,b,c = asyncio.create_task(send_audio()),asyncio.create_task(receive_text()),asyncio.create_task(flush_utterance())
+                    self.stt_tasks.update([a,b,c])
                     try:
-                        done,_ = await asyncio.wait([a,b],return_when=asyncio.FIRST_COMPLETED)
+                        done,_ = await asyncio.wait([a,b,c],return_when=asyncio.FIRST_COMPLETED)
                         for t in done:
                             if not t.cancelled():
                                 t.result()
                     finally:
-                        for t in (a,b):
+                        for t in (a,b,c):
                             t.cancel()
-                        await asyncio.gather(a,b,return_exceptions=True)
-                        self.stt_tasks.difference_update([a,b])
+                        await asyncio.gather(a,b,c,return_exceptions=True)
+                        self.stt_tasks.difference_update([a,b,c])
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -296,11 +297,49 @@ class Session:
                     await self.fail("transcription_failed", "capture_loop")
                     return
             finally:
+                self.utterances.reset()
                 self.ws = None
                 if self.stream:
                     await self.stream.aclose()
                     self.stream = None
             await asyncio.sleep(.1)
+
+    def segment(self, text):
+        self.segment_count += 1
+        return {'id':str(self.segment_count), 'text':text,
+                'at':datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+                'source':'remote_participant', 'callId':self.call_id,
+                'participantIdentity':self.worker_identity}
+
+    def accept_transcript(self, message, generation):
+        if not isinstance(message, dict) or not self.allowed or self.speaking or self.closing or generation != self.generation:
+            return False
+        text = final_transcript(message)
+        if text and (priority_stop_requested(text) or pause_requested(text)):
+            self.utterances.reset()
+            if self.queue_segment(self.segment(text)):
+                return True
+            self.allowed = False
+            self.pause_latched = True
+            if self.caption_scene:
+                self.caption_scene.clear('paused')
+            return True
+        self.utterances.feed(message)
+        return False
+
+    def flush_utterance(self, generation):
+        if not self.allowed or self.speaking or self.closing or generation != self.generation or time.monotonic()-self.policy_at >= 2:
+            self.utterances.reset()
+            return
+        result = self.utterances.take_ready()
+        if result is None:
+            return
+        self.lifecycle.utterance(result)
+        if result['text'] and not result['discarded']:
+            self.queue_segment(self.segment(result['text']))
+
+    def human_speaking(self):
+        return self.protocol_version == 2 and (self.utterances.busy or self.delivering or not self.segments.empty())
 
     def queue_segment(self, segment):
         if isinstance(segment,dict) and segment.get('id') in self.priority_stop_seen:
@@ -416,6 +455,7 @@ class Session:
     async def deliver(self):
         while not self.closed:
             segment = await self.segments.get()
+            self.delivering = True
             try:
                 if not self.valid_segment(segment):
                     self.lifecycle.segment_failure('invalid_segment', 0)
@@ -473,6 +513,7 @@ class Session:
                     self.note_segment_failure(segment, 'callback_invalid_response', age, uncertain=True)
                     self.discard_waiting_segments()
             finally:
+                self.delivering = False
                 self.segments.task_done()
                 self.speak_delivery_notice()
 
@@ -482,6 +523,8 @@ class Session:
         self.speaking = True
         self.speech_cancelled = False
         self.allowed = False
+        if self.caption_scene:
+            self.caption_scene.clear('speaking')
         await self.stop_stt()
         try:
             async with self.owner.http.post('https://api.deepgram.com/v1/speak',params={'model':self.owner.env.get('DEEPGRAM_TTS_MODEL','aura-2-thalia-en'),'encoding':'linear16','container':'none','sample_rate':str(RATE),'mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},json={'text':text[:1000]}) as response:
@@ -506,6 +549,7 @@ class Session:
             await asyncio.wait_for(barrier, 3)
         finally:
             self.speaking = False
+            self.policy_wakeup.set()
 
     async def activate(self,call_id,recording=True):
         if self.closing:
@@ -778,8 +822,20 @@ class Service:
             if session.closing or session.pause_latched or not session.active or not capture_allowed(policy) or policy.get('muted') is True or policy.get('callId') != session.call_id:
                 self.speech.set(utterance_id, 'cancelled', 'authorization_closed')
                 return
-            self.speech.set(utterance_id, 'playing')
-            await asyncio.wait_for(session.say(text), 30)
+            async def start_playback():
+                # wait_for schedules a new task; check inside that task so no
+                # continuation can arrive between this guard and say's mute.
+                if session.closing or session.pause_latched or not session.active:
+                    return 'authorization_closed'
+                if session.human_speaking():
+                    return 'human_speaking'
+                self.speech.set(utterance_id, 'playing')
+                await session.say(text)
+                return None
+            refused = await asyncio.wait_for(start_playback(), 30)
+            if refused:
+                self.speech.set(utterance_id, 'cancelled', refused)
+                return
             if session.closing or session.speech_cancelled:
                 self.speech.set(utterance_id, 'cancelled', 'capture_stopped')
             else:
@@ -863,6 +919,9 @@ class Service:
             if s.speaking or any(self.speech.get(key)['sessionId'] == sid for key in self.speech_tasks):
                 raise web.HTTPConflict(text='Speech is already playing.')
             receipt=self.speech.accept(body['id'], sid, digest)
+            if s.human_speaking():
+                self.speech.set(body['id'], 'cancelled', 'human_speaking')
+                return web.json_response(self.speech.public(self.speech.get(body['id'])))
             self.speech_tasks[body['id']] = asyncio.create_task(self.play_speech(s, body['id'], body['text']))
             return web.json_response(self.speech.public(receipt),status=202)
         raise web.HTTPNotFound()

@@ -3,6 +3,7 @@ import {
   type TerminationSource,
 } from "./termination.js";
 import { setupInvitationRetirementValid } from "../pairing/retired-setup.js";
+import { blockingSetupReservation } from "../pairing/setup-reservation.js";
 import {
   PreflightBlocked,
   freshEvidence,
@@ -320,6 +321,29 @@ export class ClawdTime {
         throw new DomainError(
           409,
           "The dedicated line is still reserved by an existing call.",
+        );
+      if (
+        blockingSetupReservation(
+          this.store,
+          pairing,
+          undefined,
+          this.transport.mode === "live",
+          this.store
+            .all<SetupTest>("setup_test")
+            .find(
+              (test) =>
+                test.sessionId === session.id &&
+                test.pairingId === pairing.id &&
+                test.state === "approved" &&
+                !test.requestId &&
+                value.taskId === `setup:${test.id}`,
+            )?.id,
+        )
+      )
+        throw new DomainError(
+          409,
+          "A setup reservation still owns this conversation.",
+          "setup_reserved",
         );
       const request: AttentionRequest = {
         ...value,
@@ -1268,6 +1292,25 @@ export class ClawdTime {
     const checks: ReadinessCheck[] = [];
     const mode =
       this.store.state<string>("runtime:mode") ?? this.transport.mode;
+    const setupReserved = !!blockingSetupReservation(
+      this.store,
+      pairing,
+      session?.id,
+      mode === "live",
+    );
+    checks.push({
+      id: "setup_reservation",
+      status: setupReserved ? "fail" : "pass",
+      message: setupReserved
+        ? "Another session retains a setup reservation for this conversation."
+        : "No other session blocks setup for this conversation.",
+      ...(setupReserved
+        ? {
+            nextAction:
+              "Finish the owning session and reconcile its call, media and input cleanup; do not redial or replace its request.",
+          }
+        : {}),
+    });
     if (mode === "live") {
       const transport =
         this.store.state<TransportReadiness>("native-preflight");

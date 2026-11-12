@@ -65,6 +65,31 @@ the introduction, and resumes afterward only while policy permits it. This is
 not a full-duplex realtime voice session and does not support voice barge-in.
 Authenticated text Stop and local Stop remain available while speech plays.
 
+Stable Deepgram `is_final` segments are assembled into one utterance rather than
+delivered as separate instructions. Capture requests interim results, VAD events,
+400ms endpointing and a 1000ms UtteranceEnd gap. A `speech_final` or valid
+UtteranceEnd boundary starts a further 600ms continuation window. Resumed speech
+cancels that window; interim words are never submitted. UtteranceEnd uses the
+last finalized word timestamp, not trailing audio silence. These are initial
+timing defaults requiring later handset qualification, not measured latency claims.
+
+Assembly is transient and resets on capture generation changes, pause, TTS,
+disconnect and policy loss. Duplicate audio offsets are suppressed within a
+connection. Requests exceeding 30 seconds, 8000 characters or 128 fragments are
+discarded at a boundary instead of executing a truncated command. Retracted
+interim speech also discards an incomplete prefix. Literal priority Stop and
+the recognized pause command bypass assembly immediately on final transcription.
+V2 speech is canceled before playback if a new utterance is assembling or being
+delivered; its durable canceled receipt cannot replay. This does not enable
+barge-in once playback has begun. The caption scene shows “Agent speaking · mic
+paused” during TTS; the screen-sharing video retains its existing presentation.
+
+`lifecycleDiagnostics.lastUtterance` exposes only fragment count, assembly/settle
+durations, discard flag and timestamps. No text or audio is added to diagnostics.
+The deterministic `test_utterances.py` and loopback `test_utterance_delivery.py`
+suites cover assembly, continuation, empty/retracted finals, duplicate events,
+policy generations, priority Stop and at-most-once playback cancellation.
+
 The implemented call workflow is agent-initiated outbound FaceTime. ClawdTime does
 not implement inbound FaceTime handling or an `auto_reject` route. Historical
 Apple Teams source-pause behavior does not establish either capability here.

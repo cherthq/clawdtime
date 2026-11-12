@@ -1,4 +1,5 @@
 import { setupInvitationReplacementAllowed } from "./retired-setup.js";
+import { blockingSetupReservation } from "./setup-reservation.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -71,14 +72,6 @@ export class SetupService {
     return this.create(session, previousTestId, raw);
   }
   private create(session: AgentSession, previousTestId?: string, raw?: string) {
-    if (
-      this.service.transport.mode === "live" &&
-      !this.service.doctor(raw!).readiness.liveReady
-    )
-      throw new DomainError(
-        409,
-        "Resolve the live doctor readiness checks before inviting a setup test.",
-      );
     const pairing = this.service.pairing(session.pairingId);
     if (!pairing.allowView || !session.capabilities.cooperativePause)
       throw new DomainError(
@@ -87,19 +80,25 @@ export class SetupService {
       );
     return this.store.transaction(() => {
       if (
-        this.store.all<SetupTest>("setup_test").some((t) => {
-          const p = this.store.get<Pairing>("pairing", t.pairingId);
-          return (
-            open.has(t.state) &&
-            p?.lineId === pairing.lineId &&
-            p.recipient === pairing.recipient &&
-            p.conversationId === pairing.conversationId
-          );
-        })
+        blockingSetupReservation(
+          this.store,
+          pairing,
+          session.id,
+          this.service.transport.mode === "live",
+        )
       )
         throw new DomainError(
           409,
           "Another session already owns the setup test for this conversation.",
+          "setup_reserved",
+        );
+      if (
+        this.service.transport.mode === "live" &&
+        !this.service.doctor(raw!).readiness.liveReady
+      )
+        throw new DomainError(
+          409,
+          "Resolve the live doctor readiness checks before inviting a setup test.",
         );
       const testId = id("setup"),
         createdAt = Math.max(

@@ -79,6 +79,61 @@ async function fixture() {
 }
 
 describe("agent-owned ordered conversation", () => {
+  it("refuses a reply based on an old cursor without creating speech, then accepts current acknowledged context", async () => {
+    const f = await fixture();
+    const a = f.receive("first", "Use the first group.");
+    f.conversation.acknowledge(f.agent.token, f.request.id, a.id);
+    const cursor = f.conversation.poll(f.agent.token, f.request.id).cursor;
+    const b = f.receive("correction", "Actually use the second group.");
+    const reply = {
+      turnId: a.id,
+      replyId: "stable",
+      text: "I will use the second group.",
+      expectedCursor: cursor,
+    };
+    await expect(
+      f.conversation.reply(f.agent.token, f.request.id, reply),
+    ).rejects.toMatchObject({ code: "reply_context_stale" });
+    expect(f.store.all("conversation_reply")).toHaveLength(0);
+    expect(f.transport.spoken).toHaveLength(0);
+    await expect(
+      f.conversation.reply(f.agent.token, f.request.id, {
+        ...reply,
+        expectedCursor: 2,
+      }),
+    ).rejects.toMatchObject({ code: "reply_context_stale" });
+    f.conversation.acknowledge(f.agent.token, f.request.id, b.id);
+    const current = { ...reply, expectedCursor: 2 };
+    const receipt = await f.conversation.reply(
+      f.agent.token,
+      f.request.id,
+      current,
+    );
+    f.receive("third", "One more instruction.");
+    expect(
+      await f.conversation.reply(f.agent.token, f.request.id, current),
+    ).toEqual(receipt);
+    expect(f.transport.spoken).toHaveLength(1);
+    f.store.close();
+  });
+
+  it("safely rejects omitted and future cursors when they do not match the conversation", async () => {
+    const f = await fixture();
+    const a = f.receive("first"),
+      b = f.receive("second");
+    f.conversation.acknowledge(f.agent.token, f.request.id, a.id);
+    f.conversation.acknowledge(f.agent.token, f.request.id, b.id);
+    const reply = { turnId: a.id, replyId: "stable", text: "Synthetic reply." };
+    for (const expectedCursor of [undefined, 3])
+      await expect(
+        f.conversation.reply(f.agent.token, f.request.id, {
+          ...reply,
+          expectedCursor,
+        }),
+      ).rejects.toMatchObject({ code: "reply_context_stale" });
+    expect(f.transport.spoken).toHaveLength(0);
+    f.store.close();
+  });
   it("poll reconciliation refreshes unknown playback by receipt ID without original speech text", async () => {
     const f = await fixture(),
       turn = f.receive("first");
@@ -189,6 +244,7 @@ describe("agent-owned ordered conversation", () => {
       turnId: a.id,
       replyId: "reply-a",
       text: "The fixture change is done.",
+      expectedCursor: 2,
     });
     f.conversation.progress(f.agent.token, f.request.id, a.id, "completed");
     f.conversation.progress(

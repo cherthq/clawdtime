@@ -56,14 +56,37 @@ export class ClawdTimeClient {
       signal: AbortSignal.timeout(Math.max(1, Math.min(12_000, timeoutMs))),
     });
     if (!response.ok) {
+      let reason: string | undefined;
+      if (response.status === 409) {
+        try {
+          const body = (await response.json()) as { errorCode?: unknown };
+          const messages: Record<string, string> = {
+            setup_reserved:
+              "This conversation has an unresolved setup reservation (409). Reconcile its call, media and input cleanup; no new call was requested.",
+            reply_context_stale:
+              "Newer speech arrived (409). Poll and acknowledge all queued turns, reconsider the reply, then use the latest expectedCursor. No speech was submitted.",
+            reply_exists:
+              "This turn already has a spoken reply (409). Reconcile the original reply receipt; do not replace its ID or repeat speech.",
+          };
+          if (
+            typeof body.errorCode === "string" &&
+            Object.hasOwn(messages, body.errorCode)
+          )
+            reason = messages[body.errorCode];
+        } catch {
+          /* Unknown responses remain redacted. */
+        }
+      }
       // Do not echo arbitrary provider response bodies or bearer credentials to an agent.
       throw new ApiError(
         response.status,
         response.status === 401
           ? "ClawdTime credential is invalid or revoked (401). Obtain a fresh authorized pairing; preserve pending request IDs and never redial to recover them."
-          : response.status === 403
-            ? "ClawdTime session or pairing is stopped or unauthorized (403). Inspect scoped status and reconcile pending work before reconnecting; native permissions are unchanged."
-            : `ClawdTime request rejected (${response.status}); inspect doctor or the exact request status before retrying effects.`,
+          : reason
+            ? reason
+            : response.status === 403
+              ? "ClawdTime session or pairing is stopped or unauthorized (403). Inspect scoped status and reconcile pending work before reconnecting; native permissions are unchanged."
+              : `ClawdTime request rejected (${response.status}); inspect doctor or the exact request status before retrying effects.`,
       );
     }
     return response.json() as Promise<T>;
