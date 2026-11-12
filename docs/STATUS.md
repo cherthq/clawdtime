@@ -50,6 +50,17 @@ as reliable control; these repairs do not establish handset acceptance or
 resolve the current model's targeting limitation. Another live call requires new
 explicit authorization and local Enable; neither was performed.
 
+Source `54b9045` deployed from a clean tracked-source archive to backend deployment
+`dcdd4926-2863-4a45-8b29-ff14ed50aaf4`. The previous backend is removed; deployed
+application/control hashes match the reviewed build. Media remains on
+`74e2e33f-6697-4d24-b7d6-2ce27aff88b6`; helper and gateway were not restarted.
+Readiness reports zero active calls, pending effects or unknown outcomes. Protected
+installation/configuration file hashes, gateway lease/action tables, backend
+entity/effect/event hashes, message cursor and line binding match the pre-deploy
+snapshot. Screen Recording and Accessibility grants remain present; local Enable
+was off at inspection and remains untouched. No billing, model or account setting
+changed. The concise README retains the targeting limitation.
+
 ## Fresh diagnostic call — November 11, after `dd011f4`
 
 The user authorized exactly one new diagnostic call and a factual recap in the
