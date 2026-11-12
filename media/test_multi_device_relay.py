@@ -52,16 +52,34 @@ class MultiDeviceRelayTests(unittest.IsolatedAsyncioTestCase):
         await gary.close()
         await stanley.close()
 
-    async def test_same_device_twice_is_refused(self):
+    async def test_reconnect_for_same_device_replaces_stale_socket(self):
         first = await self.connect('stanley_mac')
-        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'stanley_mac'})).status, 409)
+        relay = self.service.device_relay
+        pending = asyncio.create_task(relay.request('GET', '/v1/devices/stanley_mac/readiness'))
+        await first.receive_json()
+        # A plain GET cannot evict the live gateway.
+        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'stanley_mac'})).status, 400)
+        self.assertTrue(relay.connected_for('stanley_mac'))
+        second = await self.connect('stanley_mac')
+        with self.assertRaises(ConnectionError):
+            await pending  # never replayed on the new socket
+        self.assertEqual(len(relay.live()), 1)
+        task = asyncio.create_task(relay.request('GET', '/v1/devices/stanley_mac/readiness'))
+        await self.answer(second, b'new')
+        self.assertEqual((await task)[1], b'new')
         await first.close()
+        await second.close()
+
+    async def test_partial_device_overlap_is_refused(self):
+        both = await self.connect('gary_mac,stanley_mac')
+        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'stanley_mac'})).status, 409)
+        await both.close()
 
     async def test_legacy_gateway_coexists_and_serves_undeclared_devices(self):
         legacy = await self.connect()  # older gateway build, no declaration
         stanley = await self.connect('stanley_mac')
         relay = self.service.device_relay
-        self.assertEqual((await self.client.get('/device-gateway', headers=GATEWAY)).status, 409)
+        self.assertEqual((await self.client.get('/device-gateway', headers=GATEWAY)).status, 400)
 
         task = asyncio.create_task(relay.request('GET', '/v1/devices/gary_mac/readiness'))
         await self.answer(legacy, b'legacy')

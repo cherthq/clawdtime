@@ -852,6 +852,26 @@ describe("native protocol integration without live traffic", () => {
     });
     expect(next.state).toBe("queued");
   });
+  it("waits out a briefly unavailable media gateway and then dials exactly once", async () => {
+    const f = fixture(),
+      original = f.transport.media.bind(f.transport);
+    let refusals = 2;
+    f.transport.media = async (path, body) => {
+      if (path === "/sessions" && refusals-- > 0)
+        throw new Error("Provider returned HTTP 503.");
+      return original(path, body);
+    };
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("pending");
+    expect(f.store.get<AttentionRequest>("attention", f.attention.id)?.state).toBe("queued");
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("pending");
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("done");
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toHaveLength(1);
+  });
   it("keeps the outcome unknown when the native dial itself fails", async () => {
     const f = fixture(),
       original = f.transport.calls.bind(f.transport);

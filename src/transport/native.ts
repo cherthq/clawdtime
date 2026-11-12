@@ -76,7 +76,7 @@ interface MediaRecord {
   providerCallId?: string;
   outcome?: "declined" | "unanswered" | "disconnected" | "failed";
   /** Set only when the native dial request was provably never sent. */
-  notDialed?: { phase: NotDialed["phase"]; at: number };
+  notDialed?: { phase: NotDialed["phase"]; at: number; retryable?: true };
 }
 interface QuestionSpeech {
   id: string;
@@ -671,7 +671,16 @@ export class NativeTransport implements Transport {
     if (old) {
       if (old.requestId === attention.id && old.providerCallId)
         return { callId: old.providerCallId, accepted: true };
-      throw new DomainError(
+      // A media service 503 is refused before it creates any session, and no
+      // dial followed, so the same media ID may be prepared again.
+      if (
+        !(
+          old.requestId === attention.id &&
+          old.state === "closed" &&
+          old.notDialed?.retryable === true
+        )
+      )
+        throw new DomainError(
         409,
         "Existing media/call outcome requires reconciliation.",
       );
@@ -753,6 +762,22 @@ export class NativeTransport implements Transport {
       return { callId: call.id, accepted: true };
     } catch (e) {
       const current = this.store.get<MediaRecord>("media", id)!;
+      if (
+        !dialSent &&
+        phase === "media_prepare" &&
+        e instanceof Error &&
+        e.message === "Provider returned HTTP 503."
+      ) {
+        // Usually a briefly reconnecting Mac gateway. Wait and retry before the deadline.
+        this.store.put("media", {
+          ...current,
+          state: "closed",
+          notDialed: { phase, at: Date.now(), retryable: true },
+        });
+        throw new PreflightBlocked(
+          "Media service is temporarily unavailable; no session or dial was created.",
+        );
+      }
       if (!dialSent) {
         // No native dial was sent, so the human cannot have been called. The
         // unactivated media session self-closes on its activation timeout.
