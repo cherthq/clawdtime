@@ -46,7 +46,32 @@ cursor sequence 17. All eight protected installation/configuration/receipt files
 match the previous final snapshot, as do gateway action/lease tables. Both macOS
 permission grants remain present; the human's local Enable is on with no active
 lease. No live call, recap, re-pairing, permission change or model change was made.
-Production deployment and post-release evidence are recorded below when verified.
+Source `25ddf8a61b3072e7169305db13d12f9f86f0f353` is deployed from a clean
+tracked archive to backend `b9ab9778-e79a-475f-bfae-39fde6ddb79f` and media
+`9b8b9e58-bebf-4e76-9fb7-8f01eb03a2f9`. Both report SUCCESS; their predecessors
+are removed. A build of that exact archive matches every checked running module.
+Both configuration hashes are unchanged: Astra medium/4096 and the existing keys
+remain. Backend entity/effect/event hashes and cursor match the immediate
+pre-release audit; existing media tables and installed/gateway receipt hashes also
+match. The new media diagnostic table is empty, without manufactured historical
+evidence. Post-release health is HTTP200, idle, with gateway connected; read-only
+Companion checks confirm unchanged grants, ACLs, local Enable and no active lease.
+
+Rollback source is `6a94c110cecc2f8de766fdb8ec78d43b7b2613f8`; its media module
+hashes match the prior deployed image. After fresh idle reconciliation, redeploy
+only the affected existing service from that tracked source with unchanged
+configuration. Preserve volumes, receipts and current cursors; never restore an
+older database or replay effects. The additive diagnostic table can remain.
+The prior backend/media deployment IDs are `39112b96-eb77-400e-b9cd-77e79f5471d6`
+and `74e2e33f-6697-4d24-b7d6-2ce27aff88b6`. Private release proof and rollback
+instructions are retained in `.data/disconnect-release-proof.json` and
+`.data/disconnect-rollback.json`.
+
+This deploys an offline-proven lifecycle fix and diagnostic improvement. It does
+not establish the historical cause, sustained handset control, or current
+response/ack/resume/complete acceptance. A new supervised call still requires fresh
+explicit one-call approval and user-controlled local Enable; the old stopped run
+and its already-sent recap remain closed.
 
 ## Astra supervised call — November 11
 
