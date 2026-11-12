@@ -30,7 +30,14 @@ from policy import call_only_allowed, capture_allowed, final_transcript, pause_r
 
 RATE = 48000
 SAMPLES = 960
-NOTICE = 'ClawdTime is sharing your paired screen and listening for your feedback. You can speak naturally or send a text. Say Stop, or use Stop on your Mac, to end sharing and control.'
+NOTICE = 'Sharing your screen and listening. Say Stop to stop sharing.'
+
+
+class BackendRequestError(Exception):
+    """Only fixed metadata crosses into delivery diagnostics."""
+    def __init__(self, reason, status=None):
+        super().__init__('Backend callback unavailable')
+        self.reason, self.status = reason, status
 
 
 class Session:
@@ -54,7 +61,8 @@ class Session:
         self.speaking = False
         self.call_id = None
         self.audio = asyncio.Queue(maxsize=100)  # 2 seconds maximum outgoing PCM
-        self.segments = asyncio.Queue(maxsize=100)
+        self.segments = asyncio.Queue(maxsize=1)  # One waiting ordinary turn, never a speech backlog.
+        self.delivery_notice = None
         self.track_sid = None
         self.track = None
         self.capture_task = None
@@ -292,7 +300,7 @@ class Session:
     def queue_segment(self, segment):
         if self.priority_stop_id is not None:
             return True  # A local voice Stop never automatically resumes capture or queued work.
-        if self.priority_stop_allowed(segment):
+        if isinstance(segment, dict) and self.priority_stop_allowed(segment):
             self.priority_stop_id=segment['id']
             self.priority_stop_state='pending'
             self.allowed=False
@@ -301,11 +309,18 @@ class Session:
             self.owner.cancel_speech(self.id)
             if self.caption_scene:self.caption_scene.clear('paused')
             if self.screen:self.screen.update({})
-            while not self.segments.empty():
-                self.segments.get_nowait();self.segments.task_done()
+            self.delivery_notice = None
+            self.discard_waiting_segments()
             # One fixed fail-safe bypass, never an ordinary parallel model/action turn.
             self.priority_stop_task=self.task(self.deliver_priority_stop(dict(segment)), "priority_stop")
             return True
+        age = self.segment_age(segment)
+        if not self.valid_segment(segment) or age is None:
+            self.lifecycle.segment_failure('invalid_segment', 0)
+            return False
+        if self.segments.full():
+            self.note_segment_failure(segment, 'queue_full', age)
+            return False
         segment = {**segment, '_capture_generation': self.generation}
         if self.caption_scene:
             self.caption_scene.snapshot()  # expire any stale authorization first
@@ -338,37 +353,114 @@ class Session:
             self.priority_stop_state='unknown'
             logging.warning('priority_voice_stop_unconfirmed session=%s',self.id)
 
+    @staticmethod
+    def segment_age(segment):
+        try:
+            at = datetime.fromisoformat(segment['at'].replace('Z', '+00:00'))
+            if at.tzinfo is None:
+                return None
+            return int(abs((datetime.now(timezone.utc)-at).total_seconds())*1000)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
+
+    def valid_segment(self, segment):
+        return (isinstance(segment, dict) and
+            isinstance(segment.get('id'), str) and re.fullmatch(r'[1-9][0-9]{0,7}', segment['id']) and
+            isinstance(segment.get('text'), str) and 0 < len(segment['text']) <= 8000 and
+            segment.get('source') == 'remote_participant' and
+            segment.get('callId') == self.call_id and
+            segment.get('participantIdentity') == self.worker_identity)
+
+    def note_segment_failure(self, segment, reason, age, status=None, uncertain=False):
+        self.lifecycle.segment_failure(reason, age, status)
+        # One transient notice, with uncertainty taking precedence. No raw speech retained.
+        if self.valid_segment(segment) and (self.delivery_notice is None or uncertain):
+            self.delivery_notice = ({'id': segment['id'], 'callId': segment['callId']}, uncertain)
+
+    def discard_waiting_segments(self):
+        while not self.segments.empty():
+            self.segments.get_nowait()
+            self.segments.task_done()
+
+    def speak_delivery_notice(self):
+        if self.delivery_notice is None or not self.segments.empty():
+            return
+        segment, uncertain = self.delivery_notice
+        self.delivery_notice = None  # Never retry an uncertain notice receipt.
+        if (self.closing or not self.active or self.pause_latched or
+                self.priority_stop_id is not None or self.speaking or
+                not self.allowed or time.monotonic()-self.policy_at >= 2):
+            return
+        reply = ("I couldn't confirm that request. Check the screen before asking again."
+                 if uncertain else "I missed that request. Please repeat it.")
+        try:
+            # Existing durable speech receipt and playback policy checks apply.
+            self.owner.reply_to_segment(self, segment, {'captured': True, 'reply': reply})
+        except Exception:
+            logging.warning('segment_notice_unavailable session=%s', self.id)
+
     async def deliver(self):
         while not self.closed:
             segment = await self.segments.get()
-            caption_epoch = segment.pop('_caption_epoch', None)
-            capture_generation = segment.pop('_capture_generation', None)
             try:
-                result=None
-                # Stable IDs permit safe retry of transcript delivery, never audio replay.
-                for attempt in range(4):
-                    if self.priority_stop_id is not None:break
-                    try:
-                        result = await self.owner.backend(f'/media/{self.id}/segments', segment)
-                        if self.caption_scene and not self.closing:
-                            if result.get('captured') is True and not self.pause_latched:
-                                # A pre-pause queued or in-flight callback must not
-                                # repaint its text after a later resume.
-                                if caption_epoch == self.caption_scene.epoch:
-                                    self.caption_scene.append(segment)
-                            else:
-                                self.caption_scene.clear('paused')
-                        break
-                    except Exception:
-                        if self.priority_stop_id is not None:break
-                        if attempt == 3:
-                            raise
-                        await asyncio.sleep(.25 * (2**attempt))
-                if (isinstance(result,dict) and capture_generation == self.generation and
-                        (not self.caption_scene or caption_epoch == self.caption_scene.epoch)):
-                    self.owner.reply_to_segment(self, segment, result)
+                if not self.valid_segment(segment):
+                    self.lifecycle.segment_failure('invalid_segment', 0)
+                    continue
+                caption_epoch = segment.pop('_caption_epoch', None)
+                capture_generation = segment.pop('_capture_generation', None)
+                age = self.segment_age(segment)
+                if age is None:
+                    self.lifecycle.segment_failure('invalid_segment', 0)
+                    continue
+                if age > 10000:
+                    self.note_segment_failure(segment, 'stale_queue', age)
+                    continue
+                if capture_generation != self.generation:
+                    self.note_segment_failure(segment, 'obsolete_generation', age)
+                    continue
+                if (self.closing or not self.active or self.pause_latched or
+                        self.priority_stop_id is not None or not self.allowed or
+                        time.monotonic()-self.policy_at >= 2):
+                    self.lifecycle.segment_failure('authority_closed', age)
+                    continue
+                try:
+                    # Exactly one dispatch. Refusal or lost acknowledgement never
+                    # replays a voice command, even under the same receipt identity.
+                    result = await self.owner.backend(f'/media/{self.id}/segments', segment)
+                    if not isinstance(result, dict) or type(result.get('captured')) is not bool:
+                        raise BackendRequestError('callback_invalid_response')
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    reason, status = 'callback_transport', None
+                    if isinstance(error, BackendRequestError):
+                        reason, status = error.reason, error.status
+                    elif isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+                        reason = 'callback_timeout'
+                    uncertain = reason != 'callback_stale'
+                    self.note_segment_failure(segment, reason, age, status, uncertain=uncertain)
+                    # Queued follow-ups cannot assume an unconfirmed turn completed.
+                    if uncertain:
+                        self.discard_waiting_segments()
+                    continue
+                try:
+                    if self.caption_scene and not self.closing:
+                        if result.get('captured') is True and not self.pause_latched:
+                            if caption_epoch == self.caption_scene.epoch:
+                                self.caption_scene.append(segment)
+                        else:
+                            self.caption_scene.clear('paused')
+                    if (capture_generation == self.generation and
+                            (not self.caption_scene or caption_epoch == self.caption_scene.epoch)):
+                        self.owner.reply_to_segment(self, segment, result)
+                except Exception:
+                    # A display/feedback failure cannot replay an accepted command
+                    # or turn one conversational problem into a call hangup.
+                    self.note_segment_failure(segment, 'callback_invalid_response', age, uncertain=True)
+                    self.discard_waiting_segments()
             finally:
                 self.segments.task_done()
+                self.speak_delivery_notice()
 
     async def say(self,text):
         if self.speaking or self.closing:
@@ -527,12 +619,20 @@ class Service:
         # policy and cleanup requests retain their existing shorter deadlines.
         segment_timeout={'timeout':ClientTimeout(total=60,connect=5,sock_read=55)} if re.fullmatch(r'/media/ct_[a-f0-9]{40}/segments',path) else {}
         async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY']},**({} if body is None else {'json':body}),allow_redirects=False,**segment_timeout) as response:
-            if response.status >= 300:
-                raise RuntimeError('Backend request refused')
             raw=await response.content.read(128*1024+1)
             if len(raw)>128*1024:
-                raise RuntimeError('Backend response too large')
-            return json.loads(raw)
+                raise BackendRequestError('callback_invalid_response', response.status)
+            try:
+                parsed=json.loads(raw)
+            except (ValueError, UnicodeError):
+                raise BackendRequestError('callback_refused' if response.status >= 300 else 'callback_invalid_response', response.status) from None
+            if response.status >= 300:
+                stale = (response.status == 409 and isinstance(parsed, dict) and
+                         parsed.get('errorCode') == 'stale_speech' and parsed.get('captured') is False)
+                raise BackendRequestError('callback_stale' if stale else 'callback_refused', response.status)
+            if not isinstance(parsed, dict):
+                raise BackendRequestError('callback_invalid_response', response.status)
+            return parsed
 
     async def start(self,app):
         self.http=ClientSession(timeout=ClientTimeout(total=70,connect=5,sock_read=15))

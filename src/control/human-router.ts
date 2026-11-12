@@ -57,6 +57,11 @@ const toolFailureReplies: Record<ToolPreflightDiagnostics["reason"], string> = {
   frame_mismatch: "That action did not match the current screen image.",
 };
 const digest = (v: string) => createHash("sha256").update(v).digest("hex");
+export class HumanCommandConflict extends Error {
+  constructor() {
+    super("Event content changed.");
+  }
+}
 export class HumanRouter {
   private busy = new Set<string>();
   private running = new Map<string, AbortController>();
@@ -73,7 +78,7 @@ export class HumanRouter {
     readonly conversation?: ConversationAgent,
     readonly maintainViewing?: () => Promise<void>,
   ) {}
-  async receive(input: ResponseInput): Promise<HumanResult> {
+  private qualified(input: ResponseInput) {
     const store = this.service.store;
     const request = store.get<AttentionRequest>("attention", input.requestId);
     if (!request) throw new Error("Unknown request.");
@@ -96,15 +101,23 @@ export class HumanRouter {
       )
         throw new Error("Unqualified voice.");
     }
-    const receivedAt = this.control.now();
+    return { request, pairing, text };
+  }
+  /** Read-only reconciliation of the exact existing command, never execution. */
+  reconcile(input: ResponseInput): HumanResult | undefined {
+    this.qualified(input);
+    return this.previous(input);
+  }
+  private previous(input: ResponseInput): HumanResult | undefined {
     const key = `human-command:${input.eventId}`,
       fingerprint = digest(JSON.stringify(input));
-    const previous = store.state<{ fingerprint: string; result: HumanResult }>(
-      key,
-    );
+    const previous = this.service.store.state<{
+      fingerprint: string;
+      result: HumanResult;
+    }>(key);
     if (previous) {
       if (previous.fingerprint !== fingerprint)
-        throw new Error("Event content changed.");
+        throw new HumanCommandConflict();
       return {
         ...previous.result,
         reply: previous.result.responseId
@@ -118,6 +131,16 @@ export class HumanRouter {
                 : "I already handled that turn and won't repeat its inputs. Tell me what you'd like to do next.",
       };
     }
+    return undefined;
+  }
+  async receive(input: ResponseInput): Promise<HumanResult> {
+    const { request, pairing, text } = this.qualified(input);
+    const previous = this.previous(input);
+    if (previous) return previous;
+    const store = this.service.store;
+    const receivedAt = this.control.now();
+    const key = `human-command:${input.eventId}`,
+      fingerprint = digest(JSON.stringify(input));
     const persist = (phase: string, result: HumanResult) => {
       // Never persist model-written speech, screenshots, typing, or conversation history.
       const {

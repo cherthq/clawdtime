@@ -16,6 +16,7 @@ import type {
   EffectReceipt,
   Transport,
   CallSession,
+  SetupTest,
 } from "../contracts.js";
 import { Store } from "../storage/store.js";
 import {
@@ -970,6 +971,21 @@ export class NativeTransport implements Transport {
       return;
     const utteranceId = `${attention.id}:question`;
     const previous = this.store.get<QuestionSpeech>("speech", utteranceId);
+    // Setup is already authorized in the originating chat. Do not narrate its
+    // internal test question. Existing utterances still reconcile by their exact
+    // receipt; omission is never permission to erase or repeat uncertain speech.
+    if (
+      !previous &&
+      this.store
+        .all<SetupTest>("setup_test")
+        .some(
+          (test) =>
+            test.requestId === attention.id &&
+            test.sessionId === attention.sessionId &&
+            test.pairingId === attention.pairingId,
+        )
+    )
+      return;
     if (
       previous &&
       ["completed", "cancelled", "failed"].includes(previous.state)

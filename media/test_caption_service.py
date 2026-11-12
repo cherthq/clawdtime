@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -24,6 +25,18 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.client.close()
         self.tmp.cleanup()
+
+    def fixture_session(self):
+        session=Session(self.service,self.spec)
+        session.active=session.allowed=True
+        session.call_id='owned-call'
+        session.policy_at=time.monotonic()
+        return session
+
+    def queue(self, session, segment):
+        return session.queue_segment({'at':datetime.now(timezone.utc).isoformat(),
+            'source':'remote_participant','callId':session.call_id,
+            'participantIdentity':session.worker_identity,**segment})
 
     async def test_caption_start_requires_auth_and_explicit_service_gate(self):
         response = await self.client.post('/sessions', json=self.spec)
@@ -48,18 +61,18 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 409)
 
     async def test_caption_delivery_requires_backend_acceptance(self):
-        session = Session(self.service, self.spec)
+        session = self.fixture_session()
         policy = {'callId': 'call', 'state': 'listening', 'captionsEnabled': True,
                   'expiresAt': (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
         session.caption_scene.apply_policy(policy)
         self.service.backend = AsyncMock(return_value={'captured': True})
         task = asyncio.create_task(session.deliver())
         try:
-            session.queue_segment({'id': '1', 'text': 'Accepted sentence.'})
+            self.queue(session,{'id': '1', 'text': 'Accepted sentence.'})
             await asyncio.wait_for(session.segments.join(), 1)
             self.assertEqual(session.caption_scene.snapshot()['segments'], ['Accepted sentence.'])
             self.service.backend.return_value = {'captured': False}
-            session.queue_segment({'id': '2', 'text': 'Rejected private sentence.'})
+            self.queue(session,{'id': '2', 'text': 'Rejected private sentence.'})
             await asyncio.wait_for(session.segments.join(), 1)
             self.assertEqual(session.caption_scene.snapshot()['segments'], [])
             self.assertEqual(session.caption_scene.snapshot()['state'], 'paused')
@@ -68,14 +81,15 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
 
     async def test_local_pause_latch_prevents_delayed_segment_display(self):
-        session = Session(self.service, self.spec)
+        session = self.fixture_session()
         session.caption_scene.apply_policy({'callId': 'call', 'state': 'listening', 'captionsEnabled': True,
             'expiresAt': (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()})
         session.pause_latched = True
+        session.caption_scene.clear('paused')
         self.service.backend = AsyncMock(return_value={'captured': True})
         task = asyncio.create_task(session.deliver())
         try:
-            session.queue_segment({'id': '1', 'text': 'Delayed private sentence.'})
+            self.queue(session,{'id': '1', 'text': 'Delayed private sentence.'})
             await asyncio.wait_for(session.segments.join(), 1)
             self.assertEqual(session.caption_scene.snapshot()['segments'], [])
             self.assertEqual(session.caption_scene.snapshot()['state'], 'paused')
@@ -84,7 +98,7 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
 
     async def test_delayed_and_queued_pre_pause_segments_never_reappear_after_resume(self):
-        session = Session(self.service, self.spec)
+        session = self.fixture_session()
         policy = {'callId': 'call', 'state': 'listening', 'captionsEnabled': True,
                   'expiresAt': (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
         session.caption_scene.apply_policy(policy)
@@ -95,17 +109,18 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return {'captured': True}
         self.service.backend = delayed_ack
-        session.queue_segment({'id': '1', 'text': 'Private in-flight sentence.'})
-        session.queue_segment({'id': '2', 'text': 'Private queued sentence.'})
+        self.queue(session,{'id': '1', 'text': 'Private in-flight sentence.'})
         task = asyncio.create_task(session.deliver())
         try:
             await asyncio.wait_for(started.wait(), 1)
+            self.queue(session,{'id': '2', 'text': 'Private queued sentence.'})
+            self.assertEqual(session.segments.qsize(), 1)
             session.caption_scene.clear('paused')
             session.caption_scene.apply_policy(policy)
             release.set()
             await asyncio.wait_for(session.segments.join(), 1)
             self.assertEqual(session.caption_scene.snapshot()['segments'], [])
-            session.queue_segment({'id': '3', 'text': 'Fresh approved sentence.'})
+            self.queue(session,{'id': '3', 'text': 'Fresh approved sentence.'})
             await asyncio.wait_for(session.segments.join(), 1)
             self.assertEqual(session.caption_scene.snapshot()['segments'], ['Fresh approved sentence.'])
         finally:
@@ -113,7 +128,7 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
 
     async def test_first_caption_policy_must_match_activated_call(self):
-        session = Session(self.service, self.spec)
+        session = self.fixture_session()
         session.active = True
         session.call_id = 'owned-call'
         session.stop_stt = AsyncMock()
@@ -133,7 +148,8 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_segment_reply_plays_once_with_transient_text_and_policy_recheck(self):
         session=Session(self.service,{**self.spec,'captions':False})
-        session.active=True;session.call_id='owned-call';session.say=AsyncMock()
+        session.active=True;session.allowed=True;session.policy_at=time.monotonic()
+        session.call_id='owned-call';session.say=AsyncMock()
         policy={'callId':'owned-call','state':'listening','expiresAt':(datetime.now(timezone.utc)+timedelta(minutes=1)).isoformat()}
         async def backend(path,body=None):
             return policy if path.endswith('/policy') else {'captured':True,'reply':'Private fixture reply.'}
@@ -141,7 +157,7 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
         task=asyncio.create_task(session.deliver())
         try:
             for _ in range(2):
-                session.queue_segment({'id':'1','callId':'owned-call','text':'Fixture question'})
+                self.queue(session,{'id':'1','callId':'owned-call','text':'Fixture question'})
                 await asyncio.wait_for(session.segments.join(),1)
                 await asyncio.gather(*list(self.service.speech_tasks.values()))
             session.say.assert_awaited_once_with('Private fixture reply.')
@@ -154,14 +170,15 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_segment_reply_cannot_cross_pause_during_callback(self):
         session=Session(self.service,{**self.spec,'captions':False})
-        session.active=True;session.call_id='owned-call';session.say=AsyncMock()
+        session.active=True;session.allowed=True;session.policy_at=time.monotonic()
+        session.call_id='owned-call';session.say=AsyncMock()
         async def backend(path,body=None):
             session.pause_latched=True;session.generation+=1
             return {'captured':True,'reply':'Do not speak this stale reply.'}
         self.service.backend=AsyncMock(side_effect=backend)
         task=asyncio.create_task(session.deliver())
         try:
-            session.queue_segment({'id':'1','callId':'owned-call','text':'Fixture question'})
+            self.queue(session,{'id':'1','callId':'owned-call','text':'Fixture question'})
             await asyncio.wait_for(session.segments.join(),1)
             self.assertEqual(self.service.db.execute('SELECT count(*) FROM speech').fetchone()[0],0)
             session.say.assert_not_awaited()
@@ -169,7 +186,7 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
             task.cancel();await asyncio.gather(task,return_exceptions=True)
 
     async def test_busy_reply_is_cancelled_never_replayed_or_overlapped(self):
-        session=Session(self.service,self.spec)
+        session=self.fixture_session()
         session.active=True;session.call_id='owned-call';session.speaking=True;session.say=AsyncMock()
         segment={'id':'1','callId':'owned-call'};result={'captured':True,'reply':'Fixture'}
         self.service.reply_to_segment(session,segment,result)
@@ -180,8 +197,9 @@ class CaptionServiceTests(unittest.IsolatedAsyncioTestCase):
         session.say.assert_not_awaited()
 
     async def test_reply_cancels_if_policy_closed_before_playback(self):
-        session=Session(self.service,self.spec)
-        session.active=True;session.call_id='owned-call';session.say=AsyncMock()
+        session=self.fixture_session()
+        session.active=True;session.allowed=True;session.policy_at=time.monotonic()
+        session.call_id='owned-call';session.say=AsyncMock()
         self.service.backend=AsyncMock(return_value={'callId':'owned-call','state':'ended'})
         self.service.reply_to_segment(session,{'id':'1','callId':'owned-call'},{'captured':True,'reply':'Fixture'})
         await asyncio.gather(*list(self.service.speech_tasks.values()))

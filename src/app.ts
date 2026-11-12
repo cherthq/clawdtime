@@ -13,7 +13,11 @@ import type {
   Pairing,
   ActionReceipt,
 } from "./contracts.js";
-import { HumanRouter, isImmediateStop } from "./control/human-router.js";
+import {
+  HumanRouter,
+  HumanCommandConflict,
+  isImmediateStop,
+} from "./control/human-router.js";
 import { SetupService } from "./pairing/setup.js";
 import { mediaFailureSchema } from "./transport/media-diagnostics.js";
 import { publicPage } from "./public-page.js";
@@ -476,11 +480,56 @@ export function createApp(
     )
       throw new DomainError(403, "Unqualified audio source.");
     const heard = z.string().min(1).max(8000).parse(b.text);
+    const input = {
+      eventId: `voice:${c.req.param("id")}:${z
+        .string()
+        .min(1)
+        .max(100)
+        .regex(/^[A-Za-z0-9_-]+$/)
+        .parse(b.id)}`,
+      requestId: request.id,
+      memberId: pairing.memberId,
+      lineId: pairing.lineId,
+      conversationId: pairing.conversationId,
+      channel: "voice" as const,
+      text: heard,
+      callId: call.id,
+      qualifiedRemoteAudio: true,
+    };
+    // An exact acknowledged or in-flight command may be reconciled after its
+    // timestamp ages out. This only reads its original receipt, never dispatches
+    // another turn. Current qualified call/member binding still applies.
+    try {
+      const previous = human.reconcile(input);
+      if (previous)
+        return c.json({
+          ...previous,
+          captured:
+            previous.stopped !== true &&
+            (previous.accepted === true ||
+              !!previous.reply ||
+              !!previous.clarification),
+        });
+    } catch (error) {
+      if (error instanceof HumanCommandConflict)
+        return c.json(
+          {
+            error: "Event content changed.",
+            errorCode: "segment_conflict",
+            captured: false,
+          },
+          409,
+        );
+      throw error;
+    }
     if (
       Math.abs(Date.now() - Date.parse(b.at)) > 10_000 ||
       !Number.isFinite(Date.parse(b.at))
     )
-      throw new DomainError(409, "Stale speech.");
+      return c.json(
+        { error: "Stale speech.", errorCode: "stale_speech", captured: false },
+        409,
+      );
     // The qualified private-call participant speaks naturally. Intent belongs
     // to the conversation agent; a wake phrase is not authentication.
     const command = heard;
@@ -488,17 +537,11 @@ export function createApp(
     if (immediateStop) {
       service.store.saveState(`listening-stopped:${request.id}`, true);
     }
-    const result = (await human.receive({
-      eventId: `voice:${c.req.param("id")}:${b.id}`,
-      requestId: request.id,
-      memberId: pairing.memberId,
-      lineId: pairing.lineId,
-      conversationId: pairing.conversationId,
-      channel: "voice",
-      text: command,
-      callId: call.id,
-      qualifiedRemoteAudio: true,
-    })) as { accepted?: boolean; reply?: string; clarification?: string };
+    const result = (await human.receive(input)) as {
+      accepted?: boolean;
+      reply?: string;
+      clarification?: string;
+    };
     return c.json({
       ...result,
       captured:

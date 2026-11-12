@@ -2,11 +2,53 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. Live typing in Gmail is human-confirmed; the latest call disconnected after repeated voice-delivery refusals. Sustained live control and current return-to-coding acceptance remain pending.**
+**Independent pilot. Live typing in Gmail is human-confirmed. Queued-speech hangup handling is repaired in source; fresh live qualification remains pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. The Claude Code physical call loop remains unverified. Historical
 evidence below does not qualify the current conversational harness.
+
+## Recoverable queued speech and direct call startup — November 11
+
+At the user's request, ordinary speech callback failures no longer terminate the
+media session. The existing LiveKit/aiohttp media path and AI SDK ToolLoopAgent
+remain in use. There is one waiting ordinary segment; expired, superseded or
+unauthorized queued speech is discarded before dispatch. The original 10-second
+freshness window is unchanged, and timestamps are never refreshed to admit old
+commands. Each ordinary segment is posted once. Refusals, timeouts, transport
+errors and malformed replies produce bounded diagnostics and guarded feedback,
+without escalating to call failure. An uncertain callback discards waiting
+dependent speech and never retries the action. New speech remains subject to
+backend busy/unknown-outcome guards. Stop retains its independent priority path.
+
+Exact existing command receipts can be read after their segment ages out, before
+freshness validation, only under current qualified call/pairing authority and an
+unchanged input fingerprint. Pending receipts remain unknown, changed content is
+refused, and a genuinely new stale segment is never dispatched. Structured stale
+rejection metadata contains no transcript or provider error. Existing receipts,
+session authority, frame freshness and action-observation requirements remain.
+
+Setup no longer speaks its internal testing question. New setup speech is omitted
+only for an exact stored setup/request/session/pairing match; existing speech
+receipts still reconcile without replay. The startup notice is now “Sharing your
+screen and listening. Say Stop to stop sharing.” Ordinary attention questions
+remain available. No model, provider, timeout or installed Mac configuration was
+changed. Explicit Stop/hangup, authorization expiry and unrecoverable connection
+loss still perform cleanup; ordinary conversational failures do not end the call.
+
+Regression coverage includes a real loopback HTTP turn held for 27 seconds,
+discarding speech that ages behind it, and successfully delivering later fresh
+speech. It also covers permanent refusal, lost acknowledgement with late server
+completion, invalid responses, queue overflow, capture-generation changes,
+authority loss, priority Stop, and receipt reconciliation without duplicate model
+turns or input. These are offline tests, not physical acceptance. The user requires
+fresh permission before another live call; none is part of this release.
+
+Validation: 503 backend tests, 129 media tests, TypeScript typecheck/build and
+format checks pass. Independent review passed, including separate execution of
+83 focused backend tests and all nine actual HTTP delivery regressions. One
+caption regression was corrected to enqueue its second item while the first was
+in flight, preserving its original pre-pause queue coverage with the smaller queue.
 
 ## Follow-up call: voice-delivery rejection causes hangup — November 11
 

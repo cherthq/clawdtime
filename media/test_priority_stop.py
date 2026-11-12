@@ -103,7 +103,7 @@ class PriorityStopTests(unittest.IsolatedAsyncioTestCase):
         session=self.session();self.service.backend=AsyncMock()
         for index,text in enumerate(['Please stop later','Stop the spinner and click submit','Can you stop?','Stop sharing and type hello'],1):
             self.assertFalse(session.queue_segment(self.segment(session,str(index),text)))
-        self.assertEqual(session.segments.qsize(),4)
+        self.assertEqual(session.segments.qsize(),1)
         self.assertIsNone(session.priority_stop_task)
         self.service.backend.assert_not_awaited()
 

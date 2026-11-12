@@ -219,6 +219,7 @@ function fixture() {
     agent,
     attention,
     requests,
+    request: request as typeof fetch,
     events: (value: string[]) => (events = value),
     failClose: () => (closeFails = true),
   };
@@ -292,6 +293,15 @@ describe("native protocol integration without live traffic", () => {
           elapsedMs: 1001,
           text: "PRIVATE_TEXT",
         },
+        lastSegmentFailure: {
+          reason: "callback_stale",
+          at,
+          elapsedMs: 12000,
+          ageMs: 11000,
+          httpStatus: 409,
+          text: "PRIVATE_SEGMENT",
+          exception: "PRIVATE_EXCEPTION",
+        },
         transcript: "PRIVATE_TRANSCRIPT",
       },
       screenDiagnostics: {
@@ -344,6 +354,13 @@ describe("native protocol integration without live traffic", () => {
       id,
       alive: true,
       lifecycleDiagnostics: {
+        lastSegmentFailure: {
+          reason: "callback_stale",
+          at,
+          elapsedMs: 12000,
+          ageMs: 11000,
+          httpStatus: 409,
+        },
         firstFailure: {
           reason: "room_disconnected",
           category: "room_event",
@@ -518,6 +535,66 @@ describe("native protocol integration without live traffic", () => {
       f.store.get<{ state: string }>("speech", `${f.attention.id}:question`)
         ?.state,
     ).toBe("completed");
+  });
+  it("omits the setup question across polls and restart without rewriting speech receipts", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.store.put("setup_test", {
+      id: "setup_fixture",
+      requestId: f.attention.id,
+      sessionId: f.attention.sessionId,
+      pairingId: f.attention.pairingId,
+      state: "call_requested",
+      createdAt: Date.now(),
+      expiresAt: f.attention.deadline,
+      invitationEffectId: "setup_fixture:invite",
+    });
+    f.events(["bridge_ready"]);
+    const observe = (id: string, state: any, qualified?: boolean) =>
+      f.app.observeCall(id, state, qualified);
+    await f.transport.pollCalls(observe);
+    await f.transport.pollCalls(observe);
+    const restarted = new NativeTransport(f.store, config, f.request);
+    await restarted.pollCalls(observe);
+    expect(f.requests.filter((r) => r.url.endsWith("/speak"))).toHaveLength(0);
+    expect(f.store.get("speech", `${f.attention.id}:question`)).toBeUndefined();
+    expect(
+      f.store.get<CallSession>("call", mediaSessionId(f.attention.id))?.state,
+    ).toBe("connected");
+    const speech = {
+      id: `${f.attention.id}:question`,
+      sessionId: mediaSessionId(f.attention.id),
+      requestId: f.attention.id,
+      state: "unknown",
+      fingerprint: "retained-fingerprint",
+    };
+    f.store.put("speech", speech);
+    await restarted.pollCalls(observe);
+    expect(f.requests.filter((r) => r.url.endsWith("/speak"))).toHaveLength(0);
+    expect(f.requests.filter((r) => r.url.includes("/speech/"))).toHaveLength(
+      1,
+    );
+    expect(f.store.get("speech", speech.id)).toEqual({
+      ...speech,
+      state: "completed",
+    });
+    f.store.close();
+  });
+  it("does not suppress an ordinary question because an unrelated setup test exists", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.store.put("setup_test", {
+      id: "foreign-setup",
+      requestId: f.attention.id,
+      sessionId: "another-session",
+      pairingId: f.attention.pairingId,
+    });
+    f.events(["bridge_ready"]);
+    await f.transport.pollCalls((id, state, qualified) =>
+      f.app.observeCall(id, state, qualified),
+    );
+    expect(f.requests.filter((r) => r.url.endsWith("/speak"))).toHaveLength(1);
+    f.store.close();
   });
   it("does not replay a possibly audible question after timeout and keeps call active", async () => {
     const f = fixture();

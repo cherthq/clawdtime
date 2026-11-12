@@ -137,6 +137,15 @@ there is no repeat POST after a timeout or restart. Media-source playout complet
 is not proof that the handset was audible. Speech unavailability leaves viewing,
 text feedback and call cleanup operational and the speech outcome marked unknown.
 
+Setup calls omit this scripted question playback. The exact stored setup test must
+match the attention request, session and pairing; an ordinary request or a
+caller-supplied task label cannot suppress its question. Setup keeps neutral
+conversation context without asking the human to perform a screen test. Existing
+question speech receipts remain intact and are reconciled by GET only, including
+uncertain playback from an earlier version. No absent utterance is marked spoken
+or completed. This omission does not establish screen visibility or relax setup
+verification, local Enable, or fresh one-call authorization.
+
 ### Connector liveness
 
 Registration records `lastSeenAt`. The connector must explicitly heartbeat while

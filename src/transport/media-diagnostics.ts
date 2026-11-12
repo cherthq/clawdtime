@@ -81,6 +81,26 @@ export const mediaFailureSchema = z.object({
 const lifecycleDiagnosticsSchema = z.object({
   version: z.literal(1),
   firstFailure: mediaFailureSchema.optional(),
+  lastSegmentFailure: z
+    .object({
+      reason: z.enum([
+        "stale_queue",
+        "obsolete_generation",
+        "queue_full",
+        "authority_closed",
+        "callback_stale",
+        "callback_refused",
+        "callback_timeout",
+        "callback_transport",
+        "callback_invalid_response",
+        "invalid_segment",
+      ]),
+      at: timestamp,
+      elapsedMs: z.number().int().min(0).max(86400000),
+      ageMs: z.number().int().min(0).max(86400000),
+      httpStatus: httpStatus.optional(),
+    })
+    .optional(),
   closeRequested: z
     .object({
       reason: z.enum([

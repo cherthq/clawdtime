@@ -217,8 +217,7 @@ export class SetupService {
         idempotencyKey: `setup:${test.id}`,
         reason: "review",
         timeoutSeconds: 300,
-        question:
-          "We are testing your Mac screen connection. Tell me what you see or ask me to help with this screen. We can keep working until you ask to return to coding. You can speak naturally. Turning your phone to landscape may give you a larger view.",
+        question: "Continue the paired conversation.",
       });
       return {
         test: this.store.put<SetupTest>("setup_test", {

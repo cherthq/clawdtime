@@ -558,7 +558,7 @@ describe("natural setup with existing native-chat consent", () => {
     expect(f.simulated.messages[0]?.text).not.toMatch(/YES|code|answer:/);
     f.service.yieldSession(f.agent.token);
     const started = f.setup.start(f.agent.token);
-    expect(started.request.question).not.toMatch(/answer:|ClawdTime answer/);
+    expect(started.request.question).toBe("Continue the paired conversation.");
     expect(() => f.setup.authorize(f.agent.token, test.id, true)).toThrow();
     await f.service.drain();
     f.setup.start(f.agent.token);

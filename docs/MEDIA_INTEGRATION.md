@@ -248,3 +248,37 @@ failure, relaxed timeout, input replay or changed screen authority. Three repeat
 pause/resume cycles and a genuine current-generation failure are separately tested.
 This defect is proven offline; it is not established as the cause of the historical
 Astra disconnect. Sustained handset acceptance still requires a new supervised call.
+
+### Ordinary speech delivery stays local to the turn
+
+The delivery worker holds at most one waiting ordinary utterance behind the current
+turn. Overflow is dropped with bounded metadata rather than terminating capture.
+Before dispatch, it rejects malformed, older-than-ten-second, obsolete-generation
+or locally unauthorized queued speech. Original timestamps and segment identities
+are never changed. Screen freshness and input authority remain independently enforced.
+
+Each admitted segment makes exactly one HTTP POST. Explicit stale-speech refusal,
+other HTTP refusals, timeout, transport loss and malformed responses no longer escape
+as a fatal media task error. A rejected or unconfirmed conversational turn leaves the
+call and screen lifecycle intact. An uncertain acknowledgement discards already queued
+follow-ups; it never replays the command. Native input receipts, backend deduplication,
+busy-turn isolation and unknown-outcome checks still govern any later fresh request.
+
+One bounded recovery notice can ask the human to repeat a definitely undispatched
+request. An uncertain callback instead says to check the screen before asking again;
+it does not claim no input occurred. Notices use the existing speech receipt and
+policy recheck, are suppressed after Stop or lost authority, and never retry. A failed
+notice or caption update cannot turn an accepted command into another dispatch.
+
+`lifecycleDiagnostics.lastSegmentFailure` retains only a fixed reason, UTC and
+monotonic timing, bounded utterance age and optional HTTP status. It contains no
+utterance, body, URL, exception string or input contents. Stop remains a separate
+priority lane and clears waiting speech even when an ordinary HTTP turn is blocked.
+Actual room/STT loss, revocation and hangup retain their existing fail-closed behavior.
+
+The activation notice is now a single direct privacy/Stop sentence. Listening still
+pauses during synthesized speech; this does not claim full duplex or instant model
+responses. Real loopback HTTP regressions cover a 27-second prior turn, expired queued
+speech, subsequent fresh speech, permanent refusal without retries, uncertain late
+completion without duplicate dispatch, bounded queues and priority Stop. These tests
+are not handset acceptance.

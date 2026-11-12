@@ -147,6 +147,155 @@ function harness(
   };
 }
 describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
+  it("rejects aged new speech without ending the call and reconciles an exact accepted segment without replay", async () => {
+    let turns = 0;
+    const h = harness(undefined, undefined, async () => {
+        turns++;
+        return { reply: "Ready." };
+      }),
+      a = await h.connect(),
+      r = await h.attention(a.token);
+    const id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
+    const speech = {
+      id: "1",
+      text: "Look at the page.",
+      at: new Date().toISOString(),
+      source: "remote_participant",
+      callId: id,
+      participantIdentity: `worker-${id}`,
+    };
+    const path = `/media/${id}/segments`;
+    expect((await h.send(path, media, speech)).status).toBe(200);
+    const receipt = h.store.state(`human-command:voice:${id}:1`);
+    const old = { ...speech, at: new Date(Date.now() - 27_000).toISOString() };
+    const replay = await h.send(path, media, old);
+    expect(replay.status).toBe(200);
+    expect(replay.body.accepted).toBe(true);
+    expect(turns).toBe(1);
+    expect(h.store.state(`human-command:voice:${id}:1`)).toEqual(receipt);
+    const changed = await h.send(path, media, {
+      ...old,
+      text: "Different instruction.",
+    });
+    expect(changed.status).toBe(409);
+    expect(changed.body.errorCode).toBe("segment_conflict");
+    const stale = await h.send(path, media, { ...old, id: "2" });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({
+      errorCode: "stale_speech",
+      captured: false,
+    });
+    expect(h.store.state(`human-command:voice:${id}:2`)).toBeUndefined();
+    expect(h.store.get<any>("call", id).state).toBe("connected");
+    expect(h.store.effects().filter((e) => e.kind === "end_call")).toHaveLength(
+      0,
+    );
+    expect(
+      (
+        await h.send(path, media, {
+          ...speech,
+          id: "3",
+          at: new Date().toISOString(),
+        })
+      ).status,
+    ).toBe(200);
+    expect(turns).toBe(2);
+    expect(h.store.all("action")).toHaveLength(0);
+    h.store.close();
+  });
+
+  it.each(["unqualified", "ended", "revoked"])(
+    "rejects aged receipt reconciliation when current authority is %s",
+    async (loss) => {
+      let turns = 0;
+      const h = harness(undefined, undefined, async () => {
+        turns++;
+        return { reply: "Ready." };
+      });
+      const a = await h.connect(),
+        r = await h.attention(a.token),
+        id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
+      const speech = {
+        id: "1",
+        text: "Look at the page.",
+        at: new Date().toISOString(),
+        source: "remote_participant",
+        callId: id,
+        participantIdentity: `worker-${id}`,
+      };
+      const path = `/media/${id}/segments`;
+      expect((await h.send(path, media, speech)).status).toBe(200);
+      const receipt = h.store.state(`human-command:voice:${id}:1`);
+      if (loss === "revoked")
+        h.store.put("pairing", { ...a.pairing, revokedAt: Date.now() });
+      else {
+        const call = h.store.get<any>("call", id);
+        h.store.put("call", {
+          ...call,
+          ...(loss === "ended"
+            ? { state: "ended" }
+            : { remoteParticipantQualified: false }),
+        });
+      }
+      const retry = await h.send(path, media, {
+        ...speech,
+        at: new Date(Date.now() - 27_000).toISOString(),
+      });
+      expect(retry.status).toBeGreaterThanOrEqual(400);
+      expect(turns).toBe(1);
+      expect(h.store.state(`human-command:voice:${id}:1`)).toEqual(receipt);
+      expect(h.store.all("action")).toHaveLength(0);
+      h.store.close();
+    },
+  );
+
+  it("reconciles a slow in-flight segment as unknown without repeating its model turn", async () => {
+    let finish!: () => void,
+      started!: () => void,
+      turns = 0;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const h = harness(undefined, undefined, async () => {
+      turns++;
+      started();
+      await pending;
+      return { reply: "Done." };
+    });
+    const a = await h.connect(),
+      r = await h.attention(a.token),
+      id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
+    const speech = {
+      id: "1",
+      text: "Look at the page.",
+      at: new Date().toISOString(),
+      source: "remote_participant",
+      callId: id,
+      participantIdentity: `worker-${id}`,
+    };
+    const first = h.send(`/media/${id}/segments`, media, speech);
+    await ready;
+    try {
+      const retry = await h.send(`/media/${id}/segments`, media, {
+        ...speech,
+        at: new Date(Date.now() - 27_000).toISOString(),
+      });
+      expect(retry.status).toBe(200);
+      expect(retry.body).toMatchObject({ accepted: false, state: "unknown" });
+      expect(turns).toBe(1);
+      expect(
+        h.store.effects().filter((e) => e.kind === "end_call"),
+      ).toHaveLength(0);
+    } finally {
+      finish();
+      await first;
+      h.store.close();
+    }
+  });
+
   it("retains the first authenticated media failure before cleanup without persisting arbitrary content", async () => {
     const h = harness(),
       a = await h.connect(),
