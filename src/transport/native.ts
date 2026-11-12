@@ -21,6 +21,7 @@ import type {
 import { Store } from "../storage/store.js";
 import {
   configurationChecks,
+  NotDialed,
   PreflightBlocked,
   type ReadinessCheck,
   type TransportReadiness,
@@ -74,6 +75,8 @@ interface MediaRecord {
   credentials?: string;
   providerCallId?: string;
   outcome?: "declined" | "unanswered" | "disconnected" | "failed";
+  /** Set only when the native dial request was provably never sent. */
+  notDialed?: { phase: NotDialed["phase"]; at: number };
 }
 interface QuestionSpeech {
   id: string;
@@ -679,6 +682,8 @@ export class NativeTransport implements Transport {
       state: "preparing",
     };
     this.store.put("media", record);
+    let phase: NotDialed["phase"] = "media_prepare";
+    let dialSent = false;
     try {
       const media = await this.media("/sessions", {
         id,
@@ -699,6 +704,7 @@ export class NativeTransport implements Transport {
         state: "prepared",
         credentials: this.vault.seal(credentials),
       });
+      phase = "pre_dial_check";
       const currentPairing = this.store.get<Pairing>("pairing", pairing.id);
       if (!currentPairing)
         throw new DomainError(403, "Pairing no longer exists.");
@@ -718,6 +724,8 @@ export class NativeTransport implements Transport {
         state: "dialing",
         credentials: this.vault.seal(credentials),
       });
+      // From here on the provider may have received the dial: any failure is unknown.
+      dialSent = true;
       const response = await this.calls(
         "/api/v1/calls",
         {
@@ -745,6 +753,19 @@ export class NativeTransport implements Transport {
       return { callId: call.id, accepted: true };
     } catch (e) {
       const current = this.store.get<MediaRecord>("media", id)!;
+      if (!dialSent) {
+        // No native dial was sent, so the human cannot have been called. The
+        // unactivated media session self-closes on its activation timeout.
+        this.store.put("media", {
+          ...current,
+          state: "closed",
+          notDialed: { phase, at: Date.now() },
+        });
+        throw new NotDialed(
+          e instanceof Error ? e.message : "Call preparation failed.",
+          phase,
+        );
+      }
       this.store.put("media", { ...current, state: "unknown" });
       throw e;
     }
