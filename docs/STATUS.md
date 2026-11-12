@@ -2,12 +2,49 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. Welcome delivery passed; the latest control-enabled call lost its screen stream after a gateway timeout. Current voice/control acceptance remains pending.**
+**Independent pilot. The latest diagnostic call showed the Mac screen without a gateway timeout; textbox targeting failed. Reliable voice/control and current return-to-coding acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
+
+## Fresh diagnostic call — November 11, after `dd011f4`
+
+The user authorized exactly one new diagnostic call and a factual recap in the
+new chat. The lead recorded immutable predecessor linkage, used a fresh foreground
+run on the existing pairing, and yielded before the call. No onboarding,
+permission, local Enable or companion replacement was repeated.
+
+The user confirmed the Mac screen was visible. Media received 213 frames from
+01:26:30.684 through 01:28:51.743 UTC on November 12 (141 seconds), with screen
+video emission and no recorded gateway timeout or terminal screen failure. This
+does not prove the earlier intermittent timeout is fixed. Thirteen qualified
+voice turns reached the harness: six completed conversationally, three returned
+`invalid_plan`, and four returned `planner_unavailable`. Zero input actions were
+recorded. The user reported that a request to click the textbox produced
+descriptions of diagnostic content instead of locating the target. Viewing passed
+for this attempt; targeting/control did not.
+
+The lead ended this diagnostic attempt after observing the conversation failures.
+Native call ended, media closed, the lease released, and exact terminal
+acknowledgement returned `humanApproval:false`. No human-response continuation or
+setup verification was fabricated. A separately authorized factual diagnostic
+recap was sent once using the existing strict native Messages adapter and a
+durably recorded stable operation ID; read-only lookup confirms its acknowledged
+receipt. This was not the successful setup-completion path and does not mark the
+test verified. The foreground bridge then closed. App/configuration/pairing file
+hashes, helper action journal and gateway action receipts remain unchanged.
+
+Read-only follow-up reproduced a diagnostic gap offline: the installed Gateway
+provider wraps HTTP errors, while the harness checks only the outer API-error
+type. A synthetic 429 consequently appears as `other` with zero completed steps,
+matching the retained category without proving the live HTTP status. The
+`invalid_plan` code also conflates several distinct tool/frame preconditions.
+Next harness work should retain bounded specific failure reasons and test screen
+grounding, exact frame references and observation-before-input behavior. Neither
+a model replacement nor a historical targeting cause is established by this
+attempt. No further call is authorized.
 
 ## Control-enabled timeout and deliberate chat handoff — November 11
 
