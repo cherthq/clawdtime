@@ -260,6 +260,7 @@ export function createApp(
       capturedFrame: service.store.state(`setup-view:${request.id}`) ?? null,
       controlPreflight:
         service.store.state(`control-preflight:${request.id}`) ?? null,
+      screenStop: service.store.state(`screen-stop:${request.id}`) ?? null,
       media: options.callDiagnostics
         ? await options.callDiagnostics(request.id)
         : { state: "simulation", physicalAcceptance: false },
@@ -507,6 +508,22 @@ export function createApp(
     const lease = service.store.get<ControlLease>("lease", String(b.leaseId));
     if (!lease || lease.requestId !== request.id)
       throw new DomainError(403, "Screen stop binding mismatch.");
+    // Retain the first authenticated failure, never arbitrary media text. Later
+    // cleanup callbacks must not obscure the original stopped-screen cause.
+    if (!service.store.state(`screen-stop:${request.id}`)) {
+      const reason = z
+        .enum([
+          "gateway_unavailable",
+          "helper_stopped",
+          "authorization_expired",
+        ])
+        .safeParse(b.reason);
+      service.store.saveState(`screen-stop:${request.id}`, {
+        leaseId: lease.id,
+        reason: reason.success ? reason.data : "stopped",
+        at: control.now(),
+      });
+    }
     if (lease.state === "active") {
       service.store.put("lease", { ...lease, state: "unknown" });
       service.store.put("session", {

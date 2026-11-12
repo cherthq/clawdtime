@@ -4,9 +4,26 @@ import base64
 import json
 import re
 import secrets
+import time
+from datetime import datetime, timezone
 from aiohttp import web,WSMsgType
 
 MAX_BODY=2*1024*1024
+
+class RelayFailure:
+    """Only generated correlation and transport metadata; no request content."""
+    def __init__(self, diagnostic):
+        super().__init__('Gateway request unavailable; outcome unknown')
+        self.diagnostic = diagnostic
+
+
+class RelayTimeout(RelayFailure, TimeoutError):
+    pass
+
+
+class RelayDisconnected(RelayFailure, ConnectionError):
+    pass
+
 
 class DeviceRelay:
     def __init__(self):
@@ -51,9 +68,24 @@ class DeviceRelay:
         request_id=secrets.token_hex(16)
         socket=self.socket
         future=asyncio.get_running_loop().create_future();self.pending[request_id]=(socket,future)
+        started=time.monotonic()
+        sent_at=None
+        phase='send'
+        def diagnostic():
+            return {'requestId':request_id,'phase':phase,
+                'startedAt':datetime.fromtimestamp(started_wall,timezone.utc).isoformat(),
+                'sendDurationMs':min(999999,max(0,round(((sent_at or time.monotonic())-started)*1000))),
+                'socketConnected':self.socket is socket and not socket.closed}
+        started_wall=time.time()
         try:
             await socket.send_json({'id':request_id,'method':method,'path':path,'body':body})
+            sent_at=time.monotonic()
+            phase='response'
             return await asyncio.wait_for(future,2)
+        except TimeoutError as error:
+            raise RelayTimeout(diagnostic()) from error
+        except ConnectionError as error:
+            raise RelayDisconnected(diagnostic()) from error
         finally:
             self.pending.pop(request_id,None)
 

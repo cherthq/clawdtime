@@ -13,6 +13,7 @@ from PIL import Image, ImageOps, ImageDraw
 from captions import WIDTH, HEIGHT, CaptionRenderer
 from policy import capture_allowed
 from screen_diagnostics import ScreenDiagnostics
+from device_relay import RelayFailure
 
 
 def timestamp(value):
@@ -203,7 +204,7 @@ class ScreenController:
         except Exception as error:
             if phase:
                 category='timeout' if isinstance(error,TimeoutError) else 'connection' if isinstance(error,ConnectionError) else 'invalid_response' if isinstance(error,ValueError) else 'other'
-                self.diagnostics.request_result(phase,started,error=category)
+                self.diagnostics.request_result(phase,started,error=category,relay=error.diagnostic if isinstance(error,RelayFailure) else None)
             raise
         if phase: self.diagnostics.request_result(phase,started,http_status=result[0])
         return result

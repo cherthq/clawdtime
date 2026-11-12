@@ -2,12 +2,57 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot, live on Mia's corrected service number. Welcome delivery passed; the fresh setup call failed during media startup. Full CUA and voice acceptance remain pending.**
+**Independent pilot. Welcome delivery passed; the latest control-enabled call lost its screen stream after a gateway timeout. Current voice/control acceptance remains pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
+
+## Control-enabled timeout and deliberate chat handoff — November 11
+
+The user explicitly enabled display-1 control and authorized one test. The fresh
+pairing, installed companion, actual Screen Recording/Accessibility grants and
+local Enable were retained. Media received 18 screen frames, from 01:07:54.383
+through 01:08:10.749 UTC on November 12. Screen video emission continued through
+01:08:12.604; emission alone does not establish handset rendering. At
+01:08:13.713 a gateway frame request timed out after 2,001ms. The screen selection
+then stopped with `gateway_unavailable`. No computer input was recorded.
+
+Two qualified voice turns retain `not_started/context_expired`. The user heard
+that the active call was unavailable and no input was sent. The router used that
+same error for a stopped screen selection even while the call remained connected;
+qualified voice ingress requires a connected call. Thus the wording did not prove
+the call had ended, and it was not a safety judgment about the requested input.
+The historical turn records lack timestamps, so their precise ordering against
+the frame timeout cannot be reconstructed independently.
+
+Media closed at 01:08:42.764 and the native call subsequently ended. Terminal
+acknowledgement released the original agent for diagnosis without human approval.
+At the user's explicit chat handoff, the foreground bridge closed; fresh read-only
+inspection finds its session stopped, the test/request canceled, all three calls
+ended, both leases released, zero actions, and all nine effects done. The original
+run must remain closed. Its pairing, permissions, receipts and event cursor remain
+intact; another call requires fresh explicit authorization and a new audited run.
+
+The retained gateway log has one untimestamped reconnect timeout and no per-request
+timing. It cannot distinguish helper latency, local scheduling, media scheduling
+or transport delay. The exact frame-timeout trigger remains unresolved. Increasing
+timeouts, relaxing freshness or retrying capture would not be an evidence-based
+repair. The follow-up preserves those limits and adds bounded correlated timing
+metadata across the media/gateway boundary, with no frames, audio or payloads.
+The backend now retains the first authenticated screen-stop reason and bounded
+turn timestamps, and distinguishes a lost screen connection from unavailable
+call/session context. It preserves the same fail-closed authority checks.
+
+At handoff, backend deployment `f06f6be1-17f7-4c85-8a2c-08507b51af2e` and media
+deployment `cb7aac1e-551c-4fbb-acdb-a617fd06d12c` ran the previously reviewed
+`c6de85d` source. Follow-up validation passes 418 backend/connector tests plus
+TypeScript/build, 108 media tests and 24 gateway tests. Independent review passed,
+including real local HTTP/WSS delay and late-helper-completion regressions,
+diagnostic transaction isolation, and preservation of failure history during
+readiness polling. Formatting checks and skill validation passed. The installed
+companion is unchanged. No new call, recap or physical acceptance has been claimed.
 
 ## Fresh onboarding and answered-call failure — November 11
 

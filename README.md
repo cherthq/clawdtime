@@ -41,8 +41,9 @@ No command prefixes or confirmation codes. Local **Stop** always stays available
 
 **Internal pilot:** an available, locally enabled Mac and an operator-provided
 build are required; public app downloads aren’t ready. Voice takes turns rather
-than supporting interruptions. Screen/text return has passed on a handset;
-natural voice still needs live verification. Automatic message likes, standalone progress texts, calling
+than supporting interruptions. Screen/text return passed on an earlier configuration;
+the current voice/control flow still needs live verification after a screen-stream
+failure. Automatic message likes, standalone progress texts, calling
 the agent yourself, and starting work or asking it questions from Messages
 outside an active request are not available yet. During a call, ask naturally.
 

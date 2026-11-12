@@ -3,6 +3,7 @@ export type ControlPreflightCode =
   | "planner_unavailable"
   | "planning_timeout"
   | "frame_unavailable"
+  | "screen_unavailable"
   | "screen_changed"
   | "invalid_plan"
   | "stopped"
@@ -13,6 +14,8 @@ const messages: Record<ControlPreflightCode, string> = {
   planner_unavailable: "The screen action planner is unavailable.",
   planning_timeout: "Screen action planning timed out.",
   frame_unavailable: "A fresh screen frame is required.",
+  screen_unavailable:
+    "The screen connection was lost. Screen sharing and control are stopped.",
   screen_changed: "The screen changed while planning.",
   invalid_plan: "The proposed screen action is invalid.",
   stopped: "Screen control was stopped.",

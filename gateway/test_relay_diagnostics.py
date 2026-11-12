@@ -31,6 +31,7 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(len(logs.output), 2)
         self.assertIn('exception=HandshakeFailure http_status=401 suppressed=0', logs.output[0])
         self.assertIn('suppressed=20', logs.output[1])
+        self.assertRegex(logs.output[0], r'at=\d{4}-\d{2}-\d{2}T.*\+00:00')
         self.assertNotIn('secret', ''.join(logs.output))
         self.assertNotIn('private', ''.join(logs.output))
         self.assertNotIn('wss:', ''.join(logs.output))

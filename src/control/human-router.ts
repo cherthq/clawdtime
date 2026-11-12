@@ -117,6 +117,9 @@ export class HumanRouter {
       } = result;
       store.saveState(key, {
         fingerprint,
+        requestId: request.id,
+        receivedAt,
+        ...(phase !== "running" ? { finishedAt: this.control.now() } : {}),
         phase,
         result: {
           ...metadata,
@@ -210,10 +213,19 @@ export class HumanRouter {
         current.responseId ||
         current.sessionId !== request.sessionId ||
         current.deadline <= this.control.now() ||
-        !["ringing", "connected", "awaiting_input"].includes(current.state) ||
-        store.state(`view-stopped:${request.id}`)
+        !["ringing", "connected", "awaiting_input"].includes(current.state)
       )
         throw new ControlPreflightError("context_expired");
+      if (store.state(`view-stopped:${request.id}`)) {
+        const screenStop = store.state<{ reason: string }>(
+          `screen-stop:${request.id}`,
+        );
+        throw new ControlPreflightError(
+          screenStop?.reason === "gateway_unavailable"
+            ? "screen_unavailable"
+            : "stopped",
+        );
+      }
     };
     const exclusive = async <T>(fn: () => Promise<T>): Promise<T> => {
       ensure();
@@ -344,6 +356,8 @@ export class HumanRouter {
           const actionId = `input_${digest(`${input.eventId}:${actions}`).slice(0, 40)}`;
           store.saveState(key, {
             fingerprint,
+            requestId: request.id,
+            receivedAt,
             phase: "input",
             actionId,
             result: unknown,
@@ -482,6 +496,7 @@ export class HumanRouter {
         );
         store.saveState(`control-preflight:${request.id}`, {
           code: failure.code,
+          at: this.control.now(),
           ...(diagnostics ? { diagnostics } : {}),
         });
         return persist("not_started", {

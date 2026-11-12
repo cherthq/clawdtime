@@ -185,3 +185,35 @@ exercises real local HTTP and certificate-verified outbound WSS, the actual gate
 and media routes, and actual LiveKit VideoFrame FFI. Only OS capture and room
 network publication are fixtures. Tests cover a valid frame, helper refusal,
 cold capture timeout, no automatic reacquisition, and diagnostics after close.
+
+### Relay timeout correlation
+
+A frame response deadline proves the relay response did not arrive in time; it
+cannot by itself distinguish helper capture, local relay scheduling, WSS transit,
+or media scheduling. The latest control-enabled pilot received 18 frames before
+that deadline and recorded no input. Its old logs lacked enough hop metadata to
+identify the trigger. No timeout or freshness limit was relaxed for this diagnosis.
+
+Future media timeout/disconnect diagnostics retain the generated relay request ID,
+send-versus-response phase, UTC start time, bounded send duration and socket state.
+The gateway retains its last 128 lease/frame/action hop events in a separate
+`relay_diagnostics` table: receipt, local forwarding, helper completion/failure,
+and response readiness/submission. It records only the opaque relay request ID,
+fixed phase/error categories, timestamps, duration and HTTP status. Idle readiness
+polls are excluded so they cannot evict a failed call's history before inspection.
+No lease/member/frame IDs, URLs, payloads, screenshots or audio enter this table.
+A sent WSS response is not evidence media received it; correlation is required.
+
+Diagnostic writes leave receipt transactions alone and roll back only their own
+failed transaction. A healthy request commits diagnostics twice; intermediate
+stages are buffered and flushed at completion or failure. A process crash can
+therefore retain only receipt of an unfinished request. Missing later stages are
+unknown, not proof the helper was never invoked. Reconnect logs now include UTC
+time while retaining their existing rate limit and content redaction.
+
+Regression tests inject a late response across real HTTP and certificate-verified
+WSS, correlate the media timeout to successful helper and late response-submission
+stages, and verify one frame request, terminal cleanup, no input and no replay.
+These are synthetic transport checks, not a diagnosis of the historical network
+trigger or physical handset acceptance. Gateway source requires a lead-controlled
+restart; the companion binary and its permission identity remain unchanged.

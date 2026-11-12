@@ -273,6 +273,32 @@ requires its own explicit one-call authorization. Unknown call/input/cleanup
 forbids replacement attempts. The narrow operator-audited invitation exception
 below does not change those call/control rules.
 
+#### User-requested handoff to another chat
+
+An explicit user request to move the work to a new chat is a narrow exception to
+the same-chat recovery rule. It does not transfer the old live session or its
+authorization. First establish that the old bridge is closed, its session is
+stopped, its call/media are terminal, every lease is released, and no pending or
+unknown input/dispatch remains for that attempt. Preserve all old tokens,
+checkpoints, receipts and responses. Do not reopen the old run, read an old answer
+as the new chat's feedback, repeat pairing/onboarding, change permissions or rearm.
+
+Before any separately approved new test, the lead records an immutable private
+audit linking the predecessor request/test/run and cleanup evidence to the
+user's handoff instruction and a fresh stable run ID for the new chat. This audit
+is an operator prerequisite, not an API that changes old test records. The new
+chat uses the existing authorized connection with the ordinary foreground
+`setup-session` command; it registers its own session and keeps stdin open.
+Fresh explicit one-call authorization is required before its invitation/test
+workflow. The previous call's authorization is consumed. Its actual feedback,
+continuation and recap must belong to this new attempt.
+
+Do not use `retry` or `setup-retry` for this handoff: those commands only recover
+the narrowly retired, never-called legacy invitation described below in its
+original live session. If ordinary new-run readiness or ownership guards refuse
+the handoff, diagnose the exact remaining state; never rewrite identity fields,
+delete receipts or change run IDs again to bypass the refusal.
+
 ### Explicit recovery of an expired legacy invitation
 
 An **expired, never-approved legacy invitation with no call** can have a successor

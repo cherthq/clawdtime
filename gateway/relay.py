@@ -11,6 +11,7 @@ import certifi
 from urllib.parse import urlsplit
 from aiohttp import ClientSession,ClientTimeout,TCPConnector,WSMsgType,web
 from service import Gateway,MAX_FRAME
+from relay_diagnostics import milliseconds, stamp
 
 PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?)$')
 
@@ -37,8 +38,8 @@ class ReconnectLog:
         status=getattr(error,'status',None)
         safe_status=status if type(status) is int and 100<=status<=599 else 'none'
         logging.getLogger('clawdtime.gateway').warning(
-            'gateway_reconnect_failed exception=%s http_status=%s suppressed=%d',
-            name,safe_status,self.suppressed)
+            'gateway_reconnect_failed exception=%s http_status=%s suppressed=%d at=%s',
+            name,safe_status,self.suppressed,stamp())
         self.last=now
         self.suppressed=0
 
@@ -58,19 +59,38 @@ async def relay(gateway,url):
                 try:
                     async with http.ws_connect(url,headers={'Authorization':'Bearer '+key},max_msg_size=32768,heartbeat=10) as socket:
                         async def perform(item):
+                            started=time.monotonic()
+                            # Idle readiness traffic must not evict the failed call's hop history.
+                            path=item.get('path')
+                            identity=item['id'] if isinstance(path,str) and path.startswith('/v1/leases') else None
+                            record=lambda phase, **fields: gateway.relay_diagnostics.record(identity,phase,duration=milliseconds(time.monotonic()-started),**fields)
+                            record('received')
                             result={'id':item['id'],'status':503,'headers':{},'body':''}
                             try:
                                 method,path=item['method'],item['path']
                                 if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or ('/devices/' in path and method!='GET'):raise ValueError()
-                                async with http.request(method,local+path,headers={'Authorization':'Bearer '+key},**({'json':item['body']} if item.get('body') is not None else {}),allow_redirects=False) as response:
+                                record('forwarded')
+                                async with http.request(method,local+path,headers={'Authorization':'Bearer '+key,'X-ClawdTime-Relay-Request':identity or ''},**({'json':item['body']} if item.get('body') is not None else {}),allow_redirects=False) as response:
                                     chunks=[];size=0
                                     async for chunk in response.content.iter_chunked(65536):
                                         size+=len(chunk)
                                         if size>MAX_FRAME:raise ValueError()
                                         chunks.append(chunk)
                                     result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height')})
-                            except Exception:pass
-                            if not socket.closed:await socket.send_json(result)
+                            except asyncio.CancelledError:
+                                record('cancelled');raise
+                            except Exception as error:
+                                record('failed',error='timeout' if isinstance(error,TimeoutError) else 'connection' if isinstance(error,ConnectionError) else 'invalid' if isinstance(error,ValueError) else 'other')
+                            record('response_ready',status=result['status'])
+                            if socket.closed:
+                                record('failed',error='closed');return
+                            try:
+                                await socket.send_json(result)
+                                record('response_sent',status=result['status'])
+                            except asyncio.CancelledError:
+                                record('cancelled');raise
+                            except Exception:
+                                record('failed',error='connection')
                         async for message in socket:
                             if message.type!=WSMsgType.TEXT:continue
                             item=json.loads(message.data)

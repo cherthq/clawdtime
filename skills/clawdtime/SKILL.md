@@ -108,6 +108,17 @@ recorded against the old request **in this same native chat**, never another cod
 client/chat. Do not create that attempt automatically or use it to escape an
 unknown effect. Full protocol and operator commands are in `docs/CONNECTORS.md`.
 
+If the user explicitly requests a handoff to a new chat, that deliberate move is
+allowed after the lead confirms terminal call/media cleanup, released leases and
+no pending or unknown input/dispatch for the attempt. Preserve the old closed run,
+its receipts and its responses; never reopen it or consume its answer in the new
+chat. Before a separately approved test, record an immutable private audit linking
+the old request/test/run to the new chat's fresh run ID and the user's handoff
+instruction. Use the existing pairing and a new foreground `setup-session` in
+that chat, with fresh explicit one-call authorization. This is a new attempt,
+not continuation of the old live session; it does not repeat onboarding, grant
+permissions or rearm the Mac. An unknown outcome still blocks replacement.
+
 One narrow exception can preserve the current live bridge/session: an expired,
 never-approved legacy invitation with no call may be superseded only after the
 lead records an immutable retirement audit and the user explicitly authorizes a

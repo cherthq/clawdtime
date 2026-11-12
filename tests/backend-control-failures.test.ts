@@ -15,7 +15,13 @@ import {
   type ControlPreflightCode,
 } from "../src/control/errors.js";
 import { Viewing } from "../src/control/viewing.js";
-import type { ActionReceipt, ControlLease } from "../src/contracts.js";
+import { createApp } from "../src/app.js";
+import type {
+  ActionReceipt,
+  AgentSession,
+  CallSession,
+  ControlLease,
+} from "../src/contracts.js";
 import type { ConversationTurn } from "../src/control/conversation.js";
 import { ScriptedConversationAgent } from "./backend-conversation-fixture.js";
 async function fixture(
@@ -103,6 +109,318 @@ const click = async (t: ConversationTurn) => {
 const focus = `focus-unverified:${createHash("sha256")
   .update(JSON.stringify(["mac", "1"]))
   .digest("hex")}`;
+
+describe("screen failure explanation while the call is connected", () => {
+  const mediaToken = "fixture-media-screen-stop-token-at-least-32";
+  const mediaApp = (f: Awaited<ReturnType<typeof fixture>>) => {
+    const app = createApp(f.service, f.control, f.human, {
+      origin: "https://fixture.example",
+      simulation: true,
+      mediaToken,
+    });
+    const mediaId = `ct_${createHash("sha256").update(f.request.id).digest("hex").slice(0, 40)}`;
+    return (body: unknown, token = mediaToken) =>
+      app.request(`/media/${mediaId}/screen-stopped`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+  };
+
+  it("explains lost screen transport without implying the connected call or human intent was rejected", async () => {
+    let runs = 0;
+    const f = await fixture(async () => {
+      runs++;
+      return { reply: "PRIVATE_MODEL_REPLY" };
+    });
+    try {
+      await f.viewing.tick();
+      const lease = f.store.all<ControlLease>("lease")[0]!;
+      const stop = mediaApp(f);
+      expect(
+        (await stop({ leaseId: lease.id, reason: "gateway_unavailable" }))
+          .status,
+      ).toBe(200);
+      const result = await f.send("after-screen-loss", "PRIVATE_INPUT_REQUEST");
+      expect(result).toMatchObject({
+        accepted: false,
+        state: "not_started",
+        code: "screen_unavailable",
+      });
+      expect(result.reply).toMatch(/screen/i);
+      expect(result.reply).toContain("No computer input was sent.");
+      expect(result.reply).not.toMatch(/active call|unsafe/i);
+      expect(runs).toBe(0);
+      const retained = f.command("after-screen-loss");
+      expect(retained).toMatchObject({
+        requestId: f.request.id,
+        receivedAt: expect.any(Number),
+        finishedAt: expect.any(Number),
+        phase: "not_started",
+      });
+      expect(retained.receivedAt).toBeLessThanOrEqual(retained.finishedAt);
+      expect(f.store.state(`control-preflight:${f.request.id}`)).toMatchObject({
+        code: "screen_unavailable",
+        at: expect.any(Number),
+      });
+      await f.send("after-screen-loss", "PRIVATE_INPUT_REQUEST");
+      expect(f.command("after-screen-loss")).toEqual(retained);
+      expect(f.store.all<CallSession>("call")[0]?.state).toBe("connected");
+      expect(
+        f.store.get<AgentSession>("session", f.agent.session.id)?.state,
+      ).toBe("yielded");
+      expect(f.store.all("response")).toHaveLength(0);
+      expect(f.store.all("action")).toHaveLength(0);
+      await f.viewing.tick();
+      expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+      expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+      expect(f.device.leases.size).toBe(0);
+      expect(
+        JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+      ).not.toContain("PRIVATE_");
+    } finally {
+      f.store.close();
+    }
+  });
+
+  it("blocks a tool chosen before transport loss and never recreates the stopped selection", async () => {
+    const began = barrier(),
+      finish = barrier();
+    const f = await fixture(async (turn) => {
+      const view = await turn.tools.observe();
+      began.resolve();
+      await finish.promise;
+      await turn.tools.act(view.frame.id, { kind: "click", x: 0.5, y: 0.5 });
+      return { reply: "PRIVATE_FALSE_SUCCESS" };
+    });
+    try {
+      await f.viewing.tick();
+      const lease = f.store.all<ControlLease>("lease")[0]!;
+      const pending = f.send("screen-loss-during-turn", "Click the title.");
+      await began.promise;
+      expect(
+        (
+          await mediaApp(f)({
+            leaseId: lease.id,
+            reason: "gateway_unavailable",
+          })
+        ).status,
+      ).toBe(200);
+      finish.resolve();
+      expect(await pending).toMatchObject({
+        accepted: false,
+        state: "not_started",
+        code: "screen_unavailable",
+      });
+      expect(f.device.inputs).toHaveLength(0);
+      expect(f.store.all("action")).toHaveLength(0);
+      await f.viewing.tick();
+      expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+      expect(f.device.leases.size).toBe(0);
+    } finally {
+      finish.resolve();
+      f.store.close();
+    }
+  });
+
+  it("retains only the first authenticated, exact-lease stop reason", async () => {
+    const f = await fixture();
+    try {
+      await f.viewing.tick();
+      const lease = f.store.all<ControlLease>("lease")[0]!;
+      const stop = mediaApp(f);
+      const key = `screen-stop:${f.request.id}`;
+      expect(
+        (
+          await stop(
+            { leaseId: lease.id, reason: "gateway_unavailable" },
+            "wrong-token",
+          )
+        ).status,
+      ).toBe(401);
+      expect(
+        (
+          await stop({
+            leaseId: "foreign_lease",
+            reason: "gateway_unavailable",
+          })
+        ).status,
+      ).toBe(403);
+      expect(f.store.state(key)).toBeUndefined();
+      expect(
+        (
+          await stop({
+            leaseId: lease.id,
+            reason: "gateway_unavailable",
+            raw: "PRIVATE_RAW_ERROR",
+          })
+        ).status,
+      ).toBe(200);
+      const first = f.store.state(key);
+      expect(first).toEqual({
+        leaseId: lease.id,
+        reason: "gateway_unavailable",
+        at: expect.any(Number),
+      });
+      expect(
+        (await stop({ leaseId: lease.id, reason: "helper_stopped" })).status,
+      ).toBe(200);
+      expect(f.store.state(key)).toEqual(first);
+      expect(
+        JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+      ).not.toContain("PRIVATE_RAW_ERROR");
+    } finally {
+      f.store.close();
+    }
+  });
+
+  it.each([
+    "helper_stopped",
+    "authorization_expired",
+    "PRIVATE_UNKNOWN_REASON",
+  ])(
+    "keeps %s fail-closed without inventing a gateway failure",
+    async (reason) => {
+      const f = await fixture();
+      try {
+        await f.viewing.tick();
+        const lease = f.store.all<ControlLease>("lease")[0]!;
+        expect((await mediaApp(f)({ leaseId: lease.id, reason })).status).toBe(
+          200,
+        );
+        const result = await f.send("stopped-screen", "Click the title.");
+        expect(result).toMatchObject({
+          accepted: false,
+          state: "not_started",
+          code: "stopped",
+        });
+        expect(result.reply).toContain("No computer input was sent.");
+        expect(result.reply).not.toMatch(/active call|connection was lost/i);
+        expect(f.store.all("action")).toHaveLength(0);
+        expect(
+          JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+        ).not.toContain("PRIVATE_UNKNOWN_REASON");
+      } finally {
+        f.store.close();
+      }
+    },
+  );
+
+  it("keeps explicit Stop authoritative without fabricating a screen transport diagnosis", async () => {
+    const f = await fixture();
+    try {
+      await f.viewing.tick();
+      await f.send("local-conversation-stop", "Stop");
+      expect(await f.send("after-stop", "Click the title.")).toMatchObject({
+        accepted: false,
+        state: "not_started",
+        code: "stopped",
+      });
+      expect(f.store.state(`screen-stop:${f.request.id}`)).toBeUndefined();
+      expect(f.device.leases.size).toBe(0);
+      expect(f.store.all("action")).toHaveLength(0);
+    } finally {
+      f.store.close();
+    }
+  });
+
+  it.each(["stopped", "expired"] as const)(
+    "reports %s agent context before the retained screen failure",
+    async (condition) => {
+      let runs = 0;
+      const f = await fixture(async () => {
+        runs++;
+        return { reply: "This stale context must not reach the model." };
+      });
+      try {
+        await f.viewing.tick();
+        const lease = f.store.all<ControlLease>("lease")[0]!;
+        expect(
+          (
+            await mediaApp(f)({
+              leaseId: lease.id,
+              reason: "gateway_unavailable",
+            })
+          ).status,
+        ).toBe(200);
+        const session = f.store.get<AgentSession>(
+          "session",
+          f.agent.session.id,
+        )!;
+        f.store.put("session", {
+          ...session,
+          ...(condition === "stopped"
+            ? { state: "stopped" }
+            : { lastSeenAt: Date.now() - 21_000 }),
+        });
+        const result = await f.send(`context-${condition}`, "Click the title.");
+        expect(result).toMatchObject({
+          accepted: false,
+          state: "not_started",
+          code: "context_expired",
+        });
+        expect(result.reply).not.toContain("screen connection was lost");
+        expect(runs).toBe(0);
+        expect(f.device.inputs).toHaveLength(0);
+        expect(f.store.state(`screen-stop:${f.request.id}`)).toMatchObject({
+          reason: "gateway_unavailable",
+        });
+      } finally {
+        f.store.close();
+      }
+    },
+  );
+
+  it("retains observed input as partial when the screen stops during the next observation", async () => {
+    const f = await fixture(click);
+    try {
+      await f.viewing.tick();
+      const lease = f.store.all<ControlLease>("lease")[0]!;
+      const observe = f.conversation.observe.bind(f.conversation);
+      let stoppedAfterObservedInput = false;
+      f.conversation.observe = async (current) => {
+        const observation = await observe(current);
+        if (
+          f.store
+            .all<ActionReceipt>("action")
+            .some((receipt) => receipt.state === "observed")
+        ) {
+          stoppedAfterObservedInput = true;
+          expect(
+            (
+              await mediaApp(f)({
+                leaseId: lease.id,
+                reason: "gateway_unavailable",
+              })
+            ).status,
+          ).toBe(200);
+        }
+        return observation;
+      };
+      const result = await f.send("loss-after-input", "Click the title.");
+      expect(stoppedAfterObservedInput).toBe(true);
+      expect(result).toMatchObject({
+        accepted: false,
+        state: "partial",
+        code: "screen_unavailable",
+        receipt: { state: "observed" },
+      });
+      expect(result.reply).toContain("last observed input");
+      expect(result.reply).not.toContain("No computer input was sent");
+      expect(f.device.inputs).toHaveLength(1);
+      expect(f.store.all<ActionReceipt>("action")).toHaveLength(1);
+      expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+      await f.send("loss-after-input", "Click the title.");
+      expect(f.device.inputs).toHaveLength(1);
+      expect(f.command("loss-after-input").result.state).toBe("partial");
+    } finally {
+      f.store.close();
+    }
+  });
+});
 
 describe("one conversational agent with bounded screen tools", () => {
   it.each([false, true])(

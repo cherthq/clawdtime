@@ -103,10 +103,20 @@ requirements into the test environment. Do not edit global Python trust settings
 reuse another application's virtualenv, or turn TLS verification off.
 
 A failed reconnect emits at most one warning every 30 seconds:
-`gateway_reconnect_failed exception=TYPE http_status=STATUS suppressed=COUNT`.
-Only a validated class name, numeric HTTP status (or `none`) and count are logged.
+`gateway_reconnect_failed exception=TYPE http_status=STATUS suppressed=COUNT at=UTC_TIMESTAMP`.
+Only a validated class name, numeric HTTP status (or `none`), count and UTC timestamp are logged.
 URLs, credentials, response bodies, exception messages and tracebacks are excluded.
 HTTP 401 indicates authentication rejection; 409 indicates an existing gateway
 socket; TLS exception classes indicate trust/hostname verification failure.
 A healthy gateway is confirmed through the independent media health/readiness
 endpoints. No input request, lease or action is replayed during reconnect.
+
+The gateway also retains a bounded `relay_diagnostics` table in its existing
+SQLite file. The last 128 lease/frame/action hop events correlate media timeouts
+with generated relay request IDs, fixed stages, UTC timestamps, durations and
+statuses. Readiness polling is excluded; no payloads, paths, screen pixels or input
+text are recorded. Preserve the receipt tables when updating or inspecting it.
+A response-submitted stage is not proof of media receipt. Copy
+`relay_diagnostics.py` together with `service.py` and `relay.py` for a gateway
+source update; only the coordinating lead restarts the existing process after
+known call/lease cleanup. No companion replacement or permission reset is needed.

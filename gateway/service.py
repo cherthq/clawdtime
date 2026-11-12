@@ -18,6 +18,7 @@ import time
 from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
+from relay_diagnostics import RelayDiagnostics, request_id, milliseconds
 
 ID = re.compile(r'^[A-Za-z0-9_-]{1,160}$')
 MAX_FRAME = 2 * 1024 * 1024
@@ -98,6 +99,7 @@ class Gateway:
           UPDATE leases SET state=CASE WHEN state IN ('creating','creating_unknown') THEN 'creating_unknown' ELSE 'stopped' END WHERE state!='stopped';
           UPDATE actions SET state='unknown' WHERE state IN ('accepted','dispatching');''')
         self.db.commit()
+        self.relay_diagnostics = RelayDiagnostics(self.db)
         self.http = None
 
     def lease(self, lease_id):
@@ -120,11 +122,20 @@ class Gateway:
 
     async def helper(self, body, method, suffix, payload=None, frame=False):
         started=time.monotonic()
+        identity=request_id.get()
+        self.relay_diagnostics.record(identity,'helper_request')
         try:
-            return await self._helper(body,method,suffix,payload,frame)
+            result=await self._helper(body,method,suffix,payload,frame)
+            self.relay_diagnostics.record(identity,'helper_response',duration=milliseconds(time.monotonic()-started))
+            return result
+        except asyncio.CancelledError:
+            self.relay_diagnostics.record(identity,'helper_failed',duration=milliseconds(time.monotonic()-started),error='cancelled')
+            raise
         except Exception as error:
             # Fixed categories only: never log a URL, body, token, typed input or exception message.
             category='timeout' if isinstance(error,TimeoutError) else 'http' if isinstance(error,web.HTTPException) else 'connection' if isinstance(error,ConnectionError) else 'other'
+            self.relay_diagnostics.record(identity,'helper_failed',duration=milliseconds(time.monotonic()-started),
+                status=error.status if isinstance(error,web.HTTPException) else None,error=category)
             logging.warning('helper_request_failed operation=%s error=%s status=%s duration_ms=%s',
                 'frame' if frame else 'lease',category,error.status if isinstance(error,web.HTTPException) else 0,
                 min(999999,max(0,round((time.monotonic()-started)*1000))))
@@ -299,9 +310,13 @@ class Gateway:
         async def auth(request,handler):
             key=self.env.get('DEVICE_GATEWAY_KEY','')
             if len(key)<32 or not hmac.compare_digest(request.headers.get('Authorization',''),'Bearer '+key):raise web.HTTPUnauthorized()
-            try:return await handler(request)
-            except web.HTTPException:raise
-            except Exception:return web.json_response({'error':'Device operation uncertain; reconcile before retry.'},status=503)
+            identity=request.headers.get('X-ClawdTime-Relay-Request','')
+            context=request_id.set(identity if re.fullmatch(r'[a-f0-9]{32}',identity) else None)
+            try:
+                try:return await handler(request)
+                except web.HTTPException:raise
+                except Exception:return web.json_response({'error':'Device operation uncertain; reconcile before retry.'},status=503)
+            finally:request_id.reset(context)
         app=web.Application(middlewares=[auth],client_max_size=16384)
         app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
         app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)

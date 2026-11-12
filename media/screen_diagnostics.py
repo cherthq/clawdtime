@@ -1,6 +1,7 @@
 """Bounded screen lifecycle metadata. Never accepts pixels, text, URLs or exceptions."""
 from datetime import datetime, timezone
 import time
+import re
 
 PHASES = frozenset(('prepared', 'notice_playing', 'notice_completed', 'waiting_selection',
     'selection_received', 'lease_create', 'lease_renew', 'frame_request', 'viewing',
@@ -60,12 +61,21 @@ class ScreenDiagnostics:
         self.data['lastFrameAt'] = captured_at
         self.phase('viewing', force=self.data['framesReceived'] == 1)
 
-    def request_result(self,phase,started,http_status=None,error=None):
+    def request_result(self,phase,started,http_status=None,error=None,relay=None):
         if phase not in ('lease_create','lease_renew','frame_request'): raise ValueError('Invalid request phase')
         if error not in (None,'timeout','connection','invalid_response','other'): raise ValueError('Invalid request error')
         result={'phase':phase,'at':stamp(),'durationMs':min(999999,max(0,round((time.monotonic()-started)*1000)))}
         if http_status is not None: result['httpStatus']=http_status
         if error: result['error']=error
+        if relay is not None:
+            if (not isinstance(relay,dict) or set(relay)!={'requestId','phase','startedAt','sendDurationMs','socketConnected'}
+                    or not isinstance(relay['requestId'],str) or not re.fullmatch(r'[a-f0-9]{32}',relay['requestId'])
+                    or relay['phase'] not in ('send','response') or type(relay['sendDurationMs']) is not int
+                    or not 0<=relay['sendDurationMs']<=999999 or type(relay['socketConnected']) is not bool):
+                raise ValueError('Invalid relay diagnostic')
+            at=datetime.fromisoformat(relay['startedAt'].replace('Z','+00:00'))
+            if at.tzinfo is None: raise ValueError('Relay diagnostic requires timezone')
+            result['relay']={**relay,'startedAt':at.astimezone(timezone.utc).isoformat()}
         self.data['lastGatewayResult']=result
         if error or (http_status is not None and http_status>=300): self.data['lastGatewayFailure']=result
         self.save(force=bool(error) or (http_status is not None and http_status>=300))

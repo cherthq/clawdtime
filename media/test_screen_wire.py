@@ -128,6 +128,7 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
         self.tls_patch.start()
         gateway = Gateway({'DEVICE_GATEWAY_KEY':'g'*32, 'DEVICE_GATEWAY_DATABASE_PATH':str(self.root/'gateway-wss.sqlite')},
             devices={'fixture_mac':{'url':str(self.helper_server.make_url('/')).rstrip('/'), 'key':'h'*32}})
+        self.relay_gateway = gateway
         endpoint = str(self.relay_server.make_url('/device-gateway')).replace('https://','wss://').replace('http://','wss://')
         self.relay_task = asyncio.create_task(gateway_relay.relay(gateway, endpoint))
         for _ in range(100):
@@ -401,6 +402,81 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
 
 class OutboundScreenWireTests(ScreenWireTests):
     outbound = True
+
+    async def test_helper_finishing_after_relay_deadline_retains_late_stage(self):
+        original=Gateway._helper
+        async def delayed(gateway,body,method,suffix,payload=None,frame=False):
+            if frame:await asyncio.sleep(2.2)
+            return await original(gateway,body,method,suffix,payload,frame)
+        with patch.object(Gateway,'_helper',delayed):
+            response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+            self.assertEqual(response.status,200)
+            for _ in range(260):
+                if 'view_fixture' in self.screen.stopped:break
+                await asyncio.sleep(.01)
+            self.assertIn('view_fixture',self.screen.stopped)
+            if self.screen.task:await asyncio.wait_for(asyncio.shield(self.screen.task),2)
+            await asyncio.sleep(.3)
+        rows=self.relay_gateway.db.execute('SELECT request,phase,error FROM relay_diagnostics ORDER BY sequence').fetchall()
+        identity=next(row[0] for row in rows if row[1]=='failed' and row[2]=='timeout')
+        phases=[row[1] for row in rows if row[0]==identity]
+        self.assertLess(phases.index('response_sent'),phases.index('helper_failed'))
+        self.assertEqual(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),1)
+        self.assertIsNone(self.screen.frame)
+        self.assertIsNone(self.lease)
+        self.assertEqual(self.service.device_relay.pending,{})
+
+    async def test_late_wire_response_retains_correlated_timeout_without_retry(self):
+        from aiohttp.client_ws import ClientWebSocketResponse
+        original=ClientWebSocketResponse.send_json
+        async def delayed(socket,data,*args,**kwargs):
+            if data.get('status')==200 and any(k.lower()=='content-type' and v=='image/jpeg' for k,v in data.get('headers',{}).items()):
+                await asyncio.sleep(2.1)
+            return await original(socket,data,*args,**kwargs)
+        with patch.object(ClientWebSocketResponse,'send_json',delayed):
+            response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+            self.assertEqual(response.status,200)
+            for _ in range(260):
+                if 'view_fixture' in self.screen.stopped:break
+                await asyncio.sleep(.01)
+            self.assertIn('view_fixture',self.screen.stopped)
+            if self.screen.task:await asyncio.wait_for(asyncio.shield(self.screen.task),2)
+            await asyncio.sleep(.15)
+        failure=self.screen.diagnostics.data['lastGatewayFailure']
+        self.assertEqual(failure['error'],'timeout')
+        self.assertEqual(failure['relay']['phase'],'response')
+        identity=failure['relay']['requestId']
+        rows=self.relay_gateway.db.execute('SELECT phase,status,duration FROM relay_diagnostics WHERE request=? ORDER BY sequence',(identity,)).fetchall()
+        self.assertEqual([row[0] for row in rows],['received','forwarded','helper_request','helper_response','response_ready','response_sent'])
+        self.assertEqual(rows[-1][1],200)
+        self.assertGreaterEqual(rows[-1][2],2000)
+        self.assertIsNone(self.screen.frame)
+        self.assertEqual(self.screen.diagnostics.data['framesReceived'],0)
+        self.assertEqual(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),1)
+        self.assertIsNone(self.lease)
+        self.assertEqual(self.service.device_relay.pending,{})
+        # Readiness polling after failure cannot erase the retained call stages.
+        for _ in range(40):
+            await self.service.device_relay.request('GET','/v1/devices/fixture_mac/readiness')
+        retained=self.relay_gateway.db.execute('SELECT phase,status,duration FROM relay_diagnostics WHERE request=? ORDER BY sequence',(identity,)).fetchall()
+        self.assertEqual(retained,rows)
+
+    async def test_wire_failure_correlates_gateway_helper_and_response_stages(self):
+        self.fail_frames=True
+        response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+        self.assertEqual(response.status,200)
+        for _ in range(100):
+            if 'view_fixture' in self.screen.stopped:break
+            await asyncio.sleep(.01)
+        self.assertIn('view_fixture',self.screen.stopped)
+        rows=self.relay_gateway.db.execute('SELECT request,phase,status,error FROM relay_diagnostics ORDER BY sequence').fetchall()
+        failed=next(row[0] for row in rows if row[1]=='helper_failed')
+        stages=[row for row in rows if row[0]==failed]
+        self.assertEqual([row[1] for row in stages],['received','forwarded','helper_request','helper_failed','response_ready','response_sent'])
+        self.assertEqual(stages[-1][2],410)
+        self.assertEqual(stages[3][3],'http')
+        self.assertEqual(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),1)
+        self.assertFalse(any('/actions' in path for _,path in self.received))
 
 
 if __name__ == '__main__':
