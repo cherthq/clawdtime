@@ -618,6 +618,7 @@ export function createApp(
       state: open ? "listening" : "ended",
       muted: service.store.state(`muted:${request.id}`) === true,
       protocolVersion: session.protocolVersion ?? 1,
+      captionsEnabled: open,
       callId: call?.id,
       expiresAt: new Date(now + 20_000).toISOString(),
       ...(selection ? { screenSelection: selection } : {}),

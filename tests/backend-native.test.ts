@@ -604,7 +604,7 @@ describe("native protocol integration without live traffic", () => {
       f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
     ).toHaveLength(1);
   });
-  it("speaks a bounded attention question after activation notice and reconciles the stable utterance once", async () => {
+  it("speaks the actual bounded attention message after activation and reconciles it once", async () => {
     const f = fixture();
     await f.app.drain();
     f.store.put("attention", {
@@ -618,6 +618,9 @@ describe("native protocol integration without live traffic", () => {
     const speech = f.requests.find((r) => r.url.endsWith("/speak"))!;
     expect(speech.body.id).toBe(`${f.attention.id}:question`);
     expect(speech.body.callId).toBe(mediaSessionId(f.attention.id));
+    expect(speech.body.text).toMatch(/^Choose the safe fixture option/);
+    expect(speech.body.text).not.toContain("Your agent asks");
+    expect(speech.body.text).not.toContain("Sharing your screen");
     expect(speech.body.text.length).toBeLessThanOrEqual(280);
     expect(speech.body.text.split(" ").length).toBeLessThanOrEqual(36);
     expect(

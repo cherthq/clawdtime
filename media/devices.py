@@ -338,7 +338,7 @@ class ScreenController:
             draw.line((640,314,640,346),fill='#a6c3e6',width=5)
             draw.line((597,347,683,347),fill='#a6c3e6',width=5)
             title = 'Connecting your screen' if self.starting else 'Screen sharing stopped' if self.state=='stopped' else 'Screen unavailable'
-            guidance = ('Sharing starts after the','attention notice finishes.') if self.starting else ('Enable sharing on the Mac,','then request a new session.')
+            guidance = ('Your agent is connecting.','Subtitles appear here.') if self.starting else ('Enable sharing on the Mac,','then request a new session.')
             if self.closed:
                 title='Screen sharing ended'
                 guidance=('No device screen is being shared.','')

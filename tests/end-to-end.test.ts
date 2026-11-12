@@ -671,6 +671,8 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
       r = await h.attention(agent.token);
     const lease = await h.control.acquire(r.id, binding.memberId);
     expect(h.device.leases.has(lease.id)).toBe(true);
+    const activePolicy = await h.send(`/media/${lease.callId}/policy`, media);
+    expect(activePolicy.body.captionsEnabled).toBe(true);
     expect((await h.send("/api/disconnect", agent.token, {})).status).toBe(200);
     expect(h.device.leases.size).toBe(0);
     expect(
@@ -679,6 +681,7 @@ describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
     const id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
     const policy = await h.send(`/media/${id}/policy`, media);
     expect(policy.body.state).toBe("ended");
+    expect(policy.body.captionsEnabled).toBe(false);
     expect(policy.body.screenSelection).toBeUndefined();
   });
   it("accepts natural voice without a wake word and rejects stale, TTS or foreign audio", async () => {

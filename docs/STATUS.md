@@ -9,6 +9,35 @@ The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Live captions and agent introduction — November 12 (local only)
+
+The previous caption scene was not enabled by backend call policy, was replaced
+by screen video during sharing, and cleared its text during agent speech. The
+local update fixes all three paths. A portrait-safe subtitle panel now composes
+over the desktop: provisional human words, pending delivery, backend-confirmed
+receipt, uncertain delivery and incomplete capture have distinct labels.
+“Received” confirms backend acceptance; it does not claim agent execution.
+
+Agent speech displays the same bounded text sent to TTS. Long subtitles paginate
+every five seconds; they are not word-aligned. Listening/microphone-paused states
+remain visible. All text is transient and clears on policy loss, mute, wrong call,
+expiry or close. Stale callbacks cannot replace newer speech or repopulate text
+after playback. Existing native ownership, permission and Stop controls remain.
+
+V2 activation no longer speaks the generic screen-sharing announcement. Its first
+actual message begins “Hey, this is your agent.” once; later messages are spoken
+directly. The attention-question wrapper “Your agent asks” is removed. Setup runs
+continue suppressing their internal test question, so the greeting accompanies
+the coding agent's first actual reply instead. Receipt replay rules are unchanged.
+
+Validation: `npm run check` passes typecheck, 571 TypeScript tests and build.
+The full media run passes 187 tests; the final focused caption run passes 31 tests,
+including two subsequently added policy-refresh/stale-callback regressions (189
+media tests validated in total). Synthetic rendered frames were inspected at
+1280×720 and in a portrait crop. No microphone, provider, live call, native control,
+deployment or installation was used. Handset readability and timing still require
+a separately authorized physical test. Production remains at `84d09dc`.
+
 ## Missed-speech repair — November 12 (local only, not deployed)
 
 The last call's metadata cannot establish where every missing phrase was lost.

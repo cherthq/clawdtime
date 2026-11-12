@@ -31,7 +31,7 @@ All APIs below require the fresh media-only bearer key (minimum 32 characters).
 
 Media uses the configured `BACKEND_URL` and its media-only bearer key:
 
-- `GET /media/:id/policy`: `{state:"listening"|"paused"|"ended",callId,expiresAt}`.
+- `GET /media/:id/policy`: `{state:"listening"|"paused"|"ended",callId,expiresAt,captionsEnabled}`.
   Expiry is ISO 8601. Listening requires an active exact request, paired member,
   qualified private call, consent and no revocation. Screen/control require their
   own independent permission and coordinated agent state.
@@ -93,7 +93,7 @@ barge-in once playback has begun. VAD alone defers a reply for at most 1.5 secon
 instead of permanently cancelling it. Before playback, policy, generation and
 newly delivered turn count are rechecked; real continuation still cancels stale
 output without replaying its receipt. The caption scene shows “Agent speaking · mic
-paused” during TTS; the screen-sharing video retains its existing presentation.
+paused” during TTS, with agent subtitles composited over the shared-screen video.
 
 `lifecycleDiagnostics.lastUtterance` exposes only fragment count, assembly/settle
 durations, discard flag and timestamps. No text or audio is added to diagnostics.
@@ -219,6 +219,42 @@ verified messaging pairing. Do not treat existing macOS grants or local Enable a
 an authorization substitute. Cache readiness only briefly and recheck actual call,
 lease, frame and pairing authority at dispatch.
 
+## In-call subtitles and delivery feedback
+
+The backend enables captions under the same active-call policy as listening.
+The shared-screen publisher composites a portrait-safe subtitle panel over the
+existing desktop video; screen visibility, permission indicators and local Stop
+remain intact. The panel also works while the desktop is connecting or stopped.
+
+Qualified provisional transcription appears immediately as “You · hearing
+(partial)”; it is display-only and never becomes an executable turn. Final
+assembly shows “You · sending”, then “You · received” only after the backend
+returns `captured:true`. This confirms backend receipt, not execution or completion
+by the coding agent. Unknown delivery and incomplete capture have explicit states.
+The most recent 500 transcript characters remain visible, with the latest lines
+shown in the compact panel. Older callbacks cannot overwrite newer speech.
+
+The exact bounded TTS text appears as agent subtitles during playback. Long
+messages page every five seconds inside the phone-safe region; this is readable
+pagination, not word-aligned karaoke. The last agent message remains readable
+while the panel says “Listening · your turn”, until new speech arrives. During TTS
+it explicitly says “Agent speaking · mic paused”. Private text clears on mute,
+revocation, wrong-call policy, expiry, disconnect or close, and failed TTS clears
+its subtitle. Subtitle text is memory-only and absent from logs and diagnostics.
+
+For v2 calls, activation emits no generic “Sharing your screen…” announcement.
+The first actual TTS message receives “Hey, this is your agent.” once, including
+when a setup run suppresses its internal question and the coding agent speaks
+later. Subsequent replies are read directly. Unknown playback is never retried.
+The existing bounded attention-question dispatch remains once-only, without the
+“Your agent asks” wrapper; legacy v1 retains a short greeting at activation.
+
+`test_caption_experience.py` covers live provisional/final transitions, confirmed
+and uncertain delivery, subtitle/voice agreement, greeting deduplication, policy
+refresh and revocation, stale callbacks, bounds, pagination, composite video and
+non-persistence. Local synthetic frame inspection checks portrait cropping and
+screen visibility. Neither is a physical FaceTime acceptance test.
+
 ## Retained screen diagnostics
 
 Authenticated `GET /sessions/:id` includes `screenDiagnostics`, one bounded SQLite
@@ -236,8 +272,9 @@ release and stop notification run once in a tracked cleanup task, protected from
 capture-loop cancellation during policy refresh. Unconfirmed release still blocks
 replacement through the longest requested expiry.
 
-The privacy notice still completes before activation and policy-driven capture.
-Diagnostics do not grant capture authority. Old calls without this instrumentation
+V2 activation is silent; the first actual agent message carries the greeting.
+Capture still requires exact-call backend authorization. Diagnostics do not grant
+capture authority. Old calls without this instrumentation
 cannot be reconstructed from cleared frame fields. A new physical diagnostic call
 requires separate approval; protocol tests are not physical acceptance.
 
@@ -335,8 +372,8 @@ utterance, body, URL, exception string or input contents. Stop remains a separat
 priority lane and clears waiting speech even when an ordinary HTTP turn is blocked.
 Actual room/STT loss, revocation and hangup retain their existing fail-closed behavior.
 
-The activation notice is now a single direct privacy/Stop sentence. Listening still
-pauses during synthesized speech; this does not claim full duplex or instant model
+V2 has no separate spoken screen-sharing announcement. The first actual message
+begins “Hey, this is your agent.” Listening still pauses during synthesized speech; this does not claim full duplex or instant model
 responses. Real loopback HTTP regressions cover a 27-second prior turn, expired queued
 speech, subsequent fresh speech, permanent refusal without retries, uncertain late
 completion without duplicate dispatch, bounded queues and priority Stop. These tests

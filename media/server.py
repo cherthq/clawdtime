@@ -32,7 +32,7 @@ from policy import call_only_allowed, capture_allowed, final_transcript, pause_r
 
 RATE = 48000
 SAMPLES = 960
-NOTICE = 'Sharing your screen and listening. Say Stop to stop sharing.'
+NOTICE = 'Hey, this is your agent.'
 
 
 class BackendRequestError(Exception):
@@ -87,6 +87,7 @@ class Session:
         self.pause_latched = False
         self.seen_pause = False
         self.speech_cancelled = False
+        self.greeted = False
         self.priority_stop_id = None
         self.priority_stop_state = None
         self.priority_stop_task = None
@@ -216,10 +217,8 @@ class Session:
                             self.caption_scene.clear('unavailable')
                         elif self.pause_latched:
                             self.caption_scene.clear('paused')
-                        elif self.speaking:
-                            self.caption_scene.clear('speaking')
                         else:
-                            self.caption_scene.apply_policy(policy)
+                            self.caption_scene.apply_policy(policy, speaking=self.speaking)
                     if policy.get('state') == 'ended':
                         await self.close("policy_ended")
                         return
@@ -247,6 +246,8 @@ class Session:
         if self.utterances.busy:
             self.speech_diagnostics.event('capture_reset', self.generation, reason)
         self.utterances.reset()
+        if self.caption_scene and not self.speaking and self.caption_scene.state == 'listening':
+            self.caption_scene.clear('reconnecting')
         self.speech_diagnostics.update(self.utterances.snapshot())
         self.speech_diagnostics.flush(force=True)
 
@@ -269,7 +270,6 @@ class Session:
                 continue
             generation = self.generation
             try:
-                self.reset_utterance('connection_closed')
                 async with self.owner.http.ws_connect('wss://api.deepgram.com/v1/listen', params={'model':self.owner.env.get('DEEPGRAM_STT_MODEL','nova-3'),'encoding':'linear16','sample_rate':str(RATE),'channels':'1','interim_results':'true','endpointing':'400','utterance_end_ms':'1000','vad_events':'true','smart_format':'true','mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},heartbeat=5,max_msg_size=128*1024) as ws:
                     self.ws = ws
                     self.speech_diagnostics.event('capture_open', generation)
@@ -373,6 +373,16 @@ class Session:
             duration_ms=duration*1000 if duration is not None else None,
             word_end_ms=last_word*1000 if last_word is not None else None,
             endpoint=message.get('speech_final') if type(message.get('speech_final')) is bool else None)
+        if self.caption_scene:
+            if self.utterances.suppressed:
+                self.caption_scene.delivery('incomplete')
+            elif outcome in ('interim', 'final'):
+                preview = ' '.join(self.utterances.parts)
+                if outcome == 'interim':
+                    preview = (preview + ' ' + alternative['transcript']).strip()
+                self.caption_scene.hearing(preview)
+            elif outcome == 'vad_start' and not self.utterances.has_text:
+                self.caption_scene.hearing('')
         self.speech_diagnostics.update(self.utterances.snapshot())
         self.speech_diagnostics.flush()
         return False
@@ -382,11 +392,15 @@ class Session:
             self.reset_utterance('policy_closed')
             return
         result = self.utterances.take_ready()
+        if self.caption_scene and not self.utterances.busy:
+            self.caption_scene.silence()
         self.speech_diagnostics.update(self.utterances.snapshot())
         self.speech_diagnostics.flush()
         if result is None:
             return
         self.lifecycle.utterance(result)
+        if result['discarded'] and self.caption_scene:
+            self.caption_scene.delivery('incomplete')
         self.speech_diagnostics.event('utterance_discarded' if result['discarded'] else 'utterance_emitted',
             generation, result['reason'])
         if result['text'] and not result['discarded']:
@@ -428,6 +442,8 @@ class Session:
             self.caption_scene.snapshot()  # expire any stale authorization first
             segment = {**segment, '_caption_epoch': self.caption_scene.epoch}
         self.segments.put_nowait(segment)
+        if self.caption_scene:
+            self.caption_scene.delivery('sending', segment)
         self.speech_diagnostics.event('queue_accepted', self.generation, segment=int(segment['id']))
         return False
 
@@ -484,6 +500,8 @@ class Session:
         self.lifecycle.segment_failure(reason, age, status)
         self.speech_diagnostics.event('segment_rejected', self.generation, reason,
             segment=int(segment['id']) if self.valid_segment(segment) else None)
+        if self.caption_scene:
+            self.caption_scene.delivery('unconfirmed', segment)
         # One transient notice, with uncertainty taking precedence. No raw speech retained.
         if self.valid_segment(segment) and (self.delivery_notice is None or uncertain):
             self.delivery_notice = ({'id': segment['id'], 'callId': segment['callId']}, uncertain)
@@ -568,6 +586,7 @@ class Session:
                         if result.get('captured') is True and not self.pause_latched:
                             if caption_epoch == self.caption_scene.epoch:
                                 self.caption_scene.append(segment)
+                                self.caption_scene.delivery('received', segment)
                         else:
                             self.caption_scene.clear('paused')
                     if (capture_generation == self.generation and
@@ -590,11 +609,16 @@ class Session:
         self.speaking = True
         self.speech_cancelled = False
         self.allowed = False
-        if self.caption_scene:
-            self.caption_scene.clear('speaking')
+        text = text[:1600]
+        if self.protocol_version == 2 and not self.greeted:
+            text = 'Hey, this is your agent. ' + text
+        self.greeted = True  # Never retry an uncertain greeting.
         await self.stop_stt()
+        if self.caption_scene:
+            self.caption_scene.speaking(text)
+        completed = False
         try:
-            async with self.owner.http.post('https://api.deepgram.com/v1/speak',params={'model':self.owner.env.get('DEEPGRAM_TTS_MODEL','aura-2-thalia-en'),'encoding':'linear16','container':'none','sample_rate':str(RATE),'mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},json={'text':text[:1000]}) as response:
+            async with self.owner.http.post('https://api.deepgram.com/v1/speak',params={'model':self.owner.env.get('DEEPGRAM_TTS_MODEL','aura-2-thalia-en'),'encoding':'linear16','container':'none','sample_rate':str(RATE),'mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},json={'text':text}) as response:
                 if response.status != 200:
                     raise RuntimeError('TTS request refused')
                 pending=b''
@@ -614,7 +638,10 @@ class Session:
             barrier = asyncio.get_running_loop().create_future()
             await asyncio.wait_for(self.audio.put(barrier), 3)
             await asyncio.wait_for(barrier, 3)
+            completed = True
         finally:
+            if self.caption_scene:
+                self.caption_scene.finish_speaking(completed)
             self.speaking = False
             self.policy_wakeup.set()
 
@@ -630,7 +657,7 @@ class Session:
         if self.activation is None:
             async def begin():
                 try:
-                    if self.recording:
+                    if self.recording and self.protocol_version != 2:
                         if self.screen: self.screen.diagnostics.phase('notice_playing')
                         await self.say(NOTICE)
                         if self.screen: self.screen.diagnostics.phase('notice_completed')
@@ -990,6 +1017,9 @@ class Service:
             recording = capture_allowed(policy)
             if not body.get('callId') or policy.get('callId')!=body['callId'] or not (recording or call_only_allowed(policy)):
                 raise web.HTTPConflict()
+            s.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
+            if s.caption_scene:
+                s.caption_scene.apply_policy(policy)
             return web.json_response(await s.activate(body.get('callId'), recording=recording))
         if action=='speak':
             expected_segments = s.segment_count

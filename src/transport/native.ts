@@ -1113,7 +1113,7 @@ export class NativeTransport implements Transport {
       ["completed", "cancelled", "failed"].includes(previous.state)
     )
       return;
-    const text = `Your agent asks: ${attention.question}`
+    const text = attention.question
       .replace(/\s+/g, " ")
       .trim()
       .split(" ")
