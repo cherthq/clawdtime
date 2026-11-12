@@ -17,3 +17,4 @@ artifacts/
 .codex/config.toml
 .agents/skills/clawdtime/
 .claude/skills/clawdtime/
+.claude/settings.local.json
