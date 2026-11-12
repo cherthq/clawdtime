@@ -39,6 +39,17 @@ control authority. This matrix qualifies these disposable fixtures only, not
 arbitrary desktop targets or handset acceptance. The earlier failed-model evidence
 below remains historical; no successful live control claim replaces it.
 
+Source `f918b60` deployed from a clean tracked-source archive to backend deployment
+`c45e24cd-7d52-4664-a82c-ae133a4cdd3a`; the previous backend is removed. Read-only
+inspection confirms the running Gateway model is `openai/gpt-6.1-sol`, reasoning
+is `low`, and output budget is 4096, with deployed control/application hashes
+matching the reviewed build. Media, gateway and companion were not restarted.
+Backend records, effect/event hashes, message cursor, line binding, eight protected
+installation/configuration files and gateway receipt tables match the pre-release
+snapshot. Readiness has zero active calls, pending effects or unknown outcomes.
+Screen Recording and Accessibility grants remain present; local Enable remains
+off. No live test or physical acceptance was added.
+
 ## Screen-control harness repair — November 11
 
 Offline reproduction found a concrete image-transport defect: the installed OpenAI
@@ -74,10 +85,10 @@ unscaled layouts but missed a scaled target; `openai/gpt-4o` also missed it. A
 same-size coordinate-grid experiment failed and was removed. Candidates
 `openai/gpt-5.4` and `openai/gpt-6.1-sol` returned HTTP 403 with
 `no_providers_available`, explicitly citing free-tier model restrictions, before
-observation or input. The configured model,
-credentials and account settings remain unchanged. No tested replacement qualifies
-as reliable control; these repairs do not establish handset acceptance or
-resolve the current model's targeting limitation. Another live call requires new
+observation or input. At that repair, the configured model, credentials and
+account settings remained unchanged. No replacement then tested qualified as
+reliable control; those repairs did not establish handset acceptance or resolve
+the earlier model's targeting limitation. Another live call requires new
 explicit authorization and local Enable; neither was performed.
 
 Source `54b9045` deployed from a clean tracked-source archive to backend deployment
@@ -88,8 +99,8 @@ Readiness reports zero active calls, pending effects or unknown outcomes. Protec
 installation/configuration file hashes, gateway lease/action tables, backend
 entity/effect/event hashes, message cursor and line binding match the pre-deploy
 snapshot. Screen Recording and Accessibility grants remain present; local Enable
-was off at inspection and remains untouched. No billing, model or account setting
-changed. The concise README retains the targeting limitation.
+was off at inspection and remained untouched. That release changed no billing,
+model or account setting; its README retained the targeting limitation.
 
 The follow-up offline evaluator now covers native, scaled, mirrored and compact
 textbox layouts. Its held-back DOM grade checks focus before typing, untouched
