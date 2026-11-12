@@ -40,10 +40,11 @@ the Mac Control Panel; the same coding agent still makes the decisions.
 
 No command prefixes or confirmation codes. Local **Stop** always stays available.
 
-**Local release candidate:** the agent-owned conversation protocol and Mac Control
-Panel are implemented locally and await reviewed deployment approval. Existing
-hosted calls still use the legacy controller. New connectors default to the
-agent-owned protocol; existing sessions keep their original version.
+**Hosted private release 0.2.0:** the agent-owned conversation protocol and Mac
+Control Panel are deployed. New connectors default to the agent-owned protocol;
+existing sessions keep their original version. Physical qualification is pending.
+Retained historical input receipts currently block computer-control acceptance;
+viewing and conversation remain separate.
 
 The Control Panel defaults to **Agent tools only**. Native control requires a
 verified tool for the actual shared surface and the client's normal approvals.
@@ -54,9 +55,8 @@ cooperative and may leave an unresolved outcome.
 
 Both installed CLI clients passed local synthetic multi-turn polling checks.
 Live agent-owned conversation, visible native CUA, client reconnect, and connection
-beyond five minutes remain physically unqualified. Voice is half-duplex. No new
-call, deployment, companion installation or live routing change is included in
-this release preparation. Public downloads and phone-initiated coding remain
-planned. See the [release checklist](docs/AGENT_OWNED_RELEASE.md).
+beyond five minutes remain physically unqualified. Voice is half-duplex. No live
+call was placed during rollout, and routing remains unchanged. Public downloads
+and phone-initiated coding remain planned. See the [release checklist](docs/AGENT_OWNED_RELEASE.md).
 
 [Setup & development](docs/GUIDE.md) · [Current status](docs/STATUS.md) · [Architecture](docs/ARCHITECTURE.md)

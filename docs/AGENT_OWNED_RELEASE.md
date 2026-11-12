@@ -1,14 +1,21 @@
-# Agent-owned conversation release candidate
+# Agent-owned conversation release record
 
-Prepared November 12, 2026 (America/New_York). Version 0.2.0. Local implementation only.
+Prepared November 12, 2026 (America/New_York). Version 0.2.0.
 
-## Scope
+**Rollout update:** the user subsequently approved the exact release `8efbacc`
+and all listed component updates. Deployment is complete; see [STATUS.md](STATUS.md)
+for exact deployments, preserved state, signing correction and the historical-input
+reconciliation blocker. No live call has been performed. The preparation and
+approval rules below remain the release record.
+
+## Prepared scope
 
 Branch `codex/agent-owned-conversation`, based on `82ab868` (the inspected remote
-main matched that commit). The exact source commit is recorded in the local release manifest and final
-handoff; verification results are recorded in STATUS.md. No deployment, promotion, routing
-change, live message/call, installed companion replacement, or permission change
-is authorized by this implementation request.
+main matched that commit). The approved and deployed source is
+`8efbacc7407a6bad0bbe96f2eb422d0221195a8d`; verification results are recorded in
+STATUS.md. The original implementation request authorized preparation only. The
+subsequent user approval authorized the listed deployment and component updates;
+it did not authorize a live call or promotion to main.
 
 New version-2 connector sessions own ordered conversation turns, replies and normal
 coding work throughout a call. ClawdTime transports media and holds durable receipt
@@ -36,7 +43,7 @@ prompts retain their normal client behavior.
   rendering channel. Fallback requires image-capable MCP. Browser-only native
   tools qualify only their actual visible shared surface, never the whole desktop.
 
-## Reviewed deployment scope awaiting separate approval
+## Approved deployment scope
 
 The existing independent Railway project is
 `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`, production environment
@@ -107,8 +114,11 @@ remaining blocking findings. Reported asynchronous authority, cross-request nati
 ownership, local Stop/ACL, speech reconciliation and panel-status findings were
 fixed with regressions. See STATUS.md for the review record.
 
-A local ad-hoc signed companion build is prepared for review only. It is not
-installed, launched, distribution-signed or notarized. Public distribution requires
-independent signing/notarization and clean-install verification. Source archives
-contain tracked files only. Their exact source commit and artifact hashes are
-recorded in the final local release handoff; neither artifact is deployment consent.
+The originally prepared ad-hoc companion artifact is preserved. The installed
+release uses the original installed Apple Distribution identity, with unchanged
+executable code and restored permission recognition. It is not notarized. Public
+distribution still requires notarization and clean-install verification. Source
+archives contain tracked files only. The local release manifest records both
+companion artifacts, source hashes and deployment verification. Exact prior helper
+and gateway source are retained privately for rollback; do not restore old ledgers
+or cursors.

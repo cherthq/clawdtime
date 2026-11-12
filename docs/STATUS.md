@@ -2,10 +2,57 @@
 
 November 12, 2026 — America/New_York.
 
-**Version 0.2.0 is a local release candidate on `codex/agent-owned-conversation`.
-Deployment, companion installation and physical qualification are pending.**
-The hosted legacy source has not been changed by this work. Release scope,
-compatibility and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
+**Version 0.2.0 source `8efbacc7407a6bad0bbe96f2eb422d0221195a8d` is deployed.
+The companion, gateway and installed Codex connector are updated. Physical
+qualification remains pending; input control is blocked by retained legacy receipts.**
+Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
+
+## Approved rollout and verification — November 12
+
+The user explicitly approved deployment of `8efbacc` and the companion/gateway/
+connector updates. No call was authorized or placed during this rollout.
+
+- Backend deployment: `7942fb9b-472e-4dce-8642-f1f2af18144a`.
+- Media deployment: `a544d42e-9c59-4a52-9b06-28c249c80f20`.
+- Both deployments succeeded; their exact predecessor deployments were removed.
+  Deployed code hashes match the approved release, including all 60 compiled
+  backend files. Runtime configuration hashes are unchanged.
+- Backend entities, effects, events and message cursor hashes are preserved.
+  All five media table hashes/counts, gateway receipt tables, local config/ACLs,
+  pairing and connector run checkpoints are preserved. Helper receipt JSON was
+  reserialized by startup; every receipt value is unchanged. The line remains
+  idle with matching ownership/routing, zero active calls/media and no pending or
+  unknown backend effects. Encrypted backend/media backups passed offline verification.
+- Exactly one companion and gateway are running. Installed companion is 0.2.0,
+  build 2, default Agent tools only/revision 1, locally disabled with no lease.
+  Gateway connection and selected-display ACL/availability checks pass.
+
+The initial prepared ad-hoc companion did not match the previous installed
+publisher identity, so macOS reported both permissions false despite enabled
+Settings toggles. The same executable was signed with the original installed
+Apple Distribution identity. Its designated requirement matches the prior app,
+and stripped-signature executable bytes match the approved release. After exact
+companion relaunch, both Screen Recording and Accessibility report granted. No
+TCC database reset, permission bypass, local Enable or fallback selection occurred.
+This is an internal installed build, not a notarized public download.
+
+The installed Codex skill now matches the release; only its recorded ownership
+hash needed reconciliation. Owned MCP configuration, pairing credentials and run
+records were preserved. A fresh stdio handshake/list-tools verified version 0.2.0
+and all 18 tools without creating a session or call. This chat's already-loaded
+legacy tool catalog did not hot reload; its foreground v2 bridge remains the
+same-chat route. Claude connector code is updated, but no Claude project pairing
+was present and none was created.
+
+**Input-control migration blocker:** the helper retains 41 historical submitted
+receipts with the old `cg_event_posted_not_application_verified` evidence. The new
+release correctly counts them as unresolved rather than guessing successful
+outcomes. Thirty-seven match observed backend receipts; four lack a match in the
+current backend ledger. None was deleted, replayed, rewritten as successful, or
+used to silently unblock native/fallback input. Safe historical reconciliation is
+required before control acceptance. A separately approved view/voice test can
+still exercise ongoing conversation and unrelated coding work after local Enable;
+it cannot qualify native or fallback input.
 
 ## Agent-owned conversation redesign — November 12
 
