@@ -96,7 +96,19 @@ class Session:
 
         @self.room.on('track_subscribed')
         def subscribed(track, publication, participant):
-            if participant.identity != self.worker_identity or track.kind != rtc.TrackKind.KIND_AUDIO:
+            if participant.identity != self.worker_identity:
+                self.task(self.fail())
+                return
+            if track.kind == rtc.TrackKind.KIND_VIDEO:
+                # The FaceTime worker may publish the caller's camera alongside
+                # its audio. It is not our paired Mac screen source. Discard it
+                # without ending the authorized call or creating a video stream.
+                try:
+                    publication.set_subscribed(False)
+                except Exception:
+                    self.task(self.fail())
+                return
+            if track.kind != rtc.TrackKind.KIND_AUDIO:
                 self.task(self.fail())
                 return
             if self.track_sid and self.track_sid != publication.sid:

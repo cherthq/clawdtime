@@ -2,12 +2,45 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot, live on Mia's corrected service number. Fresh onboarding, full CUA and voice acceptance remain pending.**
+**Independent pilot, live on Mia's corrected service number. Welcome delivery passed; the fresh setup call failed during media startup. Full CUA and voice acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
+
+## Fresh onboarding and answered-call failure — November 11
+
+The user confirmed that the website greeting sent as iMessage and that the welcome
+with setup prompt arrived. An initial greeting from the user's original handset
+was outside the previous pilot allowlist; the user selected that handset, the
+allowlist was corrected without replay, and one fresh greeting succeeded. Backend
+deployment `2fc5ca13-0e57-4415-a9c9-32b00a53e7ca` retains the existing code image.
+
+This same Codex chat consumed the new setup link once, installed the project skill
+and connection, and configured display 1 for explicit view-only sharing. The old
+companion configuration and receipts were preserved. The existing app retained its
+signature and macOS grants; the user enabled it locally. The fresh gateway connected
+through media deployment `d78ee3d0-e57a-42b2-af0d-c223086ea64f`; scoped live checks passed.
+
+The user authorized one outbound call and Messages recap, with no control exercise.
+That call rang, and the user reported it ended when answered. Provider events show
+active at 00:01:20 UTC on November 12, caller video published at 00:01:23, bridge
+ready at 00:01:24, then ClawdTime requested closure. Media closed at 00:01:23.759
+with zero Mac frames received. No screen, voice, continuation or recap acceptance
+was established. The worker confirmed cleanup, leases were empty, and the original
+connector accepted terminal acknowledgement without treating it as human approval.
+
+Source inspection found that the media subscription callback closes the session
+for any non-audio track, including video from the exact expected worker. This is
+consistent with the observed failure timing; the callback did not retain a reason
+code, so the historical event cannot independently prove that branch fired.
+The corrected handler unsubscribes and ignores video from the exact worker while
+retaining rejection of foreign participants, unsupported track kinds, conflicting
+audio tracks and failed unsubscription. All 89 media tests pass, including seven
+new callback regression tests; independent review found no actionable issue.
+Deployment and a newly authorized physical call remain pending. The consumed
+one-call approval does not authorize a replacement.
 
 ## Service-number correction — November 11
 
