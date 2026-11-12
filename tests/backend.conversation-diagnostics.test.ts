@@ -3,8 +3,10 @@ import { APICallError, createGateway, type LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import {
   ScreenConversationAgent,
+  configuredConversationAgent,
   type ConversationTurn,
 } from "../src/control/conversation.js";
+import { MediaDevicePort } from "../media/device-port.js";
 import {
   ControlPreflightError,
   sanitizeControlPreflightDiagnostics,
@@ -73,7 +75,384 @@ const details = (error: ControlPreflightError) => {
     .conversation;
 };
 
+describe("validated conversation generation configuration", () => {
+  const device = new MediaDevicePort(
+    "http://127.0.0.1:1",
+    "synthetic-fixture-key-not-a-credential",
+    async () => {
+      throw new Error("No media access in configuration tests.");
+    },
+  );
+  const configured = (
+    overrides: NodeJS.ProcessEnv = {},
+  ): NodeJS.ProcessEnv => ({
+    CLAWDTIME_AI_ACTIONS: "true",
+    CLAWDTIME_AI_PROVIDER: "gateway",
+    CLAWDTIME_AI_MODEL: "openai/gpt-6.1-sol",
+    CLAWDTIME_AI_GATEWAY_KEY: "synthetic-fixture-not-a-credential",
+    ...overrides,
+  });
+  it.each([
+    { name: "unset defaults", env: {}, tokens: 800, reasoning: undefined },
+    {
+      name: "reasoning alone",
+      env: { CLAWDTIME_AI_REASONING: "low" },
+      tokens: 800,
+      reasoning: "low",
+    },
+    {
+      name: "explicit minimum",
+      env: { CLAWDTIME_AI_MAX_OUTPUT_TOKENS: "800" },
+      tokens: 800,
+      reasoning: undefined,
+    },
+    {
+      name: "selected candidate",
+      env: {
+        CLAWDTIME_AI_REASONING: "low",
+        CLAWDTIME_AI_MAX_OUTPUT_TOKENS: "4096",
+      },
+      tokens: 4096,
+      reasoning: "low",
+    },
+  ])(
+    "sends $name through the configured agent",
+    async ({ env, tokens, reasoning }) => {
+      const requests: Record<string, unknown>[] = [];
+      const request = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (_url, init) => {
+          requests.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify(response("I can help.")), {
+            headers: { "content-type": "application/json" },
+          });
+        });
+      try {
+        const agent = configuredConversationAgent(device, configured(env));
+        await expect(agent!.run(turn())).resolves.toEqual({
+          reply: "I can help.",
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]!.maxOutputTokens).toBe(tokens);
+        if (reasoning) expect(requests[0]!.reasoning).toBe(reasoning);
+        else expect(requests[0]).not.toHaveProperty("reasoning");
+        expect(requests[0]!.providerOptions).toEqual({
+          openai: { store: false, parallelToolCalls: false },
+        });
+      } finally {
+        request.mockRestore();
+      }
+    },
+  );
+
+  it("forwards selected generation settings to the existing OpenAI Responses path", async () => {
+    const requests: Record<string, unknown>[] = [];
+    const request = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "synthetic unavailable",
+              type: "server_error",
+              code: null,
+              param: null,
+            },
+          }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        );
+      });
+    try {
+      const agent = configuredConversationAgent(
+        device,
+        configured({
+          CLAWDTIME_AI_PROVIDER: "openai",
+          CLAWDTIME_AI_MODEL: "gpt-5.4",
+          CLAWDTIME_OPENAI_API_KEY: "synthetic-fixture-not-a-credential",
+          CLAWDTIME_AI_REASONING: "low",
+          CLAWDTIME_AI_MAX_OUTPUT_TOKENS: "4096",
+        }),
+      );
+      await expect(agent!.run(turn())).rejects.toMatchObject({
+        code: "planner_unavailable",
+      });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        model: "gpt-5.4",
+        max_output_tokens: 4096,
+        reasoning: { effort: "low" },
+        store: false,
+        parallel_tool_calls: false,
+      });
+    } finally {
+      request.mockRestore();
+    }
+  });
+
+  it("keeps disabled AI disabled even when optional generation variables are invalid", () => {
+    const request = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Provider must not be contacted."));
+    try {
+      expect(
+        configuredConversationAgent(device, {
+          CLAWDTIME_AI_ACTIONS: "false",
+          CLAWDTIME_AI_REASONING: "invalid",
+          CLAWDTIME_AI_MAX_OUTPUT_TOKENS: "",
+        }),
+      ).toBeUndefined();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      request.mockRestore();
+    }
+  });
+
+  it.each([
+    ["CLAWDTIME_AI_REASONING", ""],
+    ["CLAWDTIME_AI_REASONING", "none"],
+    ["CLAWDTIME_AI_REASONING", "medium"],
+    ["CLAWDTIME_AI_REASONING", " low "],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", ""],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "799"],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "4097"],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "800.5"],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "NaN"],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "Infinity"],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "8e2"],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", " 800 "],
+    ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "+800"],
+  ])("rejects %s=%j before any provider request", (key, value) => {
+    const request = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Provider must not be contacted."));
+    try {
+      for (const provider of ["gateway", "openai"]) {
+        expect(() =>
+          configuredConversationAgent(
+            device,
+            configured({
+              CLAWDTIME_AI_PROVIDER: provider,
+              CLAWDTIME_OPENAI_API_KEY: "synthetic-fixture-not-a-credential",
+              [key]: value,
+            }),
+          ),
+        ).toThrow(new RegExp(key));
+      }
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      request.mockRestore();
+    }
+  });
+
+  it.each([
+    { CLAWDTIME_AI_MODEL: undefined },
+    { CLAWDTIME_AI_GATEWAY_KEY: undefined },
+    { CLAWDTIME_AI_MODEL: "unqualified-model" },
+    { CLAWDTIME_AI_PROVIDER: "openai", CLAWDTIME_OPENAI_API_KEY: undefined },
+    { CLAWDTIME_AI_PROVIDER: undefined },
+  ])(
+    "retains required provider/model/credential checks with generation settings %j",
+    (missing) => {
+      const request = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Provider must not be contacted."));
+      try {
+        expect(() =>
+          configuredConversationAgent(
+            device,
+            configured({
+              CLAWDTIME_AI_REASONING: "low",
+              CLAWDTIME_AI_MAX_OUTPUT_TOKENS: "4096",
+              ...missing,
+            }),
+          ),
+        ).toThrow();
+        expect(request).not.toHaveBeenCalled();
+      } finally {
+        request.mockRestore();
+      }
+    },
+  );
+});
+
 describe("bounded conversation failure diagnostics", () => {
+  it.each([
+    {
+      name: "unchanged defaults",
+      generation: undefined,
+      tokens: 800,
+      control: true,
+      modelId: "openai/gpt-6.1-sol",
+    },
+    {
+      name: "optional low-reasoning candidate",
+      generation: { reasoning: "low" as const, maxOutputTokens: 4096 },
+      tokens: 4096,
+      control: true,
+      modelId: "openai/gpt-6.1-sol",
+    },
+    {
+      name: "optional low-reasoning candidate in a view-only session",
+      generation: { reasoning: "low" as const, maxOutputTokens: 4096 },
+      tokens: 4096,
+      control: false,
+      modelId: "openai/gpt-5.4",
+    },
+  ])(
+    "preserves $name across the real Gateway tool-loop wire",
+    async ({ generation, tokens, control, modelId }) => {
+      const requests: {
+        model: string | null;
+        body: {
+          maxOutputTokens: number;
+          reasoning?: string;
+          providerOptions: unknown;
+          tools: { name: string }[];
+          prompt: {
+            role: string;
+            content:
+              { type: string; mediaType?: string; data?: unknown }[] | string;
+          }[];
+        };
+      }[] = [];
+      const gateway = createGateway({
+        apiKey: "synthetic-fixture-not-a-credential",
+        fetch: async (_url, init) => {
+          requests.push({
+            model: new Headers(init?.headers).get("ai-language-model-id"),
+            body: JSON.parse(String(init?.body)),
+          });
+          return new Response(
+            JSON.stringify(
+              requests.length === 1
+                ? {
+                    content: [
+                      {
+                        type: "tool-call",
+                        toolCallId: "observe_fixture",
+                        toolName: "observe",
+                        input: "{}",
+                      },
+                    ],
+                    finishReason: { unified: "tool-calls", raw: "tool-calls" },
+                    usage,
+                    warnings: [],
+                  }
+                : response("I can see the screen."),
+            ),
+            {
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      });
+      const input = turn();
+      input.capabilities = { control };
+      input.tools.observe = vi.fn(async () => image());
+      input.tools.act = vi.fn(async () => {
+        throw new Error("Input must not be submitted by this fixture.");
+      });
+      await expect(
+        new ScreenConversationAgent(
+          { frameImage: async () => image() },
+          gateway(modelId),
+          generation,
+        ).run(input),
+      ).resolves.toEqual({ reply: "I can see the screen." });
+      expect(requests).toHaveLength(2);
+      expect(input.tools.observe).toHaveBeenCalledOnce();
+      expect(input.tools.act).not.toHaveBeenCalled();
+      for (const request of requests) {
+        expect(request.model).toBe(modelId);
+        expect(request.body.maxOutputTokens).toBe(tokens);
+        if (generation) expect(request.body.reasoning).toBe("low");
+        else expect(request.body).not.toHaveProperty("reasoning");
+        expect(request.body.providerOptions).toEqual({
+          openai: { store: false, parallelToolCalls: false },
+        });
+      }
+      expect(requests[0]!.body.tools.map((tool) => tool.name)).toEqual([
+        "observe",
+        "feedback",
+        "screenFeedback",
+        "stop",
+      ]);
+      const nextTools = requests[1]!.body.tools.map((tool) => tool.name);
+      if (control)
+        expect(nextTools).toEqual(
+          expect.arrayContaining(["click", "type", "scroll"]),
+        );
+      else
+        expect(nextTools).toEqual([
+          "observe",
+          "feedback",
+          "screenFeedback",
+          "stop",
+        ]);
+      const files = (request: (typeof requests)[number]) =>
+        request.body.prompt.flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content.filter((part) => part.type === "file")
+            : [],
+        );
+      expect(files(requests[0]!)).toEqual([]);
+      expect(files(requests[1]!)).toEqual([
+        expect.objectContaining({
+          mediaType: "image/jpeg",
+          data: { type: "data", data: "AQ==" },
+        }),
+      ]);
+    },
+  );
+
+  it("contains a reasoning-only token-limited Gateway reply as a bounded empty-reply failure", async () => {
+    let requests = 0;
+    const gateway = createGateway({
+      apiKey: "synthetic-fixture-not-a-credential",
+      fetch: async () => {
+        requests++;
+        return new Response(
+          JSON.stringify({
+            content: [{ type: "reasoning", text: "PRIVATE_REASONING_CONTENT" }],
+            finishReason: { unified: "length", raw: "max_output_tokens" },
+            usage: {
+              ...usage,
+              outputTokens: { total: 4096, text: 0, reasoning: 4096 },
+            },
+            warnings: [],
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    const input = turn();
+    input.tools.act = vi.fn(async () => image());
+    let caught: unknown;
+    try {
+      await new ScreenConversationAgent(
+        { frameImage: async () => image() },
+        gateway("openai/gpt-6.1-sol"),
+        { reasoning: "low", maxOutputTokens: 4096 },
+      ).run(input);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ControlPreflightError);
+    const error = caught as ControlPreflightError;
+    expect(error.code).toBe("planner_unavailable");
+    expect(details(error)).toEqual({
+      phase: "reply_validation",
+      errorKind: "invalid_reply",
+      completedSteps: 1,
+      finishReason: "length",
+      replyLength: 0,
+    });
+    expect(requests).toBe(1);
+    expect(input.tools.act).not.toHaveBeenCalled();
+    expect(JSON.stringify(error)).not.toMatch(/PRIVATE_|synthetic-fixture/);
+  });
+
   it.each([
     [400, "invalid_request_error"],
     [401, "authentication_error"],

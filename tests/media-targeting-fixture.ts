@@ -21,6 +21,7 @@ export interface TargetingProbeOptions {
   text?: string;
   captureScale?: number;
   layout?: "right" | "mirrored" | "compact";
+  generation?: { reasoning?: "low"; maxOutputTokens?: number };
 }
 
 /** Fixed offline cases; geometry is visible only through the screenshot. */
@@ -192,6 +193,7 @@ export async function runTargetingProbe(
       const result = await new ScreenConversationAgent(
         { frameImage: async () => observe() },
         model,
+        options.generation,
       ).run({
         text: `Click the Title textbox${direction} and type ${JSON.stringify(text)}. Leave Notes unchanged, inspect the result, and tell me what you see.`,
         question: "Review the draft title.",
@@ -258,6 +260,7 @@ export async function runTargetingProbe(
       layout,
       elapsedMs,
       grading,
+      ...(options.generation ? { generation: { ...options.generation } } : {}),
       captureWidth: latest?.width,
       captureHeight: latest?.height,
       observations: sequence,

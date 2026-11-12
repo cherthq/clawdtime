@@ -2,12 +2,42 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. The latest diagnostic call showed the Mac screen without a gateway timeout; textbox targeting failed. Reliable voice/control and current return-to-coding acceptance remain pending.**
+**Independent pilot. The latest diagnostic call showed the Mac screen; its textbox targeting failed. The replacement model now passes eight offline targeting trials. Live voice/control and current return-to-coding acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
+
+## Reasoning-model qualification — November 11
+
+After access was enabled with the user's authorization, the unchanged native
+Gateway route accepted `openai/gpt-6.1-sol`. With low reasoning and 4096 output
+tokens, it passed all eight fresh browser trials: native, scaled, mirrored and
+compact textbox layouts, twice each, without retrying a failed case. Each trial
+used one click and one type, verified Title focus before typing, produced the exact
+requested text, and left Notes untouched. Agent duration was 7,582–8,373ms. Two
+reviewers independently checked the held-back DOM records and target geometry.
+Separate real-model synthetic greeting, view-only and Stop cases also passed;
+ordinary greeting/view-only replies invoked no tools, and Stop invoked only the
+synthetic stop tool. No call, installed helper input or desktop capture occurred.
+
+The selected generation settings are explicit optional environment configuration.
+Absent settings retain the old 800-token/unset-reasoning defaults. Supplied
+reasoning must be exactly `low`, and the output token budget must be an integer
+800–4096; invalid values fail startup without exposing values. Both provider paths
+receive the same validated settings. Actual SDK wire regressions verify defaults,
+selected settings, image transport, control capability gating and privacy options.
+Reasoning-only token exhaustion still yields a bounded empty-reply failure.
+The full suite passes 479 tests plus TypeScript/build, formatting and independent
+review.
+
+The 12-second step and 45-second turn deadlines, four-input budget, no-retry policy,
+frame freshness, yielded-session authority, Stop and receipt handling are unchanged.
+The larger output budget makes room for reasoning; it does not expand computer
+control authority. This matrix qualifies these disposable fixtures only, not
+arbitrary desktop targets or handset acceptance. The earlier failed-model evidence
+below remains historical; no successful live control claim replaces it.
 
 ## Screen-control harness repair — November 11
 

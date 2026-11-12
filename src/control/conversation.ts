@@ -104,6 +104,10 @@ export class ScreenConversationAgent implements ConversationAgent {
   constructor(
     readonly device: Pick<MediaDevicePort, "frameImage">,
     readonly model: LanguageModel,
+    readonly generation: Readonly<{
+      reasoning?: "low";
+      maxOutputTokens?: number;
+    }> = {},
   ) {}
   observe(lease: ControlLease) {
     return this.device.frameImage(lease);
@@ -281,7 +285,8 @@ export class ScreenConversationAgent implements ConversationAgent {
             : ["observe", "feedback", "screenFeedback", "stop"],
       }),
       timeout: { totalMs: 45_000, stepMs: 12_000 },
-      maxOutputTokens: 800,
+      reasoning: this.generation.reasoning,
+      maxOutputTokens: this.generation.maxOutputTokens ?? 800,
       providerOptions: { openai: { store: false, parallelToolCalls: false } },
       stopWhen: isStepCount(8),
       onStepEnd: (step) => {
@@ -395,6 +400,26 @@ export function configuredConversationAgent(
   if (env.CLAWDTIME_AI_ACTIONS !== "true") return;
   const model = env.CLAWDTIME_AI_MODEL;
   if (!model) throw new Error("Explicit CLAWDTIME_AI_MODEL is required.");
+  const generation: { reasoning?: "low"; maxOutputTokens?: number } = {};
+  if (env.CLAWDTIME_AI_REASONING !== undefined) {
+    if (env.CLAWDTIME_AI_REASONING !== "low")
+      throw new Error("CLAWDTIME_AI_REASONING must be low when supplied.");
+    generation.reasoning = "low";
+  }
+  if (env.CLAWDTIME_AI_MAX_OUTPUT_TOKENS !== undefined) {
+    const value = env.CLAWDTIME_AI_MAX_OUTPUT_TOKENS;
+    const tokens = Number(value);
+    if (
+      !/^[0-9]+$/.test(value) ||
+      !Number.isInteger(tokens) ||
+      tokens < 800 ||
+      tokens > 4096
+    )
+      throw new Error(
+        "CLAWDTIME_AI_MAX_OUTPUT_TOKENS must be an integer from 800 to 4096.",
+      );
+    generation.maxOutputTokens = tokens;
+  }
   if (env.CLAWDTIME_AI_PROVIDER === "gateway") {
     if (!env.CLAWDTIME_AI_GATEWAY_KEY || !model.includes("/"))
       throw new Error(
@@ -403,6 +428,7 @@ export function configuredConversationAgent(
     return new ScreenConversationAgent(
       device,
       createGateway({ apiKey: env.CLAWDTIME_AI_GATEWAY_KEY })(model),
+      generation,
     );
   }
   if (env.CLAWDTIME_AI_PROVIDER !== "openai" || !env.CLAWDTIME_OPENAI_API_KEY)
@@ -412,5 +438,6 @@ export function configuredConversationAgent(
   return new ScreenConversationAgent(
     device,
     createOpenAI({ apiKey: env.CLAWDTIME_OPENAI_API_KEY }).responses(model),
+    generation,
   );
 }
