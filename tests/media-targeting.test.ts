@@ -218,7 +218,52 @@ describe("synthetic screenshot-to-textbox SDK targeting", () => {
     });
     expect(result.passed).toBe(false);
   }, 20_000);
-  it.each(targetingEvaluationCases)(
+  it("rejects a completed DOM write when the actual router retains an unknown outcome", async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: [
+        call("observe", {}, 1),
+        call(
+          "click",
+          {
+            frameId: "fixture-frame-1",
+            action: { kind: "click", x: 958, y: 272 },
+          },
+          2,
+        ),
+        call(
+          "type",
+          {
+            frameId: "fixture-frame-4",
+            action: { kind: "type", text: "Hello ClawdTime" },
+          },
+          3,
+        ),
+        response([{ type: "text", text: "The Title is now filled." }], "stop"),
+      ] as never,
+    });
+    const result = await runTargetingProbe(model, {
+      throughHumanRouter: true,
+      changingBackground: true,
+      failPostTypeObservation: true,
+    });
+    expect(result.targetValue).toBe("Hello ClawdTime");
+    expect(result.actions).toHaveLength(2);
+    expect(Object.values(result.grading).every(Boolean)).toBe(true);
+    expect(result.routerOutcome).toEqual({ accepted: false, state: "unknown" });
+    expect(result.error).toBe("router_not_completed");
+    expect(result.passed).toBe(false);
+  }, 20_000);
+  it.each([
+    ...targetingEvaluationCases,
+    {
+      name: "dynamic background through actual voice router and coordinator",
+      options: {
+        throughHumanRouter: true,
+        changingBackground: true,
+        generation: { reasoning: "medium" as const },
+      },
+    },
+  ])(
     "uses full screenshot coordinates and verifies the intended textbox: $name",
     async ({ options }) => {
       const expectedText = options.text ?? "Hello ClawdTime";
@@ -280,7 +325,18 @@ describe("synthetic screenshot-to-textbox SDK targeting", () => {
         "click",
         "type",
       ]);
-      expect(result.observations).toBe(3);
+      if (options.throughHumanRouter) {
+        expect(result.throughHumanRouter).toBe(true);
+        expect(result.routerOutcome).toEqual({ accepted: true });
+        expect(result.observations).toBe(7);
+        expect(result.changedCaptures).toBe(6);
+        // The native-style dispatch receives the fresh predispatch stamp,
+        // while the model selected each action from its preceding screenshot.
+        expect(result.dispatchFrameIds).toEqual([
+          "fixture-frame-2",
+          "fixture-frame-5",
+        ]);
+      } else expect(result.observations).toBe(3);
       if (options.captureScale) {
         expect(result.captureWidth).toBe(1108);
         expect(result.captureHeight).toBe(720);

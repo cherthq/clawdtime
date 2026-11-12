@@ -227,12 +227,17 @@ Evaluate that exact model on disposable screen targets before accepting control:
 API connectivity and fluent replies do not establish coordinate accuracy. The
 screen harness presents the latest image separately from tool metadata, uses
 screenshot-pixel coordinates at the model boundary, and preserves normalized
-coordinates in the device protocol. Optional `CLAWDTIME_AI_REASONING=low` and
+coordinates in the device protocol. Optional `CLAWDTIME_AI_REASONING=low|medium` and
 `CLAWDTIME_AI_MAX_OUTPUT_TOKENS` (integer 800–4096) configure the generation budget;
 omit them to retain unset reasoning and 800 output tokens. Supplied invalid values
 fail startup. The token cap includes reasoning as well as visible/tool output;
 qualify the exact model and settings together. Step/turn deadlines remain 12/45
-seconds, with no automatic retries or extra input allowance.
+seconds, with at most eight model steps and no automatic input retries.
+The action loop refreshes the native frame stamp, sends the model-selected action,
+and returns a screenshot. It does not require identical screenshot bytes or impose
+a separate four-action counter or persisted focus block. The model judges focus
+and visible results. Display geometry, current-session permission, local Stop,
+exclusive control and unknown-input receipts remain enforced.
 When disabled, natural-language interpretation fails closed; local Stop remains
 available. `npm run demo` uses an explicitly scripted simulation without a model.
 

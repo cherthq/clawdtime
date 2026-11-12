@@ -2,12 +2,46 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. The latest diagnostic call showed the Mac screen; its textbox request sent no input. The replacement model now passes eight offline targeting trials. Live voice/control and current return-to-coding acceptance remain pending.**
+**Independent pilot. The latest diagnostic call showed the Mac screen but sent no textbox input. The simplified harness with Astra medium now passes eight offline trials through the actual action router. Live control and current return-to-coding acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
+
+## Simplified action loop and Astra medium — November 11
+
+At the user's request, the action loop no longer compares entire JPEG files,
+replans solely because pixels changed, applies a separate four-action/twelve-tool
+counter, or blocks later typing using persisted focus state. A shorter prompt lets
+the model use the conversation and screenshots to choose actions and judge results.
+The loop refreshes the dispatch frame stamp, sends one action and returns the
+observed screen. Geometry, current-session authority, local Stop, exclusive input,
+receipt reconciliation and unknown-outcome handling remain. The SDK still limits
+turns to eight model steps and 45 seconds (12 seconds per step); these are not an
+input count. There are no automatic retries of uncertain input.
+
+The requested `openai/gpt-6-astra` model supports medium reasoning in the current
+Gateway catalog. Optional reasoning configuration now accepts `low` or `medium`;
+the existing 4096 output-token setting is retained for qualification. Real-model
+greeting, view-only and Stop probes passed. All 486 automated tests, TypeScript,
+build and formatting pass, with independent source/fixture review.
+
+The offline fixture now runs the actual HumanRouter and ControlCoordinator against
+a disposable headless browser, changes a synthetic background counter before every
+capture, and independently grades focus, field values, fresh dispatch frame IDs
+and router acceptance. A negative case proves correct DOM text with an unknown
+router outcome cannot pass. Stop/deadline during the pre-input capture prevent
+input. Screenshots remain transient and no native desktop or handset is involved.
+All four layouts passed twice with Astra medium: eight successful targeting trials
+using one click and one type each, seven captures and six JPEG changes per trial,
+correct Title focus/text and untouched Notes. Durations were 8,826–11,497ms.
+A separate attempt was rejected before observation/input by the gateway key's
+exhausted $1 lifetime budget (HTTP402). After explicit approval, that same key's
+cap was raised to $5 with no reset period, and the remaining four trials passed.
+This used existing credit; no credit purchase or automatic top-up was added.
+No live call was made. The source is reviewed and ready for backend deployment;
+this offline evidence does not establish handset or native desktop acceptance.
 
 ## Supervised textbox call — November 11
 

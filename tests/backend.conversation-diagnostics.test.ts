@@ -115,6 +115,16 @@ describe("validated conversation generation configuration", () => {
       tokens: 4096,
       reasoning: "low",
     },
+    {
+      name: "Astra medium candidate",
+      env: {
+        CLAWDTIME_AI_MODEL: "openai/gpt-6-astra",
+        CLAWDTIME_AI_REASONING: "medium",
+        CLAWDTIME_AI_MAX_OUTPUT_TOKENS: "4096",
+      },
+      tokens: 4096,
+      reasoning: "medium",
+    },
   ])(
     "sends $name through the configured agent",
     async ({ env, tokens, reasoning }) => {
@@ -211,7 +221,7 @@ describe("validated conversation generation configuration", () => {
   it.each([
     ["CLAWDTIME_AI_REASONING", ""],
     ["CLAWDTIME_AI_REASONING", "none"],
-    ["CLAWDTIME_AI_REASONING", "medium"],
+    ["CLAWDTIME_AI_REASONING", "high"],
     ["CLAWDTIME_AI_REASONING", " low "],
     ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", ""],
     ["CLAWDTIME_AI_MAX_OUTPUT_TOKENS", "799"],
@@ -299,6 +309,13 @@ describe("bounded conversation failure diagnostics", () => {
       control: false,
       modelId: "openai/gpt-5.4",
     },
+    {
+      name: "Astra medium candidate",
+      generation: { reasoning: "medium" as const, maxOutputTokens: 4096 },
+      tokens: 4096,
+      control: true,
+      modelId: "openai/gpt-6-astra",
+    },
   ])(
     "preserves $name across the real Gateway tool-loop wire",
     async ({ generation, tokens, control, modelId }) => {
@@ -366,7 +383,8 @@ describe("bounded conversation failure diagnostics", () => {
       for (const request of requests) {
         expect(request.model).toBe(modelId);
         expect(request.body.maxOutputTokens).toBe(tokens);
-        if (generation) expect(request.body.reasoning).toBe("low");
+        if (generation)
+          expect(request.body.reasoning).toBe(generation.reasoning);
         else expect(request.body).not.toHaveProperty("reasoning");
         expect(request.body.providerOptions).toEqual({
           openai: { store: false, parallelToolCalls: false },

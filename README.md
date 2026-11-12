@@ -43,8 +43,8 @@ No command prefixes or confirmation codes. Local **Stop** always stays available
 build are required; public app downloads aren’t ready. Voice takes turns rather
 than supporting interruptions. Screen/text return passed on an earlier configuration;
 screen and voice replies worked in the latest call, but its textbox request sent no
-input: changed-screen checks exhausted the harness budget. The replacement model
-passed eight offline textbox trials; live control and return-to-coding remain unverified. Automatic message likes, standalone progress texts, calling
+input. The simplified harness with Astra medium passed eight offline textbox trials
+through the action router; live control and return-to-coding remain unverified. Automatic message likes, standalone progress texts, calling
 the agent yourself, and starting work or asking it questions from Messages
 outside an active request are not available yet. During a call, ask naturally.
 

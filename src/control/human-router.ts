@@ -186,8 +186,7 @@ export class HumanRouter {
       stopped = false,
       terminal = false,
       fatal: unknown;
-    let actions = 0,
-      operations = 0;
+    let actions = 0;
     let operation: Promise<unknown> | undefined;
     let tick: Promise<void> | undefined;
     const viewTimer = this.maintainViewing
@@ -200,7 +199,6 @@ export class HumanRouter {
               });
         }, 1000)
       : undefined;
-    const focusKey = `focus-unverified:${digest(JSON.stringify([pairing.deviceId, pairing.displayId]))}`;
     const ensure = () => {
       if (fatal) throw fatal;
       if (controller.signal.aborted || terminal)
@@ -249,8 +247,8 @@ export class HumanRouter {
       });
     const exclusive = async <T>(fn: () => Promise<T>): Promise<T> => {
       ensure();
-      if (operation || ++operations > 12) {
-        fatal = invalidPlan(operation ? "parallel_tools" : "operation_limit");
+      if (operation) {
+        fatal = invalidPlan("parallel_tools");
         throw fatal;
       }
       const pending = fn();
@@ -359,22 +357,18 @@ export class HumanRouter {
           const parsedAction = actionSchema.safeParse(rawAction);
           if (!parsedAction.success) throw invalidPlan("action_invalid");
           const action = parsedAction.data;
-          if (++actions > 4) throw invalidPlan("action_limit");
           if (!observed) throw invalidPlan("observation_missing");
           if (observed.frame.id !== frameId)
             throw invalidPlan("frame_mismatch");
-          if (action.kind === "type" && store.state(focusKey))
-            throw new ControlPreflightError("planning_refused");
           const before = observed,
             fresh = await capture();
           observed = fresh;
           if (
-            before.dataUrl !== fresh.dataUrl ||
             before.frame.width !== fresh.frame.width ||
             before.frame.height !== fresh.frame.height
           )
-            return { ...fresh, changed: true };
-          const actionId = `input_${digest(`${input.eventId}:${actions}`).slice(0, 40)}`;
+            throw new ControlPreflightError("screen_changed");
+          const actionId = `input_${digest(`${input.eventId}:${++actions}`).slice(0, 40)}`;
           store.saveState(key, {
             fingerprint,
             requestId: request.id,
@@ -383,7 +377,9 @@ export class HumanRouter {
             actionId,
             result: unknown,
           });
-          // Intent and a fresh model-visible image are bound before the coordinator dispatches.
+          // Refresh the native frame stamp for dispatch; the model chose this
+          // action from its preceding observation. Ordinary pixel changes do not
+          // veto that decision. The returned image lets it inspect the result.
           receipt = await this.control.act(
             lease!.id,
             pairing.memberId,
@@ -393,7 +389,6 @@ export class HumanRouter {
           );
           if (receipt.state !== "observed")
             throw new Error("Input outcome is uncertain.");
-          if (action.kind === "click") store.saveState(focusKey, false);
           observed = await capture();
           return { ...observed, receipt };
         }),
@@ -511,7 +506,6 @@ export class HumanRouter {
       });
     if (failure) {
       if (failure instanceof ControlPreflightError) {
-        store.saveState(focusKey, true);
         const diagnostics = sanitizeControlPreflightDiagnostics(
           failure.diagnostics,
         );

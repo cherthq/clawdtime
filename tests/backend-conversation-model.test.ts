@@ -222,8 +222,8 @@ describe("conversation SDK contract", () => {
       ["one", { kind: "click", x: 320 / 639, y: 180 / 359 }],
       ["click", { kind: "type", text: "Hello" }],
     ]);
-    expect(JSON.stringify(model.doGenerateCalls[0]!.prompt)).toContain(
-      "ORIGINAL utterance",
+    expect(JSON.stringify(model.doGenerateCalls[0]!.prompt)).toMatch(
+      /original utterance/i,
     );
   });
   it.each([

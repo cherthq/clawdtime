@@ -8,7 +8,19 @@ import {
   type Observation,
   type ConversationTurn,
 } from "../src/control/conversation.js";
-import type { Frame, InputAction } from "../src/contracts.js";
+import { Store } from "../src/storage/store.js";
+import { ClawdTime } from "../src/attention/service.js";
+import { SimulationTransport } from "../src/transport/simulation.js";
+import { ControlCoordinator } from "../src/control/coordinator.js";
+import { HumanRouter } from "../src/control/human-router.js";
+import { Viewing } from "../src/control/viewing.js";
+import type {
+  CallSession,
+  ControlLease,
+  DevicePort,
+  Frame,
+  InputAction,
+} from "../src/contracts.js";
 import {
   ControlPreflightError,
   sanitizeControlPreflightDiagnostics,
@@ -21,7 +33,11 @@ export interface TargetingProbeOptions {
   text?: string;
   captureScale?: number;
   layout?: "right" | "mirrored" | "compact";
-  generation?: { reasoning?: "low"; maxOutputTokens?: number };
+  generation?: { reasoning?: "low" | "medium"; maxOutputTokens?: number };
+  throughHumanRouter?: boolean;
+  changingBackground?: boolean;
+  /** Synthetic fault: native-style post-type observation fails after DOM input. */
+  failPostTypeObservation?: boolean;
 }
 
 /** Fixed offline cases; geometry is visible only through the screenshot. */
@@ -70,6 +86,7 @@ export async function runTargetingProbe(
       ? { channel: "chrome" }
       : {}),
   });
+  let syntheticStore: Store | undefined;
   try {
     const context = await browser.newContext({
       viewport: { width, height },
@@ -92,6 +109,7 @@ export async function runTargetingProbe(
       #title:focus{background:rgb(60,220,80);border-color:#0a6020}
     </style></head><body><header>Disposable ClawdTime targeting fixture</header>
       <aside>Workspace<br><br>Draft settings</aside><main><h2>Edit this draft</h2><p>Choose the Title field${direction}.</p></main>
+      <div id="captureCounter" style="position:absolute;left:320px;bottom:20px"></div>
       <label id="notesLabel" for="notes">Notes</label><input id="notes" aria-label="Notes" value="">
       <label id="titleLabel" for="title">Title</label><input id="title" aria-label="Title" value="">
       <script>window.fixtureEvents=[];for(const id of ['title','notes']){const e=document.getElementById(id);for(const event of ['click','input'])e.addEventListener(event,()=>window.fixtureEvents.push({target:id,event}));}</script>
@@ -106,7 +124,14 @@ export async function runTargetingProbe(
       targetValue: string;
       otherValue: string;
     }[] = [];
+    let changedCaptures = 0;
+    let previousDataUrl: string | undefined;
+    const dispatchFrameIds: string[] = [];
     const observe = async (): Promise<Observation> => {
+      if (options.changingBackground)
+        await page.locator("#captureCounter").evaluate((element, value) => {
+          element.textContent = `Synthetic capture counter: ${value}`;
+        }, sequence + 1);
       const jpeg = await page.screenshot({
         type: "jpeg",
         quality: 90,
@@ -120,57 +145,62 @@ export async function runTargetingProbe(
         height: dimensions.height,
       };
       const rawDataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+      if (previousDataUrl && previousDataUrl !== rawDataUrl) changedCaptures++;
+      previousDataUrl = rawDataUrl;
       return {
         frame: latest,
         dataUrl: rawDataUrl,
       };
     };
+    const performInput = async (frameId: string, action: InputAction) => {
+      if (
+        !latest ||
+        latest.id !== frameId ||
+        Date.now() - latest.capturedAt > 2000
+      )
+        throw new Error("Fixture requires a fresh current screenshot identity");
+      dispatchFrameIds.push(frameId);
+      // Held-back grading only; this focus value never enters a tool result.
+      const focusedFieldBeforeAction = await page.evaluate(
+        () => document.activeElement?.id ?? "",
+      );
+      actions.push(action);
+      if (action.kind === "click") {
+        // Match the helper's normalized full-display mapping. The screenshot
+        // has no FaceTime video header or letterboxing to subtract.
+        await page.mouse.click(action.x * (width - 1), action.y * (height - 1));
+      } else if (action.kind === "type") {
+        await page.keyboard.insertText(action.text);
+      } else {
+        throw new Error(
+          "This fixture authorizes only requested click and typing",
+        );
+      }
+      afterActions.push(
+        await page.evaluate(
+          ({ kind, focusedFieldBeforeAction }) => ({
+            kind,
+            focusedFieldBeforeAction,
+            focusedField: document.activeElement?.id ?? "",
+            targetValue: (document.getElementById("title") as HTMLInputElement)
+              .value,
+            otherValue: (document.getElementById("notes") as HTMLInputElement)
+              .value,
+          }),
+          { kind: action.kind, focusedFieldBeforeAction },
+        ),
+      );
+    };
     const tools: ConversationTurn["tools"] = {
       observe,
       act: async (frameId, action) => {
-        if (!latest || latest.id !== frameId)
-          throw new Error("Fixture requires exact latest screenshot identity");
-        const sourceFrameId = latest.id;
-        // Held-back grading only; this focus value never enters a tool result.
-        const focusedFieldBeforeAction = await page.evaluate(
-          () => document.activeElement?.id ?? "",
-        );
-        actions.push(action);
-        if (action.kind === "click") {
-          // Match the helper's normalized full-display mapping. The screenshot
-          // has no FaceTime video header or letterboxing to subtract.
-          await page.mouse.click(
-            action.x * (width - 1),
-            action.y * (height - 1),
-          );
-        } else if (action.kind === "type") {
-          await page.keyboard.insertText(action.text);
-        } else {
-          throw new Error(
-            "This fixture authorizes only requested click and typing",
-          );
-        }
-        afterActions.push(
-          await page.evaluate(
-            ({ kind, focusedFieldBeforeAction }) => ({
-              kind,
-              focusedFieldBeforeAction,
-              focusedField: document.activeElement?.id ?? "",
-              targetValue: (
-                document.getElementById("title") as HTMLInputElement
-              ).value,
-              otherValue: (document.getElementById("notes") as HTMLInputElement)
-                .value,
-            }),
-            { kind: action.kind, focusedFieldBeforeAction },
-          ),
-        );
+        await performInput(frameId, action);
         return {
           ...(await observe()),
           receipt: {
             id: `fixture-action-${actions.length}`,
             leaseId: "fixture-lease",
-            frameId: sourceFrameId,
+            frameId,
             state: "observed" as const,
             createdAt: Date.now(),
           },
@@ -184,25 +214,140 @@ export async function runTargetingProbe(
       },
       stop: async () => ({ stopped: true }),
     };
-    let reply: string | undefined;
-    let error: string | undefined;
-    let diagnostics: ConversationPreflightDiagnostics | undefined;
-    // Match the agent budget, excluding disposable browser startup and grading.
-    const startedAt = performance.now();
-    try {
-      const result = await new ScreenConversationAgent(
-        { frameImage: async () => observe() },
-        model,
-        options.generation,
-      ).run({
-        text: `Click the Title textbox${direction} and type ${JSON.stringify(text)}. Leave Notes unchanged, inspect the result, and tell me what you see.`,
+    const agent = new ScreenConversationAgent(
+      { frameImage: async () => observe() },
+      model,
+      options.generation,
+    );
+    const instruction = `Click the Title textbox${direction} and type ${JSON.stringify(text)}. Leave Notes unchanged, inspect the result, and tell me what you see.`;
+    let run: () => Promise<{
+      reply?: string;
+      code?: string;
+      diagnostics?: unknown;
+      accepted?: boolean;
+      state?: string;
+    }> = () =>
+      agent.run({
+        text: instruction,
         question: "Review the draft title.",
         history: [],
         capabilities: { control: true },
         signal: AbortSignal.timeout(50_000),
         tools,
       });
+    let cleanupRouter: (() => Promise<void>) | undefined;
+    if (options.throughHumanRouter) {
+      syntheticStore = new Store();
+      const service = new ClawdTime(syntheticStore, new SimulationTransport());
+      const activeLeases = new Set<string>();
+      const requireLease = (lease: ControlLease) => {
+        if (!activeLeases.has(lease.id))
+          throw new Error("Synthetic lease is not active");
+      };
+      const device: DevicePort = {
+        createLease: async (lease) => {
+          activeLeases.add(lease.id);
+        },
+        frame: async (lease) => {
+          requireLease(lease);
+          if (
+            options.failPostTypeObservation &&
+            actions.at(-1)?.kind === "type"
+          )
+            throw new Error("Synthetic post-type observation failure");
+          return (await observe()).frame;
+        },
+        action: async (lease, frame, action) => {
+          requireLease(lease);
+          await performInput(frame.id, action);
+          return { submitted: true };
+        },
+        release: async (lease) => {
+          activeLeases.delete(lease.id);
+        },
+      };
+      const binding = {
+        memberId: "fixture-member",
+        recipient: "+15550000001",
+        conversationId: "iMessage;-;+15550000001",
+        lineId: "fixture-line",
+        deviceId: "fixture-browser",
+        displayId: "1",
+      };
+      const invite = service.createPairingInvite(binding);
+      const pairing = service.claimPairing({
+        token: invite.token,
+        deviceId: binding.deviceId,
+        displayId: binding.displayId,
+        allowView: true,
+        allowControl: true,
+      });
+      const session = service.registerSession(pairing.token, {
+        adapter: "codex",
+        adapterVersion: "fixture",
+        projectRoot: "/fixture",
+        externalSessionId: "fixture",
+        hostId: "fixture.local",
+        capabilities: { cooperativePause: true, polling: true },
+      });
+      service.yieldSession(session.token);
+      const request = service.requestAttention(session.token, {
+        taskId: "fixture",
+        idempotencyKey: "fixture",
+        reason: "decision",
+        question: "Review the draft title.",
+        timeoutSeconds: 120,
+      });
+      await service.drain();
+      service.observeCall(request.id, "connected", true);
+      const call = syntheticStore
+        .all<CallSession>("call")
+        .find((value) => value.requestId === request.id)!;
+      const control = new ControlCoordinator(syntheticStore, device);
+      const viewing = new Viewing(syntheticStore, device);
+      const maintainViewing = async () => {
+        service.heartbeat(session.token);
+        await viewing.tick();
+      };
+      const router = new HumanRouter(service, control, agent, maintainViewing);
+      await maintainViewing();
+      run = () =>
+        router.receive({
+          ...binding,
+          requestId: request.id,
+          eventId: "fixture-voice-turn",
+          channel: "voice",
+          callId: call.id,
+          qualifiedRemoteAudio: true,
+          text: instruction,
+        });
+      cleanupRouter = () => control.stopPairing(pairing.pairing.id);
+    }
+    let reply: string | undefined;
+    let error: string | undefined;
+    let diagnostics: ConversationPreflightDiagnostics | undefined;
+    let routerOutcome: { accepted: boolean; state?: string } | undefined;
+    // Match the agent budget, excluding disposable browser startup and grading.
+    const startedAt = performance.now();
+    try {
+      const result = await run();
       reply = result.reply;
+      error = result.code;
+      if (options.throughHumanRouter) {
+        routerOutcome = {
+          accepted: result.accepted === true,
+          ...(result.state && /^[a-z_]{1,32}$/.test(result.state)
+            ? { state: result.state }
+            : {}),
+        };
+        if (
+          !routerOutcome.accepted ||
+          ["unknown", "partial"].includes(result.state ?? "")
+        )
+          error ??= "router_not_completed";
+      }
+      const safe = sanitizeControlPreflightDiagnostics(result.diagnostics);
+      if (safe?.phase === "conversation") diagnostics = safe;
     } catch (failure) {
       if (failure instanceof ControlPreflightError) {
         const safe = sanitizeControlPreflightDiagnostics(failure.diagnostics);
@@ -218,6 +363,7 @@ export async function runTargetingProbe(
           : "fixture_failed";
     }
     const elapsedMs = Math.ceil(performance.now() - startedAt);
+    await cleanupRouter?.();
     const targetValue = await page
       .getByRole("textbox", { name: "Title", exact: true })
       .inputValue();
@@ -264,6 +410,11 @@ export async function runTargetingProbe(
       captureWidth: latest?.width,
       captureHeight: latest?.height,
       observations: sequence,
+      throughHumanRouter: options.throughHumanRouter ?? false,
+      ...(routerOutcome ? { routerOutcome } : {}),
+      changingBackground: options.changingBackground ?? false,
+      changedCaptures,
+      dispatchFrameIds,
       actions,
       afterActions,
       targetValue,
@@ -275,6 +426,7 @@ export async function runTargetingProbe(
       evidence: "synthetic_headless_browser_only" as const,
     };
   } finally {
+    syntheticStore?.close();
     await browser.close();
   }
 }

@@ -486,34 +486,125 @@ describe("one conversational agent with bounded screen tools", () => {
     expect(f.device.inputs).toHaveLength(3);
     f.store.close();
   });
-  it("provides a changed screen to the same agent without input or stale-plan rebinding", async () => {
-    let first = true;
+  it("dispatches once against a fresh frame after model latency despite changing screenshot bytes", async () => {
+    vi.useFakeTimers();
+    const observedFrames: string[] = [];
     const f = await fixture(async (t) => {
       const initial = await t.tools.observe();
-      const changed = await t.tools.act(initial.frame.id, {
+      await vi.advanceTimersByTimeAsync(3000);
+      const after = await t.tools.act(initial.frame.id, {
         kind: "click",
         x: 0.2,
         y: 0.3,
       });
-      expect(changed.changed).toBe(true);
-      expect(changed.receipt).toBeUndefined();
-      expect(f.device.inputs).toHaveLength(0);
-      await t.tools.act(changed.frame.id, { kind: "click", x: 0.7, y: 0.6 });
-      return {
-        reply: "I used the updated screen and observed the new selection.",
-      };
+      expect(after.receipt?.state).toBe("observed");
+      expect(after.receipt?.frameId).toBe(observedFrames[1]);
+      expect(after.receipt?.frameId).not.toBe(initial.frame.id);
+      expect(after.frame.id).toBe(observedFrames[2]);
+      expect(after).not.toHaveProperty("changed");
+      return { reply: "I observed the result." };
     });
     const observe = f.conversation.observe.bind(f.conversation);
-    f.conversation.observe = async (l) => ({
-      ...(await observe(l)),
-      dataUrl: first
-        ? ((first = false), "data:image/jpeg;base64,AQ==")
-        : "data:image/jpeg;base64,Ag==",
-    });
-    await f.send("changed", "Select the visible result.");
-    expect(f.device.inputs).toHaveLength(1);
-    f.store.close();
+    f.conversation.observe = async (l) => {
+      const image = await observe(l);
+      observedFrames.push(image.frame.id);
+      return {
+        ...image,
+        dataUrl: `data:image/jpeg;base64,${Buffer.from(String(observedFrames.length)).toString("base64")}`,
+      };
+    };
+    const action = f.device.action.bind(f.device);
+    f.device.action = async (lease, frame, input, id) => {
+      expect(Date.now() - frame.capturedAt).toBeLessThanOrEqual(2000);
+      expect(frame.id).toBe(observedFrames[1]);
+      return action(lease, frame, input, id);
+    };
+    try {
+      expect(
+        (await f.send("changed", "Select the visible result.")).accepted,
+      ).toBe(true);
+      expect(observedFrames).toHaveLength(3);
+      expect(f.device.inputs).toHaveLength(1);
+      await f.send("changed", "Select the visible result.");
+      expect(f.device.inputs).toHaveLength(1);
+      expect(f.store.all<ActionReceipt>("action")).toHaveLength(1);
+    } finally {
+      f.store.close();
+      vi.useRealTimers();
+    }
   });
+  it.each(["geometry", "stale"] as const)(
+    "does not dispatch when the refreshed frame has %s failure",
+    async (mode) => {
+      let captures = 0;
+      const f = await fixture(click);
+      const observe = f.conversation.observe.bind(f.conversation);
+      f.conversation.observe = async (lease) => {
+        const image = await observe(lease);
+        if (++captures === 2)
+          image.frame =
+            mode === "geometry"
+              ? { ...image.frame, width: image.frame.width - 1 }
+              : { ...image.frame, capturedAt: Date.now() - 2100 };
+        return image;
+      };
+      try {
+        expect(await f.send(mode, "Click the title.")).toMatchObject({
+          state: "not_started",
+          code: mode === "geometry" ? "screen_changed" : "frame_unavailable",
+        });
+        expect(captures).toBe(2);
+        expect(f.device.inputs).toHaveLength(0);
+        expect(f.store.all("action")).toHaveLength(0);
+      } finally {
+        f.store.close();
+      }
+    },
+  );
+  it.each(["Stop", "turn deadline"] as const)(
+    "prevents dispatch when %s occurs during the fresh pre-input capture",
+    async (interruption) => {
+      vi.useFakeTimers();
+      const began = barrier(),
+        release = barrier();
+      const f = await fixture(click);
+      const observe = f.conversation.observe.bind(f.conversation);
+      let captures = 0;
+      f.conversation.observe = async (lease) => {
+        const image = await observe(lease);
+        if (++captures === 2) {
+          began.resolve();
+          await release.promise;
+        }
+        return image;
+      };
+      const pending = f.send("interrupted-capture", "Click the title.");
+      try {
+        await began.promise;
+        expect(captures).toBe(2);
+        expect(f.device.inputs).toHaveLength(0);
+        if (interruption === "Stop") {
+          expect((await f.send("stop-capture", "Stop")).stopped).toBe(true);
+        } else {
+          await vi.advanceTimersByTimeAsync(45_001);
+        }
+        release.resolve();
+        expect(await pending).toMatchObject({
+          accepted: false,
+          state: "not_started",
+          code: "stopped",
+        });
+        expect(f.device.inputs).toHaveLength(0);
+        expect(f.store.all("action")).toHaveLength(0);
+        expect(captures).toBe(2);
+      } finally {
+        release.resolve();
+        await pending;
+        f.store.close();
+        vi.useRealTimers();
+      }
+    },
+  );
   it("clarifies conversationally without returning coding control or interrupting viewing", async () => {
     const f = await fixture(async (t) => ({
       reply: t.history.length
@@ -625,7 +716,7 @@ describe("one conversational agent with bounded screen tools", () => {
       f.store.close();
     },
   );
-  it("blocks typing after failed planning until an observed explicit click", async () => {
+  it("uses the next turn's observation without enforcing an obsolete persisted focus latch", async () => {
     const f = await fixture(async (t) => {
       if (t.text === "Focus it.")
         throw new ControlPreflightError("planning_refused");
@@ -639,13 +730,11 @@ describe("one conversational agent with bounded screen tools", () => {
       return { reply: "I observed the result." };
     });
     await f.viewing.tick();
+    f.store.saveState(focus, true);
     await f.send("failed", "Focus it.");
-    expect((await f.send("type1", "Type Hello.")).state).toBe("not_started");
-    expect(f.device.inputs).toHaveLength(0);
-    await f.send("click", "Click the title.");
-    expect(f.store.state(focus)).toBe(false);
-    await f.send("type2", "Type Hello.");
-    expect(f.device.inputs).toHaveLength(2);
+    expect((await f.send("type1", "Type Hello.")).accepted).toBe(true);
+    expect(f.device.inputs).toHaveLength(1);
+    expect(f.store.state(focus)).toBe(true);
     f.store.close();
   });
   it("unknown dispatch permanently blocks further tools even when the agent catches the error", async () => {
@@ -774,18 +863,11 @@ describe("one conversational agent with bounded screen tools", () => {
     expect(f.store.all("response")).toHaveLength(0);
     f.store.close();
   });
-  it.each([
-    "operation_limit",
-    "action_invalid",
-    "observation_missing",
-    "frame_mismatch",
-  ] as const)(
+  it.each(["action_invalid", "observation_missing", "frame_mismatch"] as const)(
     "diagnoses %s without retaining model arguments or dispatching input",
     async (reason) => {
       const f = await fixture(async (turn) => {
-        if (reason === "operation_limit") {
-          for (let i = 0; i < 13; i++) await turn.tools.observe();
-        } else if (reason === "action_invalid") {
+        if (reason === "action_invalid") {
           await turn.tools.act("PRIVATE_FRAME", {
             kind: "click",
             x: -1,
@@ -822,7 +904,6 @@ describe("one conversational agent with bounded screen tools", () => {
           "The proposed screen action is invalid.",
         );
         const wording = {
-          operation_limit: /limit/i,
           action_invalid: /valid.*action/i,
           observation_missing: /look|image|observe/i,
           frame_mismatch: /image|frame/i,
@@ -1129,30 +1210,27 @@ describe("conversation lifecycle edges", () => {
     expect(result.reply).not.toContain("succeeded");
     f.store.close();
   });
-  it("enforces the input budget even when the agent asks for a fifth action", async () => {
+  it("does not impose redundant router counters and preserves unique action receipts and replay", async () => {
     const f = await fixture(async (t) => {
       let v = await t.tools.observe();
+      // The production SDK's eight-step limit is tested separately; this
+      // trusted scripted fixture isolates the removed router counters.
+      for (let i = 0; i < 12; i++) v = await t.tools.observe();
       for (let i = 0; i < 5; i++)
         v = await t.tools.act(v.frame.id, { kind: "click", x: 0.5, y: 0.5 });
       return { reply: "Done" };
     });
     const result = await f.send("budget", "Select the five fields.");
-    expect(result.state).toBe("partial");
-    expect(result.reply).toContain("last observed input");
-    expect(result.reply).not.toContain("No computer input was sent");
-    expect(f.device.inputs).toHaveLength(4);
-    expect(f.store.state(`control-preflight:${f.request.id}`)).toMatchObject({
-      diagnostics: {
-        phase: "tool_preflight",
-        reason: "action_limit",
-        elapsedMs: expect.any(Number),
-      },
-    });
-    expect(f.command("budget").result).toMatchObject({
-      state: "partial",
-      receipt: { state: "observed" },
-      diagnostics: { phase: "tool_preflight", reason: "action_limit" },
-    });
+    expect(result.accepted).toBe(true);
+    expect(f.device.inputs).toHaveLength(5);
+    expect(new Set(f.device.inputs).size).toBe(5);
+    expect(
+      f.store
+        .all<ActionReceipt>("action")
+        .every((receipt) => receipt.state === "observed"),
+    ).toBe(true);
+    await f.send("budget", "Select the five fields.");
+    expect(f.device.inputs).toHaveLength(5);
     f.store.close();
   });
 });
