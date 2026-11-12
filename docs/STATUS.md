@@ -2,14 +2,48 @@
 
 November 12, 2026 — America/New_York.
 
-**Backend/media source `84d09dceb35c2b7252adcb272de6ff6f5efa1ab7` is deployed.
-The companion remains 0.2.1 (`d10c801`), gateway remains at `8efbacc`, and the
-project's installed Codex skill and connector build match `84d09dc`.
-The historical input block is resolved; one native-control task passed in the
-originating Codex chat. Broader physical qualification remains pending.**
+**Backend/media source `0814e50` is deployed with the speech repair, bounded
+logging and live subtitles. This hosted rollout did not install or restart the
+companion, gateway or connector. The new speech/subtitle experience still awaits
+a separately authorized physical call; no call was made during deployment.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
-## Live captions and agent introduction — November 12 (local only)
+## Speech, logging and subtitles rollout — November 12 (deployed)
+
+The user authorized both hosted updates and explicitly withheld another call.
+Release `0814e50` includes `42243fc` (speech/logging), `f496483` (subtitles and
+introduction), and preservation of an already-deployed multi-Mac gateway routing
+patch discovered during read-only preflight. That patch had not been in this
+checkout; its source was reconciled before packaging so deployment would not
+regress current routing. No gateway/companion installation or routing transfer
+was performed.
+
+- Backend: `9ed4f88e-d2d9-4d9d-9384-82f3687e13b6` — successful, one running instance.
+- Media: `3115494a-c9d2-4666-aef2-e5a3417280b7` — successful, one running instance.
+- Actual predecessors: backend `06da11f3-b841-4bb0-9d7b-2a25b28a101e` and media
+  `5d2f9655-a82c-4e9a-8767-16fbb3133440`; both are removed.
+
+Preflight and final checks showed no active calls, active leases or pending/unknown
+effects. The idle backend was stopped while media changed, then the new backend
+was deployed. Only tracked-source archives were uploaded. No protected variable
+changed; all 54 deployed JavaScript modules and 12 Python modules match the
+release. Public health checks passed and the Mac gateway reconnected.
+
+All media table hashes, backend effects/events and message cursor hashes are
+unchanged. Backend entity counts are unchanged, but its aggregate hash changed;
+restart recovery marked a historical non-none control executor uncertain, preserving
+its unresolved outcome. It was not cleared or replayed. Five operational-state
+hashes changed: heartbeat, native readiness, line-idle readiness and two device
+readiness caches. No database/cursor restoration or unknown-effect retry occurred.
+
+Validation: 571 TypeScript tests, typecheck/build, and 191 media tests passed.
+Synthetic checks inside the deployed media container verified shrinking-window
+speech assembly, caption receipt states, subtitle rendering, privacy clearing and
+allowlisted diagnostics without audio/provider/native input. These checks do not
+establish handset acceptance. No call, outbound message, fallback control, remote
+main promotion or automatic redial was performed by this rollout.
+
+## Live captions and agent introduction — November 12 (implementation record)
 
 The previous caption scene was not enabled by backend call policy, was replaced
 by screen video during sharing, and cleared its text during agent speech. The
@@ -36,9 +70,9 @@ including two subsequently added policy-refresh/stale-callback regressions (189
 media tests validated in total). Synthetic rendered frames were inspected at
 1280×720 and in a portrait crop. No microphone, provider, live call, native control,
 deployment or installation was used. Handset readability and timing still require
-a separately authorized physical test. Production remains at `84d09dc`.
+a separately authorized physical test. Production was still at `84d09dc` during implementation; see the rollout above.
 
-## Missed-speech repair — November 12 (local only, not deployed)
+## Missed-speech repair — November 12 (implementation record)
 
 The last call's metadata cannot establish where every missing phrase was lost.
 Local replay did establish three defects in the deployed assembler/arbitration:
@@ -74,9 +108,9 @@ a real local WebSocket-to-HTTP pipeline with five consecutive synthetic requests
 malformed events, capture reset, diagnostic redaction/retention, and the container
 COPY/import packaging check. These are local tests, not physical acceptance.
 No deployment, installation, live call or native-control action was performed.
-Production remains at `84d09dc`; half-duplex speech capture and future handset
-qualification remain explicit limitations. Deployment and another call require
-the user's subsequent authorization.
+Production was still at `84d09dc` during implementation. The later rollout is
+recorded above; half-duplex capture and future handset qualification remain explicit
+limitations. Another call still requires separate user authorization.
 
 ## Speech/setup live retest — November 12 (speech failed)
 

@@ -2,16 +2,16 @@
 
 Prepared November 12, 2026 (America/New_York). Version 0.2.0.
 
-**Current release:** backend/media source `84d09dc` is deployed; gateway remains
-at `8efbacc`, companion remains 0.2.1/build 3 (`d10c801`), and the project Codex
-skill/connector are updated to `84d09dc`. The historical
-receipt migration is complete. A real Codex desktop call demonstrated spoken
-instructions driving native typing/send, confirmed visible on the handset. The
-user intentionally hung up before two minutes. Fallback, Claude physical use,
-reconnect and duration beyond five minutes remain unqualified. See [STATUS.md](STATUS.md)
-and [NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md).
+**Current release:** backend/media source `0814e50` is deployed with speech
+repair, diagnostics and subtitles. Backend deployment is
+`9ed4f88e-d2d9-4d9d-9384-82f3687e13b6`; media deployment is
+`3115494a-c9d2-4666-aef2-e5a3417280b7`. Hosted module hashes and health were
+verified. The companion, gateway and installed connector were not changed by this
+rollout. The speech/subtitle experience awaits a separately authorized physical
+call. Historical native-control observations remain limited to the scopes recorded
+in [STATUS.md](STATUS.md) and [NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md).
 
-The subsequent speech/setup rollout was explicitly authorized with no further
+The earlier `84d09dc` speech/setup rollout was explicitly authorized with no further
 call. Backend deployment `9ea80a02-2896-4197-9166-98281d3c7b0e` and media deployment
 `d538d1a1-df17-4c70-a3da-41fdb58e00ac` succeeded from a tracked-source archive.
 Running code, unchanged configuration and durable state were verified, including
@@ -41,6 +41,14 @@ existing production behavior alongside `42243fc` and `f496483`. Regression tests
 cover two declared gateways, duplicate declaration rejection, ambiguous routing,
 legacy single-gateway compatibility and device-qualified cleanup. No gateway or
 companion binary/configuration is included in this hosted-only deployment.
+
+The reconciled release deployed successfully from a tracked-source archive. The
+idle backend was stopped for the coordinated transition and then restored using
+the updated artifact. Both predecessors are removed. Configuration hashes, media
+ledgers, backend effects/events and message cursor were preserved; a historical
+control record was conservatively marked uncertain by restart recovery, not
+cleared/replayed. Readiness caches refreshed. No new call was made. See STATUS.md
+for final verification counts and the remaining physical acceptance boundary.
 
 ## Prepared scope
 
