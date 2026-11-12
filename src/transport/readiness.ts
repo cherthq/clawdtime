@@ -6,6 +6,15 @@ export class PreflightBlocked extends DomainError {
     super(503, message);
   }
 }
+/** Thrown only when the native dial request was provably never sent. */
+export class NotDialed extends DomainError {
+  constructor(
+    message: string,
+    readonly phase: "media_prepare" | "pre_dial_check",
+  ) {
+    super(409, message);
+  }
+}
 export type CheckStatus = "pass" | "fail" | "unknown" | "not_applicable";
 export interface ReadinessCheck {
   id: string;

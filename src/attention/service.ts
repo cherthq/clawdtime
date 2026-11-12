@@ -4,6 +4,7 @@ import {
 } from "./termination.js";
 import { setupInvitationRetirementValid } from "../pairing/retired-setup.js";
 import {
+  NotDialed,
   PreflightBlocked,
   freshEvidence,
   type TransportReadiness,
@@ -20,6 +21,7 @@ import type {
   CallSession,
   ControlLease,
   ActionReceipt,
+  EffectReceipt,
   Transport,
   RequestAttentionInput,
   SessionRegistration,
@@ -1215,6 +1217,15 @@ export class ClawdTime {
             }
           });
         } catch (error) {
+          if (error instanceof NotDialed && effect.kind === "call") {
+            this.store.transaction(() =>
+              this.closeUndialedCall(effect, {
+                reason: "Call preparation failed before any native dial was sent.",
+                phase: error.phase,
+              }),
+            );
+            continue;
+          }
           if (error instanceof PreflightBlocked) {
             this.store.putEffect({
               ...effect,
@@ -1250,6 +1261,143 @@ export class ClawdTime {
     } finally {
       this.draining = false;
     }
+  }
+  /** Terminal bookkeeping for a call whose native dial was provably never sent. */
+  private closeUndialedCall(
+    effect: EffectReceipt,
+    detail: Record<string, unknown>,
+  ) {
+    const now = this.clock();
+    this.store.putEffect({
+      ...effect,
+      state: "failed",
+      result: { ...detail, dialSent: false, replayAllowed: false },
+    });
+    const request = this.store.get<AttentionRequest>(
+      "attention",
+      String(effect.payload.requestId),
+    );
+    if (request && (!terminal.has(request.state) || request.state === "unknown"))
+      this.store.put("attention", { ...request, state: "failed" });
+    const call = this.store.get<CallSession>(
+      "call",
+      String(effect.payload.localCallId),
+    );
+    if (call && call.state !== "ended")
+      this.store.put("call", { ...call, state: "ended", endedAt: now });
+  }
+  /**
+   * Lead-only operator reconciliation of a call recorded as unknown before the
+   * NotDialed distinction existed. The original media record must prove the
+   * native dial was never sent: it never received sealed credentials (which
+   * precede the dial) nor a provider call ID. Insert-only audit; never redials.
+   */
+  reconcileUndialedCall(input: {
+    requestId: string;
+    evidenceReference: string;
+  }) {
+    const refuse = () => {
+      throw new DomainError(
+        409,
+        "Undialed-call proof is incomplete; preserve the unknown outcome and do not replay.",
+      );
+    };
+    const digest = (v: unknown) => hash(JSON.stringify(v));
+    return this.store.transaction(() => {
+      const effectId = `${input.requestId}:call`,
+        key = `undialed-call-reconciliation:${effectId}`;
+      const previous = this.store.event<{
+        evidenceReference: string;
+        effectId: string;
+      }>(key);
+      if (previous) {
+        if (
+          previous.fingerprint !== digest(previous.result) ||
+          previous.result.evidenceReference !== input.evidenceReference
+        )
+          return refuse();
+        return previous.result;
+      }
+      if (!/^sha256:[a-f0-9]{64}$/.test(input.evidenceReference))
+        return refuse();
+      const now = this.clock();
+      const effect = this.store.effect(effectId);
+      const attention = this.store.get<AttentionRequest>(
+        "attention",
+        input.requestId,
+      );
+      if (
+        !effect ||
+        effect.kind !== "call" ||
+        effect.state !== "unknown" ||
+        effect.payload.requestId !== input.requestId ||
+        typeof effect.payload.localCallId !== "string" ||
+        effect.result?.callId !== undefined ||
+        !attention ||
+        attention.state !== "unknown" ||
+        attention.deadline > now
+      )
+        return refuse();
+      const localCallId = effect.payload.localCallId;
+      const call = this.store.get<CallSession>("call", localCallId);
+      const media = this.store.get<{
+        id: string;
+        requestId: string;
+        state: string;
+        credentials?: string;
+        providerCallId?: string;
+      }>("media", localCallId);
+      if (
+        !call ||
+        call.requestId !== attention.id ||
+        call.state !== "unknown" ||
+        call.providerCallId !== undefined ||
+        !media ||
+        media.requestId !== attention.id ||
+        media.state !== "unknown" ||
+        media.credentials !== undefined ||
+        media.providerCallId !== undefined ||
+        this.store
+          .effects()
+          .some(
+            (e) =>
+              e.id !== effectId &&
+              e.payload.requestId === attention.id &&
+              ["pending", "running", "unknown"].includes(e.state),
+          )
+      )
+        return refuse();
+      const audit = {
+        version: 1,
+        reason: "media_prepare_failed_before_native_dial",
+        effectId,
+        requestId: attention.id,
+        pairingId: attention.pairingId,
+        localCallId,
+        originalEffect: effect,
+        effectHash: digest(effect),
+        attentionHash: digest(attention),
+        callHash: digest(call),
+        mediaHash: digest(media),
+        evidenceReference: input.evidenceReference,
+        at: now,
+        dialSent: false,
+        replayAllowed: false,
+      };
+      this.store.recordEvent(key, digest(audit), audit); // insert-only
+      this.store.put("media", {
+        ...media,
+        state: "closed",
+        notDialed: { phase: "media_prepare", at: now },
+      });
+      this.closeUndialedCall(effect, {
+        reason:
+          "Operator reconciled: the media record proves no native dial was sent.",
+        phase: "media_prepare",
+        reconciliation: key,
+      });
+      return audit;
+    });
   }
   doctor(raw: string) {
     const c = this.credential(raw),

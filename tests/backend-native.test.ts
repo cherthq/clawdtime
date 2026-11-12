@@ -817,7 +817,125 @@ describe("native protocol integration without live traffic", () => {
     expect(
       f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
     ).toBe(false);
-    expect(f.store.effects("unknown")).toHaveLength(1);
+    // No dial was sent, so the outcome is known: failed, not unknown.
+    expect(f.store.effects("unknown")).toHaveLength(0);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+  });
+  it("closes a call whose media preparation fails before any dial and frees the line", async () => {
+    const f = fixture(),
+      original = f.transport.media.bind(f.transport);
+    f.transport.media = async (path, body) => {
+      if (path === "/sessions") throw new Error("Media readiness not confirmed.");
+      return original(path, body);
+    };
+    await f.app.drain();
+    const localId = mediaSessionId(f.attention.id);
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toBe(false);
+    expect(f.store.effect(`${f.attention.id}:call`)).toMatchObject({
+      state: "failed",
+      result: { dialSent: false, replayAllowed: false, phase: "media_prepare" },
+    });
+    expect(f.store.get<CallSession>("call", localId)?.state).toBe("ended");
+    expect(f.store.get<AttentionRequest>("attention", f.attention.id)?.state).toBe("failed");
+    expect(f.store.get<{ state: string }>("media", localId)?.state).toBe("closed");
+    await f.app.drain();
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toBe(false);
+    const next = f.app.requestAttention(f.agent.token, {
+      taskId: "task",
+      idempotencyKey: "second",
+      reason: "decision",
+      question: "Fixture question",
+    });
+    expect(next.state).toBe("queued");
+  });
+  it("keeps the outcome unknown when the native dial itself fails", async () => {
+    const f = fixture(),
+      original = f.transport.calls.bind(f.transport);
+    f.transport.calls = async (path, body, key) => {
+      if (path === "/api/v1/calls") throw new Error("socket hang up");
+      return original(path, body, key);
+    };
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("unknown");
+    expect(
+      f.store.get<CallSession>("call", mediaSessionId(f.attention.id))?.state,
+    ).toBe("unknown");
+  });
+});
+
+describe("operator reconciliation of a legacy undialed unknown call", () => {
+  const evidence = `sha256:${"a".repeat(64)}`;
+  function legacyUnknown(media: Record<string, unknown> = {}) {
+    const f = fixture(),
+      localId = mediaSessionId(f.attention.id),
+      effectId = `${f.attention.id}:call`;
+    f.store.putEffect({
+      id: effectId,
+      kind: "call",
+      state: "unknown",
+      payload: {
+        requestId: f.attention.id,
+        pairingId: f.attention.pairingId,
+        localCallId: localId,
+      },
+      createdAt: f.attention.createdAt,
+      result: { reason: "External outcome uncertain; reconcile the existing effect ID." },
+    });
+    f.store.put("attention", { ...f.attention, state: "unknown", deadline: Date.now() - 1 });
+    f.store.put<CallSession>("call", {
+      id: localId,
+      requestId: f.attention.id,
+      pairingId: f.attention.pairingId,
+      state: "unknown",
+      remoteParticipantQualified: false,
+      createdAt: f.attention.createdAt,
+    });
+    f.store.put("media", { id: localId, requestId: f.attention.id, state: "unknown", ...media });
+    return { ...f, localId, effectId };
+  }
+  it("closes only with exact pre-dial proof, audits once and never dials", async () => {
+    const f = legacyUnknown();
+    const audit = f.app.reconcileUndialedCall({ requestId: f.attention.id, evidenceReference: evidence });
+    expect(audit).toMatchObject({ dialSent: false, replayAllowed: false, effectId: f.effectId });
+    expect(f.app.reconcileUndialedCall({ requestId: f.attention.id, evidenceReference: evidence })).toEqual(audit);
+    expect(() =>
+      f.app.reconcileUndialedCall({ requestId: f.attention.id, evidenceReference: `sha256:${"b".repeat(64)}` }),
+    ).toThrow("incomplete");
+    expect(f.store.effect(f.effectId)?.state).toBe("failed");
+    expect(f.store.get<CallSession>("call", f.localId)?.state).toBe("ended");
+    await f.app.drain();
+    expect(f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls")).toBe(false);
+    expect(
+      f.app.requestAttention(f.agent.token, {
+        taskId: "task",
+        idempotencyKey: "again",
+        reason: "decision",
+        question: "Fixture question",
+      }).state,
+    ).toBe("queued");
+  });
+  it.each([
+    ["sealed credentials", { credentials: "sealed" }],
+    ["a provider call ID", { providerCallId: nativeCallId }],
+    ["a non-unknown media state", { state: "dialing" }],
+  ])("refuses when the media record has %s", (_, media) => {
+    const f = legacyUnknown(media);
+    expect(() =>
+      f.app.reconcileUndialedCall({ requestId: f.attention.id, evidenceReference: evidence }),
+    ).toThrow("incomplete");
+    expect(f.store.effect(f.effectId)?.state).toBe("unknown");
+    expect(f.store.event(`undialed-call-reconciliation:${f.effectId}`)).toBeUndefined();
+  });
+  it("refuses before the attention deadline has passed", () => {
+    const f = legacyUnknown();
+    f.store.put("attention", { ...f.attention, state: "unknown", deadline: Date.now() + 60_000 });
+    expect(() =>
+      f.app.reconcileUndialedCall({ requestId: f.attention.id, evidenceReference: evidence }),
+    ).toThrow("incomplete");
   });
 });
 

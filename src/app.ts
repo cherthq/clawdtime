@@ -495,6 +495,26 @@ export function createApp(
       replayAllowed: false,
     });
   });
+  app.post("/internal/calls/reconcile-undialed", async (c) => {
+    const { requestId, evidenceReference } = z
+      .object({
+        requestId: z.string().min(1).max(200),
+        evidenceReference: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        acknowledgeUnknown: z.literal(true),
+      })
+      .strict()
+      .parse(await c.req.json());
+    const audit = service.reconcileUndialedCall({
+      requestId,
+      evidenceReference,
+    });
+    return c.json({
+      reconciled: true,
+      effectId: audit.effectId,
+      dialSent: false,
+      replayAllowed: false,
+    });
+  });
   app.post("/internal/setup-invitations/retire", async (c) => {
     if (!options.retireSetupInvitation) return c.notFound();
     const result = options.retireSetupInvitation(
