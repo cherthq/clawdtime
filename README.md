@@ -79,9 +79,10 @@ The hosted backend/media and gateway run the agent-owned protocol; companion
 instructions drove native typing and a send in Messages. The human confirmed
 seeing the result on the phone and intentionally hung up.
 
-Both CLI clients passed synthetic multi-turn checks. Claude's physical flow,
-ClawdTime fallback, broader native control, reconnect and calls beyond five minutes
-remain unqualified. Voice is half-duplex. A screen-frame timeout was recorded near
+Both CLI clients passed synthetic multi-turn checks. A real Claude Code call
+(voice both ways plus screen sharing, no input) also connected from its originating
+chat. Claude native control, ClawdTime fallback, broader native control, reconnect
+and calls beyond five minutes remain unqualified. Voice is half-duplex. A screen-frame timeout was recorded near
 the latest hangup, so long-duration sharing reliability is still an open check.
 This is a deployed internal pilot, not a generally qualified public release.
 

@@ -16,3 +16,4 @@ artifacts/
 .mcp.json
 .codex/config.toml
 .agents/skills/clawdtime/
+.claude/skills/clawdtime/

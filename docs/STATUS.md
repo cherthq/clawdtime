@@ -8,6 +8,31 @@ The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Multiple paired Macs and first Claude Code call — November 12
+
+The media relay previously held exactly one gateway socket, so a second paired Mac
+was refused with 409 while another was connected. Gateways now declare the device
+IDs they serve (`X-ClawdTime-Devices`); media keeps one socket per Mac and routes
+each request by device (path, explicit device, body `deviceId`, or the socket that
+created the lease). A gateway without a declaration (older build) remains a single
+legacy socket used only for undeclared devices; the same device cannot connect
+twice. All Macs still share one gateway key; per-device keys are a follow-up.
+Media source `7001651` was deployed to the independent media service with zero
+active sessions. Validation: 143 media tests (5 new) and 29 gateway tests.
+
+A second tester and Mac were added to the backend live configuration (private
+values are held only in the host secret store). That Mac was set up from a Claude
+Code chat: pairing, installed skill, companion build with Screen Recording and
+Accessibility granted, local Enable, and an always-on gateway LaunchAgent.
+
+One user-authorized call was placed from that same Claude Code chat over the
+foreground bridge, registered with `nativeControl: none`. Four voice turns arrived
+in order; two spoken replies completed playback and a third was refused as stale
+when newer speech arrived. The human confirmed seeing the shared screen. 153 frames
+were received with the last gateway request succeeding; the call ended after about
+98 seconds with `remote_participant_disconnected`, not asserted to be intentional.
+Lease released, zero active sessions. Claude native control remains unqualified.
+
 ## Production promotion and documentation — November 12
 
 The user approved promoting the completed release and documentation to remote
