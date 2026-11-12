@@ -33,11 +33,11 @@ def gateway_origin(value):
     raise ValueError('Gateway must use HTTPS or a loopback/Tailscale IP')
 
 
-async def gateway_request(owner,method,path,body=None,frame=False):
+async def gateway_request(owner,method,path,body=None,frame=False,device=None):
     # GET receipt reconciliation is also available after Session objects are
     # lost on restart; persisted lease/action identities remain the authority.
     if owner.env.get('DEVICE_GATEWAY_RELAY')=='true':
-        return await owner.device_relay.request(method,path,body)
+        return await owner.device_relay.request(method,path,body,device=device)
     origin=gateway_origin(owner.env['DEVICE_GATEWAY_URL'])
     key=owner.env['DEVICE_GATEWAY_KEY']
     if len(key)<32:raise ValueError('Gateway credential too short')
@@ -214,11 +214,11 @@ class ScreenController:
         task.add_done_callback(self.cleanup_tasks.discard)
         return task
 
-    async def request(self,method,path,body=None,frame=False):
+    async def request(self,method,path,body=None,frame=False,device=None):
         phase='frame_request' if frame else 'lease_renew' if path.endswith('/renew') else 'lease_create' if method=='POST' else None
         started=time.monotonic()
         try:
-            result=await gateway_request(self.owner,method,path,body,frame)
+            result=await gateway_request(self.owner,method,path,body,frame,device=device or (self.selection or {}).get('deviceId'))
         except Exception as error:
             if phase:
                 category='timeout' if isinstance(error,TimeoutError) else 'connection' if isinstance(error,ConnectionError) else 'invalid_response' if isinstance(error,ValueError) else 'other'
@@ -230,7 +230,7 @@ class ScreenController:
     async def release(self,selection):
         try:
             import json
-            status,raw,_=await self.request('DELETE','/v1/leases/'+selection['leaseId'])
+            status,raw,_=await self.request('DELETE','/v1/leases/'+selection['leaseId'],device=selection.get('deviceId'))
             return status==200 and json.loads(raw).get('released') is True
         except Exception:
             return False

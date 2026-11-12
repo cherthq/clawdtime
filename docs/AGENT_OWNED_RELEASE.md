@@ -26,6 +26,22 @@ source has not changed since its successful deployment; repository promotion
 includes the installed companion repair and current documentation. The preparation
 scope below is historical, not a statement that deployment or installation is pending.
 
+## November 12 speech/subtitle rollout reconciliation
+
+The user authorized deploying speech repair, bounded diagnostic logging and live
+subtitles, with no new call. Preflight found zero calls, active leases or unresolved
+effects. Actual pre-rollout deployments were backend
+`06da11f3-b841-4bb0-9d7b-2a25b28a101e` and media
+`5d2f9655-a82c-4e9a-8767-16fbb3133440`, superseding the older IDs above.
+The backend matched the recorded source except for the intended release changes.
+Media contained the older `8efbacc` speech implementation plus untracked production
+changes in `device_relay.py` and `devices.py` for multiple declared Mac gateways.
+Those exact routing changes were reconciled into source before rollout, preserving
+existing production behavior alongside `42243fc` and `f496483`. Regression tests
+cover two declared gateways, duplicate declaration rejection, ambiguous routing,
+legacy single-gateway compatibility and device-qualified cleanup. No gateway or
+companion binary/configuration is included in this hosted-only deployment.
+
 ## Prepared scope
 
 Branch `codex/agent-owned-conversation`, based on `82ab868` (the inspected remote
