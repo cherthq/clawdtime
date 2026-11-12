@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
 import jpeg from "jpeg-js";
-import { runTargetingProbe } from "./media-targeting-fixture.js";
+import {
+  runTargetingProbe,
+  targetingEvaluationCases,
+} from "./media-targeting-fixture.js";
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
@@ -162,6 +165,7 @@ describe("synthetic screenshot-to-textbox SDK targeting", () => {
     expect(result.error).toBeUndefined();
     expect(result.reply).toContain("successfully");
     expect(result.passed).toBe(false);
+    expect(result.grading.typingFocusVerified).toBe(false);
     expect(result.targetValue).toBe("");
     expect(result.otherValue).toBe("");
     expect(result.events).toEqual([]);
@@ -170,13 +174,54 @@ describe("synthetic screenshot-to-textbox SDK targeting", () => {
       "",
     ]);
   }, 20_000);
-  it.each([
-    { width: 1108 },
-    { width: 1280 },
-    { width: 1477, height: 960, captureScale: 0.75 },
-  ])(
-    "uses full screenshot coordinates and verifies the intended textbox: %j",
-    async (options) => {
+  it("rejects correct final text obtained beyond the four-action budget", async () => {
+    const steps = [call("observe", {}, 1)];
+    for (let index = 1; index <= 5; index++)
+      steps.push(
+        call(
+          "click",
+          {
+            frameId: `fixture-frame-${index}`,
+            action: { kind: "click", x: 958, y: 272 },
+          },
+          index + 1,
+        ),
+      );
+    steps.push(
+      call(
+        "type",
+        {
+          frameId: "fixture-frame-6",
+          action: { kind: "type", text: "Hello ClawdTime" },
+        },
+        7,
+      ),
+    );
+    steps.push(
+      response(
+        [{ type: "text", text: "The Title field shows Hello ClawdTime." }],
+        "stop",
+      ),
+    );
+    const model = new MockLanguageModelV3({ doGenerate: steps as never });
+    const result = await runTargetingProbe(model);
+    expect(result.error).toBeUndefined();
+    expect(result.targetValue).toBe("Hello ClawdTime");
+    expect(result.actions).toHaveLength(6);
+    expect(model.doGenerateCalls).toHaveLength(8);
+    expect(result.grading).toEqual({
+      withinActionBudget: false,
+      withinTimeBudget: true,
+      completeActionObservations: true,
+      notesUntouched: true,
+      typingFocusVerified: true,
+    });
+    expect(result.passed).toBe(false);
+  }, 20_000);
+  it.each(targetingEvaluationCases)(
+    "uses full screenshot coordinates and verifies the intended textbox: $name",
+    async ({ options }) => {
+      const expectedText = options.text ?? "Hello ClawdTime";
       let step = 0;
       let modelFailure: unknown;
       const model = new MockLanguageModelV3({
@@ -199,7 +244,7 @@ describe("synthetic screenshot-to-textbox SDK targeting", () => {
                 "type",
                 {
                   frameId: frame.id,
-                  action: { kind: "type", text: "Hello ClawdTime" },
+                  action: { kind: "type", text: expectedText },
                 },
                 step,
               ) as never;
@@ -222,7 +267,10 @@ describe("synthetic screenshot-to-textbox SDK targeting", () => {
       expect(modelFailure).toBeUndefined();
       expect(result.error).toBeUndefined();
       expect(result.passed).toBe(true);
-      expect(result.targetValue).toBe("Hello ClawdTime");
+      expect(Object.values(result.grading).every(Boolean)).toBe(true);
+      expect(result.elapsedMs).toBeGreaterThan(0);
+      expect(result.elapsedMs).toBeLessThan(45_000);
+      expect(result.targetValue).toBe(expectedText);
       expect(result.otherValue).toBe("");
       expect(result.events).toEqual([
         { target: "title", event: "click" },

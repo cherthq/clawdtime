@@ -61,6 +61,14 @@ snapshot. Screen Recording and Accessibility grants remain present; local Enable
 was off at inspection and remains untouched. No billing, model or account setting
 changed. The concise README retains the targeting limitation.
 
+The follow-up offline evaluator now covers native, scaled, mirrored and compact
+textbox layouts. Its held-back DOM grade checks focus before typing, untouched
+neighboring fields, complete action observations, at most four inputs and the
+45-second turn budget. A correct final field reached through six inputs must fail.
+The expanded suite passes 451 tests plus TypeScript/build and independent review.
+These are test-only changes, with no runtime redeployment or newer-model acceptance;
+real-provider qualification still requires access and two fresh passes per layout.
+
 ## Fresh diagnostic call — November 11, after `dd011f4`
 
 The user authorized exactly one new diagnostic call and a factual recap in the
