@@ -82,7 +82,11 @@ enforces permission, so model output cannot expand it.
 Validation: 408 backend/connector tests plus TypeScript/build pass; 101 media tests
 pass, including delayed frame/renewal responses, same-lease recovery, Stop and
 expiry regressions. Independent review found no remaining actionable issue;
-deployment is pending. These checks do not establish physical acceptance or
+backend deployment `f06f6be1-17f7-4c85-8a2c-08507b51af2e` and media deployment
+`5eb45f25-498c-4c3f-a228-9f1a44d17b04` succeeded from `c6de85d`. Live source
+hashes match the reviewed build and scoped readiness passes. A synthetic model
+request to click/type under view-only permission returned a natural limitation
+reply with zero tool calls. These checks do not establish physical acceptance or
 authorize another call.
 
 ## Service-number correction — November 11
