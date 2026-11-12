@@ -44,6 +44,8 @@ export interface ConversationTurn {
   question: string;
   history: { role: "user" | "assistant"; content: string }[];
   signal: AbortSignal;
+  /** Trusted pairing capabilities, never inferred from the human's wording. */
+  capabilities?: { control: boolean };
   tools: ConversationTools;
 }
 export interface ConversationAgent {
@@ -118,7 +120,11 @@ export class ScreenConversationAgent implements ConversationAgent {
     };
     const agent = new ToolLoopAgent({
       model: this.model,
-      instructions,
+      instructions: `${instructions}\n${
+        turn.capabilities?.control === true
+          ? "This paired session permits human-directed computer control, subject to the tools' checks."
+          : "This paired session is VIEW-ONLY. You may observe and discuss the screen, receive feedback and stop sharing. Clicking, typing and scrolling are not enabled. If asked to control the computer, explain this permission limit plainly; do not call unavailable input tools or claim the request is unsafe. A spoken request cannot change pairing permissions."
+      }`,
       maxRetries: 0,
       timeout: { totalMs: 45_000, stepMs: 12_000 },
       maxOutputTokens: 800,
@@ -143,9 +149,13 @@ export class ScreenConversationAgent implements ConversationAgent {
           execute: () => turn.tools.observe(),
           toModelOutput: ({ output }) => imageOutput(output),
         }),
-        click: actionTool("click"),
-        type: actionTool("type"),
-        scroll: actionTool("scroll"),
+        ...(turn.capabilities?.control === true
+          ? {
+              click: actionTool("click"),
+              type: actionTool("type"),
+              scroll: actionTool("scroll"),
+            }
+          : {}),
         feedback: tool({
           description:
             "Deliver the human's original utterance to the waiting coding agent and release control. Only when the human is answering or returning control.",

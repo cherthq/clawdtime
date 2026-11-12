@@ -413,6 +413,7 @@ export class HumanRouter {
         question: request.question,
         history: this.history.get(request.id)?.messages ?? [],
         signal: controller.signal,
+        capabilities: { control: pairing.allowControl },
         tools,
       });
       reply = z.string().trim().min(1).max(900).parse(result.reply);

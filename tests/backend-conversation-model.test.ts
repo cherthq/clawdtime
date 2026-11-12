@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
 import {
   ScreenConversationAgent,
@@ -34,6 +34,7 @@ function turn(): ConversationTurn {
     text: "Click the title and type Hello.",
     question: "Choose a title.",
     history: [],
+    capabilities: { control: true },
     signal: new AbortController().signal,
     tools: {
       observe: async () => image("one"),
@@ -54,6 +55,66 @@ function turn(): ConversationTurn {
   };
 }
 describe("conversation SDK contract", () => {
+  it.each([false, undefined])(
+    "excludes input tools when control permission is %s, even for an explicit click request",
+    async (control) => {
+      const input = turn();
+      input.capabilities = control === undefined ? undefined : { control };
+      const act = vi.fn(input.tools.act);
+      input.tools.act = act;
+      const model = new MockLanguageModelV3({
+        doGenerate: output(
+          [
+            {
+              type: "text",
+              text: "This call allows viewing only, so I cannot click or type.",
+            },
+          ],
+          "stop",
+        ) as never,
+      });
+      await new ScreenConversationAgent(
+        { frameImage: async () => image("unused") },
+        model,
+      ).run(input);
+      expect(model.doGenerateCalls[0]!.tools!.map((tool) => tool.name)).toEqual(
+        ["observe", "feedback", "screenFeedback", "stop"],
+      );
+      expect(JSON.stringify(model.doGenerateCalls[0]!.prompt)).toMatch(
+        /view.only/i,
+      );
+      expect(act).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not dispatch a hallucinated click tool in a view-only conversation", async () => {
+    const input = turn();
+    input.capabilities = { control: false };
+    const act = vi.fn(input.tools.act);
+    input.tools.act = act;
+    const model = new MockLanguageModelV3({
+      doGenerate: [
+        output([
+          call("unauthorized", "click", {
+            frameId: "one",
+            action: { kind: "click", x: 0.5, y: 0.5 },
+          }),
+        ]),
+        output(
+          [{ type: "text", text: "This call allows viewing only." }],
+          "stop",
+        ),
+      ] as never,
+    });
+    const result = await new ScreenConversationAgent(
+      { frameImage: async () => image("unused") },
+      model,
+    ).run(input);
+    expect(result.reply).toBe("This call allows viewing only.");
+    for (const options of model.doGenerateCalls)
+      expect(options.tools!.map((tool) => tool.name)).not.toContain("click");
+    expect(act).not.toHaveBeenCalled();
+  });
   it("uses a single bounded model loop with strict tools and actual image results between inputs", async () => {
     const model = new MockLanguageModelV3({
       doGenerate: [

@@ -20,6 +20,7 @@ import type { ConversationTurn } from "../src/control/conversation.js";
 import { ScriptedConversationAgent } from "./backend-conversation-fixture.js";
 async function fixture(
   script?: (turn: ConversationTurn) => Promise<{ reply: string }>,
+  allowControl = true,
 ) {
   const store = new Store(),
     service = new ClawdTime(store, new SimulationTransport()),
@@ -42,7 +43,7 @@ async function fixture(
       deviceId: "mac",
       displayId: "1",
       allowView: true,
-      allowControl: true,
+      allowControl,
     });
   const agent = service.registerSession(paired.token, {
     adapter: "codex",
@@ -104,6 +105,24 @@ const focus = `focus-unverified:${createHash("sha256")
   .digest("hex")}`;
 
 describe("one conversational agent with bounded screen tools", () => {
+  it.each([false, true])(
+    "passes actual pairing control permission %s to the conversational model",
+    async (allowControl) => {
+      const seen: ConversationTurn[] = [];
+      const f = await fixture(async (turn) => {
+        seen.push(turn);
+        return { reply: "I can explain the current call permissions." };
+      }, allowControl);
+      try {
+        await f.send("capability_fixture", "Click the title and type Hello.");
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.capabilities).toEqual({ control: allowControl });
+        expect(f.store.all("action")).toHaveLength(0);
+      } finally {
+        f.store.close();
+      }
+    },
+  );
   it("executes compound natural request with one continuous lease and fresh observation between each action", async () => {
     const f = await fixture(async (t) => {
       expect(t.text).toBe(

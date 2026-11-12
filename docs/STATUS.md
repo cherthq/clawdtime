@@ -51,8 +51,9 @@ the corrected media build. It emitted Mac screen video from 00:35:17 through
 reached the conversation harness: three completed, two failed with
 `frame_unavailable`, and one failed with `planner_unavailable`. The user reported
 repeated “I couldn't safely act on that request” replies. That sentence was a
-fixed error fallback, not evidence of a model safety refusal. No computer input
-was requested by the test or recorded. The lead canceled the unsuccessful test;
+fixed error fallback, not evidence of a model safety refusal. The user subsequently clarified that they had asked for clicks and typing,
+although this pairing and the approved setup test were explicitly view-only. No
+computer input was recorded. The lead canceled the unsuccessful test;
 worker/media cleanup, released viewing lease and terminal acknowledgement are
 confirmed. Screen visibility, feedback continuation and Messages recap acceptance
 remain unverified for this attempt.
@@ -73,8 +74,12 @@ step timeouts), invalid final reply and other errors. Only status codes, step
 counts, durations and allowlisted categories are retained; raw errors, prompts,
 screens and audio remain excluded. Spoken/text fallback wording now describes
 processing, timeout or missing-frame failure instead of implying unsafe intent.
+The harness now passes trusted pairing capabilities into the conversation agent;
+view-only sessions expose no click/type/scroll tools and explain that limitation.
+Missing capability metadata defaults to view-only. The router still independently
+enforces permission, so model output cannot expand it.
 
-Validation: 403 backend/connector tests plus TypeScript/build pass; 101 media tests
+Validation: 408 backend/connector tests plus TypeScript/build pass; 101 media tests
 pass, including delayed frame/renewal responses, same-lease recovery, Stop and
 expiry regressions. Independent review found no remaining actionable issue;
 deployment is pending. These checks do not establish physical acceptance or
