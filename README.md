@@ -42,8 +42,8 @@ No command prefixes or confirmation codes. Local **Stop** always stays available
 **Internal pilot:** an available, locally enabled Mac and an operator-provided
 build are required; public app downloads aren’t ready. Voice takes turns rather
 than supporting interruptions. Screen/text return passed on an earlier configuration;
-the latest Astra medium call produced user-confirmed typing in Gmail, then
-disconnected after further commands. Eight offline textbox trials passed through
+an Astra medium call produced user-confirmed typing in Gmail; a subsequent call
+disconnected after repeated voice-delivery refusals. Eight offline textbox trials passed through
 the action router; sustained live control and current return-to-coding remain
 unverified. An offline transcription shutdown race is fixed; the prior disconnect's
 cause is still unconfirmed. Automatic message likes, standalone progress texts, calling

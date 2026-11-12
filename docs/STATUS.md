@@ -2,11 +2,64 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. The latest Astra medium call produced user-confirmed typing in Gmail, then disconnected after further commands. Sustained live control and current return-to-coding acceptance remain pending.**
+**Independent pilot. Live typing in Gmail is human-confirmed; the latest call disconnected after repeated voice-delivery refusals. Sustained live control and current return-to-coding acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. The Claude Code physical call loop remains unverified. Historical
 evidence below does not qualify the current conversational harness.
+
+## Follow-up call: voice-delivery rejection causes hangup — November 11
+
+One fresh explicitly authorized end-to-end call ran on source `25ddf8a` with the
+existing installation and user-enabled sharing. The user reported getting almost
+to sending a message before another apparent timeout/hangup. No message send is
+confirmed, and the target application was not independently inspected. Three
+native input receipts have observed outcomes; these do not establish exact UI
+content or target. Three voice turns completed and were accepted. The screen
+stream received 68 frames over about 56 seconds.
+
+New diagnostics establish the terminating path. On November 12 UTC, the third
+voice callback returned HTTP200 at 04:24:35.463 after 27,005ms. The next four
+callback requests returned HTTP409 at 35.489, 35.770, 36.303 and 37.334, each in
+3–6ms. Those intervals match the existing delivery worker's 0.25/0.5/1-second
+retry backoffs. Media recorded its first failure as `task_failed`, category
+`segment_delivery`, at 37.347. Backend recorded `media_failure` and created the
+end intent at 37.377–37.378; media then closed. Thus repeated backend refusals
+caused the worker to fail the call; these requests did not hit an HTTP timeout.
+The connector heartbeat was only 1,266ms old, the request deadline was still
+minutes away, and screen frames were arriving without a screen-stop/gateway error.
+
+The strongest trigger explanation is queued speech exceeding the backend's
+10-second freshness window while the previous 27-second turn ran. Transcription
+can continue queuing while the media delivery worker awaits the complete model
+turn. Backend freshness validation runs before command persistence/deduplication;
+media retries the unchanged rejected segment four times, then treats exhaustion
+as call-fatal. Two independent read-only synthetic probes reproduced that path,
+including HTTP409 `Stale speech` through the actual app/router and the media
+failure sequence. No code, configuration, deployment or retry policy was changed.
+
+The exact live 409 response body/queued-segment timestamp was not retained.
+Generic routing/storage failures also map to409, so stale speech is strongly
+supported rather than conclusively established. The three stored turns contain
+no response/Stop result, the request was still awaiting input at failure, and the
+call had not been marked terminal before the media failure. Those observations
+argue against normal completion, request expiry or heartbeat loss as the trigger.
+This does not retroactively prove the cause of the earlier call.
+
+The recommended repair is recoverable handling of expired/superseded speech,
+bounded queue admission and age checks, no retry of permanent freshness refusals,
+and allowlisted rejection diagnostics. Keep freshness, Stop, current-session
+authority, stable IDs and uncertain-input protections. Do not increase timeouts,
+retimestamp old speech or replay accepted input as a shortcut. Implementation was
+not requested in this follow-up; the user asked for diagnosis and a report.
+
+Terminal acknowledgement released the exact session for diagnosis only with
+`humanApproval:false`. Test/request were canceled, call/media ended, control lease
+released and all three input outcomes observed. The foreground bridge closed;
+no successful response/ack/resume/complete verification or recap is claimed.
+Seven protected app/configuration files match before/after; the native action
+journal and gateway tables legitimately gained this call's receipts. The one-call
+authorization is used. Another call requires fresh authorization.
 
 ## Disconnect investigation and transcription lifecycle repair — November 11
 
