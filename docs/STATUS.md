@@ -40,8 +40,17 @@ A separate attempt was rejected before observation/input by the gateway key's
 exhausted $1 lifetime budget (HTTP402). After explicit approval, that same key's
 cap was raised to $5 with no reset period, and the remaining four trials passed.
 This used existing credit; no credit purchase or automatic top-up was added.
-No live call was made. The source is reviewed and ready for backend deployment;
-this offline evidence does not establish handset or native desktop acceptance.
+No live call was made. This offline evidence does not establish handset or native
+desktop acceptance.
+
+Source `6a94c11` is deployed to backend
+`39112b96-eb77-400e-b9cd-77e79f5471d6`; its predecessor is removed. Deployed code
+hashes and runtime settings confirm Astra medium with 4096 output tokens. Only
+the backend model and reasoning environment values changed. Media, helper, gateway,
+pairing, permissions, line ownership, message cursor, backend receipts and all eight
+protected installation/configuration files are preserved. Readiness reports zero
+active calls, pending effects or unknown outcomes. Local Enable is currently off;
+it was not changed by this deployment. Another call needs new approval.
 
 ## Supervised textbox call — November 11
 
