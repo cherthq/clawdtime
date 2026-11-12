@@ -2,12 +2,40 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. The latest diagnostic call showed the Mac screen; its textbox targeting failed. The replacement model now passes eight offline targeting trials. Live voice/control and current return-to-coding acceptance remain pending.**
+**Independent pilot. The latest diagnostic call showed the Mac screen; its textbox request sent no input. The replacement model now passes eight offline targeting trials. Live voice/control and current return-to-coding acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. Correct control targeting, natural voice and the Claude Code physical
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
+
+## Supervised textbox call — November 11
+
+One newly authorized call used the deployed qualified model after the user enabled
+sharing locally. The user reported seeing the Mac screen and hearing replies, but
+no action followed the typing request and the call ended. Read-only DOM inspection
+after terminal cleanup found both Title and Notes empty. The backend recorded zero
+native input actions. Media received 44 frames over about 41 seconds, with no
+recorded gateway timeout. This is a failed live control test.
+
+The control diagnostic was `invalid_plan`, phase `tool_preflight`, reason
+`action_limit`, after 17,072ms. Source review explains the zero-input limit: each
+`act` attempt increments its counter before fresh capture; any different JPEG bytes
+or dimensions return a new observation without dispatching input. Four such returns
+consume the budget, and the fifth attempt fails. The metadata supports this path,
+but retained evidence cannot identify which screen content or encoding changed.
+The offline model fixture did not qualify this native pre-dispatch capture behavior.
+Do not weaken freshness or raise the action limit as an assumed fix. This rejection
+does not itself terminate calls; the subsequent disconnect cause is unconfirmed.
+
+The call ended, media closed and its control lease was released. Terminal cleanup
+was acknowledged for diagnosis with `humanApproval:false`; the test was canceled
+without claiming successful feedback/resume acceptance. A separately authorized
+factual Messages recap received an acknowledged transport receipt. All eight
+protected installation/configuration files and native action receipts match their
+pre-call hashes. Pairing, permissions and live-line ownership were preserved.
+No runtime change or deployment followed this call. The one-call authorization is
+used; any further call needs fresh approval.
 
 ## Reasoning-model qualification — November 11
 
