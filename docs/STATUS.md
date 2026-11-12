@@ -8,7 +8,7 @@ feedback → same-chat continuation → Messages recap path passed on the origin
 pilot line. The Claude Code physical call loop remains unverified. Historical
 evidence below does not qualify the current conversational harness.
 
-## Supervised queue retest and production preparation — November 11
+## Supervised queue retest and production release — November 11
 
 One newly authorized call ran on `e03b7d1`. The human reported “a LOT better” and
 “almost there,” then requested diagnosis of the final hangup and production
@@ -52,6 +52,25 @@ Independent review passed, including 102 focused backend tests and five media
 duration regressions. The diagnostic fixture still tests an empty final reply
 after seven tools; a separate adversarial test proves that a tool emitted in the
 reply-only step never executes. No new provider calls were needed for these tests.
+
+Production source `424367c` deployed successfully as backend
+`7aac217a-0201-4309-aafc-114b1acd5936` and media
+`8cc86c8c-7201-4644-b0c8-e1fa10e6b22b`. Exact code hashes match the clean source
+archive; predecessor deployments are removed. Both services return healthy HTTP
+responses, the gateway is connected, the line is idle and there are no active
+calls/media sessions or pending/unknown effects. Runtime configuration hashes,
+message cursor, action/message receipts, media tables, line routing and eight
+installed app/configuration files are preserved. An unused connector session with
+zero owned requests expired during deployment; reconstructing only its prior
+state/epoch reproduces the earlier entity hash, excluding routine heartbeat times.
+No unrelated entity changes were accepted. The Mac remains locally disabled as
+observed after the test; permissions and ACLs remain intact and no lease is active.
+
+The verified source is promoted to `main` by fast-forward, retaining all previous
+history. This is promotion of the existing private hosted deployment, not public
+distribution or a claim of complete physical acceptance. Rollback source is
+`e03b7d1` with unchanged volumes/configuration after fresh idle reconciliation;
+preserve all current receipts and cursors. No additional live call was placed.
 
 ## Recoverable queued speech and direct call startup — November 11
 
