@@ -54,6 +54,19 @@ diagnostic transaction isolation, and preservation of failure history during
 readiness polling. Formatting checks and skill validation passed. The installed
 companion is unchanged. No new call, recap or physical acceptance has been claimed.
 
+Release `dd011f4` deployed successfully from a clean tracked-source archive:
+backend `fc210e75-d686-4c43-89c7-22c9ef00efcb`, media
+`74e2e33f-6697-4d24-b7d6-2ce27aff88b6`. Both prior instances are removed and
+deployed code hashes match the reviewed source. The existing gateway was restarted
+once to load the same source; it reconnected and its diagnostic schema is present.
+The installed companion binary, protected configuration/pairing files, helper
+action journal and gateway lease/action table hashes are unchanged. Backend
+entity/effect/event hashes and the retained event cursor also match the pre-release
+audit. Scoped doctor reports `live_ready`; backend has zero pending/unknown effects
+and active calls, and media has zero active sessions. These checks establish
+readiness and preservation, not resolution of the original timeout or handset
+acceptance. No stopped run was reopened and no new test session was registered.
+
 ## Fresh onboarding and answered-call failure — November 11
 
 The user confirmed that the website greeting sent as iMessage and that the welcome
