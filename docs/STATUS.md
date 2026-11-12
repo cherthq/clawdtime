@@ -3,9 +3,47 @@
 November 12, 2026 — America/New_York.
 
 **Version 0.2.0 source `8efbacc7407a6bad0bbe96f2eb422d0221195a8d` is deployed.
-The companion, gateway and installed Codex connector are updated. Physical
-qualification remains pending; input control is blocked by retained legacy receipts.**
+The companion is now 0.2.1 (`d10c801`) and the installed skill is updated.
+The historical input block is resolved; one native-control task passed in the
+originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
+
+## Approved repair installation and native-control test — November 12
+
+The user approved companion source `d10c801`, its audited migration, the skill
+update and one further end-to-end call. Companion 0.2.1/build 3 was installed with
+the original signing identity. Dry-run and application both reconciled 41 records:
+37 historically observed, four historically unverified, zero input blockers.
+Original journal bytes and protected config/policy hashes are unchanged. Both
+macOS permission checks and gateway readiness pass. The owned skill was updated;
+pairing, MCP configuration and hosted backend/media source `8efbacc` are unchanged.
+
+The new foreground v2 run declared verified native desktop/shared-surface support
+in this same chat. During the call, the human requested a message in the selected
+Messages conversation. The agent acquired native execution at epoch 1, used its
+normal native computer tool to type and send once, observed the new message in
+that conversation, and released ownership to none at epoch 2. The human explicitly
+confirmed seeing it sent on the phone and intentionally hanging up. This qualifies
+one voice-to-native-input task with actual UI outcome and handset observation;
+it does not prove recipients read the message or qualify all native tools.
+The native tool explicitly blocks controlling the Codex app itself; that platform
+restriction is separate from the repaired ClawdTime handoff.
+
+Five voice segments reached this same session, including one instruction split
+across three segments. A later fragment's executing transition was definitively
+rejected while earlier fragments remained unfinished; processing the earliest
+segment succeeded. No input was repeated. One spoken reply was accepted and
+playing, then canceled at call cleanup; complete playback was not established.
+The call ended under two minutes, so sustained connection beyond five minutes
+remains unqualified. Screen diagnostics recorded 83 received frames and a
+2-second relay timeout shortly before the participant disconnected. The user's
+intentional hangup is confirmed; the timeout is retained as a separate observation,
+not asserted to have caused the hangup or to prove stable long-duration sharing.
+
+The call ended, viewing lease released and foreground bridge exited. The line is
+idle with routing unchanged; no native executor remains active. The helper has no
+active lease and zero input blockers; local Enable remains as the user selected.
+No second call, fallback-control test or Claude physical test is implied.
 
 ## Live v2 test and native-control repair preparation — November 12
 

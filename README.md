@@ -43,8 +43,8 @@ No command prefixes or confirmation codes. Local **Stop** always stays available
 **Hosted private release 0.2.0:** the agent-owned conversation protocol and Mac
 Control Panel are deployed. New connectors default to the agent-owned protocol;
 existing sessions keep their original version. Physical qualification is pending.
-Retained historical input receipts currently block computer-control acceptance;
-viewing and conversation remain separate.
+Companion 0.2.1 resolves the historical receipt block. One voice-directed native
+computer-use task passed in the originating Codex chat, with handset confirmation.
 
 The Control Panel defaults to **Agent tools only**. Native control requires a
 verified tool for the actual shared surface and the client's normal approvals.
@@ -54,8 +54,8 @@ ClawdTime can stop its own input immediately; cancellation of a native tool is
 cooperative and may leave an unresolved outcome.
 
 Both installed CLI clients passed local synthetic multi-turn polling checks.
-Live agent-owned conversation, visible native CUA, client reconnect, and connection
-beyond five minutes remain physically unqualified. Voice is half-duplex. No live
+Broader native CUA, client reconnect, and connection beyond five minutes remain
+physically unqualified. Voice is half-duplex. No live
 call was placed during rollout, and routing remains unchanged. Public downloads
 and phone-initiated coding remain planned. See the [release checklist](docs/AGENT_OWNED_RELEASE.md).
 

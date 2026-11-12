@@ -1,7 +1,9 @@
 # Native control repair
 
 Prepared November 12, 2026. Companion 0.2.1, build 3. Source and internal artifact
-hashes are recorded in the local release manifest. Installation is not yet approved.
+hashes are recorded in the local release manifest. The user approved and completed
+installation of source `d10c801`. One native-control physical task passed; see
+[STATUS.md](STATUS.md) for the user-confirmed outcome and remaining test limits.
 
 The 0.2.0 helper treated old submitted inputs as unresolved because the previous
 helper never recorded its new observation marker. A fresh coding chat cannot fix
@@ -27,9 +29,11 @@ their observation remains unavailable. Neither category asserts application
 success. A protected isolated-copy rehearsal passed dry-run, apply and helper
 journal reopening: zero remaining blockers, 37 historically observed, four
 historically unverified. Original copied journal bytes and live journal bytes
-were unchanged. The live migration has not been applied.
+were unchanged. The approved live migration was subsequently applied with identical counts. The
+original journal and protected configuration hashes remain unchanged; installed
+companion permissions and gateway readiness pass.
 
-## Proposed installation
+## Approved installation procedure
 
 Approval covers the reviewed companion artifact, one audited local reconciliation,
 the project skill update, and the coordinated helper/gateway restart below.
