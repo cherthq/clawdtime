@@ -4,7 +4,11 @@ Independent agent-to-human attention project. Read IMPLEMENTATION_PLAN.md and
 SESSION_PROMPT.md. Source provenance: Apple Teams be47b11fe1317c4747db4121bec37896998b5201.
 Never modify Apple Teams or sibling chert-facetime. Never copy customer/runtime data.
 
-Use codex/ branches. Default simulation/standby. Only the coordinating lead may
+Do not create or use `codex/` branches. Use `main` for this work; when a separate
+branch is needed, use a generic descriptive name (for example, `fix-speech`).
+Preserve unmerged work when renaming or removing old branches.
+
+Default simulation/standby. Only the coordinating lead may
 integrate shared contracts/manifests, handle secrets, deploy, or hand off live lines.
 No concurrent live line ownership. Preserve cursors, receipts and unknown outcomes.
 No blind retries of external effects. Tests are not physical acceptance.

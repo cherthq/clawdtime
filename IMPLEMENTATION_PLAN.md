@@ -113,7 +113,7 @@ The background companion may remain connected and ready for requests. That is di
 
 ## Phase 1 — independent project foundation
 
-1. Initialize Git in `/Users/garygao/clawdtime`, with `main` and a `codex/` implementation branch. Preserve these planning files.
+1. Use `main` in `/Users/garygao/clawdtime`, or a generic descriptive branch name when isolation is needed. Never create or use `codex/` branches. Preserve these planning files.
 2. Record the source baseline and a migration manifest of copied files and modifications.
 3. Retain the established TypeScript, Python, and Swift stack initially. This is extraction/adaptation of an established system, not a framework rewrite. Optional eve compatibility in the source is not a reason to make eve a new MVP dependency.
 4. Create project-specific `AGENTS.md`, `.gitignore`, config examples, local simulation commands, test commands, and build scripts.

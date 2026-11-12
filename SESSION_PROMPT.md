@@ -24,7 +24,7 @@ Mode 2 (general tasks initiated from Messages), cloud sandboxes, public line poo
 
 ## Execution instructions
 
-- Initialize this local Git repository and work on `codex/` branches. Preserve the handoff files.
+- Work on `main`, or use a generic descriptive branch name when isolation is needed. Never create or use `codex/` branches. Preserve the handoff files.
 - Create `README.md`, `AGENTS.md`, and the architecture/migration/status/acceptance/line-handoff docs specified in the plan.
 - Selectively copy source and matching tests from Apple Teams. Keep the TypeScript/Python/Swift stack initially. Extract narrow interfaces instead of copying the whole workspace engine and unrelated providers.
 - Do not copy production databases, customer messages, OAuth grants, `.env`, `.data`, recovery secrets, installed configurations, `node_modules`, or build artifacts.
