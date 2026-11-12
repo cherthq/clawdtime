@@ -15,6 +15,7 @@ import type {
 } from "./contracts.js";
 import { HumanRouter, isImmediateStop } from "./control/human-router.js";
 import { SetupService } from "./pairing/setup.js";
+import { mediaFailureSchema } from "./transport/media-diagnostics.js";
 import { publicPage } from "./public-page.js";
 import {
   setupRetirementInput,
@@ -261,6 +262,9 @@ export function createApp(
       controlPreflight:
         service.store.state(`control-preflight:${request.id}`) ?? null,
       screenStop: service.store.state(`screen-stop:${request.id}`) ?? null,
+      callTermination:
+        service.store.state(`call-termination:${request.id}`) ?? null,
+      mediaFailure: service.store.state(`media-failure:${request.id}`) ?? null,
       media: options.callDiagnostics
         ? await options.callDiagnostics(request.id)
         : { state: "simulation", physicalAcceptance: false },
@@ -537,7 +541,24 @@ export function createApp(
   });
   app.post("/media/:id/failure", async (c) => {
     const { request, pairing } = mediaContext(c.req.param("id"));
-    service.failCall(request.id);
+    // Optional metadata must never prevent authenticated fail-closed cleanup.
+    // Preserve callback receipt separately from the first end-intent source:
+    // this callback can itself be a consequence of earlier termination.
+    const diagnostic = mediaFailureSchema.safeParse(
+      await c.req.json().catch(() => undefined),
+    );
+    try {
+      if (!service.store.state(`media-failure:${request.id}`))
+        service.store.saveState(`media-failure:${request.id}`, {
+          ...(diagnostic.success
+            ? diagnostic.data
+            : { reason: "unspecified", category: "unspecified" }),
+          receivedAt: control.now(),
+        });
+    } catch {
+      // Cleanup and its original effect ID remain authoritative.
+    }
+    service.failCall(request.id, "media_failure");
     await control.stopPairing(pairing.id);
     return c.json({ ok: true });
   });

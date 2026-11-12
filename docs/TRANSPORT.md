@@ -395,3 +395,30 @@ the current test; additional text is not a command. An approved test still needs
 explicit agent yielding before a single call and the existing physical acceptance
 chain before verification. Coded invitations are outside this narrow legacy
 retirement mechanism.
+
+### First termination evidence
+
+New cleanup intents retain `call-termination:<request>` before the existing end
+operation: a fixed source, time, existing request/call/session/effect identifiers,
+request/session state, control epoch, last heartbeat time and bounded heartbeat
+age. Sources distinguish media failure callbacks, connector expiry, setup
+cancel/expiry, completion, pairing revocation, request expiry, terminal allocation,
+worker termination, standby, integration-error cleanup and failed media health.
+The first record survives later callbacks. Existing end receipts or retained
+cleanup state are never backfilled with a later callback's alleged initiating
+cause. Diagnostic persistence failure does not block the original cleanup.
+
+The authenticated media failure callback also retains only fixed reason/category,
+media timestamp and bounded elapsed milliseconds, with backend receipt time.
+The media GET projection includes optional bounded `lifecycleDiagnostics` with
+separate first failure and close-request evidence. Old media without these fields
+remains readable; arbitrary exception strings, transcripts and unknown fields are
+excluded. The first local termination intent is evidence of which code path
+requested cleanup, not proof of the upstream physical or network cause.
+
+An integration-tick exception can enter the existing cleanup-only polling path
+and queue owned-call termination; this behavior is preserved and now identified
+separately from a media failure. The latest historical disconnect lacks these
+fields, so its trigger cannot be reconstructed merely from the later generic
+media-task error. No retries, timeouts, cursors, receipts or authority gates were
+changed by these diagnostics.

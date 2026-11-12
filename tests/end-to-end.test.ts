@@ -147,6 +147,101 @@ function harness(
   };
 }
 describe("HTTP-to-domain-to-device-to-result acceptance (simulated)", () => {
+  it("retains the first authenticated media failure before cleanup without persisting arbitrary content", async () => {
+    const h = harness(),
+      a = await h.connect(),
+      r = await h.attention(a.token);
+    const id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
+    const failure = {
+      reason: "room_disconnected",
+      category: "room_event",
+      at: new Date().toISOString(),
+      elapsedMs: 59000,
+    };
+    expect(
+      (await h.send(`/media/${id}/failure`, "wrong", failure)).status,
+    ).toBe(401);
+    expect(h.store.state(`media-failure:${r.id}`)).toBeUndefined();
+    expect(
+      (
+        await h.send(`/media/${id}/failure`, media, {
+          ...failure,
+          error: "PRIVATE_EXCEPTION",
+          transcript: "PRIVATE_TEXT",
+        })
+      ).status,
+    ).toBe(200);
+    const first = h.store.state<any>(`media-failure:${r.id}`);
+    expect(first).toEqual({ ...failure, receivedAt: expect.any(Number) });
+    const termination = h.store.state<any>(`call-termination:${r.id}`);
+    expect(termination).toMatchObject({
+      source: "media_failure",
+      effectId: `${r.id}:end`,
+    });
+    await h.service.drain();
+    expect(
+      (
+        await h.send(`/media/${id}/failure`, media, {
+          ...failure,
+          reason: "task_failed",
+          category: "failure_cleanup",
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.store.state(`media-failure:${r.id}`)).toEqual(first);
+    expect(h.store.state(`call-termination:${r.id}`)).toEqual(termination);
+    expect(h.store.effects().filter((e) => e.kind === "end_call")).toHaveLength(
+      1,
+    );
+    const diagnostic = await h.send(
+      `/api/attention/${r.id}/diagnostics`,
+      a.token,
+    );
+    expect(diagnostic.body.mediaFailure).toEqual(first);
+    expect(diagnostic.body.callTermination).toEqual(termination);
+    expect(JSON.stringify(diagnostic.body)).not.toContain("PRIVATE_");
+    expect(h.transport.messages).toHaveLength(0);
+    h.store.close();
+  });
+
+  it.each([
+    {},
+    {
+      reason: "PRIVATE_REASON",
+      category: "PRIVATE_TASK",
+      at: "PRIVATE_TIME",
+      elapsedMs: 1,
+    },
+    {
+      reason: "task_failed",
+      category: "capture_loop",
+      at: new Date().toISOString(),
+      elapsedMs: -1,
+    },
+  ])(
+    "keeps legacy or malformed failure metadata from blocking cleanup %#",
+    async (payload) => {
+      const h = harness(),
+        a = await h.connect(),
+        r = await h.attention(a.token);
+      const id = `ct_${createHash("sha256").update(r.id).digest("hex").slice(0, 40)}`;
+      expect(
+        (await h.send(`/media/${id}/failure`, media, payload)).status,
+      ).toBe(200);
+      expect(h.store.state(`media-failure:${r.id}`)).toEqual({
+        reason: "unspecified",
+        category: "unspecified",
+        receivedAt: expect.any(Number),
+      });
+      expect(
+        h.store.effects().filter((e) => e.kind === "end_call"),
+      ).toHaveLength(1);
+      await h.service.drain();
+      expect(h.service.status(a.token, r.id).state).toBe("failed");
+      h.store.close();
+    },
+  );
+
   it("scopes read-only diagnostics and acknowledges a canceled call's confirmed cleanup without inventing approval", async () => {
     const h = harness(),
       a = await h.connect(),

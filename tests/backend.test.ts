@@ -73,6 +73,115 @@ function fixture(store = new Store(), transport = new SimulationTransport()) {
   };
 }
 describe("durable scoped attention domain", () => {
+  it("retains the first cleanup source and liveness before later cleanup callbacks", async () => {
+    const f = fixture(),
+      request = f.request();
+    await f.app.drain();
+    f.advance(1000);
+    f.app.failCall(request.id, "media_failure");
+    const first = f.store.state(`call-termination:${request.id}`);
+    expect(first).toMatchObject({
+      version: 1,
+      source: "media_failure",
+      at: 101000,
+      requestId: request.id,
+      sessionId: f.agent.session.id,
+      effectId: `${request.id}:end`,
+      sessionState: "yielded",
+      heartbeatAgeMs: 1000,
+      controlEpoch: 0,
+    });
+    const effect = f.store.effect(`${request.id}:end`);
+    f.advance(21000);
+    f.app.expireSessions();
+    f.app.failCall(request.id, "worker_terminal");
+    expect(f.store.state(`call-termination:${request.id}`)).toEqual(first);
+    expect(f.store.effect(`${request.id}:end`)).toEqual(effect);
+    expect(f.store.effects().filter((e) => e.kind === "end_call")).toHaveLength(
+      1,
+    );
+    f.store.close();
+  });
+  it("records heartbeat expiry without inventing provenance for historical end effects", async () => {
+    const f = fixture(),
+      request = f.request();
+    await f.app.drain();
+    f.advance(20001);
+    f.app.expireSessions();
+    expect(f.store.state(`call-termination:${request.id}`)).toMatchObject({
+      source: "session_heartbeat_expired",
+      heartbeatAgeMs: 20001,
+      sessionState: "stopped",
+      controlEpoch: 1,
+    });
+    f.store.close();
+    const old = fixture(),
+      prior = old.request();
+    await old.app.drain();
+    old.store.putEffect({
+      id: `${prior.id}:end`,
+      kind: "end_call",
+      state: "unknown",
+      payload: { requestId: prior.id },
+      createdAt: 100000,
+    });
+    old.app.failCall(prior.id, "media_failure");
+    expect(old.store.state(`call-termination:${prior.id}`)).toBeUndefined();
+    expect(old.store.effect(`${prior.id}:end`)?.state).toBe("unknown");
+    old.store.close();
+  });
+  it("keeps cleanup operational when diagnostic persistence fails", async () => {
+    const f = fixture(),
+      request = f.request();
+    await f.app.drain();
+    f.store.put<ControlLease>("lease", {
+      id: "failure-lease",
+      requestId: request.id,
+      sessionId: f.agent.session.id,
+      pairingId: f.pair.pairing.id,
+      callId: f.store.all<CallSession>("call")[0]!.id,
+      deviceId: "mac",
+      displayId: "display",
+      memberId: "member",
+      mode: "control",
+      epoch: 0,
+      expiresAt: 200000,
+      state: "active",
+    });
+    const save = f.store.saveState.bind(f.store);
+    f.store.saveState = (key, value) => {
+      if (key.startsWith("call-termination:"))
+        throw new Error("synthetic storage failure");
+      return save(key, value);
+    };
+    expect(() => f.app.failCall(request.id, "media_failure")).not.toThrow();
+    expect(f.store.effect(`${request.id}:end`)?.state).toBe("pending");
+    expect(f.store.get<ControlLease>("lease", "failure-lease")?.state).toBe(
+      "unknown",
+    );
+    await f.app.drain();
+    expect(f.store.effect(`${request.id}:end`)?.state).toBe("done");
+    f.store.close();
+  });
+  it("does not relabel a retained direct media health cleanup as a later failure", async () => {
+    const f = fixture(),
+      request = f.request();
+    await f.app.drain();
+    const call = f.store.all<CallSession>("call")[0]!;
+    f.store.saveState(`cleanup:${call.id}`, {
+      nativeEndRequested: true,
+      mediaClosed: true,
+      cleanupPending: true,
+    });
+    f.app.failCall(request.id, "media_failure");
+    expect(f.store.state(`call-termination:${request.id}`)).toBeUndefined();
+    expect(f.store.state(`cleanup:${call.id}`)).toEqual({
+      nativeEndRequested: true,
+      mediaClosed: true,
+      cleanupPending: true,
+    });
+    f.store.close();
+  });
   it("runs request, ring, feedback, exact-session acknowledgement, continuation and one Messages result", async () => {
     const f = fixture(),
       request = f.request();

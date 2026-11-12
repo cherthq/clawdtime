@@ -108,6 +108,23 @@ class RemoteTrackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.track_sid, 'first-audio')
         self.session.capture_loop.assert_awaited_once()
 
+    async def test_worker_disconnect_during_normal_close_is_not_failure(self):
+        self.session.lifecycle.close('backend_close')
+        self.session.room.handlers['participant_disconnected'](self.worker)
+        self.session.room.handlers['disconnected']()
+        await asyncio.sleep(0)
+        self.session.fail.assert_not_awaited()
+        self.assertNotIn('firstFailure', self.session.lifecycle.data)
+
+    async def test_worker_disconnect_retains_specific_reason_before_fail_task(self):
+        self.session.room.handlers['participant_disconnected'](self.worker)
+        first = self.session.lifecycle.data['firstFailure']
+        self.assertEqual(first['reason'], 'remote_participant_disconnected')
+        self.assertEqual(first['category'], 'room_event')
+        self.session.fail.assert_not_awaited()
+        await asyncio.sleep(0)
+        self.session.fail.assert_awaited_once()
+
     async def test_unsubscription_failure_fails_closed_without_video_stream(self):
         await self.subscribe(rtc.TrackKind.KIND_VIDEO, 'caller-video', failure=RuntimeError('fixture only'))
         self.session.fail.assert_awaited_once()

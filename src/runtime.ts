@@ -397,7 +397,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
             {
               observeOnly: true,
               onTerminalPending: (id) => {
-                service.failCall(id);
+                service.failCall(id, "worker_terminal");
               },
             },
           );
@@ -594,13 +594,16 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
               "unknown",
             ].includes(r.state)
           )
-            service.failCall(r.id);
+            service.failCall(r.id, "standby");
         await service.drain({ cleanupOnly: true, shouldStop: () => stopping });
       } else await service.drain({ shouldStop: () => stopping });
       if (transport instanceof NativeTransport)
         await transport.pollCalls(
           (id, state, qualified) => service.observeCall(id, state, qualified),
-          { cleanupOnly: mode === "standby" || stopping },
+          {
+            cleanupOnly: mode === "standby" || stopping,
+            cleanupSource: mode === "standby" ? "standby" : "cleanup_only",
+          },
         );
       await viewing.tick();
       store.saveState("heartbeat", { ok: true, at: Date.now() });
@@ -615,7 +618,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
         try {
           await transport.pollCalls(
             (id, state, qualified) => service.observeCall(id, state, qualified),
-            { cleanupOnly: true },
+            { cleanupOnly: true, cleanupSource: "integration_failure" },
           );
         } catch {
           /* retain native reservation */

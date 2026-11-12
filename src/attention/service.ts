@@ -1,3 +1,7 @@
+import {
+  recordTerminationIntent,
+  type TerminationSource,
+} from "./termination.js";
 import { setupInvitationRetirementValid } from "../pairing/retired-setup.js";
 import {
   PreflightBlocked,
@@ -415,7 +419,7 @@ export class ClawdTime {
         for (const request of this.store
           .all<AttentionRequest>("attention")
           .filter((r) => r.sessionId === session.id))
-          this.failCall(request.id);
+          this.failCall(request.id, "session_heartbeat_expired");
       });
       stopped++;
     }
@@ -653,7 +657,7 @@ export class ClawdTime {
         pairingId: request.pairingId,
         text: result,
       });
-      this.endOwnedCall(request);
+      this.endOwnedCall(request, "request_completed");
       this.revokeLeases(request.id);
       return next;
     });
@@ -800,12 +804,15 @@ export class ClawdTime {
       });
     });
   }
-  failCall(requestId: string) {
+  failCall(
+    requestId: string,
+    source: TerminationSource = "failure_unspecified",
+  ) {
     const request = this.store.get<AttentionRequest>("attention", requestId);
     if (!request) throw new DomainError(404, "Unknown attention request.");
     return this.store.transaction(() => {
       this.revokeLeases(requestId);
-      this.endOwnedCall(request);
+      this.endOwnedCall(request, source);
       if (!request.responseId && !terminal.has(request.state))
         this.store.put("attention", { ...request, state: "failed" });
       return { cleanupPending: true };
@@ -816,16 +823,18 @@ export class ClawdTime {
       if (lease.requestId === requestId && lease.state === "active")
         this.store.put("lease", { ...lease, state: "unknown" });
   }
-  private endOwnedCall(request: AttentionRequest) {
+  private endOwnedCall(request: AttentionRequest, source: TerminationSource) {
     const call = this.store
       .all<CallSession>("call")
       .find((c) => c.requestId === request.id);
-    if (call && call.state !== "ended" && call.providerCallId)
+    if (call && call.state !== "ended" && call.providerCallId) {
+      recordTerminationIntent(this.store, request, call, source, this.clock());
       this.enqueue(`${request.id}:end`, "end_call", {
         requestId: request.id,
         pairingId: request.pairingId,
         callId: call.providerCallId,
       });
+    }
   }
   disconnect(raw: string) {
     const c = this.credential(raw),
@@ -846,7 +855,7 @@ export class ClawdTime {
       for (const r of this.store.all<AttentionRequest>("attention"))
         if (r.pairingId === pairingId) {
           this.revokeLeases(r.id);
-          this.endOwnedCall(r);
+          this.endOwnedCall(r, "pairing_revoked");
           if (!terminal.has(r.state))
             this.store.put("attention", { ...r, state: "canceled" });
         }
@@ -864,7 +873,7 @@ export class ClawdTime {
         this.store.transaction(() => {
           this.store.put("attention", { ...request, state: "expired" });
           this.revokeLeases(request.id);
-          this.endOwnedCall(request);
+          this.endOwnedCall(request, "request_expired");
         });
   }
   private enqueue(
@@ -1007,7 +1016,7 @@ export class ClawdTime {
                 this.store.get<Pairing>("pairing", pairing.id)?.revokedAt !==
                   undefined
               )
-                this.endOwnedCall(current);
+                this.endOwnedCall(current, "allocation_terminal");
             }
           });
         } catch (error) {

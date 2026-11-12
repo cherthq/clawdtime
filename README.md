@@ -45,7 +45,8 @@ than supporting interruptions. Screen/text return passed on an earlier configura
 the latest Astra medium call produced user-confirmed typing in Gmail, then
 disconnected after further commands. Eight offline textbox trials passed through
 the action router; sustained live control and current return-to-coding remain
-unverified. Automatic message likes, standalone progress texts, calling
+unverified. An offline transcription shutdown race is fixed; the prior disconnect's
+cause is still unconfirmed. Automatic message likes, standalone progress texts, calling
 the agent yourself, and starting work or asking it questions from Messages
 outside an active request are not available yet. During a call, ask naturally.
 

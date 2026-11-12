@@ -325,7 +325,10 @@ export class SetupService {
   private close(test: SetupTest, state: "canceled" | "expired") {
     if (!open.has(test.state)) return test;
     if (test.requestId) {
-      this.service.failCall(test.requestId);
+      this.service.failCall(
+        test.requestId,
+        state === "canceled" ? "setup_canceled" : "setup_expired",
+      );
       const request = this.store.get<AttentionRequest>(
         "attention",
         test.requestId,

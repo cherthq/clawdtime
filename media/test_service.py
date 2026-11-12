@@ -94,7 +94,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         calls=[]
         async def backend(path,body):
             calls.append(path)
-        async def close():
+        async def close(reason):
+            self.assertEqual(reason, 'failure')
             calls.append('close')
         self.service.backend=backend
         session.close=close

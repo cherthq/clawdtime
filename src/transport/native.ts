@@ -1,3 +1,7 @@
+import {
+  recordTerminationIntent,
+  type TerminationSource,
+} from "../attention/termination.js";
 import { noticeRetirementValid } from "../control/obsolete-notice.js";
 import {
   retireSetupInvitation,
@@ -1026,6 +1030,7 @@ export class NativeTransport implements Transport {
     ) => unknown,
     options: {
       cleanupOnly?: boolean;
+      cleanupSource?: TerminationSource;
       observeOnly?: boolean;
       onTerminalPending?: (requestId: string) => void;
     } = {},
@@ -1056,7 +1061,16 @@ export class NativeTransport implements Transport {
             "attention",
             session.requestId,
           );
-          if (attention)
+          if (attention) {
+            const call = this.store.get<CallSession>("call", session.id);
+            if (call)
+              recordTerminationIntent(
+                this.store,
+                attention,
+                call,
+                options.cleanupSource ?? "cleanup_only",
+                Date.now(),
+              );
             this.store.putEffect({
               id: `${session.requestId}:end`,
               kind: "end_call",
@@ -1068,6 +1082,7 @@ export class NativeTransport implements Transport {
               },
               createdAt: Date.now(),
             });
+          }
         }
         const response = await this.calls(
           `/api/v1/calls/${encodeURIComponent(session.providerCallId!)}/events`,
@@ -1138,7 +1153,14 @@ export class NativeTransport implements Transport {
                       : "ringing"
                     : attention.state,
               });
-              if (closed && !this.store.effect(`${attention.id}:end`))
+              if (closed && !this.store.effect(`${attention.id}:end`)) {
+                recordTerminationIntent(
+                  this.store,
+                  attention,
+                  call,
+                  options.cleanupSource ?? "allocation_terminal",
+                  Date.now(),
+                );
                 this.store.putEffect({
                   id: `${attention.id}:end`,
                   kind: "end_call",
@@ -1150,6 +1172,7 @@ export class NativeTransport implements Transport {
                   },
                   createdAt: Date.now(),
                 });
+              }
             });
           }
         }
@@ -1168,6 +1191,20 @@ export class NativeTransport implements Transport {
             options.onTerminalPending?.(session.requestId);
             continue;
           }
+          const attention = this.store.get<AttentionRequest>(
+            "attention",
+            session.requestId,
+          );
+          const call = this.store.get<CallSession>("call", session.id);
+          if (attention && call)
+            recordTerminationIntent(
+              this.store,
+              attention,
+              call,
+              "worker_terminal",
+              Date.now(),
+              null,
+            );
           await this.media(`/sessions/${session.id}/close`, {});
           const outcome = types.includes("rejected")
             ? "declined"
@@ -1229,6 +1266,19 @@ export class NativeTransport implements Transport {
           await this.question(session);
           const health = await this.media(`/sessions/${session.id}`);
           if (health.id !== session.id || health.alive !== true) {
+            const attention = this.store.get<AttentionRequest>(
+              "attention",
+              session.requestId,
+            );
+            if (attention)
+              recordTerminationIntent(
+                this.store,
+                attention,
+                domain,
+                "media_unavailable",
+                Date.now(),
+                `${session.requestId}:media-failure-end`,
+              );
             this.store.put("media", {
               ...session,
               state: "closing",

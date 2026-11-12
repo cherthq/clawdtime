@@ -45,8 +45,10 @@ participantIdentity:"worker-"+mediaId}`. Reply `{captured:boolean}`. IDs are sta
   within the non-resurrectable media session; duplicates must have one effect.
   No raw audio persists. The only subscribed audio is the exact room worker;
   wrong tracks/participants fail closed. TTS suspends STT and changes its generation.
-- `POST /media/:id/failure {}`: revoke screen/control and begin conservative call
-  cleanup; keep the native call reservation until actual cleanup evidence.
+- `POST /media/:id/failure {reason,category,at,elapsedMs}`: revoke screen/control
+  and begin conservative call cleanup; keep the native call reservation until
+  actual cleanup evidence. Metadata is an allowlisted first observed failure,
+  never an exception string; legacy `{}` remains compatible.
 - `POST /media/:id/screen-stopped {leaseId,reason}`: revoke the exact selection.
   A stopped lease cannot be silently reacquired; require a fresh explicit selection.
 
@@ -217,3 +219,32 @@ stages, and verify one frame request, terminal cleanup, no input and no replay.
 These are synthetic transport checks, not a diagnosis of the historical network
 trigger or physical handset acceptance. Gateway source requires a lead-controlled
 restart; the companion binary and its permission identity remain unchanged.
+
+### Call termination diagnostics and transcription cleanup
+
+Authenticated session status also returns `lifecycleDiagnostics` when a lifecycle
+boundary has been recorded. Its `firstFailure` contains a fixed reason, task/event
+category, UTC timestamp and bounded monotonic elapsed milliseconds. `closeRequested`
+separately records the first close request and its fixed origin. Both survive media
+process restart in a separate SQLite table. The callback route binds these records
+to the existing session identity; no transcript, screen, audio, arbitrary exception
+string, participant address or credential is included.
+
+Direct room/worker disconnect handlers latch the first failure before scheduling
+asynchronous cleanup. Managed tasks identify audio publication, segment delivery,
+policy watching and capture separately. Later failures cannot replace the first
+record. Normal backend/policy/shutdown close is recorded separately, and teardown
+callbacks cannot invent a first failure. Diagnostic write errors cannot prevent
+existing fail-closed cleanup or commit an unrelated receipt transaction. A timestamp
+is an observed boundary, not proof of the underlying provider/network root cause.
+
+An offline regression reproduced a transcription shutdown race: a deliberate
+half-duplex pause closes the upstream socket before cancelling its in-flight audio
+sender. The sender can fail during that close, and previously the obsolete capture
+generation terminated the whole call. Errors from an explicitly superseded generation
+now finish its cleanup without reporting a new fatal provider failure. Fresh listening
+still requires current policy; there is no automatic retry of a current-generation
+failure, relaxed timeout, input replay or changed screen authority. Three repeated
+pause/resume cycles and a genuine current-generation failure are separately tested.
+This defect is proven offline; it is not established as the cause of the historical
+Astra disconnect. Sustained handset acceptance still requires a new supervised call.

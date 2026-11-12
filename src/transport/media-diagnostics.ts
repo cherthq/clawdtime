@@ -47,9 +47,59 @@ const gatewayResult = z.object({
     .enum(["timeout", "connection", "invalid_response", "other"])
     .optional(),
 });
+export const mediaFailureSchema = z.object({
+  reason: z.enum([
+    "task_failed",
+    "transcription_failed",
+    "remote_participant_disconnected",
+    "room_disconnected",
+    "foreign_track",
+    "unexpected_track",
+    "conflicting_audio",
+    "video_unsubscribe_failed",
+    "activation_failed",
+    "maximum_duration",
+    "activation_timeout",
+    "unspecified",
+  ]),
+  category: z.enum([
+    "audio_publish",
+    "segment_delivery",
+    "policy_watch",
+    "capture_loop",
+    "priority_stop",
+    "room_event",
+    "track_event",
+    "activation",
+    "deadline",
+    "failure_cleanup",
+    "unspecified",
+  ]),
+  at: timestamp,
+  elapsedMs: z.number().int().min(0).max(86400000),
+});
+const lifecycleDiagnosticsSchema = z.object({
+  version: z.literal(1),
+  firstFailure: mediaFailureSchema.optional(),
+  closeRequested: z
+    .object({
+      reason: z.enum([
+        "failure",
+        "policy_ended",
+        "backend_close",
+        "service_shutdown",
+        "prepare_failed",
+        "unspecified",
+      ]),
+      at: timestamp,
+      elapsedMs: z.number().int().min(0).max(86400000),
+    })
+    .optional(),
+});
 export const mediaStatusSchema = z.object({
   id: z.string().regex(/^ct_[a-f0-9]{40}$/),
   alive: z.boolean(),
+  lifecycleDiagnostics: lifecycleDiagnosticsSchema.optional(),
   state: z.enum([
     "preparing",
     "prepared",

@@ -224,6 +224,33 @@ function fixture() {
   };
 }
 describe("native protocol integration without live traffic", () => {
+  it("records integration cleanup intent before the original end effect without replay", async () => {
+    const f = fixture();
+    await f.app.drain();
+    const before = f.requests.length;
+    await f.transport.pollCalls(
+      (id, state, qualified) => f.app.observeCall(id, state, qualified),
+      { cleanupOnly: true, cleanupSource: "integration_failure" },
+    );
+    const first = f.store.state(`call-termination:${f.attention.id}`);
+    expect(first).toMatchObject({
+      source: "integration_failure",
+      effectId: `${f.attention.id}:end`,
+    });
+    expect(f.requests.slice(before).every((r) => r.method === "GET")).toBe(
+      true,
+    );
+    await f.transport.pollCalls(
+      (id, state, qualified) => f.app.observeCall(id, state, qualified),
+      { cleanupOnly: true, cleanupSource: "standby" },
+    );
+    expect(f.store.state(`call-termination:${f.attention.id}`)).toEqual(first);
+    expect(f.store.effects().filter((e) => e.kind === "end_call")).toHaveLength(
+      1,
+    );
+    f.store.close();
+  });
+
   it("reads only the owned media session and returns bounded diagnostic metadata without credentials or pixels", async () => {
     const f = fixture(),
       id = mediaSessionId(f.attention.id),
@@ -249,6 +276,23 @@ describe("native protocol integration without live traffic", () => {
         capturedAt: at,
         state: "viewing",
         jpegBase64: "PRIVATE_PIXELS",
+      },
+      lifecycleDiagnostics: {
+        version: 1,
+        firstFailure: {
+          reason: "room_disconnected",
+          category: "room_event",
+          at,
+          elapsedMs: 1000,
+          exception: "PRIVATE_EXCEPTION",
+        },
+        closeRequested: {
+          reason: "failure",
+          at,
+          elapsedMs: 1001,
+          text: "PRIVATE_TEXT",
+        },
+        transcript: "PRIVATE_TRANSCRIPT",
       },
       screenDiagnostics: {
         version: 1,
@@ -299,6 +343,15 @@ describe("native protocol integration without live traffic", () => {
     expect(result).toMatchObject({
       id,
       alive: true,
+      lifecycleDiagnostics: {
+        firstFailure: {
+          reason: "room_disconnected",
+          category: "room_event",
+          at,
+          elapsedMs: 1000,
+        },
+        closeRequested: { reason: "failure", at, elapsedMs: 1001 },
+      },
       screenDiagnostics: {
         phase: "viewing",
         framesReceived: 1,

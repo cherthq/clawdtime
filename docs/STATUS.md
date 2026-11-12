@@ -8,6 +8,46 @@ feedback → same-chat continuation → Messages recap path passed on the origin
 pilot line. The Claude Code physical call loop remains unverified. Historical
 evidence below does not qualify the current conversational harness.
 
+## Disconnect investigation and transcription lifecycle repair — November 11
+
+The human-confirmed Gmail typing remains successful evidence. The subsequent
+disconnect's initiating cause is still unconfirmed. A fresh bounded historical log
+read found the later generic task error but no `transcription_stopped` event.
+The request deadline was after termination. Direct room/participant callbacks,
+connector liveness loss and existing integration-error cleanup are distinguishable
+source paths, not established explanations for that call.
+
+An offline regression reproduced a separate concrete defect: deliberate
+transcription shutdown increments the listening generation, then closes its socket
+before canceling the sender. A pending send can raise during that close, and the
+old capture loop treated it as a fatal call failure. Errors from an already-retired
+generation now finish cleanup without ending the call. A current-generation
+connection error remains fatal; no retry, timeout or authority check changed.
+Three repeated pause/resume cycles pass; this regression failed against the old
+code. This establishes the defect and repair offline, not its role in the incident.
+
+Media now persists allowlisted first-failure reason, task category, UTC time and
+elapsed duration, separately from close origin. Backend records the first cleanup
+source and existing call/request/session/effect and heartbeat metadata before the
+original end intent. Authenticated failure callback evidence is separately retained
+and exposed through scoped diagnostics. Later cleanup cannot overwrite first
+evidence or relabel an old effect. Diagnostic writes cannot block normal cleanup.
+No exception text, transcripts, screenshots, audio or credentials are recorded.
+
+Validation: `npm run check` passes 496 tests plus TypeScript/build; all 120 media
+tests pass, with compilation, changed-file formatting and diff checks. Independent
+review found no remaining deployment blocker and separately ran lifecycle and
+backend/integration suites. Callback privacy/first-write, genuine failure,
+diagnostic write failure, standby and integration-error regressions pass.
+
+Pre-release read-only checks found both services healthy and idle: six ended calls,
+five released leases, four observed actions, eighteen completed effects and message
+cursor sequence 17. All eight protected installation/configuration/receipt files
+match the previous final snapshot, as do gateway action/lease tables. Both macOS
+permission grants remain present; the human's local Enable is on with no active
+lease. No live call, recap, re-pairing, permission change or model change was made.
+Production deployment and post-release evidence are recorded below when verified.
+
 ## Astra supervised call — November 11
 
 One newly authorized call used Astra medium after the user enabled sharing locally.

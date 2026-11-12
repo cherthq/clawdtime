@@ -25,6 +25,7 @@ from device_actions import DeviceActions
 from device_relay import DeviceRelay
 from playback import SpeechLedger, TERMINAL
 from ledger_backup import encrypted_snapshot
+from lifecycle_diagnostics import LifecycleDiagnostics, CATEGORIES
 from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, priority_stop_requested, validate_session_id
 
 RATE = 48000
@@ -58,6 +59,9 @@ class Session:
         self.track = None
         self.capture_task = None
         self.born = time.monotonic()
+        self.lifecycle = LifecycleDiagnostics(self.born,
+            (lambda data: owner.record_lifecycle_diagnostic(self.id, data))
+            if hasattr(owner, "record_lifecycle_diagnostic") else None)
         self.activation = None
         self.close_task = None
         self.policy_at = 0.0
@@ -75,18 +79,28 @@ class Session:
         self.screen = ScreenController(self) if self.caption_scene and owner.env.get('MEDIA_DEVICES_ENABLED') == 'true' and (owner.env.get('DEVICE_GATEWAY_URL') or owner.env.get('DEVICE_GATEWAY_RELAY')=='true') and len(owner.env.get('DEVICE_GATEWAY_KEY','')) >= 32 else None
         self.caption_publisher = None
 
-    def task(self, coro):
+    def task(self, coro, category="unspecified"):
+        if category not in CATEGORIES:
+            raise ValueError("Unrecognized media task category")
         task = asyncio.create_task(coro)
         self.tasks.add(task)
         def done(t):
             self.tasks.discard(t)
             if not t.cancelled() and t.exception():
-                logging.error('media_task_failed session=%s', self.id)
+                logging.error('media_task_failed session=%s category=%s', self.id, category)
                 self.allowed = False
                 if not self.closing:
-                    self.task(self.fail())
+                    self.request_failure("task_failed", category)
         task.add_done_callback(done)
         return task
+
+    def request_failure(self, reason, category):
+        # Local room teardown emits disconnect callbacks too.
+        if self.closing or "closeRequested" in self.lifecycle.data:
+            return None
+        # Latch at callback time, before task scheduling can reorder cleanup.
+        self.lifecycle.failure(reason, category)
+        return self.task(self.fail(reason, category), "failure_cleanup")
 
     async def prepare(self):
         await self.owner.lk.room.create_room(api.CreateRoomRequest(name=self.room_name, empty_timeout=60, max_participants=2))
@@ -97,7 +111,7 @@ class Session:
         @self.room.on('track_subscribed')
         def subscribed(track, publication, participant):
             if participant.identity != self.worker_identity:
-                self.task(self.fail())
+                self.request_failure("foreign_track", "track_event")
                 return
             if track.kind == rtc.TrackKind.KIND_VIDEO:
                 # The FaceTime worker may publish the caller's camera alongside
@@ -106,27 +120,27 @@ class Session:
                 try:
                     publication.set_subscribed(False)
                 except Exception:
-                    self.task(self.fail())
+                    self.request_failure("video_unsubscribe_failed", "track_event")
                 return
             if track.kind != rtc.TrackKind.KIND_AUDIO:
-                self.task(self.fail())
+                self.request_failure("unexpected_track", "track_event")
                 return
             if self.track_sid and self.track_sid != publication.sid:
-                self.task(self.fail())
+                self.request_failure("conflicting_audio", "track_event")
                 return
             self.track_sid, self.track = publication.sid, track
             if self.capture_task is None:
-                self.capture_task = self.task(self.capture_loop())
+                self.capture_task = self.task(self.capture_loop(), "capture_loop")
 
         @self.room.on('participant_disconnected')
         def disconnected(participant):
             if participant.identity == self.worker_identity:
-                self.task(self.fail())
+                self.request_failure("remote_participant_disconnected", "room_event")
 
         @self.room.on('disconnected')
         def lost(*args):
             if not self.closing:
-                self.task(self.fail())
+                self.request_failure("room_disconnected", "room_event")
 
         await self.room.connect(self.owner.env['LIVEKIT_URL'], token(self.agent_identity))
         self.source = rtc.AudioSource(RATE, 1, queue_size_ms=100)
@@ -135,9 +149,9 @@ class Session:
         if self.caption_scene:
             self.caption_publisher = CaptionPublisher(self.caption_scene, self.room, screen=self.screen)
             await self.caption_publisher.start()
-        self.task(self.publish())
-        self.task(self.deliver())
-        self.task(self.watch_policy())
+        self.task(self.publish(), "audio_publish")
+        self.task(self.deliver(), "segment_delivery")
+        self.task(self.watch_policy(), "policy_watch")
 
     async def publish(self):
         silence = bytes(SAMPLES * 2)
@@ -162,7 +176,7 @@ class Session:
     async def watch_policy(self):
         while not self.closing:
             if time.monotonic() - self.born > 55 * 60 or (not self.active and time.monotonic() - self.born > 120):
-                await self.fail()
+                await self.fail("maximum_duration" if time.monotonic()-self.born > 55*60 else "activation_timeout", "deadline")
                 return
             if self.active:
                 try:
@@ -187,7 +201,7 @@ class Session:
                         else:
                             self.caption_scene.apply_policy(policy)
                     if policy.get('state') == 'ended':
-                        await self.close()
+                        await self.close("policy_ended")
                         return
                 except Exception:
                     self.allowed = False
@@ -261,10 +275,13 @@ class Session:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # Do not silently omit audio on provider failure. End media and preserve native reservation.
-                logging.error('transcription_stopped session=%s',self.id)
-                await self.fail()
-                return
+                # A deliberate pause closes the old socket before its sender is
+                # cancelled. Errors from that obsolete generation are cleanup,
+                # not a new provider failure. Current-generation errors remain fatal.
+                if generation == self.generation and not self.closing:
+                    logging.error('transcription_stopped session=%s',self.id)
+                    await self.fail("transcription_failed", "capture_loop")
+                    return
             finally:
                 self.ws = None
                 if self.stream:
@@ -287,7 +304,7 @@ class Session:
             while not self.segments.empty():
                 self.segments.get_nowait();self.segments.task_done()
             # One fixed fail-safe bypass, never an ordinary parallel model/action turn.
-            self.priority_stop_task=self.task(self.deliver_priority_stop(dict(segment)))
+            self.priority_stop_task=self.task(self.deliver_priority_stop(dict(segment)), "priority_stop")
             return True
         segment = {**segment, '_capture_generation': self.generation}
         if self.caption_scene:
@@ -403,13 +420,14 @@ class Session:
                     self.active = True
                     self.policy_wakeup.set()
                 except Exception:
-                    await self.fail()
+                    await self.fail("activation_failed", "activation")
                     raise
             self.activation = asyncio.create_task(begin())
         await asyncio.shield(self.activation)
         return {'activated':True}
 
-    async def fail(self):
+    async def fail(self, reason="unspecified", category="unspecified"):
+        diagnostic = self.lifecycle.failure(reason, category)
         self.allowed = False
         if self.screen:
             self.screen.update({})
@@ -418,10 +436,11 @@ class Session:
         await self.stop_stt()
         # Backend holds the line reservation until the worker confirms cleanup.
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(self.owner.backend(f'/media/{self.id}/failure', {}), 5)
-        await self.close()
+            await asyncio.wait_for(self.owner.backend(f'/media/{self.id}/failure', diagnostic or {}), 5)
+        await self.close("failure")
 
-    async def close(self):
+    async def close(self, reason="unspecified"):
+        self.lifecycle.close(reason)
         if self.close_task and self.close_task.done() and not self.close_task.cancelled() and self.close_task.exception():
             self.close_task = None
         if self.close_task:
@@ -475,6 +494,7 @@ class Service:
         os.chmod(path,0o600)
         self.db.executescript('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS speech(id TEXT PRIMARY KEY,session TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL);')
         self.db.execute('CREATE TABLE IF NOT EXISTS screen_diagnostics(id TEXT PRIMARY KEY,body TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS lifecycle_diagnostics(id TEXT PRIMARY KEY,body TEXT NOT NULL)')
         self.db.execute("UPDATE sessions SET state='interrupted' WHERE state!='closed'")
         self.db.commit()
         self.speech = SpeechLedger(self.db)
@@ -485,6 +505,18 @@ class Service:
         self.db.execute('INSERT INTO screen_diagnostics(id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',
                         (sid,json.dumps(data,separators=(',',':'))))
         self.db.commit()
+
+    def record_lifecycle_diagnostic(self, sid, data):
+        # A savepoint isolates diagnostic errors from any outer receipt transaction.
+        self.db.execute("SAVEPOINT lifecycle_diagnostic")
+        try:
+            self.db.execute("INSERT INTO lifecycle_diagnostics(id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+                            (sid,json.dumps(data,separators=(",",":"))))
+            self.db.execute("RELEASE SAVEPOINT lifecycle_diagnostic")
+        except Exception:
+            self.db.execute("ROLLBACK TO SAVEPOINT lifecycle_diagnostic")
+            self.db.execute("RELEASE SAVEPOINT lifecycle_diagnostic")
+            raise
 
     def ready(self):
         return all(self.env.get(k) for k in ['MEDIA_API_KEY','BACKEND_URL','LIVEKIT_URL','LIVEKIT_API_KEY','LIVEKIT_API_SECRET','DEEPGRAM_API_KEY'])
@@ -510,7 +542,7 @@ class Service:
     async def stop(self,app):
         for s in self.sessions.values():
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(s.close(),12)
+                await asyncio.wait_for(s.close("service_shutdown"),12)
         for task in list(self.speech_tasks.values()):
             task.cancel()
         await asyncio.gather(*list(self.speech_tasks.values()), return_exceptions=True)
@@ -539,6 +571,9 @@ class Service:
         diagnostic=self.db.execute('SELECT body FROM screen_diagnostics WHERE id=?',(sid,)).fetchone()
         if diagnostic:
             result['screenDiagnostics']=json.loads(diagnostic[0])
+        lifecycle=self.db.execute('SELECT body FROM lifecycle_diagnostics WHERE id=?',(sid,)).fetchone()
+        if lifecycle:
+            result['lifecycleDiagnostics']=json.loads(lifecycle[0])
         if session and session.caption_scene:
             result['captions'] = {'enabled':session.spec.get('captions') is True, 'state':session.caption_scene.snapshot()['state'],
                                   'failed':bool(session.caption_publisher and session.caption_publisher.failed)}
@@ -586,7 +621,7 @@ class Service:
                     return s
                 except BaseException:
                     with contextlib.suppress(Exception):
-                        await s.close()
+                        await s.close("prepare_failed")
                     raise
             self.preparing[sid]=asyncio.create_task(prepare())
             try:
@@ -675,7 +710,7 @@ class Service:
         body=await request.json()
         if action=='close':
             if s:
-                await s.close()
+                await s.close("backend_close")
             elif self.lk:
                 # Interrupted session has no audio buffers to drain, but its room must still be deleted.
                 if not self.db.execute('SELECT id FROM sessions WHERE id=?',(sid,)).fetchone():
