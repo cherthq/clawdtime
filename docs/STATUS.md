@@ -2,13 +2,14 @@
 
 November 12, 2026 — America/New_York.
 
-**Version 0.2.0 source `8efbacc7407a6bad0bbe96f2eb422d0221195a8d` is deployed.
-The companion is now 0.2.1 (`d10c801`) and the installed skill is updated.
+**Backend/media source `84d09dceb35c2b7252adcb272de6ff6f5efa1ab7` is deployed.
+The companion remains 0.2.1 (`d10c801`), gateway remains at `8efbacc`, and the
+project's installed Codex skill and connector build match `84d09dc`.
 The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
-## Local speech and setup fixes — November 12 (not deployed)
+## Speech and setup fixes — November 12 (deployed)
 
 Branch `codex/setup-reservation-cleanup` assembles stable transcription fragments
 through a complete boundary plus a continuation window. V2 replies require fresh
@@ -24,12 +25,36 @@ call/media cleanup, leases, actions or native input ownership. Structured confli
 give safe recovery instructions without copying server response bodies.
 
 Local validation: `npm run check` passes typecheck, 569 TypeScript tests and build.
-All 156 media tests pass, covering synthetic provider-event replay and local HTTP callback/
+All 157 media tests pass, covering synthetic provider-event replay and local HTTP callback/
 playback races; no provider, handset or native input is exercised by these tests.
 The checked-in skill documents context draining and the new reply cursor. Its
 frontmatter is unchanged and reviewed; the optional skill-creator validator could
 not run because local Python lacks PyYAML. No dependency was installed to run it.
-No deployment, companion/installed-skill update or additional call was performed.
+Before rollout, a packaging check found the new `utterances.py` missing from the
+media Dockerfile's explicit COPY list. The release includes it and adds a test
+that imports the server from only the files shipped by that list.
+
+The user subsequently authorized deploying both fixes, with no further call.
+The tracked-source archive of `84d09dc` was deployed to the existing services:
+
+- Backend: `9ea80a02-2896-4197-9166-98281d3c7b0e`.
+- Media: `d538d1a1-df17-4c70-a3da-41fdb58e00ac`.
+
+Both deployments succeeded and their predecessors were removed. All 53 deployed
+JavaScript modules and 11 media Python modules match the release. Protected
+configuration hashes, backend entity/effect/event/cursor hashes and all media
+table hashes are unchanged. Synthetic in-container checks verified setup cleanup
+using an isolated in-memory database and utterance assembly without audio or calls.
+Health is green, the gateway is connected, and there are zero active calls, media
+sessions, pending effects or unknown effects.
+
+The existing project-owned Codex skill was refreshed with its ownership hash;
+the configured connector entry matches and points to the rebuilt local connector.
+Existing chat tool definitions were not hot-reloaded or replaced. No companion or
+gateway restart, new session, line handoff, deployment to a sibling service, main
+promotion or live call occurred. Private rollout evidence is retained under
+`.data/speech-setup-rollout/`; it contains hashes and deployment metadata rather
+than copied production rows. Physical timing and half-duplex limitations remain.
 
 ## Production promotion and documentation — November 12
 

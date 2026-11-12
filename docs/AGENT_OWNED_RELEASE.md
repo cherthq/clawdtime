@@ -2,15 +2,26 @@
 
 Prepared November 12, 2026 (America/New_York). Version 0.2.0.
 
-**Current release:** backend/media/gateway source `8efbacc` is deployed; companion
-0.2.1/build 3 and the updated skill from `d10c801` are installed. The historical
+**Current release:** backend/media source `84d09dc` is deployed; gateway remains
+at `8efbacc`, companion remains 0.2.1/build 3 (`d10c801`), and the project Codex
+skill/connector are updated to `84d09dc`. The historical
 receipt migration is complete. A real Codex desktop call demonstrated spoken
 instructions driving native typing/send, confirmed visible on the handset. The
 user intentionally hung up before two minutes. Fallback, Claude physical use,
 reconnect and duration beyond five minutes remain unqualified. See [STATUS.md](STATUS.md)
 and [NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md).
 
-The user has now authorized promotion to remote production `main`. Hosted runtime
+The subsequent speech/setup rollout was explicitly authorized with no further
+call. Backend deployment `9ea80a02-2896-4197-9166-98281d3c7b0e` and media deployment
+`d538d1a1-df17-4c70-a3da-41fdb58e00ac` succeeded from a tracked-source archive.
+Running code, unchanged configuration and durable state were verified, including
+synthetic in-container checks without audio or calls. Its immediate predecessor
+is source `8efbacc`, backend `7942fb9b-472e-4dce-8642-f1f2af18144a` and media
+`a544d42e-9c59-4a52-9b06-28c249c80f20`. Restore binaries only under a separately
+authorized rollback; never restore old ledgers or cursors. This rollout did not
+promote the branch to main or restart the companion/gateway.
+
+For the preceding agent-owned release, the user authorized promotion to remote production `main`. Hosted runtime
 source has not changed since its successful deployment; repository promotion
 includes the installed companion repair and current documentation. The preparation
 scope below is historical, not a statement that deployment or installation is pending.
