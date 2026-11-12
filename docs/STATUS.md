@@ -39,8 +39,10 @@ The corrected handler unsubscribes and ignores video from the exact worker while
 retaining rejection of foreign participants, unsupported track kinds, conflicting
 audio tracks and failed unsubscription. All 89 media tests pass, including seven
 new callback regression tests; independent review found no actionable issue.
-Deployment and a newly authorized physical call remain pending. The consumed
-one-call approval does not authorize a replacement.
+Media deployment `34d078b5-2f13-46df-9fab-20e2e701b3aa` succeeded from `3acd183`;
+the previous deployment is removed, the live server hash matches the reviewed
+source, and scoped readiness passes. A newly authorized physical call remains
+pending. The consumed one-call approval does not authorize a replacement.
 
 ## Service-number correction — November 11
 
