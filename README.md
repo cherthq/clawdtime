@@ -43,10 +43,11 @@ No command prefixes or confirmation codes. Local **Stop** always stays available
 build are required; public app downloads aren’t ready. Voice takes turns rather
 than supporting interruptions. Screen/text return passed on an earlier configuration;
 an Astra medium call produced user-confirmed typing in Gmail; a subsequent call
-disconnected after repeated voice-delivery refusals. Eight offline textbox trials passed through
-the action router; sustained live control and current return-to-coding remain
-unverified. An offline transcription shutdown race is fixed; the prior disconnect's
-cause is still unconfirmed. Automatic message likes, standalone progress texts, calling
+disconnected after repeated voice-delivery refusals. Queued speech failures now
+leave the call open, and setup starts with a brief screen-sharing/Stop notice.
+Eight offline textbox trials passed through the action router; sustained live
+control and current return-to-coding remain unverified pending a fresh approved call.
+Automatic message likes, standalone progress texts, calling
 the agent yourself, and starting work or asking it questions from Messages
 outside an active request are not available yet. During a call, ask naturally.
 

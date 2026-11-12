@@ -2,7 +2,7 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. Live typing in Gmail is human-confirmed. Queued-speech hangup handling is repaired in source; fresh live qualification remains pending.**
+**Independent pilot. Live typing in Gmail is human-confirmed. The queued-speech hangup repair is deployed; fresh live qualification remains pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. The Claude Code physical call loop remains unverified. Historical
@@ -49,6 +49,19 @@ format checks pass. Independent review passed, including separate execution of
 83 focused backend tests and all nine actual HTTP delivery regressions. One
 caption regression was corrected to enqueue its second item while the first was
 in flight, preserving its original pre-pause queue coverage with the smaller queue.
+
+Source `e03b7d1` deployed successfully as backend
+`12ad52e6-798e-45ae-bd9d-ebdf232ccd4e` and media
+`b76c1663-d29b-411f-a051-7ae4f48c2344`. Exact deployed file hashes match the
+clean source archive; both preceding deployments are removed. HTTP health checks
+pass, the device gateway is connected, and there are no active calls/media
+sessions or pending/unknown effects. Runtime configuration hashes, line routing,
+message cursor sequence 18, backend entities/effects/events, all existing media
+receipt tables and eight installed app/configuration files are unchanged. Local
+Enable, permissions and ACLs are preserved with no active lease. Rollback is the
+previous source `25ddf8a` using unchanged configuration and volumes, after fresh
+idle reconciliation; never restore old databases/cursors or replay unknown effects.
+No live call was placed during this repair or deployment.
 
 ## Follow-up call: voice-delivery rejection causes hangup — November 11
 
