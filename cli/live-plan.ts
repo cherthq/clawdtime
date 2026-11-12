@@ -5,6 +5,7 @@ import type { Adapter } from "../src/contracts.js";
 
 export interface AcceptancePlan {
   schemaVersion: 1;
+  protocolVersion: 2;
   caseId: string;
   adapter: Adapter;
   projectRoot: string;
@@ -33,6 +34,7 @@ export function acceptancePlan(options: {
     const prior = JSON.parse(readFileSync(file, "utf8")) as AcceptancePlan;
     if (
       prior.schemaVersion !== 1 ||
+      prior.protocolVersion !== 2 ||
       prior.caseId !== options.caseId ||
       prior.adapter !== options.adapter ||
       prior.projectRoot !== options.projectRoot ||
@@ -41,7 +43,7 @@ export function acceptancePlan(options: {
       !/^[a-zA-Z0-9_-]{16,100}$/.test(prior.runId)
     )
       throw new Error(
-        "Existing acceptance plan belongs to another case/project/adapter; preserve it.",
+        "Existing acceptance plan is legacy or belongs to another case/project/adapter; preserve it and prepare a fresh v2 case.",
       );
     if (!existsSync(`${file}.prompt.txt`))
       writeFileSync(`${file}.prompt.txt`, `${prior.prompt}\n`, {
@@ -61,9 +63,20 @@ export function acceptancePlan(options: {
     .slice(0, 20);
   const taskId = `acceptance-${options.caseId}`,
     idempotencyKey = `acceptance-${suffix}`;
-  const prompt = `Perform this supervised ClawdTime acceptance case in this disposable project only. Case: ${options.caseId}. Expected adapter: ${options.adapter}. Expected localRunId: ${runId}.\n\nCall connection_status first. Abort before any call unless the localRunId matches and readiness.liveReady is true. Readiness permits considering a supervised test; it is neither user consent nor physical acceptance evidence. Proceed only with the actual user's explicit authorization for this one call. Do not relax native approval or sandbox policy.\n\nStop and join every background actor that can change this project's screen. Call yield_control(backgroundActorsStopped=true). Remain paused except for ClawdTime status/result tools. Call request_attention exactly once with taskId=${JSON.stringify(taskId)}, idempotencyKey=${JSON.stringify(idempotencyKey)}, reason="review", question="ClawdTime supervised acceptance: review the disposable screen, then tell us your chosen label and when you want this coding agent to continue. Speak or text naturally; landscape may make the screen easier to see.", timeoutSeconds=900. Record the returned request ID. On timeout or uncertain outcome, inspect that exact request and stable key; never create a fresh call.\n\nPoll attention_result with waitSeconds=20. Do not fabricate feedback or treat silence as approval. The operator confirms the visible screen and provides feedback by voice or text before asking this agent to continue with their chosen label. This video setup test requires no clicking, typing, scrolling or bounded AI action; control permission alone does not authorize such an exercise. CUA qualification is separate and requires an explicit request. Do not refocus the shared Mac with a question UI during the call. A visibility statement alone is not a request to continue. Read control receipts and the current controlEpoch. Acknowledge the exact response ID, then resume_agent using that epoch. Stay paused if control is active/unknown or native permission is required.\n\nOnly after resume succeeds, create the local disposable result file clawdtime-acceptance-${options.caseId}.txt containing the chosen label and a brief factual summary, using your native file tools under existing permissions. Verify the file. Then complete_attention once with the same request ID and a concise result including the selected label and file path. Do not claim handset delivery or physical CUA success unless the operator actually confirms it.\n\nKeep this exact chat active until the operator confirms handset delivery and the acceptance observations, or explicitly cancels the test; do not finalize while verification is pending. Then report request ID, response ID, resumed epoch, artifact path and the exact completion receipt state. If the tool only returns request.state=completed, describe the Messages result as queued, not delivered; operator evidence must establish native delivery. The operator separately records handset call/screen observations, which feedback channel was actually tested, Messages delivery and timings. Do not claim CUA or an untested feedback channel was qualified. No unrelated actions, background workers or delegation.`;
+  const prompt = `Perform this supervised ClawdTime v2 acceptance case in this disposable project only. Case: ${options.caseId}. Expected adapter: ${options.adapter}. Expected localRunId: ${runId}.
+
+Call connection_status first. Stop before calling unless localRunId matches, protocolVersion is 2 and readiness.liveReady is true. Readiness is not user consent or physical evidence. Obtain actual explicit approval for this one call before request_attention. Preserve native approval and sandbox policy.
+
+Use request_attention once with taskId=${JSON.stringify(taskId)}, idempotencyKey=${JSON.stringify(idempotencyKey)}, reason="review", question="Review the disposable screen and tell this same coding agent your chosen label.", timeoutSeconds=900. Preserve its exact request ID; uncertain outcomes never authorize redial. V2 stays active: do not call yield_control or resume_agent.
+
+Poll conversation_turns with waitSeconds=20 and the retained sequence cursor. Read each real human turn and acknowledge_turn in order. Ask the human through conversation_reply whether the intended screen is visible, then wait for their actual answer; never invent visibility evidence. Keep this same session engaged through multiple turns. Report conversation_progress executing or pending_approval before using native tools. File work can continue while sharing: when asked, create clawdtime-acceptance-${options.caseId}.txt with the human's chosen label, verify it, and publish a concise conversation_reply using one stable replyId for that turn. Mark the actual turn outcome completed. Preserve turns and receipts on reconnect; do not replay replies under new IDs.
+
+Computer-control qualification requires an explicit requested exercise, verified matching shared surface, current local policy and execution_status/transfer_execution ownership. A browser-only tool is not desktop control and an invisible browser is not the shared display. Default fallback is disabled; an old pairing's allowControl is not fallback consent. Unknown effects block handoff. Never weaken native approvals, arm capture/control, install/restart the companion, or change live routing. Do not claim submitted input proves intended UI success.
+
+With the separately approved scope, verify sharing survives normal native file work and multiple spoken replies. Record actual human observations and elapsed connection time; a test shorter than five minutes cannot qualify sustained connection beyond five minutes. Qualify Codex and Claude separately. Do not promise native tool interruption or full-duplex barge-in. On explicit ending use end_conversation and inspect cleanup; an individual acknowledgement/reply must not end sharing. Do not use legacy complete_attention or verify as v2 acceptance. Keep this chat active until the human confirms completion or cancels. Report only observed voice/text/display/control paths, native approval behavior, durations and unresolved outcomes. No unrelated actions or background workers.`;
   const plan: AcceptancePlan = {
     schemaVersion: 1,
+    protocolVersion: 2,
     caseId: options.caseId,
     adapter: options.adapter,
     projectRoot: options.projectRoot,

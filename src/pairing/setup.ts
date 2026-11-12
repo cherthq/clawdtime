@@ -206,7 +206,7 @@ export class SetupService {
         409,
         "Wait for the setup notice delivery receipt; do not resend an uncertain notice.",
       );
-    if (session.state !== "yielded")
+    if (session.protocolVersion !== 2 && session.state !== "yielded")
       throw new DomainError(
         409,
         "Yield the agent session before starting the test.",
@@ -233,6 +233,11 @@ export class SetupService {
     const { session, test } = this.current(raw);
     if (!test || !test.requestId)
       throw new DomainError(409, "A setup call has not been requested.");
+    if (session.protocolVersion === 2)
+      throw new DomainError(
+        409,
+        "Agent-owned setup requires separately recorded physical acceptance; legacy verification does not qualify this protocol.",
+      );
     if (test.state === "verified") return { test };
     if (test.state !== "call_requested")
       throw new DomainError(409, "Setup test is closed.");

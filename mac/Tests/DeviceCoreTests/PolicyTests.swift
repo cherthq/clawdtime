@@ -72,7 +72,7 @@ final class PolicyTests: XCTestCase {
         renewed, now: now.addingTimeInterval(31), sessionAvailable: true, accessibility: true))
   }
   func testControlNeedsIndependentPermissionCurrentFrameAndFreshSession() throws {
-    let p = try DevicePolicy(config: config())
+    let p = try DevicePolicy(config: config(), preferences: ControlPreferences(deviceId: "device", policy: .agentToolsWithFallback))
     p.arm()
     XCTAssertThrowsError(
       try p.begin(

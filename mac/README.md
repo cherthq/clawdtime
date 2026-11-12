@@ -307,3 +307,55 @@ Tests cover idempotent activation, interrupted binding publication, preserved
 credentials/unknown receipts, conflicting claims, check-only behavior, missing
 permissions versus success, signature/team/checksum/archive refusal, and sanitized
 unreachable-helper results. They use fixtures and never launch an installed app.
+
+## Agent-owned conversation and Control Panel (protocol 2)
+
+The existing window is now **ClawdTime Control Panel**. It shows the paired call's
+coding client/project, current sharing display and macOS permissions, call state,
+executor, pending native approval and unresolved input. Agent/session labels are
+transient authenticated status, not permission grants. A stale status says unavailable;
+it is never presented as proof that a native tool stopped or a UI action succeeded.
+
+The local computer-control preference defaults to **Agent tools only**. The other
+choices are **View only** and **Agent tools with ClawdTime fallback**. The previous
+controller ACL (`allowControl: true` in pairing) does not opt into fallback. Native
+agent permissions remain in the coding client. Fallback still requires the exact
+pairing, local Enable, Accessibility, a fresh frame and exclusive current executor.
+The owner-only `control-policy.json` beside the receipt journal retains the choice
+and increasing revision. Restart never arms sharing. No network route changes this
+preference. A mode change stops and disarms sharing; unresolved input prevents
+widening policy, while View only and Stop remain available. Saving a choice does
+not place a call, grant macOS access or start capture.
+
+Protocol-2 leases append `protocolVersion:2`, `sessionId`, `executorEpoch`,
+`policyRevision` and `executor` (`none`, `native`, `clawdtime`). An existing lease
+may change executor/mode only with a higher epoch and current local revision.
+The selected display, member, call and session cannot change. Input additionally
+carries the exact session, epoch and local revision. Changing executor invalidates
+the input frame but retains the capture session. Unknown or unobserved input
+prevents handoff. A later fresh frame records observation availability only; it
+does not assert that the intended application result occurred.
+
+Authenticated `POST /v1/panel` accepts bounded, transient telemetry for that lease.
+After sharing stops, status and controls can continue only for the exact previously
+bound session/call/member/display and a nondecreasing executor epoch. It cannot
+rearm, create a lease or authorize input. `/v1/status` adds `controlPolicy`,
+`policyRevision`, `unresolvedActionCount`, and an optional `panelCommand` containing
+one stable command ID and exact session/call binding. Mute, End call and Request
+pause send cooperative requests; the UI keeps them pending until the same command
+is acknowledged by the backend. The controls disable when status is stale.
+Stop sharing still immediately disables ClawdTime's own capture/input path.
+It is not a system-wide kill switch for native coding-client tools.
+
+Old lease records remain readable and old receipt IDs retain their semantics.
+A newly built companion nevertheless requires a fresh local fallback preference
+before accepting even a legacy control lease. This is an intentional local
+restriction, not conversion of old permission into new consent. Installing or
+restarting this new companion is a separate operator action; builds and tests do
+not update the installed app.
+
+Panel labels may include a bounded transient `personLabel` (up to 80 UTF-8 bytes,
+no control characters) and project/chat label; they are not written to the policy
+or receipt stores. Media supplies actual speaking/listening state for the exact
+call. Ended and muted status remain authoritative and are never replaced by a
+status from another media session.

@@ -13,7 +13,7 @@ from aiohttp import ClientSession,ClientTimeout,TCPConnector,WSMsgType,web
 from service import Gateway,MAX_FRAME
 from relay_diagnostics import milliseconds, stamp
 
-PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?)$')
+PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel))$')
 
 def trusted_tls_context():
     # Isolated trust roots: macOS framework Python may have no default CA file.
@@ -68,7 +68,7 @@ async def relay(gateway,url):
                             result={'id':item['id'],'status':503,'headers':{},'body':''}
                             try:
                                 method,path=item['method'],item['path']
-                                if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or ('/devices/' in path and method!='GET'):raise ValueError()
+                                if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or ('/devices/' in path and method!=('POST' if path.endswith('/panel') else 'GET')):raise ValueError()
                                 record('forwarded')
                                 async with http.request(method,local+path,headers={'Authorization':'Bearer '+key,'X-ClawdTime-Relay-Request':identity or ''},**({'json':item['body']} if item.get('body') is not None else {}),allow_redirects=False) as response:
                                     chunks=[];size=0

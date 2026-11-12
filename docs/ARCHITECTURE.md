@@ -39,7 +39,57 @@ retains the line reservation until worker cleanup_complete. Media shutdown alone
 is not native hangup. Standby with protected live config drains owned calls without
 polling new messages or dispatching new calls/results.
 
-## Session continuation and control
+## Agent-owned conversation (v2)
+
+New connectors register `protocolVersion:2`; omission or explicit `1` preserves
+legacy behavior. Registration binds version and capabilities immutably to the
+exact project/host/client run. A reconnect cannot switch an existing call's brain.
+The foreground JSONL bridge serves the existing chat; it is not a replacement
+coding agent, client UI automation, or unsolicited message injection.
+
+Qualified voice/text enters a bounded ordered turn inbox. The originating coding
+session polls, acknowledges delivery, reports execution or pending native approval,
+then publishes speech with stable reply IDs. Acknowledgement does not release
+sharing or finish the request. Explicit end closes the call. A new turn received
+during work waits in sequence; corrections are content for that same session.
+Cancellation requests do not assert that a running native action was interrupted.
+
+The legacy model is never called for v2 turns, even when native tools are unavailable.
+`nativeControl` distinguishes none/browser/desktop and `sharedSurface` attests the
+actual intended display surface. Default capabilities make no CUA claim. An
+invisible browser context does not qualify the shared display. Normal tool
+approvals remain the coding client's responsibility; phone speech cannot bypass them.
+
+Call state, screen leases, turn state, and execution ownership are separate records.
+An active v2 coding session can keep a view lease while reasoning/editing files.
+Only conflicting shared-surface input claims native or ClawdTime ownership. A
+compare-and-set epoch and explicit preceding completion attestation prevent stale
+owners from dispatching; pending/unknown actions block handoff. This is cooperative
+native ownership, not an OS-wide input interceptor.
+
+The Mac securely stores local policy and its revision. It defaults to Agent tools
+only; old `allowControl:true` is not fallback consent. Fallback also requires the
+pairing permission, current exact session/call/display binding, local fallback mode,
+matching revision and executor epoch, and fresh frame/receipt checks at every hop.
+The same lease can change executor without replacing the video stream. Local
+restriction or Stop cannot be overridden by backend telemetry. Screens and raw audio
+stay transient; input text is hashed, not journaled.
+
+Turn text is retained only while pending, bounded to 100 outstanding turns and
+24 hours; terminal/uncertain outcomes redact it while preserving sequence and
+fingerprint receipts. Reply text is transient; backend and media speech receipts
+retain IDs/hashes/outcomes. Ambiguous playback is reconciled by GET, never a new
+POST or new ID. The v2 inbound encrypted outbox payload is cleared once routed.
+No duplicate unrestricted model conversation is stored.
+
+Control Panel status travels over authenticated media→gateway→helper metadata.
+Exact-session pause/mute/end commands return through readiness polling, persist an
+intent before handling, and are acknowledged by stable ID. Sharing Stop is local
+and immediate; native cancellation remains cooperative. Mute suppresses STT/TTS
+while video continues. Half-duplex playback and bounded STT queues remain; full
+barge-in is not promised.
+
+## Legacy session continuation and control (v1)
 
 The MCP connector registers an opaque project/host/client run identity. Tool
 polling is bounded (20 seconds maximum per request). Reads do not consume an
@@ -62,7 +112,7 @@ helper failure, lock/sleep, revocation, expiry or lost policy latch the selectio
 off; a reconnect does not revive it. Helper permissions and independent local
 arming remain authoritative. The helper starts stopped, even after restart.
 
-## Voice and model authority
+## Legacy voice and model authority (v1)
 
 Only the exact worker audio publisher is subscribed. TTS suspends STT. The backend
 requires fresh segments and exact active call binding, without a wake phrase.

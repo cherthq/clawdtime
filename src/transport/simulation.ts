@@ -8,6 +8,33 @@ export class SimulationTransport implements Transport {
   readonly messages: { pairingId: string; text: string; effectId: string }[] =
     [];
   readonly ended: string[] = [];
+  readonly spoken: { requestId: string; replyId: string; text: string }[] = [];
+  async speechStatus(
+    _request: AttentionRequest,
+    _pairing: Pairing,
+    replyId: string,
+  ) {
+    return {
+      state: this.spoken.some((s) => s.replyId === replyId)
+        ? ("completed" as const)
+        : ("unknown" as const),
+    };
+  }
+  async speak(
+    request: AttentionRequest,
+    _pairing: Pairing,
+    replyId: string,
+    text: string,
+    reconcileOnly = false,
+  ) {
+    const prior = this.spoken.find((s) => s.replyId === replyId);
+    if (!prior && !reconcileOnly)
+      this.spoken.push({ requestId: request.id, replyId, text });
+    return {
+      state:
+        prior || !reconcileOnly ? ("completed" as const) : ("unknown" as const),
+    };
+  }
   async call(request: AttentionRequest, _pairing: Pairing, effectId: string) {
     const callId = `sim_${hash(effectId).slice(0, 32)}`;
     if (!this.calls.some((c) => c.effectId === effectId))

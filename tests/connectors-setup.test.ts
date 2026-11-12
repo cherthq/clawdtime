@@ -325,6 +325,7 @@ function bridge(
     }
   });
   const done = startSetupSession({
+    protocolVersion: 1,
     connection: f.connection,
     project: f.project,
     adapter: "codex",

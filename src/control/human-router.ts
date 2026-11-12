@@ -1,3 +1,4 @@
+import { ConversationService } from "../attention/conversation.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ClawdTime, ResponseInput } from "../attention/service.js";
@@ -63,6 +64,7 @@ export class HumanCommandConflict extends Error {
   }
 }
 export class HumanRouter {
+  readonly turns: ConversationService;
   private busy = new Set<string>();
   private running = new Map<string, AbortController>();
   private history = new Map<
@@ -77,7 +79,9 @@ export class HumanRouter {
     readonly control: ControlCoordinator,
     readonly conversation?: ConversationAgent,
     readonly maintainViewing?: () => Promise<void>,
-  ) {}
+  ) {
+    this.turns = new ConversationService(service);
+  }
   private qualified(input: ResponseInput) {
     const store = this.service.store;
     const request = store.get<AttentionRequest>("attention", input.requestId);
@@ -105,7 +109,16 @@ export class HumanRouter {
   }
   /** Read-only reconciliation of the exact existing command, never execution. */
   reconcile(input: ResponseInput): HumanResult | undefined {
-    this.qualified(input);
+    const { request } = this.qualified(input);
+    if (
+      this.service.store.get<AgentSession>("session", request.sessionId)
+        ?.protocolVersion === 2
+    ) {
+      const turn = this.turns.reconcile(input);
+      return turn
+        ? { accepted: true, state: turn.state }
+        : this.previous(input);
+    }
     return this.previous(input);
   }
   private previous(input: ResponseInput): HumanResult | undefined {
@@ -165,6 +178,17 @@ export class HumanRouter {
     const stop = async () => {
       store.saveState(`view-stopped:${request.id}`, true);
       this.running.get(request.id)?.abort();
+      const owner = store.get<import("../contracts.js").ExecutionOwnership>(
+        "execution",
+        request.id,
+      );
+      if (owner)
+        store.put("execution", {
+          ...owner,
+          epoch: owner.epoch + 1,
+          state: owner.executor === "none" ? "paused" : "uncertain",
+          updatedAt: this.control.now(),
+        });
       await this.control.stopPairing(pairing.id);
       this.history.delete(request.id);
       return { stopped: true as const };
@@ -177,6 +201,14 @@ export class HumanRouter {
         stopped: true,
         reply: "Screen sharing and control stopped.",
       });
+    }
+    if (
+      store.get<AgentSession>("session", request.sessionId)?.protocolVersion ===
+      2
+    ) {
+      const turn = this.turns.receive(input);
+      // Delivery is not execution, speech, completion or permission to stop sharing.
+      return { accepted: true, state: turn.state };
     }
     if (this.busy.has(pairing.deviceId))
       return persist("busy", {

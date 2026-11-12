@@ -133,6 +133,8 @@ const mcpArgs = [
   resolve("node_modules/tsx/dist/loader.mjs"),
   entry,
   "mcp",
+  "--protocol-version",
+  "1",
   "--project",
   project,
   "--agent",

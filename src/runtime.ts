@@ -1,3 +1,4 @@
+import { PanelSynchronizer } from "./control/panel.js";
 import { retireObsoleteNotice as retireNotice } from "./control/obsolete-notice.js";
 import { SetupService } from "./pairing/setup.js";
 import { welcomeMessage } from "./pairing/welcome.js";
@@ -207,6 +208,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     : new SimulatedDevice();
   const control = new ControlCoordinator(store, device),
     viewing = new Viewing(store, device, Date.now, transport.mode === "live");
+  const panel = new PanelSynchronizer(service, control);
   const human = new HumanRouter(
     service,
     control,
@@ -321,6 +323,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     if (maintenance) return maintenance;
     maintenance = (async () => {
       service.expireSessions();
+      human.turns.prune();
       setup.expire();
       if (!live || !(transport instanceof NativeTransport) || !config || !vault)
         return;
@@ -418,6 +421,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     ticking = true;
     try {
       service.expireSessions();
+      human.turns.prune();
       setup.expire();
       if (live && transport instanceof NativeTransport && config && vault) {
         if (!transport.messages.cursor())
@@ -502,6 +506,18 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                   stopped?: boolean;
                   receipt?: unknown;
                 };
+                if (
+                  store.get<import("./contracts.js").AgentSession>(
+                    "session",
+                    pending[0]!.sessionId,
+                  )?.protocolVersion === 2 &&
+                  result.accepted &&
+                  !result.stopped
+                ) {
+                  // The exact originating agent supplies speech; no parallel narrator.
+                  store.put("inbound", { ...item, sealed: "", state: "done" });
+                  continue;
+                }
                 reply =
                   result.reply ??
                   result.clarification ??
@@ -606,6 +622,9 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
           },
         );
       await viewing.tick();
+      // Status telemetry cannot turn an otherwise healthy call into a transport failure.
+      // Helper status expires locally; pending command intents remain for reconciliation.
+      await panel.tick().catch(() => {});
       store.saveState("heartbeat", { ok: true, at: Date.now() });
     } catch {
       // A broken inbound feed must never prevent expiration or owned-call cleanup.

@@ -25,6 +25,7 @@ import {
   secureWrite,
   type Connection,
 } from "../connectors/shared/state.js";
+import { protocolOptions } from "../connectors/shared/protocol.js";
 import { startMcp } from "../connectors/shared/mcp.js";
 import {
   installConfiguration,
@@ -63,8 +64,26 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("--agent must be codex or claude-code.");
   const project = realpathSync(flags.project || process.cwd());
   const connectionFile = flags.connection || connectionPath(project, adapter);
+  const protocol = protocolOptions(flags);
+  if (
+    command === "run" &&
+    [
+      "protocol-version",
+      "native-control",
+      "shared-surface",
+      "native-cancellation",
+    ].some((key) => flags[key] !== undefined)
+  )
+    throw new Error(
+      "Protocol/capability flags apply only to mcp or setup-session, not run. Preserve the owned MCP configuration; configure a fresh qualified session before starting a call. Existing run protocols are immutable.",
+    );
   if (command === "mcp") {
-    await startMcp({ connection: connectionFile, project, adapter });
+    await startMcp({
+      connection: connectionFile,
+      project,
+      adapter,
+      ...protocol,
+    });
     return;
   }
   if (command === "setup-session") {
@@ -77,6 +96,7 @@ export async function main(args = process.argv.slice(2)) {
       project,
       adapter,
       runId: flags["run-id"],
+      ...protocol,
     });
     return;
   }

@@ -1,4 +1,4 @@
-/** Shared v1 boundary. IDs are opaque, credentials never enter response/log objects. */
+/** Versioned boundary; omitted protocolVersion retains v1 behavior. IDs are opaque, credentials never enter response/log objects. */
 export type Adapter = "claude-code" | "codex";
 export interface Pairing {
   id: string;
@@ -22,7 +22,15 @@ export interface AgentSession {
   externalSessionId: string;
   hostId: string;
   createdAt: number;
-  capabilities: { cooperativePause: boolean; polling: boolean };
+  /** Immutable for the lifetime of this exact registered session. Omitted = legacy. */
+  protocolVersion?: 1 | 2;
+  capabilities: {
+    cooperativePause: boolean;
+    polling: boolean;
+    nativeControl?: "none" | "browser" | "desktop";
+    sharedSurface?: boolean;
+    nativeCancellation?: boolean;
+  };
   state: "active" | "yielded" | "stopped";
   controlEpoch: number;
   lastSeenAt?: number;
@@ -92,6 +100,10 @@ export interface ControlLease {
   displayId: string;
   memberId: string;
   mode: "view" | "control";
+  protocolVersion?: 2;
+  executor?: "none" | "native" | "clawdtime";
+  executorEpoch?: number;
+  policyRevision?: number;
   epoch: number;
   expiresAt: number;
   state: "active" | "released" | "revoked" | "unknown";
@@ -134,6 +146,24 @@ export interface Transport {
     text: string,
     effectId: string,
   ): Promise<Record<string, unknown>>;
+  speechStatus?(
+    request: AttentionRequest,
+    pairing: Pairing,
+    replyId: string,
+  ): Promise<{
+    state:
+      "accepted" | "playing" | "completed" | "cancelled" | "failed" | "unknown";
+  }>;
+  speak?(
+    request: AttentionRequest,
+    pairing: Pairing,
+    replyId: string,
+    text: string,
+    reconcileOnly?: boolean,
+  ): Promise<{
+    state:
+      "accepted" | "playing" | "completed" | "cancelled" | "failed" | "unknown";
+  }>;
   endCall(callId: string, effectId: string): Promise<Record<string, unknown>>;
 }
 export interface DevicePort {
@@ -155,6 +185,7 @@ export interface RequestAttentionInput {
   timeoutSeconds?: number;
 }
 export interface SessionRegistration {
+  protocolVersion?: 1 | 2;
   adapter: Adapter;
   adapterVersion: string;
   projectRoot: string;
@@ -189,4 +220,18 @@ export interface SetupTest {
   approvalEventId?: string;
   requestId?: string;
   verifiedAt?: number;
+}
+
+/** Local policy is authoritative; this is a fresh synchronized snapshot, never consent. */
+export type ComputerControlPolicy =
+  "view_only" | "agent_tools_only" | "agent_tools_with_fallback";
+export interface ExecutionOwnership {
+  id: string;
+  requestId: string;
+  sessionId: string;
+  executor: "none" | "native" | "clawdtime";
+  epoch: number;
+  state: "idle" | "working" | "pending_approval" | "uncertain" | "paused";
+  policyRevision?: number;
+  updatedAt: number;
 }

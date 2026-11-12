@@ -953,6 +953,128 @@ export class NativeTransport implements Transport {
       return false;
     }
   }
+  /** Exact read-only receipt lookup; never needs the original spoken text. */
+  async speechStatus(
+    request: AttentionRequest,
+    pairing: Pairing,
+    replyId: string,
+  ) {
+    const session = this.store.get<MediaRecord>("media", request.callId ?? "");
+    const previous = this.store.get<QuestionSpeech>("speech", replyId);
+    if (
+      !session ||
+      session.requestId !== request.id ||
+      request.pairingId !== pairing.id ||
+      (previous &&
+        (previous.requestId !== request.id ||
+          previous.sessionId !== session.id))
+    )
+      throw new DomainError(409, "Speech receipt binding is unavailable.");
+    if (
+      previous &&
+      ["completed", "cancelled", "failed"].includes(previous.state)
+    )
+      return { state: previous.state as "completed" | "cancelled" | "failed" };
+    try {
+      const raw = await jsonRequest(
+        `${this.config.mediaOrigin}/sessions/${session.id}/speech/${encodeURIComponent(replyId)}`,
+        {
+          method: "GET",
+          headers: { authorization: `Bearer ${this.config.mediaKey}` },
+        },
+        (url, init) =>
+          this.request(url, { ...init, signal: AbortSignal.timeout(2000) }),
+      );
+      const receipt = speechReceiptSchema.parse(raw);
+      if (receipt.id !== replyId || receipt.sessionId !== session.id)
+        throw new Error("Speech receipt identity differs.");
+      if (previous)
+        this.store.put<QuestionSpeech>("speech", {
+          ...previous,
+          state: receipt.state,
+          ...(receipt.updatedAt ? { updatedAt: receipt.updatedAt } : {}),
+        });
+      return { state: receipt.state };
+    } catch {
+      return { state: "unknown" as const };
+    }
+  }
+  /** Agent-authored speech uses one durable ID; after any attempted POST only GET may reconcile. */
+  async speak(
+    request: AttentionRequest,
+    pairing: Pairing,
+    replyId: string,
+    text: string,
+    reconcileOnly = false,
+  ) {
+    const session = this.store.get<MediaRecord>("media", request.callId ?? "");
+    if (
+      !session ||
+      session.requestId !== request.id ||
+      request.pairingId !== pairing.id
+    )
+      throw new DomainError(409, "Speech media binding is unavailable.");
+    const fingerprint = hash(text);
+    const claim = this.store.transaction(() => {
+      const previous = this.store.get<QuestionSpeech>("speech", replyId);
+      if (
+        previous &&
+        (previous.fingerprint !== fingerprint ||
+          previous.requestId !== request.id ||
+          previous.sessionId !== session.id)
+      )
+        throw new DomainError(409, "Speech identity changed.");
+      const record: QuestionSpeech = previous ?? {
+        id: replyId,
+        sessionId: session.id,
+        requestId: request.id,
+        fingerprint,
+        state: "dispatching",
+      };
+      if (!previous) {
+        if (!reconcileOnly) this.guard(pairing);
+        if (
+          !reconcileOnly &&
+          (session.state !== "active" ||
+            pairing.revokedAt !== undefined ||
+            request.deadline <= Date.now())
+        )
+          throw new DomainError(409, "Speech authorization is closed.");
+        this.store.put("speech", record);
+      }
+      return { record, lookup: !!previous || reconcileOnly };
+    });
+    if (["completed", "cancelled", "failed"].includes(claim.record.state))
+      return {
+        state: claim.record.state as "completed" | "cancelled" | "failed",
+      };
+    try {
+      const raw = claim.lookup
+        ? await this.media(
+            `/sessions/${session.id}/speech/${encodeURIComponent(replyId)}`,
+          )
+        : await this.media(`/sessions/${session.id}/speak`, {
+            id: replyId,
+            callId: session.id,
+            text,
+          });
+      const receipt = speechReceiptSchema.parse(raw);
+      if (receipt.id !== replyId || receipt.sessionId !== session.id)
+        throw new Error("Speech receipt identity differs.");
+      this.store.put<QuestionSpeech>("speech", {
+        ...claim.record,
+        state: receipt.state,
+        ...(receipt.updatedAt ? { updatedAt: receipt.updatedAt } : {}),
+      });
+      return { state: receipt.state };
+    } catch {
+      this.store.put<QuestionSpeech>("speech", {
+        ...claim.record,
+        state: "unknown",
+      });
+      return { state: "unknown" as const };
+    }
+  }
   private async question(session: MediaRecord) {
     const attention = this.store.get<AttentionRequest>(
       "attention",

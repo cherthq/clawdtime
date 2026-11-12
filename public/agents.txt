@@ -59,35 +59,48 @@ run identity/checkpoint and disclose that limit; never promise an immortal sessi
    or readiness, reuse consumed consent, or require an additional SMS code.
    Wait for the notice receipt; never blindly retry unknown sends/calls.
 
-7. Stop conflicting coding activity and background actors, then yield using
-   backgroundActorsStopped=true. Start the single authorized test through the
-   bridge. No automatic redial. The human can talk naturally over FaceTime or
-   text normally, including compound requests like clicking a textbox and typing.
-   This setup test is screen sharing plus voice or text feedback; no click,
-   typing, scroll, or AI-action exercise is required. Control is optional and
-   needs its own permission. Voice currently takes turns, without barge-in.
-   Do not prescribe command prefixes or a screen-confirmation phrase. Ask for
-   honest screen feedback and suggest landscape if the desktop looks small.
-   Separate screen/control consent, fresh frames, exclusive input, action receipts
-   and post-action observation remain mandatory. Local Stop always wins.
+7. New runs default to the agent-owned v2 protocol. Start the single specifically
+   authorized test without legacy yield/resume. Poll conversation_turns with the
+   exact requestId and a sequence cursor, waitSeconds at most 20. Acknowledge each
+   turn's delivery separately, keep the same coding session working, and publish
+   direct conversation_reply text using stable turn/reply IDs. Report progress or
+   pending native approval without bypassing the client's actual approval flow.
+   End with end_conversation only when explicitly requested. An utterance or ack
+   does not stop sharing or finish the call. Silence never grants permission.
 
-8. Receive the exact response, acknowledge it, wait for control release, and
-   resume this same session at the current control epoch. Continue the task,
-   then complete with a factual result through Messages. Use verify only after
-   a real qualified call, fresh screen capture, explicit positive human screen
-   feedback, same-session continuation, and acknowledged Messages result exist.
-   Synthetic tests never qualify as physical acceptance. If live testing is
-   blocked, keep the setup question/workflow pending, explain the exact blocker,
-   and continue independent work. Cancellation ends the test and releases access.
-   For a failed/canceled call, poll the original result until cleanup is confirmed,
-   then send terminal-ack with the current control epoch before continuing diagnosis
-   in this same session. This acknowledges cleanup, never human approval. Keep the
-   foreground bridge alive. Read-only diagnostics are allowed while yielded.
-   A further test needs separate explicit human approval; never redial automatically.
+8. Native tools are preferred. Only conflicting shared-screen input needs exclusive
+   execution ownership; unrelated reasoning/file work may continue while video is
+   on. Claim a native executor only for verified tools on the intended visible
+   shared surface. A hidden browser does not prove the human saw the action.
+   Stop/join conflicting actors and acknowledge their completion before changing
+   executor. Unknown or pending input cannot be retried or handed off blindly.
+   The Control Panel defaults to Agent tools only; old allowControl=true is not
+   new fallback consent. View only forbids input. ClawdTime fallback requires the
+   human's explicit local mode plus exact current authority and an image-capable
+   MCP client. The foreground bridge cannot render transient fallback screenshots
+   and refuses fallback input; use suitable native tools or report the boundary.
+
+9. Keep the conversation in this exact session. Voice is half-duplex, without
+   promised barge-in. Ask naturally for honest screen feedback; do not require a
+   phrase or prescribe a control exercise. Local Stop ends ClawdTime capture/input
+   immediately, while native tool cancellation is cooperative and may remain
+   unresolved. Mute/end are separate controls. A setup test is screen sharing and
+   voice/text feedback, not permission to click/type/send. Tests, emitted frames
+   and input receipts do not prove physical success. V2 physical verification is
+   a separate operator qualification; the legacy verify command cannot certify it.
+   Calls longer than five minutes, native CUA and reconnect need explicit evidence.
+
+10. Existing version-1 runs retain their original installed protocol: yield,
+    start, result, ack, resume, complete and verify. Select compatibility only
+    explicitly (--protocol-version 1 for a new run); never change an active run's
+    brain or substitute a separate model when v2 tools are unavailable. On any
+    failure retain original IDs, cursors and uncertain outcomes. A further call
+    requires separate explicit human approval. Do not redial or reopen a stopped
+    session to escape an unknown effect.
 
 Screen/audio remain transient. Preserve cursors, original effect IDs, unknown
 outcomes and receipts. One lead owns live integration; never run two services
 on the same phone line. The installed skill supports future agent-initiated
-calls and request-completion Messages in this project. Incoming FaceTime and general work/questions from
+calls in this project. Version-1 request completion also supports Messages recaps. Incoming FaceTime and general work/questions from
 Messages outside an active request are not implemented. No Mode 2 task initiation
 or cloud sandbox is involved.

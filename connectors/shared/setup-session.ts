@@ -1,3 +1,4 @@
+import { sessionCapabilities, type ProtocolOptions } from "./protocol.js";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { dirname, join } from "node:path";
@@ -17,6 +18,12 @@ import {
   secureWrite,
   type RunState,
 } from "./state.js";
+import {
+  conversationCommands,
+  executeConversationCommand,
+  isConversationCommand,
+  isConversationRead,
+} from "./conversation.js";
 import { startHeartbeat } from "./heartbeat.js";
 import { requireAttentionReadiness, summarizeReadiness } from "./readiness.js";
 import { requireRetryPredecessor, validateRetryResult } from "./setup-retry.js";
@@ -55,6 +62,9 @@ const effects = new Set([
   "cancel",
   "terminal-ack",
   "retry",
+  ...Object.keys(conversationCommands).filter(
+    (name) => !isConversationRead(name as keyof typeof conversationCommands),
+  ),
 ]);
 const textArg = (args: Record<string, unknown>, key: string, max = 200) => {
   const value = args[key];
@@ -70,6 +80,10 @@ export async function startSetupSession(options: {
   project: string;
   adapter: Adapter;
   runId: string;
+  protocolVersion?: 1 | 2;
+  nativeControl?: ProtocolOptions["nativeControl"];
+  sharedSurface?: boolean;
+  nativeCancellation?: boolean;
   input?: Readable;
   output?: Writable;
   request?: typeof fetch;
@@ -173,7 +187,8 @@ export async function startSetupSession(options: {
         projectRoot: connection.projectRoot,
         externalSessionId: options.runId,
         hostId: connection.hostId,
-        capabilities: { cooperativePause: true, polling: true },
+        protocolVersion: options.protocolVersion ?? 2,
+        capabilities: sessionCapabilities(options),
       });
       run = { ...run, session: result.session, token: result.token };
       secureWrite(statePath, run);
@@ -197,6 +212,7 @@ export async function startSetupSession(options: {
       projectRoot: connection.projectRoot,
       adapter: connection.adapter,
       currentChat: true,
+      protocolVersion: run.session?.protocolVersion ?? 1,
       next: "Keep this foreground bridge alive. Use this chat's native question tool for pre-call setup; during a call keep dialogue on the phone so Mac focus stays unchanged. Do not finalize or stop while setup is pending.",
     });
     const lines = createInterface({
@@ -224,17 +240,43 @@ export async function startSetupSession(options: {
         const args = command.args || {};
         if (typeof args !== "object" || Array.isArray(args))
           throw new Error("args must be an object.");
-        // Validate before persisting any effect intent.
-        const requestId = [
-          "result",
-          "diagnostics",
-          "ack",
-          "resume",
-          "complete",
-          "terminal-ack",
-        ].includes(command.command)
-          ? textArg(args, "requestId")
+        if (command.command === "yield" && run.session?.protocolVersion === 2)
+          throw new Error(
+            "V2 keeps this coding session active. Use transfer_execution for shared-screen input; legacy yield is unavailable.",
+          );
+        const conversationCommand = isConversationCommand(command.command)
+          ? command.command
           : undefined;
+        if (conversationCommand) {
+          if (run.session?.protocolVersion !== 2)
+            throw new Error(
+              "Legacy sessions retain their original protocol; do not switch an active call to v2.",
+            );
+          conversationCommands[conversationCommand].schema.parse(args);
+          if (
+            ["observe_shared_screen", "act_on_shared_screen"].includes(
+              conversationCommand,
+            ) ||
+            (conversationCommand === "transfer_execution" &&
+              args.executor === "clawdtime")
+          )
+            throw new Error(
+              "ClawdTime fallback requires an image-capable MCP connection. The foreground JSONL bridge cannot carry transient screen images safely. Use suitable native tools or a separately qualified MCP session; never replace an active session to evade unknown outcomes.",
+            );
+        }
+        // Validate before persisting any effect intent.
+        const requestId = conversationCommand
+          ? textArg(args, "requestId")
+          : [
+                "result",
+                "diagnostics",
+                "ack",
+                "resume",
+                "complete",
+                "terminal-ack",
+              ].includes(command.command)
+            ? textArg(args, "requestId")
+            : undefined;
         const responseId =
           command.command === "ack" ? textArg(args, "responseId") : undefined;
         const completeText =
@@ -377,111 +419,129 @@ export async function startSetupSession(options: {
           secureWrite(bridgePath, bridge);
         }
         let result: any;
-        switch (command.command) {
-          case "diagnostics":
-            // Read-only metadata: no effect intent, run update or bridge checkpoint mutation.
-            emit({
-              id: command.id,
-              ok: true,
-              result: await client.diagnostics(requestId!),
-            });
-            continue;
-          case "status": {
-            const backend = await client.doctor();
-            const status = await client.setupStatus();
-            bridge.test = status.test;
-            result = {
-              ...status,
-              readiness: summarizeReadiness(backend),
-              session: backend.session,
-              localRunId: options.runId,
-            };
-            break;
-          }
-          case "invite":
-            result = await client.setupInvite();
-            break;
-          case "authorize":
-            result = validateSetupAuthorization(
-              await client.setupAuthorize(authorizationTestId!, true),
-              authorizationTestId!,
-              run.session!.id,
-              connection.pairing.id,
-            );
-            break;
-          case "retry":
-            result = validateRetryResult(
-              await client.setupRetry(previousTestId!),
-              previousTestId!,
-              run.session!.id,
-              connection.pairing.id,
-            );
-            break;
-          case "yield":
-            result = await client.yield();
-            break;
-          case "start":
-            result = await client.setupStart();
-            break;
-          case "result": {
-            const deadline = Date.now() + Number(waitSeconds) * 1000;
-            do {
-              result = await client.result(requestId!);
-              if (
-                closed ||
-                result.response ||
-                ![
-                  "requested",
-                  "queued",
-                  "ringing",
-                  "connected",
-                  "awaiting_input",
-                ].includes(result.request.state) ||
-                Date.now() >= deadline
-              )
-                break;
-              await new Promise((resolve) =>
-                setTimeout(
-                  resolve,
-                  Math.min(1000, Math.max(0, deadline - Date.now())),
-                ),
+        if (conversationCommand) {
+          result = await executeConversationCommand(
+            client,
+            conversationCommand,
+            args,
+            () => closed,
+          );
+        } else
+          switch (command.command) {
+            case "diagnostics":
+              // Read-only metadata: no effect intent, run update or bridge checkpoint mutation.
+              emit({
+                id: command.id,
+                ok: true,
+                result: await client.diagnostics(requestId!),
+              });
+              continue;
+            case "status": {
+              const backend = await client.doctor();
+              const status = await client.setupStatus();
+              bridge.test = status.test;
+              result = {
+                ...status,
+                readiness: summarizeReadiness(backend),
+                session: backend.session,
+                protocolVersion: run.session?.protocolVersion ?? 1,
+                localRunId: options.runId,
+              };
+              break;
+            }
+            case "invite":
+              result = await client.setupInvite();
+              break;
+            case "authorize":
+              result = validateSetupAuthorization(
+                await client.setupAuthorize(authorizationTestId!, true),
+                authorizationTestId!,
+                run.session!.id,
+                connection.pairing.id,
               );
-            } while (!closed);
-            break;
+              break;
+            case "retry":
+              result = validateRetryResult(
+                await client.setupRetry(previousTestId!),
+                previousTestId!,
+                run.session!.id,
+                connection.pairing.id,
+              );
+              break;
+            case "yield":
+              result = await client.yield();
+              break;
+            case "start":
+              result = await client.setupStart();
+              break;
+            case "result": {
+              const deadline = Date.now() + Number(waitSeconds) * 1000;
+              do {
+                result = await client.result(requestId!);
+                if (
+                  closed ||
+                  result.response ||
+                  ![
+                    "requested",
+                    "queued",
+                    "ringing",
+                    "connected",
+                    "awaiting_input",
+                  ].includes(result.request.state) ||
+                  Date.now() >= deadline
+                )
+                  break;
+                await new Promise((resolve) =>
+                  setTimeout(
+                    resolve,
+                    Math.min(1000, Math.max(0, deadline - Date.now())),
+                  ),
+                );
+              } while (!closed);
+              break;
+            }
+            case "ack":
+              result = await client.ack(requestId!, responseId!);
+              break;
+            case "resume":
+              result = await client.resume(
+                requestId!,
+                Number(args.controlEpoch),
+              );
+              break;
+            case "terminal-ack":
+              result = await client.acknowledgeTerminal(
+                requestId!,
+                Number(args.controlEpoch),
+              );
+              break;
+            case "complete":
+              result = await client.complete(requestId!, completeText!);
+              break;
+            case "verify":
+              result = await client.setupVerify();
+              break;
+            case "cancel":
+              result = await client.setupCancel();
+              break;
+            default:
+              throw new Error(
+                "Unknown command. Use status, diagnostics, invite, authorize, retry, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
+              );
           }
-          case "ack":
-            result = await client.ack(requestId!, responseId!);
-            break;
-          case "resume":
-            result = await client.resume(requestId!, Number(args.controlEpoch));
-            break;
-          case "terminal-ack":
-            result = await client.acknowledgeTerminal(
-              requestId!,
-              Number(args.controlEpoch),
-            );
-            break;
-          case "complete":
-            result = await client.complete(requestId!, completeText!);
-            break;
-          case "verify":
-            result = await client.setupVerify();
-            break;
-          case "cancel":
-            result = await client.setupCancel();
-            break;
-          default:
-            throw new Error(
-              "Unknown command. Use status, diagnostics, invite, authorize, retry, yield, start, result, ack, resume, complete, verify, cancel or terminal-ack.",
-            );
-        }
         if (result && Object.hasOwn(result, "test")) bridge.test = result.test;
         if (result?.session) {
           run.session = result.session;
           secureWrite(statePath, run);
         }
         if (effects.has(command.command))
-          bridge.effects[command.id]!.result = result;
+          bridge.effects[command.id]!.result = conversationCommand
+            ? {
+                recorded: true,
+                reconcileWith:
+                  "conversation_turns or execution_status using the original request and identifiers",
+              }
+            : result;
         secureWrite(bridgePath, bridge);
         emit({ id: command.id, ok: true, result });
       } catch (error) {

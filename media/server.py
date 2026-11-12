@@ -59,6 +59,8 @@ class Session:
         self.closed = False
         self.allowed = False
         self.speaking = False
+        self.protocol_version = 1
+        self.priority_stop_seen = set()
         self.call_id = None
         self.audio = asyncio.Queue(maxsize=100)  # 2 seconds maximum outgoing PCM
         self.segments = asyncio.Queue(maxsize=1)  # One waiting ordinary turn, never a speech backlog.
@@ -192,15 +194,16 @@ class Session:
                 try:
                     policy = await self.owner.backend(f'/media/{self.id}/policy')
                     self.policy_at = time.monotonic()
+                    self.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
                     authorized = self.recording and capture_allowed(policy) and policy.get('callId') == self.call_id
-                    if not authorized:
+                    if not authorized or policy.get('muted') is True:
                         self.owner.cancel_speech(self.id)
                     if policy.get('state') == 'paused':
                         self.seen_pause = True
                     elif self.seen_pause and policy.get('state') == 'listening' and self.priority_stop_id is None:
                         self.pause_latched = False
                         self.seen_pause = False
-                    self.allowed = authorized and not self.speaking and not self.pause_latched
+                    self.allowed = authorized and not self.speaking and not self.pause_latched and policy.get('muted') is not True
                     if self.screen:
                         self.screen.update(policy if authorized and not self.pause_latched else {})
                     if self.caption_scene:
@@ -300,9 +303,12 @@ class Session:
             await asyncio.sleep(.1)
 
     def queue_segment(self, segment):
+        if isinstance(segment,dict) and segment.get('id') in self.priority_stop_seen:
+            return True
         if self.priority_stop_id is not None:
             return True  # A local voice Stop never automatically resumes capture or queued work.
         if isinstance(segment, dict) and self.priority_stop_allowed(segment):
+            self.priority_stop_seen.add(segment['id'])
             self.priority_stop_id=segment['id']
             self.priority_stop_state='pending'
             self.allowed=False
@@ -348,6 +354,12 @@ class Session:
             # not retry or manufacture another segment/action identity.
             result=await asyncio.wait_for(self.owner.backend(f'/media/{self.id}/segments',segment),5)
             self.priority_stop_state='acknowledged' if result.get('stopped') is True else 'unknown'
+            if self.protocol_version == 2 and self.priority_stop_state == 'acknowledged':
+                # The stopped sharing lease stays retired. Conversation may keep
+                # listening only after the backend acknowledged the local Stop.
+                self.pause_latched=False
+                self.priority_stop_id=None
+                self.policy_wakeup.set()
         except asyncio.CancelledError:
             self.priority_stop_state='unknown'
             raise
@@ -763,7 +775,7 @@ class Service:
     async def play_speech(self, session, utterance_id, text):
         try:
             policy = await self.backend(f'/media/{session.id}/policy')
-            if session.closing or session.pause_latched or not session.active or not capture_allowed(policy) or policy.get('callId') != session.call_id:
+            if session.closing or session.pause_latched or not session.active or not capture_allowed(policy) or policy.get('muted') is True or policy.get('callId') != session.call_id:
                 self.speech.set(utterance_id, 'cancelled', 'authorization_closed')
                 return
             self.speech.set(utterance_id, 'playing')
@@ -840,7 +852,7 @@ class Service:
                     raise web.HTTPConflict(text='Speech identity conflict.')
                 return web.json_response(self.speech.public(previous), status=200 if previous['state'] in TERMINAL else 202)
             policy=await self.backend(f'/media/{sid}/policy')
-            if not s.active or not capture_allowed(policy) or policy.get('callId') != s.call_id or ('callId' in body and body['callId'] != s.call_id):
+            if not s.active or not capture_allowed(policy) or policy.get('muted') is True or policy.get('callId') != s.call_id or ('callId' in body and body['callId'] != s.call_id):
                 raise web.HTTPConflict()
             # Another request may have committed this ID while policy was fetched.
             previous=self.speech.get(body['id'])
@@ -917,6 +929,24 @@ class Service:
             value=json.loads(raw)
             if not isinstance(value,dict) or value.get('deviceId')!=device:raise web.HTTPBadGateway()
             return web.json_response(value,headers={'Cache-Control':'no-store'})
+        async def device_panel(request):
+            device=request.match_info['device']
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',device):raise web.HTTPBadRequest()
+            body=await request.json()
+            if not isinstance(body,dict):raise web.HTTPBadRequest()
+            # Display actual state from this exact media call, never another
+            # active call. Terminal/local mute status remains backend-owned.
+            if body.get('callState') not in ('ended','muted'):
+                call_id=body.get('callId')
+                session=self.sessions.get(call_id) if isinstance(call_id,str) else None
+                state='connected'
+                if session and session.call_id==call_id and session.active and not session.closing:
+                    if session.speaking:state='speaking'
+                    elif session.allowed:state='listening'
+                body={**body,'callState':state}
+            status,raw,_=await gateway_request(self,'POST',f'/v1/devices/{device}/panel',body)
+            return web.Response(status=status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
+        app.router.add_post('/devices/{device}/panel',device_panel)
         app.router.add_get('/devices/{device}/readiness',device_readiness)
         app.router.add_get('/devices/{device}/readiness/{member}/{display}',device_readiness)
         app.router.add_get('/device-gateway',self.device_relay.connect)
@@ -935,13 +965,20 @@ class Service:
         async def screen_lease(request):
             sid=request.match_info['id'];body=await request.json()
             session=self.sessions.get(sid)
-            if not isinstance(body,dict) or set(body)!={'leaseId'} or not isinstance(body['leaseId'],str):raise web.HTTPBadRequest()
+            if not isinstance(body,dict) or set(body) not in ({'leaseId'},{'leaseId','executorEpoch'}) or not isinstance(body['leaseId'],str):raise web.HTTPBadRequest()
             if not session or not session.screen:raise web.HTTPConflict()
             policy=await self.backend(f'/media/{sid}/policy')
             selection=session.screen.valid_selection(policy)
             if not selection or selection['leaseId']!=body['leaseId']:raise web.HTTPConflict(text='Lease is not currently authorized by backend policy.')
+            if selection.get('protocolVersion')==2 and body.get('executorEpoch')!=selection['executorEpoch']:raise web.HTTPConflict()
             session.screen.update(policy)
-            return web.json_response({'accepted':True,'leaseId':body['leaseId']})
+            if selection.get('protocolVersion')==2:
+                until=time.monotonic()+2.5
+                while (session.screen.applied_epoch!=selection['executorEpoch'] or session.screen.applied_lease!=body['leaseId']) and time.monotonic()<until:
+                    if session.screen.state=='stopped' or not session.screen.selection or session.screen.selection['leaseId']!=body['leaseId']:raise web.HTTPConflict()
+                    await asyncio.sleep(.025)
+                if not session.screen.selection or session.screen.selection['leaseId']!=body['leaseId'] or session.screen.selection.get('executorEpoch')!=selection['executorEpoch'] or session.screen.applied_lease!=body['leaseId'] or session.screen.applied_epoch!=selection['executorEpoch']:raise web.HTTPServiceUnavailable(text='Ownership acknowledgement pending; reconcile before input.')
+            return web.json_response({'accepted':True,'leaseId':body['leaseId'],**({'executorEpoch':session.screen.applied_epoch} if selection.get('protocolVersion')==2 else {})})
         async def screen_stop(request):
             sid=request.match_info['id'];body=await request.json()
             session=self.sessions.get(sid)

@@ -1,3 +1,4 @@
+import { ExecutionCoordinator } from "./control/execution.js";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { timingSafeEqual, createHash } from "node:crypto";
@@ -62,6 +63,7 @@ export function createApp(
 ) {
   const app = new Hono();
   const setup = new SetupService(service);
+  const execution = new ExecutionCoordinator(service, control);
   const allowedOrigins = new Set([
     options.origin,
     ...(options.compatibleOrigins ?? []),
@@ -252,6 +254,145 @@ export function createApp(
         .filter((a) => leases.some((l) => l.id === a.leaseId)),
     });
   });
+  // Version 2 is negotiated at registration, never inferred from an active call.
+  app.get("/api/attention/:id/conversation/turns", async (c) => {
+    const after = z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(0)
+      .parse(c.req.query("after"));
+    await human.turns.reconcileReplies(
+      bearer(c.req.header("authorization")),
+      c.req.param("id"),
+    );
+    return c.json(
+      human.turns.poll(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        after,
+      ),
+    );
+  });
+  app.post("/api/attention/:id/conversation/ack", async (c) => {
+    const b = z
+      .object({ turnId: z.string().min(1) })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      human.turns.acknowledge(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        b.turnId,
+      ),
+    );
+  });
+  app.post("/api/attention/:id/conversation/progress", async (c) => {
+    const b = z
+      .object({
+        turnId: z.string().min(1),
+        state: z.enum([
+          "executing",
+          "completed",
+          "canceled",
+          "uncertain",
+          "pending_approval",
+        ]),
+      })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      human.turns.progress(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        b.turnId,
+        b.state,
+      ),
+    );
+  });
+  app.post("/api/attention/:id/conversation/reply", async (c) => {
+    const b = z
+      .object({
+        turnId: z.string().min(1),
+        replyId: z.string().min(1),
+        text: z.string().min(1).max(900),
+      })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      await human.turns.reply(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        b,
+      ),
+    );
+  });
+  app.post("/api/attention/:id/conversation/cancel", async (c) => {
+    const b = z
+      .object({ turnId: z.string().min(1) })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      human.turns.cancel(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        b.turnId,
+      ),
+    );
+  });
+  app.post("/api/attention/:id/conversation/end", async (c) => {
+    const r = human.turns.end(
+      bearer(c.req.header("authorization")),
+      c.req.param("id"),
+    );
+    execution.stop(c.req.param("id"));
+    await control.stopPairing(r.request.pairingId);
+    return c.json(r);
+  });
+  app.get("/api/attention/:id/conversation/execution", (c) => {
+    const owner = execution.status(
+      bearer(c.req.header("authorization")),
+      c.req.param("id"),
+    );
+    const leases = service.store
+      .all<ControlLease>("lease")
+      .filter((l) => l.requestId === owner.requestId);
+    const actions = service.store
+      .all<ActionReceipt>("action")
+      .filter((a) => leases.some((l) => l.id === a.leaseId));
+    return c.json({ ...owner, leases, actions });
+  });
+  app.post("/api/attention/:id/conversation/execution", async (c) =>
+    c.json(
+      await execution.transition(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        await c.req.json(),
+      ),
+    ),
+  );
+  app.post("/api/attention/:id/conversation/observe", async (c) => {
+    const b = z
+      .object({ epoch: z.number().int().nonnegative() })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      await execution.observe(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        b.epoch,
+      ),
+    );
+  });
+  app.post("/api/attention/:id/conversation/act", async (c) =>
+    c.json(
+      await execution.act(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        await c.req.json(),
+      ),
+    ),
+  );
   app.get("/api/attention/:id/diagnostics", async (c) => {
     const request = service.status(
       bearer(c.req.header("authorization")),
@@ -447,7 +588,7 @@ export function createApp(
     const selection =
       open &&
       lease &&
-      session.state === "yielded" &&
+      (session.protocolVersion === 2 || session.state === "yielded") &&
       session.controlEpoch === lease.epoch
         ? {
             leaseId: lease.id,
@@ -458,17 +599,28 @@ export function createApp(
             displayId: Number(lease.displayId),
             mode: lease.mode,
             expiresAt: new Date(lease.expiresAt).toISOString(),
+            ...(lease.protocolVersion === 2
+              ? {
+                  protocolVersion: 2,
+                  sessionId: lease.sessionId,
+                  executor: lease.executor,
+                  executorEpoch: lease.executorEpoch,
+                  policyRevision: lease.policyRevision,
+                }
+              : {}),
           }
         : undefined;
     return c.json({
       state: open ? "listening" : "ended",
+      muted: service.store.state(`muted:${request.id}`) === true,
+      protocolVersion: session.protocolVersion ?? 1,
       callId: call?.id,
       expiresAt: new Date(now + 20_000).toISOString(),
       ...(selection ? { screenSelection: selection } : {}),
     });
   });
   app.post("/media/:id/segments", async (c) => {
-    const { request, pairing, call } = mediaContext(c.req.param("id")),
+    const { request, pairing, call, session } = mediaContext(c.req.param("id")),
       b = await c.req.json();
     if (service.store.state(`listening-stopped:${request.id}`))
       return c.json({ captured: false, stopped: true });
@@ -523,6 +675,11 @@ export function createApp(
       throw error;
     }
     if (
+      service.store.state(`muted:${request.id}`) === true &&
+      !isImmediateStop(heard)
+    )
+      return c.json({ captured: false, muted: true });
+    if (
       Math.abs(Date.now() - Date.parse(b.at)) > 10_000 ||
       !Number.isFinite(Date.parse(b.at))
     )
@@ -534,7 +691,7 @@ export function createApp(
     // to the conversation agent; a wake phrase is not authentication.
     const command = heard;
     const immediateStop = isImmediateStop(command);
-    if (immediateStop) {
+    if (immediateStop && session.protocolVersion !== 2) {
       service.store.saveState(`listening-stopped:${request.id}`, true);
     }
     const result = (await human.receive(input)) as {
@@ -578,6 +735,7 @@ export function createApp(
         controlEpoch: session.controlEpoch + 1,
       });
     }
+    execution.stop(request.id);
     service.store.saveState(`view-started:${request.id}`, true);
     service.store.saveState(`view-stopped:${request.id}`, true);
     return c.json({ stopped: true });

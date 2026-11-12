@@ -1,12 +1,91 @@
 # ClawdTime implementation status
 
-November 11, 2026 — America/New_York.
+November 12, 2026 — America/New_York.
 
-**Hosted private deployment. The latest supervised call survived stale speech and queue overflow until its fixed five-minute setup deadline. The human reported a much better experience; full end-to-end continuation remains unverified.**
-The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
-feedback → same-chat continuation → Messages recap path passed on the original
-pilot line. The Claude Code physical call loop remains unverified. Historical
-evidence below does not qualify the current conversational harness.
+**Version 0.2.0 is a local release candidate on `codex/agent-owned-conversation`.
+Deployment, companion installation and physical qualification are pending.**
+The hosted legacy source has not been changed by this work. Release scope,
+compatibility and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
+
+## Agent-owned conversation redesign — November 12
+
+New sessions negotiate v2 and keep the exact originating coding session as their
+conversation owner. Ordered turn delivery, acknowledgement, progress, cancellation,
+reply playback and explicit end are separate operations. The legacy controller
+remains an explicitly selected v1 path; missing version on old records retains v1.
+There is no hidden second model when native tools are unavailable.
+
+Sharing remains active while the coding agent reasons or edits files. Conflicting
+shared-display input requires a generation-checked native/fallback owner. The Mac
+Control Panel defaults to Agent tools only, retains View only, and makes ClawdTime
+fallback an explicit local choice. Old control pairing is not fallback consent.
+Helper revisions, enabled state, controller ACL and exact active lease are checked
+before input ownership is acknowledged. Unknown native ownership blocks later
+input claims on that physical display even through a new request or pairing;
+viewing and unrelated work remain available. Stop/cancellation is accurately
+bounded: ClawdTime stops its own path; a native tool can remain unresolved.
+
+Control Panel metadata identifies the project/chat and masked paired contact,
+shows actual listening/speaking, and exposes mute/end/pause with scoped stable
+command receipts. Mute stops STT/TTS without stopping video. Turn/reply content is
+bounded and redacted after terminal handling; images/audio stay transient. Speech
+outcomes reconcile through GET rather than repeated playback requests.
+
+### Capability evidence and limits
+
+Installed Codex CLI `0.166.0-alpha.5.1` and Claude Code `2.1.311` each passed a
+disposable three-turn MCP probe with two context-preserving replies, emitted
+native file-read evidence and explicit end. Deterministic tests also exercise MCP
+connector restart/reconnect with the exact durable run and no duplicate speech.
+These do not qualify live client resume, desktop/IDE sessions, visible native CUA,
+native cancellation or a call lasting beyond five minutes. Capabilities default
+to no native CUA until the actual tool/surface is explicitly attested.
+
+The existing-chat JSONL bridge supports conversation and suitable native tools;
+it refuses fallback observation/input/ownership because it has no transient image
+rendering channel. Fallback uses image-capable MCP. The old setup `verify` evidence
+chain is deliberately not reused to certify v2 physical success. Current v2
+qualification is operator-recorded with separate user approval and actual evidence.
+
+### Local checks and review
+
+Final validation passed: `npm run check` (561 tests in 33 files, typecheck and
+build), 138 media tests, 29 gateway tests, 19 Swift tests/build, 21 Mac onboarding
+script tests, formatting and diff whitespace checks. Built-app browser onboarding
+passed, including consent, fragment clearing, reused/expired
+link refusal, mobile layout, compiled CLI integration and configuration preservation.
+All fixtures are disposable; no production services or installed companion were
+started/restarted, no live routing changed and no call/message was sent.
+
+Specialists independently reviewed subsystems they did not author; a fresh reviewer
+also reviewed the integrated result and cleared all reported findings. Its
+independent checks passed 28 TypeScript integration tests, four media tests and
+five gateway tests. Findings fixed with regression coverage:
+
+- Revalidate complete authority after readiness waits and helper acknowledgement;
+  preserve newer Stop epochs and released leases rather than overwriting them.
+- Block ownership bypass through a new call/request while prior native input is
+  still unresolved; check local enabled state and exact active lease after Stop.
+- Require local controller membership even when native execution uses a view lease.
+- Bind media ownership acknowledgements to both lease and epoch, use gateway CAS
+  for concurrent renewal, and retire stale previous-call controls without replay.
+- Reconcile speech status read-only after accepted/unknown replies, preserve the
+  original ID, and keep native/tool outcome uncertainty separate from reasoning.
+- Bound polling by its deadline, reject silently ignored wrapper capability flags,
+  generate v2 acceptance plans, and report mute/end/speaking status accurately.
+
+### Latest historical physical evidence
+
+The user reports that a later legacy-production test worked well and that they
+intentionally hung up. Deadline renewal, eleven accepted HTTP-200 voice callbacks
+and eight observed native-input receipts were recorded in that prior test. It
+ended before five minutes. Receipt observation does not independently prove the
+intended application outcome. The call/media ended, its lease released and terminal
+acknowledgement succeeded; its foreground bridge closed. That run and consent must
+not be reopened or reused. This historical result does not physically qualify v2.
+
+The remaining sections are historical evidence, not current acceptance of this
+redesign.
 
 ## Supervised queue retest and production release — November 11
 

@@ -1,3 +1,4 @@
+import { localPolicySchema, type PolicyDevice } from "./execution.js";
 import { randomUUID } from "node:crypto";
 import type { Store } from "../storage/store.js";
 import type {
@@ -40,7 +41,10 @@ export class Viewing {
       current.memberId === lease.memberId &&
       current.deviceId === lease.deviceId &&
       current.displayId === lease.displayId &&
-      session?.state === "yielded" &&
+      !!session &&
+      (session.protocolVersion === 2
+        ? session.state !== "stopped"
+        : session.state === "yielded") &&
       Number.isFinite(session.lastSeenAt ?? session.createdAt) &&
       (session.lastSeenAt ?? session.createdAt) <= now + 1000 &&
       now - (session.lastSeenAt ?? session.createdAt) <= 20_000 &&
@@ -99,7 +103,10 @@ export class Viewing {
         !this.captureAllowed(lease) ||
         current?.state !== "active" ||
         current.expiresAt <= now ||
-        session?.state !== "yielded" ||
+        !session ||
+        (session.protocolVersion === 2
+          ? session.state === "stopped"
+          : session.state !== "yielded") ||
         now - (session.lastSeenAt ?? session.createdAt) > 20_000 ||
         session.controlEpoch !== lease.epoch ||
         pairing?.revokedAt !== undefined ||
@@ -142,7 +149,10 @@ export class Viewing {
           p &&
           p.revokedAt === undefined &&
           p.allowView &&
-          s?.state === "yielded" &&
+          !!s &&
+          (s.protocolVersion === 2
+            ? s.state !== "stopped"
+            : s.state === "yielded") &&
           Number.isFinite(s.lastSeenAt ?? s.createdAt) &&
           (s.lastSeenAt ?? s.createdAt) <= this.now() + 1000 &&
           this.now() - (s.lastSeenAt ?? s.createdAt) <= 20_000 &&
@@ -213,6 +223,38 @@ export class Viewing {
             )
         )
           continue;
+        let policy: { policyRevision: number } | undefined;
+        if (s.protocolVersion === 2) {
+          const device = this.device as DevicePort & Partial<PolicyDevice>;
+          if (!device.readiness) continue;
+          try {
+            policy = localPolicySchema.parse(
+              await device.readiness(p.deviceId, p.memberId, p.displayId),
+            );
+          } catch {
+            continue;
+          }
+          // Awaiting local metadata must not revive a stopped or superseded session.
+          const current = this.store.get<AgentSession>("session", s.id);
+          if (
+            !current ||
+            current.state === "stopped" ||
+            current.controlEpoch !== s.controlEpoch ||
+            this.store.state(`view-stopped:${r.id}`)
+          )
+            continue;
+          if (
+            this.store
+              .all<ControlLease>("lease")
+              .some(
+                (l) =>
+                  l.deviceId === p.deviceId &&
+                  l.displayId === p.displayId &&
+                  ["active", "unknown"].includes(l.state),
+              )
+          )
+            continue;
+        }
         const lease: ControlLease = {
           id: `view_${randomUUID()}`,
           requestId: r.id,
@@ -222,8 +264,23 @@ export class Viewing {
           deviceId: p.deviceId,
           displayId: p.displayId,
           memberId: p.memberId,
-          mode: p.allowControl ? "control" : "view",
-          epoch: s.controlEpoch + (p.allowControl ? 1 : 0),
+          mode:
+            s.protocolVersion === 2
+              ? "view"
+              : p.allowControl
+                ? "control"
+                : "view",
+          epoch:
+            s.controlEpoch +
+            (s.protocolVersion !== 2 && p.allowControl ? 1 : 0),
+          ...(s.protocolVersion === 2
+            ? {
+                protocolVersion: 2 as const,
+                executor: "none" as const,
+                executorEpoch: 0,
+                policyRevision: policy!.policyRevision,
+              }
+            : {}),
           expiresAt: Math.min(this.now() + 20_000, r.deadline),
           state: "active",
         };
@@ -237,6 +294,11 @@ export class Viewing {
           this.store.saveState(`view-device-ready:${lease.id}`, false);
         });
         try {
+          // Revalidate every binding after asynchronous readiness and before any capture effect.
+          if (!this.captureAllowed(lease)) {
+            this.store.put("lease", { ...lease, state: "released" });
+            continue;
+          }
           await this.device.createLease(lease);
           if (!this.captureAllowed(lease)) {
             this.store.put("lease", { ...lease, state: "unknown" });

@@ -35,11 +35,13 @@ credential digests are stored. Reconnection preserves the external session/proje
 host/adapter binding and replaces its credential. Revocation does not revive sessions.
 
 Session credentials cannot read or acknowledge another session's response.
-`result` is a repeatable non-consuming read; `ack` records delivery; `resume`
+For legacy protocol v1, `result` is a repeatable non-consuming read; `ack` records delivery; `resume`
 separately records agent continuation and requires a current control epoch and no
 active/unknown lease or unknown input. This preserves native agent approval policy.
-Cooperative adapters yield before requesting attention; adapters without pause
-capability cannot be used for conflicting CUA.
+Legacy cooperative adapters yield before requesting attention. Protocol v2 keeps
+the originating session active while a call and screen sharing continue. Conflicting
+computer input still requires explicit execution ownership; reasoning and file work
+do not require control of the display.
 
 Voice feedback requires the exact active local call, qualified remote participant
 and private member binding. A voice approval is rejected. HTTP/media callers must
@@ -447,3 +449,100 @@ separately from a media failure. The latest historical disconnect lacks these
 fields, so its trigger cannot be reconstructed merely from the later generic
 media-task error. No retries, timeouts, cursors, receipts or authority gates were
 changed by these diagnostics.
+
+## Agent-owned conversation protocol v2
+
+Registration explicitly supplies `protocolVersion:2` and bounded polling capability.
+Omission or `1` retains the legacy controller and response/resume protocol. The
+version, native target-surface declarations, project, host, adapter and external
+session identity are immutable across reconnect. Registering the same exact live
+session rotates its scoped credential; stopped sessions are never revived. There
+is no architecture switch for an existing call.
+
+`ConversationService` delivers qualified human text/voice to the original session,
+without asking another conversational model to interpret it. One request can carry
+many ordered turns. The connector polls `GET
+/api/attention/:id/conversation/turns?after=N`; each call returns up to 100 turns,
+a sequence cursor and retained reply receipts. Reading does not consume anything.
+The server refuses a cursor beyond committed history. Replay/recovery reads can
+start at an earlier cursor to reconcile progress changes to previously delivered
+turns; a sequence cursor tracks arrival, not a version of execution status.
+
+Scoped POST operations under that conversation path are:
+
+- `ack` with `turnId`: records delivery in sequence order, without completing a
+  turn, ending the call, or releasing the screen.
+- `progress` with `turnId` and `state`: reports `executing`, `pending_approval`,
+  `completed`, `canceled` or `uncertain`. Earlier nonterminal turns prevent starting
+  or completing a later turn. An uncertain turn is frozen against replay but does
+  not prevent a later explanation; computer input remains separately blocked by
+  unresolved execution ownership/receipts. These are the original agent's reports, not proof of
+  native tool approval or visible application success.
+- `reply` with `turnId`, stable `replyId`, and up to 900 characters of agent-authored
+  text: publishes speech to the same qualified connected call.
+- `cancel` with `turnId`: cancels queued work. For executing work it records a
+  cancellation request and keeps the executing outcome unresolved; native tool
+  cancellation is client-dependent.
+- `end` with an empty body: explicitly ends the conversation and queues owned-call
+  cleanup. Submission is not proof that native hangup finished.
+
+A new utterance during native work queues in order; it does not interrupt a native
+approval dialog or tool. Corrections are ordinary ordered turns interpreted by the
+original agent. The media path remains half-duplex: speech playback suppresses
+transcription; full-duplex interruption is not claimed. Local and authenticated
+Stop remain independent of any model. Native approvals are retained in the coding
+client and are never granted by a turn acknowledgement or voice transcript.
+
+A turn's delivery and execution states are separate. Acknowledgement leaves viewing
+and call lifetime untouched. Active v2 connector heartbeats renew eligible default
+connected requests, even while ordinary coding work continues or sharing alone has
+stopped. Explicit timeouts, listening Stop, unhealthy/unknown effects, actual hangup,
+pairing revocation and lost connector liveness retain conservative cleanup. Synthetic
+renewal tests beyond five minutes do not qualify sustained physical connection.
+
+### Speech and content retention
+
+A turn event persists only one bounded text payload plus its ID, sequence, channel,
+state and delivery timestamps. Event deduplication records a fingerprint and turn
+pointer, never a second transcript copy. The queue admits at most 100 unresolved
+turns. Terminal/uncertain turns lose their text immediately; idle pending content
+expires within 24 hours when the runtime sweep runs. Closing the request, listening
+Stop, revocation and heartbeat cleanup redact remaining turn text. Source inbound
+v2 encrypted content is cleared once routed; unknown routing records retain their
+original protected payload for reconciliation. Metadata and fingerprints remain
+for deduplication. Screens/audio are never stored by this service. This provides
+application-level retention, not a claim of forensic erasure from SQLite pages,
+backups, provider records or the originating client's own context.
+
+Replies retain a text fingerprint and playback status, not the reply prose. One
+turn may have one stable spoken reply identity. Transactional claims commit before
+network dispatch. A repeat or uncertain acceptance performs only GET of the exact
+media speech receipt; even a missing receipt never authorizes another POST. Polling
+refreshes up to four outstanding reply receipts through bounded parallel read-only
+lookups, without requiring or retaining original speech text. A
+changed ID cannot escape the per-turn reply reservation. Receipt states distinguish
+accepted, playing, completed, canceled, failed and unknown; media completion still
+does not prove handset audibility. Speech failure does not end the call.
+
+After a backend restart, an executing turn becomes uncertain, and dispatching
+speech becomes unknown. Uncertain turns cannot be re-executed or relabeled completed
+through the ordinary progress API; reconciliation requires exact external evidence
+and operator handling. No generic operator reconciliation endpoint is introduced.
+Unknown input remains separately protected by execution ownership and native input
+receipts.
+
+### Migration and validation limits
+
+Legacy response, acknowledge, resume and completion operations reject v2 requests.
+Legacy sessions, setup tests, durable receipts and old speech remain unchanged.
+Setup start supports active v2 sessions after the same explicit one-call consent
+and notice-delivery gates. The legacy `verify` evidence chain cannot qualify v2;
+it returns an explicit separately-recorded-physical-acceptance requirement. Do not
+interpret that boundary as approval to place a test call.
+
+`tests/backend-agent-conversation.test.ts` covers exact-session ordered delivery,
+progress, duplicate/corrected events, repeated speech, unknown/reconnect, native
+approval boundaries, cancellation, legacy migration, renewable lifetime, and
+hangup/heartbeat/revocation/Stop. `tests/backend-native.test.ts` includes lost speech
+acceptance and GET-only recovery, including an interrupted intent with no recorded
+native dispatch. All tests are synthetic and produce no live call or message.

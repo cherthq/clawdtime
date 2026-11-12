@@ -1,3 +1,4 @@
+import { sessionCapabilities, type ProtocolOptions } from "./protocol.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -19,18 +20,49 @@ import {
   secureWrite,
   type RunState,
 } from "./state.js";
+import {
+  conversationCommands,
+  executeConversationCommand,
+  type ConversationCommand,
+} from "./conversation.js";
 import type { Adapter } from "../../src/contracts.js";
 
 const instructions =
-  "ClawdTime cooperatively calls your paired human. Before requesting attention stop conflicting work and join/stop all background computer actors, then call yield_control. Remain paused until explicit human response, acknowledge_response, and resume_agent succeeds. Never treat timeout as approval. Reuse request idempotency keys after uncertainty. Poll attention_result (bounded waits); never dial again to recover. Native permissions remain in force.";
-const output = (value: unknown) => ({
-  content: [{ type: "text" as const, text: JSON.stringify(value) }],
-});
+  "ClawdTime carries calls and human turns for THIS coding session. Check connection_status.protocolVersion: v2 uses conversation_turns, acknowledge_turn, conversation_progress and conversation_reply; ordinary file work can continue while sharing. Native approvals remain required. Shared-screen input requires exclusive execution ownership and a verified matching surface. Fallback is off by default. Stable IDs and unknown receipts prohibit replay. Legacy v1: yield_control, attention_result, acknowledge_response, resume_agent; remain paused until release.";
+export function mcpOutput(value: unknown) {
+  const content: (
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
+  )[] = [];
+  if (value && typeof value === "object" && "dataUrl" in value) {
+    const { dataUrl, ...metadata } = value as Record<string, unknown>;
+    if (
+      typeof dataUrl !== "string" ||
+      dataUrl.length > 2_000_000 ||
+      !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(dataUrl)
+    )
+      throw new Error(
+        "Invalid transient screen image; no image or input returned.",
+      );
+    content.push({ type: "text", text: JSON.stringify(metadata) });
+    content.push({
+      type: "image",
+      data: dataUrl.slice("data:image/jpeg;base64,".length),
+      mimeType: "image/jpeg",
+    });
+  } else content.push({ type: "text", text: JSON.stringify(value) });
+  return { content };
+}
+const output = mcpOutput;
 export async function startMcp(options: {
   connection: string;
   project: string;
   adapter: Adapter;
   runId?: string;
+  protocolVersion?: 1 | 2;
+  nativeControl?: ProtocolOptions["nativeControl"];
+  sharedSurface?: boolean;
+  nativeCancellation?: boolean;
 }) {
   const connection = loadConnection(
     options.connection,
@@ -102,7 +134,8 @@ export async function startMcp(options: {
             projectRoot: connection.projectRoot,
             externalSessionId: runId,
             hostId: connection.hostId,
-            capabilities: { cooperativePause: true, polling: true },
+            protocolVersion: options.protocolVersion ?? 2,
+            capabilities: sessionCapabilities(options),
           });
           run = { ...run, session: result.session, token: result.token };
           secureWrite(statePath, run);
@@ -123,7 +156,7 @@ export async function startMcp(options: {
     if (client) await client.heartbeat();
   });
   const server = new McpServer(
-    { name: "clawdtime", version: "0.1.0" },
+    { name: "clawdtime", version: "0.2.0" },
     { instructions },
   );
   const id = z.string().min(1).max(200);
@@ -157,6 +190,7 @@ export async function startMcp(options: {
       return {
         ...backend,
         readiness: summarizeReadiness(backend),
+        protocolVersion: run.session?.protocolVersion ?? 1,
         localRunId: runId,
         projectRoot: connection.projectRoot,
         adapter: connection.adapter,
@@ -171,7 +205,12 @@ export async function startMcp(options: {
       inputSchema: { backgroundActorsStopped: z.literal(true) },
     },
     guarded(async () => {
-      const value = await (await getClient()).yield();
+      const scoped = await getClient();
+      if (run.session?.protocolVersion === 2)
+        throw new Error(
+          "V2 keeps this coding session active. Claim shared-screen input with transfer_execution; do not use legacy yield.",
+        );
+      const value = await scoped.yield();
       run.session = value.session;
       secureWrite(statePath, run);
       return value;
@@ -181,7 +220,7 @@ export async function startMcp(options: {
     "request_attention",
     {
       description:
-        "Create one durable attention request/call for the paired human. Use one stable idempotencyKey per question and preserve returned request ID. Native permission requests are not bypassed.",
+        "Create one durable attention request/call for the paired human after actual user call authorization. V2 remains active and polls conversation_turns; only legacy v1 requires prior yield. Use one stable idempotencyKey and preserve request ID. Native approvals remain required.",
       inputSchema: {
         taskId: id,
         idempotencyKey: id,
@@ -282,6 +321,28 @@ export async function startMcp(options: {
       (await getClient()).complete(requestId, text),
     ),
   );
+  for (const [name, definition] of Object.entries(conversationCommands)) {
+    server.registerTool(
+      name,
+      {
+        description: definition.description,
+        inputSchema: definition.schema.shape,
+        annotations: { readOnlyHint: "readOnly" in definition },
+      },
+      guarded(async (args: Record<string, unknown>) => {
+        const scoped = await getClient();
+        if (run.session?.protocolVersion !== 2)
+          throw new Error(
+            "This is a legacy session. Preserve its architecture; use legacy attention tools. Start a fresh explicitly authorized v2 session after cleanup.",
+          );
+        return executeConversationCommand(
+          scoped,
+          name as ConversationCommand,
+          args,
+        );
+      }),
+    );
+  }
   server.server.onclose = () => {
     stopHeartbeat();
     releaseLock();

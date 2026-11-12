@@ -120,3 +120,26 @@ A response-submitted stage is not proof of media receipt. Copy
 `relay_diagnostics.py` together with `service.py` and `relay.py` for a gateway
 source update; only the coordinating lead restarts the existing process after
 known call/lease cleanup. No companion replacement or permission reset is needed.
+
+## Versioned execution and local panel
+
+Protocol-2 leases forward exact session/executor epoch/local-policy revision fields.
+A higher-epoch renewal changes executor within the same sharing lease; identity,
+display and session cannot change. The gateway commits the proposed authority before
+forwarding the helper effect. A lost acknowledgement leaves `creating_unknown`
+with the proposed binding and expiry, preventing dispatch by the old owner or blind
+handoff replay. Pending/unknown input blocks handoff. Action requests must match the
+current session, epoch and revision. Legacy shapes retain their old wire behavior.
+
+Readiness passes through the helper's validated `controlPolicy`, `policyRevision`,
+unresolved count and exact pending `panelCommand`. Controller ACLs remain separate
+from fallback preference. Authenticated `POST /v1/devices/:device/panel` forwards
+bounded transient status only to the registered helper's `/v1/panel`; WSS permits
+POST only for this specific metadata route. It never forwards arbitrary URLs or
+writes local preferences. Backend acknowledgements identify the same pending local
+command; reconnect does not manufacture another mute/end/pause command.
+
+Readiness also returns the validated exact `activeLeaseId` when the helper has an
+active lease, alongside `activeLease`. Execution handoff checks that identity and
+current local armed/available/permission status after helper acknowledgement;
+a late acknowledgement cannot substitute another lease or override local Stop.

@@ -83,6 +83,24 @@ public final class ReceiptStore {
       }
     }
   }
+  public var unresolvedActionCount: Int {
+    receipts.values.filter {
+      $0.state == "dispatching" || $0.state == "unknown"
+        || ($0.state == "submitted" && $0.evidence != "post_input_frame_available_not_application_verified")
+    }.count
+  }
+  /// A fresh post-input frame establishes observation availability, never UI success.
+  public func observedFrame(leaseId: String, capturedAt: Date) throws {
+    var changed = false
+    for (id, var receipt) in receipts where receipt.leaseId == leaseId
+      && receipt.state == "submitted" && receipt.updatedAt <= capturedAt
+      && receipt.evidence != "post_input_frame_available_not_application_verified" {
+      receipt.evidence = "post_input_frame_available_not_application_verified"
+      receipts[id] = receipt
+      changed = true
+    }
+    if changed { try persist() }
+  }
   public func get(_ id: String, leaseId: String) throws -> ActionReceipt {
     guard let result = receipts[id], result.leaseId == leaseId else {
       throw HelperError(404, "Receipt not found for this lease.")

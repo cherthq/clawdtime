@@ -251,3 +251,22 @@ including refusal to mark a running broader-than-paired ACL ready.
 This change needs no companion rebuild or installed binary replacement: retain
 the currently granted app hash and its stable path. No physical acceptance is
 added by these tests.
+
+## November 12: Control Panel and local execution policy
+
+The existing Mac setup window is now the ClawdTime Control Panel. Native agent
+tools are the default; optional ClawdTime input fallback requires the explicit
+local **Agent tools with ClawdTime fallback** preference. Existing pairing
+`allowControl` does not supply this new consent. **View only** restricts delegated
+computer control while preserving authorized screen viewing. See
+[the companion protocol](../mac/README.md#agent-owned-conversation-and-control-panel-protocol-2)
+for secure preference storage, revision binding, same-lease execution transitions,
+transient status and local call controls.
+
+Local Stop immediately stops ClawdTime capture/input and disarms the companion.
+Native cancellation is cooperative and client-dependent. Mute, End call and Request
+pause remain visibly pending until the exact backend acknowledgement; status expires
+rather than claiming success when disconnected. Unknown input blocks a new executor;
+a fresh post-input frame means observation is available, not application success.
+Changing policy stops sharing and requires a later local Enable. No build, test or
+saved preference silently installs/restarts this companion or enables capture.

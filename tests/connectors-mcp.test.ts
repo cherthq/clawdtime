@@ -105,6 +105,8 @@ it("MCP restart retains one call/answer; a different local session cannot consum
           resolve("node_modules/tsx/dist/loader.mjs"),
           resolve("cli/main.ts"),
           "mcp",
+          "--protocol-version",
+          "1",
           "--connection",
           connection,
           "--project",

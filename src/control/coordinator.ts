@@ -7,6 +7,7 @@ import type {
   CallSession,
   ControlLease,
   DevicePort,
+  ExecutionOwnership,
   Frame,
   InputAction,
   Pairing,
@@ -91,7 +92,9 @@ export class ControlCoordinator {
       request.deadline <= this.now() ||
       call.state !== "connected" ||
       !call.remoteParticipantQualified ||
-      session.state !== "yielded" ||
+      (session.protocolVersion === 2
+        ? session.state === "stopped"
+        : session.state !== "yielded") ||
       !Number.isFinite(session.lastSeenAt ?? session.createdAt) ||
       (session.lastSeenAt ?? session.createdAt) > this.now() + 1000 ||
       this.now() - (session.lastSeenAt ?? session.createdAt) > 20_000
@@ -102,6 +105,11 @@ export class ControlCoordinator {
   }
   context(requestId: string, memberId: string) {
     const context = this.captureContext(requestId, memberId);
+    if (context.session.protocolVersion === 2) {
+      const owner = this.store.get<ExecutionOwnership>("execution", requestId);
+      if (!owner || owner.executor !== "clawdtime" || owner.state !== "working")
+        throw new ControlPreflightError("stopped");
+    }
     if (!context.pairing.allowControl)
       throw new ControlPreflightError("context_expired");
     return context;
@@ -111,6 +119,10 @@ export class ControlCoordinator {
       requestId,
       memberId,
     );
+    if (session.protocolVersion === 2)
+      throw new Error(
+        "Version 2 control requires an explicit executor transition.",
+      );
     const ownedLeases = this.store
       .all<ControlLease>("lease")
       .filter(
@@ -228,6 +240,19 @@ export class ControlCoordinator {
       mode === "control"
         ? this.context(lease.requestId, memberId)
         : this.captureContext(lease.requestId, memberId);
+    const owner = this.store.get<ExecutionOwnership>(
+      "execution",
+      lease.requestId,
+    );
+    if (
+      session.protocolVersion === 2 &&
+      mode === "control" &&
+      (!owner ||
+        owner.epoch !== lease.executorEpoch ||
+        lease.executor !== "clawdtime" ||
+        owner.policyRevision !== lease.policyRevision)
+    )
+      throw new ControlPreflightError("stopped");
     if (
       session.controlEpoch !== lease.epoch ||
       lease.mode !== mode ||
@@ -294,6 +319,18 @@ export class ControlCoordinator {
         throw new Error("Action ID conflicts.");
       return previous;
     }
+    if (
+      this.store
+        .all<ActionReceipt>("action")
+        .some(
+          (a) =>
+            a.leaseId === leaseId &&
+            ["pending", "submitted", "unknown"].includes(a.state),
+        )
+    )
+      throw new Error(
+        "Prior input outcome must be reconciled before another action.",
+      );
     if (this.busy.has(leaseId))
       throw new Error("An action is already in progress.");
     const frame = this.store.state<Frame>(`frame:${leaseId}`);

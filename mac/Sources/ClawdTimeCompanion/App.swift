@@ -9,12 +9,19 @@ struct HelperStatus: Codable {
   let screenPermission: Bool
   let controlPermission: Bool
   let activeLeaseId: String?
+  let controlPolicy: String
+  let policyRevision: Int
+  let unresolvedActionCount: Int
+  let panelCommand: PanelCommand?
+  let retiredPanelCommands: [PanelCommand]
 }
 
 @MainActor final class DeviceApp: NSObject, NSApplicationDelegate {
   let config: HelperConfig
   let policy: DevicePolicy
   let ledger: ReceiptStore
+  let preferences: ControlPreferenceStore
+  let controlPanel = ControlPanelState()
   let capture = ScreenCapture()
   let session = LocalSessionGuard()
   var server: HTTPServer?
@@ -29,18 +36,28 @@ struct HelperStatus: Codable {
   var setupScreenLabel: NSTextField?
   var setupControlLabel: NSTextField?
   var setupDisplaysLabel: NSTextField?
+  var connectionLabel: NSTextField?
+  var callLabel: NSTextField?
+  var executionLabel: NSTextField?
+  var policyChoice: NSPopUpButton?
+  var muteButton: NSButton?
+  var endButton: NSButton?
+  var pauseButton: NSButton?
   var lastSetupRefresh = Date.distantPast
   init(config: HelperConfig, ledgerURL: URL) throws {
     self.config = config
-    self.policy = try DevicePolicy(config: config)
     self.ledger = try ReceiptStore(url: ledgerURL)
+    self.preferences = try ControlPreferenceStore(
+      url: ledgerURL.deletingLastPathComponent().appendingPathComponent("control-policy.json"),
+      deviceId: config.deviceId)
+    self.policy = try DevicePolicy(config: config, preferences: preferences.value)
     super.init()
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     status = NSStatusBar.system.statusItem(withLength: 22)
     let menu = NSMenu()
-    menu.addItem(withTitle: "Device setup…", action: #selector(showSetup), keyEquivalent: "")
+    menu.addItem(withTitle: "Control Panel…", action: #selector(showSetup), keyEquivalent: "")
       .target = self
     menu.addItem(.separator())
     menu.addItem(
@@ -164,7 +181,7 @@ struct HelperStatus: Codable {
         systemSymbolName: symbol, accessibilityDescription: "ClawdTime Companion: \(state)")
       ?? NSImage(systemSymbolName: "display", accessibilityDescription: "ClawdTime Companion")
     status?.button?.setAccessibilityLabel("ClawdTime Companion: \(state)")
-    status?.button?.toolTip = "ClawdTime Companion, \(state). Click for setup or Stop."
+    status?.button?.toolTip = "ClawdTime Companion, \(state). Click for Control Panel or Stop."
     status?.button?.contentTintColor = policy.lease == nil ? nil : .systemRed
     guard let lease = policy.lease else {
       panel?.orderOut(nil)
@@ -221,7 +238,19 @@ struct HelperStatus: Codable {
           HelperStatus(
             deviceId: config.deviceId, armed: policy.armed, available: session.available,
             screenPermission: CGPreflightScreenCaptureAccess(),
-            controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id))
+            controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id,
+            controlPolicy: policy.preferences.policy.rawValue, policyRevision: policy.preferences.revision,
+            unresolvedActionCount: ledger.unresolvedActionCount, panelCommand: controlPanel.command,
+            retiredPanelCommands: controlPanel.retiredCommands))
+      }
+      if request.method == "POST", request.path == "/v1/panel" {
+        let telemetry = try decode(PanelTelemetry.self, request.body)
+        guard telemetry.policyRevision == policy.preferences.revision else {
+          throw HelperError(409, "Panel status uses an old local policy.")
+        }
+        try controlPanel.update(telemetry, lease: policy.lease, now: Date())
+        refreshSetup(force: true)
+        return try .json(["accepted": true])
       }
       if request.method == "GET", request.path == "/v1/permissions" {
         // Authenticated metadata only: no TCC request, lease, frame or input.
@@ -234,6 +263,9 @@ struct HelperStatus: Codable {
         let lease = try decode(Lease.self, request.body)
         guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(lease.displayId) != 0 else {
           throw HelperError(403, "Screen Recording and a configured active display are required.")
+        }
+        if ledger.unresolvedActionCount > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
+          throw HelperError(409, "Reconcile outstanding input before granting an executor.")
         }
         try policy.begin(
           lease, now: Date(), sessionAvailable: session.available,
@@ -286,6 +318,9 @@ struct HelperStatus: Codable {
       if request.method == "POST", parts.count == 4, parts[3] == "renew" {
         let renewed = try decode(Lease.self, request.body)
         guard renewed.id == leaseId else { throw HelperError(409, "Wrong lease renewal.") }
+        if renewed.executorEpoch != lease.executorEpoch && ledger.unresolvedActionCount > 0 {
+          throw HelperError(409, "Reconcile outstanding input before changing executor.")
+        }
         try policy.renew(
           renewed, now: Date(), sessionAvailable: session.available,
           accessibility: AXIsProcessTrusted())
@@ -311,6 +346,7 @@ struct HelperStatus: Codable {
           id: UUID().uuidString, leaseId: leaseId, displayId: lease.displayId,
           capturedAt: startedAt, width: frame.width, height: frame.height)
         try policy.recordFrame(stamp)
+        try ledger.observedFrame(leaseId: leaseId, capturedAt: stamp.capturedAt)
         frameBounds = bounds
         return HTTPResponse(
           contentType: "image/jpeg",

@@ -1,5 +1,139 @@
 # Agent connectors
 
+## Agent-owned protocol v2 (default for new sessions)
+
+ClawdTime transports human turns and speaks replies authored by the exact existing
+coding session. It does not start a replacement agent or silently use the legacy
+standalone conversational model. New MCP and foreground bridge registrations send
+`protocolVersion: 2`. Existing protected runs preserve their recorded session and
+capabilities; missing protocolVersion means v1. `--protocol-version 1` explicitly
+selects compatibility for a new run. Never migrate an active call in place.
+
+The implementation uses supported request-driven stdio MCP polling, bounded to
+20 seconds. It does not promise unsolicited message injection, arbitrary desktop
+chat takeover, background resumption, or interrupting a running native tool.
+While a poll/tool is outstanding, new human speech waits as an ordered turn. The
+agent must keep its own conversation loop engaged. Native tool approvals are
+unchanged. Speech playback remains half duplex; full-duplex barge-in is unverified.
+
+### Operations and lifecycle
+
+MCP and foreground JSONL share operation names and validation, except fallback
+image/input operations: the foreground bridge refuses `observe_shared_screen`,
+`act_on_shared_screen` and claiming the `clawdtime` executor because JSONL has no
+transient native image channel. Use a suitable native tool or an image-capable MCP
+connection qualified before the session; never replace a live session to bypass
+an unresolved outcome. MCP observations return native image content, not base64
+text or a file.
+
+| Operation               | Arguments and meaning                                                                                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conversation_turns`    | requestId, after sequence (default 0), waitSeconds (0–20). Returns ordered turns, cursor and existing reply receipts. Reads never consume. Re-read from an earlier cursor to reconcile changed outcomes. |
+| `acknowledge_turn`      | requestId, turnId. Delivery acknowledgement only; does not execute, complete, stop sharing, or end call.                                                                                                 |
+| `conversation_progress` | requestId, turnId, state: executing, pending_approval, completed, canceled, uncertain. Never report a native tool as canceled/completed without evidence.                                                |
+| `conversation_reply`    | requestId, turnId, stable replyId, text ≤900 characters. Reply remains agent-authored; one reply per turn, stable durable receipt, no blind replay.                                                      |
+| `cancel_turn`           | requestId, turnId. Cooperative cancellation; running tool outcomes may remain unresolved.                                                                                                                |
+| `end_conversation`      | requestId. Explicit conversation/call cleanup; inspect final receipts.                                                                                                                                   |
+| `execution_status`      | requestId. Current executor, epoch and unresolved state.                                                                                                                                                 |
+| `transfer_execution`    | requestId, expectedEpoch, executor (native, clawdtime, none), previousOutcome (idle, completed, uncertain), backgroundActorsStopped:true. Exact ownership transfer, never recovery from unknown input.   |
+| `observe_shared_screen` | requestId, epoch. Transient observation under current fallback permission and ownership.                                                                                                                 |
+| `act_on_shared_screen`  | requestId, epoch, stable actionId, fresh frameId, action. Existing `kind: click` x/y, `kind: type` text, or `kind: scroll` x/y/deltaY. Receipt is not proof of intended UI success.                      |
+
+REST uses `/api/attention/:id/conversation/turns?after=N` and POST siblings
+`ack`, `progress`, `reply`, `cancel`, `end`, `execution`, `observe`, `act`.
+GET `execution` reads ownership. REST callers still need the exact session bearer.
+No new global credential or automatic authorization is introduced.
+
+Acknowledge turns in order, report execution, use normal tools and publish replies,
+then poll again. Sharing and the call survive an individual acknowledgement,
+reply, and unrelated coding/file work. **Do not use legacy yield/resume for v2.**
+Only conflicting shared-surface input needs an executor. Native tools are the
+preferred path when they actually address the human's selected shared display.
+
+Fallback is off by default. Native browser control does not establish desktop
+control; invisible browser state does not establish a visible shared surface.
+New connector capability defaults are `nativeControl:none`, `sharedSurface:false`,
+`nativeCancellation:false`. Exact verified adapters may explicitly attest per run
+on `mcp` or `setup-session` with
+`--native-control browser|desktop --shared-surface true` and, only if proven,
+`--native-cancellation true`. These flags record capability evidence, not consent
+or permission grants. Reconnecting a run never changes its immutable capabilities. The `run` wrapper
+rejects protocol/capability flags because it cannot safely change the client
+configuration that starts MCP; it uses the existing owned MCP configuration.
+Set explicit v1/capabilities on the MCP command or foreground bridge before the
+new session is registered. Newly generated acceptance plans use v2; old plan files
+are preserved and rejected rather than silently retargeted.
+The native panel's current local policy, revision, pairing, live session, freshness
+and executor checks remain authoritative. Existing `allowControl:true` never
+becomes new fallback consent.
+
+A native timeout with uncertain effects must be reported as uncertain. Do not
+claim release, switch to fallback, replay input or generate fresh IDs. Local Stop
+stops ClawdTime capture/input and further delegation; it is not a guaranteed
+system-wide kill switch for unverified native tools. Pending/unknown outcomes
+remain for reconciliation. Lost heartbeat, pairing revocation and actual hangup
+retain terminal cleanup. Reconnect within the live window retains the same session,
+cursor and outcomes; stopped sessions cannot be revived with new heartbeats.
+
+The conversation service retains bounded human text for active delivery, removes
+text from terminal turns and retains minimal state/IDs/receipts. It does not store
+a duplicate unrestricted agent context. V2 bridge effects persist a hash/receipt
+marker, not speech text, screenshots or observation payloads; replaying a bridge
+command returns the marker and asks for a fresh scoped status read. Initial
+observations are transient. Raw audio/screens must never enter fixtures or logs.
+
+### Foreground setup v2
+
+The existing `setup-session` command stays in this chat and defaults v2 for new
+runs. Keep its foreground process/stdin alive. Use `status`, `invite`, `authorize`
+with the exact testId and actual one-call user authorization, then `start` (without
+`yield`). Continue with the conversation operations above, using JSONL command
+names identical to MCP. Each effect needs a stable `id`; turn/reply/action IDs are
+separate durable identities. Unknown effects are never resubmitted. EOF stops
+heartbeats and attempts owned-test cancellation once.
+
+Setup `verify` deliberately refuses to apply the old v1 response/resume evidence
+chain to v2. A separately authorized physical test and recorded human observations
+are still required. The v2 protocol's synthetic success does not qualify a call,
+handset rendering, visible native input, or sustained connection beyond five
+minutes. This release does not install/restart the user's companion or alter live
+configuration. Existing setup/pairing privacy and fresh-call authorization rules
+in the reference below continue to apply.
+
+### Client capability evidence — November 12, 2026
+
+| Client/surface                                                              | Observed locally                                                                                                                           | Unverified or unsupported boundary                                                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex CLI 0.166.0-alpha.5.1 (`exec`, disposable project, read-only sandbox) | Three synthetic ordered MCP turns in one client process, two context-preserving replies, native disposable file read, explicit end.        | Physical shared display, visible browser/desktop input, tool cancellation, client process resume/reconnect while a live call persists, unsolicited injection. |
+| Claude Code 2.1.311 (`-p`, isolated MCP configuration, native Read tool)    | Same three-turn/two-reply sequence with native Read invocation and retained context, explicit end.                                         | Same physical/control/cancellation boundaries; no claim about arbitrary interactive/desktop sessions.                                                         |
+| Codex/Claude existing chat with foreground bridge                           | Implemented request-driven bridge, exact protected run binding, bounded reads and durable local effect markers; deterministic local tests. | No fresh physical acceptance on either client; a shell bridge does not prove universal interruption or computer-use capability.                               |
+| Codex Desktop / IDE, Claude interactive / desktop                           | No automatic takeover; use already available MCP or the current chat's foreground tool bridge.                                             | Current v2 real-client surface qualification has not been performed; CLI evidence is not desktop evidence.                                                    |
+
+`tests/connectors-conversation-spike.ts` is an opt-in disposable real-client
+feasibility probe (`npx tsx tests/connectors-conversation-spike.ts codex` or
+`claude-code`). It does not call phones, use capture/input, change installed
+configuration, or retain transcripts. Its MCP fixture models sharing as a boolean;
+that is explicitly synthetic, not video evidence. The checked-in MCP integration
+regression additionally reconnects the connector with the same run and proves
+ordered delivery, separate ack/execution, session isolation and no repeated speech.
+Real-client native tool denial and physical cancellation remain acceptance items;
+no approval policy is weakened by installation.
+
+Official references checked for the supported request/permission boundaries:
+[Codex MCP](https://developers.openai.com/codex/mcp/),
+[Claude Code MCP](https://code.claude.com/docs/en/mcp), and
+[Claude Code permissions](https://code.claude.com/docs/en/permissions).
+These establish MCP configuration and native policies, not ClawdTime's physical
+integration. Product capability claims above rely on the separately listed tests.
+
+## Legacy v1 setup and recovery reference
+
+The remainder documents the retained v1 workflow and existing pairing/recovery
+operations. Its yield/result/ack/resume/completion sequence applies **only to v1**;
+use the v2 sequence above for new default sessions. Legacy capabilities are not
+silently upgraded, and the standalone controller is never used as a hidden v2
+fallback.
+
 ClawdTime 0.1.0 implements project-scoped stdio MCP tools and a bundled CLI for
 cooperative attention in Claude Code and Codex. It leaves the coding task in the
 client and never types into an arbitrary terminal or takes over a desktop chat.

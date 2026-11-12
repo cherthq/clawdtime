@@ -104,11 +104,30 @@ export class MediaDevicePort implements DevicePort {
       throw new Error("Readiness device identity mismatch.");
     return result;
   }
+  /** Transient call/executor status; the helper alone owns local policy. */
+  async panel(
+    deviceId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(deviceId))
+      throw new Error("Invalid device identifier.");
+    const result = await this.api(`/devices/${deviceId}/panel`, payload);
+    if (result.accepted !== true)
+      throw new Error("Panel status binding refused.");
+  }
   async createLease(lease: ControlLease): Promise<void> {
     const result = await this.api(this.path(lease, "/lease"), {
       leaseId: lease.id,
+      ...(lease.protocolVersion === 2
+        ? { executorEpoch: lease.executorEpoch }
+        : {}),
     });
-    if (result.accepted !== true || result.leaseId !== lease.id)
+    if (
+      result.accepted !== true ||
+      result.leaseId !== lease.id ||
+      (lease.protocolVersion === 2 &&
+        result.executorEpoch !== lease.executorEpoch)
+    )
       throw new Error("Media lease binding mismatch.");
   }
   async frame(lease: ControlLease): Promise<ScreenFrame> {
@@ -122,6 +141,8 @@ export class MediaDevicePort implements DevicePort {
           result.deviceId !== lease.deviceId ||
           String(result.displayId) !== lease.displayId ||
           result.mode !== lease.mode ||
+          (lease.protocolVersion === 2 &&
+            result.executorEpoch !== lease.executorEpoch) ||
           result.state !== "viewing" ||
           typeof result.frameId !== "string" ||
           !/^[A-Za-z0-9_-]{1,160}$/.test(result.frameId) ||
@@ -190,6 +211,13 @@ export class MediaDevicePort implements DevicePort {
       displayId: Number(lease.displayId),
       frameId: frame.id,
       type: kind,
+      ...(lease.protocolVersion === 2
+        ? {
+            sessionId: lease.sessionId,
+            executorEpoch: lease.executorEpoch,
+            policyRevision: lease.policyRevision,
+          }
+        : {}),
       ...fields,
     });
     if (

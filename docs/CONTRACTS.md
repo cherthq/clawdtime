@@ -1,5 +1,27 @@
 # V1 implementation contracts
 
+## Version 2 additions
+
+Registration `protocolVersion:2` is immutable and negotiated per exact session;
+missing/1 preserves all legacy routes below. Capabilities distinguish native
+none/browser/desktop, actual shared-surface support and cancellation support.
+New connectors default v2; no active session is upgraded in place.
+
+Under `/api/attention/:id/conversation/` the session bearer scopes every operation:
+GET `turns?after=N`; POST `ack {turnId}`; `progress {turnId,state}`;
+`reply {turnId,replyId,text}`; `cancel {turnId}`; and explicit `end {}`.
+Delivery acknowledgement, execution completion, call end and sharing release
+are separate. Unknown replies reconcile through their existing receipt without
+repeating speech. Pending text retention is bounded; receipts remain durable.
+
+GET `execution` reports owner/epoch; POST `execution` requires expectedEpoch,
+executor (none/native/clawdtime), previousOutcome and backgroundActorsStopped.
+POST `observe {epoch}` and `act {epoch,actionId,frameId,action}` require current
+fallback ownership and local revision. They never invoke a conversation model.
+A native shared-surface capability is not macOS permission or approval bypass.
+
+## Legacy version 1
+
 Canonical types: src/contracts.ts. Times are Unix milliseconds. IDs are opaque.
 Backend exports Store from src/storage/store.ts and ClawdTime from
 src/attention/service.ts. Lead composes HTTP routes; specialists implement domain.

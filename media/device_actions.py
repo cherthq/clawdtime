@@ -47,12 +47,12 @@ class DeviceActions:
     async def post(self,request):
         sid=request.match_info['id'];body=await request.json()
         required={'id','leaseId','callId','memberId','deviceId','displayId','frameId','type'}
-        if not isinstance(body,dict) or not required.issubset(body) or not set(body).issubset(required|{'x','y','text','deltaY'}):raise web.HTTPBadRequest()
+        if not isinstance(body,dict) or not required.issubset(body) or not set(body).issubset(required|{'x','y','text','deltaY','sessionId','executorEpoch','policyRevision'}):raise web.HTTPBadRequest()
         if any(not isinstance(body[k],str) or not 0<len(body[k])<=160 for k in required-{'displayId'}):raise web.HTTPBadRequest()
         if any(not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',body[k]) for k in ('id','leaseId','callId','memberId','deviceId','frameId')):raise web.HTTPBadRequest()
         action={k:v for k,v in body.items() if k not in ('leaseId','callId','memberId','deviceId','displayId')}
         kind=action['type'];keys={'id','frameId','type'}|({'x','y'} if kind=='click' else {'x','y','deltaY'} if kind=='scroll' else {'text'} if kind=='type' else set())
-        if kind not in ('click','scroll','type') or set(action)!=keys:raise web.HTTPBadRequest()
+        if kind not in ('click','scroll','type') or set(action) not in (keys,keys|{'sessionId','executorEpoch','policyRevision'}):raise web.HTTPBadRequest()
         if kind in ('click','scroll') and any(type(action[k]) not in (int,float) or not 0<=action[k]<=1 for k in ('x','y')):raise web.HTTPBadRequest()
         if kind=='scroll' and (type(action['deltaY']) is not int or not 0<abs(action['deltaY'])<=500):raise web.HTTPBadRequest()
         if kind=='type' and (not isinstance(action['text'],str) or not action['text'] or len(action['text'].encode('utf-16-le'))>1024 or not action['text'].isprintable()):raise web.HTTPBadRequest()
@@ -68,6 +68,9 @@ class DeviceActions:
         current=session.screen.status();selection=session.screen.selection
         if not selection or current['state']!='viewing' or selection['mode']!='control' or current['frameId']!=body['frameId'] or any(selection[k]!=body[k] for k in ('leaseId','callId','memberId','deviceId','displayId')):
             raise web.HTTPConflict(text='Fresh authorized control frame required.')
+        if selection.get('protocolVersion')==2:
+            if any(body.get(k)!=selection[k] for k in ('sessionId','executorEpoch','policyRevision')) or selection['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
+        elif any(k in body for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
         # Recheck after authorization await; never dispatch a duplicate concurrently.
         previous=self.db.execute('SELECT session,fingerprint FROM device_actions WHERE id=?',(body['id'],)).fetchone()
         if previous:

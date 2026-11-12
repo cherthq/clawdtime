@@ -51,3 +51,18 @@ Only tracked source, documentation, build recipes and tests were copied; no runt
 Application branding, macOS bundle/executable/storage namespace, ports (4212 media, 4213 helper, 4214 gateway), media room/track namespaces, and media session prefix (`ct_` instead of `at_`) are independent. Media backup magic is `CTMED001` with `clawdtime-media-ledger-v1` identity; Apple Teams ledgers are deliberately incompatible and are never imported. Shared helper/gateway wire fields and receipt fingerprint formats remain unchanged. `meetingId` is retained as a media wire field and carries the ClawdTime attention request ID; no meeting/workspace engine is imported.
 
 Matching retained tests run against the migrated code; their results are recorded independently. Further integration changes include ClawdTime attention consent wording, qualified speech metadata, lifecycle control and installer convenience.
+
+## Protocol-2 release preparation
+
+Deploying this source requires coordinated backend/media/gateway/companion versions;
+old helpers do not advertise revisioned local policy and cannot qualify protocol-2
+execution. A new helper defaults to Agent tools only even for old controller ACLs.
+Users must deliberately choose fallback locally; preserve both the old action ledger
+and the new private `control-policy.json`. Never copy runtime screens/audio or reset
+unknown receipts to force migration. Old sessions keep their negotiated protocol.
+
+No production service, gateway, installed companion or call was started by this
+implementation. Installing/restarting the companion requires separate approval and
+must preserve its stable signing identity and existing macOS permissions. Rollback
+stops sharing and reconciles active/unknown inputs before replacing source; retained
+receipts and policy revisions are never deleted. Mixed-version fallback is refused.

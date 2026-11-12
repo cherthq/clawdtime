@@ -46,12 +46,17 @@ def valid_origin(value):
 
 
 def validate_lease(body):
-    if not isinstance(body, dict) or set(body) != {'id','deviceId','memberId','callId','displayId','mode','expiresAt'}:
+    required={'id','deviceId','memberId','callId','displayId','mode','expiresAt'}
+    authority={'protocolVersion','sessionId','executorEpoch','policyRevision','executor'}
+    if not isinstance(body, dict) or set(body) not in (required,required|authority):
         raise web.HTTPBadRequest()
     if any(not isinstance(body[k], str) or not ID.fullmatch(body[k]) for k in ('id','deviceId','memberId','callId')):
         raise web.HTTPBadRequest()
     if type(body['displayId']) is not int or not 0 <= body['displayId'] <= 0xffffffff or body['mode'] not in ('view','control'):
         raise web.HTTPBadRequest()
+    if 'protocolVersion' in body:
+        if body['protocolVersion']!=2 or not isinstance(body['sessionId'],str) or not ID.fullmatch(body['sessionId']) or any(type(body[k]) is not int or body[k]<0 for k in ('executorEpoch','policyRevision')) or body['policyRevision']<1 or body['executor'] not in ('none','native','clawdtime') or (body['mode']=='control' and body['executor']!='clawdtime'):
+            raise web.HTTPBadRequest()
     try:
         remaining = timestamp(body['expiresAt']) - time.time()
         if not 0 < remaining <= 30:
@@ -66,8 +71,9 @@ def validate_action(body):
         raise web.HTTPBadRequest()
     kind = body.get('type')
     keys = {'id','frameId','type'} | ({'x','y'} if kind == 'click' else {'x','y','deltaY'} if kind == 'scroll' else {'text'} if kind == 'type' else set())
-    if kind not in ('click','scroll','type') or set(body) != keys:
+    if kind not in ('click','scroll','type') or set(body) not in (keys,keys|{'sessionId','executorEpoch','policyRevision'}):
         raise web.HTTPBadRequest()
+    if 'executorEpoch' in body and (not isinstance(body['sessionId'],str) or not ID.fullmatch(body['sessionId']) or any(type(body[k]) is not int or body[k]<0 for k in ('executorEpoch','policyRevision'))):raise web.HTTPBadRequest()
     if kind in ('click','scroll') and any(type(body[k]) not in (int,float) or not 0 <= body[k] <= 1 for k in ('x','y')):
         raise web.HTTPBadRequest()
     if kind == 'scroll' and (type(body['deltaY']) is not int or not 0 < abs(body['deltaY']) <= 500):
@@ -192,9 +198,21 @@ class Gateway:
         fingerprint = validate_lease(body)
         old,_,_ = self.active(lease_id)
         row = self.db.execute('SELECT fingerprint FROM leases WHERE id=?',(lease_id,)).fetchone()
-        if body['id'] != lease_id or fingerprint != row[0]:raise web.HTTPConflict()
+        transition=fingerprint!=row[0]
+        if body['id'] != lease_id:raise web.HTTPConflict()
+        if transition:
+            mutable={'mode','executorEpoch','policyRevision','executor','expiresAt'}
+            if old.get('protocolVersion')!=2 or body.get('protocolVersion')!=2 or body['executorEpoch']<=old['executorEpoch'] or any(body[k]!=v for k,v in old.items() if k not in mutable):raise web.HTTPConflict()
+            if self.db.execute("SELECT id FROM actions WHERE lease=? AND state IN ('accepted','unknown','dispatching')",(lease_id,)).fetchone():raise web.HTTPConflict(text='Input outcome requires reconciliation.')
+            # Persist the proposed authority before the helper effect. Lost replies
+            # leave a tombstone; no old owner may continue dispatching.
+            self.db.execute("UPDATE leases SET body=?,fingerprint=?,state='creating_unknown',frame=NULL,captured=NULL WHERE id=?",(json.dumps(body),fingerprint,lease_id));self.db.commit()
         await self.helper(old,'POST',f'/{lease_id}/renew',body)
-        self.db.execute('UPDATE leases SET body=? WHERE id=?',(json.dumps(body),lease_id));self.db.commit()
+        # A prior renewal may return after Stop or a newer executor transition.
+        # Its success cannot resurrect the retired or superseded authority.
+        expected_state='creating_unknown' if transition else 'active'
+        cursor=self.db.execute("UPDATE leases SET body=?,state='active' WHERE id=? AND fingerprint=? AND state=?",(json.dumps(body),lease_id,fingerprint,expected_state));self.db.commit()
+        if cursor.rowcount!=1:raise web.HTTPConflict(text='Lease changed while renewal was in flight.')
         return web.json_response({'id':lease_id,'state':'active'})
 
     async def close(self, request):
@@ -245,6 +263,9 @@ class Gateway:
             if prior != (lease_id,fingerprint):raise web.HTTPConflict()
             return await self.action_receipt(lease_id,action['id'])
         body,frame,captured = self.active(lease_id)
+        if body.get('protocolVersion')==2:
+            if any(action.get(k)!=body[k] for k in ('sessionId','executorEpoch','policyRevision')) or body['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
+        elif any(k in action for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
         if body['mode'] != 'control' or frame != action['frameId'] or captured is None or time.time()-captured > 2:
             raise web.HTTPConflict(text='A fresh control frame is required.')
         self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?,NULL)',(action['id'],lease_id,fingerprint,'{}','accepted'));self.db.commit()
@@ -302,8 +323,31 @@ class Gateway:
             scoped={'memberId':member,'displayId':display,'viewAllowed':viewing,
                 'controlAllowed':viewing and member in permission['controllers'],
                 'displayAttached':any(d['id']==int(display) for d in displays)}
-        return web.json_response({**{k:status[k] for k in ('deviceId','armed','available','screenPermission','controlPermission')},
+        active_lease=status.get('activeLeaseId')
+        if active_lease is not None and (not isinstance(active_lease,str) or not ID.fullmatch(active_lease)):
+            raise web.HTTPBadGateway(text='Invalid active helper lease identity.')
+        local={'activeLeaseId':active_lease} if active_lease is not None else {}
+        if 'controlPolicy' in status or 'policyRevision' in status:
+            if status.get('controlPolicy') not in ('view_only','agent_tools_only','agent_tools_with_fallback') or type(status.get('policyRevision')) is not int or status['policyRevision']<1:raise web.HTTPBadGateway(text='Invalid local policy.')
+            local.update(controlPolicy=status['controlPolicy'],policyRevision=status['policyRevision'])
+            if type(status.get('unresolvedActionCount')) is int and status['unresolvedActionCount']>=0:local['unresolvedActionCount']=status['unresolvedActionCount']
+            command=status.get('panelCommand')
+            if command is not None:
+                if not isinstance(command,dict) or set(command)!={'id','sessionId','callId','type'} or any(not isinstance(command[k],str) or not ID.fullmatch(command[k]) for k in ('id','sessionId','callId')) or command['type'] not in ('pause','mute','unmute','end'):raise web.HTTPBadGateway(text='Invalid local call control.')
+                local['panelCommand']=command
+        return web.json_response({**local,**{k:status[k] for k in ('deviceId','armed','available','screenPermission','controlPermission')},
             'activeLease':bool(status.get('activeLeaseId')),'displays':displays,**scoped},headers={'Cache-Control':'no-store'})
+
+    async def panel(self, request):
+        device_id=request.match_info['device']
+        config=self.devices.get(device_id)
+        if not ID.fullmatch(device_id) or not config:raise web.HTTPNotFound()
+        body=await request.json()
+        if not isinstance(body,dict):raise web.HTTPBadRequest()
+        async with self.http.post(config['url']+'/v1/panel',json=body,headers={'Authorization':'Bearer '+config['key']},allow_redirects=False) as response:
+            raw=await response.content.read(16385)
+            if len(raw)>16384:raise web.HTTPBadGateway()
+            return web.Response(status=response.status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
 
     def app(self):
         @web.middleware
@@ -320,6 +364,7 @@ class Gateway:
         app=web.Application(middlewares=[auth],client_max_size=16384)
         app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
         app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)
+        app.router.add_post('/v1/devices/{device}/panel',self.panel)
         app.router.add_post('/v1/leases',self.create)
         app.router.add_post('/v1/leases/{id}/renew',self.renew)
         app.router.add_delete('/v1/leases/{id}',self.close)

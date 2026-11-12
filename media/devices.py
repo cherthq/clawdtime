@@ -61,6 +61,8 @@ class ScreenController:
         if len(self.key)<32:raise ValueError('Gateway credential too short')
         self.selection=None
         self.generation=0
+        self.applied_epoch=None
+        self.applied_lease=None
         self.policy_at=0
         self.frame=None
         self.frame_id=None
@@ -109,7 +111,7 @@ class ScreenController:
 
     def status(self):
         self.expire()
-        return {'leaseId':self.selection['leaseId'] if self.selection else None,
+        return {'executorEpoch':self.applied_epoch,'leaseId':self.selection['leaseId'] if self.selection else None,
                 'deviceId':self.selection['deviceId'] if self.selection else None,
                 'displayId':self.selection['displayId'] if self.selection else None,
                 'mode':self.selection['mode'] if self.selection else None,
@@ -138,7 +140,10 @@ class ScreenController:
         selection=policy.get('screenSelection')
         if not isinstance(selection,dict) or not self.session.active or self.session.closing or policy.get('callId')!=self.session.call_id or not capture_allowed(policy):return None
         required={'leaseId','deviceId','alias','memberId','callId','displayId','mode','expiresAt'}
-        if set(selection)!=required or selection.get('callId')!=self.session.call_id or selection.get('mode') not in ('view','control'):return None
+        authority={'protocolVersion','sessionId','executorEpoch','policyRevision','executor'}
+        if set(selection) not in (required,required|authority) or selection.get('callId')!=self.session.call_id or selection.get('mode') not in ('view','control'):return None
+        if 'protocolVersion' in selection:
+            if selection['protocolVersion']!=2 or not isinstance(selection['sessionId'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',selection['sessionId']) or any(type(selection[k]) is not int or selection[k]<0 for k in ('executorEpoch','policyRevision')) or selection['policyRevision']<1 or selection['executor'] not in ('none','native','clawdtime') or (selection['mode']=='control' and selection['executor']!='clawdtime'):return None
         if any(not isinstance(selection[k],str) or not 0<len(selection[k])<=160 for k in ('leaseId','deviceId','alias','memberId','callId')):return None
         if any(not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',selection[k]) for k in ('leaseId','deviceId','memberId','callId')):return None
         if type(selection['displayId']) is not int or not 0<=selection['displayId']<=0xffffffff:return None
@@ -158,7 +163,20 @@ class ScreenController:
             self.starting=False
             self.revision+=1
         binding=lambda s: {k:v for k,v in s.items() if k not in ('expiresAt','alias')} if s else None
+        if selected and self.selection and selected.get('protocolVersion')==2 and self.selection.get('protocolVersion')==2 and selected['leaseId']==self.selection['leaseId']:
+            stable=('leaseId','deviceId','memberId','callId','displayId','sessionId')
+            if any(selected[k]!=self.selection[k] for k in stable):selected=None
+            elif selected['executorEpoch']<self.selection['executorEpoch']:
+                return  # stale policy cannot renew or restore an old executor
+            elif selected['executorEpoch']>self.selection['executorEpoch']:
+                self.selection=selected
+                self.frame_id=None  # keep video pixels only while still fresh
+                self.state='awaiting_frame';self.hold_until=0
+                self.policy_at=time.monotonic()
+                return  # same capture loop renews authority, then captures a new frame
         if binding(selected)!=binding(self.selection):
+            self.applied_epoch=None
+            self.applied_lease=None
             old=self.selection
             old_task=self.task
             previous_transition=self.transition_task
@@ -266,8 +284,11 @@ class ScreenController:
                 self.requested_expiry[selection['leaseId']]=max(self.requested_expiry.get(selection['leaseId'],0),timestamp(selection['expiresAt']))
                 status,_,_=await self.request('POST',route,body)
                 if self.closed or generation!=self.generation:return
+                if selection.get('executorEpoch')!=self.selection.get('executorEpoch'):continue
                 if status>=300:
                     await self.terminal(selection,'helper_stopped',status);return
+                self.applied_epoch=selection.get('executorEpoch')
+                self.applied_lease=selection['leaseId']
                 async with self.frame_lock:
                     if self.closed or generation!=self.generation:return
                     # Renewal and lock acquisition may outlive the policy that
@@ -278,6 +299,7 @@ class ScreenController:
                     self.diagnostics.phase('frame_request',http_status=status)
                     status,raw,headers=await self.request('GET','/v1/leases/'+selection['leaseId']+'/frame',frame=True)
                     if generation!=self.generation:return
+                    if selection.get('executorEpoch')!=self.selection.get('executorEpoch'):continue
                     if status in (403,404,409,410,423):
                         await self.terminal(selection,'helper_stopped',status);return
                     if status!=200:

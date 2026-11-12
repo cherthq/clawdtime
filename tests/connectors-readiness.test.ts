@@ -182,7 +182,12 @@ it("prepares a stable inert acceptance case without credentials or native approv
   );
   expect(first.prompt).toContain("readiness.liveReady is true");
   expect(first.prompt).toContain(first.runId);
-  expect(first.prompt).toContain("resume_agent");
+  expect(first.protocolVersion).toBe(2);
+  expect(first.prompt).toContain("conversation_turns");
+  expect(first.prompt).toContain("acknowledge_turn");
+  expect(first.prompt).toContain("conversation_reply");
+  expect(first.prompt).toContain("do not call yield_control or resume_agent");
+  expect(first.prompt).not.toContain("Call yield_control(");
   expect(readFileSync(`${output}.prompt.txt`, "utf8")).toContain(
     "native approval",
   );

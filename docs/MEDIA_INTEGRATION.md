@@ -303,3 +303,27 @@ expiry governs admission rather than forcing active participants off the call, a
 connected SDK clients receive refreshed tokens. No token or provider configuration
 was changed. This does not establish unlimited FaceTime/provider duration or physical
 long-call acceptance; only the application's arbitrary active-call cutoff was removed.
+
+## Agent-owned protocol 2
+
+The backend keeps call/conversation policy active independently of screen selection.
+A missing selection stops sharing without ending conversation. `muted:true` stops
+transcription and speech playback while keeping the screen stream active. The
+existing half-duplex TTS/STT rule remains; this does not establish barge-in.
+A version-2 priority Stop retires the screen selection immediately. Only after
+backend acknowledgement may conversation listening continue; the stopped lease is
+never reacquired. Legacy pause-latch behavior is unchanged.
+
+Screen selections carry protocol version, exact coding session, executor epoch,
+local policy revision and executor. A higher epoch can renew the same helper lease
+from view/native to control/ClawdTime or back without replacing the video track.
+Old-frame input authority is discarded; still-fresh pixels may bridge only until
+the next capture. A stale policy cannot restore an old executor. Lease creation
+acknowledges the helper-applied epoch before the backend grants input. Each action
+is checked against that session/epoch/revision at media, gateway and helper.
+
+`POST /devices/:device/panel` transports bounded transient call/executor telemetry
+to the fixed registered helper. Readiness returns local policy revision and pending
+call controls to the backend. These are separate from capture authorization and
+cannot mutate local preferences. Full wire and local restriction behavior is in
+[the companion README](../mac/README.md#agent-owned-conversation-and-control-panel-protocol-2).

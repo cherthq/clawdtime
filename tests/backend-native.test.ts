@@ -225,6 +225,87 @@ function fixture() {
   };
 }
 describe("native protocol integration without live traffic", () => {
+  it("publishes same-agent replies once and reconciles after lost acceptance without another POST", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    await f.transport.pollCalls((id, state, qualified) =>
+      f.app.observeCall(id, state, qualified),
+    );
+    const request = f.store.get<AttentionRequest>("attention", f.attention.id)!;
+    let posts = 0,
+      reads = 0;
+    const requestWithLoss = async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/speak")) {
+        posts++;
+        throw new Error("Synthetic response loss after dispatch");
+      }
+      if (path.includes("/speech/")) reads++;
+      return f.request(url, init);
+    };
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      requestWithLoss as typeof fetch,
+    );
+    const replyId = `${request.id}:reply:stable`;
+    expect(
+      await transport.speak(
+        request,
+        f.pair.pairing,
+        replyId,
+        "Fixture response.",
+      ),
+    ).toEqual({ state: "unknown" });
+    expect(
+      await transport.speechStatus(request, f.pair.pairing, replyId),
+    ).toEqual({ state: "completed" });
+    expect(posts).toBe(1);
+    expect(reads).toBe(1);
+    await expect(
+      transport.speak(
+        request,
+        f.pair.pairing,
+        replyId,
+        "Changed response.",
+        true,
+      ),
+    ).rejects.toThrow("identity changed");
+    expect(JSON.stringify(f.store.all("speech"))).not.toContain(
+      "Fixture response.",
+    );
+    f.store.close();
+  });
+  it("a retained reply intent with no native speech receipt only permits read reconciliation", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    await f.transport.pollCalls((id, state, qualified) =>
+      f.app.observeCall(id, state, qualified),
+    );
+    const request = f.store.get<AttentionRequest>("attention", f.attention.id)!;
+    const before = f.requests.length;
+    const replyId = `${request.id}:reply:crash-before-post`;
+    await f.transport.speak(
+      request,
+      f.pair.pairing,
+      replyId,
+      "Fixture response.",
+      true,
+    );
+    expect(f.requests.slice(before).every((r) => r.method === "GET")).toBe(
+      true,
+    );
+    expect(
+      f.requests.slice(before).some((r) => r.url.includes("/speech/")),
+    ).toBe(true);
+    f.store.close();
+  });
+
   it("records integration cleanup intent before the original end effect without replay", async () => {
     const f = fixture();
     await f.app.drain();

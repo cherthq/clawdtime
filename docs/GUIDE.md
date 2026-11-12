@@ -1,5 +1,12 @@
 # ClawdTime pilot guide
 
+> Release note, November 12, 2026: new local connectors default to the agent-owned
+> v2 conversation described in [ARCHITECTURE.md](ARCHITECTURE.md) and
+> [CONNECTORS.md](CONNECTORS.md). The older hosted setup/continuation flow below
+> documents v1. Its global yield/ack/resume and separate model requirements do not
+> apply to v2. Deployment and physical qualification are pending; see
+> [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
+
 Detailed setup, operation and implementation notes. For the overview, see the
 [README](../README.md).
 

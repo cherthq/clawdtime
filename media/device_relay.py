@@ -64,7 +64,7 @@ class DeviceRelay:
 
     async def request(self,method,path,body=None):
         if not self.connected or len(self.pending)>=8:raise ConnectionError('Device gateway unavailable')
-        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?)',path) or ('/devices/' in path and method!='GET'):raise ValueError('Invalid relay operation')
+        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel))',path) or ('/devices/' in path and method!=('POST' if path.endswith('/panel') else 'GET')):raise ValueError('Invalid relay operation')
         request_id=secrets.token_hex(16)
         socket=self.socket
         future=asyncio.get_running_loop().create_future();self.pending[request_id]=(socket,future)

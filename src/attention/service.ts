@@ -36,8 +36,15 @@ const registration = z
     projectRoot: nonempty,
     externalSessionId: nonempty,
     hostId: nonempty,
+    protocolVersion: z.union([z.literal(1), z.literal(2)]).optional(),
     capabilities: z
-      .object({ cooperativePause: z.boolean(), polling: z.boolean() })
+      .object({
+        cooperativePause: z.boolean(),
+        polling: z.boolean(),
+        nativeControl: z.enum(["none", "browser", "desktop"]).optional(),
+        sharedSurface: z.boolean().optional(),
+        nativeCancellation: z.boolean().optional(),
+      })
       .strict(),
   })
   .strict();
@@ -215,6 +222,11 @@ export class ClawdTime {
     const c = this.credential(raw, "pairing"),
       p = this.pairing(c.subjectId),
       value = registration.parse(input);
+    if (value.protocolVersion === 2 && !value.capabilities.polling)
+      throw new DomainError(
+        409,
+        "Agent-owned conversations require bounded polling.",
+      );
     return this.store.transaction(() => {
       const previous = this.store
         .all<AgentSession>("session")
@@ -225,7 +237,8 @@ export class ClawdTime {
         );
       if (
         previous &&
-        (previous.projectRoot !== value.projectRoot ||
+        ((previous.protocolVersion ?? 1) !== (value.protocolVersion ?? 1) ||
+          previous.projectRoot !== value.projectRoot ||
           previous.adapter !== value.adapter ||
           previous.hostId !== value.hostId ||
           JSON.stringify(previous.capabilities) !==
@@ -285,7 +298,11 @@ export class ClawdTime {
           );
         return this.store.get<AttentionRequest>("attention", old.requestId)!;
       }
-      if (session.capabilities.cooperativePause && session.state !== "yielded")
+      if (
+        session.protocolVersion !== 2 &&
+        session.capabilities.cooperativePause &&
+        session.state !== "yielded"
+      )
         throw new DomainError(
           409,
           "Yield agent activity before requesting attention.",
@@ -369,6 +386,11 @@ export class ClawdTime {
   }
   ack(raw: string, requestId: string, responseId: string) {
     const { session, request } = this.owned(raw, requestId);
+    if (session.protocolVersion === 2)
+      throw new DomainError(
+        409,
+        "Use conversation turn acknowledgement for this session.",
+      );
     if (request.responseId !== responseId)
       throw new DomainError(409, "Response does not match request.");
     const response = this.store.get<HumanResponse>("response", responseId);
@@ -401,7 +423,10 @@ export class ClawdTime {
         ...session,
         lastSeenAt: now,
       });
-      if (current.state !== "yielded" || !current.capabilities.cooperativePause)
+      if (
+        current.protocolVersion !== 2 &&
+        (current.state !== "yielded" || !current.capabilities.cooperativePause)
+      )
         return current;
       const pairing = this.pairing(current.pairingId);
       for (const request of this.store.all<AttentionRequest>("attention")) {
@@ -413,7 +438,8 @@ export class ClawdTime {
           !["connected", "awaiting_input"].includes(request.state) ||
           request.responseId ||
           this.store.state(`listening-stopped:${request.id}`) ||
-          this.store.state(`view-stopped:${request.id}`) ||
+          (current.protocolVersion !== 2 &&
+            this.store.state(`view-stopped:${request.id}`)) ||
           this.store.state(`call-termination:${request.id}`) ||
           this.store.effect(`${request.id}:end`)
         )
@@ -533,6 +559,11 @@ export class ClawdTime {
   }
   resume(raw: string, requestId: string, controlEpoch: number) {
     const { session, request } = this.owned(raw, requestId);
+    if (session.protocolVersion === 2)
+      throw new DomainError(
+        409,
+        "Agent-owned conversations do not use legacy resume.",
+      );
     const response = request.responseId
       ? this.store.get<HumanResponse>("response", request.responseId)
       : undefined;
@@ -728,8 +759,13 @@ export class ClawdTime {
     });
   }
   complete(raw: string, requestId: string, text: string) {
-    const { request } = this.owned(raw, requestId),
+    const { session, request } = this.owned(raw, requestId),
       result = textSchema.parse(text);
+    if (session.protocolVersion === 2)
+      throw new DomainError(
+        409,
+        "End the agent-owned conversation explicitly.",
+      );
     if (request.state === "completed") {
       if (request.result !== result)
         throw new DomainError(
@@ -781,6 +817,14 @@ export class ClawdTime {
     );
     if (!request) throw new DomainError(404, "Unknown attention request.");
     const p = this.pairing(request.pairingId);
+    if (
+      this.store.get<AgentSession>("session", request.sessionId)
+        ?.protocolVersion === 2
+    )
+      throw new DomainError(
+        409,
+        "Use ordered conversation turns for this session.",
+      );
     if (
       p.memberId !== value.memberId ||
       p.lineId !== value.lineId ||
@@ -913,6 +957,60 @@ export class ClawdTime {
       if (!request.responseId && !terminal.has(request.state))
         this.store.put("attention", { ...request, state: "failed" });
       return { cleanupPending: true };
+    });
+  }
+  /** Explicit v2 end closes the call, never interprets one delivered turn as completion. */
+  endConversation(raw: string, requestId: string) {
+    const { session, request } = this.owned(raw, requestId);
+    if (session.protocolVersion !== 2)
+      throw new DomainError(
+        409,
+        "This session uses the legacy attention protocol.",
+      );
+    return this.store.transaction(() => {
+      if (!terminal.has(request.state))
+        this.store.put<AttentionRequest>("attention", {
+          ...request,
+          state: "completed",
+        });
+      this.revokeLeases(request.id);
+      this.endOwnedCall(request, "request_completed");
+      return this.store.get<AttentionRequest>("attention", request.id)!;
+    });
+  }
+  /** The caller must authenticate the exact local panel/device binding first. */
+  endConversationFromPanel(
+    requestId: string,
+    sessionId: string,
+    callId: string,
+  ) {
+    const request = this.store.get<AttentionRequest>("attention", requestId);
+    const session = this.store.get<AgentSession>("session", sessionId);
+    const call = this.store.get<CallSession>("call", callId);
+    if (
+      !request ||
+      !session ||
+      !call ||
+      session.protocolVersion !== 2 ||
+      request.sessionId !== session.id ||
+      request.callId !== call.id ||
+      call.requestId !== request.id ||
+      call.pairingId !== request.pairingId ||
+      session.pairingId !== request.pairingId
+    )
+      throw new DomainError(403, "Control panel call binding does not match.");
+    return this.store.transaction(() => {
+      if (!terminal.has(request.state)) {
+        if (call.state !== "connected")
+          throw new DomainError(409, "The panel call is not connected.");
+        this.store.put<AttentionRequest>("attention", {
+          ...request,
+          state: "completed",
+        });
+      }
+      this.revokeLeases(request.id);
+      this.endOwnedCall(request, "request_completed");
+      return this.store.get<AttentionRequest>("attention", request.id)!;
     });
   }
   private revokeLeases(requestId: string) {

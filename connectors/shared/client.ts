@@ -44,7 +44,7 @@ export class ClawdTimeClient {
   ) {
     this.origin = validateOrigin(origin);
   }
-  async api<T>(path: string, body?: unknown): Promise<T> {
+  async api<T>(path: string, body?: unknown, timeoutMs = 12_000): Promise<T> {
     const response = await this.request(`${this.origin}${path}`, {
       method: body === undefined ? "GET" : "POST",
       headers: {
@@ -53,7 +53,7 @@ export class ClawdTimeClient {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       redirect: "error",
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(12_000, timeoutMs))),
     });
     if (!response.ok) {
       // Do not echo arbitrary provider response bodies or bearer credentials to an agent.
@@ -130,6 +130,41 @@ export class ClawdTimeClient {
     return this.api(`/api/attention/${encodeURIComponent(id)}/complete`, {
       text,
     });
+  }
+  conversationTurns(id: string, after = 0, timeoutMs = 12_000) {
+    return this.api<{
+      turns: unknown[];
+      request?: { state: string };
+      conversation?: { state: string };
+      [key: string]: unknown;
+    }>(
+      `/api/attention/${encodeURIComponent(id)}/conversation/turns?after=${after}`,
+      undefined,
+      timeoutMs,
+    );
+  }
+  conversationExecution(id: string) {
+    return this.api(
+      `/api/attention/${encodeURIComponent(id)}/conversation/execution`,
+    );
+  }
+  conversationOperation(
+    id: string,
+    operation:
+      | "ack"
+      | "progress"
+      | "reply"
+      | "cancel"
+      | "end"
+      | "execution"
+      | "observe"
+      | "act",
+    body: unknown,
+  ) {
+    return this.api(
+      `/api/attention/${encodeURIComponent(id)}/conversation/${operation}`,
+      body,
+    );
   }
   doctor() {
     return this.api<Record<string, unknown>>("/api/doctor");
