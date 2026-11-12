@@ -94,11 +94,22 @@ class DeviceRelay:
 
     async def connect(self,request):
         devices=declared_devices(request)
-        for s in self.live():
-            claimed=self.claimed(s)
-            if (devices is None and claimed is None) or (devices is not None and claimed is not None and devices&claimed):
-                raise web.HTTPConflict(text='A device gateway is already connected for this device.')
-        socket=web.WebSocketResponse(max_msg_size=3*1024*1024,heartbeat=10)
+        # The same authenticated gateway reconnecting after a network drop must
+        # not wait for its half-dead previous socket to time out. The newest
+        # connection for a device replaces the stale one; requests pending on the
+        # old socket fail as unknown (never replayed).
+        stale=[s for s in self.live() if (devices is None and self.claimed(s) is None) or (devices is not None and self.claimed(s) is not None and devices&self.claimed(s))]
+        if devices is not None and any(not self.claimed(s)<=devices for s in stale):
+            raise web.HTTPConflict(text='A device gateway is already connected for another device set.')
+        socket=web.WebSocketResponse(max_msg_size=3*1024*1024,heartbeat=20)
+        if stale and not socket.can_prepare(request).ok:
+            raise web.HTTPBadRequest(text='A WebSocket upgrade is required.')
+        for old in stale:
+            self.sockets.pop(id(old),None)
+            for lease in [l for l,s in self.leases.items() if s is old]:self.leases.pop(lease,None)
+            for owner,future in list(self.pending.values()):
+                if owner is old and not future.done():future.set_exception(ConnectionError('Gateway replaced; outcome unknown'))
+            asyncio.ensure_future(old.close(code=4000,message=b'Replaced by a newer gateway connection'))
         # Reserve before the handshake yields so competing sockets cannot replace it.
         self.sockets[id(socket)]=(socket,devices)
         try:
