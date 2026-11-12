@@ -2,12 +2,46 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. The latest diagnostic call showed the Mac screen but sent no textbox input. The simplified harness with Astra medium now passes eight offline trials through the actual action router. Live control and current return-to-coding acceptance remain pending.**
+**Independent pilot. The latest Astra medium call produced user-confirmed typing in Gmail, then disconnected after further commands. Sustained live control and current return-to-coding acceptance remain pending.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
-pilot line. Correct control targeting, natural voice and the Claude Code physical
-call loop remain unverified. Historical evidence below does not qualify the new
-line or the later conversational harness.
+pilot line. The Claude Code physical call loop remains unverified. Historical
+evidence below does not qualify the current conversational harness.
+
+## Astra supervised call — November 11
+
+One newly authorized call used Astra medium after the user enabled sharing locally.
+The user confirmed that the agent typed “hello world” correctly in Gmail, then
+reported that the call hung up after more commands and the screen went dark.
+The disposable Draft editor remained empty because the user was working in Gmail;
+that fixture inspection does not contradict the reported typing result. Gmail was
+not inspected afterward, and no email sending is claimed.
+
+The backend recorded four native input actions, each with an observed outcome,
+and five completed, accepted voice turns. These receipts do not independently
+prove the exact target or text; UI success is supported by the user's report.
+No control-preflight failure, screen-stop reason or gateway timeout was recorded.
+The media service received 85 screen frames over about 59 seconds.
+
+The backend created its end-call effect at 03:51:31.714 UTC on November 12;
+media closed at 03:51:31.776. A generic `media_task_failed` was logged at
+03:51:32.946, followed by provider end-request/ending events around 03:51:40 and
+failed/cleanup-complete events at 03:51:43. The generic media error does not name
+the failing task or establish the initiating cause. Source review found no
+approximately one-minute whole-call cap; the earlier action-budget rejection did
+not recur. The disconnect remains unresolved; no speculative runtime change or
+redeployment followed this call.
+
+The call ended, media closed and control was released, with no unknown inputs.
+Terminal cleanup was acknowledged for diagnosis only (`humanApproval:false`),
+and the test was canceled. The foreground bridge was closed and its session is
+stopped at epoch 2. A factual Messages recap was sent once and its transport
+receipt acknowledged; handset reading was not independently verified. Installation,
+pairing, permissions and line ownership
+were preserved: seven app/configuration hashes match, while the action journal
+legitimately gained this call's receipts. This is successful user-reported typing,
+not full click/scroll, sustained-call or response/ack/resume/complete acceptance.
+The one-call authorization is used; another call requires fresh approval.
 
 ## Simplified action loop and Astra medium — November 11
 
