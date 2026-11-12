@@ -9,6 +9,29 @@ The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Speech/setup live retest — November 12 (speech failed)
+
+One explicitly authorized call used a fresh foreground v2 run in the originating
+Codex chat against `84d09dc`. Readiness initially refused local sharing because
+Enable was off; the human enabled it. Setup then passed without a reservation
+conflict and exactly one call connected. One complete voice request arrived and
+was handled with the normal native desktop tool under exclusive execution;
+the requested application content was observed and control released.
+
+The agent's spoken acknowledgement was canceled before playback with the media
+receipt reason `human_speaking`. No subsequent voice turns arrived despite the
+human confirming they had spoken again. Available lifecycle metadata showed
+discarded zero-fragment utterances; this does not establish where later speech
+was lost. The deployed speech fix therefore does not pass physical acceptance.
+The planned group-message demo was not completed and no group message was sent.
+
+The service later reported remote-participant disconnection; this event does not
+distinguish a deliberate handset hangup from a transport loss. Call ended, media
+closed, sharing stopped, lease released and native executor none/idle were
+observed. The bridge exited on EOF. Final readiness showed zero active calls,
+active media sessions, pending effects or unknown effects. No redial, deployment,
+fallback control or permission bypass occurred during the test.
+
 ## Speech and setup fixes — November 12 (deployed)
 
 Branch `codex/setup-reservation-cleanup` assembles stable transcription fragments
