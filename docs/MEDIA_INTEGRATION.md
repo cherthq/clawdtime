@@ -73,6 +73,14 @@ cancels that window; interim words are never submitted. UtteranceEnd uses the
 last finalized word timestamp, not trailing audio silence. These are initial
 timing defaults requiring later handset qualification, not measured latency claims.
 
+Interim audio durations are provisional: a final result can cover a shorter
+window. Assembly tracks provisional word/region metadata rather than requiring
+that the final duration reach the largest interim duration. A newer provisional
+region cannot be cleared by an older final. Noise-only SpeechStarted events have
+a separate 1.5-second grace period; they do not start a request's 30-second budget
+or cause an empty final to discard already finalized words. Known retracted
+interim words still invalidate the request rather than allowing a partial action.
+
 Assembly is transient and resets on capture generation changes, pause, TTS,
 disconnect and policy loss. Duplicate audio offsets are suppressed within a
 connection. Requests exceeding 30 seconds, 8000 characters or 128 fragments are
@@ -81,14 +89,40 @@ interim speech also discards an incomplete prefix. Literal priority Stop and
 the recognized pause command bypass assembly immediately on final transcription.
 V2 speech is canceled before playback if a new utterance is assembling or being
 delivered; its durable canceled receipt cannot replay. This does not enable
-barge-in once playback has begun. The caption scene shows “Agent speaking · mic
+barge-in once playback has begun. VAD alone defers a reply for at most 1.5 seconds
+instead of permanently cancelling it. Before playback, policy, generation and
+newly delivered turn count are rechecked; real continuation still cancels stale
+output without replaying its receipt. The caption scene shows “Agent speaking · mic
 paused” during TTS; the screen-sharing video retains its existing presentation.
 
 `lifecycleDiagnostics.lastUtterance` exposes only fragment count, assembly/settle
 durations, discard flag and timestamps. No text or audio is added to diagnostics.
+`lifecycleDiagnostics.speech` adds versioned stage counters, current assembly
+phase and a bounded 64-event timeline. It records audio frame/byte/nonzero counts,
+frames sent, provider event categories and numeric offsets, utterance emission or
+discard, queue acceptance/rejection, callback outcomes and playback arbitration.
+Generation, segment sequence, relative times, character counts and fixed reasons
+locate a stall without retaining transcripts, audio, provider bodies or exception
+strings. Nonzero audio counts do not prove intelligible speech. Normal persistence
+and `speech_pipeline` structured logs are throttled to once per two seconds;
+transitions such as capture close and playback outcomes flush immediately. Logs
+include the new bounded event batch plus cumulative counters. The latest snapshot
+survives close/restart in the existing lifecycle diagnostics table; no new database
+table is needed. Backend status validation strips unknown fields and rejects
+unknown categories, oversized histories and unbounded values. Missing final or
+endpoint events remain fail-closed and visible as waiting/quarantined assembly;
+no timeout executes a partial instruction.
+
 The deterministic `test_utterances.py` and loopback `test_utterance_delivery.py`
 suites cover assembly, continuation, empty/retracted finals, duplicate events,
 policy generations, priority Stop and at-most-once playback cancellation.
+`test_speech_pipeline.py` additionally exercises synthetic audio through a real
+local WebSocket, capture tasks, assembly and a real local HTTP callback across
+five consecutive requests, malformed provider events and capture reset. It checks
+redacted diagnostics after service restart. `test_speech_diagnostics.py` covers
+log bounds, throttling, redaction and persistence failure; the backend schema tests
+cover the matching status contract. These tests never contact a transcription
+provider, open a microphone or place a call.
 
 The implemented call workflow is agent-initiated outbound FaceTime. ClawdTime does
 not implement inbound FaceTime handling or an `auto_reject` route. Historical

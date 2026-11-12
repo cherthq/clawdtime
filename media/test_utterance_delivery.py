@@ -115,3 +115,78 @@ class UtterancePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await repeated.json(),receipt)
         self.assertEqual(self.play_count,0)
         self.assertEqual(self.service.speech_tasks,{})
+
+    async def test_vad_only_defers_then_plays_once_and_deduplicates(self):
+        session = await self.create_session()
+        session.protocol_version = 2
+        session.utterances = UtteranceAssembler(vad_grace_seconds=.12)
+        session.utterances.feed({'type':'SpeechStarted'})
+        url = f'/sessions/{session.id}/speak'
+        body = {'id':'noise-grace','text':'Synthetic reply','callId':session.call_id}
+        response = await self.client.post(url,json=body,headers=self.headers)
+        self.assertEqual(response.status,202)
+        self.assertEqual(self.play_count,0)
+        await asyncio.wait_for(self.started.wait(),1)
+        self.release.set()
+        await asyncio.gather(*list(self.service.speech_tasks.values()))
+        repeated = await self.client.post(url,json=body,headers=self.headers)
+        self.assertEqual((await repeated.json())['state'],'completed')
+        self.assertEqual(self.play_count,1)
+        self.assertEqual(session.speech_diagnostics.counts['reply_deferred'],1)
+
+    async def test_real_speech_during_vad_grace_cancels_and_preserves_words(self):
+        session = await self.create_session()
+        session.protocol_version = 2
+        session.utterances.feed({'type':'SpeechStarted'})
+        self.service.speech.accept('continuation',session.id,'synthetic')
+        task = asyncio.create_task(self.service.play_speech(session,'continuation','Synthetic'))
+        await asyncio.sleep(.02)
+        session.utterances.feed(result('Actual correction',final=False))
+        await task
+        self.assertEqual(self.play_count,0)
+        self.assertTrue(session.utterances.unfinalized)
+        self.assertEqual(self.service.speech.get('continuation')['reason'],'human_speaking')
+
+    async def test_policy_or_generation_change_during_grace_prevents_playback(self):
+        session = await self.create_session()
+        session.protocol_version = 2
+        session.utterances.vad_grace_seconds=.06
+        for mode in ['muted','generation','pause']:
+            with self.subTest(mode=mode):
+                session.pause_latched=False
+                self.policy['muted']=False
+                session.utterances.reset()
+                session.utterances.feed({'type':'SpeechStarted'})
+                self.service.speech.accept(mode,session.id,'synthetic')
+                task=asyncio.create_task(self.service.play_speech(session,mode,'Synthetic'))
+                await asyncio.sleep(.02)
+                if mode=='muted': self.policy['muted']=True
+                elif mode=='generation': session.generation+=1
+                else: session.pause_latched=True
+                await task
+                self.assertEqual(self.service.speech.get(mode)['reason'],'authorization_closed')
+        self.assertEqual(self.play_count,0)
+
+    async def test_completed_new_turn_during_policy_fetch_still_cancels_old_reply(self):
+        session = await self.create_session()
+        session.protocol_version = 2
+        async def policy(path, body=None):
+            session.segment_count += 1  # Delivered and acknowledged during the await.
+            return self.policy
+        self.service.backend=policy
+        self.service.speech.accept('obsolete',session.id,'synthetic')
+        await self.service.play_speech(session,'obsolete','Synthetic')
+        self.assertEqual(self.play_count,0)
+        self.assertEqual(self.service.speech.get('obsolete')['reason'],'newer_human_turn')
+
+    async def test_callback_reply_remembers_turn_count_before_task_handoff(self):
+        session = await self.create_session()
+        session.protocol_version=2
+        self.service.reply_to_segment(session,{'id':'1','callId':session.call_id},
+                                      {'captured':True,'reply':'Synthetic reply'})
+        tasks=list(self.service.speech_tasks.items())
+        self.assertEqual(len(tasks),1)
+        session.segment_count+=1
+        await tasks[0][1]
+        self.assertEqual(self.play_count,0)
+        self.assertEqual(self.service.speech.get(tasks[0][0])['reason'],'newer_human_turn')

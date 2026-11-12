@@ -9,6 +9,46 @@ The historical input block is resolved; one native-control task passed in the
 originating Codex chat. Broader physical qualification remains pending.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Missed-speech repair — November 12 (local only, not deployed)
+
+The last call's metadata cannot establish where every missing phrase was lost.
+Local replay did establish three defects in the deployed assembler/arbitration:
+
+- A final transcription window can be shorter than its interim window. Tracking
+  the largest interim audio end left a valid final permanently unfinished.
+- Noise-only VAD was treated as recognized speech. An empty final could discard
+  already finalized words, and an orphan VAD could consume the next request's
+  duration budget before that request began.
+- The same noise-only state permanently cancelled a spoken reply as
+  `human_speaking`, even when no new words were recognized.
+
+The repair tracks provisional regions/word ends, separates bounded VAD grace
+from actual text assembly, preserves finalized words across noise-only events,
+and defers noise-only reply contention before rechecking authorization. Genuine
+continuation or a newer delivered turn still cancels stale output without replay.
+Old/duplicate endpoints cannot prematurely finalize newer speech. Transcription
+JSON errors are counted and skipped; partial instructions are never executed.
+The behavior follows the provider's documented [interim/final window semantics](https://developers.deepgram.com/docs/understand-endpointing-interim-results/),
+[VAD events](https://developers.deepgram.com/docs/speech-started), and
+[utterance-end boundaries](https://developers.deepgram.com/docs/utterance-end).
+
+New allowlisted diagnostics record capture/audio counters, numeric provider
+boundaries, assembly state, queue/callback outcomes and playback decisions.
+A bounded timeline persists through close/restart; throttled structured logs
+include event batches and cumulative counters. No speech, audio, provider bodies
+or exception strings are retained. See [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md)
+for the data contract and interpretation limits.
+
+Validation: `npm run check` passes typecheck, 571 TypeScript tests and build.
+All 177 media tests pass, including regression replays, playback/policy races,
+a real local WebSocket-to-HTTP pipeline with five consecutive synthetic requests,
+malformed events, capture reset, diagnostic redaction/retention, and the container
+COPY/import packaging check. These are local tests, not physical acceptance.
+No deployment, installation, live call or native-control action was performed.
+Production remains at `84d09dc`; half-duplex speech capture and future handset
+qualification remain explicit limitations. Deployment and another call require
+the user's subsequent authorization.
+
 ## Speech/setup live retest — November 12 (speech failed)
 
 One explicitly authorized call used a fresh foreground v2 run in the originating

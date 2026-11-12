@@ -101,7 +101,7 @@ class UtteranceTests(unittest.TestCase):
         self.assertFalse(self.a.busy)
         self.a.feed({'type':'SpeechStarted'})
         self.a.feed(result('',2,1,boundary=True))
-        self.assertTrue(self.advance(.61)['discarded'])
+        self.assertIsNone(self.advance(.61))  # Noise alone is not an utterance.
         self.assertFalse(self.a.busy)
 
     def test_overlong_utterance_is_discarded_not_truncated_into_an_action(self):
@@ -127,3 +127,87 @@ class UtteranceTests(unittest.TestCase):
             self.a.feed(event)
         self.assertFalse(self.a.busy)
         self.assertIsNone(self.advance(1))
+
+    def test_final_can_shrink_the_previous_interim_audio_window(self):
+        self.a.feed(result('provisional request',0,4.3,final=False))
+        self.a.feed(result('Final request',0,3.26,boundary=True))
+        self.assertEqual(self.advance(.61)['text'],'Final request')
+
+    def test_vad_noise_and_empty_final_do_not_erase_finalized_words(self):
+        self.a.feed(result('A complete request',0,1,boundary=True))
+        self.advance(.2)
+        self.a.feed({'type':'SpeechStarted','timestamp':1.2})
+        self.a.feed(result('',1,1,boundary=True))
+        delivered = self.advance(.61)
+        self.assertFalse(delivered['discarded'])
+        self.assertEqual(delivered['text'],'A complete request')
+
+    def test_orphan_vad_cannot_poison_the_next_real_request(self):
+        self.a.feed({'type':'SpeechStarted','timestamp':0})
+        self.assertIsNone(self.advance(31))
+        self.a.feed(result('Fresh complete request',32,1,boundary=True))
+        delivered = self.advance(.61)
+        self.assertFalse(delivered['discarded'])
+        self.assertEqual(delivered['text'],'Fresh complete request')
+
+    def test_short_final_preserves_known_provisional_tail_until_next_final(self):
+        interim = result('provisional first and second',0,4.3,final=False)
+        interim['channel']['alternatives'][0]['words'] = [{'end':4.1}]
+        self.a.feed(interim)
+        self.a.feed(result('First',0,3.26))
+        self.a.feed({'type':'UtteranceEnd','last_word_end':3.26})
+        self.assertIsNone(self.advance(1))
+        self.a.feed(result('second',3.26,2.24,boundary=True))
+        self.assertEqual(self.advance(.61)['text'],'First second')
+
+    def test_old_final_cannot_clear_new_region_interim(self):
+        self.a.feed(result('new region',2,1,final=False))
+        self.a.feed(result('Earlier',0,1,boundary=True))
+        self.assertIsNone(self.advance(2))
+        self.a.feed(result('new region',2,1,boundary=True))
+        self.assertEqual(self.advance(.61)['text'],'Earlier new region')
+
+    def test_repeated_empty_boundaries_do_not_restart_settle_window(self):
+        self.a.feed(result('Complete',boundary=True))
+        self.advance(.4)
+        self.a.feed(result('',1,.1,boundary=True))
+        self.assertEqual(self.advance(.21)['text'],'Complete')
+
+    def test_duplicate_final_can_upgrade_boundary_without_duplicating_words(self):
+        self.a.feed(result('Complete'))
+        self.a.feed(result('Complete',boundary=True))
+        self.assertEqual(self.advance(.61)['text'],'Complete')
+
+    def test_noise_grace_expires_without_final_or_new_utterance(self):
+        self.a.feed({'type':'SpeechStarted','timestamp':0})
+        self.assertEqual(self.a.snapshot()['phase'],'vad_grace')
+        self.advance(1.51)
+        self.assertFalse(self.a.busy)
+        self.assertEqual(self.a.snapshot()['phase'],'idle')
+
+    def test_boundary_after_timeout_discards_then_recovers(self):
+        self.a.feed(result('Unfinished',final=False))
+        self.advance(31)
+        self.assertEqual(self.a.snapshot()['phase'],'quarantined')
+        self.a.feed(result('Late final',boundary=True))
+        self.assertEqual(self.advance(.61)['reason'],'duration_limit')
+        self.a.feed(result('New request',2,1,boundary=True))
+        self.assertEqual(self.advance(.61)['text'],'New request')
+
+    def test_malformed_numeric_metadata_does_not_crash_or_execute_interim(self):
+        for value in [float('inf'),float('nan'),10**1000,-1,True,'PRIVATE',{},[]]:
+            self.a.reset()
+            self.a.feed({'type':'SpeechStarted','timestamp':value})
+            event=result('Synthetic provisional',value,value,final=False)
+            event['channel']['alternatives'][0]['words']=[{'end':value}]
+            self.a.feed(event)
+            self.a.feed({'type':'UtteranceEnd','last_word_end':value})
+            self.assertIsNone(self.advance(2))
+
+    def test_old_empty_endpoint_cannot_finalize_a_later_fragment(self):
+        self.a.feed(result('First',0,1))
+        self.a.feed(result('second',1,1))
+        self.a.feed(result('',0,1,boundary=True))
+        self.assertIsNone(self.advance(1))
+        self.a.feed(result('',2,1,boundary=True))
+        self.assertEqual(self.advance(.61)['text'],'First second')

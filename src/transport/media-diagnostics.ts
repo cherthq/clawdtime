@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { speechPipelineSchema } from "./speech-diagnostics.js";
 
 // Match media/screen_diagnostics.py. Unknown fields are stripped at every level;
 // diagnostic strings are categories, bounded identifiers, or timestamps only.
@@ -80,6 +81,7 @@ export const mediaFailureSchema = z.object({
 });
 const lifecycleDiagnosticsSchema = z.object({
   version: z.literal(1),
+  speech: speechPipelineSchema.optional(),
   firstFailure: mediaFailureSchema.optional(),
   lastUtterance: z
     .object({
