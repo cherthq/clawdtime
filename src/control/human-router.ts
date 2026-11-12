@@ -15,6 +15,8 @@ import { actionSchema, ControlCoordinator } from "./coordinator.js";
 import {
   ControlPreflightError,
   sanitizeControlPreflightDiagnostics,
+  type ToolPreflightDiagnostics,
+  type ControlPreflightDiagnostics,
 } from "./errors.js";
 import type {
   ConversationAgent,
@@ -38,6 +40,7 @@ export interface HumanResult {
   receipt?: ActionReceipt;
   state?: string;
   code?: string;
+  diagnostics?: ControlPreflightDiagnostics;
   responseId?: string;
 }
 /** Literal emergency phrases only; all ordinary intent stays with the conversation agent. */
@@ -45,6 +48,14 @@ export const isImmediateStop = (text: string) =>
   /^(?:(?:hey\s+)?clawdtime[,!:]?\s+)?stop(?:\s+(?:sharing|control|listening))?[.!]?$/i.test(
     text.trim(),
   );
+const toolFailureReplies: Record<ToolPreflightDiagnostics["reason"], string> = {
+  parallel_tools: "I couldn't safely order the requested screen actions.",
+  operation_limit: "I reached the screen-check limit for this request.",
+  action_invalid: "I couldn't form a valid action for that target.",
+  action_limit: "I reached the input limit for this request.",
+  observation_missing: "I need to look at the screen before acting.",
+  frame_mismatch: "That action did not match the current screen image.",
+};
 const digest = (v: string) => createHash("sha256").update(v).digest("hex");
 export class HumanRouter {
   private busy = new Set<string>();
@@ -227,10 +238,19 @@ export class HumanRouter {
         );
       }
     };
+    const invalidPlan = (reason: ToolPreflightDiagnostics["reason"]) =>
+      new ControlPreflightError("invalid_plan", {
+        phase: "tool_preflight",
+        elapsedMs: Math.max(
+          0,
+          Math.min(60_000, this.control.now() - receivedAt),
+        ),
+        reason,
+      });
     const exclusive = async <T>(fn: () => Promise<T>): Promise<T> => {
       ensure();
       if (operation || ++operations > 12) {
-        fatal = new ControlPreflightError("invalid_plan");
+        fatal = invalidPlan(operation ? "parallel_tools" : "operation_limit");
         throw fatal;
       }
       const pending = fn();
@@ -337,11 +357,12 @@ export class HumanRouter {
           if (!pairing.allowControl)
             throw new ControlPreflightError("planning_refused");
           const parsedAction = actionSchema.safeParse(rawAction);
-          if (!parsedAction.success)
-            throw new ControlPreflightError("invalid_plan");
+          if (!parsedAction.success) throw invalidPlan("action_invalid");
           const action = parsedAction.data;
-          if (++actions > 4 || !observed || observed.frame.id !== frameId)
-            throw new ControlPreflightError("invalid_plan");
+          if (++actions > 4) throw invalidPlan("action_limit");
+          if (!observed) throw invalidPlan("observation_missing");
+          if (observed.frame.id !== frameId)
+            throw invalidPlan("frame_mismatch");
           if (action.kind === "type" && store.state(focusKey))
             throw new ControlPreflightError("planning_refused");
           const before = observed,
@@ -503,16 +524,20 @@ export class HumanRouter {
           accepted: false,
           state: receipt ? "partial" : "not_started",
           code: failure.code,
+          ...(diagnostics ? { diagnostics } : {}),
           receipt,
           reply: receipt
             ? "I paused after the last observed input. I couldn't safely finish the remaining steps."
-            : failure.code === "planner_unavailable"
-              ? "I couldn't process that request because the conversation service failed. No computer input was sent."
-              : failure.code === "planning_timeout"
-                ? "I couldn't process that request in time. No computer input was sent."
-                : failure.code === "frame_unavailable"
-                  ? "I don't have a fresh screen image to work from. No computer input was sent."
-                  : `${new ControlPreflightError(failure.code).message} No computer input was sent.`,
+            : failure.code === "invalid_plan" &&
+                diagnostics?.phase === "tool_preflight"
+              ? `${toolFailureReplies[diagnostics.reason]} No computer input was sent.`
+              : failure.code === "planner_unavailable"
+                ? "I couldn't process that request because the conversation service failed. No computer input was sent."
+                : failure.code === "planning_timeout"
+                  ? "I couldn't process that request in time. No computer input was sent."
+                  : failure.code === "frame_unavailable"
+                    ? "I don't have a fresh screen image to work from. No computer input was sent."
+                    : `${new ControlPreflightError(failure.code).message} No computer input was sent.`,
         });
       }
       return persist("unknown", {

@@ -223,6 +223,11 @@ Paired Mac companion ← loopback helper API ← outbound authenticated WSS gate
 
 Live conversational feedback requires `CLAWDTIME_AI_ACTIONS=true`, an explicit
 `CLAWDTIME_AI_PROVIDER`/`CLAWDTIME_AI_MODEL`, and its independent provider key.
+Evaluate that exact model on disposable screen targets before accepting control:
+API connectivity and fluent replies do not establish coordinate accuracy. The
+screen harness presents the latest image separately from tool metadata, uses
+screenshot-pixel coordinates at the model boundary, and preserves normalized
+coordinates in the device protocol.
 When disabled, natural-language interpretation fails closed; local Stop remains
 available. `npm run demo` uses an explicitly scripted simulation without a model.
 

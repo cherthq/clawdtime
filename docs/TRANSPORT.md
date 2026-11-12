@@ -342,6 +342,23 @@ creation, first frame reception and screen-video emission after the live media
 object closes. Emission proves media processing, not rendering on the handset;
 the separate human confirmation and setup-verification gates still apply.
 
+Conversation preflight metadata distinguishes provider HTTP failure, timeout,
+invalid final reply and local tool rejection. Gateway wrappers are inspected at
+the model boundary because the SDK can replace authentication failures with an
+error that omits their original status and cause. Only bounded status, duration,
+step count and fixed categories survive; provider bodies, prompts, images and
+tool arguments are never diagnostic fields. Error inspection is depth-limited
+and guards malformed getters. It neither retries the model nor dispatches input.
+Each failed human-command receipt keeps its sanitized diagnostic alongside the
+request's latest summary, so a later turn cannot erase the earlier failure reason.
+
+An `invalid_plan` records one fixed tool-preflight reason: overlapping operations,
+operation limit, malformed action, action limit, missing observation or mismatched
+frame identity. This explains which local check rejected the plan without relaxing
+it. If an earlier input was already observed, a later rejection remains a partial
+turn and retains that receipt; it must not claim that no input was sent. Older
+records lacking these categories cannot establish the original failure cause.
+
 ### Expired legacy setup invitation supersession
 
 The operator-authenticated `POST /internal/setup-invitations/retire` recognizes

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { APICallError } from "ai";
+import { describe, expect, it, vi } from "vitest";
+import { APICallError, createGateway, type LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import {
   ScreenConversationAgent,
@@ -50,7 +50,7 @@ function response(text: string) {
     warnings: [],
   };
 }
-async function failure(model: MockLanguageModelV4, input = turn()) {
+async function failure(model: LanguageModel, input = turn()) {
   try {
     await new ScreenConversationAgent(
       { frameImage: async () => image() },
@@ -74,6 +74,181 @@ const details = (error: ControlPreflightError) => {
 };
 
 describe("bounded conversation failure diagnostics", () => {
+  it.each([
+    [400, "invalid_request_error"],
+    [401, "authentication_error"],
+    [429, "rate_limit_exceeded"],
+    [503, "internal_server_error"],
+  ] as const)(
+    "classifies actual Gateway-wrapped HTTP %i without retaining its private response or retrying",
+    async (statusCode, type) => {
+      let requests = 0;
+      const gateway = createGateway({
+        apiKey: "synthetic-fixture-not-a-credential",
+        fetch: async () => {
+          requests++;
+          return new Response(
+            JSON.stringify({
+              error: { type, message: "PRIVATE_GATEWAY_BODY" },
+            }),
+            {
+              status: statusCode,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      });
+      const error = await failure(gateway("openai/gpt-4o-mini"));
+      expect(error.code).toBe("planner_unavailable");
+      expect(details(error)).toEqual({
+        phase: "generate",
+        errorKind: "api",
+        statusCode,
+        completedSteps: 0,
+      });
+      expect(requests).toBe(1);
+      expect(JSON.stringify(error)).not.toMatch(/PRIVATE_|synthetic-fixture/);
+    },
+  );
+
+  it("retains actual Gateway authentication status through the production SDK error wrapper", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    let requests = 0;
+    try {
+      const gateway = createGateway({
+        apiKey: "synthetic-fixture-not-a-credential",
+        fetch: async () => {
+          requests++;
+          return new Response(
+            JSON.stringify({
+              error: {
+                type: "authentication_error",
+                message: "PRIVATE_AUTH_BODY",
+              },
+            }),
+            { status: 401, headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+      const error = await failure(gateway("openai/gpt-4o-mini"));
+      expect(details(error)).toMatchObject({
+        errorKind: "api",
+        statusCode: 401,
+        completedSteps: 0,
+      });
+      expect(JSON.stringify(error)).not.toContain("PRIVATE_");
+      expect(requests).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not infer an HTTP failure from an arbitrary error name and status", async () => {
+    const error = await failure(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw Object.assign(new Error("PRIVATE_LOCAL_ERROR"), {
+            name: "GatewayError",
+            statusCode: 401,
+          });
+        },
+      }),
+    );
+    expect(details(error)).toMatchObject({ errorKind: "other" });
+    expect(details(error)).not.toHaveProperty("statusCode");
+  });
+
+  it("finds a wrapped API failure through a bounded cyclic cause chain", async () => {
+    const apiError = new APICallError({
+      message: "PRIVATE_API_ERROR",
+      url: "https://private.invalid",
+      requestBodyValues: { prompt: "PRIVATE_PROMPT" },
+      statusCode: 429,
+    });
+    const wrapper = new Error("PRIVATE_WRAPPER", { cause: apiError });
+    Object.defineProperty(apiError, "cause", { value: wrapper });
+    const error = await failure(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw wrapper;
+        },
+      }),
+    );
+    expect(details(error)).toMatchObject({ errorKind: "api", statusCode: 429 });
+    expect(JSON.stringify(error)).not.toMatch(/PRIVATE_|private\.invalid/);
+  });
+
+  it("does not expose a throwing cause getter", async () => {
+    const outer = new Error("PRIVATE_WRAPPER");
+    Object.defineProperty(outer, "cause", {
+      get() {
+        throw new Error("PRIVATE_CAUSE_GETTER");
+      },
+    });
+    const error = await failure(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw outer;
+        },
+      }),
+    );
+    expect(details(error)).toMatchObject({
+      errorKind: "other",
+      completedSteps: 0,
+    });
+    expect(JSON.stringify(error)).not.toContain("PRIVATE_");
+  });
+
+  it("does not traverse an unbounded provider cause chain", async () => {
+    let deepestRead = false;
+    const deep = new Error("PRIVATE_DEEP");
+    Object.defineProperty(deep, "cause", {
+      get() {
+        deepestRead = true;
+        throw new Error("PRIVATE_DEEP_GETTER");
+      },
+    });
+    let outer = deep;
+    for (let i = 0; i < 10; i++)
+      outer = new Error("PRIVATE_WRAPPER", { cause: outer });
+    const error = await failure(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw outer;
+        },
+      }),
+    );
+    expect(deepestRead).toBe(false);
+    expect(details(error)).toMatchObject({
+      errorKind: "other",
+      completedSteps: 0,
+    });
+    expect(JSON.stringify(error)).not.toContain("PRIVATE_");
+  });
+
+  it("contains hostile wrapped API status getters without losing safe failure handling", async () => {
+    const apiError = new APICallError({
+      message: "PRIVATE_API_ERROR",
+      url: "https://private.invalid",
+      requestBodyValues: {},
+    });
+    Object.defineProperty(apiError, "statusCode", {
+      get() {
+        throw new Error("PRIVATE_STATUS_GETTER");
+      },
+    });
+    const error = await failure(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw new Error("PRIVATE_WRAPPER", { cause: apiError });
+        },
+      }),
+    );
+    expect(error.code).toBe("planner_unavailable");
+    expect(details(error)).not.toHaveProperty("statusCode");
+    expect(JSON.stringify(error)).not.toMatch(/PRIVATE_|private\.invalid/);
+  });
+
   it("persists only bounded diagnostics for qualified voice, with truthful fallback and no replay", async () => {
     const store = new Store();
     try {
@@ -478,6 +653,37 @@ describe("bounded conversation failure diagnostics", () => {
         completedSteps: 0,
       },
     });
+  });
+
+  it("strips tool arguments from preflight diagnostics and rejects arbitrary reason strings", () => {
+    expect(
+      sanitizeControlPreflightDiagnostics({
+        phase: "tool_preflight",
+        elapsedMs: 1,
+        reason: "frame_mismatch",
+        frameId: "PRIVATE_FRAME",
+        action: { text: "PRIVATE_TYPED_TEXT" },
+      }),
+    ).toEqual({
+      phase: "tool_preflight",
+      elapsedMs: 1,
+      reason: "frame_mismatch",
+    });
+    for (const invalid of [
+      { reason: "PRIVATE_REASON" },
+      { elapsedMs: Infinity },
+      { elapsedMs: -1 },
+      { elapsedMs: 60_001 },
+    ]) {
+      expect(
+        sanitizeControlPreflightDiagnostics({
+          phase: "tool_preflight",
+          elapsedMs: 1,
+          reason: "frame_mismatch",
+          ...invalid,
+        }),
+      ).toBeUndefined();
+    }
   });
 
   it.each([

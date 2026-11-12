@@ -69,8 +69,22 @@ export interface ConversationPreflightDiagnostics {
   };
 }
 
+export interface ToolPreflightDiagnostics {
+  phase: "tool_preflight";
+  elapsedMs: number;
+  reason:
+    | "parallel_tools"
+    | "operation_limit"
+    | "action_invalid"
+    | "action_limit"
+    | "observation_missing"
+    | "frame_mismatch";
+}
+
 export type ControlPreflightDiagnostics =
-  ScreenPreflightDiagnostics | ConversationPreflightDiagnostics;
+  | ScreenPreflightDiagnostics
+  | ConversationPreflightDiagnostics
+  | ToolPreflightDiagnostics;
 
 const screenDiagnosticsSchema = z.object({
   phase: z.enum(["settling", "planning"]),
@@ -111,6 +125,18 @@ const screenDiagnosticsSchema = z.object({
 
 const diagnosticsSchema = z.union([
   screenDiagnosticsSchema,
+  z.object({
+    phase: z.literal("tool_preflight"),
+    elapsedMs: z.number().finite().min(0).max(60_000),
+    reason: z.enum([
+      "parallel_tools",
+      "operation_limit",
+      "action_invalid",
+      "action_limit",
+      "observation_missing",
+      "frame_mismatch",
+    ]),
+  }),
   z.object({
     phase: z.literal("conversation"),
     elapsedMs: z.number().finite().min(0).max(60_000),

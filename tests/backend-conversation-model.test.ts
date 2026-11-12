@@ -97,7 +97,7 @@ describe("conversation SDK contract", () => {
         output([
           call("unauthorized", "click", {
             frameId: "one",
-            action: { kind: "click", x: 0.5, y: 0.5 },
+            action: { kind: "click", x: 320, y: 180 },
           }),
         ]),
         output(
@@ -122,7 +122,7 @@ describe("conversation SDK contract", () => {
         output([
           call("c", "click", {
             frameId: "one",
-            action: { kind: "click", x: 0.5, y: 0.5 },
+            action: { kind: "click", x: 320, y: 180 },
           }),
         ]),
         output([
@@ -138,7 +138,12 @@ describe("conversation SDK contract", () => {
       { frameImage: async () => image("unused") },
       model,
     );
-    const result = await runner.run(turn());
+    const input = turn();
+    const observe = vi.fn(input.tools.observe);
+    const act = vi.fn(input.tools.act);
+    input.tools.observe = observe;
+    input.tools.act = act;
+    const result = await runner.run(input);
     expect(result.reply).toBe("The title now reads Hello.");
     expect(model.doGenerateCalls).toHaveLength(4);
     for (const options of model.doGenerateCalls) {
@@ -148,8 +153,13 @@ describe("conversation SDK contract", () => {
       });
       expect(JSON.stringify(options.tools)).not.toContain('"oneOf"');
     }
-    const tools = model.doGenerateCalls[0]!.tools!;
-    expect(tools.map((t) => t.name)).toEqual([
+    expect(model.doGenerateCalls[0]!.tools!.map((t) => t.name)).toEqual([
+      "observe",
+      "feedback",
+      "screenFeedback",
+      "stop",
+    ]);
+    const readyTools = [
       "observe",
       "click",
       "type",
@@ -157,19 +167,162 @@ describe("conversation SDK contract", () => {
       "feedback",
       "screenFeedback",
       "stop",
+    ];
+    for (const [step, expectedFrame] of [
+      [1, "one"],
+      [2, "click"],
+      [3, "type"],
+    ] as const) {
+      const options = model.doGenerateCalls[step]!;
+      expect(options.tools!.map((tool) => tool.name)).toEqual(readyTools);
+      const userContent = options.prompt.flatMap((message) =>
+        message.role === "user" ? message.content : [],
+      );
+      const images = userContent.filter((part) => part.type === "file");
+      expect(images).toHaveLength(1);
+      expect(images[0]).toMatchObject({ mediaType: "image/jpeg" });
+      const bytes = images[0]!.data;
+      expect(
+        typeof bytes === "string"
+          ? bytes
+          : Buffer.from(bytes as Uint8Array).toString("base64"),
+      ).toBe("AQ==");
+      const latestImageMessage = options.prompt.at(-1)!;
+      expect(latestImageMessage.role).toBe("user");
+      expect(JSON.stringify(latestImageMessage)).toContain(
+        `frameId=${expectedFrame}; size=640x360`,
+      );
+      const toolResults = options.prompt.flatMap((message) =>
+        message.role === "tool" ? message.content : [],
+      );
+      expect(toolResults).toHaveLength(step);
+      for (const result of toolResults) {
+        expect(result.type).toBe("tool-result");
+        if (result.type !== "tool-result")
+          throw new Error("Expected tool result");
+        expect(result.output.type).toBe("text");
+        if (result.output.type !== "text")
+          throw new Error("Expected metadata text");
+        expect(JSON.parse(result.output.value)).toHaveProperty("frameId");
+        expect(result.output.value).not.toMatch(/AQ==|image\/jpeg|dataUrl/);
+      }
+      const latestResult = toolResults.at(-1)!;
+      if (
+        latestResult.type !== "tool-result" ||
+        latestResult.output.type !== "text"
+      )
+        throw new Error("Expected metadata text");
+      expect(JSON.parse(latestResult.output.value)).toMatchObject({
+        frameId: expectedFrame,
+        frame: { id: expectedFrame },
+      });
+    }
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(act.mock.calls).toEqual([
+      ["one", { kind: "click", x: 320 / 639, y: 180 / 359 }],
+      ["click", { kind: "type", text: "Hello" }],
     ]);
-    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain(
-      "image/jpeg",
-    );
-    expect(JSON.stringify(model.doGenerateCalls[2]!.prompt)).toContain(
-      '"frameId":"one"',
-    );
-    expect(JSON.stringify(model.doGenerateCalls[3]!.prompt)).toContain(
-      "image/jpeg",
-    );
     expect(JSON.stringify(model.doGenerateCalls[0]!.prompt)).toContain(
       "ORIGINAL utterance",
     );
+  });
+  it.each([
+    { kind: "click", x: 0, y: 0 },
+    { kind: "click", x: 639, y: 359 },
+    { kind: "scroll", x: 321, y: 179, deltaY: 100 },
+  ])(
+    "normalizes integer pixel action against the exact latest dimensions: %j",
+    async (action) => {
+      const input = turn();
+      const act = vi.fn(input.tools.act);
+      input.tools.act = act;
+      const model = new MockLanguageModelV3({
+        doGenerate: [
+          output([call("observe", "observe", {})]),
+          output([call("act", action.kind, { frameId: "one", action })]),
+          output([{ type: "text", text: "I inspected the result." }], "stop"),
+        ] as never,
+      });
+      await new ScreenConversationAgent(
+        { frameImage: async () => image("unused") },
+        model,
+      ).run(input);
+      expect(act.mock.calls).toEqual([
+        ["one", { ...action, x: action.x / 639, y: action.y / 359 }],
+      ]);
+    },
+  );
+
+  it.each([
+    { frameId: "wrong-frame", x: 20, y: 30, reason: "frame_mismatch" },
+    { frameId: "one", x: 640, y: 30, reason: "action_invalid" },
+    { frameId: "one", x: 20, y: 360, reason: "action_invalid" },
+  ])(
+    "rejects %j before input without clamping or losing the cause",
+    async ({ reason, ...action }) => {
+      const input = turn();
+      const act = vi.fn(input.tools.act);
+      input.tools.act = act;
+      const model = new MockLanguageModelV3({
+        doGenerate: [
+          output([call("observe", "observe", {})]),
+          output([
+            call("bad", "click", {
+              frameId: action.frameId,
+              action: { kind: "click", x: action.x, y: action.y },
+            }),
+          ]),
+          output([{ type: "text", text: "No input was sent." }], "stop"),
+        ] as never,
+      });
+      await expect(
+        new ScreenConversationAgent(
+          { frameImage: async () => image("unused") },
+          model,
+        ).run(input),
+      ).rejects.toMatchObject({
+        code: "invalid_plan",
+        diagnostics: { phase: "tool_preflight", reason },
+      });
+      expect(act).not.toHaveBeenCalled();
+    },
+  );
+  it("keeps the first pixel preflight failure and blocks later model correction from dispatching input", async () => {
+    const input = turn();
+    const act = vi.fn(input.tools.act);
+    input.tools.act = act;
+    const model = new MockLanguageModelV3({
+      doGenerate: [
+        output([call("observe-first", "observe", {})]),
+        output([
+          call("wrong-frame", "click", {
+            frameId: "wrong",
+            action: { kind: "click", x: 20, y: 30 },
+          }),
+        ]),
+        output([call("observe-again", "observe", {})]),
+        output([
+          call("retry-click", "click", {
+            frameId: "one",
+            action: { kind: "click", x: 20, y: 30 },
+          }),
+        ]),
+        output(
+          [{ type: "text", text: "I must not claim a successful action." }],
+          "stop",
+        ),
+      ] as never,
+    });
+    await expect(
+      new ScreenConversationAgent(
+        { frameImage: async () => image("unused") },
+        model,
+      ).run(input),
+    ).rejects.toMatchObject({
+      code: "invalid_plan",
+      diagnostics: { reason: "frame_mismatch" },
+    });
+    expect(act).not.toHaveBeenCalled();
   });
   it("bounds runaway model tool loops", async () => {
     let calls = 0;

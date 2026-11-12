@@ -759,10 +759,152 @@ describe("one conversational agent with bounded screen tools", () => {
       await finish.promise;
       return original(l);
     };
-    expect((await f.send("parallel", "Change it.")).code).toBe("invalid_plan");
+    const result = await f.send("parallel", "Change it.");
+    expect(result.code).toBe("invalid_plan");
+    expect(result.reply).toMatch(/order.*screen actions/i);
+    expect(result.reply).toContain("No computer input was sent.");
+    expect(f.store.state(`control-preflight:${f.request.id}`)).toMatchObject({
+      diagnostics: {
+        phase: "tool_preflight",
+        reason: "parallel_tools",
+        elapsedMs: expect.any(Number),
+      },
+    });
     expect(f.device.inputs).toHaveLength(0);
     expect(f.store.all("response")).toHaveLength(0);
     f.store.close();
+  });
+  it.each([
+    "operation_limit",
+    "action_invalid",
+    "observation_missing",
+    "frame_mismatch",
+  ] as const)(
+    "diagnoses %s without retaining model arguments or dispatching input",
+    async (reason) => {
+      const f = await fixture(async (turn) => {
+        if (reason === "operation_limit") {
+          for (let i = 0; i < 13; i++) await turn.tools.observe();
+        } else if (reason === "action_invalid") {
+          await turn.tools.act("PRIVATE_FRAME", {
+            kind: "click",
+            x: -1,
+            y: 0.5,
+            raw: "PRIVATE_ARGUMENT",
+          } as never);
+        } else if (reason === "observation_missing") {
+          await turn.tools.act("PRIVATE_FRAME", {
+            kind: "click",
+            x: 0.5,
+            y: 0.5,
+          });
+        } else {
+          await turn.tools.observe();
+          await turn.tools.act("PRIVATE_WRONG_FRAME", {
+            kind: "click",
+            x: 0.5,
+            y: 0.5,
+          });
+        }
+        return { reply: "PRIVATE_FALSE_SUCCESS" };
+      });
+      try {
+        const result = await f.send(
+          `invalid-${reason}`,
+          "PRIVATE_HUMAN_REQUEST",
+        );
+        expect(result).toMatchObject({
+          code: "invalid_plan",
+          state: "not_started",
+        });
+        expect(result.reply).toContain("No computer input was sent.");
+        expect(result.reply).not.toContain(
+          "The proposed screen action is invalid.",
+        );
+        const wording = {
+          operation_limit: /limit/i,
+          action_invalid: /valid.*action/i,
+          observation_missing: /look|image|observe/i,
+          frame_mismatch: /image|frame/i,
+        };
+        expect(result.reply).toMatch(wording[reason]);
+        const saved = f.store.state<any>(`control-preflight:${f.request.id}`);
+        expect(saved.diagnostics).toEqual({
+          phase: "tool_preflight",
+          reason,
+          elapsedMs: expect.any(Number),
+        });
+        expect(saved.diagnostics.elapsedMs).toBeGreaterThanOrEqual(0);
+        expect(saved.diagnostics.elapsedMs).toBeLessThanOrEqual(60000);
+        expect(f.command(`invalid-${reason}`).result.diagnostics).toEqual(
+          saved.diagnostics,
+        );
+        expect(f.device.inputs).toHaveLength(0);
+        expect(f.store.all("action")).toHaveLength(0);
+        expect(
+          JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+        ).not.toContain("PRIVATE_");
+      } finally {
+        f.store.close();
+      }
+    },
+  );
+  it("retains sanitized diagnostics for each event after another failure replaces the request summary", async () => {
+    let runs = 0;
+    const f = await fixture(async (turn) => {
+      runs++;
+      if (turn.text === "First request")
+        await turn.tools.act("PRIVATE_FRAME", {
+          kind: "click",
+          x: 0.5,
+          y: 0.5,
+        });
+      throw new ControlPreflightError("planner_unavailable", {
+        phase: "conversation",
+        elapsedMs: 10,
+        conversation: {
+          phase: "generate",
+          errorKind: "api",
+          statusCode: 429,
+          completedSteps: 0,
+          raw: "PRIVATE_RESPONSE",
+        },
+        prompt: "PRIVATE_PROMPT",
+      } as ControlPreflightDiagnostics);
+    });
+    try {
+      await f.send("first-diagnostic", "First request");
+      const first = f.command("first-diagnostic");
+      expect(first.result.diagnostics).toMatchObject({
+        phase: "tool_preflight",
+        reason: "observation_missing",
+      });
+      await f.send("second-diagnostic", "Second request");
+      const second = f.command("second-diagnostic");
+      expect(second.result.diagnostics).toEqual({
+        phase: "conversation",
+        elapsedMs: 10,
+        conversation: {
+          phase: "generate",
+          errorKind: "api",
+          statusCode: 429,
+          completedSteps: 0,
+        },
+      });
+      expect(
+        f.store.state<any>(`control-preflight:${f.request.id}`).diagnostics,
+      ).toEqual(second.result.diagnostics);
+      expect(f.command("first-diagnostic")).toEqual(first);
+      await f.send("first-diagnostic", "First request");
+      expect(f.command("first-diagnostic")).toEqual(first);
+      expect(runs).toBe(2);
+      expect(f.device.inputs).toHaveLength(0);
+      expect(
+        JSON.stringify(f.store.query("SELECT body FROM operational_state")),
+      ).not.toContain("PRIVATE_");
+    } finally {
+      f.store.close();
+    }
   });
   it("maintains viewing while a model turn awaits, without blocking Stop", async () => {
     vi.useFakeTimers();
@@ -808,6 +950,9 @@ describe("one conversational agent with bounded screen tools", () => {
     await f.send("diagnostics", "PRIVATE_USER_PROMPT");
     const saved = f.store.state<any>(`control-preflight:${f.request.id}`);
     expect(saved.diagnostics.comparison.changedPixels).toBe(2);
+    expect(f.command("diagnostics").result.diagnostics).toEqual(
+      saved.diagnostics,
+    );
     expect(
       JSON.stringify(f.store.query("SELECT body FROM operational_state")),
     ).not.toContain("PRIVATE");
@@ -991,10 +1136,23 @@ describe("conversation lifecycle edges", () => {
         v = await t.tools.act(v.frame.id, { kind: "click", x: 0.5, y: 0.5 });
       return { reply: "Done" };
     });
-    expect((await f.send("budget", "Select the five fields.")).state).toBe(
-      "partial",
-    );
+    const result = await f.send("budget", "Select the five fields.");
+    expect(result.state).toBe("partial");
+    expect(result.reply).toContain("last observed input");
+    expect(result.reply).not.toContain("No computer input was sent");
     expect(f.device.inputs).toHaveLength(4);
+    expect(f.store.state(`control-preflight:${f.request.id}`)).toMatchObject({
+      diagnostics: {
+        phase: "tool_preflight",
+        reason: "action_limit",
+        elapsedMs: expect.any(Number),
+      },
+    });
+    expect(f.command("budget").result).toMatchObject({
+      state: "partial",
+      receipt: { state: "observed" },
+      diagnostics: { phase: "tool_preflight", reason: "action_limit" },
+    });
     f.store.close();
   });
 });

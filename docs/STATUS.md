@@ -9,6 +9,47 @@ pilot line. Correct control targeting, natural voice and the Claude Code physica
 call loop remain unverified. Historical evidence below does not qualify the new
 line or the later conversational harness.
 
+## Screen-control harness repair — November 11
+
+Offline reproduction found a concrete image-transport defect: the installed OpenAI
+Chat adapter stringifies image files returned inside tool content. The Responses
+adapter does not. The harness now supplies one latest, transient image as multimodal
+user content and keeps tool results to bounded frame/receipt metadata. This proves
+an adapter defect, not which hosted adapter caused the earlier handset failure.
+Input tools appear only after observation. Model coordinates are explicit screenshot
+pixels, checked against the exact current frame and converted to the existing
+normalized device contract. Inputs remain sequential; a local preflight rejection
+latches and prevents later input even when the SDK turns tool exceptions into
+model-visible results. Fresh capture, pixel matching, yielded-session authority,
+Stop, action budgets and unknown-outcome handling remain enforced.
+
+Provider errors retain bounded status/type metadata before SDK error wrapping can
+lose it. Invalid plans distinguish missing/mismatched frames, malformed actions,
+overlapping tools and budget limits. Sanitized diagnostics persist per turn;
+replies distinguish no input, partial observed input and uncertain outcomes.
+No raw errors, screenshots or model speech enter these diagnostic records.
+
+The disposable browser harness checks actual focus and textbox values independently
+of model narration. Deterministic pixel-grounded tests cover two capture sizes and
+a scaled display, plus a deliberately false success claim that must fail. Actual
+Chat/Responses wire regressions verify image modality and latest-frame binding.
+`npm run check` passes 449 tests plus TypeScript and build; independent review
+found and verified the fix for SDK-swallowed preflight errors. No helper, gateway
+or media runtime code changed.
+
+Real-provider tests reveal a remaining blocker. The configured `openai/gpt-4o-mini`
+missed the target and claimed success despite empty fields. Pixel coordinates and
+explicit high image detail did not fix its grounding. `openai/gpt-4.1` passed two
+unscaled layouts but missed a scaled target; `openai/gpt-4o` also missed it. A
+same-size coordinate-grid experiment failed and was removed. Candidates
+`openai/gpt-5.4` and `openai/gpt-6.1-sol` returned HTTP 403 with
+`no_providers_available`, explicitly citing free-tier model restrictions, before
+observation or input. The configured model,
+credentials and account settings remain unchanged. No tested replacement qualifies
+as reliable control; these repairs do not establish handset acceptance or
+resolve the current model's targeting limitation. Another live call requires new
+explicit authorization and local Enable; neither was performed.
+
 ## Fresh diagnostic call — November 11, after `dd011f4`
 
 The user authorized exactly one new diagnostic call and a factual recap in the
@@ -41,8 +82,8 @@ provider wraps HTTP errors, while the harness checks only the outer API-error
 type. A synthetic 429 consequently appears as `other` with zero completed steps,
 matching the retained category without proving the live HTTP status. The
 `invalid_plan` code also conflates several distinct tool/frame preconditions.
-Next harness work should retain bounded specific failure reasons and test screen
-grounding, exact frame references and observation-before-input behavior. Neither
+The subsequent harness repair above retains bounded specific failure reasons and
+tests screen grounding, exact frame references and observation-before-input behavior. Neither
 a model replacement nor a historical targeting cause is established by this
 attempt. No further call is authorized.
 
