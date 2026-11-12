@@ -155,6 +155,22 @@ increments its control epoch, invalidates its leases and queues owned-call clean
 An expired/stopped session cannot be revived by a late heartbeat or by registering
 the same external session ID. Native call reservations remain until confirmed cleanup.
 
+New attention requests without an explicit timeout use a renewable five-minute
+window once the exact call is connected and its remote participant qualified.
+Only an explicit heartbeat from the same cooperatively yielded session extends
+the still-unexpired request; setup expiration follows that deadline atomically.
+The original consent, request, call and effect identifiers are preserved. Ringing
+or unanswered calls retain their initial deadline. Explicit caller timeouts and
+legacy requests without the internal renewal flag remain fixed.
+
+Renewal refuses stopped/revoked or answered/terminal requests, local Stop, pending
+termination, closing/unknown media, stale or mismatched active leases, and uncertain
+inputs/effects. A heartbeat cannot revive an expired request. The independent
+20-second connector-liveness timeout still stops orphaned calls; status reads do
+not renew either lifetime. Completion, human hangup and control revocation retain
+their existing cleanup and receipt rules. These automated checks do not establish
+sustained handset acceptance.
+
 ### Native opt-out observation compatibility
 
 The source's installed-feed exception for `lead_opted_out` is retained. A line-less

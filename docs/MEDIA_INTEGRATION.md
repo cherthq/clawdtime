@@ -282,3 +282,24 @@ responses. Real loopback HTTP regressions cover a 27-second prior turn, expired 
 speech, subsequent fresh speech, permanent refusal without retries, uncertain late
 completion without duplicate dispatch, bounded queues and priority Stop. These tests
 are not handset acceptance.
+
+### Active-call duration
+
+Media no longer ends a healthy active call merely because 55 minutes have elapsed
+since preparation. The backend's current call policy remains authoritative; an
+ended policy closes media, and expired or unavailable policy stops capture, speech
+and screen authorization under the existing short freshness bounds. Local Stop,
+worker/room disconnection, revocation, receipt preservation and native cleanup remain
+unchanged. A preparation that never activates still fails after 120 seconds.
+
+Backend request deadlines are not part of the media preparation body. A renewable
+backend deadline can therefore keep an already connected, authorized call open
+without issuing new room credentials or extending helper grants beyond their
+existing limits. Explicitly fixed backend deadlines still close through ended policy.
+
+The existing LiveKit join tokens retain their 60-minute TTL. According to
+[LiveKit's token lifecycle documentation](https://docs.livekit.io/frontends/reference/tokens-grants/),
+expiry governs admission rather than forcing active participants off the call, and
+connected SDK clients receive refreshed tokens. No token or provider configuration
+was changed. This does not establish unlimited FaceTime/provider duration or physical
+long-call acceptance; only the application's arbitrary active-call cutoff was removed.

@@ -986,32 +986,40 @@ describe("bounded conversation failure diagnostics", () => {
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
-  it("identifies the bounded tool-loop exit without inventing a provider failure", async () => {
+  it("identifies an empty final reply after seven tools without inventing a provider failure", async () => {
     let calls = 0;
     const model = new MockLanguageModelV4({
-      doGenerate: async () => ({
-        content: [
-          {
-            type: "tool-call",
-            toolCallId: `observe_${++calls}`,
-            toolName: "observe",
-            input: "{}",
-          },
-        ],
-        finishReason: { unified: "tool-calls", raw: "tool-calls" },
-        usage,
-        warnings: [],
-      }),
+      doGenerate: async (options) => {
+        calls++;
+        if (calls === 8) {
+          expect(options.toolChoice).toEqual({ type: "none" });
+          return response("");
+        }
+        return {
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: `observe_${calls}`,
+              toolName: "observe",
+              input: "{}",
+            },
+          ],
+          finishReason: { unified: "tool-calls", raw: "tool-calls" },
+          usage,
+          warnings: [],
+        };
+      },
     });
     const error = await failure(model);
     expect(details(error)).toEqual({
       phase: "reply_validation",
       errorKind: "invalid_reply",
       completedSteps: 8,
-      finishReason: "tool-calls",
+      finishReason: "stop",
       replyLength: 0,
     });
     expect(model.doGenerateCalls).toHaveLength(8);
+    expect(details(error)).not.toHaveProperty("statusCode");
   });
 
   it("refuses malformed diagnostic getters without exposing their exception", () => {

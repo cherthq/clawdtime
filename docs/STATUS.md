@@ -2,11 +2,56 @@
 
 November 11, 2026 — America/New_York.
 
-**Independent pilot. Live typing in Gmail is human-confirmed. The queued-speech hangup repair is deployed; fresh live qualification remains pending.**
+**Hosted private deployment. The latest supervised call survived stale speech and queue overflow until its fixed five-minute setup deadline. The human reported a much better experience; full end-to-end continuation remains unverified.**
 The earlier supervised Codex → FaceTime → Mac screen → authenticated Messages
 feedback → same-chat continuation → Messages recap path passed on the original
 pilot line. The Claude Code physical call loop remains unverified. Historical
 evidence below does not qualify the current conversational harness.
+
+## Supervised queue retest and production preparation — November 11
+
+One newly authorized call ran on `e03b7d1`. The human reported “a LOT better” and
+“almost there,” then requested diagnosis of the final hangup and production
+promotion. Metadata recorded 18 voice turns: 16 accepted and two partial turns
+that reached eight tool steps without a final text reply. Twenty-two native input
+receipts reached observed state, and media received 359 screen frames. These
+receipts do not independently prove target content, correct focus or message send.
+
+The repaired queue handling was exercised live: `queue_full` and `stale_queue`
+were recorded while the call continued, including utterances aged 15.6 and 23.5
+seconds. No media failure was recorded. At the five-minute request deadline,
+backend termination source was `setup_expired`; the connector heartbeat was only
+1,594ms old. Media closed on ended policy and the screen recorded authorization
+expiry. This establishes the final hangup's cause, distinct from the previous
+speech-delivery failure. The setup request expired without feedback/ack/resume
+completion, so no full-loop verification or completion recap is claimed.
+
+Cleanup completed with the call ended, media closed, lease released and all input
+outcomes observed. Terminal acknowledgement released the coding session for
+diagnosis with `humanApproval:false`, then its foreground bridge closed and the
+session stopped. The one-call authorization is used. No further call is authorized.
+
+Production preparation removes the arbitrary active-call cutoff for new requests
+without an explicit caller timeout. A heartbeat from the same yielded connector
+renews a still-valid, qualified connected call and its matching setup deadline
+atomically. Explicit timeouts and legacy records remain fixed. Expired, stopped,
+revoked, terminal or uncertain control states cannot gain new authority. The
+20-second connector liveness limit, short media/helper authority, Stop, hangup and
+receipt safeguards remain. Active media follows fresh backend policy rather than
+a separate 55-minute age cutoff; unactivated sessions still time out after 120s.
+
+The existing AI SDK tool loop now reserves its eighth step for a grounded spoken
+reply with tools disabled. It reports partial/uncertain outcomes without claiming
+success or replaying input; the same eight-step and inference-time budgets remain.
+The two regressions reproduced the old empty reply and unwanted final-step tool
+behavior before the change and pass after it. These new lifetime/reply changes
+require a future approved physical test; the positive report applies to `e03b7d1`.
+
+Validation: 524 backend tests, 134 media tests, typecheck/build and formatting pass.
+Independent review passed, including 102 focused backend tests and five media
+duration regressions. The diagnostic fixture still tests an empty final reply
+after seven tools; a separate adversarial test proves that a tool emitted in the
+reply-only step never executes. No new provider calls were needed for these tests.
 
 ## Recoverable queued speech and direct call startup — November 11
 

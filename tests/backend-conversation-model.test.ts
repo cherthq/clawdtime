@@ -324,6 +324,70 @@ describe("conversation SDK contract", () => {
     });
     expect(act).not.toHaveBeenCalled();
   });
+  it("reserves the final bounded step for a spoken reply grounded in the latest observation", async () => {
+    const input = turn();
+    input.tools.observe = vi.fn(async () => image("latest"));
+    let calls = 0;
+    const model = new MockLanguageModelV3({
+      doGenerate: async (options) => {
+        calls++;
+        if (options.toolChoice?.type === "none") {
+          expect(options.tools ?? []).toEqual([]);
+          expect(JSON.stringify(options.prompt)).toContain("frameId=latest");
+          return output(
+            [
+              {
+                type: "text",
+                text: "I can see the page. The edit is not finished yet.",
+              },
+            ],
+            "stop",
+          ) as never;
+        }
+        return output([call(`observe-${calls}`, "observe", {})]) as never;
+      },
+    });
+    await expect(
+      new ScreenConversationAgent(
+        { frameImage: async () => image("unused") },
+        model,
+      ).run(input),
+    ).resolves.toEqual({
+      reply: "I can see the page. The edit is not finished yet.",
+    });
+    expect(calls).toBe(8);
+    expect(input.tools.observe).toHaveBeenCalledTimes(7);
+  });
+
+  it("does not execute a tool emitted in the final reply-only step", async () => {
+    const input = turn();
+    const act = vi.fn(input.tools.act);
+    input.tools.act = act;
+    let calls = 0;
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => {
+        calls++;
+        return output([
+          calls === 8
+            ? call("forbidden-final-input", "click", {
+                frameId: "one",
+                action: { kind: "click", x: 20, y: 30 },
+              })
+            : call(`observe-${calls}`, "observe", {}),
+        ]) as never;
+      },
+    });
+    await expect(
+      new ScreenConversationAgent(
+        { frameImage: async () => image("unused") },
+        model,
+      ).run(input),
+    ).rejects.toMatchObject({ code: "planner_unavailable" });
+    expect(model.doGenerateCalls[7]!.toolChoice).toEqual({ type: "none" });
+    expect(act).not.toHaveBeenCalled();
+    expect(calls).toBe(8);
+  });
+
   it("bounds runaway model tool loops", async () => {
     let calls = 0;
     const model = new MockLanguageModelV3({

@@ -53,6 +53,8 @@ export interface AttentionRequest {
   question: string;
   createdAt: number;
   deadline: number;
+  /** New requests without an explicit timeout may renew while their live session owns a healthy connected call. */
+  renewWhileConnected?: boolean;
   state: AttentionState;
   callId?: string;
   responseId?: string;

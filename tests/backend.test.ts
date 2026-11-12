@@ -182,6 +182,141 @@ describe("durable scoped attention domain", () => {
     });
     f.store.close();
   });
+  it("renews a default connected call on live heartbeats beyond its initial deadline", async () => {
+    const f = fixture(),
+      request = f.request();
+    await f.app.drain();
+    f.app.observeCall(request.id, "connected", true);
+    for (let i = 0; i < 80; i++) {
+      f.advance(5000);
+      f.app.heartbeat(f.agent.token);
+      f.app.expire();
+    }
+    const current = f.store.get<AttentionRequest>("attention", request.id)!;
+    expect(current.state).toBe("awaiting_input");
+    expect(request.renewWhileConnected).toBe(true);
+    expect(current.deadline).toBe(800000);
+    expect(current.deadline).toBeGreaterThan(request.deadline);
+    expect(f.store.effect(`${request.id}:end`)).toBeUndefined();
+    f.advance(20000);
+    f.app.expireSessions();
+    expect(f.store.effect(`${request.id}:end`)?.state).toBe("pending");
+    expect(f.store.state(`call-termination:${request.id}`)).toMatchObject({
+      source: "session_heartbeat_expired",
+    });
+    f.store.close();
+  });
+  it.each([
+    "explicit",
+    "legacy",
+    "ringing",
+    "unqualified",
+    "ended",
+    "stopped_view",
+    "stopped_listening",
+    "cleanup",
+    "unknown_input",
+    "unknown_lease",
+    "wrong_epoch",
+    "expired_lease",
+    "responded",
+    "expired_request",
+    "media_closing",
+    "media_unknown",
+  ] as const)("never renews a %s call on heartbeat", async (kind) => {
+    const f = fixture(),
+      request = f.app.requestAttention(f.agent.token, {
+        ...input,
+        ...(kind === "explicit" ? { timeoutSeconds: 10 } : {}),
+      });
+    await f.app.drain();
+    if (kind !== "ringing")
+      f.app.observeCall(request.id, "connected", kind !== "unqualified");
+    const call = f.store.all<CallSession>("call")[0]!;
+    if (kind === "media_closing" || kind === "media_unknown")
+      f.store.put("media", {
+        id: call.id,
+        requestId: request.id,
+        state: kind === "media_closing" ? "closing" : "unknown",
+      });
+    if (kind === "legacy") {
+      const { renewWhileConnected: _, ...old } = f.store.get<AttentionRequest>(
+        "attention",
+        request.id,
+      )!;
+      f.store.put("attention", old);
+    }
+    if (kind === "ended") f.app.observeCall(request.id, "ended");
+    if (kind === "stopped_view")
+      f.store.saveState(`view-stopped:${request.id}`, true);
+    if (kind === "stopped_listening")
+      f.store.saveState(`listening-stopped:${request.id}`, true);
+    if (kind === "cleanup") f.app.failCall(request.id, "media_failure");
+    if (
+      [
+        "unknown_input",
+        "unknown_lease",
+        "wrong_epoch",
+        "expired_lease",
+      ].includes(kind)
+    ) {
+      f.store.put<ControlLease>("lease", {
+        id: "rolling-lease",
+        requestId: request.id,
+        sessionId: f.agent.session.id,
+        pairingId: f.pair.pairing.id,
+        callId: call.id,
+        deviceId: "mac",
+        displayId: "display",
+        memberId: "member",
+        mode: "control",
+        epoch: kind === "wrong_epoch" ? 1 : 0,
+        expiresAt: kind === "expired_lease" ? 100000 : 200000,
+        state: kind === "unknown_lease" ? "unknown" : "active",
+      });
+      if (kind === "unknown_input")
+        f.store.put("action", {
+          id: "unknown-action",
+          leaseId: "rolling-lease",
+          state: "unknown",
+        });
+    }
+    if (kind === "responded") f.answer(request.id);
+    if (kind === "expired_request")
+      f.store.put("attention", {
+        ...f.store.get<AttentionRequest>("attention", request.id)!,
+        deadline: 100001,
+      });
+    const before = f.store.get<AttentionRequest>("attention", request.id)!;
+    f.advance(kind === "explicit" ? 10001 : 5000);
+    f.app.heartbeat(f.agent.token);
+    expect(
+      f.store.get<AttentionRequest>("attention", request.id)?.deadline,
+    ).toBe(before.deadline);
+    if (kind === "explicit" || kind === "expired_request") {
+      f.app.expire();
+      expect(f.store.effect(`${request.id}:end`)).toBeDefined();
+    }
+    f.store.close();
+  });
+  it("revocation or stopped sessions never renew a connected request", async () => {
+    for (const kind of ["revoked", "stopped"]) {
+      const f = fixture(),
+        request = f.request();
+      await f.app.drain();
+      f.app.observeCall(request.id, "connected", true);
+      if (kind === "revoked") f.app.disconnect(f.agent.token);
+      else {
+        f.advance(20000);
+        f.app.expireSessions();
+      }
+      expect(() => f.app.heartbeat(f.agent.token)).toThrow();
+      expect(
+        f.store.get<AttentionRequest>("attention", request.id)?.deadline,
+      ).toBe(request.deadline);
+      f.store.close();
+    }
+  });
   it("runs request, ring, feedback, exact-session acknowledgement, continuation and one Messages result", async () => {
     const f = fixture(),
       request = f.request();

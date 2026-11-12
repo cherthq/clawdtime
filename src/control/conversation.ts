@@ -237,7 +237,10 @@ export class ScreenConversationAgent implements ConversationAgent {
       }`,
       maxRetries: 0,
       toolCallConcurrency: 1,
-      prepareStep: ({ initialMessages, responseMessages }) => ({
+      prepareStep: ({ initialMessages, responseMessages, stepNumber }) => ({
+        // Keep the final step inside the existing budget for a grounded spoken
+        // answer. The SDK enforces toolChoice:none before executing any tool.
+        ...(stepNumber === 7 ? { toolChoice: "none" as const } : {}),
         // Rebuild from canonical text/tool history: one latest image, never a
         // growing screenshot history or a screen-bearing persisted chat record.
         messages: [
@@ -268,19 +271,30 @@ export class ScreenConversationAgent implements ConversationAgent {
                 },
               ]
             : []),
+          ...(stepNumber === 7
+            ? [
+                {
+                  role: "system" as const,
+                  content:
+                    "This is the final step of this turn. Reply briefly using the observed results so far. State any unfinished work or uncertain outcome plainly; do not claim completion from submitted input alone. Do not request or repeat tools.",
+                },
+              ]
+            : []),
         ],
         activeTools:
-          latestObservation && turn.capabilities?.control === true
-            ? [
-                "observe",
-                "click",
-                "type",
-                "scroll",
-                "feedback",
-                "screenFeedback",
-                "stop",
-              ]
-            : ["observe", "feedback", "screenFeedback", "stop"],
+          stepNumber === 7
+            ? []
+            : latestObservation && turn.capabilities?.control === true
+              ? [
+                  "observe",
+                  "click",
+                  "type",
+                  "scroll",
+                  "feedback",
+                  "screenFeedback",
+                  "stop",
+                ]
+              : ["observe", "feedback", "screenFeedback", "stop"],
       }),
       timeout: { totalMs: 45_000, stepMs: 12_000 },
       reasoning: this.generation.reasoning,

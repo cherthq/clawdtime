@@ -183,8 +183,10 @@ class Session:
 
     async def watch_policy(self):
         while not self.closing:
-            if time.monotonic() - self.born > 55 * 60 or (not self.active and time.monotonic() - self.born > 120):
-                await self.fail("maximum_duration" if time.monotonic()-self.born > 55*60 else "activation_timeout", "deadline")
+            # Active calls follow current backend authority, not a wall-clock
+            # lifetime. Abandoned preparations retain their bounded cleanup.
+            if not self.active and time.monotonic() - self.born > 120:
+                await self.fail("activation_timeout", "deadline")
                 return
             if self.active:
                 try:

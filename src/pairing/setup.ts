@@ -216,7 +216,6 @@ export class SetupService {
         taskId: `setup:${test.id}`,
         idempotencyKey: `setup:${test.id}`,
         reason: "review",
-        timeoutSeconds: 300,
         question: "Continue the paired conversation.",
       });
       return {

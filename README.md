@@ -39,14 +39,17 @@ editor and workflow.
 
 No command prefixes or confirmation codes. Local **Stop** always stays available.
 
-**Internal pilot:** an available, locally enabled Mac and an operator-provided
+**Private hosted release:** an available, locally enabled Mac and an operator-provided
 build are required; public app downloads aren’t ready. Voice takes turns rather
 than supporting interruptions. Screen/text return passed on an earlier configuration;
 an Astra medium call produced user-confirmed typing in Gmail; a subsequent call
-disconnected after repeated voice-delivery refusals. Queued speech failures now
-leave the call open, and setup starts with a brief screen-sharing/Stop notice.
-Eight offline textbox trials passed through the action router; sustained live
-control and current return-to-coding remain unverified pending a fresh approved call.
+disconnected after repeated voice-delivery refusals. The latest supervised call
+survived stale speech and queue overflow, and the human reported a much better
+experience. Its final hangup was the setup's five-minute deadline. New default
+calls now renew while the same connector and call remain healthy; explicit time
+limits, Stop and hangup still apply. Setup starts with a brief sharing/Stop notice,
+and long tool sequences reserve their final step for a spoken reply. These latest
+changes and the complete return-to-coding flow still need physical qualification.
 Automatic message likes, standalone progress texts, calling
 the agent yourself, and starting work or asking it questions from Messages
 outside an active request are not available yet. During a call, ask naturally.

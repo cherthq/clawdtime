@@ -311,6 +311,9 @@ export class ClawdTime {
         pairingId: pairing.id,
         createdAt: this.clock(),
         deadline: this.clock() + (value.timeoutSeconds ?? 300) * 1000,
+        ...(value.timeoutSeconds === undefined
+          ? { renewWhileConnected: true }
+          : {}),
         state: "queued",
       };
       delete (request as AttentionRequest & { timeoutSeconds?: number })
@@ -392,9 +395,103 @@ export class ClawdTime {
   heartbeat(raw: string) {
     this.expireSessions();
     const session = this.authenticateSession(raw);
-    return this.store.put<AgentSession>("session", {
-      ...session,
-      lastSeenAt: this.clock(),
+    return this.store.transaction(() => {
+      const now = this.clock();
+      const current = this.store.put<AgentSession>("session", {
+        ...session,
+        lastSeenAt: now,
+      });
+      if (current.state !== "yielded" || !current.capabilities.cooperativePause)
+        return current;
+      const pairing = this.pairing(current.pairingId);
+      for (const request of this.store.all<AttentionRequest>("attention")) {
+        if (
+          request.sessionId !== current.id ||
+          request.pairingId !== pairing.id ||
+          request.renewWhileConnected !== true ||
+          request.deadline <= now ||
+          !["connected", "awaiting_input"].includes(request.state) ||
+          request.responseId ||
+          this.store.state(`listening-stopped:${request.id}`) ||
+          this.store.state(`view-stopped:${request.id}`) ||
+          this.store.state(`call-termination:${request.id}`) ||
+          this.store.effect(`${request.id}:end`)
+        )
+          continue;
+        const call = this.store.get<CallSession>("call", request.callId ?? "");
+        if (
+          !call ||
+          call.requestId !== request.id ||
+          call.pairingId !== pairing.id ||
+          call.state !== "connected" ||
+          !call.remoteParticipantQualified ||
+          this.store.state(`cleanup:${call.id}`)
+        )
+          continue;
+        const media = this.store.get<{
+          id: string;
+          requestId: string;
+          state: string;
+        }>("media", call.id);
+        if (
+          media &&
+          (media.requestId !== request.id || media.state !== "active")
+        )
+          continue;
+        const leases = this.store
+          .all<ControlLease>("lease")
+          .filter((l) => l.requestId === request.id);
+        if (
+          leases.some(
+            (l) =>
+              l.state === "unknown" ||
+              (l.state === "active" &&
+                (l.sessionId !== current.id ||
+                  l.pairingId !== pairing.id ||
+                  l.callId !== call.id ||
+                  l.epoch !== current.controlEpoch ||
+                  l.expiresAt <= now)),
+          ) ||
+          this.store
+            .all<ActionReceipt>("action")
+            .some(
+              (a) =>
+                leases.some((l) => l.id === a.leaseId) &&
+                ["pending", "submitted", "unknown", "running"].includes(
+                  a.state,
+                ),
+            ) ||
+          this.store
+            .effects()
+            .some(
+              (e) =>
+                e.payload.requestId === request.id &&
+                ["running", "unknown"].includes(e.state),
+            )
+        )
+          continue;
+        const setupTests = this.store
+          .all<SetupTest>("setup_test")
+          .filter((t) => t.requestId === request.id);
+        if (
+          setupTests.some(
+            (t) =>
+              t.sessionId !== current.id ||
+              t.pairingId !== pairing.id ||
+              t.state !== "call_requested" ||
+              t.expiresAt <= now,
+          )
+        )
+          continue;
+        const deadline = Math.max(request.deadline, now + 300_000);
+        this.store.put<AttentionRequest>("attention", { ...request, deadline });
+        for (const test of setupTests)
+          this.store.put<SetupTest>("setup_test", {
+            ...test,
+            expiresAt: deadline,
+          });
+      }
+      return current;
     });
   }
   expireSessions(ttlMs = 20_000) {

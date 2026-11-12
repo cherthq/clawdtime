@@ -123,6 +123,36 @@ function fixture(mode: "simulation" | "live" = "simulation", legacy = true) {
 }
 
 describe("same-session approved setup test", () => {
+  it("rolls connected setup and attention deadlines together without another consent or call", async () => {
+    const f = fixture();
+    f.setup.invite(f.agent.token);
+    await f.service.drain();
+    f.setup.receive(f.event);
+    f.service.yieldSession(f.agent.token);
+    const initial = f.setup.start(f.agent.token);
+    await f.service.drain();
+    f.service.observeCall(initial.request.id, "connected", true);
+    for (let i = 0; i < 80; i++) {
+      f.advance(5000);
+      f.service.heartbeat(f.agent.token);
+      f.setup.expire();
+      f.service.expire();
+    }
+    const current = f.setup.start(f.agent.token);
+    expect(current.test.state).toBe("call_requested");
+    expect(current.test.expiresAt).toBe(current.request.deadline);
+    expect(current.request.deadline).toBe(f.now() + 300000);
+    expect(current.test.approvalEventId).toBe(initial.test.approvalEventId);
+    expect(current.test.approvedAt).toBe(initial.test.approvedAt);
+    expect(current.request.id).toBe(initial.request.id);
+    expect(f.simulated.calls).toHaveLength(1);
+    expect(f.simulated.ended).toHaveLength(0);
+    f.advance(20000);
+    f.service.expireSessions();
+    f.setup.expire();
+    expect(f.store.effect(`${initial.request.id}:end`)?.state).toBe("pending");
+    f.store.close();
+  });
   it("gives a late exact YES a bounded start window and a started call its full deadline", async () => {
     const f = fixture(),
       initial = f.setup.invite(f.agent.token).test;
