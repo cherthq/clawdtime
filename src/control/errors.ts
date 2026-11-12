@@ -33,7 +33,7 @@ export class ControlPreflightError extends Error {
 }
 import { z } from "zod";
 
-export interface ControlPreflightDiagnostics {
+export interface ScreenPreflightDiagnostics {
   phase: "settling" | "planning";
   elapsedMs: number;
   frameAgeMs: number;
@@ -52,7 +52,24 @@ export interface ControlPreflightDiagnostics {
   };
 }
 
-const diagnosticsSchema = z.object({
+export interface ConversationPreflightDiagnostics {
+  phase: "conversation";
+  elapsedMs: number;
+  conversation: {
+    phase: "generate" | "reply_validation";
+    errorKind: "api" | "timeout" | "invalid_reply" | "other";
+    statusCode?: number;
+    completedSteps: number;
+    finishReason?:
+      "stop" | "length" | "tool-calls" | "content-filter" | "error" | "other";
+    replyLength?: number;
+  };
+}
+
+export type ControlPreflightDiagnostics =
+  ScreenPreflightDiagnostics | ConversationPreflightDiagnostics;
+
+const screenDiagnosticsSchema = z.object({
   phase: z.enum(["settling", "planning"]),
   elapsedMs: z.number().finite().min(0).max(60_000),
   frameAgeMs: z.number().finite().min(-500).max(60_000),
@@ -88,6 +105,31 @@ const diagnosticsSchema = z.object({
     )
     .optional(),
 });
+
+const diagnosticsSchema = z.union([
+  screenDiagnosticsSchema,
+  z.object({
+    phase: z.literal("conversation"),
+    elapsedMs: z.number().finite().min(0).max(60_000),
+    conversation: z.object({
+      phase: z.enum(["generate", "reply_validation"]),
+      errorKind: z.enum(["api", "timeout", "invalid_reply", "other"]),
+      statusCode: z.number().int().min(100).max(599).optional(),
+      completedSteps: z.number().int().min(0).max(8),
+      finishReason: z
+        .enum([
+          "stop",
+          "length",
+          "tool-calls",
+          "content-filter",
+          "error",
+          "other",
+        ])
+        .optional(),
+      replyLength: z.number().int().min(0).max(1_000_000).optional(),
+    }),
+  }),
+]);
 
 /** Copy only bounded telemetry; no arbitrary strings or nested values survive. */
 export function sanitizeControlPreflightDiagnostics(

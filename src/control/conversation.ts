@@ -3,6 +3,7 @@ import {
   tool,
   isStepCount,
   createGateway,
+  APICallError,
   type LanguageModel,
 } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -15,7 +16,10 @@ import type {
 } from "../contracts.js";
 import type { MediaDevicePort } from "../../media/device-port.js";
 import { actionSchema } from "./coordinator.js";
-import { ControlPreflightError } from "./errors.js";
+import {
+  ControlPreflightError,
+  type ConversationPreflightDiagnostics,
+} from "./errors.js";
 
 export interface Observation {
   frame: Frame;
@@ -82,6 +86,23 @@ export class ScreenConversationAgent implements ConversationAgent {
     return this.device.frameImage(lease);
   }
   async run(turn: ConversationTurn) {
+    const startedAt = Date.now();
+    let completedSteps = 0;
+    let finishReason: ConversationPreflightDiagnostics["conversation"]["finishReason"];
+    const diagnostics = (
+      details: Omit<
+        ConversationPreflightDiagnostics["conversation"],
+        "completedSteps" | "finishReason"
+      >,
+    ): ConversationPreflightDiagnostics => ({
+      phase: "conversation",
+      elapsedMs: Math.max(0, Math.min(60_000, Date.now() - startedAt)),
+      conversation: {
+        ...details,
+        completedSteps,
+        ...(finishReason ? { finishReason } : {}),
+      },
+    });
     const actionTool = <T extends InputAction["kind"]>(kind: T) => {
       const schema = actionSchema.options.find(
         (s) => s.shape.kind.value === kind,
@@ -103,6 +124,18 @@ export class ScreenConversationAgent implements ConversationAgent {
       maxOutputTokens: 800,
       providerOptions: { openai: { store: false, parallelToolCalls: false } },
       stopWhen: isStepCount(8),
+      onStepEnd: (step) => {
+        completedSteps = Math.min(8, completedSteps + 1);
+        finishReason = [
+          "stop",
+          "length",
+          "tool-calls",
+          "content-filter",
+          "error",
+        ].includes(step.finishReason)
+          ? (step.finishReason as typeof finishReason)
+          : "other";
+      },
       tools: {
         observe: tool({
           description: "Observe the current selected screen without input.",
@@ -149,11 +182,50 @@ export class ScreenConversationAgent implements ConversationAgent {
           { role: "user", content: turn.text },
         ],
       });
-      return { reply: z.string().trim().min(1).max(900).parse(result.text) };
+      const text = result.text;
+      const reply = z.string().trim().min(1).max(900).safeParse(text);
+      if (!reply.success)
+        throw new ControlPreflightError(
+          "planner_unavailable",
+          diagnostics({
+            phase: "reply_validation",
+            errorKind: "invalid_reply",
+            replyLength:
+              typeof text === "string" ? Math.min(1_000_000, text.length) : 0,
+          }),
+        );
+      return { reply: reply.data };
     } catch (error) {
       if (error instanceof ControlPreflightError) throw error;
+      let timedOut = turn.signal.aborted;
+      let candidate: unknown = error;
+      for (let depth = 0; depth < 3 && candidate instanceof Error; depth++) {
+        try {
+          if (candidate.name === "TimeoutError") timedOut = true;
+          candidate = candidate.cause;
+        } catch {
+          break;
+        }
+      }
+      let apiError = false,
+        statusCode: number | undefined;
+      try {
+        apiError = APICallError.isInstance(error);
+        const status = apiError
+          ? (error as APICallError).statusCode
+          : undefined;
+        if (Number.isInteger(status) && status! >= 100 && status! <= 599)
+          statusCode = status;
+      } catch {
+        /* Diagnostic getters must never replace the bounded failure. */
+      }
       throw new ControlPreflightError(
-        turn.signal.aborted ? "planning_timeout" : "planner_unavailable",
+        timedOut ? "planning_timeout" : "planner_unavailable",
+        diagnostics({
+          phase: "generate",
+          errorKind: timedOut ? "timeout" : apiError ? "api" : "other",
+          ...(statusCode !== undefined ? { statusCode } : {}),
+        }),
       );
     }
   }

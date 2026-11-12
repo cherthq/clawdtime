@@ -41,8 +41,44 @@ audio tracks and failed unsubscription. All 89 media tests pass, including seven
 new callback regression tests; independent review found no actionable issue.
 Media deployment `34d078b5-2f13-46df-9fab-20e2e701b3aa` succeeded from `3acd183`;
 the previous deployment is removed, the live server hash matches the reviewed
-source, and scoped readiness passes. A newly authorized physical call remains
-pending. The consumed one-call approval does not authorize a replacement.
+source, and scoped readiness passed before the separately authorized follow-up below.
+
+## Voice fallback and screen recovery — November 11
+
+A second, separately approved view-only call stayed connected through startup on
+the corrected media build. It emitted Mac screen video from 00:35:17 through
+00:35:44 UTC on November 12 and received 42 frames. Six qualified voice turns
+reached the conversation harness: three completed, two failed with
+`frame_unavailable`, and one failed with `planner_unavailable`. The user reported
+repeated “I couldn't safely act on that request” replies. That sentence was a
+fixed error fallback, not evidence of a model safety refusal. No computer input
+was requested by the test or recorded. The lead canceled the unsuccessful test;
+worker/media cleanup, released viewing lease and terminal acknowledgement are
+confirmed. Screen visibility, feedback continuation and Messages recap acceptance
+remain unverified for this attempt.
+
+The screen loop could silently return when policy freshness elapsed during an
+HTTP 200 frame response. A subsequent valid policy for the same lease did not
+restart that completed task. The corrected loop clears stale pixels and waits
+without capture or renewal, then resumes its single existing task only with fresh
+policy and an unexpired helper grant. It also rechecks authority after renewal
+before requesting another frame. Expired grants, Stop and binding changes remain
+terminal; no input or lease creation is replayed.
+
+The last conversation failure discarded its underlying cause, so it cannot be
+attributed retrospectively to a provider outage. Synthetic requests using the
+actual deployed model/key succeeded for a greeting and an observe/image tool loop.
+New bounded diagnostics distinguish API failure, timeout (including wrapped SDK
+step timeouts), invalid final reply and other errors. Only status codes, step
+counts, durations and allowlisted categories are retained; raw errors, prompts,
+screens and audio remain excluded. Spoken/text fallback wording now describes
+processing, timeout or missing-frame failure instead of implying unsafe intent.
+
+Validation: 403 backend/connector tests plus TypeScript/build pass; 101 media tests
+pass, including delayed frame/renewal responses, same-lease recovery, Stop and
+expiry regressions. Independent review found no remaining actionable issue;
+deployment is pending. These checks do not establish physical acceptance or
+authorize another call.
 
 ## Service-number correction — November 11
 

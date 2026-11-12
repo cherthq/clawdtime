@@ -490,7 +490,13 @@ export class HumanRouter {
           receipt,
           reply: receipt
             ? "I paused after the last observed input. I couldn't safely finish the remaining steps."
-            : "I couldn't safely act on that request. The screen remains available if sharing is active; tell me what you'd like to do next.",
+            : failure.code === "planner_unavailable"
+              ? "I couldn't process that request because the conversation service failed. No computer input was sent."
+              : failure.code === "planning_timeout"
+                ? "I couldn't process that request in time. No computer input was sent."
+                : failure.code === "frame_unavailable"
+                  ? "I don't have a fresh screen image to work from. No computer input was sent."
+                  : `${new ControlPreflightError(failure.code).message} No computer input was sent.`,
         });
       }
       return persist("unknown", {

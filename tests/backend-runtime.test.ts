@@ -669,7 +669,8 @@ describe("runtime standby and mode boundaries", () => {
               )?.state,
             ).toBe("done");
             expect(sends).toHaveLength(4);
-            expect(sends[3]?.text).toContain("couldn't safely act");
+            expect(sends[3]?.text).toContain("conversation service failed");
+            expect(sends[3]?.text).not.toContain("couldn't safely act");
             expect(sends[3]?.text).not.toContain("do:");
             expect(runtime.store.all("action")).toHaveLength(0);
             await runtime.tick();

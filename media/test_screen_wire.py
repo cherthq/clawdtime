@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import ssl
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -37,6 +38,7 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
         self.fail_frames = False
         self.slow_frames = False
         self.frame_gate = None
+        self.renew_gate = None
         image = io.BytesIO()
         Image.new('RGB', (320, 180), '#8d17cb').save(image, 'JPEG')
         self.jpeg = image.getvalue()
@@ -49,6 +51,7 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
                 return web.json_response({'id':action['id'],'leaseId':self.lease['id'],'state':'submitted',
                     **{key:self.lease[key] for key in ('deviceId','memberId','callId')}})
             if request.method == 'POST':
+                if request.path.endswith('/renew') and self.renew_gate:await self.renew_gate.wait()
                 self.lease = await request.json()
                 self.assertEqual(set(self.lease), {'id','deviceId','memberId','callId','displayId','mode','expiresAt'})
                 return web.json_response(self.lease)
@@ -231,6 +234,139 @@ class ScreenWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(failure['durationMs'],1000)
         self.assertTrue(failure.get('httpStatus')==503 or failure.get('error')=='timeout')
         self.assertEqual(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),1)
+
+    async def pause_policy_during_successful_frame(self):
+        response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+        self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.screen.frame_id:break
+            await asyncio.sleep(.01)
+        self.assertIsNotNone(self.screen.frame_id)
+        before=self.screen.frame_id
+        self.frame_gate=asyncio.Event()
+        requested=sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame'))
+        for _ in range(100):
+            if sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame'))>requested:break
+            await asyncio.sleep(.01)
+        self.assertGreater(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),requested)
+        # Model a slow policy callback without waiting on wall-clock/network.
+        # The held HTTP frame response itself remains successful and fresh.
+        self.screen.policy_at=time.monotonic()-2.1
+        self.frame_gate.set()
+        for _ in range(100):
+            if self.screen.frame is None:break
+            await asyncio.sleep(.01)
+        self.assertIsNone(self.screen.frame)
+        self.assertIsNone(self.screen.frame_id)
+        self.assertEqual(self.screen.diagnostics.data['lastGatewayResult']['httpStatus'],200)
+        with self.assertRaises(ValueError):await self.screen.observed(include_frame=True)
+        return before,self.screen.task
+
+    async def test_policy_stale_after_http200_pauses_then_recovers_same_poll_and_lease(self):
+        before,poll=await self.pause_policy_during_successful_frame()
+        self.assertFalse(poll.done())
+        requests=len(self.received)
+        await asyncio.sleep(.12)
+        self.assertEqual(len(self.received),requests)  # no capture or renewal under stale policy
+        self.screen.update(self.policy)
+        self.assertIs(self.screen.task,poll)
+        for _ in range(100):
+            if self.screen.frame_id:break
+            await asyncio.sleep(.01)
+        self.assertIsNotNone(self.screen.frame_id)
+        self.assertNotEqual(self.screen.frame_id,before)
+        self.assertEqual(self.screen.selection['leaseId'],'view_fixture')
+        self.assertEqual(self.screen.diagnostics.data['framesReceived'],2)  # discarded HTTP200 frame is never published
+        self.assertFalse(any(method=='DELETE' or '/actions' in path for method,path in self.received))
+        self.assertEqual(sum(1 for method,path in self.received if method=='POST' and path=='/v1/leases'),1)
+
+    async def test_policy_pause_cannot_revive_expired_last_helper_grant(self):
+        _,poll=await self.pause_policy_during_successful_frame()
+        self.screen.requested_expiry['view_fixture']=time.time()-1
+        self.screen.update(self.policy)  # newer policy cannot replace an expired actual helper grant
+        await asyncio.wait_for(asyncio.shield(poll),2)
+        self.assertIn('view_fixture',self.screen.stopped)
+        self.assertIsNone(self.screen.frame)
+        self.screen.update(self.policy)
+        self.assertIsNone(self.screen.selection)
+        self.assertEqual(self.screen.diagnostics.data['terminalReason'],'authorization_expired')
+        self.assertEqual(sum(1 for method,path in self.received if method=='POST' and path=='/v1/leases'),1)
+
+    async def test_stop_during_policy_pause_cannot_restart_same_lease(self):
+        _,poll=await self.pause_policy_during_successful_frame()
+        self.screen.update({})
+        if self.screen.transition_task:await asyncio.wait_for(asyncio.shield(self.screen.transition_task),2)
+        self.screen.update(self.policy)
+        self.assertIsNone(self.screen.selection)
+        self.assertIsNone(self.screen.frame)
+        self.assertIsNone(self.screen.task)
+        self.assertTrue(poll.done())
+        self.assertEqual(sum(1 for method,path in self.received if method=='POST' and path=='/v1/leases'),1)
+
+    async def test_policy_stale_during_successful_renewal_does_not_dispatch_frame(self):
+        response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+        self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.screen.frame_id:break
+            await asyncio.sleep(.01)
+        self.assertIsNotNone(self.screen.frame_id)
+        self.renew_gate=asyncio.Event()
+        renewals=sum(1 for method,path in self.received if method=='POST' and path.endswith('/renew'))
+        for _ in range(100):
+            if sum(1 for method,path in self.received if method=='POST' and path.endswith('/renew'))>renewals:break
+            await asyncio.sleep(.01)
+        self.assertGreater(sum(1 for method,path in self.received if method=='POST' and path.endswith('/renew')),renewals)
+        frames=self.frames;poll=self.screen.task
+        self.screen.policy_at=time.monotonic()-2.1
+        self.renew_gate.set()
+        await asyncio.sleep(.12)
+        self.assertEqual(self.frames,frames)
+        self.assertEqual(sum(1 for method,path in self.received if method=='GET' and path.endswith('/frame')),frames)
+        self.assertIsNone(self.screen.frame)
+        self.assertFalse(poll.done())
+        self.screen.update(self.policy)
+        self.assertIs(self.screen.task,poll)
+        for _ in range(100):
+            if self.frames>frames:break
+            await asyncio.sleep(.01)
+        self.assertGreater(self.frames,frames)
+        self.assertEqual(sum(1 for method,path in self.received if method=='POST' and path=='/v1/leases'),1)
+        self.assertFalse(any(method=='DELETE' or '/actions' in path for method,path in self.received))
+
+    async def shorter_policy_during_request(self,phase):
+        response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
+        self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.screen.frame_id:break
+            await asyncio.sleep(.01)
+        self.assertIsNotNone(self.screen.frame_id)
+        method,suffix=('POST','/renew') if phase=='renew' else ('GET','/frame')
+        gate=asyncio.Event()
+        if phase=='renew':self.renew_gate=gate
+        else:self.frame_gate=gate
+        requests=sum(1 for m,path in self.received if m==method and path.endswith(suffix))
+        for _ in range(100):
+            if sum(1 for m,path in self.received if m==method and path.endswith(suffix))>requests:break
+            await asyncio.sleep(.01)
+        self.assertGreater(sum(1 for m,path in self.received if m==method and path.endswith(suffix)),requests)
+        frames=self.frames;accepted=self.screen.diagnostics.data['framesReceived'];poll=self.screen.task
+        shorter={**self.policy,'screenSelection':{**self.selection,'expiresAt':(datetime.now(timezone.utc)+timedelta(milliseconds=40)).isoformat()}}
+        self.screen.update(shorter)
+        self.assertIs(self.screen.task,poll)
+        await asyncio.sleep(.06)
+        gate.set()
+        await asyncio.wait_for(asyncio.shield(poll),2)
+        self.assertIn('view_fixture',self.screen.stopped)
+        self.assertIsNone(self.screen.frame)
+        self.assertEqual(self.screen.diagnostics.data['framesReceived'],accepted)
+        self.assertEqual(self.frames,frames+(1 if phase=='frame' else 0))
+        self.assertEqual(sum(1 for m,path in self.received if m=='POST' and path=='/v1/leases'),1)
+
+    async def test_shorter_policy_expiry_during_renewal_prevents_capture(self):
+        await self.shorter_policy_during_request('renew')
+
+    async def test_shorter_policy_expiry_during_frame_prevents_publication(self):
+        await self.shorter_policy_during_request('frame')
 
     async def test_action_retains_video_but_requires_new_input_observation_without_recreate(self):
         self.selection['mode']='control'

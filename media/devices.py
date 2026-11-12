@@ -233,13 +233,28 @@ class ScreenController:
         await asyncio.shield(self.terminal_tasks[lease_id])
 
     async def poll(self,generation):
+        waiting_policy=False
         try:
             while not self.closed and self.selection and generation==self.generation:
+                selection=dict(self.selection)
+                expiry=timestamp(selection['expiresAt'])
+                # A fresh policy cannot revive a helper grant that expired while
+                # policy delivery was delayed. Existing Stop/generation checks
+                # still own removal; never create a replacement lease here.
+                granted_expiry=self.requested_expiry.get(selection['leaseId'],expiry)
+                if min(expiry,granted_expiry)<=time.time():
+                    await self.terminal(selection,'authorization_expired');return
+                if time.monotonic()-self.policy_at>=2:
+                    if self.frame is not None or self.state!='unavailable':self.clear('unavailable')
+                    if not waiting_policy:
+                        self.diagnostics.phase('policy_unavailable','authorization_expired')
+                        waiting_policy=True
+                    # Keep this single poll task idle, with no capture or renewal,
+                    # until fresh same-lease authority arrives or the grant ends.
+                    await asyncio.sleep(.05);continue
+                waiting_policy=False
                 if self.hold_until>time.monotonic():
                     await asyncio.sleep(.05);continue
-                selection=dict(self.selection)
-                if time.monotonic()-self.policy_at>=2 or timestamp(selection['expiresAt'])<=time.time():
-                    await self.terminal(selection,'authorization_expired');return
                 body={k:v for k,v in selection.items() if k not in ('leaseId','alias')};body['id']=selection['leaseId']
                 route='/v1/leases'
                 if selection['leaseId'] in self.created:route+='/'+selection['leaseId']+'/renew'
@@ -249,9 +264,15 @@ class ScreenController:
                 # whose response is lost/cancelled or a later shorter policy.
                 self.requested_expiry[selection['leaseId']]=max(self.requested_expiry.get(selection['leaseId'],0),timestamp(selection['expiresAt']))
                 status,_,_=await self.request('POST',route,body)
+                if self.closed or generation!=self.generation:return
                 if status>=300:
                     await self.terminal(selection,'helper_stopped',status);return
                 async with self.frame_lock:
+                    if self.closed or generation!=self.generation:return
+                    # Renewal and lock acquisition may outlive the policy that
+                    # authorized them. Do not dispatch a new capture under it.
+                    if time.monotonic()-self.policy_at>=2 or min(timestamp(selection['expiresAt']),timestamp(self.selection['expiresAt']))<=time.time():
+                        self.clear('unavailable');continue
                     if self.hold_until>time.monotonic():continue
                     self.diagnostics.phase('frame_request',http_status=status)
                     status,raw,headers=await self.request('GET','/v1/leases/'+selection['leaseId']+'/frame',frame=True)
@@ -270,7 +291,10 @@ class ScreenController:
                         image.load();frame=image.convert('RGB')
                     if generation!=self.generation:return
                     self.expire()
-                    if time.monotonic()-self.policy_at>=2:return
+                    # Discard a successful frame if authority expired in flight.
+                    # Returning here used to strand a completed task forever:
+                    # same-binding policy refreshes do not spawn another poller.
+                    if time.monotonic()-self.policy_at>=2 or min(timestamp(selection['expiresAt']),timestamp(self.selection['expiresAt']))<=time.time():continue
                     if self.frame_id!=frame_id:
                         self.frame=frame;self.frame_id=frame_id;self.captured_at=captured;self.received_at=time.monotonic();self.revision+=1
                         self.diagnostics.frame(captured)
