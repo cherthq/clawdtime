@@ -270,3 +270,89 @@ rather than claiming success when disconnected. Unknown input blocks a new execu
 a fresh post-input frame means observation is available, not application success.
 Changing policy stops sharing and requires a later local Enable. No build, test or
 saved preference silently installs/restarts this companion or enables capture.
+
+## Audited legacy receipt reconciliation (companion 0.2.1)
+
+The initial protocol-2 companion incorrectly treated every older helper
+`submitted` receipt as a current ownership blocker. Older helpers never wrote the
+new post-input-frame marker even when the backend recorded a later frame. Those
+old leases cannot legitimately be resumed merely to create that marker. Native
+tools may remain available for ordinary work in the coding client, but ClawdTime
+refuses shared-surface ownership while the historical receipt gate blocks it.
+Availability of native tools neither bypasses the required ownership transfer
+nor establishes the old application's outcome.
+
+The repair preserves original receipts and separates three facts:
+
+- **Unresolved input blocks computer control:** current unobserved submissions,
+  pending/unknown dispatch and unreconciled historical submissions remain blocking.
+- **Historical input with a later frame:** an exact backend observation is recorded
+  as separate provenance, with ownership conclusively closed. It is not UI success.
+- **Historical input with no verified result:** ownership closure may be audited
+  without inventing an observation. The original submission remains unobserved and
+  permanently nonreplayable, but it no longer represents a live executor.
+
+New receipts carry their lease's protocol version. Missing version alone is never
+migration eligibility. An explicit private pre-upgrade snapshot and a fresh
+lead-prepared audit are required. The offline companion mode acquires the same
+exclusive receipt lock as the running helper. It does not start AppKit, a listener,
+a lease, capture or input, change local policy, or enable sharing:
+
+```sh
+"$COMPANION_EXECUTABLE" --reconcile-legacy-receipts \
+  --config "$EXACT_HELPER_CONFIG" \
+  --receipt-snapshot "$PRIVATE_PRE_UPGRADE_JOURNAL" \
+  --receipt-audit "$PRIVATE_RECONCILIATION_AUDIT" --dry-run
+```
+
+After separately authorized shutdown and review, omitting `--dry-run` applies the
+same audit. Dry-run validates all conditions and takes the lock but writes no
+journal or reconciliation ledger. The journal path is fixed by the configured
+device's normal Application Support directory; it cannot be redirected by an
+operator flag. No network endpoint performs this migration. No live helper or
+coding-client process may still own the affected surface. A failed ownership
+attestation, held helper lock, pending/unknown input, selected protocol-2 receipt,
+changed snapshot or mismatched receipt refuses the operation.
+
+The version-1 audit schema contains:
+
+- `auditId`, `deviceId`, `sourceSnapshotProtocol: 1`;
+- exact raw-byte `preUpgradeSnapshotSHA256` and `expectedCurrentJournalSHA256`;
+- `createdAt` in Unix milliseconds, with `helperStopped`,
+  `conflictingActorsStopped`, and `currentOwnershipIdle` all explicitly true;
+- a nonempty `receipts` list containing exact `id`, `leaseId`, `deviceId`,
+  `memberId`, `callId` and `fingerprint` bindings;
+- each receipt's `ownership`: `leaseState` (`released` or `expired`),
+  `callState: ended`, `executorState: none`, `releaseEvidenceId`,
+  `callEndEvidenceId`, and `evidenceSHA256` referencing the retained private
+  closure evidence. Expired ownership additionally requires `leaseExpiresAt`
+  in Unix milliseconds no later than the audit;
+- optional `observation`: exact `actionId`, `leaseId`, `afterFrameId`, and
+  `capturedAt` in Unix milliseconds at or after the helper submission timestamp
+  and no later than the audit. Omission explicitly preserves an unobserved result.
+
+IDs use the existing letters/digits/underscore/hyphen format, maximum 160 bytes;
+digests are 64 lowercase hexadecimal characters. The first application needs an
+audit no older than 15 minutes. An exact already-applied audit remains idempotent;
+changed evidence under the same audit ID is refused. These are trusted operator
+attestations backed by retained evidence, not a claim that the offline tool has
+independently queried the backend, gateway or native client's current processes.
+Prepare the final attestations only after fresh ownership inspection. If exact
+closure proof is unavailable for a receipt, omit it and leave it blocking.
+
+The sidecar `receipts-reconciliation.json`, beside `action-receipts.json`, records
+receipt/audit/snapshot hashes and the separate closure/observation provenance.
+Files and their directories must be regular owner-owned mode 0600/0700, without
+symlinks. Both the original journal and snapshot remain byte-for-byte unchanged
+by reconciliation and ordinary unchanged helper startup. Later new input retains
+the frozen original reconciled record fields, including unknown extension fields.
+The helper refuses reopening a reconciled historical lease, preserves duplicate-ID
+checks, and continues to block genuine current or unknown input. It never rewrites
+an old receipt to `observed` or labels an application result successful.
+
+Preserve the sidecar, original journal, pre-upgrade snapshot and evidence audit in
+backup/rollback. Do not remove the sidecar to bypass an integrity error or remove
+receipts to permit replay. Startup fails closed if a reconciled record changes.
+The native Control Panel distinguishes blocking input from historical observed or
+unverified results. Existing `unresolvedActionCount` status now reports only
+blocking input; separate historical counts are available from helper status.

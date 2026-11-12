@@ -7,6 +7,41 @@ The companion, gateway and installed Codex connector are updated. Physical
 qualification remains pending; input control is blocked by retained legacy receipts.**
 Release scope and rollback are in [AGENT_OWNED_RELEASE.md](AGENT_OWNED_RELEASE.md).
 
+## Live v2 test and native-control repair preparation — November 12
+
+The user approved one six-minute voice/viewing/coding test, enabled sharing locally,
+and then agreed during the call to end it early to repair native control. The
+same originating Codex chat received ten ordered voice segments and supplied five
+reply intents: four reached completed playback, one remained unknown and was not
+replayed. Speech was fragmented across several segments; these are not ten distinct
+user instructions. The call ended intentionally after approximately 2 minutes
+48 seconds. The request completed, call ended, viewing lease released, connector
+stopped and all backend effects finished. No computer input was dispatched.
+Sustained connection beyond five minutes and native control remain unqualified.
+
+The human requested native typing into the Codex input box. The agent posted a
+chat response but did not type into that box. This exposed two concrete integration
+issues: the helper's new global observation-marker check blocks legacy submitted
+receipts forever, and the view-only test bridge registered immutable native
+capability `none` despite a native desktop tool being available in this chat.
+A new chat alone does not clear the device-wide historical receipt block.
+
+Source repair is prepared, not installed: an explicit offline audited
+retirement separates closed historical ownership from pending/unknown input,
+preserves original receipts and records backend-observed versus unobserved history
+separately. Exact retained evidence closes all 41 historical ownership records:
+37 have backend post-action frame metadata; four have stopped/expired gateway
+leases and ended calls in retained ClawdTime handoff evidence, without a matching
+backend observation. None is claimed to prove application success. Skill guidance
+now checks this chat's actual native tool/surface before initial registration;
+native actions still use that same tool directly under exclusive ownership.
+Installing the repaired companion and applying its reviewed migration require
+approval of the specific new source. Swift build and all 28 tests pass, including
+nine migration regressions independently rerun by the reviewer. The isolated
+41-record rehearsal passed with the live journal unchanged. See
+[NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md) for the concrete installation
+and recovery plan. No second call is authorized.
+
 ## Approved rollout and verification — November 12
 
 The user explicitly approved deployment of `8efbacc` and the companion/gateway/

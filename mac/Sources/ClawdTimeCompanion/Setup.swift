@@ -154,7 +154,13 @@ extension DeviceApp {
       "\(executorNames[$0.executor] ?? "Unknown executor") · \(executionNames[$0.executionState] ?? "Unknown status")"
     } ?? "Execution: no current status"
     if ledger.unresolvedActionCount > 0 {
-      executionLabel?.stringValue += "\n\(ledger.unresolvedActionCount) input outcome(s) need reconciliation."
+      executionLabel?.stringValue += "\n\(ledger.unresolvedActionCount) unresolved input outcome(s) block computer control."
+    }
+    if ledger.historicalObservedActionCount > 0 {
+      executionLabel?.stringValue += "\n\(ledger.historicalObservedActionCount) historical input(s): later frame recorded; ownership closed."
+    }
+    if ledger.historicalUnverifiedActionCount > 0 {
+      executionLabel?.stringValue += "\n\(ledger.historicalUnverifiedActionCount) historical input(s): result unverified; ownership closed, no replay."
     }
     if !controlPanel.retiredCommands.isEmpty { executionLabel?.stringValue += "\nEarlier call control outcome(s) remain unresolved." }
     if controlPanel.command != nil { executionLabel?.stringValue += "\nCall control awaiting acknowledgement." }

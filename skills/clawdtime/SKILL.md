@@ -56,6 +56,25 @@ TTS, timeout, disconnect or uncertain input as approval. Preserve native approva
 boundaries and ask through the appropriate native tool when required. During a
 call prefer phone dialogue and avoid stealing shared-screen focus unnecessarily.
 
+## Choose native capabilities before the call
+
+Before first registering, identify the normal computer tool in **this same chat**
+and its shared surface. Use existing session evidence; inspect only if unclear.
+A connected `cua_repl` desktop tool can qualify this chat, not every client/chat.
+A hidden browser or another display does not match the selected shared surface.
+
+Pass the matching initial launch flags: `--native-control desktop --shared-surface
+true` for verified desktop control, `--native-control browser --shared-surface true`
+for a verified visible browser, or `--native-control none --shared-surface false`
+when no suitable surface is verified. Keep `--native-cancellation false` unless
+interruption is known to work. Pairing, local policy, task scope and native approvals
+still govern input; a viewing exercise does not mean an available tool is absent.
+
+Read `status.session.capabilities` (MCP: `connection_status`) before starting the
+call and confirm the intended capabilities were registered. Existing runs cannot
+be upgraded by changing flags. Never patch or replace an active session to bypass
+that limit; reconcile it before any later separately authorized call.
+
 ## Shared-screen input and optional fallback
 
 Before input, inspect `execution_status`. The intended display and tool surface
@@ -68,8 +87,9 @@ Native cancellation defaults false; enable its attestation only with client proo
 
 Stop/join conflicting computer actors before `transfer_execution`, using the
 current expectedEpoch, desired executor and actual previousOutcome. Claim
-`native` before suitable native shared-surface input. Release to `none` when it
-finishes. Do not operate concurrently with another executor or use a stale epoch.
+`native` before suitable native shared-surface input, then use this chat's normal
+native tool directly. Verify its actual UI result and release to `none` when done.
+Do not operate concurrently with another executor or use a stale epoch.
 An uncertain native tool/input outcome blocks safe handoff; report `uncertain`,
 reconcile the original action, and never switch to fallback to evade it.
 
@@ -105,12 +125,19 @@ silently rearm or weaken approvals. Pilot trust requires explicit
 `--pilot-installed true`; signed release trust uses independently established team
 identity. Resolve failures before claiming setup complete.
 
-Start `setup-session --agent AGENT --project PROJECT --run-id STABLE_CURRENT_CHAT_ID`
-through this chat's persistent foreground shell tool. Keep its handle/stdin open.
-It is only a JSONL command bridge, not another agent or daemon. New runs default
-v2. Use `status` → `invite` → `authorize` (exact testId and
-userAuthorizedCall:true only after actual one-call permission) → `start` →
-`conversation_turns` and the v2 operations above. Do not yield a v2 session.
+Launch in this chat's persistent foreground shell; for a verified desktop surface:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup-session --agent codex --project PROJECT --run-id STABLE_CURRENT_CHAT_ID --native-control desktop --shared-surface true --native-cancellation false
+```
+
+Use the actual adapter and matching browser/none flags when appropriate. Flags
+belong on the initial `setup-session` or MCP launcher, not `setup` or `run`.
+Keep the handle/stdin open; this is a JSONL bridge, not another agent or daemon.
+Native CUA remains this chat's ordinary tool; the bridge coordinates ownership.
+New runs default v2. Read `status.session.capabilities`, then `invite` → `authorize`
+(exact testId and userAuthorizedCall:true after actual one-call permission) →
+`start` → `conversation_turns`. Do not yield a v2 session.
 Each input is `{id,command,args}`; operation names match MCP v2 tools. Use stable
 command/effect IDs. The setup notice is informational, not a consent-code ritual.
 

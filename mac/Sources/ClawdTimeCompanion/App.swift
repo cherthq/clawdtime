@@ -12,6 +12,8 @@ struct HelperStatus: Codable {
   let controlPolicy: String
   let policyRevision: Int
   let unresolvedActionCount: Int
+  let historicalObservedActionCount: Int
+  let historicalUnverifiedActionCount: Int
   let panelCommand: PanelCommand?
   let retiredPanelCommands: [PanelCommand]
 }
@@ -240,7 +242,10 @@ struct HelperStatus: Codable {
             screenPermission: CGPreflightScreenCaptureAccess(),
             controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id,
             controlPolicy: policy.preferences.policy.rawValue, policyRevision: policy.preferences.revision,
-            unresolvedActionCount: ledger.unresolvedActionCount, panelCommand: controlPanel.command,
+            unresolvedActionCount: ledger.unresolvedActionCount,
+            historicalObservedActionCount: ledger.historicalObservedActionCount,
+            historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
+            panelCommand: controlPanel.command,
             retiredPanelCommands: controlPanel.retiredCommands))
       }
       if request.method == "POST", request.path == "/v1/panel" {
@@ -263,6 +268,9 @@ struct HelperStatus: Codable {
         let lease = try decode(Lease.self, request.body)
         guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(lease.displayId) != 0 else {
           throw HelperError(403, "Screen Recording and a configured active display are required.")
+        }
+        guard !ledger.isHistoricallyRetiredLease(lease.id) else {
+          throw HelperError(409, "This historical lease is retired; its input cannot be replayed.")
         }
         if ledger.unresolvedActionCount > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
@@ -369,6 +377,13 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
+      let reconciliationMode = args.contains("--reconcile-legacy-receipts")
+      if reconciliationMode && (args.contains("--list-displays") || args.contains("--check-config")) {
+        throw HelperError(400, "Reconciliation cannot be combined with another helper mode.")
+      }
+      if !reconciliationMode && args.contains(where: { ["--receipt-snapshot", "--receipt-audit", "--dry-run"].contains($0) }) {
+        throw HelperError(400, "Receipt audit arguments require offline reconciliation mode.")
+      }
       if args.contains("--list-displays") {
         var count: UInt32 = 0
         guard CGGetActiveDisplayList(0, nil, &count) == .success, count <= 32 else {
@@ -393,6 +408,32 @@ struct HelperStatus: Codable {
       }
       let base = applicationSupport.appendingPathComponent("ClawdTimeCompanion", isDirectory: true).appendingPathComponent(
           config.deviceId, isDirectory: true)
+      if reconciliationMode {
+        let switches: Set<String> = ["--reconcile-legacy-receipts", "--dry-run"]
+        let valued: Set<String> = ["--config", "--receipt-snapshot", "--receipt-audit"]
+        var values: [String: String] = [:]
+        var seen = Set<String>()
+        var index = 1
+        while index < args.count {
+          let flag = args[index]
+          guard seen.insert(flag).inserted else { throw HelperError(400, "Duplicate reconciliation argument.") }
+          if switches.contains(flag) { index += 1; continue }
+          guard valued.contains(flag), index + 1 < args.count, args[index + 1].hasPrefix("/") else {
+            throw HelperError(400, "Offline reconciliation requires explicit absolute private paths.")
+          }
+          values[flag] = args[index + 1]
+          index += 2
+        }
+        guard values["--config"] != nil, let snapshot = values["--receipt-snapshot"], let audit = values["--receipt-audit"] else {
+          throw HelperError(400, "Provide --config, --receipt-snapshot and --receipt-audit for offline reconciliation.")
+        }
+        let result = try ReceiptStore.reconcileLegacy(
+          journal: base.appendingPathComponent("action-receipts.json"),
+          snapshot: URL(fileURLWithPath: snapshot), audit: URL(fileURLWithPath: audit),
+          deviceId: config.deviceId, dryRun: args.contains("--dry-run"))
+        print(String(data: try JSONEncoder().encode(result), encoding: .utf8)!)
+        return
+      }
       let delegate = try DeviceApp(
         config: config, ledgerURL: base.appendingPathComponent("action-receipts.json"))
       let app = NSApplication.shared

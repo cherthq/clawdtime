@@ -82,11 +82,42 @@ marker, not speech text, screenshots or observation payloads; replaying a bridge
 command returns the marker and asks for a fresh scoped status read. Initial
 observations are transient. Raw audio/screens must never enter fixtures or logs.
 
+### Native tools in the current chat
+
+Before registering a new session, identify the native tool and shared surface
+available in this same coding chat. Use existing session evidence; inspect the
+surface only if its mapping is unclear. For example, an available `cua_repl`
+desktop tool may operate the selected shared display, while a hidden browser or a
+different display does not. This is not a new tool, replacement agent or universal
+claim about Codex/Claude. Native permissions and approval rules remain unchanged.
+
+For a verified desktop surface, the foreground launch is:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup-session --agent codex --project /absolute/project --run-id STABLE_CURRENT_CHAT_ID --native-control desktop --shared-surface true --native-cancellation false
+```
+
+Use `browser` for a verified visible browser surface, or `none` with
+`--shared-surface false` when no suitable surface is verified. Select the actual
+adapter. Keep cancellation false unless interruption is known to work. These
+flags record capabilities, not permission to act; a viewing exercise can still
+record an available native tool. Flags apply to initial `setup-session`/MCP
+registration, not pairing `setup` or the `run` wrapper. Check the returned
+`status.session.capabilities` or MCP `connection_status` before calling.
+
+After `transfer_execution(executor=native, ...)` succeeds, use the chat's ordinary
+native tool directly, verify its result, then release ownership with the current
+epoch and actual outcome. Foreground fallback refusal does not prohibit native
+CUA. Existing runs retain their original capabilities: changing flags cannot
+upgrade them, and an active session must not be patched/replaced to evade a
+refusal or unknown outcome. Reconcile it before a later authorized call.
+
 ### Foreground setup v2
 
 The existing `setup-session` command stays in this chat and defaults v2 for new
-runs. Keep its foreground process/stdin alive. Use `status`, `invite`, `authorize`
-with the exact testId and actual one-call user authorization, then `start` (without
+runs. Supply the matching initial native capability flags above and keep its
+foreground process/stdin alive. Read `status` to confirm the registered
+capabilities, then use `invite` and `authorize` with the exact testId and actual one-call user authorization, then `start` (without
 `yield`). Continue with the conversation operations above, using JSONL command
 names identical to MCP. Each effect needs a stable `id`; turn/reply/action IDs are
 separate durable identities. Unknown effects are never resubmitted. EOF stops
