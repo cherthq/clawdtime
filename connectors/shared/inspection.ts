@@ -61,6 +61,7 @@ const eventSchema = z.object({
   event: z.enum(stageNames),
   correlationId: hex(24),
   generation: z.number().int().nonnegative().max(999999999).default(0),
+  playbackGeneration: z.number().int().nonnegative().max(999999999).optional(),
   elapsedMs: z.number().int().min(0).max(86400000),
   at: z.string().datetime({ offset: true }).optional(),
 });
@@ -168,14 +169,24 @@ export function inspectSession(
       events.push({ ...parsed.data, processId: process.data });
     }
   }
-  const groups = new Map<string, Event[]>();
-  for (const event of events) {
-    const key = `${event.processId}:${event.generation}:${event.correlationId}`;
-    const group = groups.get(key) ?? [];
-    group.push(event);
-    groups.set(key, group);
-  }
   const metrics = pairs.map(([name, start, end]) => {
+    const playbackScoped =
+      name === "tts_first_byte" || name === "tts_first_publication";
+    const groups = new Map<string, Event[]>();
+    for (const [index, event] of events.entries()) {
+      // Half-duplex playback intentionally restarts capture. Only an explicit
+      // playback generation can join TTS stages across those capture changes.
+      // Missing playback identity stays unmatched; never infer it from neighbors.
+      const scope = playbackScoped
+        ? event.playbackGeneration === undefined
+          ? `unidentified:${index}`
+          : `playback:${event.playbackGeneration}`
+        : `capture:${event.generation}`;
+      const key = `${event.processId}:${scope}:${event.correlationId}`;
+      const group = groups.get(key) ?? [];
+      group.push(event);
+      groups.set(key, group);
+    }
     const samples: number[] = [];
     let missingCount = 0,
       failedCount = 0,
@@ -286,7 +297,7 @@ export function inspectSession(
     measurementKind,
     physicalAcceptance: false,
     clockPolicy:
-      "Durations use one process and generation only. UTC entries are observations; cross-process deltas are unavailable.",
+      "Durations use one process and correlation. TTS stages require one explicit playback generation; other stages require one capture generation. UTC entries are observations; cross-process deltas are unavailable.",
     invalidCount,
     uncorrelatedCount,
     overflowCount,
@@ -311,6 +322,9 @@ export function inspectSession(
       process: label(processes, event.processId, "p"),
       correlation: label(correlations, event.correlationId, "c"),
       generation: event.generation,
+      ...(event.playbackGeneration !== undefined
+        ? { playbackGeneration: event.playbackGeneration }
+        : {}),
       sequence: event.sequence,
       stage: event.event,
       elapsedMs: event.elapsedMs,

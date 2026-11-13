@@ -230,9 +230,9 @@ describe("connector timing evidence", () => {
         speechPipeline: {
           processId: "c".repeat(32),
           events: [
-            event(1, "tts_requested", 100),
-            event(2, "tts_first_byte", 140),
-            event(3, "audio_first_published", 160),
+            event(1, "tts_requested", 100, { playbackGeneration: 3 }),
+            event(2, "tts_first_byte", 140, { playbackGeneration: 3 }),
+            event(3, "audio_first_published", 160, { playbackGeneration: 3 }),
             event(4, "interruption_detected", 200),
             event(5, "playback_cleared", 220),
             event(6, "event_loop_lag", 230, {
@@ -262,5 +262,105 @@ describe("connector timing evidence", () => {
     ).toBe(20);
     expect(report.eventLoopLag).toMatchObject({ sampleCount: 1, medianMs: 17 });
     expect(JSON.stringify(report)).not.toMatch(/SECRET|PRIVATE/);
+  });
+
+  it("pairs TTS across capture restarts only with exact process, correlation and playback generation", () => {
+    const events = [
+      {
+        sequence: 1,
+        event: "tts_requested",
+        generation: 24,
+        elapsedMs: 122174,
+      },
+      {
+        sequence: 2,
+        event: "tts_first_byte",
+        generation: 25,
+        elapsedMs: 122491,
+      },
+      {
+        sequence: 3,
+        event: "audio_first_published",
+        generation: 25,
+        elapsedMs: 122527,
+      },
+      {
+        sequence: 4,
+        event: "audio_last_published",
+        generation: 38,
+        elapsedMs: 129555,
+      },
+    ].map((event) => ({
+      ...event,
+      correlationId: "1".repeat(24),
+      playbackGeneration: 3,
+    }));
+    const inspect = (sourceEvents: unknown[]) =>
+      inspectSession({
+        media: {
+          speechPipeline: {
+            processId: "a".repeat(32),
+            events: sourceEvents,
+          },
+        },
+      });
+    const metric = (
+      report: ReturnType<typeof inspect>,
+      name = "tts_first_publication",
+    ) => report.metrics.find((entry) => entry.name === name)!;
+    const report = inspect(events);
+    expect(metric(report, "tts_first_byte")).toMatchObject({
+      sampleCount: 1,
+      medianMs: 317,
+    });
+    expect(metric(report)).toMatchObject({ sampleCount: 1, medianMs: 353 });
+    expect(report.timeline.map((event) => event.playbackGeneration)).toEqual([
+      3, 3, 3, 3,
+    ]);
+    for (const changed of [
+      { playbackGeneration: 4 },
+      { playbackGeneration: undefined },
+      { correlationId: "2".repeat(24) },
+    ]) {
+      expect(
+        metric(
+          inspect(
+            events.map((event, index) =>
+              index === 0 ? { ...event, ...changed } : event,
+            ),
+          ),
+        ),
+      ).toMatchObject({ sampleCount: 0, medianMs: null });
+    }
+    expect(
+      metric(inspect(events.map(({ playbackGeneration, ...event }) => event))),
+    ).toMatchObject({ sampleCount: 0, medianMs: null });
+    const splitProcess = inspectSession({
+      media: {
+        speechPipeline: {
+          processId: "a".repeat(32),
+          events: events.slice(0, 1),
+        },
+      },
+      conversationTimeline: {
+        processId: "b".repeat(32),
+        events: events.slice(1),
+      },
+    });
+    expect(metric(splitProcess).sampleCount).toBe(0);
+    const inputs = inspect(
+      events.slice(0, 2).map((event, index) => ({
+        ...event,
+        event: index === 0 ? "input_started" : "input_submitted",
+      })),
+    );
+    expect(metric(inputs, "input_submission").sampleCount).toBe(0);
+    const playback = inspect(
+      events.slice(0, 2).map(({ playbackGeneration, ...event }, index) => ({
+        ...event,
+        event: index === 0 ? "playback_started" : "playback_completed",
+      })),
+    );
+    expect(metric(playback, "playback").sampleCount).toBe(0);
   });
 });

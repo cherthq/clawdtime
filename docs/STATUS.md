@@ -2,6 +2,35 @@
 
 ## Live interaction test — November 13, 2026
 
+The post-fix call stayed active for approximately 134 seconds until the user
+intentionally hung up; the provider recorded `remote_ended` and confirmed cleanup.
+Three real spoken turns reached this chat, two agent replies completed playback,
+and the user verbally confirmed hearing the first reply. One queued reply was
+canceled when newer speech arrived, without replay. This establishes basic
+half-duplex speech in both directions, not usable conversational latency or
+speakerphone interruption acceptance. No shared-screen input was submitted: the
+requested text field was ambiguous and the user ended the call during clarification.
+All calls/media sessions are now inactive, with zero pending or unknown effects.
+
+The user explicitly reported 30-second-scale response latency as unusable and
+requested a new architecture with a full-duplex conversational layer delegating
+work asynchronously. Current metrics support that change:
+
+| Measured boundary                                             | Actual observation                                     |
+| ------------------------------------------------------------- | ------------------------------------------------------ |
+| Final turn accepted → host agent acknowledgment               | 8.635, 10.368, 15.030 seconds                          |
+| Connector poll HTTP round trip                                | 99 ms median; 167 ms p95, 25 retained samples          |
+| TTS request → first audio publication                         | 353 ms, one retained correlated reply                  |
+| Local native action + accessibility observation, outside call | 473–532 ms                                             |
+| Fresh screen capture cadence during second call               | 184 frames across 123.7 seconds, approximately 1.5 fps |
+
+These boundaries do not add up to a complete handset latency measurement.
+Host scheduling/model/tool round trips are a large demonstrated contributor.
+The offline inspector was corrected to correlate TTS by explicit playback
+generation across capture restarts; unrelated processes/correlations remain
+separate. Its 23 focused tests, typecheck and build pass. This diagnostic-only
+change does not require redeploying the call services.
+
 The user enabled sharing locally and used speakerphone. The real iMessage
 instruction reached this same foreground Codex session; its `BLUE` response had
 a transport acknowledgment, and the user confirmed receiving it. The text-only
