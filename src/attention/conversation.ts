@@ -238,6 +238,23 @@ export class ConversationService {
     if (terminalTurn.has(state)) delete next.text;
     return this.service.store.put<ConversationTurn>("conversation_turn", next);
   }
+  /**
+   * A hangup closes authority, not delivery: a turn the live originating session
+   * has not acknowledged yet is still the human's answer. Lost heartbeat and
+   * revocation stop the session, so nothing remains that may read the turn.
+   */
+  private awaitingDelivery(turn: ConversationTurn, request: AttentionRequest) {
+    const session = this.service.store.get<AgentSession>(
+      "session",
+      turn.sessionId,
+    );
+    return (
+      request.state === "disconnected" &&
+      turn.delivery === "pending" &&
+      !!session &&
+      session.state !== "stopped"
+    );
+  }
   /** Pending content expires after 24h; receipts/fingerprints remain for deduplication. */
   prune() {
     for (const turn of this.service.store.all<ConversationTurn>(
@@ -251,7 +268,8 @@ export class ConversationService {
         !terminalTurn.has(turn.state) &&
         (this.service.clock() - turn.createdAt >= maxTextAgeMs ||
           !request ||
-          terminal.has(request.state) ||
+          (terminal.has(request.state) &&
+            !this.awaitingDelivery(turn, request)) ||
           this.service.store.state(`listening-stopped:${turn.requestId}`))
       )
         this.saveTurn(
@@ -585,6 +603,13 @@ export class ConversationService {
   end(raw: string, requestId: string) {
     this.owned(raw, requestId);
     const request = this.service.endConversation(raw, requestId);
+    // The agent closed the conversation itself, so its unread turns end with it.
+    for (const turn of this.turns(requestId))
+      if (!terminalTurn.has(turn.state))
+        this.saveTurn(
+          turn,
+          turn.state === "executing" ? "uncertain" : "canceled",
+        );
     this.prune();
     return {
       request,

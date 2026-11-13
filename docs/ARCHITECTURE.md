@@ -77,7 +77,9 @@ stay transient; input text is hashed, not journaled.
 
 Turn text is retained only while pending, bounded to 100 outstanding turns and
 24 hours; terminal/uncertain outcomes redact it while preserving sequence and
-fingerprint receipts. Reply text is transient; backend and media speech receipts
+fingerprint receipts. A hangup closes authority, not delivery: a turn the live
+originating session has not acknowledged stays readable until it is acknowledged,
+the session stops, or the 24-hour bound. Lost heartbeat and revocation redact it. Reply text is transient; backend and media speech receipts
 retain IDs/hashes/outcomes. Ambiguous playback is reconciled by GET, never a new
 POST or new ID. The v2 inbound encrypted outbox payload is cleared once routed.
 No duplicate unrestricted model conversation is stored.
