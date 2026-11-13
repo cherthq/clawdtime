@@ -798,3 +798,90 @@ qualify CUA, the other feedback channel, all client surfaces, or inbound FaceTim
 Voice currently uses half-duplex replies: listening pauses while the service
 speaks. Local Stop and supported phone Stop remain available; voice barge-in while
 speech is playing is not claimed.
+
+## Scoped activity and outcome receipts
+
+V2 progress accepts optional `presentation` when the exact request's polling
+response advertises `capabilities.presentationVersion: 1`. The connector probes
+that read-only capability before its first extended progress write and omits the
+extension for older servers. A timeout never triggers a second progress write or
+legacy `complete()` fallback. Legacy clients can keep reporting state alone.
+
+```json
+{
+  "requestId": "synthetic-request",
+  "turnId": "synthetic-turn",
+  "state": "completed",
+  "presentation": {
+    "version": 1,
+    "outcome": {
+      "outcomeId": "observed-result-1",
+      "summary": "The synthetic test passed.",
+      "verification": "agent_observed",
+      "evidenceKind": "test_result"
+    }
+  }
+}
+```
+
+Intermediate `presentation.activity` uses `activityId`, `kind` (`status` or
+`approval_needed`) and `summary`. Summaries allow at most 160 Unicode scalars and
+640 UTF-8 bytes. IDs are stable: identical retries reconcile the existing record;
+changed content requires reconciliation, never action replay. Activity is visual
+only; use the existing one-reply-per-turn speech protocol for useful answers or
+clarifications. Do not expose tool dumps or internal reasoning.
+
+The terminal turn determines outcome status. `agent_observed` is the originating
+agent's report of an actual observation, not server certification. `not_verified`
+means no verified result; `unknown` means unresolved. Submitted input and completed
+speech are insufficient evidence of UI success. Inspect the returned/polled receipt
+and summarize it in the original chat; there is no unsolicited chat injection.
+Completing a turn leaves its call connected. End it explicitly when appropriate.
+
+Activity text is transient (20 entries/request, 10 minutes, 100 active caches).
+Outcome summary text lasts at most 60 seconds while the exact call remains
+allowed. Stop, policy loss and call close clear it earlier. Metadata and
+fingerprints survive restart; summary text does not. Replaying an old report does
+not extend its lifetime or restore cleared text. The tracked source skill
+contains this workflow; implementation validation does not update installed skills.
+
+## Isolated session inspection
+
+Run the deterministic synthetic report without credentials or live services:
+
+```sh
+npx tsx scripts/inspect-session.ts
+npx tsx scripts/inspect-session.ts --export /tmp/clawdtime-synthetic-report.json
+npx tsx scripts/inspect-session.ts --input /tmp/explicit-diagnostic-fixture.json --export /tmp/clawdtime-inspection.json
+```
+
+Export is explicit and creates a new owner-readable file; an existing file is
+never overwritten. Input is limited to 1 MiB, three bounded sources and 64 events
+per source. The tool never reads installed configuration, queries production,
+contacts a model, or copies the raw response. A caller with separately authorized
+scoped diagnostics access can provide an explicit local response file. Treat that
+input file according to its original retention policy; the inspector does not
+archive it. File input is labeled `unclassified`, never presumed physical.
+
+The allowlisted report includes short opaque process/correlation labels, fixed
+stages, monotonic offsets, validated UTC observations and aggregate timing.
+Transcripts, arbitrary text, credential fields, phone numbers, project paths,
+provider bodies and errors are excluded. Median uses the middle value (the mean
+of the two middle values for an even count); p95 uses nearest rank. Each metric
+includes attempted, successful, failed and missing-stage counts. Duplicated,
+backwards or failed stages cannot produce a successful sample. Cross-process,
+cross-generation and uncorrelated stages report missing/unavailable durations;
+UTC observations are never subtracted to estimate precise latency. No dial
+response is called handset ringing or screen visibility.
+
+The default synthetic backend-to-agent fixture has five samples: median 300 ms,
+p95 500 ms, zero failures and zero missing stages. This is a reproducible
+calculation fixture, not a performance measurement of a real call or a comparison
+with another product. Physical latency remains unqualified.
+
+Readiness preserves existing check IDs/status/nextAction and adds fixed reason
+categories plus the evidence timestamp: stale agent, locally stopped sharing,
+screen/control permission, wrong binding, unreachable gateway, native approval
+and unresolved prior effect. Reasons come from explicit categories/check IDs,
+never prose or an inference that an unreachable Mac is asleep. Rechecks do not
+call, capture, input, enable, install, reset permissions or grant a lease.

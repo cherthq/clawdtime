@@ -423,3 +423,28 @@ to the fixed registered helper. Readiness returns local policy revision and pend
 call controls to the backend. These are separate from capture authorization and
 cannot mutate local preferences. Full wire and local restriction behavior is in
 [the companion README](../mac/README.md#agent-owned-conversation-and-control-panel-protocol-2).
+
+## Improvements presentation and diagnostic capability
+
+New media requests advertise `X-ClawdTime-Presentation: 1`. For v2 only, the
+backend returns `presentationBinding` (exact session/member/device/display) and
+`presentationSequence` in policy. Old callers receive the original policy shape.
+Panel metadata still travels over the existing authenticated device path; it grants
+no screen or input authority. Local helper capability controls optional forwarding.
+
+The phone validates the binding, policy freshness, five-second panel expiry,
+monotonic sequence and text expiry before showing visual activity. Stable sequence
+replay cannot restore cleared text. Backend acceptance, agent acknowledgment,
+working, native approval and observed/unverified/unresolved outcomes remain separate.
+The same projection supplies the native panel. Current summaries are distinct from
+recent history, and a task outcome never ends the call. See
+[media checks and preview commands](../media/README.md) and
+[local implementation evidence](STATUS.md).
+
+Speech diagnostics add a random 32-hex monotonic process scope and 24-hex opaque
+segment/reply correlation. Backend conversation stages use the same correlations
+for causal inspection. Process reset/24-hour rollover starts a fresh scope; clocks
+across processes are never subtracted into a latency claim.
+`npx tsx scripts/inspect-session.ts` defaults to an isolated fixture and accepts only
+explicit file input/export, with an allowlisted report rather than a raw response
+dump. No production configuration is discovered implicitly.

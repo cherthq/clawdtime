@@ -152,3 +152,38 @@ The connector refreshes an explicit heartbeat every five seconds while its stdio
 session is alive. After a 20-second gap, session expiry stops sharing and queues
 owned-call cleanup; delayed heartbeats do not resurrect stopped sessions. Media and
 control evaluate liveness independently, so a slow inbound poll cannot extend capture.
+
+## Optional activity presentation (version 1)
+
+V2 polling/doctor advertise `capabilities.presentationVersion:1`. Connectors
+negotiate per request before adding progress `presentation`; old servers receive
+the existing progress shape. Activity decorates an explicit transition; it never
+creates another task engine, grants input, satisfies approval, speaks, messages,
+captures a screen or ends the call. Terminal outcomes use stable IDs and agent
+verification (`agent_observed`, `not_verified`, `unknown`). The original chat can
+summarize the existing poll/progress receipt itself.
+
+Only per-turn IDs/fingerprints/verification and monotonic request ordering are
+stored durably, with at most 19 intermediate identities plus one outcome per turn.
+The original turn receipts remain intact. Text stays in one process-local cache:
+100 requests globally, 20 summaries per request, ten minutes for activity and
+60 seconds for outcomes. Capacity pressure drops optional text/metadata without
+changing a human turn or effect. Terminal transitions clear interim text; Stop,
+revocation, call closure, stale authority and expiry clear all retained text.
+Replay never renews or restores it. Restart retains receipt metadata only.
+
+The projection keeps newest delivery separate from active work: unresolved
+outcomes take precedence, then an executing/approval turn, then the newest turn.
+A queued correction cannot hide active work. Current summaries are separate from
+bounded recent Details history. TS/Python/Swift share fixtures and reject Unicode
+control/surrogate scalars, accepting valid ZWJ/astral text within 160 scalar and
+640-byte limits. Panel telemetry expires after five seconds. Helper capability
+negotiation preserves older components; malformed optional display data cannot
+block local Stop or command acknowledgments.
+
+Diagnostic conversation stages retain only process/correlation IDs and timing in
+bounded memory (100 request timelines, 64 events each, ten minutes). Speech stages
+extend the existing allowlisted media diagnostics. Correlations join causal
+observations across processes; durations use only a single monotonic process and
+generation. No backend dial timestamp is represented as handset ringing or visible
+screen evidence. The fixture-first inspector exports only its explicit allowlist.

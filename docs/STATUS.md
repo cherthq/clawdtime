@@ -1,5 +1,95 @@
 # ClawdTime implementation status
 
+## Improvements A–F — November 13, 2026 (local verification only)
+
+Implementation source: `783be9523faa2c861cc82dc89e0b01d3c16e6d6a`, branch
+`improvements`, based on `bf8f18e`. Local/remote history and worktrees were
+inspected first; no existing `improvements` branch existed. The original two
+uncommitted planning files were preserved and are included with this record.
+Separate `multi-device-relay` work was inspected read-only and not merged.
+
+The user explicitly authorized `git push -u origin improvements`; both planning
+documents now reflect that override. This is source implementation and isolated
+validation, not a deployment or physical acceptance record. Package G remains
+deferred. Main and the previously recorded hosted release below are unchanged.
+
+### Implemented
+
+- **A:** Optional version-1 activity on existing v2 progress/poll/panel paths;
+  exact session binding, stable IDs, server ordering, replay/conflict handling and
+  capability negotiation. Text is transient, limited to 20 summaries per request,
+  100 cached requests, ten minutes; Unicode is bounded by scalars and bytes.
+- **B:** Compact/expanded nonactivating AppKit activity panel with exact labels,
+  persistent local Stop, pending command status, safe stale/ended states, keyboard
+  navigation and fixed readiness guidance. The existing setup window remains.
+- **C:** Phone status separates backend acceptance from agent acknowledgment,
+  execution and native approval. Current summaries cannot be replaced by prior
+  outcomes. Original-agent speech remains one reply per turn and half-duplex.
+- **D:** Stable terminal outcome receipts report agent-observed, unverified or
+  unknown results without ending the call, sending a message or capturing a
+  screenshot. Outcome text lasts at most 60 seconds, clears on authority loss,
+  and is absent after restart; durable metadata remains reconcilable.
+- **E:** Bounded process/correlation timing with monotonic clock-scope resets and
+  a fixture-first inspector. Explicit allowlisted export contains opaque labels,
+  sample/failure/missing counts and median/p95. Cross-process UTC observations
+  are not represented as precise latency or handset evidence.
+- **F:** Deterministic readiness reasons/next actions, shared TS/Python/Swift
+  fixtures, isolated route/journey/fault tests, and a separate ten-turn physical
+  qualification checklist in [DEMO_ACCEPTANCE.md](DEMO_ACCEPTANCE.md).
+
+Independent integration review caught and corrected historical outcomes hiding new
+work, corrections hiding pending approval, Unicode disagreement, retained text in
+a media comparison field, false reply-accepted diagnostics, clock saturation after
+24 hours, and stale connection success headlines. Worst-case escaped Unicode
+metadata uses a bounded 64 KiB envelope; native non-panel bodies retain their
+16 KiB limit. No authority or native-input freshness limit was loosened.
+
+### Checks actually performed
+
+Environment: Node `v24.22.1`, isolated media Python `3.14.0`, Apple Swift `6.2.4`.
+
+| Command/check                                                                 | Result                                                                                 |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Baseline `npm run check`                                                      | Typecheck, 571 tests, build passed before edits                                        |
+| Final `npm run check`                                                         | Typecheck, 599 tests across 37 files, build passed                                     |
+| `npm run test:onboarding:browser`                                             | Passed isolated browser/compiled-CLI onboarding checks and config preservation         |
+| `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`         | 204 tests passed                                                                       |
+| `media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'`       | 31 tests passed                                                                        |
+| `python3 -m unittest discover -s mac/scripts -p 'test_*.py'`                  | 21 tests passed                                                                        |
+| `swift test` and `swift build` in `mac/`                                      | 38 tests and build passed                                                              |
+| `swift run --package-path mac PanelPreview /tmp/clawdtime-panel-final`        | 40 synthetic production-view renderings; control-bounds assertions passed              |
+| `media/.venv/bin/python media/preview_activity.py /tmp/clawdtime-phone-final` | Synthetic portrait/landscape, light/dark-background renderings generated and inspected |
+| `npx tsx scripts/inspect-session.ts`                                          | Deterministic sanitized report; no live reads                                          |
+| Focused backend/execution/connector regressions and `git diff --check`        | Passed                                                                                 |
+
+Visual review included compact/expanded panels, long Unicode, larger text,
+light/dark contrast, approval, pending controls, uncertain/unverified results and
+stale/ended clearing; phone portrait contact sheets and full landscape frames.
+Generated PNGs/reports remain outside Git. The inspector's five known calculation
+samples yield median 300 ms and p95 500 ms; these are fixture arithmetic, **not**
+measured ClawdTime latency, a before/after performance improvement, or a comparison
+with FaceTimeOS. Missing stages remain unavailable and counted. Deliberately
+injected media/gateway failures log fixed warnings during passing tests.
+
+No remaining isolated check failures. No merge, deployment, installed-component
+replacement/restart, real connector spike, physical call, outbound message, real
+native input, or production configuration/database read was performed. No sibling
+Apple Teams/chert-facetime files were modified. Native approvals, exclusive
+ownership, Stop, cursors, unknown outcomes and existing receipt behavior remain
+required; tests do not grant permission.
+
+### Still physically unverified
+
+New panel focus/VoiceOver behavior on actual multiple displays; handset readability
+and ten-turn speech accounting; real input plus observed result; actual Stop/mute/
+end/remote-hangup cleanup; repeated sessions; clean installation/upgrade/rollback;
+second-Mac isolation; signed/notarized distribution. Each requires the separately
+authorized scope and prerequisites in the acceptance document. Full-duplex,
+Messages task initiation, screenshots/messages, new agents/adapters, credential
+migration and the other package-G features remain deferred.
+
+## Previously recorded hosted state
+
 November 12, 2026 — America/New_York.
 
 **Backend/media source `0814e50` is deployed with the speech repair, bounded
