@@ -4,6 +4,7 @@ import {
   presentationFor,
 } from "./attention/presentation.js";
 import { ExecutionCoordinator } from "./control/execution.js";
+import { Interruptions, interruptionSchema } from "./control/interruptions.js";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { timingSafeEqual, createHash } from "node:crypto";
@@ -40,6 +41,8 @@ export interface AppOptions {
   simulation: boolean;
   dispatchEnabled?: boolean;
   publicTextNumber?: string;
+  twoWayVoiceEnabled?: boolean;
+  remoteAudioIsolated?: boolean;
   retireObsoleteNotice?: (input: {
     noticeId: string;
     pairingId: string;
@@ -68,7 +71,15 @@ export function createApp(
 ) {
   const app = new Hono();
   const setup = new SetupService(service);
-  const execution = new ExecutionCoordinator(service, control);
+  const interruptions = new Interruptions(service);
+  const execution = new ExecutionCoordinator(
+    service,
+    control,
+    (token, requestId, cursor) => {
+      interruptions.assertClear(requestId);
+      human.turns.assertCurrentInput(token, requestId, cursor);
+    },
+  );
   const allowedOrigins = new Set([
     options.origin,
     ...(options.compatibleOrigins ?? []),
@@ -263,6 +274,9 @@ export function createApp(
     });
   });
   // Version 2 is negotiated at registration, never inferred from an active call.
+  app.get("/api/conversation/inbox", (c) =>
+    c.json(human.turns.inbox(bearer(c.req.header("authorization")))),
+  );
   app.get("/api/attention/:id/conversation/turns", async (c) => {
     const after = z.coerce
       .number()
@@ -274,13 +288,14 @@ export function createApp(
       bearer(c.req.header("authorization")),
       c.req.param("id"),
     );
-    return c.json(
-      human.turns.poll(
+    return c.json({
+      ...human.turns.poll(
         bearer(c.req.header("authorization")),
         c.req.param("id"),
         after,
       ),
-    );
+      hold: interruptions.status(c.req.param("id")),
+    });
   });
   app.post("/api/attention/:id/conversation/ack", async (c) => {
     const b = z
@@ -327,6 +342,7 @@ export function createApp(
         replyId: z.string().min(1),
         text: z.string().min(1).max(900),
         expectedCursor: z.number().int().nonnegative().safe().optional(),
+        channel: z.enum(["text", "voice"]).optional(),
       })
       .strict()
       .parse(await c.req.json());
@@ -371,7 +387,14 @@ export function createApp(
     const actions = service.store
       .all<ActionReceipt>("action")
       .filter((a) => leases.some((l) => l.id === a.leaseId));
-    return c.json({ ...owner, leases, actions });
+    return c.json({
+      ...owner,
+      leases,
+      actions,
+      ...human.turns.executionRevision(owner.requestId),
+      hold: interruptions.status(owner.requestId),
+      nativeCancellation: "cooperative_host_dependent",
+    });
   });
   app.post("/api/attention/:id/conversation/execution", async (c) =>
     c.json(
@@ -415,6 +438,7 @@ export function createApp(
         ? service.store.get<CallSession>("call", request.callId)
         : null,
       conversationTimeline: timelineFor(service).snapshot(request.id),
+      controlTiming: control.timing.snapshot(request.id),
       capturedFrame: service.store.state(`setup-view:${request.id}`) ?? null,
       controlPreflight:
         service.store.state(`control-preflight:${request.id}`) ?? null,
@@ -626,6 +650,21 @@ export function createApp(
       state: open ? "listening" : "ended",
       muted: service.store.state(`muted:${request.id}`) === true,
       protocolVersion: session.protocolVersion ?? 1,
+      ...(session.protocolVersion === 2
+        ? {
+            voiceMode:
+              options.twoWayVoiceEnabled === true &&
+              options.remoteAudioIsolated === true &&
+              session.capabilities.voiceInteractionVersion === 1
+                ? "two_way"
+                : "half_duplex",
+            remoteAudioIsolated: options.remoteAudioIsolated === true,
+            voiceInteractionVersion:
+              session.capabilities.voiceInteractionVersion,
+            conversationRevision: human.turns.executionRevision(request.id)
+              .cursor,
+          }
+        : {}),
       ...(session.protocolVersion === 2 &&
       c.req.header("X-ClawdTime-Presentation") === "1"
         ? {
@@ -645,6 +684,33 @@ export function createApp(
       expiresAt: new Date(now + 20_000).toISOString(),
       ...(selection ? { screenSelection: selection } : {}),
     });
+  });
+  app.post("/media/:id/interrupt", async (c) => {
+    const { request, pairing, call, session } = mediaContext(c.req.param("id"));
+    const input = interruptionSchema.parse(await c.req.json());
+    const now = service.clock();
+    if (
+      !options.twoWayVoiceEnabled ||
+      !options.remoteAudioIsolated ||
+      session.protocolVersion !== 2 ||
+      session.capabilities.voiceInteractionVersion !== 1 ||
+      pairing.revokedAt !== undefined ||
+      session.state === "stopped" ||
+      now - (session.lastSeenAt ?? session.createdAt) >= 20_000 ||
+      (session.lastSeenAt ?? session.createdAt) > now + 1000 ||
+      request.deadline <= now ||
+      !["connected", "awaiting_input"].includes(request.state) ||
+      !call ||
+      call.state !== "connected" ||
+      !call.remoteParticipantQualified ||
+      input.callId !== call.id ||
+      input.participantIdentity !== `worker-${c.req.param("id")}` ||
+      service.store.state(`muted:${request.id}`) === true ||
+      service.store.state(`listening-stopped:${request.id}`) ||
+      service.store.state(`view-stopped:${request.id}`)
+    )
+      throw new DomainError(403, "Qualified two-way audio required.");
+    return c.json(interruptions.accept(request.id, input));
   });
   app.post("/media/:id/segments", async (c) => {
     const { request, pairing, call, session } = mediaContext(c.req.param("id")),

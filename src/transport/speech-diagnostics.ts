@@ -2,6 +2,16 @@ import { z } from "zod";
 
 // Fixed categories shared with media/speech_diagnostics.py; never free-form payloads.
 const speechEvents = [
+  "speech_onset",
+  "interruption_detected",
+  "playback_cleared",
+  "interruption_reported",
+  "interruption_unconfirmed",
+  "tts_requested",
+  "tts_first_byte",
+  "audio_first_published",
+  "audio_last_published",
+  "event_loop_lag",
   "callback_accepted",
   "callback_failed",
   "callback_refused",
@@ -33,6 +43,16 @@ const speechEvents = [
   "utterance_emitted",
 ] as const;
 const speechCounters = [
+  "speech_onset",
+  "interruption_detected",
+  "playback_cleared",
+  "interruption_reported",
+  "interruption_unconfirmed",
+  "tts_requested",
+  "tts_first_byte",
+  "audio_first_published",
+  "audio_last_published",
+  "event_loop_lag",
   "audio_bytes",
   "audio_frames",
   "audio_nonzero_frames",
@@ -68,6 +88,9 @@ const speechCounters = [
   "utterance_emitted",
 ] as const;
 const speechReasons = [
+  "human_interruption",
+  "newer_revision",
+  "duplex_disabled",
   "authority_closed",
   "authorization_closed",
   "callback_invalid_response",
@@ -138,6 +161,8 @@ export const speechPipelineSchema = z.object({
         characters: z.number().int().min(0).max(8001).optional(),
         startMs: milliseconds.optional(),
         durationMs: milliseconds.optional(),
+        playbackGeneration: count.optional(),
+        queueDepth: count.optional(),
         lastWordEndMs: milliseconds.optional(),
         speechFinal: z.boolean().optional(),
       }),

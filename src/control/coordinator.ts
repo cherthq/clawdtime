@@ -14,6 +14,7 @@ import type {
 } from "../contracts.js";
 import type { Store } from "../storage/store.js";
 import { ControlPreflightError } from "./errors.js";
+import { ControlTiming } from "./timing.js";
 
 export const actionSchema = z.discriminatedUnion("kind", [
   z
@@ -53,11 +54,17 @@ const liveStates = ["connected", "awaiting_input"];
 /** Exclusivity is persisted before awaiting any helper call. One process per DB. */
 export class ControlCoordinator {
   private busy = new Set<string>();
+  readonly timing: ControlTiming;
   constructor(
     readonly store: Store,
     readonly device: DevicePort,
     readonly now = Date.now,
   ) {
+    this.timing = new ControlTiming(
+      store.state("runtime:mode") === "simulation"
+        ? "synthetic"
+        : "unclassified",
+    );
     for (const lease of store.all<ControlLease>("lease")) {
       if (lease.state === "active")
         store.put("lease", { ...lease, state: "unknown" });
@@ -267,10 +274,13 @@ export class ControlCoordinator {
   }
   async frame(leaseId: string, memberId: string) {
     const lease = this.check(leaseId, memberId);
+    const correlation = this.timing.attempt(lease.requestId);
+    this.timing.record(lease.requestId, "frame_started", correlation);
     let raw: Frame;
     try {
       raw = await this.device.frame(lease);
     } catch {
+      this.timing.record(lease.requestId, "frame_failed", correlation);
       this.check(leaseId, memberId);
       throw new ControlPreflightError("frame_unavailable");
     }
@@ -280,10 +290,20 @@ export class ControlCoordinator {
       width: raw.width,
       height: raw.height,
     };
+    try {
+      this.acceptFrame(leaseId, memberId, frame);
+    } catch (error) {
+      this.timing.record(lease.requestId, "frame_failed", correlation);
+      throw error;
+    }
+    this.timing.record(lease.requestId, "frame_completed", correlation);
+    return frame;
+  }
+  /** Validate an image-bearing device observation without capturing a second frame. */
+  acceptFrame(leaseId: string, memberId: string, frame: Frame) {
     this.check(leaseId, memberId);
     this.fresh(frame);
     this.store.saveState(`frame:${leaseId}`, frame);
-    return frame;
   }
   private fresh(frame: Frame) {
     if (
@@ -291,6 +311,8 @@ export class ControlCoordinator {
       !Number.isFinite(frame.capturedAt) ||
       frame.capturedAt > this.now() + 250 ||
       this.now() - frame.capturedAt > 2000 ||
+      !Number.isFinite(frame.width) ||
+      !Number.isFinite(frame.height) ||
       frame.width <= 0 ||
       frame.height <= 0
     )
@@ -302,6 +324,7 @@ export class ControlCoordinator {
     actionId: string,
     frameId: string,
     input: InputAction,
+    beforeDispatch?: () => void,
   ): Promise<ActionReceipt> {
     const lease = this.check(leaseId, memberId);
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(actionId))
@@ -319,6 +342,7 @@ export class ControlCoordinator {
         throw new Error("Action ID conflicts.");
       return previous;
     }
+    beforeDispatch?.();
     if (
       this.store
         .all<ActionReceipt>("action")
@@ -350,23 +374,30 @@ export class ControlCoordinator {
       this.store.saveState(`frame:${leaseId}`, null);
     });
     this.busy.add(leaseId);
+    const correlation = this.timing.attempt(lease.requestId);
+    this.timing.record(lease.requestId, "input_started", correlation);
     try {
       this.check(leaseId, memberId);
+      beforeDispatch?.();
       const result = await this.device.action(lease, frame, action, actionId);
       if (!result.submitted) throw new Error("Input outcome is unknown.");
       this.store.put("action", { ...receipt, state: "submitted" });
+      this.timing.record(lease.requestId, "input_submitted", correlation);
       const afterFrame = await this.frame(leaseId, memberId);
       if (
         afterFrame.id === frame.id ||
         afterFrame.capturedAt < frame.capturedAt
       )
         throw new Error("Post-action frame was not fresh.");
-      return this.store.put<ActionReceipt>("action", {
+      const observed = this.store.put<ActionReceipt>("action", {
         ...receipt,
         state: "observed",
         afterFrame,
       });
+      this.timing.record(lease.requestId, "input_observed", correlation);
+      return observed;
     } catch (error) {
+      this.timing.record(lease.requestId, "input_failed", correlation);
       const current = this.store.get<ActionReceipt>("action", actionId)!;
       if (current.state === "pending")
         this.store.put("action", { ...receipt, state: "unknown" });

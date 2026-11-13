@@ -46,6 +46,7 @@ class CaptionScene:
         self.feedback = 'listening'
         self.pending_sequence = None
         self.agent_text = ''
+        self.two_way_listening = False
         self.subtitle_at = self.clock()
         self.presentation = None
         self.presentation_binding = None
@@ -64,6 +65,7 @@ class CaptionScene:
         self.feedback = 'listening'
         self.pending_sequence = None
         self.policy_at = None
+        self.two_way_listening = False
         self.presentation = None
         self.presentation_binding = None
         self.presentation_sequence = max(self.presentation_sequence, self.presentation_floor)
@@ -94,6 +96,10 @@ class CaptionScene:
         elif policy.get('state') == 'paused' or policy.get('muted') is True:
             self.clear('paused')
         elif capture_allowed(policy):
+            two_way = policy.get('twoWayListening') is True
+            if self.two_way_listening != two_way:
+                self.revision += 1
+            self.two_way_listening = two_way
             target = 'speaking' if speaking else 'listening'
             if self.state not in ('listening', 'speaking'):
                 self.segments.clear()
@@ -187,6 +193,7 @@ class CaptionScene:
                     del entry['summary']
                     self.revision += 1
         return {'title': self.title, 'state': self.state,
+                'twoWayListening': self.two_way_listening,
                 'activityLabel':activity_label(self.presentation),
                 'activitySummary':((self.presentation.get('outcome', {}).get('summary', '')
                     if self.presentation['work'] in ('completed','canceled','uncertain') else self.presentation.get('currentSummary', '')) if self.presentation and not self.presentation.get('_readiness') else ''),
@@ -195,7 +202,7 @@ class CaptionScene:
                 'page': max(0, int((self.clock() - self.subtitle_at) / 5))}
 
     def hearing(self, text):
-        if self.snapshot()['state'] != 'listening':
+        if self.snapshot()['state'] != 'listening' and not (self.state == 'speaking' and self.two_way_listening):
             return
         text = clean_text(text, 8000)[-500:]
         if self.preview != text or self.feedback != 'hearing':
@@ -321,7 +328,7 @@ class CaptionRenderer:
             }.get(state, ('Captions unavailable', 'Check this chat to continue.'))
             return label, self.lines([text], limit=line_count)
         if snapshot.get('agentText'):
-            label = 'Agent speaking · mic paused' if state == 'speaking' else 'Listening · your turn'
+            label = ('Speaking · still listening' if snapshot.get('twoWayListening') else 'Agent speaking · mic paused') if state == 'speaking' else 'Listening · your turn'
             lines = self.lines([snapshot['agentText']], limit=None)
             pages = max(1, (len(lines) + line_count - 1) // line_count)
             page = snapshot.get('page', 0) % pages
@@ -351,7 +358,7 @@ class CaptionRenderer:
         draw.text((472,410), label, font=self.label_font, fill='#64dfaa')
         for index, line in enumerate(lines):
             draw.text((472,442+43*index),line,font=self.body_font,fill='white')
-        footer = ('Mic resumes after reply' if snapshot['state'] == 'speaking' else
+        footer = (('You can interrupt' if snapshot.get('twoWayListening') else 'Mic resumes after reply') if snapshot['state'] == 'speaking' else
                   'Say Stop to stop sharing' if snapshot['state'] == 'listening' else 'Check this chat to continue')
         draw.text((472,633),footer,font=self.label_font,fill='#b5c3d7')
         if snapshot.get('activityLabel') and snapshot['state'] in ('listening', 'speaking'):

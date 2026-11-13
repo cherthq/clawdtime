@@ -17,6 +17,7 @@ export const executionTransition = z
     executor: z.enum(["none", "native", "clawdtime"]),
     previousOutcome: z.enum(["idle", "completed", "uncertain"]),
     backgroundActorsStopped: z.boolean(),
+    expectedCursor: z.number().int().nonnegative().safe().optional(),
   })
   .strict();
 export const localPolicySchema = z.object({
@@ -67,6 +68,11 @@ export class ExecutionCoordinator {
   constructor(
     readonly service: ClawdTime,
     readonly control: ControlCoordinator,
+    private readonly inputGuard?: (
+      token: string,
+      requestId: string,
+      expectedCursor?: number,
+    ) => void,
   ) {
     for (const e of service.store.all<ExecutionOwnership>("execution"))
       if (e.executor !== "none" && e.state !== "uncertain")
@@ -171,7 +177,11 @@ export class ExecutionCoordinator {
     if (this.busy.has(p.deviceId))
       throw new DomainError(409, "An ownership operation is in progress.");
     this.busy.add(p.deviceId);
+    const correlation = this.control.timing.attempt(requestId);
+    this.control.timing.record(requestId, "ownership_started", correlation);
     try {
+      if (input.executor !== "none")
+        this.inputGuard?.(token, requestId, input.expectedCursor);
       const before = this.status(token, requestId);
       if (before.epoch !== input.expectedEpoch)
         throw new DomainError(
@@ -197,6 +207,8 @@ export class ExecutionCoordinator {
         );
       const policy = await readLocalPolicy(this.control, r);
       this.context(token, requestId);
+      if (input.executor !== "none")
+        this.inputGuard?.(token, requestId, input.expectedCursor);
       if (
         this.status(token, requestId).epoch !== before.epoch ||
         this.unresolved(requestId)
@@ -309,7 +321,6 @@ export class ExecutionCoordinator {
         )
           throw new Error("Local policy or ownership changed.");
         this.service.store.saveState(`view-device-ready:${lease.id}`, true);
-        return next;
       } catch {
         const currentOwner = this.service.store.get<ExecutionOwnership>(
           "execution",
@@ -335,6 +346,15 @@ export class ExecutionCoordinator {
           "Ownership synchronization is uncertain; do not dispatch or replay input.",
         );
       }
+      // The grant is now known. A newly arrived correction refuses dispatch,
+      // but must not turn confirmed ownership into an unknown input outcome.
+      if (input.executor !== "none")
+        this.inputGuard?.(token, requestId, input.expectedCursor);
+      this.control.timing.record(requestId, "ownership_completed", correlation);
+      return next;
+    } catch (error) {
+      this.control.timing.record(requestId, "ownership_failed", correlation);
+      throw error;
     } finally {
       this.busy.delete(p.deviceId);
     }
@@ -392,18 +412,26 @@ export class ExecutionCoordinator {
     )
       throw new DomainError(403, "Local fallback policy changed.");
     this.check(token, requestId, epoch);
-    const frame = await this.control.frame(lease.id, p.memberId);
     const imageDevice = this.control.device as typeof this.control.device & {
       frameImage?: (
         lease: ControlLease,
-      ) => Promise<{ frame: typeof frame; dataUrl: string }>;
+      ) => Promise<{ frame: import("../contracts.js").Frame; dataUrl: string }>;
     };
     if (imageDevice.frameImage) {
-      const image = await imageDevice.frameImage(lease);
-      this.check(token, requestId, epoch);
-      this.control.store.saveState(`frame:${lease.id}`, image.frame);
-      return image;
+      const correlation = this.control.timing.attempt(requestId);
+      this.control.timing.record(requestId, "frame_started", correlation);
+      try {
+        const image = await imageDevice.frameImage(lease);
+        this.check(token, requestId, epoch);
+        this.control.acceptFrame(lease.id, p.memberId, image.frame);
+        this.control.timing.record(requestId, "frame_completed", correlation);
+        return image;
+      } catch (error) {
+        this.control.timing.record(requestId, "frame_failed", correlation);
+        throw error;
+      }
     }
+    const frame = await this.control.frame(lease.id, p.memberId);
     return { frame };
   }
   async act(token: string, requestId: string, raw: unknown) {
@@ -413,6 +441,7 @@ export class ExecutionCoordinator {
         actionId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
         frameId: z.string().min(1).max(160),
         action: actionSchema,
+        expectedCursor: z.number().int().nonnegative().safe().optional(),
       })
       .strict()
       .parse(raw);
@@ -438,6 +467,7 @@ export class ExecutionCoordinator {
       input.actionId,
       input.frameId,
       input.action,
+      () => this.inputGuard?.(token, requestId, input.expectedCursor),
     );
   }
 }

@@ -6,6 +6,65 @@ Deepgram STT/TTS, a stable screen video track, bounded device inputs, speech/act
 receipts, gateway WSS, encrypted-ledger export, and terminal cleanup. Default
 configuration has no credentials and cannot place or join a live call.
 
+## Experimental two-way voice — source implementation
+
+The new v2 path can keep qualified input/STT open during TTS and interrupt playback.
+It is **off by default and not physically qualified**. Admission requires all of:
+
+- media `MEDIA_TWO_WAY_VOICE_ENABLED=true`;
+- an original-agent session negotiating `voiceInteractionVersion:1`;
+- backend policy `voiceInteractionVersion:1`, `voiceMode:"two_way"` and
+  `remoteAudioIsolated:true`, with the existing fresh call identity/consent checks.
+
+The backend supplies these only under its own explicit feature/isolation configuration.
+`remoteAudioIsolated` is an operator qualification assertion, not something these
+tests establish. Trace the actual FaceTime worker/handset audio path and qualify
+speakerphone and headset echo before enabling it. There is no fabricated echo
+canceller or automatic acoustic-isolation claim. Missing gates retain half duplex.
+
+Capture and playback have independent generations. TTS does not reset an admitted
+duplex capture stream. Outgoing chunks and playout barriers carry playback generation;
+cancellation invalidates late chunks, drains application/SDK queues and cancels TTS.
+Already published audio cannot be recalled. Closed/muted/revoked/stale policy and
+foreign-track behavior remain fail-closed. Source/timing tests use synthetic audio.
+
+A constant-memory detector requires 120 ms sustained normalized RMS >=0.012,
+with 200 ms quiet to rearm. This is a conservative **activity candidate**, not proof
+of speech or command intent. Candidate activity cancels audio locally without a
+model/poll round trip. Fresh sustained activity can refresh the action hold once
+per second; quiet does not. At most one callback is in flight, and failed callbacks
+are not retried. Final recognized utterances still use normal ordered delivery.
+
+`POST /media/:id/interrupt` carries `{callId,participantIdentity,interruptionId,
+playbackGeneration,at}`. The timestamp is fixed at observation. Backend admission
+enforces exact call/participant, bounded age and a two-second hold; duplicate IDs
+cannot extend it. No transcript, input command or outcome assertion is carried.
+Holding future actions is distinct from canceling a native action already running.
+
+Negotiated speech requests include `expectedRevision` from the original turn cursor.
+Media compares it against fresh `conversationRevision` before accepting/playing;
+the fingerprint binds text and revision. Policy revision changes also cancel playing
+stale replies. Existing sessions without the capability keep the old request shape.
+Interrupted/unknown receipts are preserved and never replayed as new speech.
+
+Phone captions show “Speaking · still listening” only when media admitted duplex;
+default mode continues to show “Agent speaking · mic paused.” The Mac panel uses
+the compatible neutral “Agent speaking” label because its old enum does not carry
+the independently verified microphone mode.
+
+New bounded diagnostic events include `speech_onset`, `interruption_detected`,
+`playback_cleared`, callback acknowledgment/uncertainty, `tts_requested`,
+`tts_first_byte`, `audio_first_published` and `audio_last_published`. Reply correlations
+and playback generation prevent mixed measurements. Publication means submission
+to the SDK, not handset audibility. `event_loop_lag` is the maximum scheduling delay
+of ten 100 ms heartbeat probes, emitted about once per second; provider/capture awaits
+are not mislabeled as event-loop stalls. Queue depth is bounded numeric metadata.
+No raw audio, transcript, file paths or provider exception text enters telemetry.
+
+The detailed pilot/rollout gates are in [VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md).
+The half-duplex descriptions below describe the compatibility/default path and
+historical releases; only the explicitly admitted path above changes that behavior.
+
 ## Identity and lifecycle
 
 `media/device-port.ts` exports `mediaSessionId(requestId)`, returning `ct_` plus the
@@ -44,7 +103,8 @@ callId,displayId,mode,expiresAt}`. Display is a numeric macOS uint32. Mode is vi
 participantIdentity:"worker-"+mediaId}`. Reply `{captured:boolean}`. IDs are stable
   within the non-resurrectable media session; duplicates must have one effect.
   No raw audio persists. The only subscribed audio is the exact room worker;
-  wrong tracks/participants fail closed. TTS suspends STT and changes its generation.
+  wrong tracks/participants fail closed. Legacy/unnegotiated TTS suspends STT and
+  changes its capture generation; explicitly qualified two-way v2 preserves it.
 - `POST /media/:id/failure {reason,category,at,elapsedMs}`: revoke screen/control
   and begin conservative call cleanup; keep the native call reservation until
   actual cleanup evidence. Metadata is an allowlisted first observed failure,

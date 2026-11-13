@@ -1,4 +1,8 @@
-import { sessionCapabilities, type ProtocolOptions } from "./protocol.js";
+import {
+  sessionCapabilities,
+  sessionInteraction,
+  type ProtocolOptions,
+} from "./protocol.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -28,7 +32,7 @@ import {
 import type { Adapter } from "../../src/contracts.js";
 
 const instructions =
-  "ClawdTime carries calls and human turns for THIS coding session. Check connection_status.protocolVersion: v2 uses conversation_turns, acknowledge_turn, conversation_progress and conversation_reply; ordinary file work can continue while sharing. Native approvals remain required. Shared-screen input requires exclusive execution ownership and a verified matching surface. Fallback is off by default. Stable IDs and unknown receipts prohibit replay. Legacy v1: yield_control, attention_result, acknowledge_response, resume_agent; remain paused until release.";
+  "ClawdTime carries calls and human turns for THIS coding session. Check connection_status.protocolVersion: v2 uses conversation_inbox for this running session’s text requests, conversation_turns, acknowledge_turn, conversation_progress and conversation_reply; negotiated replies default to the incoming channel; ordinary file work can continue while sharing. Native approvals remain required. Shared-screen input requires exclusive ownership, latest expectedCursor, no active hold and a verified matching surface. Native interruption is host-dependent. conversation_timing reports local HTTP intervals only. Fallback is off by default. Stable IDs and unknown receipts prohibit replay. Legacy v1: yield_control, attention_result, acknowledge_response, resume_agent; remain paused until release.";
 export function mcpOutput(value: unknown) {
   const content: (
     | { type: "text"; text: string }
@@ -63,6 +67,7 @@ export async function startMcp(options: {
   nativeControl?: ProtocolOptions["nativeControl"];
   sharedSurface?: boolean;
   nativeCancellation?: boolean;
+  messageUpdates?: boolean;
 }) {
   const connection = loadConnection(
     options.connection,
@@ -136,6 +141,7 @@ export async function startMcp(options: {
             hostId: connection.hostId,
             protocolVersion: options.protocolVersion ?? 2,
             capabilities: sessionCapabilities(options),
+            interaction: sessionInteraction(options),
           });
           run = { ...run, session: result.session, token: result.token };
           secureWrite(statePath, run);

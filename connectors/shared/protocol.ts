@@ -6,6 +6,18 @@ export interface ProtocolOptions {
   nativeControl?: "none" | "browser" | "desktop";
   sharedSurface?: boolean;
   nativeCancellation?: boolean;
+  messageUpdates?: boolean;
+}
+export function sessionInteraction(
+  options: ProtocolOptions,
+): AgentSession["interaction"] {
+  return options.protocolVersion === 1
+    ? undefined
+    : {
+        version: 1,
+        commandChannel: "imessage_first",
+        messageUpdates: options.messageUpdates ?? true,
+      };
 }
 export function sessionCapabilities(
   options: ProtocolOptions,
@@ -21,6 +33,9 @@ export function sessionCapabilities(
     nativeControl,
     sharedSurface: options.sharedSurface ?? false,
     nativeCancellation: options.nativeCancellation ?? false,
+    ...(options.protocolVersion === 1
+      ? {}
+      : { voiceInteractionVersion: 1 as const }),
   };
 }
 export function protocolOptions(
@@ -32,7 +47,11 @@ export function protocolOptions(
   const nativeControl = flags["native-control"] ?? "none";
   if (!["none", "browser", "desktop"].includes(nativeControl))
     throw new Error("--native-control must be none, browser or desktop.");
-  for (const key of ["shared-surface", "native-cancellation"])
+  for (const key of [
+    "shared-surface",
+    "native-cancellation",
+    "message-updates",
+  ])
     if (flags[key] !== undefined && !["true", "false"].includes(flags[key]!))
       throw new Error(`--${key} must be true or false.`);
   const result: ProtocolOptions = {
@@ -40,6 +59,7 @@ export function protocolOptions(
     nativeControl: nativeControl as "none" | "browser" | "desktop",
     sharedSurface: flags["shared-surface"] === "true",
     nativeCancellation: flags["native-cancellation"] === "true",
+    messageUpdates: flags["message-updates"] !== "false",
   };
   sessionCapabilities(result);
   return result;

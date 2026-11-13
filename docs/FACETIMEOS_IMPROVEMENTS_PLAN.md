@@ -2,6 +2,13 @@
 
 Drafted November 13, 2026, America/New_York. **Implementation authorized November 13, 2026.**
 
+**November 13 follow-up:** A–F are now recorded as locally implemented in
+`STATUS.md`. The user selected iMessage-first control and requested a detailed
+two-way voice plan. See [section 8](#8-next-phase-imessage-first-control-and-two-way-voice)
+and [VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md). The user subsequently
+authorized this follow-up implementation; its local validation and remaining
+physical gates are recorded in [STATUS.md](STATUS.md).
+
 ## 1. Purpose, scope and authority
 
 Make ClawdTime's existing agent-owned conversation easier to understand, diagnose
@@ -370,9 +377,13 @@ qualification must precede general availability.
 specific next step rather than generic “not ready”; documented live gates remain
 marked unrun. Source tests/builds must not launch or replace the installed app.
 
-### G. Deferred product expansion and public-release gates
+### G. Subsequent product work and public-release gates
 
 Not required for the `improvements` implementation:
+
+The subsequent iMessage-first and two-way voice design now lives in section 8.
+The exclusions below remain accurate for the original A–F implementation, not a
+rejection of that newly selected product direction.
 
 - Text-to-resume known sessions, then general Messages task initiation. Requires
   explicit session selection, authenticated routing and separate product scope.
@@ -454,3 +465,27 @@ Required evidence beyond command exit status:
 The authorized implementer must complete A–F, commit the intended source/tests/docs
 on `improvements`, push using `git push -u origin improvements`, and verify the
 remote commit. Stop before merge, installation, deployment or physical calls.
+
+## 8. Next phase: iMessage-first control and two-way voice
+
+The user selected iMessage as the default reliable control channel, with FaceTime
+for viewing and a deliberate repair of two-way voice. The detailed follow-up is
+[VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md). It defines:
+
+- T1 existing-session text commands and explicit status/results; T2 known-session
+  start/resume and call-independent authority; T3 verified file delivery.
+- V0 measured stage timing; V1 continuous qualified capture; V2 local playback
+  interruption; V3 finalized turns/corrections; V4 cooperative action holds and
+  native limitations; V5 concise speech scheduling and honest status.
+- Independent capture/playback generations, echo qualification, stale-reply
+  suppression, ordered text/voice input and preservation of unknown input outcomes.
+- Numerical engineering targets labeled as unmeasured, deterministic race tests,
+  a repeated-call physical pilot gate, versioned rollout and receipt-preserving rollback.
+- A native-versus-fallback CUA benchmark and retention of Swift/Python/TypeScript
+  until stage-level evidence justifies a change. No Agent S default is selected.
+
+A–F presentation and diagnostics remain useful foundations. Their implementation
+did not make the microphone listen during playback or provide arbitrary Messages
+task initiation. The follow-up now implements selection of an already-running
+session, gated two-way voice and timing; idle-host wake and file delivery remain
+separate work. No live changes or physical qualification are claimed.

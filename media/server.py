@@ -25,6 +25,7 @@ from device_actions import DeviceActions
 from device_relay import DeviceRelay
 from playback import SpeechLedger, TERMINAL
 from utterances import UtteranceAssembler
+from voice_interaction import SpeechOnset, two_way_allowed
 from speech_diagnostics import SpeechDiagnostics
 from ledger_backup import encrypted_snapshot
 from lifecycle_diagnostics import LifecycleDiagnostics, CATEGORIES
@@ -62,6 +63,16 @@ class Session:
         self.allowed = False
         self.speaking = False
         self.protocol_version = 1
+        self.two_way = False
+        self.playback_generation = 0
+        self.conversation_revision = 0
+        self.playback_revision = 0
+        self.active_reply_id = None
+        self.first_audio_published = False
+        self.onset = SpeechOnset()
+        self.onset_sequence = 0
+        self.last_interruption_at = float('-inf')
+        self.interruption_task = None
         self.priority_stop_seen = set()
         self.call_id = None
         self.audio = asyncio.Queue(maxsize=100)  # 2 seconds maximum outgoing PCM
@@ -166,6 +177,7 @@ class Session:
             self.caption_publisher = CaptionPublisher(self.caption_scene, self.room, screen=self.screen)
             await self.caption_publisher.start()
         self.task(self.publish(), "audio_publish")
+        self.task(self.monitor_loop_lag(), "audio_publish")
         self.task(self.deliver(), "segment_delivery")
         self.task(self.watch_policy(), "policy_watch")
 
@@ -177,17 +189,123 @@ class Session:
                 pcm = self.audio.get_nowait()
             except asyncio.QueueEmpty:
                 pcm = silence
+            playback_generation = None
+            if isinstance(pcm, tuple):
+                playback_generation, pcm = pcm
+                if playback_generation != self.playback_generation or self.speech_cancelled:
+                    if isinstance(pcm, asyncio.Future) and not pcm.done():
+                        pcm.cancel()
+                    continue
             if isinstance(pcm, asyncio.Future):
                 # Pause silence publication at an utterance boundary so LiveKit's
                 # playout waiter cannot be perpetually extended by silent frames.
                 if not pcm.cancelled():
+                    if playback_generation is not None:
+                        # All preceding frames have been submitted. This is not
+                        # handset audibility; the SDK playout barrier follows it.
+                        self.playback_event('audio_last_published')
                     await asyncio.wait_for(self.source.wait_for_playout(), 2)
-                    if not pcm.done():
+                    if playback_generation is not None and playback_generation != self.playback_generation:
+                        if not pcm.done():
+                            pcm.cancel()
+                    elif not pcm.done():
                         pcm.set_result(None)
                 continue
             frame = rtc.AudioFrame(pcm, RATE, 1, SAMPLES)
             await self.source.capture_frame(frame)
+            # Already-submitted frames cannot be recalled. Only current speech
+            # frames count toward the current reply's publication measurement.
+            if playback_generation == self.playback_generation and not self.first_audio_published:
+                self.first_audio_published = True
+                self.playback_event('audio_first_published')
             await asyncio.sleep(max(0, .02 - (time.monotonic() - start)))
+
+    async def monitor_loop_lag(self):
+        # Separate heartbeat: capture_frame/provider await time is not mislabeled
+        # as event-loop starvation. Emit one max-of-ten 100ms probe sample/second.
+        peak, count = 0., 0
+        while not self.closing:
+            target = time.monotonic() + .1
+            await asyncio.sleep(.1)
+            peak = max(peak, max(0., time.monotonic()-target))
+            count += 1
+            if count == 10:
+                if self.active and not self.closing:
+                    self.speech_diagnostics.event('event_loop_lag', self.generation,
+                        duration_ms=peak*1000, queue_depth=self.audio.qsize())
+                    self.speech_diagnostics.flush()
+                peak, count = 0., 0
+
+    def playback_event(self, event, reason=None, duration_ms=None, playback_generation=None):
+        self.speech_diagnostics.event(event, self.generation, reason,
+            correlation_id=self.speech_diagnostics.correlation(self.active_reply_id)
+                if self.active_reply_id else None,
+            playback_generation=self.playback_generation if playback_generation is None else playback_generation,
+            duration_ms=duration_ms,
+            queue_depth=self.audio.qsize())
+
+    @property
+    def playback_blocks_capture(self):
+        return self.speaking and not self.two_way
+
+    def apply_voice_policy(self, policy):
+        enabled = two_way_allowed(policy, self.owner.env)
+        revision = policy.get('conversationRevision', 0)
+        if type(revision) is not int or not 0 <= revision <= 9007199254740991:
+            revision = 0
+        # Never roll the conversation back to let obsolete audio play.
+        self.conversation_revision = max(self.conversation_revision, revision)
+        if self.speaking and self.playback_revision < self.conversation_revision:
+            self.owner.cancel_speech(self.id, reason='newer_revision')
+        if self.two_way and not enabled:
+            self.owner.cancel_speech(self.id, reason='duplex_disabled')
+            self.onset.reset()
+        self.two_way = enabled
+
+    def observe_audio_activity(self, pcm):
+        if (not self.two_way or not self.allowed or not self.active or self.closing
+                or not self.track_sid or time.monotonic()-self.policy_at >= 2):
+            self.onset.reset()
+            return
+        onset = self.onset.feed(pcm)
+        # New sustained audio evidence renews a short action hold; this is not a
+        # retry of an uncertain callback. Quiet input never refreshes the hold.
+        now = time.monotonic()
+        if not onset and not (self.onset.triggered and self.onset.silent_ms == 0
+                              and now-self.last_interruption_at >= 1):
+            return
+        self.last_interruption_at = now
+        self.onset_sequence += 1
+        generation = self.playback_generation
+        interruption_id = 'interrupt_' + hashlib.sha256(
+            f'{self.id}:{self.generation}:{self.onset_sequence}'.encode()).hexdigest()[:32]
+        at = datetime.now(timezone.utc).isoformat()
+        correlation = self.speech_diagnostics.correlation(self.active_reply_id or interruption_id)
+        if onset:
+            self.playback_event('speech_onset')
+        self.playback_event('interruption_detected')
+        self.owner.cancel_speech(self.id, reason='human_interruption')
+        # This notification is not a command or a recognized transcript. A lost
+        # receipt is never retried and cannot block local playback cancellation.
+        if self.interruption_task and not self.interruption_task.done():
+            self.playback_event('interruption_unconfirmed')
+            return
+        async def notify():
+            try:
+                response = await asyncio.wait_for(self.owner.backend(f'/media/{self.id}/interrupt', {
+                    'callId': self.call_id, 'participantIdentity': self.worker_identity,
+                    'interruptionId': interruption_id, 'playbackGeneration': generation,
+                    'at': at,
+                }), 2)
+                self.speech_diagnostics.event('interruption_reported' if response.get('accepted') is True
+                    else 'interruption_unconfirmed', self.generation, correlation_id=correlation,
+                    playback_generation=generation)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.speech_diagnostics.event('interruption_unconfirmed', self.generation,
+                    correlation_id=correlation, playback_generation=generation)
+        self.interruption_task = self.task(notify(), 'segment_delivery')
 
     async def watch_policy(self):
         while not self.closing:
@@ -201,6 +319,7 @@ class Session:
                     policy = await self.owner.backend(f'/media/{self.id}/policy')
                     self.policy_at = time.monotonic()
                     self.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
+                    self.apply_voice_policy(policy)
                     authorized = self.recording and capture_allowed(policy) and policy.get('callId') == self.call_id
                     if not authorized or policy.get('muted') is True:
                         self.owner.cancel_speech(self.id)
@@ -209,7 +328,7 @@ class Session:
                     elif self.seen_pause and policy.get('state') == 'listening' and self.priority_stop_id is None:
                         self.pause_latched = False
                         self.seen_pause = False
-                    self.allowed = authorized and not self.speaking and not self.pause_latched and policy.get('muted') is not True
+                    self.allowed = authorized and not self.playback_blocks_capture and not self.pause_latched and policy.get('muted') is not True
                     if self.screen:
                         self.screen.update(policy if authorized and not self.pause_latched else {})
                     if self.caption_scene:
@@ -218,7 +337,7 @@ class Session:
                         elif self.pause_latched:
                             self.caption_scene.clear('paused')
                         else:
-                            self.caption_scene.apply_policy(policy, speaking=self.speaking)
+                            self.caption_scene.apply_policy({**policy, 'twoWayListening': self.two_way}, speaking=self.speaking)
                     if policy.get('state') == 'ended':
                         await self.close("policy_ended")
                         return
@@ -253,6 +372,7 @@ class Session:
 
     async def stop_stt(self):
         self.generation += 1
+        self.onset.reset()
         self.reset_utterance('generation_change')
         if self.ws:
             await self.ws.close()
@@ -265,7 +385,7 @@ class Session:
 
     async def capture_loop(self):
         while not self.closing:
-            if not (self.active and self.allowed and not self.speaking and time.monotonic() - self.policy_at < 2):
+            if not (self.active and self.allowed and not self.playback_blocks_capture and time.monotonic() - self.policy_at < 2):
                 await asyncio.sleep(.1)
                 continue
             generation = self.generation
@@ -279,8 +399,9 @@ class Session:
                         async for frame in self.stream:
                             data = bytes(frame.frame.data)
                             self.speech_diagnostics.audio(len(data), nonzero=any(data))
-                            if not self.allowed or generation != self.generation or self.speaking or time.monotonic()-self.policy_at>=2:
+                            if not self.allowed or generation != self.generation or self.playback_blocks_capture or time.monotonic()-self.policy_at>=2:
                                 break
+                            self.observe_audio_activity(data)
                             await asyncio.wait_for(ws.send_bytes(data),2)
                             self.speech_diagnostics.audio(0, sent=True)
                     async def receive_text():
@@ -338,12 +459,16 @@ class Session:
                 'participantIdentity':self.worker_identity}
 
     def accept_transcript(self, message, generation):
-        if not self.allowed or self.speaking or self.closing or generation != self.generation:
+        if not self.allowed or self.playback_blocks_capture or self.closing or generation != self.generation:
             return False
         if not isinstance(message, dict):
             self.speech_diagnostics.event('provider_invalid', generation)
             return False
         text = final_transcript(message)
+        if text and self.two_way and self.speaking:
+            # Recognized final speech also cancels obsolete audio when the local
+            # energy detector did not trigger (e.g. a softly spoken correction).
+            self.owner.cancel_speech(self.id, reason='human_interruption')
         if text and (priority_stop_requested(text) or pause_requested(text)):
             self.reset_utterance('priority_stop')
             if self.queue_segment(self.segment(text)):
@@ -388,7 +513,7 @@ class Session:
         return False
 
     def flush_utterance(self, generation):
-        if not self.allowed or self.speaking or self.closing or generation != self.generation or time.monotonic()-self.policy_at >= 2:
+        if not self.allowed or self.playback_blocks_capture or self.closing or generation != self.generation or time.monotonic()-self.policy_at >= 2:
             self.reset_utterance('policy_closed')
             return
         result = self.utterances.take_ready()
@@ -450,7 +575,7 @@ class Session:
 
     def priority_stop_allowed(self,segment):
         if (not priority_stop_requested(segment.get('text')) or not self.active or
-                not self.allowed or self.speaking or self.closing or not self.track_sid or
+                not self.allowed or self.playback_blocks_capture or self.closing or not self.track_sid or
                 time.monotonic()-self.policy_at>=2 or segment.get('source')!='remote_participant' or
                 segment.get('participantIdentity')!=self.worker_identity or segment.get('callId')!=self.call_id or
                 not isinstance(segment.get('id'),str) or not re.fullmatch(r'[1-9][0-9]{0,7}',segment['id'])):
@@ -609,35 +734,48 @@ class Session:
             raise web.HTTPConflict()
         self.speaking = True
         self.speech_cancelled = False
-        self.allowed = False
+        self.playback_generation += 1
+        playback_generation = self.playback_generation
+        self.playback_revision = self.conversation_revision
+        self.first_audio_published = False
+        self.onset.reset()
+        if not self.two_way:
+            self.allowed = False
         text = text[:1600]
         if self.protocol_version == 2 and not self.greeted:
             text = 'Hey, this is your agent. ' + text
         self.greeted = True  # Never retry an uncertain greeting.
-        await self.stop_stt()
+        if not self.two_way:
+            await self.stop_stt()
         if self.caption_scene:
             self.caption_scene.speaking(text)
         completed = False
         try:
+            self.playback_event('tts_requested')
             async with self.owner.http.post('https://api.deepgram.com/v1/speak',params={'model':self.owner.env.get('DEEPGRAM_TTS_MODEL','aura-2-thalia-en'),'encoding':'linear16','container':'none','sample_rate':str(RATE),'mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},json={'text':text}) as response:
                 if response.status != 200:
                     raise RuntimeError('TTS request refused')
                 pending=b''
                 size=0
                 async for chunk in response.content.iter_chunked(SAMPLES*2):
+                    first = size == 0
                     size+=len(chunk)
-                    if size>RATE*2*60 or self.closing or self.speech_cancelled:
+                    if size>RATE*2*60 or self.closing or self.speech_cancelled or playback_generation != self.playback_generation:
                         raise RuntimeError('TTS exceeds bounds')
+                    if first and chunk:
+                        self.playback_event('tts_first_byte')
                     pending+=chunk
                     while len(pending)>=SAMPLES*2:
-                        await asyncio.wait_for(self.audio.put(pending[:SAMPLES*2]),3)
+                        await asyncio.wait_for(self.audio.put((playback_generation, pending[:SAMPLES*2])),3)
+                        if playback_generation != self.playback_generation or self.speech_cancelled:
+                            raise RuntimeError('Speech cancelled')
                         pending=pending[SAMPLES*2:]
                 if pending:
-                    await self.audio.put(pending.ljust(SAMPLES*2,b'\0'))
-            if self.closing or self.speech_cancelled:
+                    await asyncio.wait_for(self.audio.put((playback_generation, pending.ljust(SAMPLES*2,b'\0'))),3)
+            if self.closing or self.speech_cancelled or playback_generation != self.playback_generation:
                 raise RuntimeError('Speech cancelled')
             barrier = asyncio.get_running_loop().create_future()
-            await asyncio.wait_for(self.audio.put(barrier), 3)
+            await asyncio.wait_for(self.audio.put((playback_generation, barrier)), 3)
             await asyncio.wait_for(barrier, 3)
             completed = True
         finally:
@@ -887,20 +1025,27 @@ class Service:
             result['videoPublisherReady'] = bool(s.caption_publisher and not s.caption_publisher.failed)
         return web.json_response(result)
 
-    def cancel_speech(self, sid):
+    def cancel_speech(self, sid, reason='capture_stopped'):
         session = self.sessions.get(sid)
         if session:
+            started = time.monotonic()
             session.speech_cancelled = True
+            generation = session.playback_generation
+            session.playback_generation += 1
             while not session.audio.empty():
                 item = session.audio.get_nowait()
+                if isinstance(item, tuple):
+                    item = item[1]
                 if isinstance(item, asyncio.Future) and not item.done():
                     item.cancel()
             if session.source:
                 session.source.clear_queue()
+            session.playback_event('playback_cleared', reason, duration_ms=(time.monotonic()-started)*1000,
+                playback_generation=generation)
         for utterance_id, task in list(self.speech_tasks.items()):
             receipt = self.speech.get(utterance_id)
             if receipt and receipt['sessionId'] == sid and receipt['state'] not in TERMINAL:
-                self.speech.set(utterance_id, 'cancelled', 'capture_stopped')
+                self.speech.set(utterance_id, 'cancelled', reason)
                 task.cancel()
 
     async def speech_status(self, request):
@@ -912,10 +1057,14 @@ class Service:
             raise web.HTTPNotFound()
         return web.json_response(self.speech.public(receipt))
 
-    async def play_speech(self, session, utterance_id, text, expected_segments=None):
+    async def play_speech(self, session, utterance_id, text, expected_segments=None, expected_revision=None):
         observed_segments = session.segment_count if expected_segments is None else expected_segments
+        observed_revision = session.conversation_revision if expected_revision is None else expected_revision
         generation = session.generation
         def outcome(state, reason=None):
+            previous = self.speech.get(utterance_id)
+            if previous and previous['state'] in TERMINAL:
+                return
             self.speech.set(utterance_id, state, reason)
             event = {'playing':'playback_started','completed':'playback_completed',
                      'cancelled':'reply_cancelled','failed':'playback_failed','unknown':'playback_unknown'}.get(state)
@@ -926,6 +1075,7 @@ class Service:
                 session.speech_diagnostics.flush(force=True)
         try:
             policy = await self.backend(f'/media/{session.id}/policy')
+            session.apply_voice_policy(policy)
             if session.closing or session.pause_latched or not session.active or not capture_allowed(policy) or policy.get('muted') is True or policy.get('callId') != session.call_id:
                 outcome('cancelled', 'authorization_closed')
                 return
@@ -942,15 +1092,19 @@ class Service:
                         await asyncio.sleep(.05)
                     # Waiting does not extend authority. Recheck policy before playback.
                     current = await self.backend(f'/media/{session.id}/policy')
+                    session.apply_voice_policy(current)
                     if not capture_allowed(current) or current.get('muted') is True or current.get('callId') != session.call_id:
                         return 'authorization_closed'
                 if session.closing or session.pause_latched or not session.active or session.generation != generation:
                     return 'authorization_closed'
                 if session.protocol_version == 2 and session.segment_count != observed_segments:
                     return 'newer_human_turn'
+                if session.conversation_revision != observed_revision:
+                    return 'newer_revision'
                 if session.human_speaking():
                     return 'human_speaking'
                 outcome('playing')
+                session.active_reply_id = utterance_id
                 await session.say(text)
                 return None
             refused = await asyncio.wait_for(start_playback(), 30)
@@ -976,6 +1130,20 @@ class Service:
                 session.source.clear_queue()
         finally:
             self.speech_tasks.pop(utterance_id, None)
+            if session.active_reply_id == utterance_id:
+                session.active_reply_id = None
+
+    def schedule_speech(self, session, utterance_id, text, expected_segments=None, expected_revision=None):
+        task = asyncio.create_task(self.play_speech(
+            session, utterance_id, text, expected_segments, expected_revision))
+        self.speech_tasks[utterance_id] = task
+        def clear(completed):
+            # A task canceled before its first step never reaches the coroutine's
+            # finally. It must not leave the session permanently speech-busy.
+            if self.speech_tasks.get(utterance_id) is completed:
+                self.speech_tasks.pop(utterance_id, None)
+        task.add_done_callback(clear)
+        return task
 
     def reply_to_segment(self, session, segment, result):
         """At-most-once bounded spoken feedback; text stays transient, receipts do not."""
@@ -991,8 +1159,7 @@ class Service:
         if session.speaking or any(self.speech.get(key)['sessionId']==session.id for key in self.speech_tasks):
             self.speech.set(utterance_id,'cancelled','speech_busy')
             return
-        self.speech_tasks[utterance_id]=asyncio.create_task(
-            self.play_speech(session,utterance_id,text,session.segment_count))
+        self.schedule_speech(session,utterance_id,text,session.segment_count)
 
     async def action(self,request):
         sid,action=request.match_info['id'],request.match_info['action']
@@ -1020,22 +1187,35 @@ class Service:
             if not body.get('callId') or policy.get('callId')!=body['callId'] or not (recording or call_only_allowed(policy)):
                 raise web.HTTPConflict()
             s.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
+            s.apply_voice_policy(policy)
             if s.caption_scene:
-                s.caption_scene.apply_policy(policy)
+                s.caption_scene.apply_policy({**policy, 'twoWayListening': s.two_way})
             return web.json_response(await s.activate(body.get('callId'), recording=recording))
         if action=='speak':
             expected_segments = s.segment_count
-            if set(body) not in ({'id','text'}, {'id','text','callId'}) or not isinstance(body['id'],str) or not 0<len(body['id'])<=200 or not isinstance(body['text'],str) or not 0<len(body['text'])<=1600:
+            if (not isinstance(body, dict) or not {'id','text'}.issubset(body) or not set(body).issubset({'id','text','callId','expectedRevision'})
+                    or not isinstance(body['id'],str) or not 0<len(body['id'])<=200
+                    or not isinstance(body['text'],str) or not 0<len(body['text'])<=1600
+                    or ('expectedRevision' in body and (type(body['expectedRevision']) is not int
+                        or not 0 <= body['expectedRevision'] <= 9007199254740991))):
                 raise web.HTTPBadRequest()
-            digest=hashlib.sha256(body['text'].encode()).hexdigest()
+            fingerprint_text = body['text'] if 'expectedRevision' not in body else json.dumps(
+                [body['text'], body['expectedRevision']], separators=(',', ':'))
+            digest=hashlib.sha256(fingerprint_text.encode()).hexdigest()
             previous=self.speech.get(body['id'])
             if previous:
                 if previous['sessionId'] != sid or previous['fingerprint'] != digest:
                     raise web.HTTPConflict(text='Speech identity conflict.')
                 return web.json_response(self.speech.public(previous), status=200 if previous['state'] in TERMINAL else 202)
             policy=await self.backend(f'/media/{sid}/policy')
+            s.apply_voice_policy(policy)
             if not s.active or not capture_allowed(policy) or policy.get('muted') is True or policy.get('callId') != s.call_id or ('callId' in body and body['callId'] != s.call_id):
                 raise web.HTTPConflict()
+            expected_revision = body.get('expectedRevision', s.conversation_revision)
+            if (policy.get('voiceInteractionVersion') == 1 and 'expectedRevision' not in body):
+                raise web.HTTPBadRequest(text='Negotiated speech requires a conversation revision.')
+            if expected_revision != s.conversation_revision:
+                raise web.HTTPConflict(text='Speech revision is obsolete.')
             # Another request may have committed this ID while policy was fetched.
             previous=self.speech.get(body['id'])
             if previous:
@@ -1051,7 +1231,7 @@ class Service:
                 s.speech_diagnostics.update(s.utterances.snapshot())
                 s.speech_diagnostics.flush(force=True)
                 return web.json_response(self.speech.public(self.speech.get(body['id'])))
-            self.speech_tasks[body['id']] = asyncio.create_task(self.play_speech(s, body['id'], body['text'], expected_segments))
+            self.schedule_speech(s, body['id'], body['text'], expected_segments, expected_revision)
             return web.json_response(self.speech.public(receipt),status=202)
         raise web.HTTPNotFound()
 

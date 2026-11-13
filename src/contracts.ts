@@ -24,12 +24,19 @@ export interface AgentSession {
   createdAt: number;
   /** Immutable for the lifetime of this exact registered session. Omitted = legacy. */
   protocolVersion?: 1 | 2;
+  /** Explicit immutable opt-in; omitted sessions preserve their original delivery policy. */
+  interaction?: {
+    version: 1;
+    commandChannel: "imessage_first";
+    messageUpdates: boolean;
+  };
   capabilities: {
     cooperativePause: boolean;
     polling: boolean;
     nativeControl?: "none" | "browser" | "desktop";
     sharedSurface?: boolean;
     nativeCancellation?: boolean;
+    voiceInteractionVersion?: 1;
   };
   state: "active" | "yielded" | "stopped";
   controlEpoch: number;
@@ -145,6 +152,8 @@ export interface Transport {
     pairing: Pairing,
     text: string,
     effectId: string,
+    /** Recheck after asynchronous preflight, immediately before provider submission. */
+    beforeDispatch?: () => void,
   ): Promise<Record<string, unknown>>;
   speechStatus?(
     request: AttentionRequest,
@@ -160,6 +169,7 @@ export interface Transport {
     replyId: string,
     text: string,
     reconcileOnly?: boolean,
+    expectedRevision?: number,
   ): Promise<{
     state:
       "accepted" | "playing" | "completed" | "cancelled" | "failed" | "unknown";
@@ -186,6 +196,7 @@ export interface RequestAttentionInput {
 }
 export interface SessionRegistration {
   protocolVersion?: 1 | 2;
+  interaction?: AgentSession["interaction"];
   adapter: Adapter;
   adapterVersion: string;
   projectRoot: string;

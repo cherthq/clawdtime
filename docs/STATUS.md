@@ -1,5 +1,68 @@
 # ClawdTime implementation status
 
+## iMessage-first controls and two-way voice — November 13, 2026
+
+Implemented in the working tree after the user's explicit follow-up request, with
+the existing TypeScript/Python/Swift stack. This is **local source verification**;
+no deployment, installed-component change, real message, physical call or native
+input was performed for this update. Existing A–F and deployment history below
+remain historical records.
+
+- New v2 sessions negotiate iMessage-first input and text replies. `/sessions` and
+  `/use SESSION_ID` select an available exact session; `conversation_inbox` lets its
+  already-running agent discover call-free text requests. No arbitrary host wake
+  or call-independent screen permission is implied. Legacy sessions retain their
+  behavior; automatic notices can be disabled independently of explicit replies.
+- Text notices/results use durable paired-recipient effects, coalescing and
+  once-only receipts. Unknown sends remain unknown. New final text/voice input
+  advances the cursor and blocks stale queued replies and future ClawdTime input.
+- Negotiated two-way media keeps capture/STT active while playing streamed speech.
+  Sustained PCM activity cancels TTS, clears local queues and invalidates late audio
+  chunks without resetting capture. Authenticated activity callbacks briefly hold
+  further input; final turns remain ordered and require acknowledgment. The exact
+  reply revision is checked at the media boundary. Native tool cancellation is
+  cooperative and host-dependent; published audio cannot be recalled.
+- Two-way voice defaults off. Both backend flags, the media flag, connector
+  capability and operator-qualified remote-audio isolation are required. This is
+  not automatic echo cancellation; threshold/provider tuning and actual handset
+  echo/interruption performance remain unqualified.
+- Bounded process-local timing now covers connector round trips, ownership, frame
+  capture, input submission/observation, speech publication, interruption and event
+  loop lag. Inspector reports missing stages and hidden native/model/handset work
+  honestly. A duplicate fallback screenshot capture was removed; no measured
+  speedup or comparative native/fallback performance is claimed.
+
+Integration review also fixed legacy routing being diverted by stopped opted-in
+sessions and false unknown ownership when a correction arrives during successful
+grant synchronization. A confirmed grant remains safely releasable after refusal.
+
+Final transport review added a dispatch guard after every asynchronous readiness
+and identity check: correction, pairing revocation or deadline expiry prevents the
+provider POST and creates a redacted not-sent receipt. Media review fixed a speech
+task canceled before its first execution leaving subsequent replies permanently
+busy, plus revision rechecking after the VAD grace interval.
+
+| Isolated validation                                                     | Result                                                        |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `npm run check`                                                         | Typecheck, 637 tests across 40 files, build passed            |
+| `npm run test:onboarding:browser`                                       | Browser/compiled-CLI journey and config preservation passed   |
+| `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`   | 223 tests passed                                              |
+| `media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'` | 31 tests passed                                               |
+| `swift test` and `swift build` in `mac/`                                | 38 tests and build passed                                     |
+| Prettier across source/connectors/tests/docs and `git diff --check`     | Passed                                                        |
+| `npx tsx scripts/inspect-session.ts`                                    | Sanitized synthetic report; missing stages remain unavailable |
+
+Tests include cross-stack MCP→backend→text receipt reconciliation without a call,
+legacy routing, stale input during grant synchronization, single fallback image
+capture, clock/retention bounds, interruption authorization, and a shared TS/Python
+policy fixture. Media tests exercise a local WebSocket STT stream while speech is
+active. Provider boundaries are synthetic; no result above proves handset behavior.
+
+See [GUIDE.md](GUIDE.md) for configuration and
+[VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md) for remaining physical
+acceptance. Attachment delivery, idle-chat wake and separate call-free screen
+authority remain unimplemented.
+
 ## Improvements A–F — November 13, 2026 (local verification only)
 
 Implementation source: `783be9523faa2c861cc82dc89e0b01d3c16e6d6a`, branch

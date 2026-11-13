@@ -296,7 +296,12 @@ export class NativeMessages {
       this.polling = false;
     }
   }
-  async send(pairing: Pairing, text: string, effectId: string) {
+  async send(
+    pairing: Pairing,
+    text: string,
+    effectId: string,
+    beforeDispatch?: () => void,
+  ) {
     await this.verify();
     if (
       pairing.lineId !== this.binding.lineId ||
@@ -317,6 +322,7 @@ export class NativeMessages {
       to: pairing.recipient,
       text,
     };
+    beforeDispatch?.();
     const r = await this.api("/api/v1/text-operations/v1", operation);
     const fingerprint = hash(
       JSON.stringify([

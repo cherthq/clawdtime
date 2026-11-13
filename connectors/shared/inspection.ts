@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { connectorOperations } from "./timing.js";
 import {
   explainReadiness,
   readinessReasons,
@@ -24,6 +25,33 @@ const stageNames = [
   "outcome_reported",
   "end_requested",
   "cleanup_confirmed",
+  "message_queued",
+  "message_acknowledged",
+  "ownership_started",
+  "ownership_completed",
+  "ownership_failed",
+  "frame_started",
+  "frame_completed",
+  "frame_failed",
+  "input_started",
+  "input_submitted",
+  "input_observed",
+  "input_failed",
+  "speech_onset",
+  "interruption_detected",
+  "playback_cleared",
+  "interruption_reported",
+  "interruption_unconfirmed",
+  "tts_requested",
+  "tts_first_byte",
+  "audio_first_published",
+  "audio_last_published",
+  "event_loop_lag",
+  ...connectorOperations.flatMap((operation) =>
+    ["started", "completed", "failed"].map(
+      (state) => `connector_${operation}_${state}`,
+    ),
+  ),
 ] as const;
 const stages = new Set<string>(stageNames);
 const hex = (size: number) =>
@@ -46,6 +74,23 @@ const pairs = [
   ["playback", "playback_started", "playback_completed"],
   ["execution_to_outcome", "execution_reported", "outcome_reported"],
   ["end_to_cleanup", "end_requested", "cleanup_confirmed"],
+  ["message_to_transport", "message_queued", "message_acknowledged"],
+  ["ownership", "ownership_started", "ownership_completed"],
+  ["frame", "frame_started", "frame_completed"],
+  ["input_submission", "input_started", "input_submitted"],
+  ["input_observation", "input_submitted", "input_observed"],
+  ["tts_first_byte", "tts_requested", "tts_first_byte"],
+  ["tts_first_publication", "tts_requested", "audio_first_published"],
+  ["interruption_clear", "interruption_detected", "playback_cleared"],
+  ["interruption_report", "interruption_detected", "interruption_reported"],
+  ...connectorOperations.map(
+    (operation) =>
+      [
+        `connector_${operation}_round_trip`,
+        `connector_${operation}_started`,
+        `connector_${operation}_completed`,
+      ] as const,
+  ),
 ] as const;
 const record = (raw: unknown): Record<string, unknown> =>
   raw !== null && typeof raw === "object" && !Array.isArray(raw)
@@ -77,12 +122,15 @@ export function inspectSession(
     input.conversationTimeline,
     media.speechPipeline,
     lifecycle.speech,
+    input.connectorTiming,
+    input.controlTiming,
   ].filter(Boolean);
   const events: Event[] = [];
+  const loopLag: number[] = [];
   let invalidCount = 0,
     uncorrelatedCount = 0,
     overflowCount = 0;
-  for (const source of sources.slice(0, 3)) {
+  for (const source of sources.slice(0, 5)) {
     const value = record(source),
       process = hex(32).safeParse(value.processId);
     const rawEvents = Array.isArray(value.events) ? value.events : [];
@@ -90,6 +138,24 @@ export function inspectSession(
     for (const item of rawEvents.slice(-64)) {
       const candidate = record(item);
       if (!stages.has(String(candidate.event))) continue;
+      if (candidate.event === "event_loop_lag") {
+        const duration = z
+          .number()
+          .finite()
+          .min(0)
+          .max(86400000)
+          .safeParse(candidate.durationMs);
+        const elapsed = z
+          .number()
+          .int()
+          .min(0)
+          .max(86400000)
+          .safeParse(candidate.elapsedMs);
+        if (process.success && duration.success && elapsed.success)
+          loopLag.push(duration.data);
+        else invalidCount++;
+        continue;
+      }
       if (!process.success || candidate.correlationId === undefined) {
         uncorrelatedCount++;
         continue;
@@ -120,9 +186,21 @@ export function inspectSession(
       const failureEvents: string[] =
         name === "final_to_backend"
           ? ["callback_failed", "callback_refused"]
-          : name === "playback"
+          : name === "playback" ||
+              name === "tts_first_byte" ||
+              name === "tts_first_publication"
             ? ["playback_failed", "playback_unknown"]
-            : [];
+            : name === "ownership"
+              ? ["ownership_failed"]
+              : name === "frame"
+                ? ["frame_failed"]
+                : name === "input_submission" || name === "input_observation"
+                  ? ["input_failed"]
+                  : name === "interruption_report"
+                    ? ["interruption_unconfirmed"]
+                    : name.startsWith("connector_")
+                      ? [start.replace(/_started$/, "_failed")]
+                      : [];
       const failure = group.some((e) => failureEvents.includes(e.event));
       if (!starts.length && !ends.length && !failure) continue;
       attemptedCount++;
@@ -151,6 +229,9 @@ export function inspectSession(
     return {
       name,
       durationKind: "process_local_monotonic" as const,
+      boundary: name.startsWith("connector_")
+        ? ("connector_http_round_trip" as const)
+        : ("recorded_stage_interval" as const),
       attemptedCount,
       sampleCount: samples.length,
       failedCount,
@@ -210,6 +291,17 @@ export function inspectSession(
     uncorrelatedCount,
     overflowCount,
     metrics,
+    eventLoopLag: {
+      durationKind: "process_local_monotonic" as const,
+      sampleCount: loopLag.length,
+      ...quantiles(loopLag),
+    },
+    unmeasured: [
+      "native_tool_internals",
+      "model_inference_without_host_instrumentation",
+      "handset_audibility",
+      "handset_screen_visibility",
+    ],
     readiness: {
       ...(timestamp.success ? { checkedAt: timestamp.data } : {}),
       checks: sanitizedChecks,

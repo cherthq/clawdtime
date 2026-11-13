@@ -2,6 +2,12 @@ import { explainReadiness } from "../../connectors/shared/readiness.js";
 import { presentationFor } from "./presentation.js";
 import { timelineFor } from "../transport/conversation-timeline.js";
 import {
+  messageUpdateAuthorized,
+  MessageDispatchClosed,
+  redactMessageEffect,
+  pruneMessageEffects,
+} from "./messaging.js";
+import {
   recordTerminationIntent,
   type TerminationSource,
 } from "./termination.js";
@@ -41,6 +47,14 @@ const registration = z
     externalSessionId: nonempty,
     hostId: nonempty,
     protocolVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+    interaction: z
+      .object({
+        version: z.literal(1),
+        commandChannel: z.literal("imessage_first"),
+        messageUpdates: z.boolean(),
+      })
+      .strict()
+      .optional(),
     capabilities: z
       .object({
         cooperativePause: z.boolean(),
@@ -48,6 +62,7 @@ const registration = z
         nativeControl: z.enum(["none", "browser", "desktop"]).optional(),
         sharedSurface: z.boolean().optional(),
         nativeCancellation: z.boolean().optional(),
+        voiceInteractionVersion: z.literal(1).optional(),
       })
       .strict(),
   })
@@ -115,6 +130,7 @@ export class ClawdTime {
     options: { clock?: () => number } = {},
   ) {
     this.clock = options.clock ?? Date.now;
+    pruneMessageEffects(this);
     for (const e of store.effects("unknown")) {
       const request = store.get<AttentionRequest>(
         "attention",
@@ -231,6 +247,11 @@ export class ClawdTime {
         409,
         "Agent-owned conversations require bounded polling.",
       );
+    if (value.interaction && value.protocolVersion !== 2)
+      throw new DomainError(
+        409,
+        "iMessage-first interaction requires protocol version 2.",
+      );
     return this.store.transaction(() => {
       const previous = this.store
         .all<AgentSession>("session")
@@ -246,7 +267,9 @@ export class ClawdTime {
           previous.adapter !== value.adapter ||
           previous.hostId !== value.hostId ||
           JSON.stringify(previous.capabilities) !==
-            JSON.stringify(value.capabilities))
+            JSON.stringify(value.capabilities) ||
+          JSON.stringify(previous.interaction) !==
+            JSON.stringify(value.interaction))
       )
         throw new DomainError(
           409,
@@ -1094,6 +1117,7 @@ export class ClawdTime {
     });
   }
   expire() {
+    pruneMessageEffects(this);
     for (const request of this.store.all<AttentionRequest>("attention"))
       if (
         !terminal.has(request.state) &&
@@ -1165,13 +1189,16 @@ export class ClawdTime {
           (!request && !setupAuthorized) ||
           !pairing ||
           (effect.kind !== "end_call" && pairing.revokedAt !== undefined) ||
+          !messageUpdateAuthorized(this, effect) ||
           (effect.kind === "call" && request?.state !== "queued")
         ) {
-          this.store.putEffect({
-            ...effect,
-            state: "failed",
-            result: { reason: "Authorization closed before dispatch." },
-          });
+          this.store.putEffect(
+            redactMessageEffect({
+              ...effect,
+              state: "failed",
+              result: { reason: "Authorization closed before dispatch." },
+            }),
+          );
           if (effect.kind === "call") {
             const call = this.store.get<CallSession>(
               "call",
@@ -1201,6 +1228,22 @@ export class ClawdTime {
               pairing,
               String(effect.payload.text),
               effect.id,
+              () => {
+                const currentPairing = this.store.get<Pairing>(
+                  "pairing",
+                  pairing.id,
+                );
+                if (
+                  !currentPairing ||
+                  currentPairing.revokedAt !== undefined ||
+                  currentPairing.memberId !== pairing.memberId ||
+                  currentPairing.recipient !== pairing.recipient ||
+                  currentPairing.lineId !== pairing.lineId ||
+                  currentPairing.conversationId !== pairing.conversationId ||
+                  !messageUpdateAuthorized(this, effect)
+                )
+                  throw new MessageDispatchClosed();
+              },
             );
           else
             result = await this.transport.endCall(
@@ -1215,7 +1258,15 @@ export class ClawdTime {
           )
             throw new Error("Message acknowledgement receipt missing.");
           this.store.transaction(() => {
-            this.store.putEffect({ ...effect, state: "done", result });
+            this.store.putEffect(
+              redactMessageEffect({ ...effect, state: "done", result }),
+            );
+            if (effect.payload.conversationUpdate === 1)
+              timelineFor(this).record(
+                String(effect.payload.requestId),
+                "message_acknowledged",
+                effect.id,
+              );
             if (
               effect.kind === "end_call" &&
               this.transport.mode === "simulation"
@@ -1251,6 +1302,19 @@ export class ClawdTime {
             }
           });
         } catch (error) {
+          if (error instanceof MessageDispatchClosed) {
+            this.store.putEffect(
+              redactMessageEffect({
+                ...effect,
+                state: "failed",
+                result: {
+                  reason:
+                    "Authorization closed before dispatch; no external effect attempted.",
+                },
+              }),
+            );
+            continue;
+          }
           if (error instanceof PreflightBlocked) {
             this.store.putEffect({
               ...effect,
@@ -1262,14 +1326,16 @@ export class ClawdTime {
             });
             continue;
           }
-          this.store.putEffect({
-            ...effect,
-            state: "unknown",
-            result: {
-              reason:
-                "External outcome uncertain; reconcile the existing effect ID.",
-            },
-          });
+          this.store.putEffect(
+            redactMessageEffect({
+              ...effect,
+              state: "unknown",
+              result: {
+                reason:
+                  "External outcome uncertain; reconcile the existing effect ID.",
+              },
+            }),
+          );
           if (effect.kind === "call") {
             this.store.put("attention", {
               ...this.store.get<AttentionRequest>("attention", request!.id)!,

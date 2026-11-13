@@ -28,6 +28,11 @@ it("foreground v2 retains same-session turns and minimal receipts while refusing
     protocolVersion: 2,
     state: "active",
     controlEpoch: 0,
+    interaction: {
+      version: 1,
+      commandChannel: "imessage_first",
+      messageUpdates: true,
+    },
   };
   const test = {
     id: "test",
@@ -46,6 +51,13 @@ it("foreground v2 retains same-session turns and minimal receipts while refusing
     else if (path === "/api/sessions/heartbeat") result = { session };
     else if (path === "/api/doctor") result = { mode: "simulation", session };
     else if (path === "/api/setup/test") result = { test };
+    else if (path === "/api/conversation/inbox")
+      result = {
+        requests: [
+          { id: "text-request", sessionId: "session" },
+          { id: "foreign-request", sessionId: "foreign-session" },
+        ],
+      };
     else if (path.endsWith("/conversation/turns"))
       result = {
         turns: [{ id: "turn", sequence: 1, text: "transient-human-text" }],
@@ -99,6 +111,7 @@ it("foreground v2 retains same-session turns and minimal receipts while refusing
     );
     expect(messages[0].protocolVersion).toBe(2);
     expect(requests[0]?.body.protocolVersion).toBe(2);
+    expect(requests[0]?.body.interaction).toEqual(session.interaction);
     await send("status", "status");
     const turns = await send("turns", "conversation_turns", {
       requestId: "request",
@@ -145,6 +158,30 @@ it("foreground v2 retains same-session turns and minimal receipts while refusing
       (await send("yield", "yield", { backgroundActorsStopped: true })).ok,
     ).toBe(false);
     expect(requests).toHaveLength(count);
+    const timing = await send("timing", "conversation_timing", {
+      requestId: "request",
+    });
+    expect(timing.result.connectorTiming.events.length).toBeGreaterThan(0);
+    expect(requests).toHaveLength(count);
+    const inbox = await send("inbox", "conversation_inbox");
+    expect(inbox.result.requests[0].id).toBe("text-request");
+    expect(
+      (
+        await send("text-turns", "conversation_turns", {
+          requestId: "text-request",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await send("foreign-turns", "conversation_turns", {
+          requestId: "foreign-request",
+        })
+      ).ok,
+    ).toBe(false);
+    expect(requests.some((r) => r.path.includes("foreign-request"))).toBe(
+      false,
+    );
     input.write(
       JSON.stringify({
         id: "reply",

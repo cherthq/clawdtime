@@ -6,6 +6,48 @@ voice-directed native Messages task passed in the originating Codex desktop chat
 through the foreground bridge. See [STATUS.md](STATUS.md) for the release and
 physical evidence; the client/surface limits below still apply.
 
+## iMessage-first interaction and timing — source implementation
+
+New v2 MCP/foreground registrations request `interaction.version: 1`, command
+channel `imessage_first`, and `messageUpdates: true`; `--message-updates false`
+opts a fresh run out of automatic status updates. New v2 capabilities advertise
+`voiceInteractionVersion: 1`. None of these fields enables capture/input or
+qualifies duplex audio. Existing protected runs are never upgraded in place.
+
+`conversation_inbox {}` discovers active requests for this already-running exact
+session, including call-free text work. It does not wake an idle coding host.
+The foreground bridge checks non-setup request IDs against this scoped inbox;
+legacy setup-specific operations remain restricted to their saved setup request.
+Text-only requests cannot acquire call-bound screen control.
+
+`conversation_reply` accepts optional `channel: text|voice` when the poll advertises
+`capabilities.interactionVersion: 1`; omission follows the incoming turn's channel
+for negotiated sessions. An explicit unsupported channel fails before dispatch,
+never silently falling back to speech. Stable reply IDs and unknown receipts remain
+mandatory. New `expectedCursor` fields on `transfer_execution` and
+`act_on_shared_screen` are negotiated and forwarded unchanged. Read and acknowledge
+new turns, inspect cursor/pending delivery/hold, and recheck before native input.
+Native cancellation remains host-dependent; a preflight check is not an atomic
+lock over an external native tool. Polling returns promptly on `hold.active` even
+before final recognized text exists; interim words never become actions.
+
+`conversation_timing {requestId}` is a read-only local snapshot with no HTTP call.
+It records start/completion/failure of connector HTTP poll, ack, progress, reply,
+cancel, end, execution-status, ownership, observation and action requests. Each
+attempt has an opaque unique correlation ID; memory is capped at 64 events per
+request, 100 requests and ten minutes. Backward/24-hour monotonic clock changes
+reset the scope; late completions cannot revive old data. Request text, response
+content, credentials, image data and error bodies are absent.
+
+Connector diagnostic reads automatically include this local `connectorTiming`;
+the standalone timing tool is also available without a server read. Supply it alongside backend `controlTiming` and media
+`speechPipeline` to the existing session inspector. It reports connector round
+trips, ownership/frame/input intervals, TTS first byte/publication, interruption
+clearing/reporting and event-loop lag. Samples never span processes/generations;
+failures and missing stages remain counted. These boundaries do not measure hidden
+native tool internals, model inference, handset audibility or phone screen lag.
+Recorded source support and isolated tests do not establish physical acceptance.
+
 ## Agent-owned protocol v2 (default for new sessions)
 
 ClawdTime transports human turns and speaks replies authored by the exact existing
@@ -20,7 +62,8 @@ The implementation uses supported request-driven stdio MCP polling, bounded to
 chat takeover, background resumption, or interrupting a running native tool.
 While a poll/tool is outstanding, new human speech waits as an ordered turn. The
 agent must keep its own conversation loop engaged. Native tool approvals are
-unchanged. Speech playback remains half duplex; full-duplex barge-in is unverified.
+unchanged. Legacy playback remains half duplex. Negotiated duplex requires explicit media
+policy and audio-isolation evidence; physical barge-in remains unqualified.
 
 ### Operations and lifecycle
 

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { ConversationService } from "../src/attention/conversation.js";
 import { Store } from "../src/storage/store.js";
 import { ClawdTime } from "../src/attention/service.js";
 import {
@@ -225,6 +226,150 @@ function fixture() {
   };
 }
 describe("native protocol integration without live traffic", () => {
+  it.each([
+    ["readiness", "correction"],
+    ["identity", "correction"],
+    ["readiness", "revocation"],
+    ["identity", "revocation"],
+    ["readiness", "deadline"],
+    ["identity", "deadline"],
+  ] as const)(
+    "closes text dispatch after %s await when %s arrives",
+    async (boundary, change) => {
+      const store = new Store();
+      let mutate = () => {};
+      const submission = vi.fn();
+      const request = async (url: string | URL | Request) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/v1/whoami") {
+          await Promise.resolve();
+          if (boundary === "identity") mutate();
+          return new Response(
+            JSON.stringify({
+              healthy: true,
+              phone_line: {
+                phone_line_id: "provider",
+                phone_number: config.binding.phone,
+                instance_id: "instance",
+              },
+            }),
+          );
+        }
+        submission(path);
+        throw new Error("Unexpected external submission in isolated race test");
+      };
+      const transport = new NativeTransport(
+        store,
+        config,
+        request as typeof fetch,
+      );
+      const service = new ClawdTime(store, transport);
+      vi.spyOn(transport, "preflight").mockImplementation(async () => {
+        await Promise.resolve();
+        if (boundary === "readiness") mutate();
+        return {
+          checkedAt: Date.now(),
+          mode: "live",
+          liveReady: true,
+          bindingFingerprint: "fixture",
+          checks: [],
+        };
+      });
+      try {
+        const invite = service.createPairingInvite({
+          memberId: "member",
+          recipient: "+15550000001",
+          conversationId: "iMessage;-;+15550000001",
+          lineId: logicalLineId,
+          deviceId: "mac",
+          displayId: "1",
+        });
+        const paired = service.claimPairing({
+          token: invite.token,
+          deviceId: "mac",
+          displayId: "1",
+          allowView: true,
+          allowControl: true,
+        });
+        const agent = service.registerSession(paired.token, {
+          protocolVersion: 2,
+          adapter: "codex",
+          adapterVersion: "fixture",
+          projectRoot: "/synthetic",
+          externalSessionId: "text-race",
+          hostId: "mac",
+          capabilities: { cooperativePause: true, polling: true },
+          interaction: {
+            version: 1,
+            commandChannel: "imessage_first",
+            messageUpdates: false,
+          },
+        });
+        const conversation = new ConversationService(service);
+        const event = {
+          id: "fixture-inbound",
+          lineId: logicalLineId,
+          sender: paired.pairing.recipient,
+          conversationId: paired.pairing.conversationId,
+          text: "Use blue.",
+        };
+        const requestId = conversation.resolveTextTarget(
+          paired.pairing.id,
+          event,
+        ).requestId!;
+        const input = {
+          eventId: event.id,
+          requestId,
+          memberId: "member",
+          lineId: logicalLineId,
+          conversationId: event.conversationId,
+          channel: "text" as const,
+          text: event.text,
+        };
+        const turn = conversation.receive(input);
+        conversation.acknowledge(agent.token, requestId, turn.id);
+        const reply = {
+          turnId: turn.id,
+          replyId: "fixture-reply",
+          text: "The old answer.",
+        };
+        await conversation.reply(agent.token, requestId, reply);
+        mutate = () => {
+          if (change === "correction")
+            conversation.receive({
+              ...input,
+              eventId: "fixture-correction",
+              text: "Actually use green.",
+            });
+          else if (change === "revocation")
+            store.put("pairing", { ...paired.pairing, revokedAt: Date.now() });
+          else
+            store.put("attention", {
+              ...store.get<AttentionRequest>("attention", requestId)!,
+              deadline: Date.now() - 1,
+            });
+        };
+        await service.drain();
+        const effect = store
+          .effects()
+          .find((item) => item.payload.stage === "reply")!;
+        expect(effect).toMatchObject({
+          state: "failed",
+          result: {
+            reason: expect.stringContaining("no external effect attempted"),
+          },
+        });
+        expect(effect.payload.text).toBeUndefined();
+        expect(submission).not.toHaveBeenCalled();
+        await service.drain();
+        expect(submission).not.toHaveBeenCalled();
+        expect(store.effect(effect.id)?.state).toBe("failed");
+      } finally {
+        store.close();
+      }
+    },
+  );
+
   it("publishes same-agent replies once and reconciles after lost acceptance without another POST", async () => {
     const f = fixture();
     await f.app.drain();

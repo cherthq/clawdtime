@@ -1,0 +1,11 @@
+{
+  "callId": "owned-call",
+  "protocolVersion": 2,
+  "voiceInteractionVersion": 1,
+  "voiceMode": "two_way",
+  "remoteAudioIsolated": true,
+  "conversationRevision": 3,
+  "state": "listening",
+  "captionsEnabled": true,
+  "expiresAt": "2099-01-01T00:00:00.000Z"
+}

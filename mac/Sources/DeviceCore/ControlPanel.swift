@@ -215,7 +215,8 @@ public struct PanelPresentation {
     let outcome = activity?.outcome
     let state = t.executionState == "uncertain" || work == "uncertain" || outcome?.verification == "unknown" ? "Outcome unresolved" : outcome?.verification == "not_verified" ? "Outcome unverified" : labels[work] ?? "Status unavailable"
     let delivery = activity.map { $0.delivery == "acknowledged" ? "Received by agent" : "Accepted by backend" } ?? "Delivery status unavailable"
-    let capture = ["listening":"Microphone listening", "muted":"Microphone muted", "speaking":"Microphone paused for speech", "ended":"Call ended"][t.callState] ?? "Microphone status pending"
+    // Speaking alone cannot establish whether this media session is half-duplex.
+    let capture = ["listening":"Microphone listening", "muted":"Microphone muted", "speaking":"Agent speaking", "ended":"Call ended"][t.callState] ?? "Microphone status pending"
     status = t.callState == "ended" ? "Call ended" : unavailable ? "Status unavailable · reconnect and recheck" : "\(state) · \(delivery)\n\(capture)" + (pending.map { "\n\($0.type.capitalized) request pending acknowledgement" } ?? "")
     let summaries = t.callState == "ended" ? [] : activity?.entries.compactMap(\.summary) ?? []
     let readiness = t.readiness?.nextStep ?? (work == "pending_approval" ? "Review the native approval in the coding client." : work == "uncertain" ? "Reconcile the prior effect before continuing." : nil)

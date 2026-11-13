@@ -1,4 +1,8 @@
-import { sessionCapabilities, type ProtocolOptions } from "./protocol.js";
+import {
+  sessionCapabilities,
+  sessionInteraction,
+  type ProtocolOptions,
+} from "./protocol.js";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { dirname, join } from "node:path";
@@ -84,6 +88,7 @@ export async function startSetupSession(options: {
   nativeControl?: ProtocolOptions["nativeControl"];
   sharedSurface?: boolean;
   nativeCancellation?: boolean;
+  messageUpdates?: boolean;
   input?: Readable;
   output?: Writable;
   request?: typeof fetch;
@@ -189,6 +194,7 @@ export async function startSetupSession(options: {
         hostId: connection.hostId,
         protocolVersion: options.protocolVersion ?? 2,
         capabilities: sessionCapabilities(options),
+        interaction: sessionInteraction(options),
       });
       run = { ...run, session: result.session, token: result.token };
       secureWrite(statePath, run);
@@ -265,18 +271,19 @@ export async function startSetupSession(options: {
             );
         }
         // Validate before persisting any effect intent.
-        const requestId = conversationCommand
-          ? textArg(args, "requestId")
-          : [
-                "result",
-                "diagnostics",
-                "ack",
-                "resume",
-                "complete",
-                "terminal-ack",
-              ].includes(command.command)
+        const requestId =
+          conversationCommand && conversationCommand !== "conversation_inbox"
             ? textArg(args, "requestId")
-            : undefined;
+            : [
+                  "result",
+                  "diagnostics",
+                  "ack",
+                  "resume",
+                  "complete",
+                  "terminal-ack",
+                ].includes(command.command)
+              ? textArg(args, "requestId")
+              : undefined;
         const responseId =
           command.command === "ack" ? textArg(args, "responseId") : undefined;
         const completeText =
@@ -330,10 +337,29 @@ export async function startSetupSession(options: {
             Number(args.controlEpoch) < 0)
         )
           throw new Error("Provide the current nonnegative controlEpoch.");
-        if (requestId && bridge.test?.requestId !== requestId)
-          throw new Error(
-            "Request does not belong to this setup test; read status first.",
-          );
+        if (
+          requestId &&
+          conversationCommand !== "conversation_timing" &&
+          bridge.test?.requestId !== requestId
+        ) {
+          // A text request can be created for this already-running session without
+          // a setup call. Never widen setup-only effects to another request.
+          const inbox =
+            conversationCommand && run.session?.interaction?.version === 1
+              ? await client.conversationInbox()
+              : undefined;
+          const owned = inbox?.requests
+            ?.slice(0, 100)
+            .some(
+              (request) =>
+                request.id === requestId &&
+                request.sessionId === run.session!.id,
+            );
+          if (!owned)
+            throw new Error(
+              "Request does not belong to this setup test or this exact session's live text inbox; read status first.",
+            );
+        }
         const fingerprint = createHash("sha256")
           .update(JSON.stringify([command.command, args]))
           .digest("hex");

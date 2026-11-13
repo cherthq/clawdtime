@@ -26,6 +26,12 @@ The agent receives ordered voice or text turns and supplies the replies you hear
 Screen sharing can continue while it reasons, edits files or uses a permitted
 computer tool. It remains in your original chat and follows its normal approvals.
 
+The latest source adds **iMessage-first commands and replies**, selection of an
+already-running session, gated two-way voice with playback interruption, and CUA
+stage timing. These changes are locally tested, not deployed or physically
+qualified. See the [pilot guide](docs/GUIDE.md) for flags, session selection and
+remaining limits. Existing installed sessions keep their negotiated behavior.
+
 ## Native computer use and optional fallback
 
 **Native tools are the default.** The agent uses the computer/browser tools already
@@ -69,7 +75,7 @@ unverified outcomes remain visible without being presented as successful actions
    review would help. Speak naturally on the call; the original agent continues.
 
 The pilot uses a trusted local build and existing pairing. Public npm installation,
-notarized public downloads and general tasks initiated from Messages are planned.
+notarized public downloads and waking arbitrary idle chats from Messages are planned.
 The skill does not automatically detect every blocked process or bypass approvals.
 
 ## What has been verified

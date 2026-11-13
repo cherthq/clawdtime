@@ -749,10 +749,16 @@ export class NativeTransport implements Transport {
       throw e;
     }
   }
-  async message(pairing: Pairing, text: string, effectId: string) {
+  async message(
+    pairing: Pairing,
+    text: string,
+    effectId: string,
+    beforeDispatch?: () => void,
+  ) {
     this.guard(pairing);
     await this.requireReady(pairing, "message");
-    return this.messages.send(pairing, text, effectId);
+    beforeDispatch?.();
+    return this.messages.send(pairing, text, effectId, beforeDispatch);
   }
   async endCall(callId: string, effectId: string) {
     const owned = this.store
@@ -1006,6 +1012,7 @@ export class NativeTransport implements Transport {
     replyId: string,
     text: string,
     reconcileOnly = false,
+    expectedRevision?: number,
   ) {
     const session = this.store.get<MediaRecord>("media", request.callId ?? "");
     if (
@@ -1057,6 +1064,7 @@ export class NativeTransport implements Transport {
             id: replyId,
             callId: session.id,
             text,
+            ...(expectedRevision !== undefined ? { expectedRevision } : {}),
           });
       const receipt = speechReceiptSchema.parse(raw);
       if (receipt.id !== replyId || receipt.sessionId !== session.id)

@@ -42,5 +42,8 @@ backgrounds. It does not import a server, read installed configuration, access a
 microphone/screen, or connect to a service. Keep generated images outside Git.
 Review the generated contact sheet and full landscape images for readability.
 Physical handset readability, audio timing, barge-in, real native input, and cleanup
-remain separate, explicitly authorized acceptance work. Half-duplex speech is
-unchanged: the microphone is paused during agent playback.
+remain separate acceptance work. Half-duplex remains the default. Experimental v2
+continuous listening requires `MEDIA_TWO_WAY_VOICE_ENABLED=true`, negotiated
+`voiceInteractionVersion:1`, backend `voiceMode:"two_way"`, and explicitly qualified
+`remoteAudioIsolated:true`. See [media integration](../docs/MEDIA_INTEGRATION.md)
+for interruption, revision, measurement semantics and the physical echo gate.

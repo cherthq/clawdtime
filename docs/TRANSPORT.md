@@ -50,6 +50,60 @@ These checks are session context, not biometric speaker identification.
 
 ## Receipt and recovery semantics
 
+### iMessage-first protocol v2
+
+New clients explicitly register immutable
+`interaction: {version: 1, commandChannel: "imessage_first", messageUpdates: true}`.
+Omitted interaction retains historical delivery behavior; reconnect cannot silently
+change an existing session's policy. Setting `messageUpdates: false` suppresses
+routine notices but retains text commands and explicit agent replies.
+
+Authenticated text and qualified final voice input share one ordered inbox. Replayed
+event IDs return the same turn; identical text under two different message IDs stays
+two separate instructions. Opted-in text turns enqueue recipient-bound accepted,
+acknowledged, pending-approval and terminal notices through the existing effects
+dispatcher. Newer status coalesces only unsent lower-priority notices for that turn.
+A provider-acknowledged message is not handset delivery or proof of task success.
+
+`conversation_reply` defaults to text for text input and speech for voice input in
+these sessions; an explicit negotiated `channel` can override it. Text replies have
+`channel: text`, a durable `effectId` and `delivery` of `queued`,
+`transport_acknowledged`, `unconfirmed` or `not_sent`. They are reconciled against
+message effects, never speech receipts. One reply identity per turn remains required.
+New input invalidates a queued stale text reply before dispatch. Already dispatched
+sends retain their actual/unknown outcome and are never recalled or blindly repeated.
+
+Message dispatch rechecks exact request/session/turn/pairing, freshness, expiry,
+policy and current reply cursor. Pending text expires after ten minutes; terminal
+or unknown effects retain identifiers/fingerprints but redact the new message body.
+Scope changes, Stop and revocation suppress pending sends. Existing historical
+message effects retain their previous recovery semantics.
+
+An already-running agent can discover text requests with `conversation_inbox`.
+The authenticated paired person can send `/sessions` and `/use SESSION_ID` to select
+an available exact session. Selection lasts ten minutes and does not wake a desktop
+chat. If exactly one opted-in live session is available, ordinary text can bind to
+it automatically; ambiguous, stale or unavailable sessions produce an explanation.
+Event-to-request binding is durable, so a duplicate message cannot move to a newly
+selected agent. A text-only request expires after five minutes and creates no call,
+capture or control lease. Shared-screen input remains call-bound. Arbitrary idle
+host resumption and attachment sending are not supplied by this routing feature.
+
+`executionRevision` reports current and acknowledged inbox cursors. New opted-in
+input requires the current cursor and all delivered turns acknowledged; this is
+checked together with the separate execution hold and existing control authority.
+This cannot revoke a native tool the host has already dispatched. Spoken replies
+for the negotiated voice capability carry their validated expected revision to
+media so an obsolete queued response can be refused there as well.
+
+The conversation timeline includes `message_queued` and `message_acknowledged` in
+the same bounded process-clock scope. Speech diagnostics accept playback-generation,
+queue-depth and first/last audio publication measurements. Publication is server
+evidence, not a handset timestamp. All timings remain synthetic/unclassified until
+the physical qualification in `VOICE_INTERACTION_PLAN.md` is performed.
+
+### Existing effect guarantees
+
 Request keys are scoped to the exact session and fingerprinted. Reusing a key with
 changed arguments fails. A call reservation and pending effect commit in the same
 transaction as the request. Dispatch changes pending to running before a network

@@ -239,6 +239,8 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     operatorToken: env.CLAWDTIME_OPERATOR_TOKEN,
     mediaToken: env.CLAWDTIME_MEDIA_TOKEN,
     simulation: mode === "simulation",
+    twoWayVoiceEnabled: env.CLAWDTIME_TWO_WAY_VOICE_ENABLED === "true",
+    remoteAudioIsolated: env.CLAWDTIME_REMOTE_AUDIO_ISOLATED === "true",
     dispatchEnabled: mode !== "standby",
     publicTextNumber:
       live && env.CLAWDTIME_PUBLIC_TEXTING === "true"
@@ -478,6 +480,24 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                 displayId: tester.displayId,
               });
             } else {
+              const textFirst = store
+                .all<import("./contracts.js").AgentSession>("session")
+                .some(
+                  (session) =>
+                    session.pairingId === pairing.id &&
+                    session.interaction?.version === 1 &&
+                    session.state !== "stopped" &&
+                    service.clock() -
+                      (session.lastSeenAt ?? session.createdAt) <
+                      20_000 &&
+                    (session.lastSeenAt ?? session.createdAt) <=
+                      service.clock() + 1000,
+                );
+              const routed =
+                textFirst ||
+                /^\/(?:sessions|use)(?:\s|$)/i.test(event.text.trim())
+                  ? human.turns.resolveTextTarget(pairing.id, event)
+                  : undefined;
               const pending = store
                 .all<AttentionRequest>("attention")
                 .filter(
@@ -487,13 +507,17 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                       r.state,
                     ),
                 );
-              if (pending.length !== 1)
+              const requestId =
+                routed?.requestId ??
+                (!routed && pending.length === 1 ? pending[0]!.id : undefined);
+              if (routed?.reply) reply = routed.reply;
+              else if (!requestId)
                 reply =
                   "There is no single pending agent request. Start an attention request from your connected coding agent. Starting general work from Messages is planned.";
               else {
                 const result = (await human.receive({
                   eventId: event.id,
-                  requestId: pending[0]!.id,
+                  requestId,
                   memberId: pairing.memberId,
                   lineId: event.lineId,
                   conversationId: event.conversationId,
@@ -509,12 +533,13 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
                 if (
                   store.get<import("./contracts.js").AgentSession>(
                     "session",
-                    pending[0]!.sessionId,
+                    store.get<AttentionRequest>("attention", requestId)!
+                      .sessionId,
                   )?.protocolVersion === 2 &&
                   result.accepted &&
                   !result.stopped
                 ) {
-                  // The exact originating agent supplies speech; no parallel narrator.
+                  // Negotiated status/result effects are drained once by the service.
                   store.put("inbound", { ...item, sealed: "", state: "done" });
                   continue;
                 }

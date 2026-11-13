@@ -186,11 +186,8 @@ class CaptionFlowTests(unittest.IsolatedAsyncioTestCase):
             posted.append(kwargs['json']['text'])
             self.assertEqual(session.caption_scene.snapshot()['agentText'],kwargs['json']['text'])
             return context
-        async def playout():
-            while True:
-                item=await session.audio.get()
-                if isinstance(item,asyncio.Future):item.set_result(None)
-        pump=asyncio.create_task(playout())
+        session.source=AsyncMock()
+        pump=asyncio.create_task(session.publish())
         try:
             with patch.object(self.service.http,'post',side_effect=post):
                 await session.say('Here is the synthetic decision.')

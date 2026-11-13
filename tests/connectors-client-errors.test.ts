@@ -4,8 +4,10 @@ import { ClawdTimeClient } from "../connectors/shared/client.js";
 it("explains only allowlisted structured conflicts and redacts arbitrary error text", async () => {
   for (const [errorCode, expected] of [
     ["setup_reserved", "setup reservation"],
-    ["reply_context_stale", "Newer speech arrived"],
-    ["reply_exists", "already has a spoken reply"],
+    ["reply_context_stale", "Newer input arrived"],
+    ["reply_exists", "already has a reply"],
+    ["input_context_stale", "Newer input must be read"],
+    ["input_held", "Incoming speech temporarily holds"],
     ["private-provider-details", "request rejected (409)"],
     ["toString", "request rejected (409)"],
   ]) {

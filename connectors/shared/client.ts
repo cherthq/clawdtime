@@ -6,6 +6,7 @@ import type {
   RequestAttentionInput,
   SetupTest,
 } from "../../src/contracts.js";
+import { ConnectorTiming, type ConnectorOperation } from "./timing.js";
 
 export class ApiError extends Error {
   constructor(
@@ -38,6 +39,8 @@ export function validateOrigin(raw: string): string {
 export class ClawdTimeClient {
   readonly origin: string;
   private presentationSupport = new Map<string, boolean>();
+  private interactionSupport = new Map<string, boolean>();
+  private readonly timing = new ConnectorTiming();
   constructor(
     origin: string,
     private token: string,
@@ -65,9 +68,15 @@ export class ClawdTimeClient {
             setup_reserved:
               "This conversation has an unresolved setup reservation (409). Reconcile its call, media and input cleanup; no new call was requested.",
             reply_context_stale:
-              "Newer speech arrived (409). Poll and acknowledge all queued turns, reconsider the reply, then use the latest expectedCursor. No speech was submitted.",
+              "Newer input arrived (409). Poll and acknowledge all queued turns, reconsider the reply, then use the latest expectedCursor. No reply was submitted.",
             reply_exists:
-              "This turn already has a spoken reply (409). Reconcile the original reply receipt; do not replace its ID or repeat speech.",
+              "This turn already has a reply (409). Reconcile the original receipt; do not replace its ID or repeat speech or messaging.",
+            interaction_stale:
+              "Newer input or an interruption holds computer control (409). Poll and acknowledge current turns, inspect execution status, and reconsider the action. Do not blindly replay input.",
+            input_context_stale:
+              "Newer input must be read and acknowledged before computer control (409). Poll current turns, inspect execution status, and reconsider the action. No automatic retry is permitted.",
+            input_held:
+              "Incoming speech temporarily holds new computer input (409). Keep polling for finalized instructions; an already-running native action may still finish.",
           };
           if (
             typeof body.errorCode === "string" &&
@@ -106,10 +115,11 @@ export class ClawdTimeClient {
       `/api/attention/${encodeURIComponent(id)}`,
     );
   }
-  diagnostics(id: string) {
-    return this.api<Record<string, unknown>>(
+  async diagnostics(id: string) {
+    const result = await this.api<Record<string, unknown>>(
       `/api/attention/${encodeURIComponent(id)}/diagnostics`,
     );
+    return { ...result, ...this.conversationTiming(id) };
   }
   result(id: string) {
     return this.api<{
@@ -156,18 +166,21 @@ export class ClawdTimeClient {
     });
   }
   async conversationTurns(id: string, after = 0, timeoutMs = 12_000) {
-    const result = await this.api<{
-      turns: unknown[];
-      request?: { state: string };
-      conversation?: { state: string };
-      [key: string]: unknown;
-    }>(
-      `/api/attention/${encodeURIComponent(id)}/conversation/turns?after=${after}`,
-      undefined,
-      timeoutMs,
+    const result = await this.timed(id, "poll", () =>
+      this.api<{
+        turns: unknown[];
+        request?: { state: string };
+        conversation?: { state: string };
+        [key: string]: unknown;
+      }>(
+        `/api/attention/${encodeURIComponent(id)}/conversation/turns?after=${after}`,
+        undefined,
+        timeoutMs,
+      ),
     );
     const capabilities = result.capabilities as
-      { presentationVersion?: unknown } | undefined;
+      | { presentationVersion?: unknown; interactionVersion?: unknown }
+      | undefined;
     if (
       this.presentationSupport.size >= 100 &&
       !this.presentationSupport.has(id)
@@ -176,12 +189,46 @@ export class ClawdTimeClient {
         this.presentationSupport.keys().next().value!,
       );
     this.presentationSupport.set(id, capabilities?.presentationVersion === 1);
+    if (this.interactionSupport.size >= 100 && !this.interactionSupport.has(id))
+      this.interactionSupport.delete(
+        this.interactionSupport.keys().next().value!,
+      );
+    this.interactionSupport.set(id, capabilities?.interactionVersion === 1);
     return result;
   }
+  conversationInbox() {
+    return this.api<{
+      requests: Array<{
+        id: string;
+        sessionId: string;
+        [key: string]: unknown;
+      }>;
+    }>("/api/conversation/inbox");
+  }
   conversationExecution(id: string) {
-    return this.api(
-      `/api/attention/${encodeURIComponent(id)}/conversation/execution`,
+    return this.timed(id, "execution_status", () =>
+      this.api(
+        `/api/attention/${encodeURIComponent(id)}/conversation/execution`,
+      ),
     );
+  }
+  conversationTiming(id: string) {
+    return { connectorTiming: this.timing.snapshot(id) };
+  }
+  private async timed<T>(
+    id: string,
+    operation: ConnectorOperation,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const finish = this.timing.begin(id, operation);
+    try {
+      const value = await run();
+      finish("completed");
+      return value;
+    } catch (error) {
+      finish("failed");
+      throw error;
+    }
   }
   async conversationOperation(
     id: string,
@@ -197,6 +244,19 @@ export class ClawdTimeClient {
     body: unknown,
   ) {
     if (
+      body &&
+      typeof body === "object" &&
+      ((operation === "reply" && "channel" in body) ||
+        ((operation === "execution" || operation === "act") &&
+          "expectedCursor" in body))
+    ) {
+      if (!this.interactionSupport.has(id)) await this.conversationTurns(id);
+      if (!this.interactionSupport.get(id))
+        throw new Error(
+          "This request has not negotiated iMessage-first interaction controls. No effect was submitted; preserve this session and its receipts.",
+        );
+    }
+    if (
       operation === "progress" &&
       body &&
       typeof body === "object" &&
@@ -209,9 +269,11 @@ export class ClawdTimeClient {
         body = legacy;
       }
     }
-    return this.api(
-      `/api/attention/${encodeURIComponent(id)}/conversation/${operation}`,
-      body,
+    return this.timed(id, operation, () =>
+      this.api(
+        `/api/attention/${encodeURIComponent(id)}/conversation/${operation}`,
+        body,
+      ),
     );
   }
   doctor() {
