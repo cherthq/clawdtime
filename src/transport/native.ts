@@ -21,6 +21,7 @@ import type {
 import { Store } from "../storage/store.js";
 import {
   configurationChecks,
+  NotDispatched,
   PreflightBlocked,
   type ReadinessCheck,
   type TransportReadiness,
@@ -679,6 +680,7 @@ export class NativeTransport implements Transport {
       state: "preparing",
     };
     this.store.put("media", record);
+    let dialSent = false;
     try {
       const media = await this.media("/sessions", {
         id,
@@ -718,6 +720,7 @@ export class NativeTransport implements Transport {
         state: "dialing",
         credentials: this.vault.seal(credentials),
       });
+      dialSent = true;
       const response = await this.calls(
         "/api/v1/calls",
         {
@@ -745,8 +748,23 @@ export class NativeTransport implements Transport {
       return { callId: call.id, accepted: true };
     } catch (e) {
       const current = this.store.get<MediaRecord>("media", id)!;
-      this.store.put("media", { ...current, state: "unknown" });
-      throw e;
+      if (dialSent) {
+        this.store.put("media", { ...current, state: "unknown" });
+        throw e;
+      }
+      // No dial left this process, so the call outcome is certain: it never
+      // started. Only the prepared media session may remain, and it holds no line.
+      const closed = await this.media(`/sessions/${id}/close`, {}).then(
+        () => true,
+        () => false,
+      );
+      this.store.put(
+        "media",
+        closed
+          ? { ...record, state: "closed", outcome: "failed" }
+          : { ...current, state: "unknown" },
+      );
+      throw new NotDispatched("Call preparation failed before the dial.");
     }
   }
   async message(pairing: Pairing, text: string, effectId: string) {

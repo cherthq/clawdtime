@@ -5,6 +5,7 @@ import {
 import { setupInvitationRetirementValid } from "../pairing/retired-setup.js";
 import { blockingSetupReservation } from "../pairing/setup-reservation.js";
 import {
+  NotDispatched,
   PreflightBlocked,
   freshEvidence,
   type TransportReadiness,
@@ -1247,6 +1248,31 @@ export class ClawdTime {
                 reason:
                   "Read-only readiness blocked dispatch; no external effect attempted.",
               },
+            });
+            continue;
+          }
+          if (error instanceof NotDispatched && effect.kind === "call") {
+            this.store.transaction(() => {
+              this.store.putEffect({
+                ...effect,
+                state: "failed",
+                result: {
+                  reason:
+                    "Refused before dispatch; no external effect attempted.",
+                },
+              });
+              const call = this.store.get<CallSession>(
+                "call",
+                String(effect.payload.localCallId),
+              );
+              if (request && call?.requestId === request.id)
+                this.observeCall(request.id, "failed");
+              else if (call && call.state !== "ended")
+                this.store.put("call", {
+                  ...call,
+                  state: "ended",
+                  endedAt: this.clock(),
+                });
             });
             continue;
           }
