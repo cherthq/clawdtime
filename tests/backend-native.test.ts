@@ -838,7 +838,79 @@ describe("native protocol integration without live traffic", () => {
     expect(
       f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
     ).toBe(false);
-    expect(f.store.effects("unknown")).toHaveLength(1);
+    expect(f.store.effects("unknown")).toHaveLength(0);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+    expect(
+      f.store.get<CallSession>("call", mediaSessionId(f.attention.id))?.state,
+    ).toBe("ended");
+  });
+  it("releases the line when media preparation fails before any dial is sent", async () => {
+    const f = fixture(),
+      original = f.transport.media.bind(f.transport);
+    let failing = true;
+    f.transport.media = async (path, body) => {
+      if (path === "/sessions" && failing)
+        throw new Error("Provider returned HTTP 503.");
+      return original(path, body);
+    };
+    await f.app.drain();
+    const mediaId = mediaSessionId(f.attention.id);
+    const dials = () =>
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls");
+    expect(dials()).toHaveLength(0);
+    expect(f.requests.some((r) => r.url.endsWith(`/${mediaId}/close`))).toBe(
+      true,
+    );
+    expect(f.store.effects("unknown")).toHaveLength(0);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("failed");
+    expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+    expect(f.store.get<{ state: string }>("media", mediaId)).toMatchObject({
+      state: "closed",
+      outcome: "failed",
+    });
+    expect(
+      f.store.get<{ credentials?: unknown }>("media", mediaId)?.credentials,
+    ).toBeUndefined();
+    failing = false;
+    const next = f.app.requestAttention(f.agent.token, {
+      taskId: "task",
+      idempotencyKey: "twice",
+      reason: "decision",
+      question: "Second fixture question",
+    });
+    await f.app.drain();
+    expect(dials()).toHaveLength(1);
+    expect(f.store.get<AttentionRequest>("attention", next.id)?.state).toBe(
+      "ringing",
+    );
+  });
+  it("keeps the line reserved when the dial was sent and its response was lost", async () => {
+    const f = fixture(),
+      original = f.transport.calls.bind(f.transport);
+    f.transport.calls = async (path, body, key) => {
+      if (path === "/api/v1/calls" && body !== undefined) {
+        await original(path, body, key);
+        throw new Error("Provider request failed.");
+      }
+      return original(path, body, key);
+    };
+    await f.app.drain();
+    const mediaId = mediaSessionId(f.attention.id);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("unknown");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("unknown");
+    expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("unknown");
+    expect(f.store.get<{ state: string }>("media", mediaId)?.state).toBe(
+      "unknown",
+    );
+    await f.app.drain();
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toHaveLength(1);
   });
 });
 
