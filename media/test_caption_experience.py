@@ -153,7 +153,7 @@ class CaptionFlowTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task,return_exceptions=True)
 
-    async def test_v2_activation_is_silent_and_duplicate_activation_does_not_greet_again(self):
+    async def test_v2_activation_greets_once_and_duplicate_activation_does_not_repeat(self):
         session=self.fixture_session()
         session.active=False
         session.activation=None
@@ -166,7 +166,7 @@ class CaptionFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status,200)
         self.assertTrue(session.active)
         self.assertEqual(session.protocol_version,2)
-        session.say.assert_not_awaited()
+        session.say.assert_awaited_once_with('Hey, this is your agent.')
         self.assertEqual(session.caption_scene.snapshot()['state'],'listening')
 
     async def test_exact_spoken_text_is_subtitled_with_one_greeting_and_cleared_on_tts_failure(self):

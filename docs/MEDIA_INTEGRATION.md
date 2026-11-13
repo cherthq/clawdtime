@@ -302,12 +302,19 @@ it explicitly says “Agent speaking · mic paused”. Private text clears on mu
 revocation, wrong-call policy, expiry, disconnect or close, and failed TTS clears
 its subtitle. Subtitle text is memory-only and absent from logs and diagnostics.
 
-For v2 calls, activation emits no generic “Sharing your screen…” announcement.
-The first actual TTS message receives “Hey, this is your agent.” once, including
-when a setup run suppresses its internal question and the coding agent speaks
-later. Subsequent replies are read directly. Unknown playback is never retried.
-The existing bounded attention-question dispatch remains once-only, without the
-“Your agent asks” wrapper; legacy v1 retains a short greeting at activation.
+For authorized, unmuted v2 recording calls, activation says “Hey, this is your
+agent.” once. This fixed connection notice supplies the audible output required
+by the worker's ten-second startup check; a silent v2 setup call failed with
+`bridge_remote_audio_timeout` in the November 13 physical test. It creates no
+human turn or agent reply receipt. Fresh exact-call policy is required, policy
+polling remains active during the notice, and mute, Stop, revocation and close
+can cancel it. The notice has a six-second bound and is never replayed after
+uncertainty. Actual replies then omit the repeated introduction. Call-only and
+muted calls remain silent; those cases are not qualified against this worker's
+audio requirement. Half-duplex callers should wait for the brief greeting to
+finish before speaking. Duplex qualification gates remain unchanged.
+The bounded attention-question dispatch remains once-only, without the
+“Your agent asks” wrapper; legacy v1 retains its activation greeting.
 
 `test_caption_experience.py` covers live provisional/final transitions, confirmed
 and uncertain delivery, subtitle/voice agreement, greeting deduplication, policy
@@ -332,7 +339,7 @@ release and stop notification run once in a tracked cleanup task, protected from
 capture-loop cancellation during policy refresh. Unconfirmed release still blocks
 replacement through the longest requested expiry.
 
-V2 activation is silent; the first actual agent message carries the greeting.
+V2 activation uses the policy-gated connection notice described above.
 Capture still requires exact-call backend authorization. Diagnostics do not grant
 capture authority. Old calls without this instrumentation
 cannot be reconstructed from cleared frame fields. A new physical diagnostic call

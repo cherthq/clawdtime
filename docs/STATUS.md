@@ -1,6 +1,65 @@
 # ClawdTime implementation status
 
-## Interaction rollout — November 13, 2026 (deployed; handset tests pending)
+## Live interaction test — November 13, 2026
+
+The user enabled sharing locally and used speakerphone. The real iMessage
+instruction reached this same foreground Codex session; its `BLUE` response had
+a transport acknowledgment, and the user confirmed receiving it. The text-only
+request completed without a call or shared-screen input. Session selection through
+`/sessions` and `/use` was not exercised in this test.
+
+One authorized FaceTime attempt connected and emitted screen video, then the
+remote media participant disconnected after approximately nine seconds of capture
+(the provider recorded approximately sixteen seconds from active to ended). The user
+reported an unexpected drop. The provider's terminal detail was
+`bridge_remote_audio_timeout`: the worker requires non-silent outgoing audio
+within ten seconds of structural readiness, while v2 deliberately omitted the
+startup greeting. No TTS audio was published during this attempt. This is a
+confirmed startup incompatibility, independent of speech recognition results.
+Cleanup reconciled: call ended, media stopped and
+screen lease cleared. No redial was performed. During the connected interval,
+861 audio frames reached STT; it produced two empty finals and no recognized
+words. No agent speech was submitted, so neither intelligible two-direction audio
+nor interruption behavior passed. Duplex flags remain disabled. Screen visibility
+on the handset was not confirmed.
+
+A separate local native-tool trial, after call cleanup, visibly computed
+`2 + 3 = 5` in macOS Calculator. Two clicks took 45 and 26 ms; typing `3` and
+Return together took 66 ms. The corresponding accessibility observations took
+431, 447 and 466 ms; action plus observation took 473–532 ms. One transient
+screenshot took 73 ms. These are small samples measured within tool invocations,
+not model inference, active-call contention, scrolling or handset latency.
+The browser rejected the local-file fixture URL; it was not bypassed.
+
+Live connector poll HTTP requests were mostly around 85–130 ms. The text turn
+was acknowledged about 11 seconds after backend receipt and its reply queued
+about 15.6 seconds after receipt; this includes the coordinating agent's manual
+polling and tool sequence, rather than measuring transport alone. Initial evidence
+points to orchestration/observation overhead as a contributor, but does not yet
+identify the dominant end-to-end CUA bottleneck. Private metadata-only evidence is
+under `.data/interaction-live-20261113/`; no screens or audio were retained.
+
+The call's screen diagnostics recorded nine fresh source frames across roughly
+eight seconds. The compositor targets five video frames per second, but can repeat
+the same captured image: source capture and video output cadence are different.
+The source loop serially renews the lease, requests/decodes a screenshot, then waits
+200 ms. First screen-video publication was approximately 737 ms after selection
+within the media component. This is evidence of a potentially visible screen-update
+delay, not a measurement of handset display latency. Optimize this path only while
+preserving policy freshness, lease expiry and local Stop enforcement.
+
+The call also recorded media event-loop delays up to 338 ms. Their cause is not
+attributed yet. The next measurement should correlate those delays with frame
+decode/composition, TTS publication and actual native actions during a stable call,
+instead of changing Python or the CUA framework based on the local trial alone.
+
+The startup fix adds one policy-authorized connection greeting for unmuted v2
+recording calls, with a six-second bound, once-only activation, cancellation and
+queue clearing. It creates no synthetic human turn or agent reply. All **238 media
+tests** passed, including nine focused activation/cancellation regressions.
+Actual post-fix call survival and audible greeting still require a new handset test.
+
+## Interaction rollout — November 13, 2026 (deployment baseline)
 
 The user authorized deployment, an iMessage/two-way voice end-to-end test and CUA
 timing diagnosis. When asked about the physical test, the user answered **not ready

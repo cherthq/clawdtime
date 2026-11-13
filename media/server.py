@@ -34,6 +34,7 @@ from policy import call_only_allowed, capture_allowed, final_transcript, pause_r
 RATE = 48000
 SAMPLES = 960
 NOTICE = 'Hey, this is your agent.'
+CONNECTION_NOTICE_TIMEOUT = 6
 
 
 class BackendRequestError(Exception):
@@ -86,6 +87,7 @@ class Session:
             (lambda data: owner.record_lifecycle_diagnostic(self.id, data))
             if hasattr(owner, "record_lifecycle_diagnostic") else None)
         self.activation = None
+        self.connection_notice = None
         self.close_task = None
         self.policy_at = 0.0
         self.policy_wakeup = asyncio.Event()
@@ -742,7 +744,7 @@ class Session:
         if not self.two_way:
             self.allowed = False
         text = text[:1600]
-        if self.protocol_version == 2 and not self.greeted:
+        if self.protocol_version == 2 and not self.greeted and text != NOTICE:
             text = 'Hey, this is your agent. ' + text
         self.greeted = True  # Never retry an uncertain greeting.
         if not self.two_way:
@@ -796,7 +798,39 @@ class Session:
         if self.activation is None:
             async def begin():
                 try:
-                    if self.recording and self.protocol_version != 2:
+                    if self.recording and self.protocol_version == 2:
+                        # bridge_ready establishes structure, but the worker also
+                        # requires actual output within ten seconds. A fixed local
+                        # notice satisfies startup without inventing an agent turn.
+                        policy = await self.owner.backend(f'/media/{self.id}/policy')
+                        if (self.closing or self.pause_latched or not capture_allowed(policy)
+                                or policy.get('callId') != self.call_id):
+                            raise web.HTTPConflict()
+                        self.apply_voice_policy(policy)
+                        self.policy_at = time.monotonic()
+                        self.active = True
+                        # Remain subject to policy polling while TTS is pending.
+                        self.policy_wakeup.set()
+                        if policy.get('muted') is not True:
+                            self.connection_notice = asyncio.create_task(self.say(NOTICE))
+                            try:
+                                await asyncio.wait_for(self.connection_notice, CONNECTION_NOTICE_TIMEOUT)
+                            except asyncio.CancelledError:
+                                # Revocation/interruption cancels the notice, never
+                                # retries it or converts it into a human command.
+                                if not self.speech_cancelled:
+                                    self.owner.cancel_speech(self.id)
+                                    raise
+                            except Exception:
+                                # Timeout/provider failure must flush immediately,
+                                # before the failure callback can wait on a network.
+                                self.owner.cancel_speech(self.id)
+                                raise
+                            finally:
+                                self.connection_notice = None
+                        if self.closing:
+                            raise web.HTTPConflict()
+                    elif self.recording:
                         if self.screen: self.screen.diagnostics.phase('notice_playing')
                         await self.say(NOTICE)
                         if self.screen: self.screen.diagnostics.phase('notice_completed')
@@ -824,6 +858,9 @@ class Session:
 
     async def close(self, reason="unspecified"):
         self.lifecycle.close(reason)
+        if (self.activation and not self.activation.done()
+                and self.activation is not asyncio.current_task()):
+            self.activation.cancel()
         if self.close_task and self.close_task.done() and not self.close_task.cancelled() and self.close_task.exception():
             self.close_task = None
         if self.close_task:
@@ -1030,6 +1067,8 @@ class Service:
         if session:
             started = time.monotonic()
             session.speech_cancelled = True
+            if session.connection_notice and not session.connection_notice.done():
+                session.connection_notice.cancel()
             generation = session.playback_generation
             session.playback_generation += 1
             while not session.audio.empty():
