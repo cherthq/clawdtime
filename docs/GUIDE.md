@@ -15,10 +15,10 @@ See [STATUS.md](STATUS.md) for exact versions, checks and limits.
 
 ## Set up once
 
-### Local source follow-up: text first and two-way voice
+### Deployed follow-up: text first and gated two-way voice
 
-The following behavior is implemented in source and isolated tests, **not deployed
-or physically qualified**. Newly registered v2 connectors opt into iMessage-first
+The following behavior is deployed as source `7f1b687`; **handset qualification
+is pending and two-way voice remains disabled**. Newly registered v2 connectors opt into iMessage-first
 control. Existing saved runs keep their negotiated behavior. Text `/sessions` to
 list available sessions and `/use SESSION_ID` to select one; selection lasts ten
 minutes. A single available session is selected automatically. The original agent

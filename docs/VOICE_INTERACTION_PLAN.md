@@ -2,8 +2,9 @@
 
 Prepared November 13, 2026, America/New_York; implementation subsequently authorized
 by the user. This extends [the improvements plan](FACETIMEOS_IMPROVEMENTS_PLAN.md)
-beyond completed A–F. Source implementation is now present; physical qualification,
-deployment and installed-component replacement have not been performed.
+beyond completed A–F. Source and installed components were subsequently deployed
+as `7f1b687`; physical qualification remains pending and two-way voice is still
+gated off. See [STATUS.md](STATUS.md) for the actual rollout evidence.
 
 Implemented locally: T1 durable text commands/status/results; T2 selection and an
 inbox for an already-running exact session; V0 bounded timing; V1–V2 gated continuous

@@ -1,5 +1,90 @@
 # ClawdTime implementation status
 
+## Interaction rollout — November 13, 2026 (deployed; handset tests pending)
+
+The user authorized deployment, an iMessage/two-way voice end-to-end test and CUA
+timing diagnosis. When asked about the physical test, the user answered **not ready
+yet**. Deployment and read-only validation proceeded; no call, test message,
+screen capture or computer input was performed. Physical testing remains pending.
+
+Release source: `7f1b687da4d32ea1e9f1fa5d79f37139f30c8f3e` on `improvements`.
+The implementation is `52eb2c5`; production reconciliation added `4d980f5` and
+`f93d027`, preserving already-deployed pre-dial failure handling and gateway
+reconnect behavior. `7f1b687` aligns the retained routing test with reconnection.
+The previous live code matched `88e2cd5` exactly, rather than the older documented
+release. No sibling project, line assignment or unrelated branch was modified.
+
+| Component       | Verified release                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Backend         | `c6d304b4-d42b-4deb-8130-0fd5f8bf1063`, SUCCESS; all 62 deployed JavaScript files matched                          |
+| Media           | `9175e3e9-3565-4c3c-926e-8eec2f7a236e`, SUCCESS; all 14 deployed Python files matched                              |
+| Companion       | Current source installed with the original signing requirement; Screen Recording and Accessibility preserved       |
+| Gateway         | Existing independent LaunchAgent restarted with current source and unchanged private configuration                 |
+| Codex connector | Rebuilt and installed skill updated; MCP configuration preserved; fresh foreground registration/inbox smoke passed |
+
+The backend was stopped while media changed; both preceding deployments are
+removed. Encrypted consistent backups were retained on the existing service
+volumes. Configuration hashes, transport effects/events/cursor and all existing
+media table hashes were unchanged. The only original entity change was expiry of
+an idle connector session; normalizing that transition reproduces the pre-rollout
+entity hash. A separate new smoke session negotiated interaction version 1 and
+voice interaction version 1, had no attention request, and then expired. Historical
+uncertain execution remains retained, not cleared or replayed. Final readiness
+reported zero active calls, pending effects, unknown transport effects and active
+media sessions; the Mac gateway was connected.
+
+Local sharing remains **disabled**. Two-way voice is deployed but **not enabled**:
+backend voice/isolation flags are false, and no protected service variables were
+changed. Existing client runs retain their original capabilities; this chat's old
+loaded MCP catalog is not claimed to have hot-reloaded. Use a new foreground run
+in this same chat for the eventual test, after confirming user readiness.
+
+Validation after integrating the production fixes: typecheck, **645 TypeScript
+tests**, build, **229 media tests**, **31 gateway tests**, and signed release
+companion packaging passed. Prior Swift tests and browser onboarding remain valid
+for their unchanged source. The isolated runtime smoke does not establish handset
+message delivery, intelligible speech, interruption quality or CUA success.
+
+### Initial real timing baseline
+
+Ten sequential idle read-only samples, November 13 at 19:25 UTC. Durations use each
+measuring process's own clock; these are not synthetic fixtures or full CUA trials.
+
+| Read-only boundary                                     | Median | p95 (10 samples) |
+| ------------------------------------------------------ | ------ | ---------------- |
+| Backend → media → gateway → exact Mac helper readiness | 137 ms | 386 ms           |
+| Local client → loopback Mac helper status              | 3 ms   | 25 ms            |
+| Local client → deployed backend health                 | 125 ms | 183 ms           |
+
+The remote readiness round trip is a measurable contribution: ownership and
+fallback paths perform these checks sequentially. These samples do not identify
+the dominant CUA bottleneck. No screenshot, model, native tool, input observation
+or handset-render latency was measured. The duplicate fallback screenshot was
+removed in source, but no before/after speedup is asserted. A disposable local
+click/type/scroll fixture is ready at `artifacts/cua-timing/index.html`.
+
+### Remaining live steps
+
+1. User enables the intended display locally and is ready at the paired phone.
+2. Fresh same-chat connector; real `/sessions` and `/use` selection, instruction,
+   text result and handset receipt observation. No simulated provider events.
+3. Qualify the actual worker audio route and a headset canary before enabling the
+   voice flags. Owned-line metadata confirms a recent, identity-confirmed line
+   session, but does not prove acoustic isolation or that the inclusive process
+   tap started. Source supports FaceTime/avconferenced-only return audio in
+   line-session mode; no AEC is claimed. Speakerphone needs separate qualification.
+4. Measure interruption and input holds, then visible CUA trials with connector,
+   backend, media and native-wrapper timings. The external worker has an audio
+   output ring with five seconds of **capacity**, not established latency; media
+   queue clearing does not prove that its downstream queue or the handset is
+   silent. Measure the audible tail separately.
+5. End/reconcile the owned test, retain unknown receipts, and report observed
+   outcomes. No automatic redial or concurrent line owner.
+
+Private operational evidence is under `.data/interaction-rollout-20261113/`; it
+contains sanitized timings, hashes and deployment receipts. Source was deployed
+from a tracked archive; private runtime/configuration files were not uploaded.
+
 ## iMessage-first controls and two-way voice — November 13, 2026
 
 Implemented in the working tree after the user's explicit follow-up request, with

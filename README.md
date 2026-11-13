@@ -28,8 +28,8 @@ computer tool. It remains in your original chat and follows its normal approvals
 
 The latest source adds **iMessage-first commands and replies**, selection of an
 already-running session, gated two-way voice with playback interruption, and CUA
-stage timing. These changes are locally tested, not deployed or physically
-qualified. See the [pilot guide](docs/GUIDE.md) for flags, session selection and
+stage timing. These changes are deployed; handset tests are pending and two-way
+voice remains gated off. See the [pilot guide](docs/GUIDE.md) for flags, session selection and
 remaining limits. Existing installed sessions keep their negotiated behavior.
 
 ## Native computer use and optional fallback
