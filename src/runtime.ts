@@ -9,6 +9,10 @@ import { Vault, hash } from "./storage/security.js";
 import { ClawdTime } from "./attention/service.js";
 import { PreflightBlocked } from "./transport/readiness.js";
 import {
+  reportError as defaultReportError,
+  type ReportError,
+} from "./error-report.js";
+import {
   NativeTransport,
   type NativeTransportConfig,
 } from "./transport/native.js";
@@ -104,7 +108,11 @@ function privateJSON<T>(path: string): T {
     throw new Error("Live configuration must be an owner-only regular file.");
   return parseProtectedJSON<T>(readFileSync(path, "utf8"));
 }
-export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
+export function createRuntime(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { reportError?: ReportError } = {},
+) {
+  const reportError = options.reportError ?? defaultReportError;
   const mode = env.CLAWDTIME_MODE ?? "simulation";
   if (!["simulation", "standby", "live"].includes(mode))
     throw new Error("Unknown CLAWDTIME_MODE.");
@@ -221,6 +229,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
   const app = createApp(service, control, human, {
     origin,
     compatibleOrigins,
+    reportError,
     retireSetupInvitation:
       transport instanceof NativeTransport
         ? (input) => transport.retireSetupInvitation(input)
@@ -626,7 +635,8 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       // Helper status expires locally; pending command intents remain for reconciliation.
       await panel.tick().catch(() => {});
       store.saveState("heartbeat", { ok: true, at: Date.now() });
-    } catch {
+    } catch (error) {
+      reportError("loop_failed", error);
       // A broken inbound feed must never prevent expiration or owned-call cleanup.
       try {
         await service.drain({ cleanupOnly: true });

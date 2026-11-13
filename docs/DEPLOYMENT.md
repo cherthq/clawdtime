@@ -27,8 +27,12 @@ volume, one replica, no overlapping deployment processes. Set `CLAWDTIME_ORIGIN`
 to the fixed HTTPS backend origin. Use `CLAWDTIME_MODE=standby` initially. Standby
 hosts onboarding/health but does not ingest new Messages or dispatch new calls or
 completion messages. `/health` is process health; authenticated
-`/internal/readiness` reports pending/unknown effects and active calls, not physical
-readiness. Keep the SQLite WAL and unknown effects, never reset them to force progress.
+`/internal/readiness` reports pending/unknown effects, active calls and the
+background loop (`loop.state` is `never`, `fresh`, `stale` after 60 seconds without
+a pass, or `failed`), not physical readiness. An unexpected failure writes one JSON
+line to standard error with the error class and stack frames, never its message; a
+failed request also returns a `requestId` that matches its line, and a repeating
+loop failure is written once a minute with a repeat count. Keep the SQLite WAL and unknown effects, never reset them to force progress.
 
 Use fresh, distinct 32+ character operator/media keys, supplied through the host
 secret store, never Docker build args. `CLAWDTIME_OPERATOR_TOKEN` protects internal
