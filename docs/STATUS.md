@@ -59,6 +59,15 @@ queue clearing. It creates no synthetic human turn or agent reply. All **238 med
 tests** passed, including nine focused activation/cancellation regressions.
 Actual post-fix call survival and audible greeting still require a new handset test.
 
+Media-only fix source `f7611d2799eada34026fdd71556e38d781d0b808` was deployed as
+`cb123fed-509f-499b-93b5-a30b88a2d3cc` (SUCCESS); the previous media deployment
+was removed. All fourteen deployed Python files matched the clean source archive.
+Protected configuration and media ledger hashes were unchanged. Backend, Mac
+companion and gateway source were not redeployed. The gateway reconnected after
+replacement; readiness then reported only local sharing disabled. The first test
+was canceled after known cleanup; another call awaits user readiness and local
+Enable. No automatic redial or two-way voice flag change occurred.
+
 ## Interaction rollout — November 13, 2026 (deployment baseline)
 
 The user authorized deployment, an iMessage/two-way voice end-to-end test and CUA
