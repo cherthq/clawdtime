@@ -327,6 +327,8 @@ class Gateway:
         if active_lease is not None and (not isinstance(active_lease,str) or not ID.fullmatch(active_lease)):
             raise web.HTTPBadGateway(text='Invalid active helper lease identity.')
         local={'activeLeaseId':active_lease} if active_lease is not None else {}
+        if type(status.get('presentationVersion')) is int and status['presentationVersion']==1:
+            local['presentationVersion']=1
         if 'controlPolicy' in status or 'policyRevision' in status:
             if status.get('controlPolicy') not in ('view_only','agent_tools_only','agent_tools_with_fallback') or type(status.get('policyRevision')) is not int or status['policyRevision']<1:raise web.HTTPBadGateway(text='Invalid local policy.')
             local.update(controlPolicy=status['controlPolicy'],policyRevision=status['policyRevision'])
@@ -344,6 +346,18 @@ class Gateway:
         if not ID.fullmatch(device_id) or not config:raise web.HTTPNotFound()
         body=await request.json()
         if not isinstance(body,dict):raise web.HTTPBadRequest()
+        if 'activity' in body or 'presentationVersion' in body or 'readiness' in body:
+            # A rolling upgrade must not send extensions to an old helper.
+            helper=None
+            try:
+                async with self.http.get(config['url']+'/v1/status',headers={'Authorization':'Bearer '+config['key']},allow_redirects=False,timeout=ClientTimeout(total=1)) as status:
+                    raw=await status.content.read(16385)
+                    if status.status==200 and len(raw)<=16384:helper=json.loads(raw)
+            except Exception:
+                pass  # Optional presentation discovery cannot block baseline controls.
+            if isinstance(helper,dict) and helper.get('deviceId')!=device_id:raise web.HTTPBadGateway()
+            if not isinstance(helper,dict) or type(helper.get('presentationVersion')) is not int or helper['presentationVersion']!=1:
+                body={key:value for key,value in body.items() if key not in ('activity','presentationVersion','readiness')}
         async with self.http.post(config['url']+'/v1/panel',json=body,headers={'Authorization':'Bearer '+config['key']},allow_redirects=False) as response:
             raw=await response.content.read(16385)
             if len(raw)>16384:raise web.HTTPBadGateway()
@@ -361,7 +375,7 @@ class Gateway:
                 except web.HTTPException:raise
                 except Exception:return web.json_response({'error':'Device operation uncertain; reconcile before retry.'},status=503)
             finally:request_id.reset(context)
-        app=web.Application(middlewares=[auth],client_max_size=16384)
+        app=web.Application(middlewares=[auth],client_max_size=65536)
         app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
         app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)
         app.router.add_post('/v1/devices/{device}/panel',self.panel)

@@ -1,3 +1,6 @@
+import { explainReadiness } from "../../connectors/shared/readiness.js";
+import { presentationFor } from "./presentation.js";
+import { timelineFor } from "../transport/conversation-timeline.js";
 import {
   recordTerminationIntent,
   type TerminationSource,
@@ -815,6 +818,8 @@ export class ClawdTime {
         text: result,
       });
       this.endOwnedCall(request, "request_completed");
+      presentationFor(this).clear(request.id);
+      timelineFor(this).record(request.id, "end_requested", request.id);
       this.revokeLeases(request.id);
       return next;
     });
@@ -956,6 +961,9 @@ export class ClawdTime {
         });
       }
       this.revokeLeases(request.id);
+      presentationFor(this).clear(request.id);
+      if (state === "ended")
+        timelineFor(this).record(requestId, "cleanup_confirmed", requestId);
       if (!request.responseId && !terminal.has(request.state))
         this.store.put("attention", {
           ...request,
@@ -999,6 +1007,8 @@ export class ClawdTime {
         });
       this.revokeLeases(request.id);
       this.endOwnedCall(request, "request_completed");
+      presentationFor(this).clear(request.id);
+      timelineFor(this).record(request.id, "end_requested", request.id);
       return this.store.get<AttentionRequest>("attention", request.id)!;
     });
   }
@@ -1034,6 +1044,8 @@ export class ClawdTime {
       }
       this.revokeLeases(request.id);
       this.endOwnedCall(request, "request_completed");
+      presentationFor(this).clear(request.id);
+      timelineFor(this).record(request.id, "end_requested", request.id);
       return this.store.get<AttentionRequest>("attention", request.id)!;
     });
   }
@@ -1407,7 +1419,13 @@ export class ClawdTime {
       retiredSetupInvitationCount,
       blockingUnknownEffects,
       physicalAcceptance: false,
-      readiness: { checkedAt: now, mode, liveReady, checks },
+      capabilities: { presentationVersion: 1 },
+      readiness: {
+        checkedAt: now,
+        mode,
+        liveReady,
+        checks: checks.map((check) => explainReadiness(check, now)),
+      },
     };
   }
 }

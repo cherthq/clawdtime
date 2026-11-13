@@ -235,3 +235,9 @@ export interface ExecutionOwnership {
   policyRevision?: number;
   updatedAt: number;
 }
+
+// Optional v2 display metadata; never input or approval authority.
+export type {
+  PresentationInput,
+  PresentationReceipt,
+} from "./attention/presentation.js";

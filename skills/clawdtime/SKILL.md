@@ -58,6 +58,21 @@ permissions or arm capture/control to make checks pass without authorization.
    A correction is a new ordered human turn. Respect cancellation requests and
    record unresolved running effects; do not claim a native tool was interrupted
    unless the client confirms it.
+   When the server advertises `capabilities.presentationVersion: 1`, include
+   optional `presentation: {version: 1, activity: {activityId, kind, summary}}`
+   for meaningful progress. Use stable activity IDs and concise user-facing text
+   (at most 160 Unicode scalars and 640 UTF-8 bytes). This is visual-only: do not
+   narrate every action, expose internal reasoning, or generate extra speech IDs.
+   Terminal progress may include `presentation.outcome: {outcomeId, summary,
+verification, evidenceKind?}`. Use `agent_observed` only after observing the
+   resulting application state or actual test/artifact; use `not_verified` when
+   no observation exists and `unknown` when the effect is unresolved. An input
+   submission or TTS completion does not prove UI success. Outcome status comes
+   from the explicit terminal turn state, never completion words in prose.
+   Inspect returned/polled receipts and summarize actual results in this original
+   chat. Outcome text expires after 60 seconds (and earlier on Stop/close); after
+   restart the metadata receipt remains while summary text is unavailable. Do
+   not repeat the action or repopulate old text to recover a missing summary.
 7. Continue polling the same call. Use `end_conversation` only when explicitly
    ending it. Inspect call/sharing/receipt state until cleanup is reconciled.
 

@@ -107,6 +107,10 @@ const count = z.number().int().min(0).max(999999999);
 const milliseconds = z.number().int().min(0).max(86400000);
 export const speechPipelineSchema = z.object({
   version: z.literal(1),
+  processId: z
+    .string()
+    .regex(/^[a-f0-9]{32}$/)
+    .optional(),
   at: z.string().max(40).datetime({ offset: true }),
   counts: z.object(
     Object.fromEntries(speechCounters.map((key) => [key, count.optional()])),
@@ -122,6 +126,10 @@ export const speechPipelineSchema = z.object({
     .array(
       z.object({
         sequence: count,
+        correlationId: z
+          .string()
+          .regex(/^[a-f0-9]{24}$/)
+          .optional(),
         event: z.enum(speechEvents),
         generation: count,
         elapsedMs: milliseconds,

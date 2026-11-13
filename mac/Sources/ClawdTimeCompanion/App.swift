@@ -16,6 +16,7 @@ struct HelperStatus: Codable {
   let historicalUnverifiedActionCount: Int
   let panelCommand: PanelCommand?
   let retiredPanelCommands: [PanelCommand]
+  let presentationVersion: Int
 }
 
 @MainActor final class DeviceApp: NSObject, NSApplicationDelegate {
@@ -30,6 +31,7 @@ struct HelperStatus: Codable {
   var status: NSStatusItem?
   var panel: NSPanel?
   var label: NSTextField?
+  var activityView: ActivityPanelView?
   var timer: Timer?
   var lastFrameRequest = Date.distantPast
   var frameBounds: CGRect?
@@ -137,6 +139,7 @@ struct HelperStatus: Codable {
     updateIndicator()
   }
   @objc func stop() {
+    controlPanel.clearActivity(stop: true)
     policy.stop(disarm: true)
     updateIndicator()
   }
@@ -168,6 +171,7 @@ struct HelperStatus: Codable {
     alert.runModal()
   }
   func updateIndicator() {
+    if policy.lease == nil { controlPanel.clearActivity(stop: true) }
     refreshSetup()
     let state =
       policy.lease.map {
@@ -185,32 +189,39 @@ struct HelperStatus: Codable {
     status?.button?.setAccessibilityLabel("ClawdTime Companion: \(state)")
     status?.button?.toolTip = "ClawdTime Companion, \(state). Click for Control Panel or Stop."
     status?.button?.contentTintColor = policy.lease == nil ? nil : .systemRed
-    guard let lease = policy.lease else {
+    let telemetry = controlPanel.current(now: Date())
+    guard policy.lease != nil || telemetry != nil || controlPanel.command != nil else {
       panel?.orderOut(nil)
       return
     }
-    let title = "◉ \(lease.mode == "control" ? "CONTROL" : "VIEW") · \(lease.displayId)"
     if panel == nil {
-      let p = NSPanel(
-        contentRect: NSRect(x: 30, y: 30, width: 300, height: 85),
+      let p = NSPanel(contentRect: NSRect(x: 30, y: 30, width: 480, height: 270),
         styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
-      p.title = "ClawdTime, screen sharing"
+      p.title = "ClawdTime activity"
       p.level = .floating
       p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
       p.isMovableByWindowBackground = true
       p.hidesOnDeactivate = false
-      let text = NSTextField(labelWithString: "")
-      text.frame = NSRect(x: 12, y: 48, width: 280, height: 23)
-      p.contentView?.addSubview(text)
-      label = text
-      let button = NSButton(
-        title: "STOP sharing and control", target: self, action: #selector(stop))
-      button.frame = NSRect(x: 12, y: 10, width: 275, height: 30)
-      p.contentView?.addSubview(button)
-      panel = p
+      let view = ActivityPanelView(frame: NSRect(x: 0, y: 0, width: 480, height: 270))
+      for (button, action) in [(view.stop, #selector(stop)), (view.mute, #selector(toggleMute)),
+        (view.pause, #selector(requestPause)), (view.end, #selector(endCall)),
+        (view.details, #selector(toggleActivityDetails)), (view.setup, #selector(showSetup))] {
+        button.target = self; button.action = action
+      }
+      p.contentView = view
+      activityView = view; panel = p
     }
-    label?.stringValue = title
+    activityView?.update(PanelPresentation(telemetry: telemetry, pending: controlPanel.command, sharing: "\(state) · Mac \(config.deviceId)"))
+    if let panel, let screen = panel.screen ?? NSScreen.main {
+      panel.setFrame(ActivityPanelView.constrained(panel.frame, to: screen.visibleFrame), display: true)
+    }
     panel?.orderFrontRegardless()
+  }
+  @objc func toggleActivityDetails() {
+    guard let panel, let activityView else { return }
+    activityView.expanded.toggle()
+    panel.setContentSize(NSSize(width: 480, height: activityView.expanded ? 480 : 270))
+    updateIndicator()
   }
   func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
     let decoder = JSONDecoder()
@@ -246,7 +257,7 @@ struct HelperStatus: Codable {
             historicalObservedActionCount: ledger.historicalObservedActionCount,
             historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
             panelCommand: controlPanel.command,
-            retiredPanelCommands: controlPanel.retiredCommands))
+            retiredPanelCommands: controlPanel.retiredCommands, presentationVersion: 1))
       }
       if request.method == "POST", request.path == "/v1/panel" {
         let telemetry = try decode(PanelTelemetry.self, request.body)
@@ -254,6 +265,7 @@ struct HelperStatus: Codable {
           throw HelperError(409, "Panel status uses an old local policy.")
         }
         try controlPanel.update(telemetry, lease: policy.lease, now: Date())
+        updateIndicator()
         refreshSetup(force: true)
         return try .json(["accepted": true])
       }

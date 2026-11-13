@@ -401,10 +401,11 @@ class Session:
         self.lifecycle.utterance(result)
         if result['discarded'] and self.caption_scene:
             self.caption_scene.delivery('incomplete')
+        segment = self.segment(result['text']) if result['text'] and not result['discarded'] else None
         self.speech_diagnostics.event('utterance_discarded' if result['discarded'] else 'utterance_emitted',
-            generation, result['reason'])
-        if result['text'] and not result['discarded']:
-            self.queue_segment(self.segment(result['text']))
+            generation, result['reason'], segment=int(segment['id']) if segment else None)
+        if segment:
+            self.queue_segment(segment)
 
     def human_speaking(self):
         return self.protocol_version == 2 and (self.utterances.has_text or self.delivering or not self.segments.empty())
@@ -771,7 +772,7 @@ class Service:
         # Its single callback response must outlive that 45-second turn; other
         # policy and cleanup requests retain their existing shorter deadlines.
         segment_timeout={'timeout':ClientTimeout(total=60,connect=5,sock_read=55)} if re.fullmatch(r'/media/ct_[a-f0-9]{40}/segments',path) else {}
-        async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY']},**({} if body is None else {'json':body}),allow_redirects=False,**segment_timeout) as response:
+        async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY'], 'X-ClawdTime-Presentation':'1'},**({} if body is None else {'json':body}),allow_redirects=False,**segment_timeout) as response:
             raw=await response.content.read(128*1024+1)
             if len(raw)>128*1024:
                 raise BackendRequestError('callback_invalid_response', response.status)
@@ -919,7 +920,8 @@ class Service:
             event = {'playing':'playback_started','completed':'playback_completed',
                      'cancelled':'reply_cancelled','failed':'playback_failed','unknown':'playback_unknown'}.get(state)
             if event:
-                session.speech_diagnostics.event(event, session.generation, reason)
+                session.speech_diagnostics.event(event, session.generation, reason,
+                    correlation_id=session.speech_diagnostics.correlation(utterance_id))
                 session.speech_diagnostics.update(session.utterances.snapshot())
                 session.speech_diagnostics.flush(force=True)
         try:
@@ -1096,7 +1098,7 @@ class Service:
             except Exception:
                 logging.error('media_request_failed path=%s',request.path)
                 return web.json_response({'error':'Media operation failed; reconcile before retrying.'},status=503)
-        app=web.Application(client_max_size=16384,middlewares=[auth])
+        app=web.Application(client_max_size=65536,middlewares=[auth])
         async def health(request):
             devices_configured=self.env.get('MEDIA_DEVICES_ENABLED')=='true' and len(self.env.get('DEVICE_GATEWAY_KEY',''))>=32 and bool(self.env.get('DEVICE_GATEWAY_URL') or self.env.get('DEVICE_GATEWAY_RELAY')=='true')
             return web.json_response({'ok':True,'service':'clawdtime-media','configured':self.ready(),'activeSessions':sum(not s.closed for s in self.sessions.values()),'deviceGatewayConnected':self.device_relay.connected,'devicesConfigured':devices_configured})
@@ -1124,12 +1126,17 @@ class Service:
             # active call. Terminal/local mute status remains backend-owned.
             if body.get('callState') not in ('ended','muted'):
                 call_id=body.get('callId')
-                session=self.sessions.get(call_id) if isinstance(call_id,str) else None
+                session=next((s for s in self.sessions.values() if s.call_id==call_id),None) if isinstance(call_id,str) else None
                 state='connected'
                 if session and session.call_id==call_id and session.active and not session.closing:
                     if session.speaking:state='speaking'
                     elif session.allowed:state='listening'
                 body={**body,'callState':state}
+            if body.get('presentationVersion') == 1:
+                call_id=body.get('callId')
+                session=next((s for s in self.sessions.values() if s.call_id==call_id and s.active and not s.closing),None)
+                if session and session.caption_scene:
+                    session.caption_scene.apply_presentation(body,device)
             status,raw,_=await gateway_request(self,'POST',f'/v1/devices/{device}/panel',body)
             return web.Response(status=status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
         app.router.add_post('/devices/{device}/panel',device_panel)

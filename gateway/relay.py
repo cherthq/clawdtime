@@ -57,7 +57,7 @@ async def relay(gateway,url):
             while True:
                 pending=set()
                 try:
-                    async with http.ws_connect(url,headers={'Authorization':'Bearer '+key},max_msg_size=32768,heartbeat=10) as socket:
+                    async with http.ws_connect(url,headers={'Authorization':'Bearer '+key},max_msg_size=65536,heartbeat=10) as socket:
                         async def perform(item):
                             started=time.monotonic()
                             # Idle readiness traffic must not evict the failed call's hop history.

@@ -1,4 +1,10 @@
+import { timelineFor } from "../transport/conversation-timeline.js";
 import { z } from "zod";
+import {
+  presentationFor,
+  type PresentationInput,
+  type PresentationReceipt,
+} from "./presentation.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -28,6 +34,8 @@ export interface ConversationTurn {
   acknowledgedAt?: number;
   state: ConversationTurnState;
   cancellationRequestedAt?: number;
+  presentation?: PresentationReceipt[];
+  correlationId?: string;
 }
 export interface ConversationReply {
   id: string;
@@ -83,6 +91,7 @@ const maxTextAgeMs = 24 * 60 * 60 * 1000;
 export class ConversationService {
   private speaking = new Set<string>();
   constructor(readonly service: ClawdTime) {
+    presentationFor(service).reset();
     // A process restart cannot prove that a client-side action was completed.
     for (const turn of service.store.all<ConversationTurn>("conversation_turn"))
       if (turn.state === "executing") this.saveTurn(turn, "uncertain");
@@ -200,6 +209,9 @@ export class ConversationService {
           requestId: request.id,
           sessionId: session.id,
           sequence: (turns.at(-1)?.sequence ?? 0) + 1,
+          ...(value.eventId.startsWith("voice:")
+            ? { correlationId: hash(value.eventId.slice(6)).slice(0, 24) }
+            : {}),
           channel: value.channel,
           text: value.text,
           kind: value.kind ?? "answer",
@@ -215,6 +227,12 @@ export class ConversationService {
         hash(JSON.stringify(value)),
         { turnId: turn.id },
       );
+      timelineFor(this.service).record(
+        request.id,
+        "callback_accepted",
+        turn.correlationId ?? turn.id,
+      );
+      presentationFor(this.service).bump(request.id);
       return turn;
     });
   }
@@ -235,11 +253,16 @@ export class ConversationService {
   }
   private saveTurn(turn: ConversationTurn, state: ConversationTurnState) {
     const next = { ...turn, state, updatedAt: this.service.clock() };
-    if (terminalTurn.has(state)) delete next.text;
+    if (terminalTurn.has(state)) {
+      delete next.text;
+      presentationFor(this.service).clearTurn(turn.requestId, turn.id);
+    }
+    presentationFor(this.service).bump(turn.requestId);
     return this.service.store.put<ConversationTurn>("conversation_turn", next);
   }
   /** Pending content expires after 24h; receipts/fingerprints remain for deduplication. */
   prune() {
+    presentationFor(this.service).prune();
     for (const turn of this.service.store.all<ConversationTurn>(
       "conversation_turn",
     )) {
@@ -277,6 +300,8 @@ export class ConversationService {
     return {
       request,
       session,
+      capabilities: { presentationVersion: 1 },
+      activity: presentationFor(this.service).projection(requestId),
       turns,
       cursor: turns.at(-1)?.sequence ?? afterSequence,
       replies: this.service.store
@@ -358,6 +383,12 @@ export class ConversationService {
         )
       )
         throw new DomainError(409, "Acknowledge earlier turn delivery first.");
+      timelineFor(this.service).record(
+        requestId,
+        "agent_acknowledged",
+        turn.correlationId ?? turn.id,
+      );
+      presentationFor(this.service).bump(requestId);
       return this.service.store.put<ConversationTurn>("conversation_turn", {
         ...turn,
         delivery: "acknowledged",
@@ -371,8 +402,9 @@ export class ConversationService {
     requestId: string,
     turnId: string,
     state: Exclude<ConversationTurnState, "received">,
+    presentation?: PresentationInput,
   ) {
-    this.owned(raw, requestId, true);
+    const { session, request } = this.owned(raw, requestId);
     z.enum([
       "executing",
       "completed",
@@ -382,7 +414,21 @@ export class ConversationService {
     ]).parse(state);
     return this.service.store.transaction(() => {
       const turn = this.turn(requestId, turnId);
-      if (turn.state === state) return turn;
+      const display = presentationFor(this.service);
+      const prepared = display.prepare(turn, state, presentation);
+      if (turn.state === state) {
+        if (!terminalTurn.has(turn.state)) this.open(session, request);
+        if (terminalTurn.has(turn.state) && prepared.some((p) => !p.previous))
+          throw new DomainError(
+            409,
+            "Terminal presentation cannot be replaced or revived.",
+          );
+        const result = prepared.some((p) => !p.previous)
+          ? display.record(turn, prepared)
+          : turn;
+        return { ...result, activity: display.projection(requestId) };
+      }
+      this.open(session, request);
       if (turn.delivery !== "acknowledged")
         throw new DomainError(
           409,
@@ -411,7 +457,17 @@ export class ConversationService {
           409,
           "Reconcile earlier turns before beginning this turn.",
         );
-      return this.saveTurn(turn, state);
+      const result = display.record(this.saveTurn(turn, state), prepared);
+      timelineFor(this.service).record(
+        requestId,
+        state === "pending_approval"
+          ? "approval_reported"
+          : terminalTurn.has(state)
+            ? "outcome_reported"
+            : "execution_reported",
+        turn.correlationId ?? turn.id,
+      );
+      return { ...result, activity: display.projection(requestId) };
     });
   }
   cancel(raw: string, requestId: string, turnId: string) {
@@ -569,6 +625,12 @@ export class ConversationService {
           "unknown",
         ])
         .parse(result.state);
+      if (["accepted", "playing", "completed"].includes(state))
+        timelineFor(this.service).record(
+          requestId,
+          "reply_accepted",
+          hash(`${request.callId}:${replyId}`).slice(0, 24),
+        );
       return this.service.store.put<ConversationReply>("conversation_reply", {
         ...record,
         state,
@@ -585,6 +647,7 @@ export class ConversationService {
   end(raw: string, requestId: string) {
     this.owned(raw, requestId);
     const request = this.service.endConversation(raw, requestId);
+    timelineFor(this.service).record(requestId, "end_requested", requestId);
     this.prune();
     return {
       request,

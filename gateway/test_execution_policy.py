@@ -21,13 +21,17 @@ class ExecutionPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.tmp=tempfile.TemporaryDirectory();self.received=[];self.refuse_renew=False
         self.delay_old=False;self.old_entered=asyncio.Event();self.old_release=asyncio.Event()
         self.active_lease=None;self.armed=True
+        self.presentation_version=None;self.panels=[];self.status_unavailable=False
         self.command={'id':'command','sessionId':'session','callId':'call','type':'mute'}
         async def helper(request):
             self.received.append(request.path)
-            if request.path=='/v1/status':return web.json_response({'deviceId':'mac','armed':self.armed,'activeLeaseId':self.active_lease,'available':True,'screenPermission':True,'controlPermission':True,'controlPolicy':'agent_tools_only','policyRevision':1,'panelCommand':self.command,'unresolvedActionCount':0})
+            if request.path=='/v1/status' and self.status_unavailable:raise web.HTTPServiceUnavailable()
+            if request.path=='/v1/status':return web.json_response({'deviceId':'mac','armed':self.armed,'activeLeaseId':self.active_lease,'available':True,'screenPermission':True,'controlPermission':True,'controlPolicy':'agent_tools_only','policyRevision':1,'panelCommand':self.command,'unresolvedActionCount':0,**({'presentationVersion':self.presentation_version} if self.presentation_version is not None else {})})
             if request.path=='/v1/displays':return web.json_response([{'id':1,'width':100,'height':100}])
             if request.path=='/v1/permissions':return web.json_response([{'displayId':1,'viewers':['person'],'controllers':['person']}])
-            if request.path=='/v1/panel':return web.json_response({'accepted':True})
+            if request.path=='/v1/panel':
+                self.panels.append(await request.json())
+                return web.json_response({'accepted':True})
             if request.path.endswith('/renew'):
                 body=await request.json()
                 if self.delay_old and body.get('executorEpoch')==0:
@@ -95,3 +99,26 @@ class ExecutionPolicyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(web.HTTPBadRequest):validate_lease({**lease(),**changed})
         bad=lease();del bad['sessionId']
         with self.assertRaises(web.HTTPBadRequest):validate_lease(bad)
+
+
+    async def test_optional_activity_capability_and_old_helper_fallback(self):
+        body={'sessionId':'session','presentationVersion':1,'activity':{'version':1,'sequence':1}}
+        for version in (None,1,2,True):
+            self.presentation_version=version
+            result=await (await self.client.get('/v1/devices/mac/readiness/person/1',headers=self.headers)).json()
+            self.assertEqual(result.get('presentationVersion'),1 if type(version) is int and version==1 else None)
+            response=await self.client.post('/v1/devices/mac/panel',json=body,headers=self.headers)
+            self.assertEqual(response.status,200)
+            self.assertEqual(self.panels[-1],body if type(version) is int and version==1 else {'sessionId':'session'})
+        self.assertEqual(self.gateway.db.execute('SELECT COUNT(*) FROM leases').fetchone()[0],0)
+        self.assertTrue(all(p in ('/v1/status','/v1/displays','/v1/permissions','/v1/panel') for p in self.received))
+
+
+    async def test_optional_discovery_failure_still_forwards_baseline_control_ack(self):
+        self.status_unavailable=True
+        body={'sessionId':'session','callId':'call','acknowledgedCommandId':'command',
+              'presentationVersion':1,'activity':{'version':1,'sequence':1},'readiness':{'reason':'gateway_absent'}}
+        response=await self.client.post('/v1/devices/mac/panel',json=body,headers=self.headers)
+        self.assertEqual(response.status,200)
+        self.assertEqual(self.panels[-1],{'sessionId':'session','callId':'call','acknowledgedCommandId':'command'})
+        self.assertEqual(self.gateway.db.execute('SELECT COUNT(*) FROM leases').fetchone()[0],0)

@@ -16,7 +16,7 @@ public struct HTTPRequest {
   public var headers: [String: String]
   public var body: Data
   public static func parse(_ data: Data) throws -> HTTPRequest? {
-    guard data.count <= 24576 else { throw HelperError(413, "Request too large.") }
+    guard data.count <= 73732 else { throw HelperError(413, "Request too large.") }
     guard let range = data.range(of: Data("\r\n\r\n".utf8)) else {
       if data.count > 8192 { throw HelperError(413, "Headers too large.") }
       return nil
@@ -46,7 +46,8 @@ public struct HTTPRequest {
       throw HelperError(400, "Transfer encoding is unsupported.")
     }
     let rawLength = headers["content-length"] ?? "0"
-    guard rawLength.allSatisfy(\.isNumber), let count = Int(rawLength), count >= 0, count <= 16384
+    let bodyLimit = start[0] == "POST" && start[1] == "/v1/panel" ? 65536 : 16384
+    guard rawLength.allSatisfy(\.isNumber), let count = Int(rawLength), count >= 0, count <= bodyLimit
     else { throw HelperError(413, "Invalid content length.") }
     let body = data[range.upperBound...]
     if body.count < count { return nil }

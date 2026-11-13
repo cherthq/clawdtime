@@ -1,3 +1,8 @@
+import { timelineFor } from "./transport/conversation-timeline.js";
+import {
+  presentationSchema,
+  presentationFor,
+} from "./attention/presentation.js";
 import { ExecutionCoordinator } from "./control/execution.js";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -294,6 +299,7 @@ export function createApp(
     const b = z
       .object({
         turnId: z.string().min(1),
+        presentation: presentationSchema.optional(),
         state: z.enum([
           "executing",
           "completed",
@@ -310,6 +316,7 @@ export function createApp(
         c.req.param("id"),
         b.turnId,
         b.state,
+        b.presentation,
       ),
     );
   });
@@ -407,6 +414,7 @@ export function createApp(
       call: request.callId
         ? service.store.get<CallSession>("call", request.callId)
         : null,
+      conversationTimeline: timelineFor(service).snapshot(request.id),
       capturedFrame: service.store.state(`setup-view:${request.id}`) ?? null,
       controlPreflight:
         service.store.state(`control-preflight:${request.id}`) ?? null,
@@ -618,6 +626,20 @@ export function createApp(
       state: open ? "listening" : "ended",
       muted: service.store.state(`muted:${request.id}`) === true,
       protocolVersion: session.protocolVersion ?? 1,
+      ...(session.protocolVersion === 2 &&
+      c.req.header("X-ClawdTime-Presentation") === "1"
+        ? {
+            presentationSequence: presentationFor(service).projection(
+              request.id,
+            ).sequence,
+            presentationBinding: {
+              sessionId: session.id,
+              memberId: pairing.memberId,
+              deviceId: pairing.deviceId,
+              displayId: Number(pairing.displayId),
+            },
+          }
+        : {}),
       captionsEnabled: open,
       callId: call?.id,
       expiresAt: new Date(now + 20_000).toISOString(),

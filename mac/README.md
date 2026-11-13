@@ -85,7 +85,7 @@ restrict access to that gateway. Binding an address does not install Tailscale.
 
 Every route requires `Authorization: Bearer <secret>`. No CORS or browser UI is
 provided. Requests are one HTTP/1.1 request per connection, JSON body at most
-16 KiB. Transfer encoding, duplicate headers and pipelining are rejected.
+16 KiB (64 KiB for bounded `/v1/panel` metadata only). Transfer encoding, duplicate headers and pipelining are rejected.
 Responses use `Cache-Control: no-store`; errors are JSON `{"error":"…"}`.
 
 | Route                                    | Behavior                                                                                                         |
@@ -359,3 +359,54 @@ no control characters) and project/chat label; they are not written to the polic
 or receipt stores. Media supplies actual speaking/listening state for the exact
 call. Ended and muted status remain authoritative and are never replaced by a
 status from another media session.
+
+## Compact activity and synthetic preview
+
+The existing floating NSPanel now has compact and expanded Details modes, with
+persistent Stop sharing, Mute/Unmute, Request pause, End call and Setup controls.
+It uses a nonactivating panel and does not select another display when moved.
+The exact agent/chat and selected display stay visible; long labels truncate
+without pushing controls offscreen. Details is keyboard-navigable and scrollable.
+Native approvals remain in the coding client. A pending pause/end/mute request
+keeps its stable ID and is never displayed as completed before acknowledgement.
+
+`GET /v1/status` advertises `presentationVersion: 1`. Authenticated panel telemetry
+may include `presentationVersion: 1` and an `activity` projection with version,
+sequence, delivery, work, currentSummary, at most 20 entries, optional outcome and text expiry.
+The compact view uses only the current turn’s summary; historical entries remain
+in Details and cannot appear as the current result when another turn starts.
+Summaries are capped at 160 Unicode scalars and 640 UTF-8 bytes, rejecting Unicode
+control/surrogate categories while preserving valid ZWJ emoji. Unknown or malformed
+optional presentation is dropped without preventing command acknowledgement.
+Legacy telemetry remains supported. Delivery says **Received by agent** only for
+acknowledged turns; outcomes distinguish agent reports, unverified and unresolved.
+
+The helper retains presentation only in memory. It clears activity on outer status
+expiry (the backend emits five seconds), Stop, policy/lease loss, wrong binding or
+call end. Original text expiry also applies while status continues arriving; replay
+of the same sequence cannot replace text, extend expiry or repopulate cleared text.
+The outcome limit is 60 seconds and the activity limit is 10 minutes. A stopped
+call's activity stays suppressed until a newly bound call. Stop remains enabled
+when telemetry is stale; remote call controls require fresh exact binding.
+
+Run the separate offscreen fixture executable from `mac/`:
+
+```sh
+swift run PanelPreview /tmp/clawdtime-panel-preview
+```
+
+It uses the production `ActivityPanelView` and generates 40 synthetic PNGs covering
+compact/expanded, light/dark, narrow Unicode labels, larger text, pending commands,
+approval, completed/unverified/uncertain, stale and ended states. It does not read
+helper configuration, construct `DeviceApp`, open a listener, capture a display,
+request permissions, invoke native input or launch the installed companion. Output
+is deliberately outside the repository. `swift test` also checks two display
+geometries, a narrow screen, status binding, replay/expiry and control semantics.
+These renderings do not qualify actual handset readability, VoiceOver, focus behavior,
+multiple physical displays, or the installed app; those remain separately authorized
+physical acceptance steps.
+
+Readiness metadata uses fixed reason categories and concrete local next steps; Details
+shows the check timestamp. Unknown categories, stale timestamps and arbitrary
+remote next-step text are not displayed. This read-only status never enables sharing
+or requests macOS permissions.

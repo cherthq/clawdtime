@@ -120,6 +120,7 @@ extension DeviceApp {
     do { try controlPanel.request(type, now: Date()) }
     catch { showError((error as? HelperError)?.message ?? "Call control unavailable.") }
     refreshSetup(force: true)
+    updateIndicator()
   }
   @objc func toggleMute() {
     queuePanelCommand(controlPanel.current(now: Date())?.callState == "muted" ? "unmute" : "mute")
@@ -153,6 +154,9 @@ extension DeviceApp {
     executionLabel?.stringValue = telemetry.map {
       "\(executorNames[$0.executor] ?? "Unknown executor") · \(executionNames[$0.executionState] ?? "Unknown status")"
     } ?? "Execution: no current status"
+    if let readiness = telemetry?.readiness, let next = readiness.nextStep {
+      executionLabel?.stringValue += "\nNext step: \(next) · Checked \(ISO8601DateFormatter().string(from: readiness.checkedAt))"
+    }
     if ledger.unresolvedActionCount > 0 {
       executionLabel?.stringValue += "\n\(ledger.unresolvedActionCount) unresolved input outcome(s) block computer control."
     }
@@ -168,9 +172,9 @@ extension DeviceApp {
     muteButton?.isEnabled = enabled; endButton?.isEnabled = enabled; pauseButton?.isEnabled = enabled
     muteButton?.title = telemetry?.callState == "muted" ? "Unmute" : "Mute"
     setupScreenLabel?.stringValue =
-      "View permission: \(CGPreflightScreenCaptureAccess() ? "Granted" : "Not granted")"
+      "View permission: \(CGPreflightScreenCaptureAccess() ? "Granted" : "Not granted — choose Grant Screen Recording")"
     setupControlLabel?.stringValue =
-      "Control permission: \(AXIsProcessTrusted() ? "Granted" : "Not granted")"
+      "Control permission: \(AXIsProcessTrusted() ? "Granted" : "Not granted — grant Accessibility if control is intended")"
     setupDisplaysLabel?.stringValue =
       config.displays.isEmpty
       ? "Configured displays: none. An operator must explicitly select a display before sharing."

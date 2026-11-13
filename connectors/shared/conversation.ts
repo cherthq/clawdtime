@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { presentationSchema } from "../../src/attention/presentation.js";
 import type { ClawdTimeClient } from "./client.js";
 
 const id = z.string().min(1).max(200);
@@ -22,7 +23,7 @@ export const conversationCommands = {
   },
   conversation_progress: {
     description:
-      "Report turn execution, pending native approval, completion, cancellation or uncertain outcome. A native tool timeout is uncertain; do not retry or switch executors.",
+      "Report turn execution, pending native approval, completion, cancellation or uncertain outcome. Optional bounded presentation is visual-only; outcome verification is the original agent’s report, never proof from input submission. A native tool timeout is uncertain; do not retry or switch executors.",
     schema: z.object({
       requestId: id,
       turnId: id,
@@ -33,6 +34,7 @@ export const conversationCommands = {
         "uncertain",
         "pending_approval",
       ]),
+      presentation: presentationSchema.optional(),
     }),
   },
   conversation_reply: {
