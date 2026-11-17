@@ -11,7 +11,7 @@ Actual Finder capture: 76 consecutive frames over 30.128 seconds. Browser review
 showed the real selected Finder window and confirmed Stop removed the image.
 Local prepared voice→camera integration passed with roughly 0.5-second focus settling
 including the designed 450 ms animation. 59 Swift and 40 gateway tests passed. 366 media tests
-passed with 13 optional SDK skips; all 35 ElevenLabs tests passed. Final
+ran, including 13 optional SDK skips; all 35 ElevenLabs tests passed. Final
 `npm run check`: 978 tests in 59 files, typecheck and build passed. See
 IMPLEMENTATION_ARGOS_REVIEW.md for evidence and limits.
 

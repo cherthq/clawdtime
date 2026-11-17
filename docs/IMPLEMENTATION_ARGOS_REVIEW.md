@@ -62,7 +62,7 @@ the local implementation that replaces the earlier audit's missing pieces.
 - Final backend/connectors: `npm run check` passed **978 tests in 59 files**,
   typecheck and build, including pre-dial refusal and once-only initial task narration
   through the confirmed ElevenLabs owner.
-- Full media regression: **366 tests passed, 13 expected skips** for optional
+- Full media regression: **366 tests run, including 13 expected skips** for optional
   GPT-Live/acoustic SDK qualification dependencies. All **35 ElevenLabs tests** ran
   and passed, including real loopback WebSocket framing, synthetic resampled audio
   while task acceptance is blocked, report-only narration, interruption, pre-dial
