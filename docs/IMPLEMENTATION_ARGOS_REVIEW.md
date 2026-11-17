@@ -1,5 +1,27 @@
 # IMPLEMENTATION_ARGOS review
 
+## Demo preflight completed — November 17, 2026
+
+Both previously recorded verification gaps are resolved. Read-only production
+metadata confirms the new dedicated project has no recipient-verification policy;
+no code exchange or verification bypass is needed. Worker release manifest,
+installed executable and exact-line heartbeat agree on `97823a1…` from clean
+`5d70b571…`. Independent review confirms the previously qualified process-isolation
+source remains unchanged. No provider software was modified or reinstalled.
+
+Configuration-only backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` enables
+duplex and remote-isolation assertions. Exact line resumed, inbound reject policy
+preserved. Fresh same-chat ElevenLabs session selects only the harmless Finder
+window and preserves native input ownership. Companion restarted using the existing
+paired configuration to load its already-authorized controller membership; no
+permission expansion, configuration rewrite or pairing replacement occurred.
+
+At this checkpoint the only failing readiness check is local Enable. The user was
+asked to enable locally after computer-use actions yielded to their interaction.
+No new call has been placed yet; physical latency, screen arrival, prepared zooms,
+annotations and interruption still require the upcoming supervised demo.
+
+
 ## New-project connection verified — November 17, 2026
 
 The requested **Clawdtime** project now owns line ending 9741, and the ClawdTime

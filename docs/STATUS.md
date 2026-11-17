@@ -1,3 +1,37 @@
+## November 17, 2026 — demo prerequisites verified and duplex enabled
+
+Continued at the user's request to reach the supervised demo. A scoped read-only
+control-plane query confirmed current customer assignment to Clawdtime, no Shared
+pool membership, and no recipient-verification policy. Therefore no verification
+code is required for this dedicated project's reviewed admission path. No policy,
+proof, exemption or database record was changed to obtain this result.
+
+The remaining binary provenance gap was closed through read-only inspection of the
+worker host: clean-source release manifest `5d70b571687f59419ce5b81845a3cfdc335ce498`
+records engine hash `97823a1da14c605b8f78c2f9330192b0c0014e1d0ab0cedd262ac8f4e245e6de`,
+matching the installed engine and exact line-session heartbeat. Independent source
+review confirmed the qualified FaceTime/avconferenced ownership, worker exclusion,
+inclusive tap and identity-revalidation paths are unchanged. Current line-session
+protocol 1 selects that same isolated branch. This establishes digital process
+isolation, not handset playback, acoustic echo cancellation or physical duplex.
+
+Backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` succeeded with duplex and
+remote-audio-isolation flags enabled. Same reviewed image, database, project/binding
+and media deployment preserved. Resumed only 9741; inbound routing remains reject.
+Registered a fresh explicit ElevenLabs v2 session in this chat with the exact Finder
+window and native desktop capability. Prior installed MCP uses a rejected old pairing;
+its three unknown registration intents are retained untouched. Current backend had
+only two prior sessions, both stopped, and no active call/pending/unknown effects.
+
+The running companion had opened without the explicit paired configuration, using
+an older view-only display grant. The saved paired configuration already contained
+the correct controller membership. Stopped local capture, validated that file and
+restarted the existing binary with its explicit path; no configuration, pairing,
+permission or ledger change. The panel now shows one viewer and one controller,
+Accessibility/Screen Recording granted and Agent tools only. All live readiness
+checks pass except local Enable, which was requested from the user after desktop
+interaction interrupted automation. No new call has been placed at this checkpoint.
+
 ## November 17, 2026 — new project connected without resetting records
 
 Continued the user-authorized Clawdtime project move. Created a replacement
