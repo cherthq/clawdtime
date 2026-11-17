@@ -88,3 +88,16 @@ class ScreenDiagnostics:
             self.data.setdefault('firstScreenVideoAt', stamp())
             self.data['lastScreenVideoAt'] = stamp()
         self.save(force=first_screen)
+
+    def presentation_result(self,stage,started,error=None):
+        if stage not in ('initial_authority','first_resolve','second_resolve','final_authority',
+                         'monitor_resolve','monitor_authority','monitor_cycle'):
+            raise ValueError('Invalid presentation stage')
+        if error not in (None,'timeout','cancelled','refused'):
+            raise ValueError('Invalid presentation error')
+        result={'stage':stage,'at':stamp(),
+                'durationMs':min(999999,max(0,round((time.monotonic()-started)*1000)))}
+        if error:result['error']=error
+        self.data['lastPresentationResult']=result
+        if error:self.data['lastPresentationFailure']=result
+        self.save(force=bool(error))

@@ -501,3 +501,45 @@ never substitutes a PID or observation time for a process lifetime. Missing or
 changed lifetime evidence still refuses. Fixed qualification diagnostics identify
 media/broker authority, app identity, CG matching or AX candidate-scan stages;
 AX candidate failures do not necessarily identify the exact target as the cause.
+
+### Native tool foreground readiness — November 17 follow-up
+
+Native-tool UI access does not by itself qualify foreground presentation. In the
+lead's no-call check, CUA selected exact Window-menu entries and invoked exposed
+Raise actions; the disposable TextEdit window entered and exited fullscreen.
+Independent metadata observations nevertheless reported `appActive:false` and
+`windowOnScreen:false` in all 116 samples over about 25 seconds while fullscreen,
+and all 84 samples over about 18 seconds after restoration. `windowFocused:true`
+persisted. No document content was edited. This establishes an unresolved
+foreground-readiness failure for that run, not successful cross-Space switching.
+
+The observer requires both `NSRunningApplication.isActive` and exact
+`NSWorkspace.frontmostApplication` identity for `appActive`; Apple documents the
+latter as the app receiving key events. `windowFocused` compares this target
+app's `AXFocusedWindow`, which is separate from global activation. The onscreen
+flag comes from an exact CG window/PID/geometry witness and fails closed when that
+witness or its flag is unavailable. Consequently, false flags do not establish a
+particular Space, a virtual desktop, or the CUA provider's GUI-session identity.
+The observer's console/login/lock checks do not establish that another tool uses
+the same session. No such root cause has been proven.
+
+For lead-operated metadata qualification only:
+
+```sh
+mac/.build/debug/ClawdTimeCompanion --native-observe --target '{"appId":"com.apple.TextEdit","windowId":"EXACT_WINDOW_ID","ownerPid":123,"displayId":1}'
+```
+
+Replace the example PID/window/display with freshly identified exact values. This
+development command has a two-second watchdog, no capture/input verbs, and no
+lease or execution authority. Its three booleans are sampled evidence, not a
+persistent-foreground guarantee. Native input still needs current exclusive
+ownership and target verification; presentation additionally needs the exact
+window active, focused and onscreen in fresh independent observations. A tool's
+rendered app image or successful AX action cannot substitute for those checks.
+
+The read-only production resolver cannot activate a window. The background preview
+executor can request cooperative activation, but cannot guarantee that the native
+tool's frontend yields focus or that macOS switches Spaces. Keep presentation
+unavailable rather than weaken these guards or retry an uncertain action.
+See Apple's [foreground-app definition](https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication)
+and [cooperative activation contract](https://developer.apple.com/documentation/appkit/passing-control-from-one-app-to-another-with-cooperative-activation).

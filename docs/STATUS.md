@@ -1,3 +1,49 @@
+## November 17, 2026 — no-call switching and cloud timing checks
+
+Agent teams reproduced a monitor latency problem and fixed it locally. The old
+monitor required two backend authority callbacks plus a remote window resolution
+inside 200 ms. It now uses the previous exact, unexpired authority only to start
+the read-only observation, then requires a fresh backend callback before renewing
+the presentation. It retains the original authority expiry, 250 ms native witness
+limit, 200 ms monitor deadline, Stop checks, and no-replay receipts. A simulated
+90 ms backend / 30 ms resolver path now sustains presentation; slower paths and
+stale witnesses still clear it. Stage timings contain only fixed categories,
+timestamps, durations and bounded error categories.
+
+Eight authenticated, read-only production readiness probes returned HTTP 200.
+The first took 352.9 ms; subsequent requests took 174.9–218.0 ms. This includes
+the local client-to-media leg and gateway/helper readiness work, not actual
+presentation resolution or the media-to-backend authority callback. It does not
+qualify the cloud frame bracket or sustained zoom. The helper remained disarmed,
+without an active lease; production presentation admission remained off.
+
+The physical switching check did **not** pass. Original-chat native CUA selected
+the exact Finder and TextEdit test windows through their Window menus, entered
+and exited temporary TextEdit fullscreen, and invoked the exposed Raise action.
+Independent read-only target observations returned per-app window focus but never
+global app activation or on-screen visibility: 116 samples over 25 seconds in
+fullscreen and 84 samples over 18 seconds after restoration. A direct title-bar
+click then failed with `noWindowsAvailable`. The optional application-launch API
+was unavailable and Dock inspection timed out. Accessibility responses and
+per-window screenshots therefore do not establish a visible Space transition.
+The precise cause of the foreground-control failure remains unproven.
+
+Added a bounded `--native-observe --target JSON` diagnostic to distinguish these
+states without capturing pixels, sending input, creating a lease or loading
+installed credentials. See [DEVICE.md](DEVICE.md) for its exact contract.
+
+Validation: `npm run check` passed 1,135 tests across 69 files, typecheck and build;
+Swift passed 90 tests and build; the full media suite ran 469 tests successfully
+with 13 optional SDK skips; six focused gateway regressions passed. Independent
+review covered the monitor authorization ordering, original witness expiry,
+diagnostic privacy and the read-only native observation boundary.
+
+These fixes are local; no new deployment, gate change, call, message, permission
+change or installed companion replacement occurred during this check. Production
+walkthrough acceptance remains open until native foreground control and the real
+authorized remote presentation path pass. A phone rehearsal remains separately
+unauthorized.
+
 ## November 17, 2026 — prepared presentation deployed with new admission off
 
 Production source `c7af884` is committed and pushed on `ArgosClawd`. Backend

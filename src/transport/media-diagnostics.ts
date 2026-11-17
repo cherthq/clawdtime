@@ -48,6 +48,20 @@ const gatewayResult = z.object({
     .enum(["timeout", "connection", "invalid_response", "other"])
     .optional(),
 });
+const presentationResult = z.object({
+  stage: z.enum([
+    "initial_authority",
+    "first_resolve",
+    "second_resolve",
+    "final_authority",
+    "monitor_resolve",
+    "monitor_authority",
+    "monitor_cycle",
+  ]),
+  at: timestamp,
+  durationMs: z.number().int().min(0).max(999999),
+  error: z.enum(["timeout", "cancelled", "refused"]).optional(),
+});
 export const mediaFailureSchema = z.object({
   reason: z.enum([
     "task_failed",
@@ -223,6 +237,8 @@ export const mediaStatusSchema = z.object({
         .optional(),
       lastGatewayResult: gatewayResult.optional(),
       lastGatewayFailure: gatewayResult.optional(),
+      lastPresentationResult: presentationResult.optional(),
+      lastPresentationFailure: presentationResult.optional(),
     })
     .optional(),
 });

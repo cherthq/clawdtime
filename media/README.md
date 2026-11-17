@@ -395,8 +395,11 @@ whole transaction. Metadata is copied for staging; source pixels remain immutabl
 and are not duplicated or retained in receipts.
 
 Only this new target-bound presentation may survive content-only frame changes.
-Its read-only monitor rechecks target identity, foreground/focus/on-screen state and
-broker authority before and after native reads. Rendering requires a successful
+Its read-only monitor rechecks target identity, foreground/focus/on-screen state.
+The last successful backend authorization may initiate another read only while
+its original absolute expiry and exact command/fingerprint binding remain valid.
+A fresh backend authorization after that read is mandatory before renewing the
+target witness. Rendering requires a successful
 witness no older than 250 ms using its original observation time, not reply time.
 Movement, lost focus/authority, monitor failure, Stop or the monotonic three-second
 lifetime clears both focus/motion and marks and increments camera revision, so a
@@ -434,3 +437,48 @@ its verifier recognizes this optional table while retaining old-backup
 compatibility. Unknown receipts are never deleted or replayed during upgrade.
 Remote timing and outgoing-call video remain unqualified; keep the gate off until
 matched artifacts and physical remote acceptance are recorded.
+
+#### Cloud timing checks without a call
+
+The monitor now avoids one redundant backend round trip by using its prior
+unexpired authorization solely for the next read-only resolver request. Local
+Stop/lease checks run before and after the remote read, the helper checks its
+current lease, and a fresh backend callback after the observation still gates
+every renewal. The initial transaction still performs both backend checks. No
+timestamp is rewritten, expiry extended, or timed-out operation retried.
+
+For backend callback RTT `B` and resolver RTT `R`, a monitor cycle needs roughly
+`R + B < 200 ms` (previously `R + 2B`). The resolver itself must finish within
+180 ms. Sustained targeting also requires that the preceding original witness
+remain under 250 ms when the next renewal arrives. With symmetric resolver
+transport, the approximate steady-state bound is `1.5R + 2B < 250 ms`, including
+the previous resolver return leg and backend callback. Processing, scheduling,
+asymmetric transport and clock offset consume additional margin. These formulas
+are planning bounds, never substituted for the runtime freshness checks.
+
+`test_presentation_timing.py` models outbound and return delay separately while
+preserving the helper's original timestamp. A synthetic 90 ms callback / 30 ms
+resolver sustains targeting after the optimization; the previous sequence would
+exceed 200 ms. A 90/60 ms pair still clears because the original witness expires,
+even though its individual monitor cycle fits. A 130/90 ms pair clears on the
+200 ms cycle limit. Tests also retain the 150 ms final callback cutoff, reject
+expired/wrong cached bindings before remote reads, and verify revocation and Stop
+during an awaited read with no replay or receipt rewrite.
+
+Authenticated media session status includes bounded
+`screenDiagnostics.lastPresentationResult` and `lastPresentationFailure`: only a
+fixed stage, timestamp, duration and optional `timeout`, `cancelled` or `refused`
+category. This distinguishes final-callback failures from monitor-budget failures
+without storing labels, window metadata, payloads or upstream exception text.
+
+With the gate off and helper disarmed, the lead can time existing authenticated
+health/readiness requests and inspect existing relay diagnostics without opening
+a call or requesting a capture. Such measurements are transport proxies: readiness
+includes different helper reads and cannot certify the resolver, active lease,
+source frame, monitor or outgoing video. The actual resolve/presentation endpoints
+require the existing authorized viewing session and current selected-display
+lease; never manufacture one or widen freshness merely to produce a timing result.
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_presentation_timing.py'
+```

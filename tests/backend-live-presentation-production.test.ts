@@ -602,6 +602,55 @@ describe("production live presentation durable authority", () => {
     expect(f.device.livePresentation).not.toHaveBeenCalled();
   });
 
+  it("retains a delayed accepted host receipt as uncertain without replaying it", async () => {
+    const f = await controllerFixture();
+    let originalObservedAt: number | undefined;
+    f.onPresent(async (result) => {
+      originalObservedAt = result.observation.observedAt;
+      f.advance(2001);
+    });
+    expect((await f.present()).state).toBe("uncertain");
+    expect(f.records()[0].hostResult.state).toBe("accepted");
+    expect(f.records()[0].hostResult.observation.observedAt).toBe(
+      originalObservedAt,
+    );
+    expect(f.coordinator.hasUnresolved(f.request.id)).toBe(true);
+    expect((await f.present()).state).toBe("uncertain");
+    expect(f.device.livePresentation).toHaveBeenCalledTimes(1);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("does not restart the original authority lifetime for a late fresh-looking result", async () => {
+    const f = await controllerFixture();
+    f.onPresent(async (result) => {
+      f.advance(8001);
+      result.observation.observedAt = f.service.clock();
+      result.camera.capturedAt = f.service.clock();
+    });
+    expect((await f.present()).state).toBe("uncertain");
+    expect(f.records()[0].hostResult.state).toBe("accepted");
+    expect(() =>
+      f.coordinator.authority(
+        f.agent.session,
+        f.request.id,
+        f.lastPresentation(),
+      ),
+    ).toThrow("changed");
+    expect((await f.present()).state).toBe("uncertain");
+    expect(f.device.livePresentation).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses disarmed readiness before target qualification or durable presentation work", async () => {
+    const f = await controllerFixture();
+    const readiness = await f.device.readiness();
+    f.device.readiness.mockResolvedValue({ ...readiness, armed: false });
+    await expect(f.present()).rejects.toThrow("Fresh live presentation peer");
+    expect(f.records()).toHaveLength(0);
+    expect(f.device.resolvePresentation).not.toHaveBeenCalled();
+    expect(f.device.livePresentation).not.toHaveBeenCalled();
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
   it("allows a fresh authoritative epoch-zero view without a stored execution owner", async () => {
     const f = await controllerFixture();
     f.store.db

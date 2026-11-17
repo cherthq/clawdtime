@@ -495,6 +495,30 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
+      if args.contains("--native-observe") {
+        guard args.count == 4, args[1] == "--native-observe", args[2] == "--target",
+          let bytes = args[3].data(using: .utf8), bytes.count <= 1024 else {
+          throw HelperError(400, "Use --native-observe --target with one exact window object.")
+        }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { exit(2) }
+        Task { @MainActor in
+          do {
+            let result = try nativeObservation(bytes)
+            let data = try JSONSerialization.data(withJSONObject: result)
+            guard data.count <= 8192 else { exit(2) }
+            FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10])); exit(0)
+          } catch {
+            let reason = (error as? HelperError)?.message ?? "observation_unavailable"
+            let data = try? JSONSerialization.data(withJSONObject: ["error":"native_observation_unavailable","reason":reason])
+            if let data { FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10])) }
+            exit(2)
+          }
+        }
+        application.run()
+        return
+      }
       if args.contains("--preview-presentation-resolver") {
         guard args.count == 2 else { throw HelperError(400, "Invalid read-only resolver arguments.") }
         let application = NSApplication.shared

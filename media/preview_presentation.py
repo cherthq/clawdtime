@@ -107,10 +107,9 @@ class LivePresentationController:
         return json.loads(row[2])
     def save(self,value,args,mark,result):
         self.db.execute('INSERT OR REPLACE INTO presentation_receipts VALUES (?,?,?,?)',(self.receipt_namespace+value['commandId'],args,mark,json.dumps(result,separators=(',',':'))));self.db.commit()
-    async def authorized(self,value,mark):
+    def checked_authority(self,value,mark,result):
         if self.closed:raise ValueError('presentation_stopped')
         self.local_guard(value)
-        result=await self.authority(value)
         expected=value['expected']
         if (not isinstance(result,dict) or set(result)!=set(expected)|{'expiresAt','fingerprint'}
             or any(result[k]!=v or type(result[k]) is not type(v) for k,v in expected.items())
@@ -118,7 +117,22 @@ class LivePresentationController:
             or not math.isfinite(result['expiresAt']) or not time.time()*1000<result['expiresAt']<=time.time()*1000+2000):raise ValueError('presentation_authority_unavailable')
         self.local_guard(value)
         if self.closed:raise ValueError('presentation_stopped')
-        return result
+        return dict(result)
+    async def authorized(self,value,mark):
+        if self.closed:raise ValueError('presentation_stopped')
+        self.local_guard(value)
+        return self.checked_authority(value,mark,await self.authority(value))
+    def timing(self,stage,started,error=None):
+        diagnostics=getattr(self.screen,'diagnostics',None)
+        if diagnostics:diagnostics.presentation_result(stage,started,error)
+    async def timed(self,stage,pending,timeout=None):
+        started=time.monotonic();error=None
+        try:
+            return await pending if timeout is None else await asyncio.wait_for(pending,timeout)
+        except BaseException as failure:
+            error='timeout' if isinstance(failure,TimeoutError) else 'cancelled' if isinstance(failure,asyncio.CancelledError) else 'refused'
+            raise
+        finally:self.timing(stage,started,error)
     def observation(self,raw,value,previous=None):
         observed=NativePreviewController._observation(None,raw,{'window':value['window']})
         if (observed['processIdentity']!=value['processIdentity'] or not all(observed[k] for k in ('appActive','windowFocused','windowOnScreen'))
@@ -145,10 +159,10 @@ class LivePresentationController:
             committed=False
             try:
                 async with asyncio.timeout(4):
-                    authority=await self.authorized(value,mark)
+                    authority=await self.timed('initial_authority',self.authorized(value,mark))
                     await self.retire()
                     source=self.factory(self.binary);self.source=source
-                    first=self.observation(await source.resolve(value,authority),value)
+                    first=self.observation(await self.timed('first_resolve',source.resolve(value,authority)),value)
                     self.local_guard(value)
                     until=time.monotonic()+1.2
                     while True:
@@ -159,8 +173,8 @@ class LivePresentationController:
                     async with self.screen.frame_lock:
                         self.local_guard(value);camera=self.screen.camera;generation=self.screen.generation
                         before=camera.status()
-                        second=self.observation(await source.resolve(value,authority,timeout=.2),value,first)
-                        await asyncio.wait_for(self.authorized(value,mark),.15)
+                        second=self.observation(await self.timed('second_resolve',source.resolve(value,authority,timeout=.2)),value,first)
+                        authority=await self.timed('final_authority',self.authorized(value,mark),.15)
                         self.local_guard(value);after=camera.status()
                         if self.closed or self.screen.camera is not camera or self.screen.generation!=generation or any(before[k]!=after[k] for k in ('revision','sourceFrameId','geometryGeneration','contentRevision')):raise ValueError('presentation_camera_changed')
                         if (not first['observedAt']<=after['capturedAt']<=second['observedAt']
@@ -173,7 +187,7 @@ class LivePresentationController:
                         result.update(state='accepted',reason='target_presentation_applied',observation=second,
                             camera={k:state[k] for k in ('revision','sourceFrameId','geometryGeneration','contentRevision','capturedAt')})
                     self.save(value,args,mark,result)
-                    self.monitor=asyncio.create_task(self.watch(value,mark,source,camera,second))
+                    self.monitor=asyncio.create_task(self.watch(value,mark,source,camera,second,authority))
                     return result
             except BaseException as error:
                 await self.retire()
@@ -182,21 +196,28 @@ class LivePresentationController:
                 self.save(value,args,mark,result)
                 if isinstance(error,asyncio.CancelledError):raise
                 return result
-    async def watch(self,value,mark,source,camera,previous):
+    async def watch(self,value,mark,source,camera,previous,authority):
         try:
             while not self.closed and self.source is source:
                 began=time.monotonic()
                 camera.expire_target_scope()
                 if not camera.target_scope or camera.target_scope['commandId']!=value['commandId']:return
                 async with asyncio.timeout(.2):
-                    authority=await self.authorized(value,mark)
-                    observed=self.observation(await source.resolve(value,authority,timeout=.18),value,previous)
-                    await self.authorized(value,mark)
+                    # The previous successful post-read callback may authorize
+                    # only another read. Preserve its exact absolute expiry and
+                    # binding; never reuse it to renew or publish targeting.
+                    self.checked_authority(value,mark,authority)
+                    observed=self.observation(await self.timed('monitor_resolve',source.resolve(value,authority,timeout=.18)),value,previous)
+                    renewed_authority=await self.timed('monitor_authority',self.authorized(value,mark))
                     self.local_guard(value)
                     confirmed=time.monotonic()-(time.time()*1000-observed['observedAt'])/1000
-                    if self.screen.camera is not camera or not camera.renew_target_scope(value['commandId'],confirmed):return
+                    if self.screen.camera is not camera or not camera.renew_target_scope(value['commandId'],confirmed):
+                        self.timing('monitor_cycle',began,'refused');return
+                    authority=renewed_authority
+                self.timing('monitor_cycle',began)
                 await asyncio.sleep(max(0,.1-(time.monotonic()-began)))
-        except (Exception,asyncio.CancelledError):pass
+        except (Exception,asyncio.CancelledError) as error:
+            self.timing('monitor_cycle',began,'timeout' if isinstance(error,TimeoutError) else 'cancelled' if isinstance(error,asyncio.CancelledError) else 'refused')
         finally:
             camera.invalidate_target_scope(value['commandId'])
             await source.close()
