@@ -1,3 +1,22 @@
+## November 17, 2026 — idle-Mac foreground rehearsal
+
+After the user confirmed they would minimize Codex and leave the Mac idle, the
+lead repeated native Finder Raise, exact TextEdit Window-menu selection, a direct
+TextEdit title-bar click, and exact Finder Window-menu selection. The direct click
+returned successfully this time. A 55-second read-only observation run collected
+156 samples for each exact test window: every sample reported windowFocused and
+windowOnScreen true, but appActive false. There were no observation errors.
+A separate AppKit metadata check found both `isActive` and frontmost PID equality
+false, confirming this was not merely object-comparison failure in the observer.
+
+This distinguishes the earlier off-screen/direct-click failure from the remaining
+foreground activation failure. It does not identify why the native-control path
+leaves another app active. Automatic switching and cross-Space acceptance remain
+unpassed; do not remove the foreground guard or count per-window accessibility
+responses as visible presentation success. No document content, permissions,
+production settings or installed software changed; no call was placed. The
+metadata sampler exited and no capture or input actor remains running.
+
 ## November 17, 2026 — no-call switching and cloud timing checks
 
 Agent teams reproduced a monitor latency problem and fixed it locally. The old
