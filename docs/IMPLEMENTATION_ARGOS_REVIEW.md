@@ -28,8 +28,11 @@ the call became terminal. Existing receipts remain intact.
 
 Cleanup confirmed both services idle, no active or unknown call effects, no view
 lease or unresolved input, and local sharing stopped. No further call is authorized.
-Physical visibility, zoom/annotation behavior and perceived response speed remain
-unconfirmed pending the human's feedback and a later supervised test.
+Follow-up handset feedback: the human answered yes to the combined question about
+Finder visibility before the stop and improved voice response speed. This is recorded
+as confirmation of initial screen visibility and subjectively faster voice, not a
+measured latency result. Sustained sharing, zooms/annotations, and the subsequently
+deployed playback correction still require physical acceptance.
 
 The playback correction uses a three-second continuously-full queue bound with
 atomic authorization/epoch checks before enqueue and interruptible 20 ms waits.
