@@ -14,7 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from livekit import rtc
 
 from elevenlabs_frontend import (ElevenLabsFrontend, TOOL_PARAMETERS, allowed,
-                                bounded_context, client_tool_definitions, validate_agent, validate_configured_agent)
+                                bounded_context, client_tool_definitions, validate_agent, validate_configured_agent, provider_get)
 from server import Service, Session
 from speech_diagnostics import SpeechDiagnostics
 from elevenlabs_agent_config import configuration
@@ -533,6 +533,66 @@ class ServiceSpeechTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LoopbackProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_json_accumulates_delayed_network_chunks_through_eof(self):
+        config = agent_config()
+        payload = json.dumps(config).encode()
+        async def chunks(request):
+            response = web.StreamResponse(headers={'Content-Type': 'application/json'})
+            await response.prepare(request)
+            # First fragment ends inside a JSON string, as a normal network read can.
+            await response.write(payload[:29])
+            await asyncio.sleep(.02)
+            await response.write(payload[29:2713])
+            await asyncio.sleep(.02)
+            await response.write(payload[2713:])
+            await response.write_eof()
+            return response
+        app = web.Application(); app.router.add_get('/agents/agent_fixture', chunks)
+        server = TestServer(app); await server.start_server()
+        try:
+            async with ClientSession() as http:
+                owner = SimpleNamespace(http=http, env=env())
+                with patch('elevenlabs_frontend.API', str(server.make_url('')).rstrip('/')):
+                    self.assertEqual(await provider_get(owner, '/agents/agent_fixture'), config)
+        finally:
+            await server.close()
+
+    async def test_provider_reader_does_not_accept_complete_prefix_before_eof(self):
+        async def chunks(request):
+            response = web.StreamResponse(); await response.prepare(request)
+            await response.write(b'{"ok":true}')
+            await asyncio.sleep(.02)
+            await response.write(b' trailing invalid data')
+            await response.write_eof()
+            return response
+        app = web.Application(); app.router.add_get('/fixture', chunks)
+        server = TestServer(app); await server.start_server()
+        try:
+            async with ClientSession() as http:
+                with patch('elevenlabs_frontend.API', str(server.make_url('')).rstrip('/')):
+                    with self.assertRaises(ValueError):
+                        await provider_get(SimpleNamespace(http=http, env=env()), '/fixture')
+        finally:
+            await server.close()
+
+    async def test_provider_reader_enforces_size_limit_across_chunks(self):
+        async def chunks(request):
+            response = web.StreamResponse(); await response.prepare(request)
+            await response.write(b'{"value":"' + b'x' * (100 * 1024))
+            await asyncio.sleep(.02)
+            await response.write(b'x' * (29 * 1024) + b'"}')
+            await response.write_eof()
+            return response
+        app = web.Application(); app.router.add_get('/fixture', chunks)
+        server = TestServer(app); await server.start_server()
+        try:
+            async with ClientSession() as http:
+                with patch('elevenlabs_frontend.API', str(server.make_url('')).rstrip('/')):
+                    with self.assertRaisesRegex(ValueError, 'preflight unavailable'):
+                        await provider_get(SimpleNamespace(http=http, env=env()), '/fixture')
+        finally:
+            await server.close()
+
     async def test_handshake_refuses_redirect_without_contacting_destination(self):
         destination = Mock()
         async def redirect(request): raise web.HTTPFound('/other')

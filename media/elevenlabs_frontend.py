@@ -207,9 +207,20 @@ async def provider_get(owner, path):
     async with owner.http.get(API + path,
             headers={'xi-api-key': owner.env['ELEVENLABS_API_KEY']},
             allow_redirects=False, timeout=ClientTimeout(total=4)) as response:
-        raw = await response.content.read(128 * 1024 + 1)
-        if response.status != 200 or len(raw) > 128 * 1024:
+        if response.status != 200:
             raise ValueError('ElevenLabs preflight unavailable')
+        # StreamReader.read(n) may return one available network fragment, not n
+        # bytes or EOF. Accumulate within the existing total request timeout and
+        # retain at most limit+1 bytes so overflow cannot become an unbounded read.
+        limit = 128 * 1024
+        raw = bytearray()
+        while True:
+            chunk = await response.content.read(min(16 * 1024, limit + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > limit:
+                raise ValueError('ElevenLabs preflight unavailable')
         result = json.loads(raw)
         if not isinstance(result, dict):
             raise ValueError('ElevenLabs preflight invalid')
