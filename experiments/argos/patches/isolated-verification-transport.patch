@@ -1,0 +1,133 @@
+diff --git a/control-plane/docs/API_CONTRACT.md b/control-plane/docs/API_CONTRACT.md
+index 34d6b8b7..fbad5806 100644
+--- a/control-plane/docs/API_CONTRACT.md
++++ b/control-plane/docs/API_CONTRACT.md
+@@ -3237,6 +3237,14 @@ pool lines. Operators rewrite it whole from the vault each time a line joins, so
+ write-only map is replaced. A key in more than one map fails closed, and invalid
+ pool JSON disables only the pool map.
+ 
++`CHERT_VERIFICATION_TRANSPORTS_ISOLATED` accepts the same schema for independently
++provisioned transports when existing maps are write-only. It is consulted only
++when the key is absent from all three established maps. Duplicates in this map
++cannot override or disable established entries, and malformed isolated JSON
++affects only isolated entries. Invalid or ambiguous established entries still
++fail closed; this fallback cannot repair them. Use a new unique transport key
++and qualify its physical source and send receipt before enabling its binding.
++
+ An explicitly qualified split transport can set `catchup: { origin, token }`
+ for the installed read-only event API. Its source credential is used only for
+ those GETs, without the cloud tenant header. The top-level `origin`, `token` and
+diff --git a/control-plane/src/lib/facetime/recipient-verification.ts b/control-plane/src/lib/facetime/recipient-verification.ts
+index 4f0ba4a8..fc16809d 100644
+--- a/control-plane/src/lib/facetime/recipient-verification.ts
++++ b/control-plane/src/lib/facetime/recipient-verification.ts
+@@ -140,8 +140,12 @@ function optionalTransportMap(name: string): Record<string, unknown> {
+   return {};
+ }
+ export function verificationTransport(key: string) {
++  let stage = "primary_map";
++  let establishedEntries = 0;
++  let isolatedEntry = false;
+   try {
+     const primary = JSON.parse(process.env.CHERT_VERIFICATION_TRANSPORTS ?? "{}");
++    stage = "map_resolution";
+     // Optional maps let operators add transports without replacing a write-only
+     // production secret: ADDITIONAL for isolated dedicated transports, POOL for
+     // Shared pool lines, rewritten whole from the vault. A key in two maps fails closed.
+@@ -150,7 +154,17 @@ export function verificationTransport(key: string) {
+       optionalTransportMap("CHERT_VERIFICATION_TRANSPORTS_ADDITIONAL"),
+       optionalTransportMap("CHERT_VERIFICATION_TRANSPORTS_POOL"),
+     ].filter(map => Object.hasOwn(map, key));
++    establishedEntries = holders.length;
+     if (holders.length > 1) throw new Error("ambiguous transport key");
++    // Fallback only: independent provisioning cannot override or invalidate an
++    // established transport, even if its new map accidentally repeats a key.
++    let transport = holders[0]?.[key];
++    if (holders.length === 0) {
++      const isolated = optionalTransportMap("CHERT_VERIFICATION_TRANSPORTS_ISOLATED");
++      isolatedEntry = Object.hasOwn(isolated, key);
++      transport = isolatedEntry ? isolated[key] : undefined;
++    }
++    stage = "source_metadata";
+     const sources = optionalTransportMap("CHERT_SHARED_IMAGE_SOURCES");
+     const addition = sources[key] === undefined ? {} : z.object({
+       provider_origin:z.string().url().optional(),
+@@ -159,7 +173,9 @@ export function verificationTransport(key: string) {
+     }).strict().parse(sources[key]);
+     // Only byte-source/catch-up metadata may be added; never replace a sender/tenant credential.
+     const {provider_origin,...sourceMetadata}=addition as typeof addition & {provider_origin?:string};
+-    const config = transportSchema.parse({...holders[0]?.[key] as object,...sourceMetadata,...(provider_origin?{image_provider_origin:provider_origin}:{})});
++    stage = "transport_schema";
++    const config = transportSchema.parse({...transport as object,...sourceMetadata,...(provider_origin?{image_provider_origin:provider_origin}:{})});
++    stage = "origin_validation";
+     for (const origin of [config.origin, ...(config.catchup ? [config.catchup.origin] : []), ...(config.image_storage ? [config.image_storage.origin] : []), ...(config.image_provider_origin?[config.image_provider_origin]:[])]) {
+       const url = new URL(origin);
+       if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/")
+@@ -167,6 +183,9 @@ export function verificationTransport(key: string) {
+     }
+     return config;
+   } catch {
++    // Do not log keys, input values, credentials, or validation errors: they can
++    // contain secrets. These bounded flags identify deployment/config failures.
++    console.warn("verification_transport_unavailable", { stage, establishedEntries, isolatedEntry });
+     throw new ControlPlaneError(
+       "verification_unavailable",
+       "Recipient verification is not configured for this line.",
+diff --git a/control-plane/tests/recipient-verification.test.ts b/control-plane/tests/recipient-verification.test.ts
+index de209e8c..8248cb9d 100644
+--- a/control-plane/tests/recipient-verification.test.ts
++++ b/control-plane/tests/recipient-verification.test.ts
+@@ -331,3 +331,53 @@ it("adds Shared pool transports from a third map that never overrides another ma
+   expect(verificationTransport("dedicated").provider_line_id).toBe("dedicated-line");
+   expect(() => verificationTransport("shared")).toThrow(/not configured/);
+ });
++
++it("resolves new isolated transports without changing any existing map", () => {
++  environment();
++  const primary = verificationTransport("pilot");
++  const additional = { ...primary, provider_line_id: "dedicated-line" };
++  const pool = { ...primary, provider_line_id: "pool-line" };
++  const isolated = { ...primary, provider_line_id: "isolated-line" };
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ADDITIONAL", JSON.stringify({ additional }));
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_POOL", JSON.stringify({ pool }));
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ISOLATED", JSON.stringify({ isolated }));
++  expect(verificationTransport("isolated")).toEqual(isolated);
++  for (const duplicate of [isolated, null, { token: "invalid" }]) {
++    vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ISOLATED", JSON.stringify({ pilot: duplicate, additional: duplicate, pool: duplicate }));
++    expect(verificationTransport("pilot")).toEqual(primary);
++    expect(verificationTransport("additional")).toEqual(additional);
++    expect(verificationTransport("pool")).toEqual(pool);
++  }
++});
++
++it.each(["not-json", "[]", "null", "42", '"text"'])("contains malformed isolated map %s", raw => {
++  environment();
++  const primary = verificationTransport("pilot");
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ISOLATED", raw);
++  expect(verificationTransport("pilot")).toEqual(primary);
++  expect(() => verificationTransport("isolated")).toThrow(/not configured/);
++});
++
++it("does not rescue invalid or ambiguous established entries with isolated credentials", () => {
++  environment();
++  const primary = verificationTransport("pilot");
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ISOLATED", JSON.stringify({ pilot: primary }));
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ADDITIONAL", JSON.stringify({ pilot: primary }));
++  expect(() => verificationTransport("pilot")).toThrow(/not configured/);
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ADDITIONAL", "{}");
++  vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS", JSON.stringify({ pilot: null }));
++  expect(() => verificationTransport("pilot")).toThrow(/not configured/);
++});
++
++it("validates isolated credentials and origins and rejects inherited keys", () => {
++  environment();
++  const primary = verificationTransport("pilot");
++  for (const bad of [{ ...primary, token: "short" }, { ...primary, origin: "http://example.test" }, { ...primary, origin: "https://example.test/path" }]) {
++    vi.stubEnv("CHERT_VERIFICATION_TRANSPORTS_ISOLATED", JSON.stringify({ isolated: bad }));
++    expect(() => verificationTransport("isolated")).toThrow(/not configured/);
++    expect(verificationTransport("pilot")).toEqual(primary);
++  }
++  expect(() => verificationTransport("missing")).toThrow(/not configured/);
++  expect(() => verificationTransport("toString")).toThrow(/not configured/);
++  expect(() => verificationTransport("__proto__")).toThrow(/not configured/);
++});

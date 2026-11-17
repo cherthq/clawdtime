@@ -1,0 +1,8 @@
+.private/
+source/
+.venv/
+output/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.log
