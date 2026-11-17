@@ -6,11 +6,12 @@ Work in `/Users/garygao/clawdtime` on the existing branch **`ArgosClawd`**.
 
 ### Latest review correction — November 17, 2026
 
-One user-authorized9741 call connected audio and delivered voice turns into this
+One user-authorized 9741 call connected audio and delivered voice turns into this
 chat, but selected-window capture failed after its first frame. The human expects
 Argos realtime duplex/tool-call latency and prepared camera movement, not the
-old half-duplex ClawdTime path used in that attempt. Commit the existing checkpoint,
-then audit/implement experience parity with agent teams. Persistent restoration of
+old half-duplex ClawdTime path used in that attempt. Checkpoint `1e5e140` is committed. The post-checkpoint agent-team audit confirms
+experience parity is missing; see the review report for the corrective implementation
+and acceptance sequence. The audit itself makes no deployment or live call. Persistent restoration of
 the user's HackPton admin membership was explicitly approved and completed; do not
 remove it. Backend is now live; old standby notes below are historical. No redial
 without new call authorization. See the newest review section for exact evidence.

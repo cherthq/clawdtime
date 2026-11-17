@@ -1,5 +1,64 @@
 # IMPLEMENTATION_ARGOS review
 
+## Post-checkpoint Argos experience audit — November 17, 2026
+
+Checkpoint `1e5e140` commits all pending implementation and diagnostic work. The
+user asked to commit first, then check and verify the experience. This follow-up
+is a source comparison and local validation, not another deployment or phone call.
+Three specialists independently reviewed Mac capture, connector ownership, and
+voice/media integration. **Experience parity fails the audit.**
+
+| Experience | Argos evidence | Current ClawdTime finding |
+| --- | --- | --- |
+| Responsive voice frontend | The accepted lab trial used ElevenLabs Conversation with Gemini 2.5 Flash / Eleven Flash v2 and streaming PCM. | The demo used finalized speech segments and separate replies from this chat. The planned ElevenLabs adapter is absent. |
+| Voice while work proceeds | Original Argos execution bridge queues work and returns immediately, supplying results asynchronously. The phone lab did not qualify real coding execution. | Existing realtime GPT frontend is gated on an API-managed executor distinct from this chat. Enabling two-way audio alone cannot connect it to this chat's tools. |
+| Prepared focus and overview | Lab tools directly select prepared synthetic camera regions. | Local general camera, transitions and annotations exist; the voice frontend has no camera tools or prepared target catalog. |
+| Real application sharing | Argos lab was synthetic, not desktop capture. | Local Finder review passed, but the phone attempt failed after its first frame. Repeated native stream-stop failure is reproduced; diagnostics are not a fix. |
+| Duplex/interruption quality | Concurrent audio exists in source; handset interruption quality was not separately confirmed. | The requested combined experience has no physical qualification. Unit tests do not establish perceived latency or visibility. |
+
+Source anchors: integration plan section 5 already requires an ElevenLabs adapter;
+`src/contracts.ts` defines `session.conversation` as `api_managed`;
+`src/app.ts` requires that field and hardcodes `conversationFrontend: "gpt_live"`;
+`media/conversational.py` defines no camera tools. The optional GPTLive work gate
+also waits for 1,000 ms of quiet PCM and polls work every 500 ms. These are code
+intervals, not measured phone response times, and that optional frontend was not
+the one used in the failed demo. The coordinating chat's delayed polling/reply
+also contributed to the slow interaction; provider/model choice is not the only
+issue. No reliable end-of-speech-to-first-audio measurement was collected.
+
+Read-only comparison used `/Users/garygao/argos-lab/README.md`, `create-agent.py`,
+`media_trial.py`, and `source/escalation_mcp/voice/eleven_agent.py`. No sibling
+project, provider configuration, credentials, or live call was changed by this
+audit. The lab implementation is evidence of its own limited acceptance, not a
+license to copy its transcript logging or editor-specific execution behavior.
+
+Required corrective implementation:
+
+1. Select a single streaming ElevenLabs voice frontend independently of the
+   execution host on a fresh session. Keep this original chat as the executor;
+   preserve ordered turns, native approvals, and exclusive CUA ownership.
+2. Feed it bounded, current task/presentation context and geometry-bound prepared
+   focus targets. Add presentation-only focus, overview and annotation tools
+   through the existing authenticated camera controller. Reject stale targets,
+   Stop, wrong call/surface, and duplicate effects. Never give it unrestricted
+   desktop tools or a session bearer token.
+3. Queue work promptly and deliver verified progress/results asynchronously, so
+   the voice conversation does not wait on a coding-model/tool round trip. Keep
+   one speech owner and clear both provider and media queues on interruption.
+4. Fix and sustain-test native capture before another handset demo, preserving
+   exact window identity, frame freshness, cleanup and local Stop.
+5. Test the combined path locally: audio input during output, interruption,
+   asynchronous same-chat handoff, voice-tool-to-rendered camera changes, stale
+   context rejection and effect deduplication. Instrument user-speech-end to first
+   audio and camera-command to first changed frame using comparable clock scopes.
+   Then separately qualify the actual phone experience on one authorized call.
+
+Validation at the checkpoint: `npm run check` passed again (950 tests in 58 files,
+typecheck and build). The Mac specialist verified 55 Swift tests and a Swift build;
+4 gateway camera tests passed. The prior reviewed release also passed 12 preview
+tests. No tests establish Argos-equivalent handset behavior. The checkpoint is
+committed locally, not pushed; the audit adds no runtime feature or flag change.
+
 ## First authorized 9741 camera call — November 17, 2026
 
 The user authorized live activation and one Finder FaceTime demo, then explicitly
@@ -37,8 +96,8 @@ voice path. Realtime GPT voice and two-way voice flags remained disabled. The us
 expects the Argos experience: a fast duplex voice model calling tools, prepared
 camera movement/zoom/annotations, combined with ClawdTime's general cross-app
 capture and CUA. This parity is not implemented/physically verified by the above
-call. Agent-team source comparison and corrective implementation follow the
-requested commit checkpoint; do not describe readiness as experience parity.
+call. Agent-team source comparison follows the requested commit checkpoint;
+corrective implementation remains outstanding; do not describe readiness as experience parity.
 
 The user requested committing all current changes before that audit. Private
 credentials, runtime databases, captured media and operational receipts stay out
