@@ -1,3 +1,61 @@
+## November 17, 2026 — production-bound walkthrough local acceptance
+
+The prepared Finder/TextEdit workflow now uses the production backend, media,
+gateway and installed-helper authority path. Activation has a separately negotiated,
+default-off capability. Exact operation reservations survive restart and fence
+device-wide input and replacement sessions. The helper checks local policy before
+input and during settling; slow native activation and read-only AX resolution run
+in disposable children that local Stop can kill and join independently of cloud
+callbacks. Returned host execution remains distinct from verified UI success.
+
+**One complete isolated no-call physical run passed on an idle Mac.** Five native
+operations returned terminal `verified` receipts and five visual scenes were
+accepted. Original-chat CUA triggered each fixed prepared operation. Finder and
+TextEdit activated automatically; the actual preview showed zoom transitions and
+aligned labels. A fresh follow-up plan preceded a harmless TextEdit heading edit
+and save. Native UI and a read-only fixture check confirmed the saved heading
+exactly once. Finder returned automatically, and original-chat CUA moved the one
+disposable sample from Approved to Research. UI and filesystem checks confirmed
+one destination file and no remaining source copy. Input ownership was claimed
+and released around every activation, edit and move.
+
+Local Stop cleared the actual preview. The harness joined its actors and reported
+zero unresolved leases and native operations; helper status was disarmed, without
+an active lease or unresolved action. No screen/audio content was retained. The
+qualified candidate was 0.4.0 build 8, executable SHA-256
+`8b1b110391b54a80e0385c519cf51d067b24d56cb8c3c726348ed0d5b9c3fb05`.
+
+The user canceled the optional second pass. Before cancellation, its native
+activation verified but visual qualification was rejected; this is not a second
+passing walkthrough. It also stopped and joined cleanly, with zero unresolved
+lease/native outcomes. Earlier diagnostic runs and their unknown cleanup receipts
+remain retained, without replay or deletion. The first complete run establishes
+the tested fixtures, not uninterrupted operation in every Space/display layout
+or under concurrent desktop use. Stop during a deliberately hung AX child is
+covered by automated tests; that stress case was not physically repeated.
+
+Physical testing exposed and repaired capture pacing across an ownership change,
+resolver-child idle retirement during a fresh-frame bracket, and exact lease
+cleanup after local Stop. Original observation timestamps, the 200 ms monitor,
+250 ms witness, 600 ms native settle and immutable native deadlines remain intact.
+Independent specialists reviewed reservation recovery, binding, no replay,
+ownership transitions, child lifecycle and cleanup acknowledgments.
+
+The existing original-chat connection and CLI doctor both returned HTTP 401.
+Their saved state was preserved; no replacement pairing, session, invitation or
+call was created. A valid authorized connection for this exact project is required
+before a fresh capability-negotiated production test session can register. The
+connector build includes the new capability and prepared CUA trigger.
+
+Final validation: `npm run check` passed 1,185 tests across 72 files, typecheck and
+build; Swift passed 110 tests; gateway passed 55 tests; Mac packaging scripts
+passed 21 tests. The full media suite ran 477 tests successfully with 13 optional
+SDK skips. Changed-file formatting and whitespace checks passed. Exact production
+release versions are recorded separately in the deployment entry.
+No call or outbound message was placed. Handset video/voice, real cloud frame
+timing and same-chat continuation remain live acceptance items. See the exact
+[one-call checklist and Stop/rollback procedure](DEMO_ACCEPTANCE.md#production-bound-walkthrough-qualification).
+
 ## November 17, 2026 — native foreground activation repair
 
 **Local physical acceptance passed:** Finder → TextEdit → Finder completed with

@@ -16,6 +16,19 @@ final class PolicyTests: XCTestCase {
       id: id, deviceId: "device", memberId: member, callId: "call", displayId: 7, mode: mode,
       expiresAt: now.addingTimeInterval(25))
   }
+  func testExactRetiredLeaseAcknowledgementAfterStopGrantsNothing() throws {
+    let p=try DevicePolicy(config:config())
+    XCTAssertFalse(p.isRetiredLease("lease"));p.arm()
+    try p.begin(lease(),now:now,sessionAvailable:true,accessibility:false)
+    XCTAssertFalse(p.isRetiredLease("lease"));p.stop(disarm:true)
+    XCTAssertTrue(p.isRetiredLease("lease"));XCTAssertFalse(p.isRetiredLease("unseen"))
+    XCTAssertFalse(p.armed);XCTAssertNil(p.lease)
+    XCTAssertThrowsError(try p.requireLease("lease",now:now,sessionAvailable:true))
+    XCTAssertTrue(p.isRetiredLease("lease"))
+    p.arm();try p.begin(lease(id:"fresh"),now:now,sessionAvailable:true,accessibility:false)
+    XCTAssertTrue(p.isRetiredLease("lease"));XCTAssertEqual(p.lease?.id,"fresh")
+    XCTAssertFalse(p.isRetiredLease("fresh"))
+  }
   func testBindRejectsPublicAndWildcardAddresses() throws {
     for host in [
       "0.0.0.0", "::", "localhost", "192.168.1.2", "100.63.0.1", "100.128.0.1", "100.064.1.1",

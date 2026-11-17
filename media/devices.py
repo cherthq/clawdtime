@@ -282,8 +282,10 @@ class ScreenController:
 
     async def poll(self,generation):
         waiting_policy=False
+        poll_stage="authority";poll_status=None
         try:
             while not self.closed and self.selection and generation==self.generation:
+                poll_stage="authority";poll_status=None
                 iteration_started=time.monotonic()
                 selection=dict(self.selection)
                 expiry=timestamp(selection['expiresAt'])
@@ -312,7 +314,8 @@ class ScreenController:
                 # Keep the longest expiry we sent, including an in-flight renew
                 # whose response is lost/cancelled or a later shorter policy.
                 self.requested_expiry[selection['leaseId']]=max(self.requested_expiry.get(selection['leaseId'],0),timestamp(selection['expiresAt']))
-                status,_,_=await self.request('POST',route,body)
+                poll_stage='renew';poll_status=None
+                status,_,_=await self.request('POST',route,body);poll_status=status
                 if self.closed or generation!=self.generation:return
                 if selection.get('executorEpoch')!=self.selection.get('executorEpoch'):continue
                 if status>=300:
@@ -327,9 +330,15 @@ class ScreenController:
                         self.clear('unavailable');continue
                     if self.hold_until>time.monotonic():continue
                     self.diagnostics.phase('frame_request',http_status=status)
-                    status,raw,headers=await self.request('GET','/v1/leases/'+selection['leaseId']+'/frame',frame=True)
+                    poll_stage='capture';poll_status=None
+                    status,raw,headers=await self.request('GET','/v1/leases/'+selection['leaseId']+'/frame',frame=True);poll_status=status
                     if generation!=self.generation:return
-                    if selection.get('executorEpoch')!=self.selection.get('executorEpoch'):continue
+                    if selection.get('executorEpoch')!=self.selection.get('executorEpoch'):
+                        # The discarded read still consumed the helper's capture
+                        # slot. Preserve five-request cadence across ownership
+                        # changes instead of immediately provoking helper429.
+                        await asyncio.sleep(self.source_interval)
+                        continue
                     if status==425 and self.camera:
                         # Only this typed read-only geometry race may retry.
                         # Clear presentation and input authority before another capture.
@@ -341,13 +350,17 @@ class ScreenController:
                     if status!=200:
                         self.diagnostics.phase('frame_request','frame_unavailable',status)
                         raise ValueError('Device frame unavailable')
+                    poll_stage='frame_headers'
                     captured=headers['x-captured-at'];frame_id=headers['x-frame-id']
                     if headers.get('content-type','').split(';')[0]!='image/jpeg' or not -.5<=time.time()-timestamp(captured)<2 or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',frame_id):raise ValueError('Stale frame')
+                    poll_stage='frame_dimensions'
                     width,height=int(headers['x-frame-width']),int(headers['x-frame-height'])
                     if not 0<width<=(8192 if self.camera else 1280) or not 0<height<=(8192 if self.camera else 720) or width*height>32_000_000:raise ValueError('Invalid frame dimensions')
+                    poll_stage='frame_decode'
                     with Image.open(io.BytesIO(raw)) as image:
                         if image.format!='JPEG' or image.size!=(width,height):raise ValueError('Invalid frame')
                         image.load();frame=image.convert('RGB')
+                    poll_stage='camera_metadata'
                     metadata=decode_header(headers.get('x-camera-frame'),selection['surface'],width,height) if self.camera else None
                     if generation!=self.generation:return
                     self.expire()
@@ -356,13 +369,18 @@ class ScreenController:
                     # same-binding policy refreshes do not spawn another poller.
                     if time.monotonic()-self.policy_at>=2 or min(timestamp(selection['expiresAt']),timestamp(self.selection['expiresAt']))<=time.time():continue
                     if self.frame_id!=frame_id:
+                        poll_stage='camera_accept'
                         if self.camera:self.camera.accept(frame,frame_id,timestamp(captured),metadata)
+                        poll_stage='publish'
                         self.frame=frame;self.frame_id=frame_id;self.captured_at=captured;self.received_at=time.monotonic();self.revision+=1
                         self.diagnostics.frame(captured)
                     self.state='viewing'
+                poll_stage='pacing'
                 await asyncio.sleep(max(0,self.source_interval-(time.monotonic()-iteration_started)) if self.preview_pacing else self.source_interval)
         except asyncio.CancelledError:raise
-        except Exception:
+        except Exception as error:
+            category='timeout' if isinstance(error,TimeoutError) else 'connection' if isinstance(error,ConnectionError) else 'missing_field' if isinstance(error,KeyError) else 'camera_rejected' if isinstance(error,CameraError) else 'invalid_response' if isinstance(error,ValueError) else 'io' if isinstance(error,OSError) else 'other'
+            self.diagnostics.poll_failure(poll_stage,category,poll_status)
             if generation==self.generation and self.selection:
                 await self.terminal(dict(self.selection),'gateway_unavailable')
 

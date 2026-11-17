@@ -27,6 +27,7 @@ export const executionTransition = z
 export const localPolicySchema = z.object({
   cameraVersion: z.literal(1).optional(),
   livePresentationVersion: z.literal(1).optional(),
+  nativeActivationVersion: z.literal(1).optional(),
   controlPolicy: z.enum([
     "view_only",
     "agent_tools_only",
@@ -68,7 +69,7 @@ export async function readLocalPolicy(
   return localPolicySchema.parse(raw);
 }
 
-/** Cooperative ownership of only the selected shared surface, independent of reasoning/file work. */
+/** Exclusive device input ownership, independent of ordinary reasoning/file work. */
 export class ExecutionCoordinator {
   private busy = new Set<string>();
   constructor(
@@ -144,7 +145,9 @@ export class ExecutionCoordinator {
       requestId,
     )!;
     const pairing = this.service.pairing(request.pairingId);
-    const sameSurface = (id: string) => {
+    if (this.service.nativeReservations.hasUnresolvedDevice(pairing.deviceId))
+      return true;
+    const sameDevice = (id: string) => {
       const other = this.service.store.get<AttentionRequest>("attention", id);
       const paired =
         other &&
@@ -152,10 +155,7 @@ export class ExecutionCoordinator {
           "pairing",
           other.pairingId,
         );
-      return (
-        paired?.deviceId === pairing.deviceId &&
-        paired.displayId === pairing.displayId
-      );
+      return paired?.deviceId === pairing.deviceId;
     };
     // A new request, new pairing, or expired call cannot make an old native tool idle.
     if (
@@ -163,7 +163,7 @@ export class ExecutionCoordinator {
         .all<ExecutionOwnership>("execution")
         .some(
           (e) =>
-            sameSurface(e.requestId) &&
+            sameDevice(e.requestId) &&
             (e.state === "uncertain" ||
               (e.requestId !== requestId &&
                 e.executor !== "none" &&
@@ -173,10 +173,7 @@ export class ExecutionCoordinator {
       return true;
     const leases = this.service.store
       .all<ControlLease>("lease")
-      .filter(
-        (l) =>
-          l.deviceId === pairing.deviceId && l.displayId === pairing.displayId,
-      );
+      .filter((l) => l.deviceId === pairing.deviceId);
     return (
       leases.some((l) => l.state === "unknown") ||
       this.service.store
@@ -472,6 +469,11 @@ export class ExecutionCoordinator {
       .strict()
       .parse(raw);
     const { p, r, e, lease } = this.check(token, requestId, input.epoch);
+    if (this.service.nativeReservations.hasUnresolvedDevice(p.deviceId))
+      throw new DomainError(
+        409,
+        "Unresolved native operation prevents fallback input.",
+      );
     const policy = await readLocalPolicy(this.control, r);
     if (
       !policy.armed ||

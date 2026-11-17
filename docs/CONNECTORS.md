@@ -1712,3 +1712,90 @@ lease released. This used the snapshot capture diagnostic path and made no exter
 call. It does not resolve the intermittent persistent-capture failure, qualify
 Space transitions, establish handset acceptance or claim production presentation
 polish.
+
+## Production native activation and original-chat trigger — November 17, 2026
+
+The source now connects prepared activation to production reservations using a
+separate default-off `nativeActivationVersion:1` capability. A fresh v2 same-chat
+registration requests `--native-activation true --live-presentation true
+--screen-camera true --camera-display DISPLAY_ID --native-control desktop
+--shared-surface true`. These flags attest a separately qualified original-chat
+native surface; they do not grant OS permission. Managed runners, browser-only
+control, window-only capture, old sessions and unconfirmed capabilities are
+rejected. Backend and media activation admission must independently be enabled
+for a separately authorized trial. Deployment/physical evidence remains in
+STATUS.md; this section documents source behavior.
+
+`ProductionNativeClient` uses only the exact request's authenticated
+`/api/attention/:id/conversation/native-activation` route family. MCP and
+foreground JSONL provide `native_activation_status`, `prepare_native_activation`,
+`native_activation_receipt`, `reconcile_native_activation` and
+`cancel_prepared_activation`. There is no MCP dispatch command. Preparation binds
+an immutable operation to the actual owner, cursor, selected display and backend
+reservation. Receipt identity includes the operation fingerprint; transport or
+malformed-result failures are unknown and never automatically retried. Read-only
+reconciliation preserves the distinction between host completion and fresh UI
+verification.
+
+The fixed CUA trigger is available through the explicit foreground bridge:
+
+```sh
+node dist/cli/main.js walkthrough --run /PRIVATE/runs/EXISTING_RUN.json --connection /PRIVATE/connection.json --plan /PRIVATE/plan.json --request-id EXISTING_REQUEST --background-actors-stopped true
+```
+
+Use a protected, owner-only plan file matching `presentationScenePlanSchema`.
+Prepare all scenes upfront with current Finder/TextEdit window identities and
+window-relative focus/annotations. This command attaches to the already active
+original-chat session; it does not register, call, arm, capture or replace it.
+Keep the original registration alive. The command emits a private loopback
+`triggerUrl` with a transient capability fragment: open it only through this
+chat's permitted native CUA, and do not copy it into logs or tracked artifacts.
+The page removes the fragment from browser history and authenticates each request.
+It displays only the current fixed operation and refuses arbitrary action bodies
+and foreign Origins.
+
+Send one JSONL command per line to the bridge:
+
+```json
+{"id":"prepare-finder-1","command":"prepare","sceneId":"finder","operationId":"finder-activation-1"}
+{"id":"status-1","command":"status"}
+```
+
+`prepare` clears the old presentation while ownership is released, claims native
+ownership, freshly qualifies the target and obtains a durable reservation. Click
+**Execute prepared operation** with native CUA. The trigger dispatches that one
+immutable reference once, requires a fresh exact verified receipt, releases input
+ownership and freshly resolves/presents the scene. Unknown, returned-but-unverified
+or interrupted outcomes retain ownership and block repeat dispatch; inspect the
+original production receipt. Prepared planning expiry is separate from the
+single short execution deadline minted by dispatch, and neither is renewed by
+connector retry.
+
+For another planned scene, send a new `prepare` command with its scene and unique
+operation ID. After the final scene, `{"id":"complete-1","command":"complete"}`
+marks the walkthrough complete. A follow-up uses
+`{"id":"replan-1","command":"replan","expectedGeneration":CURRENT_GENERATION,"plan":NEW_PLAN}`.
+A new plan ID is required. This invalidates old witnesses, cancels only proven
+nondispatched preparation and clears prior annotations. Dispatched/uncertain input
+cannot be bypassed by replanning. Bounded edits, saves and fixture file moves remain
+ordinary original-chat CUA under its existing exclusive claim/observe/verify/release
+flow; activation adds no general-purpose action endpoint.
+
+The adjacent `.walkthrough.json` journal uses `FileNativeSceneJournal` for a
+single owner and durable command hashes/operation IDs before effects. It stores
+no plan labels, screen/audio content, credentials or trigger URL. Existing
+journals and stale locks refuse automatic restart; preserve them and reconcile
+production receipts instead of resetting a plan. Production backend/media/helper
+receipts remain the authority across processes and replacement sessions.
+
+`{"id":"stop-1","command":"stop"}`, Ctrl-C or closing the trigger invalidates
+local queued work. Use the companion's independent **Stop** to end capture/input;
+closing this bridge alone does not claim helper cleanup or release an unresolved
+actor. Preserve all receipts and use read-only status to verify cleanup.
+
+Synthetic verification: `tests/connectors-production-native.test.ts` covers
+capability rejection, exact receipt identity, no mutation retry, fixed trigger
+authentication/Origin/body checks, reserve → CUA-trigger → verify → release →
+present ordering, follow-up generation/cancellation, Stop during dispatch,
+uncertain ownership and protected foreground attachment/journal privacy. These
+checks perform no OS input, call, capture or handset acceptance.

@@ -1,3 +1,5 @@
+import { releaseSourceRevision } from "./release.js";
+import { NativeActivationCoordinator } from "./control/native-activation.js";
 import { isDeepStrictEqual } from "node:util";
 import { VoicePresentation } from "./control/voice-presentation.js";
 import { voiceEventSchema, voiceCameraSchema } from "./voice-contracts.js";
@@ -63,6 +65,7 @@ import {
 export interface AppOptions {
   screenCameraEnabled?: boolean;
   livePresentationEnabled?: boolean;
+  nativeActivationEnabled?: boolean;
   elevenLabsEnabled?: boolean;
   elevenLabsReadiness?: () => Promise<{
     configured: boolean;
@@ -132,6 +135,11 @@ export function createApp(
   const interruptions = new Interruptions(service);
   const livePresentation = new LivePresentationCoordinator(service, camera, {
     enabled: options.livePresentationEnabled === true,
+    revision: (requestId) => human.turns.executionRevision(requestId),
+    assertClear: (requestId) => interruptions.assertClear(requestId),
+  });
+  const nativeActivation = new NativeActivationCoordinator(service, camera, {
+    enabled: options.nativeActivationEnabled === true,
     revision: (requestId) => human.turns.executionRevision(requestId),
     assertClear: (requestId) => interruptions.assertClear(requestId),
   });
@@ -237,6 +245,7 @@ export function createApp(
   app.get("/health", (c) =>
     c.json({
       ok: true,
+      sourceRevision: releaseSourceRevision(),
       mode: options.simulation
         ? "simulation"
         : options.dispatchEnabled === false
@@ -1088,6 +1097,51 @@ export function createApp(
       ),
     );
   });
+  app.get("/api/attention/:id/conversation/native-activation/status", (c) =>
+    c.json(
+      nativeActivation.status(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+      ),
+    ),
+  );
+  app.get(
+    "/api/attention/:id/conversation/native-activation/receipts/:operationId",
+    (c) =>
+      c.json(
+        nativeActivation.receipt(
+          bearer(c.req.header("authorization")),
+          c.req.param("id"),
+          c.req.param("operationId"),
+        ),
+      ),
+  );
+  for (const method of [
+    "prepare",
+    "dispatch",
+    "reconcile",
+    "cancel",
+  ] as const) {
+    app.post(
+      `/api/attention/:id/conversation/native-activation/${method}`,
+      async (c) =>
+        c.json(
+          await nativeActivation[method](
+            bearer(c.req.header("authorization")),
+            c.req.param("id"),
+            await c.req.json(),
+          ),
+        ),
+    );
+  }
+  app.get("/api/attention/:id/conversation/native-activation", (c) =>
+    c.json(
+      nativeActivation.status(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+      ),
+    ),
+  );
   app.get("/api/attention/:id/conversation/presentation", async (c) =>
     c.json(
       await livePresentation.status(
@@ -1448,6 +1502,18 @@ export function createApp(
         "Audio qualification cannot deliver instructions.",
       );
     await next();
+  });
+  app.post("/media/:id/native-activation-authority", async (c) => {
+    if (c.req.header("Origin"))
+      throw new DomainError(403, "Server bridge required.");
+    const { session, request } = mediaContext(c.req.param("id"));
+    const body = z
+      .object({ envelope: z.unknown() })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      nativeActivation.authority(session, request.id, body.envelope),
+    );
   });
   app.post("/media/:id/presentation-qualification", async (c) => {
     if (c.req.header("Origin"))

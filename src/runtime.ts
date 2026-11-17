@@ -353,6 +353,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       env.CLAWDTIME_AUDIO_QUALIFICATION_ENABLED === "true",
     screenCameraEnabled: env.CLAWDTIME_SCREEN_CAMERA_ENABLED === "true",
     livePresentationEnabled: env.CLAWDTIME_LIVE_PRESENTATION_ENABLED === "true",
+    nativeActivationEnabled: env.CLAWDTIME_NATIVE_ACTIVATION_ENABLED === "true",
     elevenLabsEnabled: env.CLAWDTIME_ELEVENLABS_ENABLED === "true",
     elevenLabsReadiness:
       transport instanceof NativeTransport

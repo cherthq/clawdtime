@@ -577,3 +577,53 @@ left no preview actors running. This was a local, no-call fixture acceptance wit
 the production gate off. It does not qualify every Space layout, fullscreen,
 minimized or multiple-monitor cases, the cloud production path, or handset output.
 The final source passed 98 Swift tests and independent safety review.
+
+## Production native activation authority (staged, November 17)
+
+`nativeActivationVersion: 1` advertises a separate narrow capability. Backend and
+media admission require `CLAWDTIME_NATIVE_ACTIVATION_ENABLED=true`; its default is
+off. Existing leases and sessions do not acquire input authority from this flag.
+Only Finder/TextEdit activation and independently qualified window raise are
+accepted under a current protocol-2 native/view selected-display lease, controller
+ACL, local Enable, Accessibility, Screen Recording and native local policy.
+
+Authenticated helper routes are `POST /v1/leases/{lease}/native/prepare`,
+`POST .../native/dispatch` and read-only `GET .../native/{operation}`. The envelope
+binds the existing operation/fingerprint to media session, pairing, device/member
+and original planning expiry. Preparation observes current identity without input;
+dispatch requalifies that exact process/window/bounds within its original two-second
+native deadline. A new deadline cannot renew the same dispatched operation.
+
+The installed parent owns policy and private fsynced reservations in
+`<device>/native/receipts.json`. A disposable child executes the existing single
+AXFrontmost/AXRaise behavior. It asks the parent through inherited pipes for local
+authority immediately before the setter and throughout the existing 600 ms settle.
+The parent serves these checks on its policy actor without running AX there. Stop
+disarms and sends SIGKILL immediately; it never waits on AX or a cloud callback.
+The asynchronous request joins the child before completing its receipt. An already
+admitted OS request may have taken effect when Stop arrives; killed, interrupted or unconfirmed operations retain uncertainty rather than
+claiming cancellation or verified UI success. A matching child response proves
+that the host returned; if authority was lost before receipt completion, the
+receipt is only `returned`, never `verified`. A child result cannot restore stopped policy.
+
+Unknown receipts fence replacement leases, input and execution transfers. Read-only
+receipt retrieval survives Stop and restart. Ledger write failure poisons local
+admission, so an in-memory terminal result cannot clear the durable fence. Preserve
+both action and native receipt directories during upgrade and rollback. An older
+helper that cannot read native fences is not a safe rollback while any native
+operation is unresolved.
+
+New source tests cover exact scope/deadline checks, duplicate reservations, durable
+restart uncertainty, competing helper locks and poisoned receipt writes. They are
+not physical acceptance. See STATUS.md for lead-run local and production evidence.
+
+The read-only production presentation resolver also runs in a separate child.
+Helper policy, exact lease and Stop generation are checked before and after each
+awaited read; Stop kills and asynchronously joins it. The parent's main actor
+never performs the resolver's AX calls. The existing 180 ms read budget remains;
+an idle child is retired at the last read’s original absolute authority expiry
+(at most two seconds), and retirement owns the child slot until
+its exact process/handles are joined and cleared. A simultaneous new read cannot
+inherit or erase an older child's resources. The installed child's bounded 256-ID
+history covers the existing admitted presentation lifetime; preview retains its
+64-ID bound. Neither mode renews timestamps or authority to fit transport delays.

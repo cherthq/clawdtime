@@ -155,7 +155,8 @@ media. A new original-chat connector must explicitly register
 its normal exact surface arguments. Consult connector help for the complete command;
 existing sessions cannot upgrade their capability. The backend requires the
 versioned helper capability from scoped readiness, current view lease, no input
-owner, and exact conversation cursor. No production native-input endpoint is added.
+owner, and exact conversation cursor. These presentation endpoints remain camera-only;
+the separately negotiated activation path below owns its own reservations.
 
 Release matching backend, media, gateway and companion artifacts. Keep new admission
 off until the selected display, lease-bound resolver, original timestamps and remote
@@ -168,3 +169,57 @@ Backend receipts live in the existing durable entities store; media adds a
 ignore this table during rollback; never delete it or restore an older database to
 replay a command. Record current service deployments and preserve the configuration,
 active cursor and all unknown outcomes before changing running components.
+
+## Narrow native activation staging
+
+`CLAWDTIME_NATIVE_ACTIVATION_ENABLED` defaults off independently in backend and
+media. New original-chat v2 sessions explicitly select `--native-activation true`
+alongside the display camera, live presentation and verified desktop native-control
+capabilities. Existing registrations cannot acquire it by reconnecting.
+
+Preparation reserves the exact operation and device in the backend before any
+remote qualification. Its planning expiry is at most the original lease expiry
+and twenty seconds. A fixed CUA trigger initiates dispatch once, creating a
+separate immutable deadline of at most two seconds. Every helper setter and
+settling observation requires the installed parent's current local policy;
+Stop kills the disposable AX child without waiting for the cloud or AX.
+An exact returned receipt proves the host finished, not that its target UI is
+correct. Only fresh independent foreground/focus/on-screen evidence verifies UI.
+
+Backend, media, gateway and helper retain native reservations. Prepared operations
+can expire without input; dispatching/submitted/uncertain operations never expire
+into permission to retry. They fence the entire Mac, including replacement chats
+and other displays. Read original receipts to reconcile; never replace IDs,
+delete ledgers, restore older databases or replay effects.
+
+For an isolated no-call rehearsal, use a private synthetic helper configuration
+with a fresh device ID beginning `synthetic_`, a separate loopback port and one
+explicit display/controller. Launch the candidate companion with that config and
+Enable that candidate locally through native CUA. Keep the installed production
+helper disarmed. Run:
+
+```sh
+npx tsx scripts/production-walkthrough.ts PRIVATE_HELPER_JSON PRIVATE_SCENE_PLAN
+```
+
+This script uses simulation transport only and the production backend routes,
+media controllers, gateway and installed-helper native host. It writes a private
+local-access file and retains all test receipts. Its JSONL `prepare` command does
+not dispatch; click the fixed prepared-operation button using the original chat's
+native CUA. `claim`/`release` bracket original-chat fixture edits and moves. Local
+helper Stop is authoritative; end with the harness `stop` command and inspect
+process cleanup and unresolved counts separately. The harness is excluded from
+the media image and has no deployed bypass route.
+
+Release only after local acceptance and independent review. Freeze the committed
+source in an isolated upload directory; replace each packaged `release-source.json`
+with that exact SHA. Backend and media health expose the baked revision; gateway
+version metadata exposes its revision and runtime digest. Companion Info.plist
+records the source revision and whether implementation files were dirty. Verify
+actual running versions and artifact hashes after rollout, not merely upload or
+Git status. Keep both admission gates off and the installed companion disarmed.
+
+A compatible rollback retains all ledgers and starts disarmed with admission off.
+Never roll back to a pre-activation binary while a native reservation is unresolved:
+older binaries do not enforce this new fence. Stop, join and reconcile first, or
+retain the compatible disabled release. Do not restore a stale cursor or volume.

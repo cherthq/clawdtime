@@ -12,6 +12,7 @@ export interface ProtocolOptions {
   screenCamera?: AgentSession["screenCamera"];
   voiceFrontend?: AgentSession["voiceFrontend"];
   livePresentation?: boolean;
+  nativeActivation?: boolean;
 }
 export function sessionInteraction(
   options: ProtocolOptions,
@@ -29,6 +30,15 @@ export function sessionInteraction(
 export function sessionCapabilities(
   options: ProtocolOptions,
 ): AgentSession["capabilities"] {
+  if (
+    options.nativeActivation &&
+    (!options.livePresentation ||
+      !options.sharedSurface ||
+      options.nativeControl !== "desktop")
+  )
+    throw new Error(
+      "Native activation requires a fresh same-chat live presentation session with an explicitly qualified shared native surface.",
+    );
   if (
     options.livePresentation &&
     (options.protocolVersion === 1 ||
@@ -68,6 +78,9 @@ export function sessionCapabilities(
     sharedSurface: options.sharedSurface ?? false,
     nativeCancellation: options.nativeCancellation ?? false,
     ...(options.screenCamera ? { screenCameraVersion: 1 as const } : {}),
+    ...(options.nativeActivation
+      ? { nativeActivationVersion: 1 as const }
+      : {}),
     ...(options.livePresentation
       ? { livePresentationVersion: 1 as const }
       : {}),
@@ -91,6 +104,7 @@ export function protocolOptions(
     "message-updates",
     "screen-camera",
     "live-presentation",
+    "native-activation",
   ])
     if (flags[key] !== undefined && !["true", "false"].includes(flags[key]!))
       throw new Error(`--${key} must be true or false.`);
@@ -181,6 +195,7 @@ export function protocolOptions(
   const result: ProtocolOptions = {
     protocolVersion,
     livePresentation: flags["live-presentation"] === "true",
+    nativeActivation: flags["native-activation"] === "true",
     ...(voiceFrontend
       ? {
           voiceFrontend: {

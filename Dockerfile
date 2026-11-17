@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY tsconfig*.json ./
+COPY release-source.json ./
 COPY src ./src
 COPY cli ./cli
 COPY connectors ./connectors

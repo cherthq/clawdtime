@@ -700,3 +700,13 @@ The preview-only mixed `SCStream`/snapshot experiment has intermittently reporte
 and that transport is not promoted by this change. Public cooperative activation
 also does not guarantee a macOS Space switch; no private Space API, preference
 change, broad capture or automatic action retry is introduced.
+
+## Installed native walkthrough host
+
+The authenticated installed helper now has a separate activation capability and
+private native receipt ledger. Its disposable AX executor reads authority from the
+installed parent at every native boundary; the parent remains responsive to local
+Stop and kills/joins the child without waiting on AX in the UI handler. Existing
+preview mode stays distinct. See [device authority](../docs/DEVICE.md#production-native-activation-authority-staged-november-17)
+for preparation, dispatch, receipt and rollback rules. A source test or successful
+OS setter is not evidence that the requested window was actually visible.

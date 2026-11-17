@@ -60,6 +60,7 @@ export class PresentationSceneController {
   private generation = 0;
   private index = -1;
   private phase: Phase = "idle";
+  private stopped = false;
   private tail: Promise<unknown> = Promise.resolve();
   private sequence = 0;
   private unknownCommandId: string | undefined;
@@ -133,6 +134,10 @@ export class PresentationSceneController {
   }
 
   private valid(generation: number) {
+    if (this.stopped)
+      throw new Error(
+        "Presentation controller stopped; no queued camera work may continue.",
+      );
     if (this.clock() >= this.expiresAt) {
       this.phase = "expired";
       throw new Error("Presentation plan expired; prepare a fresh plan.");
@@ -151,6 +156,16 @@ export class PresentationSceneController {
     const result = this.tail.then(operation);
     this.tail = result.catch(() => undefined);
     return result;
+  }
+
+  /** Invalidate awaited/queued work immediately without submitting cleanup effects. */
+  stop() {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.generation++;
+    this.phase = "interrupted";
+    this.observations.length = 0;
+    this.presentedFingerprint = undefined;
   }
 
   private block(generation: number) {

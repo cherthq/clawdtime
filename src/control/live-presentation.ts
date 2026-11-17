@@ -114,6 +114,11 @@ export class LivePresentationCoordinator {
       epoch: 0,
       policyRevision: c.lease.policyRevision,
     };
+    if (this.service.nativeReservations.hasUnresolvedDevice(c.lease.deviceId))
+      throw new DomainError(
+        409,
+        "Native operation unresolved before presentation.",
+      );
     const revision = this.options.revision(requestId);
     this.options.assertClear(requestId);
     const leases = this.service.store

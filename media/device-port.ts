@@ -162,6 +162,30 @@ export class MediaDevicePort implements DevicePort {
   ) {
     return this.api(this.path(lease, "/presentation/resolve"), input);
   }
+  async nativePrepare(
+    lease: ControlLease,
+    envelope: Parameters<NonNullable<DevicePort["nativePrepare"]>>[1],
+  ) {
+    return this.api(this.path(lease, "/native/prepare"), envelope);
+  }
+  async nativeDispatch(
+    lease: ControlLease,
+    envelope: Parameters<NonNullable<DevicePort["nativeDispatch"]>>[1],
+  ) {
+    return this.api(this.path(lease, "/native/dispatch"), envelope);
+  }
+  async nativeReceipt(
+    lease: ControlLease,
+    operationId: string,
+    fingerprint: string,
+  ) {
+    return this.api(
+      this.path(
+        lease,
+        `/native/receipts/${encodeURIComponent(operationId)}?fingerprint=${encodeURIComponent(fingerprint)}`,
+      ),
+    );
+  }
   async livePresentation(
     lease: ControlLease,
     presentation: Parameters<NonNullable<DevicePort["livePresentation"]>>[1],

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
 from relay_diagnostics import RelayDiagnostics, request_id, milliseconds
+from native_relay import NativeRelay
 
 class CameraGeometryChanged(web.HTTPClientError):
     status_code = 425
@@ -159,6 +160,14 @@ class Gateway:
           UPDATE leases SET state=CASE WHEN state IN ('creating','creating_unknown') THEN 'creating_unknown' ELSE 'stopped' END WHERE state!='stopped';
           UPDATE actions SET state='unknown' WHERE state IN ('accepted','dispatching');''')
         self.db.commit()
+        source=json.loads(Path(__file__).with_name('release-source.json').read_text())
+        if not isinstance(source,dict) or set(source)!={'sourceRevision'} or not isinstance(source['sourceRevision'],str) or not re.fullmatch(r'(?:development|[a-f0-9]{40})',source['sourceRevision']):raise ValueError('Invalid release source manifest')
+        runtime=Path(__file__).parent
+        digest=hashlib.sha256()
+        for name in ('native_relay.py','relay.py','relay_diagnostics.py','service.py','start.py'):
+            digest.update(name.encode()+b'\0'+(runtime/name).read_bytes()+b'\0')
+        self.version={'sourceRevision':source['sourceRevision'],'runtimeSha256':digest.hexdigest(),'nativeActivationVersion':1}
+        self.native_activation = NativeRelay(self)
         self.relay_diagnostics = RelayDiagnostics(self.db)
         self.http = None
 
@@ -244,6 +253,7 @@ class Gateway:
     async def create(self, request):
         body = await request.json()
         fingerprint = validate_lease(body)
+        if self.native_activation.blocked(body['deviceId']):raise web.HTTPConflict(text='Native operation unresolved.')
         if body['deviceId'] not in self.devices:
             raise web.HTTPForbidden()
         if body.get('cameraVersion')==1:
@@ -280,6 +290,7 @@ class Gateway:
         row = self.db.execute('SELECT fingerprint FROM leases WHERE id=?',(lease_id,)).fetchone()
         transition=fingerprint!=row[0]
         if body['id'] != lease_id:raise web.HTTPConflict()
+        if transition and self.native_activation.blocked(body['deviceId']):raise web.HTTPConflict(text='Native operation unresolved.')
         if transition:
             mutable={'mode','executorEpoch','policyRevision','executor','expiresAt'}
             if old.get('protocolVersion') not in (2,3) or body.get('protocolVersion')!=old.get('protocolVersion') or body['executorEpoch']<=old['executorEpoch'] or any(body[k]!=v for k,v in old.items() if k not in mutable):raise web.HTTPConflict()
@@ -355,6 +366,7 @@ class Gateway:
         if body.get('protocolVersion') in (2,3):
             if any(action.get(k)!=body[k] for k in ('sessionId','executorEpoch','policyRevision')) or body['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
         elif any(k in action for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
+        if self.native_activation.blocked(body['deviceId']):raise web.HTTPConflict(text='Native operation unresolved.')
         if body['mode'] != 'control' or frame != action['frameId'] or captured is None or time.time()-captured > 2:
             raise web.HTTPConflict(text='A fresh control frame is required.')
         self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?,NULL)',(action['id'],lease_id,fingerprint,'{}','accepted'));self.db.commit()
@@ -425,6 +437,8 @@ class Gateway:
             local.update(textControlVersion=1,localEnableGeneration=status['localEnableGeneration'])
         if type(status.get('cameraVersion')) is int and status['cameraVersion']==1:
             local['cameraVersion']=1
+        if scoped.get('controlAllowed') and scoped.get('displayAttached') and type(status.get('nativeActivationVersion')) is int and status['nativeActivationVersion']==1:
+            local['nativeActivationVersion']=1
         if scoped.get('viewAllowed') and scoped.get('displayAttached') and type(status.get('livePresentationVersion')) is int and status['livePresentationVersion']==1:
             local['livePresentationVersion']=1
         if type(status.get('presentationVersion')) is int and status['presentationVersion']==1:
@@ -453,7 +467,11 @@ class Gateway:
                 headers={'Authorization':'Bearer '+config['key']},json=value,allow_redirects=False,timeout=1.5) as response:
             raw=await response.content.read(8193)
             if len(raw)>8192:raise web.HTTPBadGateway()
-            if response.status!=200:raise web.HTTPConflict(text='presentation_resolver_unavailable')
+            if response.status!=200:
+                try:reason=json.loads(raw).get('error')
+                except (ValueError,AttributeError):reason=None
+                allowed={'presentation_resolver_busy','presentation_authority_unavailable','presentation_target_changed','presentation_resolver_unavailable'}
+                return web.json_response({'error':'presentation_resolver_unavailable','reason':reason if reason in allowed else 'presentation_resolver_unavailable'},status=409)
         current,_,_=self.active(lease_id);validate_presentation_resolve(value,current)
         try:observation=json.loads(raw)
         except (ValueError,TypeError):raise web.HTTPBadGateway()
@@ -521,6 +539,12 @@ class Gateway:
                 except Exception:return web.json_response({'error':'Device operation uncertain; reconcile before retry.'},status=503)
             finally:request_id.reset(context)
         app=web.Application(middlewares=[auth],client_max_size=65536)
+        async def version(request):
+            device=request.match_info.get('device')
+            if device is not None and device not in self.devices:raise web.HTTPNotFound()
+            return web.json_response(self.version,headers={'Cache-Control':'no-store'})
+        app.router.add_get('/v1/version',version)
+        app.router.add_get('/v1/devices/{device}/version',version)
         app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
         app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)
         app.router.add_post('/v1/devices/{device}/panel',self.panel)
@@ -532,6 +556,8 @@ class Gateway:
         app.router.add_delete('/v1/leases/{id}',self.close)
         app.router.add_get('/v1/leases/{id}/frame',self.frame)
         app.router.add_post('/v1/leases/{id}/presentation/resolve',self.presentation_resolve)
+        app.router.add_post('/v1/leases/{id}/native/{stage:prepare|dispatch}',self.native_activation.post)
+        app.router.add_get('/v1/leases/{id}/native/{operation}',self.native_activation.get)
         app.router.add_post('/v1/leases/{id}/actions',self.action)
         async def receipt(request):return await self.action_receipt(request.match_info['id'],request.match_info['action'])
         app.router.add_get('/v1/leases/{id}/actions/{action}',receipt)

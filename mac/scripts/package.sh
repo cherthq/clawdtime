@@ -17,6 +17,18 @@ if [[ ! "$build_number" =~ ^[1-9][0-9]{0,3}$ ]]; then
   printf 'CLAWDTIME_BUILD_NUMBER must be an integer from 1 to 9999.\n' >&2
   exit 1
 fi
+source_revision="$(git rev-parse HEAD)"
+if [[ ! "$source_revision" =~ ^[a-f0-9]{40}$ ]]; then
+  printf 'A valid source Git revision is required.\n' >&2
+  exit 1
+fi
+source_dirty="$(python3 - <<'PYDIRTY'
+import subprocess
+ignored={'docs/PRODUCTION_TEST_READINESS.md','docs/PRODUCTION_WALKTHROUGH_AGENT_PROMPT.md','docs/PRODUCTION_WALKTHROUGH_IMPLEMENTATION_PLAN.md'}
+status=subprocess.check_output(['git','-C','..','status','--porcelain','--untracked-files=all'],text=True)
+print('true' if any(line[3:] not in ignored for line in status.splitlines()) else 'false')
+PYDIRTY
+)"
 swift build -c release
 output="$PWD/build/ClawdTime Companion.app"
 mkdir -p "$output/Contents/MacOS" "$output/Contents/Resources"
@@ -31,6 +43,8 @@ cat > "$output/Contents/Info.plist" <<PLIST
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$version</string>
 <key>CFBundleVersion</key><string>$build_number</string>
+<key>ClawdTimeSourceRevision</key><string>$source_revision</string>
+<key>ClawdTimeSourceDirty</key><$source_dirty/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>

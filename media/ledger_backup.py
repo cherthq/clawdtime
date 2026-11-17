@@ -30,6 +30,7 @@ OPTIONAL_TABLES = {
     # Old snapshots remain verifiable. If a new capability table exists, verify
     # its schema/count too; the SQLite online backup always includes ALL tables.
     'presentation_receipts': {'id', 'arguments', 'fingerprint', 'result'},
+    'native_activation_receipts': {'id', 'device', 'binding', 'base_hash', 'phase', 'result'},
 }
 
 

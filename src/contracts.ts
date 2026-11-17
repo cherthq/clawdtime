@@ -66,6 +66,7 @@ export interface AgentSession {
     voiceInteractionVersion?: 1;
     screenCameraVersion?: 1;
     livePresentationVersion?: 1;
+    nativeActivationVersion?: 1;
   };
   state: "active" | "yielded" | "stopped";
   controlEpoch: number;
@@ -230,6 +231,19 @@ export interface DevicePort {
   livePresentation?(
     lease: ControlLease,
     presentation: import("./live-presentation-contracts.js").LivePresentation,
+    fingerprint: string,
+  ): Promise<unknown>;
+  nativePrepare?(
+    lease: ControlLease,
+    envelope: import("./production-native-contracts.js").ProductionNativeEnvelope,
+  ): Promise<unknown>;
+  nativeDispatch?(
+    lease: ControlLease,
+    envelope: import("./production-native-contracts.js").ProductionNativeEnvelope,
+  ): Promise<unknown>;
+  nativeReceipt?(
+    lease: ControlLease,
+    operationId: string,
     fingerprint: string,
   ): Promise<unknown>;
   action(

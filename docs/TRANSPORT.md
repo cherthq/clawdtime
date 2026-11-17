@@ -850,3 +850,42 @@ Preserve all metadata, original anchors and unknown outcomes on rollback. Retain
 the newer code in standby while any stage/send outcome remains uncertain; older
 code cannot enforce these ledgers. Never restore a database or discard a dispatch
 claim to make a demo retry possible.
+
+### Prepared native activation reservations — November 17, 2026
+
+New original-chat sessions may separately negotiate `nativeActivationVersion:1`.
+This requires protocol v2, the display camera and live-presentation capabilities,
+`nativeControl:"desktop"` and `sharedSurface:true`; reconnect cannot upgrade an
+existing session. This negotiation alone never enables production admission or
+arms the helper. Finder/TextEdit activation remains separate from fallback input.
+
+The backend retains `native-activation` records in its existing FULL-synchronous
+SQLite entities store. Preparation binds the operation fingerprint, original
+expiry, exact agent/request/media/pairing/member/device/display, lease, native
+ownership epoch, policy, cursor and scene generation. The prepared process/window
+observation is write-once. Dispatch commits its once-only claim and at-most-two-
+second deadline before invoking the helper. Neither a duplicate ID nor a retry
+extends the original authority. Other operations cannot replace a reserved device,
+including through another display, pairing, request or freshly registered session.
+Exact session reconnect remains possible for read-only reconciliation.
+
+Undispatched preparation can expire or be canceled safely. Dispatching/submitted
+records become uncertain after backend restart and never expire into permission to
+retry. Terminal results require matching operation/fingerprint evidence; `returned`
+proves the actor returned without proving the UI outcome. A validated `verified`
+result additionally carries the exact independently observed window. Lost receipt
+persistence leaves the original reservation in place. Reconciliation reads the
+same helper receipt and never submits the native effect again.
+
+Admission, audio qualification and doctor inspect these device-wide reservations.
+Preserve the ledger, original deadlines and unknown results during deployment and
+rollback. Older binaries do not enforce this new ledger: keep a compatible binary
+in standby whenever unresolved native work remains; do not restore an old database
+or delete records to make a preflight pass.
+
+`backend-native-activation-storage.test.ts` and `backend-native-activation.test.ts`
+exercise synthetic production protocols, restart/persistence failure, exact
+receipt binding, duplicate/conflicting identities, multi-client/device fences,
+wrong authority, Stop at awaited boundaries, late replies, target replacement and
+authenticated routes. They produce no real call or native input and do not prove
+physical acceptance, handset delivery or production frame timing.

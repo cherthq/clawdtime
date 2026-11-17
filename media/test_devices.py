@@ -26,6 +26,27 @@ class ScreenTests(unittest.IsolatedAsyncioTestCase):
         session=SimpleNamespace(owner=owner,id='session',call_id='call',active=True,closing=False)
         screen=ScreenController(session);screen.release=AsyncMock();return screen
 
+    async def test_epoch_change_midframe_preserves_helper_capture_cadence(self):
+        screen=self.make();screen.release=AsyncMock(return_value=True)
+        selected={**selection(),'protocolVersion':2,'sessionId':'agent','executorEpoch':1,'policyRevision':1,'executor':'native'}
+        calls=[];second=asyncio.Event()
+        buffer=io.BytesIO();Image.new('RGB',(100,100),'blue').save(buffer,'JPEG');jpeg=buffer.getvalue()
+        async def request(method,path,body=None,frame=False):
+            if method!='GET':return 200,b'{}',{}
+            calls.append(time.monotonic())
+            if len(calls)==1:
+                screen.update(policy({**selected,'executorEpoch':2,'executor':'none'}))
+            else:second.set()
+            return 200,jpeg,{'content-type':'image/jpeg','x-captured-at':datetime.now(timezone.utc).isoformat(),
+                'x-frame-id':'frame-'+str(len(calls)),'x-frame-width':'100','x-frame-height':'100'}
+        screen.request=request
+        try:
+            screen.update(policy(selected));await asyncio.wait_for(second.wait(),1)
+            self.assertGreaterEqual(calls[1]-calls[0],.19)
+            self.assertEqual(screen.applied_epoch,2);self.assertEqual(screen.state,'viewing')
+            self.assertNotIn('lease-1',screen.stopped)
+        finally:await screen.close()
+
     async def test_input_consumes_frame_authority_without_flashing_video(self):
         screen=self.make();screen.poll=AsyncMock();screen.update(policy(selection()))
         screen.frame=Image.new('RGB',(640,360),'blue');screen.frame_id='before';screen.state='viewing'

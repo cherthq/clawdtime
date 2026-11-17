@@ -2,7 +2,9 @@
 import asyncio
 import time
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
+from contextlib import ExitStack
+from types import SimpleNamespace
 
 import test_production_presentation as fixtures
 from screen_diagnostics import ScreenDiagnostics
@@ -18,28 +20,33 @@ class PresentationTimingTests(unittest.IsolatedAsyncioTestCase):
         self.diagnostics=ScreenDiagnostics();self.fixture.screen.diagnostics=self.diagnostics
         self.backend_rtt=0;self.resolver_rtt=0;self.revoked=False
         self.monitor_started=asyncio.Event();self.monitor_release=None
-        self.authorities=[];self.witnesses=[]
+        self.authorities=[];self.witnesses=[];self.logical_clock=None
         self.fixture.owner.backend=AsyncMock(side_effect=self.backend)
         self.fixture.transport.side_effect=self.gateway
     async def asyncTearDown(self):await self.fixture.asyncTearDown()
+    async def hop(self,seconds):
+        if self.logical_clock is None:await asyncio.sleep(seconds)
+        else:
+            self.logical_clock[0]+=seconds
+            await asyncio.sleep(0)
     async def backend(self,path,body):
-        await asyncio.sleep(self.backend_rtt/2)
+        await self.hop(self.backend_rtt/2)
         if self.revoked:raise ValueError('presentation_authority_unavailable')
         result=await self.fixture.backend(path,body)
         self.authorities.append(dict(result))
-        await asyncio.sleep(self.backend_rtt/2)
+        await self.hop(self.backend_rtt/2)
         return result
     async def gateway(self,*args,**kwargs):
         monitor=self.fixture.calls>=2
         if monitor:
             self.monitor_started.set()
             if self.monitor_release:await self.monitor_release.wait()
-        await asyncio.sleep(self.resolver_rtt/2)
+        await self.hop(self.resolver_rtt/2)
         result=await self.fixture.gateway(*args,**kwargs)
         # Model the helper timestamp at the far end, before the return trip.
         import json
         self.witnesses.append(json.loads(result[1])['observedAt'])
-        await asyncio.sleep(self.resolver_rtt/2)
+        await self.hop(self.resolver_rtt/2)
         return result
     async def present(self):
         return await self.controller.present(self.value,self.mark)
@@ -50,14 +57,28 @@ class PresentationTimingTests(unittest.IsolatedAsyncioTestCase):
         self.backend_rtt=.09;self.resolver_rtt=.03
         self.assertGreater(2*self.backend_rtt+self.resolver_rtt,.2)
         self.assertLess(self.backend_rtt+self.resolver_rtt,.2)
-        result=await self.present();self.assertEqual(result['state'],'accepted')
-        self.assertEqual(result['observation']['observedAt'],self.witnesses[1])
-        await asyncio.sleep(.48)
-        self.assertIsNotNone(self.camera.target_scope)
-        self.assertGreaterEqual(self.fixture.calls,4)
-        # Final fresh callback is still made for each completed monitor read.
-        self.assertGreaterEqual(len(self.authorities),4)
-        self.assertEqual(self.controller.receipt(self.value['commandId']),result)
+        # This positive transport model advances a shared logical clock at
+        # each injected network half-hop. Host scheduling/parallel compilation
+        # must not silently add latency to the scenario being asserted. The
+        # runtime's original timestamps, 250ms witness and 200ms budgets remain
+        # unchanged; the following negative tests exercise real timeout clocks.
+        self.logical_clock=[0.0];wall=time.time();mono=time.monotonic()
+        clock=SimpleNamespace(time=lambda:wall+self.logical_clock[0],monotonic=lambda:mono+self.logical_clock[0])
+        self.camera.clock=clock.monotonic;self.camera.wall=clock.time
+        with ExitStack() as stack:
+            for module in ('preview_presentation','live_presentation','preview_native','test_production_presentation','screen_diagnostics'):
+                stack.enter_context(patch(module+'.time',clock))
+            try:
+                result=await self.present();self.assertEqual(result['state'],'accepted')
+                self.assertEqual(result['observation']['observedAt'],self.witnesses[1])
+                for _ in range(100):
+                    if self.fixture.calls>=6 and len(self.authorities)>=6:break
+                    await asyncio.sleep(0)
+                self.assertIsNotNone(self.camera.target_scope)
+                self.assertGreaterEqual(self.fixture.calls,6)
+                self.assertGreaterEqual(len(self.authorities),6)
+                self.assertEqual(self.controller.receipt(self.value['commandId']),result)
+            finally:await self.host.stop()
     async def test_two_remaining_hops_over_budget_clear_without_replay(self):
         self.backend_rtt=.13;self.resolver_rtt=.09
         result=await self.present();self.assertEqual(result['state'],'accepted')

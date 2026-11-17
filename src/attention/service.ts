@@ -44,6 +44,10 @@ import type {
   SessionRegistration,
 } from "../contracts.js";
 import { Store } from "../storage/store.js";
+import {
+  NativeReservationStore,
+  unresolvedNativeReservations,
+} from "../storage/native-reservations.js";
 import { DomainError, hash, id, token } from "../storage/security.js";
 export { DomainError } from "../storage/security.js";
 
@@ -95,6 +99,7 @@ const registration = z
         voiceInteractionVersion: z.literal(1).optional(),
         screenCameraVersion: z.literal(1).optional(),
         livePresentationVersion: z.literal(1).optional(),
+        nativeActivationVersion: z.literal(1).optional(),
       })
       .strict(),
   })
@@ -155,6 +160,7 @@ export interface ResponseInput {
 }
 export class ClawdTime {
   readonly clock: () => number;
+  readonly nativeReservations: NativeReservationStore;
   private draining = false;
   constructor(
     readonly store: Store,
@@ -162,6 +168,7 @@ export class ClawdTime {
     options: { clock?: () => number } = {},
   ) {
     this.clock = options.clock ?? Date.now;
+    this.nativeReservations = new NativeReservationStore(store, this.clock);
     pruneMessageEffects(this);
     for (const e of store.effects("unknown")) {
       const request = store.get<AttentionRequest>(
@@ -524,6 +531,20 @@ export class ClawdTime {
         "Live presentation requires a fresh same-chat version 2 display camera session.",
       );
     if (
+      value.capabilities.nativeActivationVersion === 1 &&
+      (value.protocolVersion !== 2 ||
+        value.capabilities.livePresentationVersion !== 1 ||
+        value.screenCamera?.surface.kind !== "display" ||
+        !value.capabilities.sharedSurface ||
+        value.capabilities.nativeControl !== "desktop" ||
+        value.conversation ||
+        value.documentAccess)
+    )
+      throw new DomainError(
+        409,
+        "Native activation requires a fresh original-chat display session with shared desktop control and live presentation.",
+      );
+    if (
       value.voiceFrontend &&
       (value.protocolVersion !== 2 ||
         value.capabilities.voiceInteractionVersion !== 1 ||
@@ -564,6 +585,11 @@ export class ClawdTime {
           (s) =>
             s.pairingId === p.id &&
             s.externalSessionId === value.externalSessionId,
+        );
+      if (!previous && this.nativeReservations.hasUnresolvedDevice(p.deviceId))
+        throw new DomainError(
+          409,
+          "Unresolved native input prevents a replacement session on this device.",
         );
       if (previous && isAudioQualification(previous))
         throw new DomainError(
@@ -644,6 +670,11 @@ export class ClawdTime {
           );
         return this.store.get<AttentionRequest>("attention", old.requestId)!;
       }
+      if (this.nativeReservations.hasUnresolvedDevice(pairing.deviceId))
+        throw new DomainError(
+          409,
+          "Unresolved native input prevents a new attention request on this device.",
+        );
       if (
         session.protocolVersion !== 2 &&
         session.capabilities.cooperativePause &&
@@ -1928,8 +1959,17 @@ export class ClawdTime {
       .filter(
         (item) => item.pairingId === pairing.id && item.state === "unknown",
       ).length;
+    const nativeReservations = unresolvedNativeReservations(
+      this.store,
+      pairing.deviceId,
+      now,
+    );
+    const unresolvedNativeCount = nativeReservations.length;
     const blockingUnknownEffects =
-      unknownEffects - retiredSetupInvitationCount + unknownAttachmentCount;
+      unknownEffects -
+      retiredSetupInvitationCount +
+      unknownAttachmentCount +
+      unresolvedNativeCount;
     const checks: ReadinessCheck[] = [];
     const mode =
       this.store.state<string>("runtime:mode") ?? this.transport.mode;
@@ -2046,6 +2086,7 @@ export class ClawdTime {
       ready: mode === "simulation" ? pairing.allowView : liveReady,
       unknownEffects,
       unknownAttachmentCount,
+      unresolvedNativeCount,
       retiredSetupInvitationCount,
       blockingUnknownEffects,
       physicalAcceptance: false,

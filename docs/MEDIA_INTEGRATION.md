@@ -751,7 +751,6 @@ access, live response latency or verified task success. Physical trial counts fo
 this new voice frontend and text-only grant path are zero as of this source change;
 no native/custom latency default is selected from simulated tests.
 
-
 ### Scoped document first-page preview (source, not physical acceptance)
 
 Document-only preparation is immutable: `documentOnly:true`, exact
@@ -771,7 +770,6 @@ cannot reacquire automatically. A fresh preview request needs a new identity.
 Rendering/upload/source selection and attachment-send receipts belong to the local
 adapter/backend; publishing a video frame is not proof the handset displayed it or
 that a résumé was sent. No actual résumé or handset preview was used in media tests.
-
 
 Verified document jobs use the backend-constructed `job.report` for candidate
 names, selected preview status and transfer receipts. Raw worker summaries cannot
@@ -805,13 +803,13 @@ The original native CUA tool separately changed/saved one disposable document
 heading and moved one disposable file; UI and filesystem observations confirmed
 the results. The new activation executor did not perform those edits or moves.
 
-| Case | Evidence and limit |
-| --- | --- |
-| Normal windows on current selected display | Activation and outgoing preview passed in this rehearsal. |
-| Original native CUA under current ownership | One document edit/save and one file move verified; no general input capability added to the preview executor. |
-| Off-Space, full-screen, minimized or multiple displays | Not qualified. |
-| Stop and release | Capture stopped cleanly, ownership returned to none/paused and the viewing lease released. |
-| FaceTime, handset delivery or installed services | Not exercised or deployed. |
+| Case                                                   | Evidence and limit                                                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Normal windows on current selected display             | Activation and outgoing preview passed in this rehearsal.                                                     |
+| Original native CUA under current ownership            | One document edit/save and one file move verified; no general input capability added to the preview executor. |
+| Off-Space, full-screen, minimized or multiple displays | Not qualified.                                                                                                |
+| Stop and release                                       | Capture stopped cleanly, ownership returned to none/paused and the viewing lease released.                    |
+| FaceTime, handset delivery or installed services       | Not exercised or deployed.                                                                                    |
 
 Across approximately 417 seconds, metadata recorded 5,086 source requests, 3,020
 distinct source samples and 11,186 rendered responses (about 26.82 fps), with no
@@ -1111,3 +1109,43 @@ application-connection interruption remains unexplained. Snapshot success is not
 reported as a persistent-stream repair. Public macOS cooperative activation also
 cannot guarantee that a target moves from another Space into view. No broader
 capture fallback, forced Space change or automatic action replay is introduced.
+
+## Default-off production activation relay
+
+The separate `CLAWDTIME_NATIVE_ACTIVATION_ENABLED` media gate defaults off.
+`POST /sessions/{mediaSession}/screen/native/prepare|dispatch` requires exact
+backend-authorized envelope, currently applied native execution epoch and the
+selected display camera. The callback
+`/media/{mediaSession}/native-activation-authority` is bounded by the original
+expiry; it cannot extend the native two-second dispatch deadline. No call, lease,
+local Enable or fallback action is created by these routes.
+
+Media retains `native_activation_receipts` in its existing SQLite ledger. Gateway
+retains `native_activations` and fences the whole device during dispatch/uncertainty.
+Both reserve before forwarding an effect, never retry on timeout, and preserve the
+operation identity across duplicates, Stop and restart. Preparation of a retired
+operation cannot overwrite its result. Read-only receipt reconciliation is
+available after session removal and validates the retained fingerprint, host,
+operation and original completion interval before clearing an uncertainty fence.
+The online encrypted media backup includes and validates the new optional table.
+
+Gateway WSS permits only the fixed native prepare/dispatch POSTs and receipt GETs.
+The helper independently validates its actual enabled lease/Stop policy at native
+boundaries. Cloud approval alone is insufficient. Older media/helper versions do
+not advertise the activation capability; old connector sessions cannot upgrade
+silently. Keep admission disabled until matched components and physical walkthrough
+acceptance have been recorded by the coordinating lead.
+
+Ownership changes that arrive during a capture discard that frame and still wait
+one existing source interval before the next request. The discarded capture
+already consumed the helper's five-request/second slot; skipping pacing previously
+caused a second request immediately after native release, provoking rate refusal
+and terminal cleanup. A deterministic regression reproduced a roughly 0.06 ms gap
+before the repair and verifies at least 190 ms afterward. Original frame timestamps
+and freshness remain unchanged; no native effect is retried.
+
+`screenDiagnostics.lastPollFailure` now reports a fixed stage/category and optional
+HTTP status for failure after an awaited gateway result. It can distinguish
+capture, header, dimensions, JPEG decode, camera metadata and camera acceptance
+failures without exception text, image bytes or titles. Stages reset their status
+before each request so a capture exception never inherits renewal's HTTP 200.

@@ -80,6 +80,13 @@ class ScreenDiagnostics:
         if error or (http_status is not None and http_status>=300): self.data['lastGatewayFailure']=result
         self.save(force=bool(error) or (http_status is not None and http_status>=300))
 
+    def poll_failure(self,stage,error,http_status=None):
+        if stage not in ('authority','renew','capture','frame_headers','frame_dimensions','frame_decode','camera_metadata','camera_accept','publish','pacing') or error not in ('timeout','connection','missing_field','camera_rejected','invalid_response','io','other'):raise ValueError('Invalid poll diagnostic')
+        if http_status is not None and (type(http_status) is not int or not 100<=http_status<=599):raise ValueError('Invalid poll status')
+        result={'stage':stage,'error':error,'at':stamp()}
+        if http_status is not None:result['httpStatus']=http_status
+        self.data['lastPollFailure']=result;self.save(force=True)
+
     def emitted(self, screen=False):
         first_screen = screen and self.data.get('screenVideoObserved') is not True
         self.data['videoFramesEmitted'] = min(self.data['videoFramesEmitted']+1, 999999999)

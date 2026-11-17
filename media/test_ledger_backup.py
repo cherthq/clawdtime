@@ -192,7 +192,7 @@ class LedgerBackupEndpointTests(unittest.IsolatedAsyncioTestCase):
         output = Path(self.tmp.name) / 'download.enc'
         write_encrypted(output, encrypted)
         self.assertEqual(verify_backup(output, KEY, IDENTITY)['tables'],
-                         {'sessions': 0, 'speech': 0, 'device_actions': 0, 'presentation_receipts': 0})
+                         {'sessions': 0, 'speech': 0, 'device_actions': 0, 'presentation_receipts': 0, 'native_activation_receipts': 0})
         self.assertEqual((await self.client.get('/internal/ledger-backup', headers=self.headers)).status, 429)
 
     async def test_busy_snapshot_does_not_block_health_or_start_another_worker(self):

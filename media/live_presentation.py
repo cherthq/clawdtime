@@ -37,7 +37,12 @@ class RemoteResolver:
                 async with asyncio.timeout(timeout):
                     status,raw,_=await gateway_request(self.host.owner,'POST',f"/v1/leases/{expected['leaseId']}/presentation/resolve",body,device=selection['deviceId'])
                 self.host.guard(presentation)
-                if self.closed or status!=200 or len(raw)>8192:raise ValueError('presentation_resolver_unavailable')
+                if self.closed or len(raw)>8192:raise ValueError('presentation_resolver_unavailable')
+                if status!=200:
+                    try:reason=json.loads(raw).get('reason')
+                    except (ValueError,AttributeError):reason=None
+                    allowed={'presentation_resolver_busy','presentation_authority_unavailable','presentation_target_changed','presentation_resolver_unavailable'}
+                    raise ValueError(reason if reason in allowed else 'presentation_resolver_unavailable')
                 result=NativePreviewController._observation(None,json.loads(raw),{'window':presentation['window']})
                 if not HASH.fullmatch(result['processIdentity']) or not all(result[k] for k in ('appActive','windowFocused','windowOnScreen')):raise ValueError('presentation_target_changed')
                 return result

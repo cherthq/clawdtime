@@ -99,6 +99,7 @@ export async function startSetupSession(options: {
   screenCamera?: ProtocolOptions["screenCamera"];
   voiceFrontend?: ProtocolOptions["voiceFrontend"];
   livePresentation?: ProtocolOptions["livePresentation"];
+  nativeActivation?: ProtocolOptions["nativeActivation"];
   input?: Readable;
   output?: Writable;
   request?: typeof fetch;
@@ -197,7 +198,9 @@ export async function startSetupSession(options: {
         JSON.stringify(run.session.voiceFrontend) !==
           JSON.stringify(options.voiceFrontend) ||
         (run.session.capabilities?.livePresentationVersion === 1) !==
-          (options.livePresentation === true))
+          (options.livePresentation === true) ||
+        (run.session.capabilities?.nativeActivationVersion === 1) !==
+          (options.nativeActivation === true))
     )
       throw new Error(
         "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
@@ -239,10 +242,12 @@ export async function startSetupSession(options: {
     }
     if (
       (run.session?.capabilities?.livePresentationVersion === 1) !==
-      (options.livePresentation === true)
+        (options.livePresentation === true) ||
+      (run.session?.capabilities?.nativeActivationVersion === 1) !==
+        (options.nativeActivation === true)
     )
       throw new Error(
-        "Server did not confirm the selected live presentation capability. Preserve this registration; do not downgrade or retry it.",
+        "Server did not confirm the selected live presentation/native activation capabilities. Preserve this registration; do not downgrade or retry it.",
       );
     if (bridge.sessionId && bridge.sessionId !== run.session?.id)
       throw new Error("Setup session binding changed.");

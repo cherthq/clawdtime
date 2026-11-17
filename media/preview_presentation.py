@@ -13,7 +13,7 @@ REASONS=QUALIFICATION_REASONS|frozenset(('target_not_foreground','presentation_s
     'invalid_presentation','presentation_fingerprint_mismatch','presentation_authority_unavailable',
     'presentation_target_changed','presentation_frame_unavailable','presentation_bracket_changed',
     'presentation_camera_changed','presentation_transaction_refused','presentation_completion_unknown',
-    'presentation_resolver_unavailable','presentation_witness_expired'))
+    'presentation_resolver_unavailable','presentation_resolver_busy','presentation_witness_expired'))
 
 
 def safe_reason(error):

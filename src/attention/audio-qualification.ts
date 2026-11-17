@@ -7,6 +7,7 @@ import type {
 } from "../contracts.js";
 import { DomainError } from "../storage/security.js";
 import type { Store } from "../storage/store.js";
+import { hasUnresolvedNativeDevice } from "../storage/native-reservations.js";
 
 export const audioQualificationSchema = z
   .object({
@@ -109,6 +110,8 @@ export function assertAudioQualificationIdle(
   const blocked = (message: string) => {
     throw new DomainError(409, message);
   };
+  if (hasUnresolvedNativeDevice(store, pairing.deviceId, now))
+    blocked("Unresolved native input reserves this device.");
   if (sessions.some((session) => session.state !== "stopped"))
     blocked("An existing session must stop before audio qualification.");
   if (requests.some((request) => !terminal.has(request.state)))

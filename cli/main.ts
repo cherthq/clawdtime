@@ -26,6 +26,7 @@ import {
   type Connection,
 } from "../connectors/shared/state.js";
 import { protocolOptions } from "../connectors/shared/protocol.js";
+import { startProductionWalkthroughSession } from "../connectors/shared/production-walkthrough-session.js";
 import { startExecutorWorker } from "../connectors/shared/executor-worker.js";
 import { startMcp } from "../connectors/shared/mcp.js";
 import {
@@ -54,12 +55,31 @@ export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
   if (command === "help" || command === "--help") {
     console.log(
-      "ClawdTime internal build (no npm publication implied)\nexecutor-worker --run PRIVATE_REGISTERED_RUN [--connection PRIVATE_CONNECTION] (explicit local managed worker, no native chat takeover)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID [--message-updates true|false] [--voice-frontend elevenlabs] [--live-presentation true] [--screen-camera true --camera-display ID [--camera-window ID --camera-owner-pid PID]] [--runner codex-app-server|remote-codex-app-server|remote-documents --execution-session api_managed] [--document-access-until ISO_TIMESTAMP] (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",
+      "ClawdTime internal build (no npm publication implied)\nwalkthrough --run PRIVATE_REGISTERED_RUN --plan PRIVATE_PLAN --request-id ID --background-actors-stopped true [--connection PRIVATE_CONNECTION] (original-chat prepared CUA trigger, no call/capture)\nexecutor-worker --run PRIVATE_REGISTERED_RUN [--connection PRIVATE_CONNECTION] (explicit local managed worker, no native chat takeover)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID [--message-updates true|false] [--voice-frontend elevenlabs] [--live-presentation true] [--native-activation true] [--screen-camera true --camera-display ID [--camera-window ID --camera-owner-pid PID]] [--runner codex-app-server|remote-codex-app-server|remote-documents --execution-session api_managed] [--document-access-until ISO_TIMESTAMP] (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",
     );
     return;
   }
   const separator = args.indexOf("--");
   const flags = options(args.slice(1, separator < 0 ? undefined : separator));
+  if (command === "walkthrough") {
+    if (
+      !flags.run ||
+      !flags.plan ||
+      !flags["request-id"] ||
+      flags["background-actors-stopped"] !== "true"
+    )
+      throw new Error(
+        "Use --run PRIVATE_RUN --plan PRIVATE_PLAN --request-id ID --background-actors-stopped true after stopping conflicting input actors.",
+      );
+    await startProductionWalkthroughSession({
+      runFile: flags.run,
+      planFile: flags.plan,
+      requestId: flags["request-id"],
+      backgroundActorsStopped: true,
+      connectionFile: flags.connection,
+    });
+    return;
+  }
   if (command === "executor-worker") {
     if (!flags.run)
       throw new Error(
@@ -87,6 +107,7 @@ export async function main(args = process.argv.slice(2)) {
       "message-updates",
       "screen-camera",
       "live-presentation",
+      "native-activation",
       "voice-frontend",
       "camera-display",
       "camera-window",

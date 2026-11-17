@@ -7,11 +7,18 @@ import DeviceCore
 /// Only the authenticated local preview controller may broker this inherited pipe.
 @MainActor final class PreviewNativeExecutor {
   private var admission = PreviewNativeAdmission()
+  private let installed: Bool
+  init(installed: Bool = false) { self.installed = installed }
+  private func localAuthority() -> Bool {
+    guard installed else { return true }
+    FileHandle.standardOutput.write(Data("{\"localAuthority\":1}\n".utf8))
+    return FileHandle.standardInput.readData(ofLength: 2) == Data("1\n".utf8)
+  }
   private var retained: (NSRunningApplication, AXUIElement, ProcessLifetimeIdentity, Double)?
   private var binding: PreviewNativeRequest?
   private let resolver = NativeTargetResolver()
   private var refusalReason: String { resolver.refusalReason }
-  private func available(_ request: PreviewNativeRequest) -> Bool { resolver.available(request) }
+  private func available(_ request: PreviewNativeRequest) -> Bool { localAuthority() && resolver.available(request) }
   private func resolve(_ request: PreviewNativeRequest) -> (NSRunningApplication, AXUIElement, PreviewNativeRequest, ProcessLifetimeIdentity)? { resolver.resolve(request) }
   private func observation(_ request: PreviewNativeRequest, app: NSRunningApplication, window: AXUIElement, lifetime: ProcessLifetimeIdentity) -> [String: Any] {
     resolver.observation(request, app: app, window: window, lifetime: lifetime)
@@ -80,7 +87,8 @@ import DeviceCore
       }, setFrontmost: {
         // Public Accessibility app activation, not a window raise or a launch.
         // Never fall through to another activation method on failure.
-        AXUIElementSetAttributeValue(root, kAXFrontmostAttribute as CFString, kCFBooleanTrue) == .success
+        guard self.available(request), !Task.isCancelled else { return false }
+        return AXUIElementSetAttributeValue(root, kAXFrontmostAttribute as CFString, kCFBooleanTrue) == .success
       })
       switch activation {
       case .unavailable: return response(request.requestId, "rejected", "activation_attribute_unavailable")
@@ -93,6 +101,7 @@ import DeviceCore
       guard current.0.isActive, NSWorkspace.shared.frontmostApplication?.isEqual(current.0) == true else {
         return response(request.requestId, "rejected", "app_not_active")
       }
+      guard available(request), !Task.isCancelled else { return response(request.requestId, "rejected", "qualification_changed") }
       sent = AXUIElementPerformAction(current.1, kAXRaiseAction as CFString) == .success
     }
     // Only fixed local stage codes cross the pipe, never an AX title or NSError.

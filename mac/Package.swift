@@ -8,5 +8,6 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     .target(name: "DeviceCore"),
     .executableTarget(name: "ClawdTimeCompanion", dependencies: ["DeviceCore"]),
     .testTarget(name: "DeviceCoreTests", dependencies: ["DeviceCore"]),
+    .testTarget(name: "CompanionTests", dependencies: ["ClawdTimeCompanion", "DeviceCore"]),
     .executableTarget(name: "PanelPreview", dependencies: ["DeviceCore"]),
 ], swiftLanguageModes: [.v5])

@@ -12,8 +12,8 @@ or physical FaceTime screen delivery. Viewing must pass before testing control.
 
 Use an isolated Python 3.12 virtual environment in
 `~/Library/Application Support/ClawdTimeGateway`; do not install into Chert's
-runtime. Install `requirements.txt` into that environment. Copy `service.py` and
-`relay.py`, then start `python relay.py` under an owner-controlled LaunchAgent.
+runtime. Install `requirements.txt` into that environment. Copy the matched runtime
+files and `release-source.json` listed below, then start `python relay.py` under an owner-controlled LaunchAgent.
 Environment:
 
 - `DEVICE_GATEWAY_KEY`: fresh 32+ character gateway-only secret. Set the same key
@@ -122,7 +122,7 @@ with generated relay request IDs, fixed stages, UTC timestamps, durations and
 statuses. Readiness polling is excluded; no payloads, paths, screen pixels or input
 text are recorded. Preserve the receipt tables when updating or inspecting it.
 A response-submitted stage is not proof of media receipt. Copy
-`relay_diagnostics.py` together with `service.py` and `relay.py` for a gateway
+`relay_diagnostics.py` and `native_relay.py` together with `service.py` and `relay.py` for a gateway
 source update; only the coordinating lead restarts the existing process after
 known call/lease cleanup. No companion replacement or permission reset is needed.
 
@@ -184,3 +184,26 @@ retire an otherwise healthy capture lease. Only bounded metadata is returned;
 helper private error text is discarded. Both relay allowlists permit only this
 exact path with POST. `livePresentationVersion: 1` is forwarded only by scoped
 readiness for an allowed viewer on an attached display.
+
+### Production native activation
+
+`nativeActivationVersion: 1` is forwarded only for a controller-authorized attached
+display. `/v1/leases/{id}/native/prepare|dispatch` are authenticated narrow POSTs;
+`GET /v1/leases/{id}/native/{operation}` reconciles retained results even after
+lease Stop. Only Finder/TextEdit operations under current native ownership are
+valid. The gateway persists a device-wide reservation before dispatch and refuses
+replacement input/ownership while its result is uncertain. Duplicate IDs never
+resend input, including prepare after a completed dispatch. Preserve the
+`native_activations` table during deployment; receipt GET is the recovery path.
+
+Gateway rollout must copy `native_relay.py` together with `service.py`,
+`relay.py`, `relay_diagnostics.py`, `start.py` and the existing requirements.
+A gateway started from the repository uses these matched sources directly.
+Preserve its configured SQLite path and unknown rows; do not create an empty
+replacement database for an upgrade.
+
+Authenticated `GET /v1/version` returns the startup-loaded source manifest SHA,
+a deterministic SHA-256 over the five Python runtime files and capability version.
+Copy the release staging `release-source.json` containing the exact source SHA.
+The tracked development manifest deliberately reports `development`. This metadata
+contains no device configuration or secrets and does not authorize any activity.

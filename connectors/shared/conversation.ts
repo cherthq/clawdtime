@@ -7,11 +7,52 @@ import { presentationSchema } from "../../src/attention/presentation.js";
 import { voicePreparationSchema } from "../../src/voice-contracts.js";
 import { livePresentationIntentSchema } from "../../src/live-presentation-contracts.js";
 import type { ClawdTimeClient } from "./client.js";
+import { ProductionNativeClient } from "./production-native.js";
+import { nativePresentationOperationSchema } from "../../src/native-presentation-contracts.js";
+import { productionNativeReferenceSchema } from "../../src/production-native-contracts.js";
 
 const id = z.string().min(1).max(200);
 const epoch = z.number().int().nonnegative();
 /** Shared schemas keep stdio MCP and foreground JSONL behavior identical. */
 export const conversationCommands = {
+  native_activation_status: {
+    description:
+      "Read this exact request's separately negotiated production activation reservations. Missing capability is not permission to use the preview or fallback path.",
+    schema: z.object({ requestId: id }).strict(),
+    readOnly: true,
+  },
+  prepare_native_activation: {
+    description:
+      "Prepare and durably reserve one exact Finder/TextEdit activate_app or raise_window operation under current exclusive native ownership. Preparation does not execute input. Only the original chat's permitted CUA may click the fixed prepared-operation trigger. Keep the same operation ID and read receipts after uncertainty.",
+    schema: z
+      .object({ requestId: id, operation: nativePresentationOperationSchema })
+      .strict(),
+  },
+  native_activation_receipt: {
+    description:
+      "Read the original activation reservation/receipt without replaying input. A submitted or returned input is not observed UI success. Unknown effects prohibit release or replacement.",
+    schema: z
+      .object({
+        requestId: id,
+        operationId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
+      })
+      .strict(),
+    readOnly: true,
+  },
+  reconcile_native_activation: {
+    description:
+      "Reconcile the original native activation receipt only. Never dispatches input or claims fresh UI verification after Stop.",
+    schema: z
+      .object({ requestId: id, reference: productionNativeReferenceSchema })
+      .strict(),
+  },
+  cancel_prepared_activation: {
+    description:
+      "Cancel only a known nondispatched prepared activation. Dispatched or uncertain input cannot be canceled by relabeling its receipt; preserve and reconcile it.",
+    schema: z
+      .object({ requestId: id, reference: productionNativeReferenceSchema })
+      .strict(),
+  },
   live_presentation_status: {
     description:
       "Inspect this exact request's negotiated production live presentation capability, generation and unresolved command. Read-only; cameraVersion 1 alone is insufficient. No preview fallback or OS input.",
@@ -195,6 +236,22 @@ export async function executeConversationCommand(
     any
   >;
   const { requestId, ...body } = args;
+  if (name === "native_activation_status")
+    return new ProductionNativeClient(client, requestId).status();
+  if (name === "prepare_native_activation")
+    return new ProductionNativeClient(client, requestId).prepare(
+      body.operation,
+    );
+  if (name === "native_activation_receipt")
+    return new ProductionNativeClient(client, requestId).receipt(
+      body.operationId,
+    );
+  if (name === "reconcile_native_activation")
+    return new ProductionNativeClient(client, requestId).reconcile(
+      body.reference,
+    );
+  if (name === "cancel_prepared_activation")
+    return new ProductionNativeClient(client, requestId).cancel(body.reference);
   if (name === "live_presentation_status")
     return client.livePresentationStatus(requestId);
   if (name === "live_presentation_receipt")
@@ -267,6 +324,11 @@ export async function executeConversationCommand(
       | "live_presentation_status"
       | "live_presentation_receipt"
       | "present_prepared_scene"
+      | "native_activation_status"
+      | "prepare_native_activation"
+      | "native_activation_receipt"
+      | "reconcile_native_activation"
+      | "cancel_prepared_activation"
     >
   ];
   return name === "execution_status"

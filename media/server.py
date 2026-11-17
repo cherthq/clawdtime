@@ -36,6 +36,7 @@ from ledger_backup import encrypted_snapshot
 from lifecycle_diagnostics import LifecycleDiagnostics, CATEGORIES
 from camera_http import camera_request
 from live_presentation import routes as presentation_routes
+from native_activation import routes as native_activation_routes
 from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, priority_stop_requested, validate_session_id
 
 RATE = 48000
@@ -979,6 +980,9 @@ class Session:
 class Service:
     def __init__(self,env=None):
         self.env = dict(os.environ if env is None else env)
+        source=json.loads(Path(__file__).with_name('release-source.json').read_text())
+        if not isinstance(source,dict) or set(source)!={'sourceRevision'} or not isinstance(source['sourceRevision'],str) or not re.fullmatch(r'(?:development|[a-f0-9]{40})',source['sourceRevision']):raise ValueError('Invalid release source manifest')
+        self.source_revision=source['sourceRevision']
         self.sessions = {}
         self.preparing = {}
         self.speech_tasks = {}
@@ -1471,7 +1475,7 @@ class Service:
         app=web.Application(client_max_size=65536,middlewares=[auth])
         async def health(request):
             devices_configured=self.env.get('MEDIA_DEVICES_ENABLED')=='true' and len(self.env.get('DEVICE_GATEWAY_KEY',''))>=32 and bool(self.env.get('DEVICE_GATEWAY_URL') or self.env.get('DEVICE_GATEWAY_RELAY')=='true')
-            return web.json_response({'ok':True,'service':'clawdtime-media','configured':self.ready(),'activeSessions':sum(not s.closed for s in self.sessions.values()),'deviceGatewayConnected':self.device_relay.connected,'devicesConfigured':devices_configured})
+            return web.json_response({'ok':True,'service':'clawdtime-media','sourceRevision':self.source_revision,'configured':self.ready(),'activeSessions':sum(not s.closed for s in self.sessions.values()),'deviceGatewayConnected':self.device_relay.connected,'devicesConfigured':devices_configured})
         app.router.add_get('/health',health)
         async def qualification_readiness(request):
             return web.json_response(acoustic_readiness(self.env), headers={'Cache-Control':'no-store'})
@@ -1495,6 +1499,7 @@ class Service:
             if not isinstance(value,dict) or value.get('deviceId')!=device:raise web.HTTPBadGateway()
             if self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true':value.pop('cameraVersion',None)
             if self.env.get('CLAWDTIME_LIVE_PRESENTATION_ENABLED')!='true' or self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true' or not suffix:value.pop('livePresentationVersion',None)
+            if self.env.get('CLAWDTIME_NATIVE_ACTIVATION_ENABLED')!='true' or not suffix:value.pop('nativeActivationVersion',None)
             return web.json_response(value,headers={'Cache-Control':'no-store'})
         async def device_panel(request):
             device=request.match_info['device']
@@ -1521,6 +1526,15 @@ class Service:
             status,raw,_=await gateway_request(self,'POST',f'/v1/devices/{device}/panel',body)
             return web.Response(status=status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
         app.router.add_post('/devices/{device}/panel',device_panel)
+        async def device_version(request):
+            device=request.match_info['device']
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',device):raise web.HTTPBadRequest()
+            status,raw,_=await gateway_request(self,'GET',f'/v1/devices/{device}/version',device=device)
+            if status!=200 or len(raw)>1024:raise web.HTTPServiceUnavailable()
+            value=json.loads(raw)
+            if not isinstance(value,dict) or set(value)!={'sourceRevision','runtimeSha256','nativeActivationVersion'} or not isinstance(value['sourceRevision'],str) or not re.fullmatch(r'(?:development|[a-f0-9]{40})',value['sourceRevision']) or not isinstance(value['runtimeSha256'],str) or not re.fullmatch(r'[a-f0-9]{64}',value['runtimeSha256']) or type(value['nativeActivationVersion']) is not int or value['nativeActivationVersion']!=1:raise web.HTTPBadGateway()
+            return web.json_response(value,headers={'Cache-Control':'no-store'})
+        app.router.add_get('/devices/{device}/version',device_version)
         app.router.add_get('/devices/{device}/readiness',device_readiness)
         app.router.add_get('/devices/{device}/readiness/{member}/{display}',device_readiness)
         app.router.add_get('/device-gateway',self.device_relay.connect)
@@ -1567,6 +1581,13 @@ class Service:
             if not session or not session.screen:raise web.HTTPConflict()
             screen=session.screen;selection=screen.selection
             if not selection or selection['leaseId']!=body['leaseId']:
+                # update({}) clears selection before its asynchronous DELETE has
+                # completed. Join the exact cleanup before acknowledging absence.
+                terminal=screen.terminal_tasks.get(body['leaseId'])
+                if terminal:await asyncio.shield(terminal)
+                transition=screen.transition_task
+                if transition:await asyncio.shield(transition)
+                if screen.transition_task is not transition:raise web.HTTPConflict(text='Lease cleanup changed; reconcile release.')
                 if body['leaseId'] in screen.stopped and time.time()>=screen.release_blocked_until:
                     return web.json_response({'released':True,'leaseId':body['leaseId']})
                 raise web.HTTPConflict(text='Lease release requires exact current selection.')
@@ -1580,6 +1601,7 @@ class Service:
         app.router.add_get('/sessions/{id}/screen/frame',screen_frame)
         app.router.add_post('/sessions/{id}/screen/actions',self.device_actions.post)
         presentation_routes(self,app)
+        native_activation_routes(self,app)
         app.router.add_get('/sessions/{id}/screen/actions/{action_id}',self.device_actions.get)
         app.router.add_post('/sessions/{id}/{action}',self.action)
         app.on_startup.append(self.start)

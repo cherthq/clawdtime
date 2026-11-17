@@ -20,6 +20,7 @@ struct HelperStatus: Codable {
   let textControlVersion: Int
   let cameraVersion: Int
   let livePresentationVersion: Int
+  let nativeActivationVersion: Int
   let localEnableGeneration: Int
 }
 
@@ -27,6 +28,8 @@ struct HelperStatus: Codable {
   let config: HelperConfig
   let policy: DevicePolicy
   let ledger: ReceiptStore
+  let nativeHost: InstalledNativeHost
+  let presentationHost=InstalledPresentationHost()
   let preferences: ControlPreferenceStore
   let controlPanel = ControlPanelState()
   let capture = ScreenCapture()
@@ -56,6 +59,7 @@ struct HelperStatus: Codable {
   init(config: HelperConfig, ledgerURL: URL) throws {
     self.config = config
     self.ledger = try ReceiptStore(url: ledgerURL)
+    self.nativeHost = try InstalledNativeHost(url: ledgerURL.deletingLastPathComponent().appendingPathComponent("native/receipts.json"))
     self.preferences = try ControlPreferenceStore(
       url: ledgerURL.deletingLastPathComponent().appendingPathComponent("control-policy.json"),
       deviceId: config.deviceId)
@@ -156,7 +160,7 @@ struct HelperStatus: Codable {
     alert.addButton(withTitle: "Reject")
     if alert.runModal() == .alertFirstButtonReturn {
       do {
-        guard ledger.unresolvedActionCount == 0 else {
+        guard (ledger.unresolvedActionCount + nativeHost.store.unresolved) == 0 else {
           throw HelperError(409, "Reconcile outstanding input before allowing control.")
         }
         try policy.approveTextGrant(id: grant.id, now: Date(), sessionAvailable: session.available)
@@ -167,6 +171,8 @@ struct HelperStatus: Codable {
   @objc func stop() {
     controlPanel.clearActivity(stop: true)
     policy.stop(disarm: true)
+    nativeHost.cancel()
+    presentationHost.cancel()
     updateIndicator()
   }
   @objc func unavailable() {
@@ -197,6 +203,7 @@ struct HelperStatus: Codable {
     alert.runModal()
   }
   func updateIndicator() {
+    if !policy.armed || policy.lease == nil { nativeHost.cancel();presentationHost.cancel() }
     if policy.lease == nil { controlPanel.clearActivity(stop: true) }
     refreshSetup()
     let state =
@@ -279,16 +286,16 @@ struct HelperStatus: Codable {
             screenPermission: CGPreflightScreenCaptureAccess(),
             controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id,
             controlPolicy: policy.preferences.policy.rawValue, policyRevision: policy.preferences.revision,
-            unresolvedActionCount: ledger.unresolvedActionCount,
+            unresolvedActionCount: ledger.unresolvedActionCount + nativeHost.store.unresolved,
             historicalObservedActionCount: ledger.historicalObservedActionCount,
             historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
             panelCommand: controlPanel.command,
             retiredPanelCommands: controlPanel.retiredCommands, presentationVersion: 1,
-            textControlVersion: 1, cameraVersion: 1, livePresentationVersion: 1, localEnableGeneration: policy.localEnableGeneration))
+            textControlVersion: 1, cameraVersion: 1, livePresentationVersion: 1, nativeActivationVersion: 1, localEnableGeneration: policy.localEnableGeneration))
       }
       if request.method == "POST", request.path == "/v1/text-grants" {
         let grant = try decode(TextControlGrant.self, request.body)
-        guard ledger.unresolvedActionCount == 0 else {
+        guard (ledger.unresolvedActionCount + nativeHost.store.unresolved) == 0 else {
           throw HelperError(409, "Reconcile outstanding input before requesting control.")
         }
         try policy.proposeTextGrant(grant, now: Date(), sessionAvailable: session.available)
@@ -329,13 +336,14 @@ struct HelperStatus: Codable {
       }
       if request.method == "POST", request.path == "/v1/leases" {
         let lease = try decode(Lease.self, request.body)
+        guard nativeHost.store.unresolved == 0 else { throw HelperError(409,"native_operation_unresolved") }
         guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(lease.displayId) != 0 else {
           throw HelperError(403, "Screen Recording and a configured active display are required.")
         }
         guard !ledger.isHistoricallyRetiredLease(lease.id) else {
           throw HelperError(409, "This historical lease is retired; its input cannot be replayed.")
         }
-        if ledger.unresolvedActionCount > 0 && (lease.mode == "control" || ([2, 3].contains(lease.protocolVersion ?? 0) && lease.executor != "none")) {
+        if (ledger.unresolvedActionCount + nativeHost.store.unresolved) > 0 && (lease.mode == "control" || ([2, 3].contains(lease.protocolVersion ?? 0) && lease.executor != "none")) {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
         }
         if policy.lease == nil, let surface = lease.surface {
@@ -351,25 +359,41 @@ struct HelperStatus: Codable {
         throw HelperError(404, "Unknown route.")
       }
       let leaseId = parts[2]
+      if parts.count == 5, parts[3] == "native", request.method == "GET" {
+        return HTTPResponse(headers:["Cache-Control":"no-store"],body:try JSONSerialization.data(withJSONObject:nativeHost.store.receipt(id:parts[4],leaseId:leaseId)))
+      }
+      if parts.count == 5, parts[3] == "native", request.method == "POST", ["prepare","dispatch"].contains(parts[4]) {
+        let envelope=try NativeActivationEnvelope.decode(request.body,now:Date().timeIntervalSince1970*1000)
+        guard envelope.expected["leaseId"] as? String == leaseId else { throw HelperError(409,"native_lease_changed") }
+        let generation=policy.generation
+        let allowed = { [self] in
+          guard policy.generation == generation, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(),
+            CGDisplayIsActive(envelope.expected["displayId"] as? UInt32 ?? 0) != 0,
+            policy.preferences.policy != .viewOnly, ledger.unresolvedActionCount == 0,
+            let lease=try? policy.requireLease(leaseId,now:Date(),sessionAvailable:session.available),
+            envelope.matches(lease,device:config.deviceId,now:Date()),
+            config.displays.contains(where: { $0.displayId == lease.displayId && $0.controllers.contains(lease.memberId) }) else { return false }
+          return true
+        }
+        let result=try await nativeHost.run(envelope,dispatch:parts[4] == "dispatch",allowed:allowed)
+        return HTTPResponse(headers:["Cache-Control":"no-store"],body:try JSONSerialization.data(withJSONObject:result))
+      }
       if request.method == "POST", parts.count == 5, parts[3] == "presentation", parts[4] == "resolve" {
         let value = try LeasePresentationRequest.decode(request.body, now: Date().timeIntervalSince1970 * 1000)
         let lease = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
-        guard value.expected.leaseId == leaseId, value.matches(lease, now: Date()), ledger.unresolvedActionCount == 0,
+        guard value.expected.leaseId == leaseId, value.matches(lease, now: Date()), (ledger.unresolvedActionCount + nativeHost.store.unresolved) == 0,
           let native = value.nativeRequest(now: Date().timeIntervalSince1970 * 1000) else { throw HelperError(409, "presentation_authority_unavailable") }
         let generation = policy.generation
-        let resolver = NativeTargetResolver()
-        guard let resolved = resolver.resolve(native) else { throw HelperError(409, resolver.refusalReason) }
-        let observation = resolver.observation(resolved.2, app: resolved.0, window: resolved.1, lifetime: resolved.3)
-        guard value.processIdentity.map({ observation["processIdentity"] as? String == $0 }) ?? true,
-          processLifetime(resolved.0) == resolved.3,
-          ["appActive","windowFocused","windowOnScreen"].allSatisfy({ observation[$0] as? Bool == true }),
-          resolver.available(native) else { throw HelperError(409, "presentation_target_changed") }
-        // No await/effect occurs here. All locally retained authority is checked
-        // again; request/cursor authority is owned by the authenticated backend.
-        let current = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
-        guard policy.generation == generation, value.matches(current, now: Date()), ledger.unresolvedActionCount == 0 else {
-          throw HelperError(409, "presentation_authority_unavailable")
+        let allowed = { [self] in
+          guard policy.generation == generation,CGPreflightScreenCaptureAccess(),AXIsProcessTrusted(),
+            CGDisplayIsActive(value.expected.displayId) != 0,
+            let current=try? policy.requireLease(leaseId,now:Date(),sessionAvailable:session.available),
+            value.matches(current,now:Date()),ledger.unresolvedActionCount+nativeHost.store.unresolved == 0 else { return false }
+          return true
         }
+        let observation=try await presentationHost.resolve(native,allowed:allowed)
+        guard allowed(),value.processIdentity.map({ observation["processIdentity"] as? String == $0 }) ?? true,
+          ["appActive","windowFocused","windowOnScreen"].allSatisfy({ observation[$0] as? Bool == true }) else { throw HelperError(409,"presentation_authority_unavailable") }
         return HTTPResponse(headers: ["Cache-Control":"no-store"], body: try JSONSerialization.data(withJSONObject: observation))
       }
       if parts.count == 5, parts[3] == "actions", request.method == "GET" {
@@ -419,16 +443,23 @@ struct HelperStatus: Codable {
           throw error
         }
       }
+      if request.method == "DELETE", parts.count == 3, policy.isRetiredLease(leaseId) {
+        // Local Stop already revoked this exact grant. Acknowledge its tombstone
+        // without requiring armed state, rearming, or clearing input receipts.
+        return try .json(["stopped":true])
+      }
       let lease = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
       if request.method == "DELETE", parts.count == 3 {
         policy.stop()
+        nativeHost.cancel()
+        presentationHost.cancel()
         updateIndicator()
         return try .json(["stopped": true])
       }
       if request.method == "POST", parts.count == 4, parts[3] == "renew" {
         let renewed = try decode(Lease.self, request.body)
         guard renewed.id == leaseId else { throw HelperError(409, "Wrong lease renewal.") }
-        if renewed.executorEpoch != lease.executorEpoch && ledger.unresolvedActionCount > 0 {
+        if renewed.executorEpoch != lease.executorEpoch && (ledger.unresolvedActionCount + nativeHost.store.unresolved) > 0 {
           throw HelperError(409, "Reconcile outstanding input before changing executor.")
         }
         try policy.renew(
@@ -519,19 +550,19 @@ struct HelperStatus: Codable {
         application.run()
         return
       }
-      if args.contains("--preview-presentation-resolver") {
+      if args.contains("--preview-presentation-resolver") || args.contains("--installed-presentation-resolver") {
         guard args.count == 2 else { throw HelperError(400, "Invalid read-only resolver arguments.") }
         let application = NSApplication.shared
         application.setActivationPolicy(.prohibited)
-        PreviewPresentationResolver().run()
+        PreviewPresentationResolver(installed:args.contains("--installed-presentation-resolver")).run()
         application.run()
         return
       }
-      if args.contains("--preview-native-executor") {
+      if args.contains("--preview-native-executor") || args.contains("--installed-native-executor") {
         guard args.count == 2 else { throw HelperError(400, "Invalid native preview arguments.") }
         let application = NSApplication.shared
         application.setActivationPolicy(.prohibited)
-        PreviewNativeExecutor().run()
+        PreviewNativeExecutor(installed: args.contains("--installed-native-executor")).run()
         application.run()
         return
       }

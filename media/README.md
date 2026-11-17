@@ -482,3 +482,18 @@ lease; never manufacture one or widen freshness merely to produce a timing resul
 ```sh
 media/.venv/bin/python -m unittest discover -s media -p 'test_presentation_timing.py'
 ```
+
+### Production native activation
+
+The new `CLAWDTIME_NATIVE_ACTIVATION_ENABLED` gate defaults off and is independent
+of presentation. The production routes use the installed helper's real policy and
+durable native ledger; they do not call the preview native controller. Preparation
+is read-only, dispatch has one original two-second authority interval, and receipts
+remain available after Stop/restart. See `docs/DEVICE.md` and
+`docs/MEDIA_INTEGRATION.md` for the full envelope, local Stop and recovery boundary.
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_native_activation.py'
+media/.venv/bin/python -m unittest discover -s gateway -p 'test_native_activation.py'
+swift test --package-path mac
+```

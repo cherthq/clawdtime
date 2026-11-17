@@ -272,6 +272,11 @@ public final class DevicePolicy {
     if let pendingTextGrant { retiredTextGrants.insert(pendingTextGrant.id) }
     pendingTextGrant = nil
   }
+  /// Read-only acknowledgement of an exact lease this process already retired.
+  /// It grants nothing and does not alter uncertain input receipts.
+  public func isRetiredLease(_ id:String) -> Bool {
+    validID(id) && retired.contains(id) && lease?.id != id
+  }
   public func stop(disarm: Bool = false) {
     if let lease { retired.insert(lease.id) }
     lease = nil
