@@ -41,6 +41,15 @@ probe passed in 25,667 ms with 579 paced frames, a 157,344-byte valid chunk, pea
 queued PCM 338,896 bytes, no tool effects, and empty queues after Stop.
 The full media suite passed 379 tests (13 optional SDK tests skipped) in 55.948s.
 
+Deployment `4db02d42-291d-477e-a6f3-d7e4ad5762e3` is SUCCESS from pushed
+commit `f0426b4`. Running frontend SHA-256
+`528141fbefadd9a6acb1697a012005b1b24e25af164e93c5c7a30a8c9bf25cf3`
+matches tested source. Voice readiness passes; all seven media ledger tables match
+the post-call/pre-deploy snapshot and environment values are unchanged. Services
+are idle. No native Mac, line/provider, backend, or pairing changes were made.
+Next: identify the native frame-refusal guard locally before another handset demo;
+no broader capture, automatic recovery, or new call was enabled.
+
 
 One newly authorized demo call reached the phone; the user reported that it hung
 up. Backend diagnostics record a media `capture_loop` task failure shortly after
