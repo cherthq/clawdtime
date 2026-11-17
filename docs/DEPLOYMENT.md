@@ -223,3 +223,48 @@ A compatible rollback retains all ledgers and starts disarmed with admission off
 Never roll back to a pre-activation binary while a native reservation is unresolved:
 older binaries do not enforce this new fence. Stop, join and reconcile first, or
 retain the compatible disabled release. Do not restore a stale cursor or volume.
+
+## November 17 native walkthrough release
+
+Source: `89f78397c63b2e9362e764a0ab6b34ad42aa6623`, pushed on `ArgosClawd`.
+Backend deployment: `f320ce4b-e9db-4fc1-812a-8fc01178e820`.
+Media deployment: `cb364e09-af86-4765-9ec4-6712bcee8fd5`.
+Both services report the baked source SHA. Both presentation/activation admission
+gates remain unset/default-off. Installed companion 0.4.0 build 8 remains disarmed.
+See [STATUS.md](STATUS.md) for artifact hashes, receipt-preservation evidence,
+local acceptance and the current connector HTTP 401 prerequisite.
+
+The gateway LaunchAgent uses its existing Python environment and unchanged private
+configuration. Its source is frozen under
+`~/Library/Application Support/ClawdTimeReleases/89f78397c63b2e9362e764a0ab6b34ad42aa6623/gateway`.
+It is no longer started from a mutable working-tree source directory. The owner-only
+release audit beside that directory records configuration/ledger hashes and the
+previous launch arguments, without copying credentials or runtime records.
+
+The original-chat CLI is `/Users/garygao/clawdtime/dist/cli/main.js`; its compiled
+tree matches the frozen build and `dist/release-source.json` records the source
+SHA. The current connection is invalid, so no fresh session was registered.
+After restoring an authorized connection for the same intended pairing, prepare
+the new session in this original chat with a new stable run ID:
+
+```sh
+node /Users/garygao/clawdtime/dist/cli/main.js setup-session --agent codex --project /Users/garygao/clawdtime --run-id CURRENT_CHAT_NEW_STABLE_RUN_ID --native-control desktop --shared-surface true --native-cancellation false --screen-camera true --camera-display 1 --live-presentation true --native-activation true --message-updates false
+```
+
+Read the returned immutable capabilities before any test. Keep existing runs and
+receipts; never silently patch an old registration. Registration alone does not
+authorize an invitation, call, capture, input or enabling admission.
+
+Preferred recovery is to keep this compatible release installed, disarmed and
+with admission off while reconciling exact receipts. The previous backend
+`3419147a-df04-4166-a4a9-5f32e6681c42` and media
+`4c7de1a8-32b2-4e31-ba3d-c51dad365185` deployments are pre-activation rollback
+targets only after all native reservations are terminal and actors joined. Their
+source is `c7af884`; gateway source and the original companion build 7 bundle are
+retained under
+`~/Library/Application Support/ClawdTimeReleases/rollback-c7af884-build7`.
+Keep current databases/configuration/cursors throughout rollback. Point the
+existing gateway LaunchAgent at that frozen gateway source, and restore the saved
+companion to its existing stable application path only after idle checks. Never
+start a second gateway or helper against the same configuration. Verify actual
+running versions, permissions, disarmed state and receipt preservation afterward.

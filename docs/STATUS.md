@@ -1,3 +1,47 @@
+## November 17, 2026 — native walkthrough staged with admission off
+
+Implementation source `89f78397c63b2e9362e764a0ab6b34ad42aa6623` is committed and
+pushed on `ArgosClawd`. Matching artifacts were deployed from a frozen Git archive:
+
+| Component           | Verified artifact                                                                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend             | Deployment `f320ce4b-e9db-4fc1-812a-8fc01178e820`; health reports the exact source SHA                                                                   |
+| Media               | Deployment `cb364e09-af86-4765-9ec4-6712bcee8fd5`; health reports the exact source SHA                                                                   |
+| Gateway             | Frozen source directory; authenticated version reports the exact SHA and runtime hash `e7fa4859b4ff26b3d692c498e1b84e235d5f8931a30e64c860c983f5e2713462` |
+| Installed companion | 0.4.0 build 8; exact source SHA, `ClawdTimeSourceDirty=false`; executable SHA-256 `949460aa9de727fe97da0f07db4904a8828189c24930878870ea8050c065a71b`     |
+| Original-chat CLI   | 129 compiled files match a fresh frozen-source build; tree SHA-256 `85796f67871d415aebe73cf795eb280b36bac522a76cbeecfba8a3a1f51bc7a1`                    |
+
+The companion was repackaged after commit with clean source metadata and a fresh
+ad-hoc signature; that changes its signed executable hash from the physically
+tested candidate below. The release build reused the same compiled executable
+without recompiling source. Signature verification passed. This remains an
+internal pilot artifact, not a notarized distribution release.
+
+Post-deployment checks: backend active calls, pending effects and unknown effects
+were all zero; media had zero active sessions and the gateway connected. Both
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED` and `CLAWDTIME_NATIVE_ACTIVATION_ENABLED`
+remain unset/default-off on backend and media. The installed helper is disarmed,
+without an active lease or unresolved action; both macOS permissions remain
+granted. No rehearsal capture/input actor survives.
+
+Helper/gateway/device-map configuration hashes and the helper action receipt file
+are unchanged. All 26 gateway lease records and 37 action records are unchanged.
+This includes one historical `creating_unknown` lease whose grant expired on
+November 14; it was retained, not erased to make preflight green. No volumes,
+pairings, cursors, active chats or unknown receipts were restored or replaced.
+
+**Deployed, but a production test is blocked by the original-chat credential's
+HTTP 401.** Restore a valid authorized connection for this exact project before
+registering a fresh immutable capability-negotiated session. The old connection
+and run state remain intact. No call, outbound message, live admission or line
+handoff occurred. Handset video/voice, actual cloud frame timing and same-chat
+continuation remain unverified until a separately authorized test.
+
+See [release/rollback targets](DEPLOYMENT.md#november-17-native-walkthrough-release)
+and the [one-call checklist](DEMO_ACCEPTANCE.md#production-bound-walkthrough-qualification).
+The three planning drafts remain uncommitted. Later documentation-only commits do
+not change the deployed implementation SHA above.
+
 ## November 17, 2026 — production-bound walkthrough local acceptance
 
 The prepared Finder/TextEdit workflow now uses the production backend, media,
