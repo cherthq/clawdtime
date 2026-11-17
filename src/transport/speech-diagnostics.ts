@@ -2,6 +2,7 @@ import { z } from "zod";
 
 // Fixed categories shared with media/speech_diagnostics.py; never free-form payloads.
 const speechEvents = [
+  "voice_response_audio",
   "speech_onset",
   "interruption_detected",
   "playback_cleared",
@@ -43,6 +44,7 @@ const speechEvents = [
   "utterance_emitted",
 ] as const;
 const speechCounters = [
+  "voice_response_audio",
   "speech_onset",
   "interruption_detected",
   "playback_cleared",

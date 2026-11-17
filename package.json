@@ -23,7 +23,8 @@
     "test:onboarding:browser": "npm run build && tsx tests/onboarding.browser.ts",
     "test:connectors:real": "tsx tests/connectors-spike.ts claude-code && tsx tests/connectors-spike.ts codex",
     "backup": "tsx scripts/backup.ts",
-    "format:check": "prettier --check src cli connectors scripts tests public media/device-port.ts package.json tsconfig.json tsconfig.build.json docs README.md AGENTS.md"
+    "format:check": "prettier --check src cli connectors scripts tests public media/device-port.ts package.json tsconfig.json tsconfig.build.json docs README.md AGENTS.md",
+    "test:voice:camera": "tsx scripts/preview-camera.ts --voice-smoke"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.114",

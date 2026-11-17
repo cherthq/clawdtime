@@ -2,7 +2,12 @@ import unittest
 import json
 import time
 import tempfile
+import asyncio
+import base64
+import io
+from datetime import datetime, timezone
 from pathlib import Path
+from PIL import Image
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from test_execution_policy import ExecutionPolicyTests, lease
@@ -45,6 +50,36 @@ del ExecutionPolicyTests
 
 
 class CameraFailureDiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    async def test_camera_capture_deadline_does_not_relax_frame_freshness(self):
+        selected={**lease(),'cameraVersion':1,'surface':{'kind':'window','id':'99','displayId':1,'ownerPid':123}}
+        stale=False
+        buf=io.BytesIO();Image.new('RGB',(2,2),'navy').save(buf,'JPEG')
+        async def helper(request):
+            captured=time.time()-(3 if stale else 0)
+            if not stale:await asyncio.sleep(1.6)  # beyond old 1.5s HTTP deadline
+            return web.Response(body=buf.getvalue(),content_type='image/jpeg',headers={
+                'X-Frame-Id':'frame','X-Captured-At':datetime.fromtimestamp(captured,timezone.utc).isoformat(),
+                'X-Frame-Width':'2','X-Frame-Height':'2','X-Camera-Frame':base64.b64encode(json.dumps({
+                    'version':1,'surface':selected['surface'],'source':{'width':2,'height':2}}).encode()).decode()})
+        app=web.Application();app.router.add_get('/v1/leases/lease/frame',helper)
+        server=TestServer(app);await server.start_server()
+        with tempfile.TemporaryDirectory() as directory:
+            gateway=Gateway({'DEVICE_GATEWAY_KEY':'g'*32,'DEVICE_GATEWAY_DATABASE_PATH':str(Path(directory)/'gateway.sqlite')},
+                {'mac':{'url':str(server.make_url('')).rstrip('/'),'key':'h'*32}})
+            client=TestClient(TestServer(gateway.app()));await client.start_server()
+            try:
+                self.assertEqual(gateway.http.timeout.total,1.5)
+                gateway.db.execute('INSERT INTO leases VALUES(?,?,?,?,?,?,?)',
+                    ('lease','mac',json.dumps(selected),validate_lease(selected),'active',None,None));gateway.db.commit()
+                response=await client.get('/v1/leases/lease/frame',headers={'Authorization':'Bearer '+'g'*32})
+                self.assertEqual(response.status,200)
+                stale=True
+                response=await client.get('/v1/leases/lease/frame',headers={'Authorization':'Bearer '+'g'*32})
+                self.assertEqual(response.status,502)
+                self.assertIsNone(gateway.lease('lease')[2])
+            finally:
+                await client.close();await server.close()
+
     async def test_fixed_error_categories_only_no_body_logging_or_retry(self):
         calls=0
         diagnostic={'X-ClawdTime-Capture-Error':'stream_start','X-ClawdTime-Capture-Code':'-3805'}

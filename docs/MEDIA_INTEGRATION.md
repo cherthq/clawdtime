@@ -808,3 +808,144 @@ Default actual mode stays view-only. Native-host qualification, native tool resu
 and UI verification belong to the original agent; the media readiness response is
 not proof of those properties. No FaceTime connection or installed-service update is
 performed by this local mode.
+
+## Same-chat ElevenLabs streaming frontend
+
+The optional `elevenlabs` frontend connects one continuous bidirectional voice
+stream to the existing authenticated FaceTime participant. It keeps the original
+coding chat as executor and uses the existing screen camera and CUA ownership
+broker. It is independent of the older `gpt_live` API-managed executor negotiation.
+There is one speech owner per call; frontend selection cannot change during a call,
+and missing prerequisites fail activation instead of selecting legacy half-duplex.
+
+`media/elevenlabs_frontend.py` independently implements the published
+[ElevenLabs Agents WebSocket protocol](https://elevenlabs.io/docs/eleven-agents/api-reference/eleven-agents/websocket)
+using the already pinned aiohttp/LiveKit dependencies. No Argos upstream source was
+copied. Provider configuration is read and validated before obtaining one signed
+WebSocket URL. URL authority is restricted to the official ElevenLabs WSS endpoint;
+redirects, authentication failures, incompatible audio formats, tool drift and
+unexpected provider disconnects fail closed. There is no reconnect or automatic
+effect retry. Reads of backend progress may retry while current policy remains valid.
+
+Authenticated `GET /voice/elevenlabs/readiness` returns only `configured`,
+`agentValidated` and `ready` booleans with `Cache-Control: no-store`. Within a
+six-second overall deadline it reads the selected agent and any referenced tool
+definitions; it does not obtain a signed URL, open a provider session, send audio,
+use model credits or dial. Disabled/missing configuration skips provider reads.
+Activation repeats the same validation to reject intervening drift. Passing this
+read-only check does not establish WebSocket permission, provider session startup
+or physical audio acceptance.
+
+Runtime prerequisites, all explicit and disabled by default:
+
+- The backend enables `CLAWDTIME_ELEVENLABS_ENABLED=true`,
+  `CLAWDTIME_TWO_WAY_VOICE_ENABLED=true` and qualified
+  `CLAWDTIME_REMOTE_AUDIO_ISOLATED=true`. The exact protocol-2 coding session
+  registers `voiceFrontend:{version:1,provider:"elevenlabs"}` and
+  `voiceInteractionVersion:1`; it must not select an API-managed conversation runner.
+- Media enables `MEDIA_ELEVENLABS_ENABLED=true` and
+  `MEDIA_TWO_WAY_VOICE_ENABLED=true`, with its separately protected
+  `ELEVENLABS_API_KEY` and explicit `ELEVENLABS_AGENT_ID`. The key must be able to
+  read the selected agent/tool definitions and obtain authenticated conversation
+  URLs. Runtime activation verifies the selected agent; a configured key alone
+  does not establish readiness.
+- Existing backend/media authentication, LiveKit, caller identity qualification
+  and fresh policy requirements still apply. The short existing connection notice
+  uses Deepgram before the ElevenLabs owner starts, so `DEEPGRAM_API_KEY` remains a
+  prerequisite in this source. Legacy STT and ordinary TTS do not run alongside the
+  streaming frontend. Audio isolation flags require operator qualification, not an
+  inference from passing local tests.
+- Screen tools additionally require the existing screen-camera gates, exact
+  selected surface and current lease. The original coding agent prepares bounded
+  target IDs and annotations through the authenticated session API. IDE support
+  remains optional. No voice tool gains general desktop-input authority.
+
+Generate a reviewable creation payload for a **new dedicated agent** locally:
+
+```sh
+media/.venv/bin/python media/elevenlabs_agent_config.py --voice-id YOUR_EXPLICIT_VOICE_ID > /tmp/clawdtime-elevenlabs-agent.json
+```
+
+The builder reads no environment or credentials and makes no network request.
+It validates Gemini 2.5 Flash, Eleven Flash v2, 16 kHz PCM input/output, authenticated
+access, prompt/first-message overrides, disabled recording, zero retention and
+exactly seven client tools. The existing two-tool Argos lab agent is incompatible
+with this contract and must not be modified implicitly. Creating/configuring a
+provider agent is a separate operator action; no deployment or provider mutation
+is performed by this local implementation. Agent GET responses may supply inline
+tools or tool IDs; IDs are resolved with read-only GETs and every definition is
+validated. Workflows, external tools, MCP and built-in actions are refused.
+
+The tools are `send_to_agent({text})`, `show_target({target_id})`,
+`show_overview({})`, `annotate_target({target_id})`, `clear_annotations({})`,
+`stop_sharing({})` and `end_call({})`. A coding handoff must quote the latest actual
+human transcript exactly. The media adapter forwards that transcript, never a
+model-rewritten instruction, with a stable event ID into the original chat's
+ordered turn/acknowledgment flow. A tool result reports queued/accepted/refused or
+unconfirmed, never invented execution success. Unknown handoffs are not retried,
+including when the model supplies another tool ID. Task cancellation goes through
+the same original-chat instruction path; it is distinct from speech interruption.
+
+Camera tools accept only currently advertised prepared target IDs. The backend
+rechecks prepared geometry/content revision and the exact camera lease before
+focus or annotations. Overview, marks and smooth focus are presentation changes;
+they do not move windows, navigate an IDE, type, click or switch selected surfaces.
+The original coding agent still claims/releases native or fallback ownership for
+real desktop input. Stop sharing revokes viewing/input while preserving the voice
+conversation. End-call requires a direct current human hangup phrase; quoted,
+conditional and negated mentions are refused. Native approval remains in its
+original supported surface.
+
+Progress is read from authenticated `/media/:id/voice/context` snapshots and sent
+as passive contextual updates only; it never separately triggers narration.
+Verified agent replies sent through the existing `/speak` endpoint become bounded
+context for this sole voice owner. The existing durable speech receipt is terminal
+`unknown` with reason `frontend_context_submitted` after a successful socket write,
+or `frontend_context_unconfirmed` after uncertainty. A contextual update has no
+causal playback acknowledgment, so it cannot truthfully become `completed`.
+Duplicate or restarted requests only reconcile the existing receipt.
+
+To allow completion narration while the caller is quiet, a verified report also
+queues one explicitly labelled application `user_message` at the next quiet pause.
+Only an explicit original-agent `/speak` reply creates this trigger. Unsaid replies
+are coalesced to the newest one, and only one report may be in flight through local
+audio drain. If output remains unconfirmed after ten seconds, queued reports are
+dropped and further triggers wait for new human input; they are never retried.
+That trigger is not human input: its echoed transcript is ignored and **all tool
+dispatch is blocked until a distinct actual human transcript arrives**. New human
+speech supersedes unsaid reports; queued reports expire after 15 seconds. Neither
+lost context nor a lost report trigger is resent. This preserves an honest receipt
+even if the provider never speaks the report. Provider output remains untrusted.
+
+Audio uplink uses continuous 100 ms PCM chunks, including silence. Output is
+resampled to the existing 48 kHz publication queue. Local speech onset and provider
+interruptions clear current playback; late audio for the interrupted response
+cannot restore it. Audio and text stay in memory. Input, output, tools, context and
+report queues are bounded; oversized data fails closed rather than silently
+truncating an instruction. Older provider transcript events without `event_id`
+receive a local per-socket identity; immediately repeated identical no-ID text is
+conservatively coalesced. This may require a differently worded explicit new
+request, and prevents an ambiguous duplicate from becoming a second effect.
+
+Allowlisted diagnostics measure latest transcript receipt to first subsequent
+provider PCM (`voice_response_audio`) and tool callback to backend receipt
+(`callback_*`). IDs are hashed and durations are monotonic/process scoped. The
+first metric is observational, not proof of causal pairing with that utterance;
+neither metric measures handset playback or physical user-perceived latency.
+
+Local validation:
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_elevenlabs_frontend.py'
+media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'
+```
+
+The focused suite includes a real loopback WebSocket with synthetic provider data,
+streaming audio while a backend handoff is blocked, interruption/revocation,
+exact-transcript authority, prepared targets, report-trigger isolation, durable
+unknown replies and no reconnect. It uses no real provider, handset, microphone,
+desktop capture or call. The new combined frontend has **no physical acceptance
+evidence yet**. Actual provider schema/config access, audio isolation, audible
+reporting, barge-in/recovery, camera responsiveness during work and cleanup still
+require a separately authorized supervised trial. Local test success is not
+Argos-equivalent handset-experience acceptance.

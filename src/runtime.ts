@@ -292,7 +292,13 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     ? new MediaDevicePort(config.mediaOrigin, config.mediaKey)
     : new SimulatedDevice();
   const control = new ControlCoordinator(store, device),
-    viewing = new Viewing(store, device, Date.now, transport.mode === "live", env.CLAWDTIME_SCREEN_CAMERA_ENABLED === "true");
+    viewing = new Viewing(
+      store,
+      device,
+      Date.now,
+      transport.mode === "live",
+      env.CLAWDTIME_SCREEN_CAMERA_ENABLED === "true",
+    );
   const panel = new PanelSynchronizer(service, control);
   const human = new HumanRouter(
     service,
@@ -346,6 +352,11 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
     audioQualificationEnabled:
       env.CLAWDTIME_AUDIO_QUALIFICATION_ENABLED === "true",
     screenCameraEnabled: env.CLAWDTIME_SCREEN_CAMERA_ENABLED === "true",
+    elevenLabsEnabled: env.CLAWDTIME_ELEVENLABS_ENABLED === "true",
+    elevenLabsReadiness:
+      transport instanceof NativeTransport
+        ? () => transport.elevenLabsReadiness()
+        : undefined,
     twoWayVoiceEnabled: env.CLAWDTIME_TWO_WAY_VOICE_ENABLED === "true",
     remoteAudioIsolated: env.CLAWDTIME_REMOTE_AUDIO_ISOLATED === "true",
     dispatchEnabled: mode !== "standby",

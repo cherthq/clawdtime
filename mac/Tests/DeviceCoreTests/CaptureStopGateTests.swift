@@ -2,6 +2,23 @@ import XCTest
 @testable import DeviceCore
 
 final class CaptureStopGateTests: XCTestCase {
+  func testStreamIsRetainedThroughStopCallbackButReleasedAfterward() async {
+    final class Stream {}
+    weak var retained: Stream?
+    let finished = expectation(description: "stream remains alive through completion")
+    var gate: CaptureStopGate<Int>!
+    do {
+      let stream = Stream(); retained = stream
+      gate = CaptureStopGate(result: .success(42), retaining: stream) { _ in
+        XCTAssertNotNil(retained); finished.fulfill()
+      }
+    }
+    XCTAssertNotNil(retained)
+    gate.acknowledged(error: nil)
+    await fulfillment(of: [finished], timeout: 1)
+    XCTAssertNil(retained)
+  }
+
   func testCaptureFailureWinsOverCleanupErrorWithoutPublishing() async {
     let finished = expectation(description: "original failure")
     let failure = CaptureFailure(.streamStart,
@@ -56,7 +73,7 @@ final class CaptureStopGateTests: XCTestCase {
     var gate: CaptureStopGate<Image>!
     do {
       let image = Image(); released = image
-      gate = CaptureStopGate(result: .success(image), timeout: 0.01) { result in
+      gate = CaptureStopGate(result: .success(image), timeout: 0.01, retaining: image) { result in
         if case .failure(let error) = result {
           XCTAssertEqual((error as? CaptureFailure)?.reason, .stopDeadline)
         } else { XCTFail("Stop failure must not publish pixels") }; finished.fulfill()

@@ -7,10 +7,11 @@ public final class CaptureStopGate<Value>: @unchecked Sendable {
   private var pending: Result<Value, Error>?
   private var completion: ((Result<Value, Error>) -> Void)?
   private var timer: DispatchWorkItem?
+  private var resource: AnyObject?
 
-  public init(result: Result<Value, Error>, timeout: TimeInterval = 0.35,
+  public init(result: Result<Value, Error>, timeout: TimeInterval = 0.35, retaining resource: AnyObject? = nil,
     completion: @escaping (Result<Value, Error>) -> Void) {
-    pending = result; self.completion = completion
+    pending = result; self.completion = completion; self.resource = resource
     let timer = DispatchWorkItem { [self] in
       resolve(failure: CaptureFailure(.stopDeadline))
     }
@@ -33,8 +34,9 @@ public final class CaptureStopGate<Value>: @unchecked Sendable {
     else if let pending { result = pending }
     else { lock.unlock(); return }
     self.pending = nil; self.completion = nil
+    let resource = self.resource; self.resource = nil
     timer?.cancel(); timer = nil
     lock.unlock()
-    completion(result)
+    withExtendedLifetime(resource) { completion(result) }
   }
 }

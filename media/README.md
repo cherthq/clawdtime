@@ -1,9 +1,30 @@
 # Media presentation and isolated checks
 
 The descriptions below cover the legacy/default path. New source also includes
-an optional asynchronous GPT-Live frontend and separate text-only control grants;
+an optional same-chat ElevenLabs frontend, asynchronous GPT-Live frontend and separate text-only control grants;
 [read the qualification status](../docs/MEDIA_INTEGRATION.md#asynchronous-conversation-frontend-november-13-source)
 before enabling either feature.
+
+For the Argos-style streaming voice owner that preserves the **current coding
+chat**, see [same-chat ElevenLabs integration](../docs/MEDIA_INTEGRATION.md#same-chat-elevenlabs-streaming-frontend).
+The existing GPT-Live frontend remains a separately selected managed-executor path.
+Neither frontend is enabled by default, and a negotiated frontend never silently
+falls back to legacy speech.
+
+Build a reviewable **new dedicated agent** configuration locally (no provider
+request, environment/credential access, call, microphone or screen capture):
+
+```sh
+media/.venv/bin/python media/elevenlabs_agent_config.py --voice-id YOUR_EXPLICIT_VOICE_ID > /tmp/clawdtime-elevenlabs-agent.json
+media/.venv/bin/python -m unittest discover -s media -p 'test_elevenlabs_frontend.py'
+```
+
+The builder validates its seven client tools, Gemini 2.5 Flash / Eleven Flash v2,
+16 kHz PCM, authenticated access, prompt overrides and disabled recording/retention.
+It does not create an agent or change the existing Argos lab agent. The focused
+test suite uses synthetic credentials, a loopback WebSocket and fake backend;
+it does not contact ElevenLabs, LiveKit or Chert. The adapter uses the existing
+pinned `aiohttp` and `livekit` dependencies; no optional SDK install is required.
 
 The existing compositor displays ephemeral human captions and one spoken reply per
 turn. “Backend accepted” means the media callback was accepted; “Received by agent”

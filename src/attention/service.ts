@@ -57,6 +57,10 @@ const registration = z
     hostId: nonempty,
     protocolVersion: z.union([z.literal(1), z.literal(2)]).optional(),
     screenCamera: cameraSelectionSchema.optional(),
+    voiceFrontend: z
+      .object({ version: z.literal(1), provider: z.literal("elevenlabs") })
+      .strict()
+      .optional(),
     interaction: z
       .object({
         version: z.literal(1),
@@ -505,6 +509,17 @@ export class ClawdTime {
         409,
         "Screen camera requires an explicit version 2 surface on the paired display and matching capability.",
       );
+    if (
+      value.voiceFrontend &&
+      (value.protocolVersion !== 2 ||
+        value.capabilities.voiceInteractionVersion !== 1 ||
+        value.conversation ||
+        value.documentAccess)
+    )
+      throw new DomainError(
+        409,
+        "Streaming voice requires a fresh same-chat v2 session with voice interaction support.",
+      );
     if (value.interaction && value.protocolVersion !== 2)
       throw new DomainError(
         409,
@@ -551,6 +566,8 @@ export class ClawdTime {
             JSON.stringify(value.capabilities) ||
           JSON.stringify(previous.interaction) !==
             JSON.stringify(value.interaction) ||
+          JSON.stringify(previous.voiceFrontend) !==
+            JSON.stringify(value.voiceFrontend) ||
           JSON.stringify(previous.conversation) !==
             JSON.stringify(value.conversation) ||
           JSON.stringify(previous.documentAccess) !==
@@ -1358,6 +1375,14 @@ export class ClawdTime {
   }
   /** The caller must authenticate the exact local panel/device binding first. */
   endConversationFromPanel(
+    requestId: string,
+    sessionId: string,
+    callId: string,
+  ) {
+    return this.endConversationFromBoundCall(requestId, sessionId, callId);
+  }
+  /** Trusted callers authenticate panel or media and qualify the exact call first. */
+  endConversationFromBoundCall(
     requestId: string,
     sessionId: string,
     callId: string,

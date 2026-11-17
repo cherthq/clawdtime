@@ -3,6 +3,10 @@ import {
   cameraStatusSchema,
   cameraReceiptSchema,
 } from "../../src/camera-contracts.js";
+import {
+  voicePreparationSchema,
+  voicePreparedReceiptSchema,
+} from "../../src/voice-contracts.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -204,6 +208,40 @@ export class ClawdTimeClient {
   }
   private async requireCamera(id: string) {
     if (!this.cameraSupport.get(id)) await this.screenCamera(id);
+  }
+  async prepareVoicePresentation(id: string, preparation: unknown) {
+    const parsed = voicePreparationSchema.safeParse(preparation);
+    if (!parsed.success)
+      throw new Error(
+        "Invalid bounded voice presentation; no preparation submitted.",
+      );
+    if (parsed.data.geometryGeneration || parsed.data.contentRevision) {
+      const status = cameraStatusSchema.parse(await this.screenCamera(id));
+      if (
+        status.state !== "live" ||
+        status.geometryGeneration !== parsed.data.geometryGeneration ||
+        status.contentRevision !== parsed.data.contentRevision
+      )
+        throw new Error(
+          "Voice presentation requires the current live camera geometry and content; refresh before preparing.",
+        );
+    }
+    // No retry and no durable catalog: context and labels remain transient.
+    const receipt = voicePreparedReceiptSchema.safeParse(
+      await this.api(
+        `/api/attention/${encodeURIComponent(id)}/conversation/voice/prepare`,
+        parsed.data,
+      ),
+    );
+    if (
+      !receipt.success ||
+      JSON.stringify(receipt.data.targetIds) !==
+        JSON.stringify(parsed.data.targets.map((t) => t.id))
+    )
+      throw new Error(
+        "Voice preparation receipt is invalid; outcome is uncertain. Do not retry automatically.",
+      );
+    return receipt.data;
   }
   async screenCamera(id: string, command?: unknown): Promise<unknown> {
     if (command !== undefined) {

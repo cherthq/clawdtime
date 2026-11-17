@@ -10,6 +10,7 @@ export interface ProtocolOptions {
   conversation?: AgentSession["conversation"];
   documentAccess?: AgentSession["documentAccess"];
   screenCamera?: AgentSession["screenCamera"];
+  voiceFrontend?: AgentSession["voiceFrontend"];
 }
 export function sessionInteraction(
   options: ProtocolOptions,
@@ -29,6 +30,21 @@ export function sessionCapabilities(
 ): AgentSession["capabilities"] {
   if (options.screenCamera && options.protocolVersion === 1)
     throw new Error("Screen camera requires protocol v2.");
+  if (
+    options.voiceFrontend &&
+    (options.protocolVersion === 1 ||
+      options.conversation ||
+      options.documentAccess)
+  )
+    throw new Error(
+      "Realtime voice requires a fresh v2 same-chat session without a managed runner.",
+    );
+  if (
+    options.voiceFrontend &&
+    (options.voiceFrontend.version !== 1 ||
+      options.voiceFrontend.provider !== "elevenlabs")
+  )
+    throw new Error("Unsupported realtime voice frontend.");
   const nativeControl = options.nativeControl ?? "none";
   if (options.sharedSurface && nativeControl === "none")
     throw new Error(
@@ -97,6 +113,18 @@ export function protocolOptions(
   if (cameraEnabled && flags["runner"] === "remote-documents")
     throw new Error("Document-only execution cannot claim a screen camera.");
   const runnerId = flags["runner"];
+  const voiceFrontend = flags["voice-frontend"];
+  if (voiceFrontend !== undefined && voiceFrontend !== "elevenlabs")
+    throw new Error(
+      "--voice-frontend must be elevenlabs; omit it to preserve the existing voice path.",
+    );
+  if (
+    voiceFrontend &&
+    (protocolVersion !== 2 || runnerId || flags["execution-session"])
+  )
+    throw new Error(
+      "Realtime voice requires a fresh v2 same-chat session without a managed runner.",
+    );
   const documentUntil = flags["document-access-until"];
   if ((runnerId === "remote-documents") !== (documentUntil !== undefined))
     throw new Error(
@@ -137,6 +165,14 @@ export function protocolOptions(
     );
   const result: ProtocolOptions = {
     protocolVersion,
+    ...(voiceFrontend
+      ? {
+          voiceFrontend: {
+            version: 1 as const,
+            provider: "elevenlabs" as const,
+          },
+        }
+      : {}),
     ...(cameraEnabled
       ? {
           screenCamera: {

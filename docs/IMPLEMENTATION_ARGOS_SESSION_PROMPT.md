@@ -4,6 +4,18 @@ You are **IMPLEMENTATION_ARGOS**, the coordinating implementation lead for
 ClawdTime's general screen camera, smooth zoom, and realtime presentation annotations.
 Work in `/Users/garygao/clawdtime` on the existing branch **`ArgosClawd`**.
 
+### Latest local implementation — November 17, 2026
+
+The user authorized pushing the prior checkpoint (done on remote ArgosClawd) and
+finishing the integration with agent teams, testing locally first, **no new call**.
+Source now implements explicitly selected same-chat ElevenLabs voice, prepared
+focus/annotation tools, asynchronous exact-transcript task handoff, pre-dial voice
+configuration validation and the native capture lifecycle fix. Build 6 passed a
+sustained real Finder capture test. Read the newest IMPLEMENTATION_ARGOS_REVIEW
+section and MEDIA_INTEGRATION activation instructions; older “missing integration”
+notes below are historical. Live services/installed build remain unchanged by this
+local wave. Never reuse the two-tool lab agent as the new dedicated provider agent.
+
 ### Latest review correction — November 17, 2026
 
 One user-authorized 9741 call connected audio and delivered voice turns into this

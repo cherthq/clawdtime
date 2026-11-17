@@ -71,6 +71,7 @@ const effects = new Set([
   ...Object.keys(conversationCommands).filter(
     (name) =>
       name !== "screen_camera_command" &&
+      name !== "prepare_voice_presentation" &&
       !isConversationRead(name as keyof typeof conversationCommands),
   ),
 ]);
@@ -96,10 +97,12 @@ export async function startSetupSession(options: {
   conversation?: ProtocolOptions["conversation"];
   documentAccess?: ProtocolOptions["documentAccess"];
   screenCamera?: ProtocolOptions["screenCamera"];
+  voiceFrontend?: ProtocolOptions["voiceFrontend"];
   input?: Readable;
   output?: Writable;
   request?: typeof fetch;
 }) {
+  sessionCapabilities(options);
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(options.runId))
     throw new Error(
       "Use a stable current-chat --run-id (16–100 letters, digits, underscore or hyphen).",
@@ -189,7 +192,9 @@ export async function startSetupSession(options: {
         JSON.stringify(run.session.documentAccess) !==
           JSON.stringify(options.documentAccess) ||
         JSON.stringify(run.session.screenCamera) !==
-          JSON.stringify(options.screenCamera))
+          JSON.stringify(options.screenCamera) ||
+        JSON.stringify(run.session.voiceFrontend) !==
+          JSON.stringify(options.voiceFrontend))
     )
       throw new Error(
         "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
@@ -217,9 +222,17 @@ export async function startSetupSession(options: {
         conversation: options.conversation,
         documentAccess: options.documentAccess,
         screenCamera: options.screenCamera,
+        voiceFrontend: options.voiceFrontend,
       });
       run = { ...run, session: result.session, token: result.token };
       secureWrite(statePath, run);
+      if (
+        JSON.stringify(result.session.voiceFrontend) !==
+        JSON.stringify(options.voiceFrontend)
+      )
+        throw new Error(
+          "Server did not confirm the selected voice frontend. Preserve this registration; do not downgrade or retry it.",
+        );
     }
     if (bridge.sessionId && bridge.sessionId !== run.session?.id)
       throw new Error("Setup session binding changed.");
@@ -248,6 +261,9 @@ export async function startSetupSession(options: {
           }
         : {}),
       protocolVersion: run.session?.protocolVersion ?? 1,
+      ...(run.session?.voiceFrontend
+        ? { voiceFrontend: run.session.voiceFrontend }
+        : {}),
       next:
         run.session?.conversation?.executionSession === "api_managed"
           ? run.session.conversation.runnerId === "remote-documents"

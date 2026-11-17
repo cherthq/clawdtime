@@ -77,6 +77,18 @@ it("actual stdio MCP negotiates the immutable camera and sends bounded commands 
     input++;
     return c.json({});
   });
+  app.post("/api/attention/request/conversation/voice/prepare", async (c) => {
+    const preparation = await c.req.json();
+    expect(preparation.context).toBe("Synthetic task context");
+    expect(preparation.geometryGeneration).toBe("geometry");
+    expect(preparation.contentRevision).toBe("content");
+    return c.json({
+      version: 1,
+      prepared: true,
+      expiresAt: Date.now() + 300000,
+      targetIds: ["fixture"],
+    });
+  });
   const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
   await new Promise<void>((r) => server.on("listening", r));
   const connection = join(root, "connection.json");
@@ -92,7 +104,7 @@ it("actual stdio MCP negotiates the immutable camera and sends bounded commands 
   });
   const clients: Client[] = [];
   const runId = randomUUID();
-  const start = async (display: string) => {
+  const start = async (display: string, voice = true) => {
     const client = new Client({ name: "camera-fixture", version: "1" });
     clients.push(client);
     await client.connect(
@@ -117,6 +129,7 @@ it("actual stdio MCP negotiates the immutable camera and sends bounded commands 
           "14",
           "--camera-owner-pid",
           "71",
+          ...(voice ? ["--voice-frontend", "elevenlabs"] : []),
         ],
         env: {
           ...Object.fromEntries(
@@ -144,6 +157,31 @@ it("actual stdio MCP negotiates the immutable camera and sends bounded commands 
       version: 1,
       surface: status.surface,
     });
+    expect(registration.voiceFrontend).toEqual({
+      version: 1,
+      provider: "elevenlabs",
+    });
+    expect(registration.conversation).toBeUndefined();
+    const prepared = await client.callTool({
+      name: "prepare_voice_presentation",
+      arguments: {
+        requestId: "request",
+        preparation: {
+          version: 1,
+          context: "Synthetic task context",
+          geometryGeneration: "geometry",
+          contentRevision: "content",
+          targets: [
+            {
+              id: "fixture",
+              label: "Fixture area",
+              rect: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 },
+            },
+          ],
+        },
+      },
+    });
+    expect(prepared.isError).toBeFalsy();
     expect(registration.capabilities).toMatchObject({
       screenCameraVersion: 1,
       nativeControl: "none",
@@ -169,6 +207,7 @@ it("actual stdio MCP negotiates the immutable camera and sends bounded commands 
     await client.close();
     // Reopening a protected run with another display fails before re-registration.
     await expect(start("3")).rejects.toThrow();
+    await expect(start("2", false)).rejects.toThrow();
     expect(mutations).toBe(1);
   } finally {
     await Promise.all(clients.map((c) => c.close()));

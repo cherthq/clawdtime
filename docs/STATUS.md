@@ -1,3 +1,25 @@
+## November 17, 2026 — Argos same-chat integration locally validated
+
+The prior checkpoint was pushed to origin/ArgosClawd at user request. The next
+local implementation adds explicit ElevenLabs streaming voice independent of a
+managed runner, exact-transcript same-chat handoff, prepared camera zoom/annotations,
+one speech owner, report-only narration, pre-dial provider configuration validation,
+and the native capture start/stop lifecycle fix. Native CUA ownership and IDE-optional
+cross-app sharing remain intact.
+
+Actual Finder capture: 76 consecutive frames over 30.128 seconds. Browser review
+showed the real selected Finder window and confirmed Stop removed the image.
+Local prepared voice→camera integration passed with roughly 0.5-second focus settling
+including the designed 450 ms animation. 59 Swift and 40 gateway tests passed. 366 media tests
+passed with 13 optional SDK skips; all 35 ElevenLabs tests passed. Final
+`npm run check`: 978 tests in 59 files, typecheck and build passed. See
+IMPLEMENTATION_ARGOS_REVIEW.md for evidence and limits.
+
+No new call, provider-agent configuration, deployment or installed-helper replacement
+occurred in this wave. Build 6 is available locally. The next phone demonstration needs
+a dedicated seven-tool ElevenLabs agent, reviewed deployment/install, fresh session
+selection and explicit one-call permission; physical voice latency remains unmeasured.
+
 ## November 17, 2026 — committed checkpoint and experience audit
 
 All pending code was committed as `1e5e140` on ArgosClawd, with no push. Fresh

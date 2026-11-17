@@ -1,5 +1,96 @@
 # IMPLEMENTATION_ARGOS review
 
+## Argos same-chat integration implemented locally — November 17, 2026
+
+The user authorized pushing the existing checkpoint and using agent teams to finish
+voice, prepared camera tools, and capture repair, with local testing first and **no
+new FaceTime call**. Checkpoint `3e03421` was pushed to the existing remote
+`ArgosClawd` branch. No codex branch was created. The following source changes are
+the local implementation that replaces the earlier audit's missing pieces.
+
+### Implemented path
+
+- A fresh explicit `--voice-frontend elevenlabs` session selects streaming voice
+  independently of `session.conversation`. The current coding chat remains the
+  executor, with native CUA capability, ordered delivery, existing approvals and
+  exclusive input ownership. Old runs cannot silently add/remove this selection.
+- One ElevenLabs WebSocket owns speech. It streams 100 ms input chunks during
+  output, clears output on interruption, sends exact observed human transcripts
+  to this chat without a second task-planning model, and returns queue acceptance
+  promptly. No auto-reconnect or effect retry is introduced.
+- Verified progress is background context. Explicit coding replies trigger bounded
+  application-report narration; synthetic report text cannot become a human task
+  or tool authority. A context send does not prove playback: its speech receipt is
+  deliberately `unknown`, not `completed`, and cannot be replayed.
+- `prepare_voice_presentation` supplies transient task context and up to 12 labeled
+  regions, bound to the selected lease, geometry and observed content revision.
+  The voice model can focus/overview, annotate/clear and stop sharing. It cannot
+  submit coordinates, select another surface, receive a session bearer, or execute
+  OS input. Focus uses the existing smooth 450 ms transition; user pinning wins.
+  Old pixels, geometry changes, expired preparation, wrong calls and Stop reject
+  new presentation effects. Up to 512 durable camera event markers per call retain
+  unknown outcomes without unbounded admission or retries.
+- Stop-sharing removes the image and prepared targets while conversation/hangup
+  remain available. The existing stronger local helper Stop behavior is preserved.
+- Native capture waits for both start acknowledgment and the complete frame before
+  stopping, and retains the stream through stop acknowledgment/deadline. This fixes
+  the reproduced lifecycle race without introducing persistent capture or retries.
+  Camera HTTP reads allow 3 seconds for bounded native cleanup; returned-frame
+  freshness remains 2 seconds, and input/lease timeouts remain 1.5 seconds.
+- Backend doctor, call admission and native transport validate the selected
+  dedicated voice frontend before dialing. Media validates it again at activation.
+  Default-off gates and legacy behavior remain unchanged for unselected sessions.
+
+### Local acceptance evidence
+
+- Actual harmless Finder capture: **76 consecutive frames in 30.128 seconds** in
+  one process; no pixels saved. Earlier code failed after four frames.
+- Actual Finder preview inspected visually through the browser; selected-window
+  pixels were visible. Stop disabled presentation controls and removed the image.
+  The disposable preview was then shut down, leaving no local test capture running.
+- `npm run test:voice:camera`: same-chat preparation → authenticated voice route →
+  real Python media compositor, using synthetic pixels. Focus settled in about
+  **496–505 ms** including the designed 450 ms animation; annotation, overview, clear,
+  duplicate suppression and Stop passed. This is local presentation timing, not
+  speech or handset latency.
+- Native build: 59 Swift tests passed; release build and strict signature check
+  passed. Review artifact: `mac/build/ClawdTime Companion.app`, 0.4.0/build 6,
+  executable SHA-256 `924621661e8d441a4dbe836070f7fd3c695f402deb296f82a055878088b0acfa`.
+  The installed build was not replaced during this local verification.
+- Full gateway regression: 40 tests passed, including a 1.6-second successful fresh
+  camera fetch and rejection of a three-second-old frame.
+- Final backend/connectors: `npm run check` passed **978 tests in 59 files**,
+  typecheck and build, including pre-dial refusal and once-only initial task narration
+  through the confirmed ElevenLabs owner.
+- Full media regression: **366 tests passed, 13 expected skips** for optional
+  GPT-Live/acoustic SDK qualification dependencies. All **35 ElevenLabs tests** ran
+  and passed, including real loopback WebSocket framing, synthetic resampled audio
+  while task acceptance is blocked, report-only narration, interruption, pre-dial
+  configuration checks and no retries. No real provider connection was made.
+
+### Before the next phone test
+
+The local code is not yet a deployed or physically accepted Argos-equivalent phone
+experience. No provider session was opened, microphone recorded, FaceTime call
+placed, live service deployed, line reassigned, or sibling project modified here.
+The earlier live services still run their prior release.
+
+The existing lab agent has two synthetic camera tools and is intentionally **not**
+reused or altered. A new dedicated agent must match the seven-tool contract,
+Gemini 2.5 Flash / Eleven Flash v2, 16 kHz PCM, authenticated sessions, permitted
+prompt override and zero recording/retention. A local, network-free configuration
+builder is supplied in `media/elevenlabs_agent_config.py`; exact activation flags,
+private credential names and validation are in `docs/MEDIA_INTEGRATION.md` under
+“Same-chat ElevenLabs streaming frontend.” No provider key belongs in Git.
+
+After this local review: configure that dedicated agent, deploy the reviewed
+ClawdTime components and install build 6 preserving local configuration; register
+one fresh same-chat voice/camera session and prepare its first stable targets.
+Then obtain specific permission for the next phone test. Measure actual response
+latency, barge-in, prepared zooms/annotations, sustained sharing and same-chat CUA.
+Local fakes, provider configuration checks and published PCM cannot prove that
+physical experience or acoustic isolation. IDE support remains optional.
+
 ## Post-checkpoint Argos experience audit — November 17, 2026
 
 Checkpoint `1e5e140` commits all pending implementation and diagnostic work. The

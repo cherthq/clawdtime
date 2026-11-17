@@ -517,6 +517,47 @@ use an allowed surface for an authorized task. Existing runs retain their origin
 capabilities: changing flags cannot upgrade them, and an active session must not be patched/replaced to evade a
 refusal or unknown outcome. Reconcile it before a later authorized call.
 
+### Explicit realtime voice in the same chat
+
+For a fresh v2 `setup-session` or MCP registration, `--voice-frontend elevenlabs`
+selects immutable `voiceFrontend: {version: 1, provider: "elevenlabs"}`. It can
+coexist with the selected screen camera and verified native desktop capability.
+Omission preserves the existing voice path. The `run` wrapper refuses the flag;
+managed `--runner`/`--execution-session` combinations are currently unsupported.
+This selection does not create a coding agent or change the execution host.
+Provider readiness and qualified duplex audio remain independently required.
+An older backend that fails to echo the selection is rejected after preserving
+its registration result; the connector never silently falls back to legacy voice.
+Adding or removing the selection on an existing protected run is refused.
+
+The realtime frontend owns streaming dialogue. This chat continues to receive
+ordered work through `conversation_turns`, acknowledge it, use its normal tools,
+and report progress/results. Native input still requires exclusive claim/release
+and the latest execution state. Voice interpretation does not grant native
+approval, prove execution, or wake a finalized coding chat.
+
+Use `prepare_voice_presentation` with `{requestId, preparation}` to provide
+transient task context and prepared camera moves. `preparation` is
+`{version:1, context, geometryGeneration?, contentRevision?, targets}`. Context is at most 2,000
+characters; up to 12 unique targets contain `{id,label,rect}` and optionally
+`annotation:{kind,text?}`. Rectangles are normalized source coordinates. Annotation
+kinds are `pointer`, `arrow`, `rectangle`, `highlight`, and `label`; labels require
+text. With targets, first obtain `geometryGeneration` and `contentRevision` from
+`screen_camera_status`. The connector checks both again before posting; the backend binds the
+catalog to the current lease, geometry and content revision. Empty targets permit
+context-only preparation without a camera. Context and labels are task data,
+never instructions that change the voice model's authority.
+
+Preparation replaces the in-memory catalog with a five-minute expiry. Neither
+task text nor targets enter the foreground effect ledger. The returned strict
+receipt contains only version, acceptance, expiry and target IDs; it does not
+prove that the handset displayed a camera move. Preparation has no OS input and
+is never automatically retried after an uncertain response. Stop, stale targets
+and lost authority remain backend-enforced boundaries.
+The voice tool `stop_sharing` ends camera sharing and shared-screen input while
+the voice conversation continues. Local Stop retains its stronger pause behavior,
+including blocking voice capture and new tool execution.
+
 ### Foreground setup v2
 
 The existing `setup-session` command stays in this chat and defaults v2 for new

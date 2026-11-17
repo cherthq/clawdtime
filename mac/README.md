@@ -447,6 +447,17 @@ create no listener or receipt store, never grant privacy permissions, and submit
 input. They require the active unlocked session. See the media README for the local
 preview with visible Start/Stop and synthetic fixtures.
 
+For an explicitly authorized disposable surface, `--camera-probe --surface '<exact
+JSON>'` repeatedly captures that same identity in one process, stopping at 120
+frames or 30 seconds plus completion of the current bounded frame. It requires
+initial display containment and rechecks the unlocked session and two-second
+freshness for every capture. Output contains only frame count, elapsed time and
+completion status; errors use fixed capture categories and bounded native numeric
+codes. A 35-second process deadline also bounds an unresponsive framework call.
+It never outputs/saves pixels, starts a listener or submits input. This
+development probe uses the identical capture/start/stop implementation as helper
+frame requests; it does not qualify the remote media or handset path.
+
 For a disposable window, development lookup can resolve one exact app bundle and
 window title without listing other titles or capturing pixels:
 
@@ -495,6 +506,11 @@ refuses an unavailable source; the preview also bounds the child process to 2.5
 seconds. Display capture retains the existing `SCScreenshotManager` path. No audio
 or child-window capture is requested. Exact identity and geometry are revalidated
 after capture, and the existing two-second freshness gate remains unchanged.
+The first complete frame waits for successful `startCapture` acknowledgment before
+requesting stop. The stream remains strongly retained through stop acknowledgment
+or its deadline; an early frame or asynchronous cleanup cannot release it midway.
+Native failures expose only an allowlisted stage and bounded numeric code in
+authenticated error headers; raw native error text/userInfo never crosses the gateway.
 
 For window viewing, `source.display*` describes the active display selected at
 initial authorization; it is an anchor, not a crop boundary. WindowServer may place

@@ -59,6 +59,11 @@ itself publicly. Fixed helper origins allow HTTPS, loopback HTTP, or Tailscale
 - Frames and input text are never persisted by the gateway. Persisted records
   contain bindings, hashes, timestamps and receipts. Logs never print pixels,
   input text, tokens, or full request bodies.
+- Negotiated camera frame fetches allow up to three seconds for native frame
+  production and acknowledged stream cleanup. Returned frames still must be no
+  older than two seconds; stale pixels are rejected and prior input frame authority
+  is cleared. Other helper requests retain their 1.5-second timeout. A timeout is
+  not retried, and no uncertain input is replayed.
 - A control receipt marked `submitted` means the OS accepted an input event; it
   does not verify what the application did. Unknown results are reconciled by GET
   against the same action ID and never automatically reissued.

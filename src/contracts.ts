@@ -1,4 +1,11 @@
-import type { CameraSelection, CameraCommand, CameraFrame, CameraStatus, CameraReceipt, PresentationReference } from "./camera-contracts.js";
+import type {
+  CameraSelection,
+  CameraCommand,
+  CameraFrame,
+  CameraStatus,
+  CameraReceipt,
+  PresentationReference,
+} from "./camera-contracts.js";
 /** Versioned boundary; omitted protocolVersion retains v1 behavior. IDs are opaque, credentials never enter response/log objects. */
 export type Adapter = "claude-code" | "codex" | "audio-qualification";
 /** Dedicated, immutable, short-lived audio-only authority. Never grants execution. */
@@ -38,6 +45,8 @@ export interface AgentSession {
     commandChannel: "imessage_first";
     messageUpdates: boolean;
   };
+  /** Explicit same-chat streaming voice selection; independent of execution host. */
+  voiceFrontend?: { version: 1; provider: "elevenlabs" };
   /** New sessions only. A selected managed runner is distinct from this chat. */
   conversation?: {
     version: 1;
@@ -204,7 +213,10 @@ export interface DevicePort {
   createLease(lease: ControlLease): Promise<void>;
   frame(lease: ControlLease): Promise<Frame>;
   cameraStatus?(lease: ControlLease): Promise<CameraStatus>;
-  cameraCommand?(lease: ControlLease, command: CameraCommand): Promise<CameraReceipt>;
+  cameraCommand?(
+    lease: ControlLease,
+    command: CameraCommand,
+  ): Promise<CameraReceipt>;
   action(
     lease: ControlLease,
     frame: Frame,
@@ -225,6 +237,7 @@ export interface SessionRegistration {
   protocolVersion?: 1 | 2;
   interaction?: AgentSession["interaction"];
   conversation?: AgentSession["conversation"];
+  voiceFrontend?: AgentSession["voiceFrontend"];
   documentAccess?: AgentSession["documentAccess"];
   screenCamera?: CameraSelection;
   adapter: Adapter;

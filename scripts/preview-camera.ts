@@ -37,15 +37,16 @@ const args = process.argv.slice(2);
 if (
   args.some(
     (a, i) =>
-      !["--smoke", "--port", "--native-window"].includes(a) &&
+      !["--smoke", "--voice-smoke", "--port", "--native-window"].includes(a) &&
       args[i - 1] !== "--port",
   )
 )
   throw new Error(
     "Use --smoke, --port PORT, or --native-window for explicit local Finder/native-tool review.",
   );
+const voiceSmoke = args.includes("--voice-smoke");
 const nativeWindow = args.includes("--native-window");
-if (nativeWindow && args.includes("--smoke"))
+if (nativeWindow && (args.includes("--smoke") || voiceSmoke))
   throw new Error("Native review never submits synthetic fallback input.");
 const nativeBinary = resolve("mac/.build/debug/ClawdTimeCompanion");
 let selectedSurface = cameraSurfaceSchema.parse({
@@ -231,7 +232,13 @@ const agent = service.registerSession(paired.token, {
   projectRoot: "/synthetic",
   externalSessionId: "preview",
   hostId: "preview",
+  ...(voiceSmoke
+    ? {
+        voiceFrontend: { version: 1 as const, provider: "elevenlabs" as const },
+      }
+    : {}),
   capabilities: {
+    ...(voiceSmoke ? { voiceInteractionVersion: 1 as const } : {}),
     cooperativePause: true,
     polling: true,
     screenCameraVersion: 1,
@@ -264,6 +271,9 @@ const app = createApp(service, control, human, {
   simulation: true,
   mediaToken,
   screenCameraEnabled: true,
+  elevenLabsEnabled: voiceSmoke,
+  twoWayVoiceEnabled: voiceSmoke,
+  remoteAudioIsolated: voiceSmoke,
 });
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port });
 const tick = setInterval(() => {
@@ -319,9 +329,10 @@ try {
     "live",
     "Backend/media path must produce a fresh selected frame",
   );
-  console.log(
-    `${nativeWindow ? "Native CUA camera review" : "Synthetic camera preview"}: ${preview?.url ?? preview?.previewUrl ?? `${preview!.origin}/#${mediaToken}`}`,
-  );
+  if (!voiceSmoke && !args.includes("--smoke"))
+    console.log(
+      `${nativeWindow ? "Native CUA camera review" : "Synthetic camera preview"}: ${preview?.url ?? preview?.previewUrl ?? `${preview!.origin}/#${mediaToken}`}`,
+    );
   console.log(
     "Local simulation only. Stop clears capture. Session expires after 15 minutes. Ctrl-C exits.",
   );
@@ -423,6 +434,88 @@ try {
     input.once("close", () => {
       void pending.then(close);
     });
+  }
+  if (voiceSmoke) {
+    const call =
+      store.all<import("../src/contracts.js").CallSession>("call")[0]!;
+    await executeConversationCommand(client, "prepare_voice_presentation", {
+      requestId: request.id,
+      preparation: {
+        version: 1,
+        context:
+          "Synthetic prepared presentation; no physical call or provider connection.",
+        geometryGeneration: status.geometryGeneration,
+        contentRevision: status.contentRevision,
+        targets: [
+          {
+            id: "review",
+            label: "Review region",
+            rect: { x: 0.2, y: 0.2, width: 0.4, height: 0.4 },
+            annotation: { kind: "highlight", text: "Prepared review" },
+          },
+        ],
+      },
+    });
+    const invoke = async (
+      eventId: string,
+      action: string,
+      targetId?: string,
+    ) => {
+      const started = performance.now();
+      const response = await app.request(
+        `/media/${mediaSessionId(request.id)}/voice/camera`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${mediaToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            eventId,
+            callId: call.id,
+            qualifiedRemoteAudio: true,
+            action,
+            ...(targetId ? { targetId } : {}),
+          }),
+        },
+      );
+      const result = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(result));
+      assert.equal(result.accepted, true);
+      return started;
+    };
+    const started = await invoke("voice_focus", "focus", "review");
+    for (let i = 0; i < 40; i++) {
+      status = await client.screenCamera(request.id);
+      if (!status.moving && status.crop.width < 0.99) break;
+      await wait(50);
+    }
+    assert.ok(status.crop.width < 0.99);
+    assert.equal(status.moving, false);
+    console.log(
+      `Local prepared focus accepted-to-settled check: ${Math.round(performance.now() - started)}ms (not handset latency)`,
+    );
+    await invoke("voice_mark", "annotate", "review");
+    status = await client.screenCamera(request.id);
+    assert.equal(status.annotations[0]?.kind, "highlight");
+    const revision = status.revision;
+    await invoke("voice_mark", "annotate", "review");
+    status = await client.screenCamera(request.id);
+    assert.equal(status.revision, revision);
+    await invoke("voice_wide", "overview");
+    await wait(500);
+    status = await client.screenCamera(request.id);
+    assert.equal(status.crop.width, 1);
+    await invoke("voice_clear", "clear");
+    status = await client.screenCamera(request.id);
+    assert.equal(status.annotations.length, 0);
+    await invoke("voice_stop", "stop");
+    await assert.rejects(client.screenCamera(request.id));
+    console.log(
+      "PASS: same-chat preparation → qualified voice camera route → real media compositor; smooth focus/annotation/overview/clear/deduplication/Stop. Synthetic source, no provider, phone or OS input.",
+    );
+    await close();
+    clearTimeout(expiry);
   }
   if (args.includes("--smoke")) {
     let commandNumber = 0;

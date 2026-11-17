@@ -29,6 +29,7 @@ from playback import SpeechLedger, TERMINAL
 from utterances import UtteranceAssembler
 from voice_interaction import SpeechOnset, two_way_allowed
 from conversational import GPTLiveFrontend, live_requested, live_allowed, sdk_readiness
+from elevenlabs_frontend import ElevenLabsFrontend, requested as eleven_requested, allowed as eleven_allowed, readiness as eleven_readiness
 from acoustic import AcousticFrontend, QUALIFICATION_NOTICE, allowed as acoustic_allowed, requested as acoustic_requested, readiness as acoustic_readiness
 from speech_diagnostics import SpeechDiagnostics
 from ledger_backup import encrypted_snapshot
@@ -362,7 +363,9 @@ class Session:
                                 or self.pause_latched):
                             await self.close('policy_ended')
                             return
-                    elif acoustic_requested(policy) or (self.live_frontend is not None and not live_allowed(policy, self.owner.env)):
+                    elif acoustic_requested(policy) or (self.live_frontend is not None and not (
+                            self.live_frontend.policy_allowed(policy) if isinstance(self.live_frontend, ElevenLabsFrontend)
+                            else live_allowed(policy, self.owner.env))):
                         await self.close('policy_ended')
                         return
                     authorized = self.recording and capture_allowed(policy) and policy.get('callId') == self.call_id
@@ -1329,14 +1332,21 @@ class Service:
                     s.live_frontend = AcousticFrontend(s, policy)
                 elif not isinstance(s.live_frontend, AcousticFrontend) or not s.live_frontend.policy_allowed(policy):
                     raise web.HTTPConflict(text='Acoustic mode is immutable.')
+            elif eleven_requested(policy):
+                if not eleven_allowed(policy, self.env):
+                    raise web.HTTPServiceUnavailable(text='ElevenLabs configuration or qualified audio is unavailable.')
+                if s.activation is None:
+                    s.live_frontend = ElevenLabsFrontend(s)
+                elif not isinstance(s.live_frontend, ElevenLabsFrontend):
+                    raise web.HTTPConflict(text='Conversation frontend is immutable for this call.')
             elif live_requested(policy):
                 if not live_allowed(policy, self.env) or not sdk_readiness()['available']:
                     raise web.HTTPServiceUnavailable(text='GPT-Live provider, SDK or qualified audio is unavailable.')
                 if s.activation is None:
                     s.live_frontend = GPTLiveFrontend(s)
-                elif s.live_frontend is None:
+                elif not isinstance(s.live_frontend, GPTLiveFrontend):
                     raise web.HTTPConflict(text='Conversation frontend is immutable for this call.')
-            elif s.live_frontend is not None:
+            elif s.live_frontend is not None or policy.get('conversationFrontend') is not None:
                 raise web.HTTPConflict(text='Conversation frontend is immutable for this call.')
             s.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
             s.apply_voice_policy(policy)
@@ -1346,12 +1356,14 @@ class Service:
             # Report the owner actually started, not requested flags/capabilities.
             if isinstance(s.live_frontend, GPTLiveFrontend):
                 result = {**result, 'conversationFrontend': 'gpt_live'}
+            elif isinstance(s.live_frontend, ElevenLabsFrontend):
+                result = {**result, 'conversationFrontend': 'elevenlabs'}
             elif isinstance(s.live_frontend, AcousticFrontend):
                 result = {**result, 'audioQualification': True}
             return web.json_response(result)
         if action=='speak':
-            if s.audio_qualification or s.live_frontend is not None:
-                raise web.HTTPConflict(text='GPT-Live owns speech for this session.')
+            if s.audio_qualification or (s.live_frontend is not None and not isinstance(s.live_frontend, ElevenLabsFrontend)):
+                raise web.HTTPConflict(text='Another frontend owns speech for this session.')
             expected_segments = s.segment_count
             if (not isinstance(body, dict) or not {'id','text'}.issubset(body) or not set(body).issubset({'id','text','callId','expectedRevision'})
                     or not isinstance(body['id'],str) or not 0<len(body['id'])<=200
@@ -1382,6 +1394,23 @@ class Service:
                 if previous['sessionId'] != sid or previous['fingerprint'] != digest:
                     raise web.HTTPConflict(text='Speech identity conflict.')
                 return web.json_response(self.speech.public(previous),status=200 if previous['state'] in TERMINAL else 202)
+            if isinstance(s.live_frontend, ElevenLabsFrontend):
+                if not s.live_frontend.policy_allowed(policy) or not s.live_frontend.authorized():
+                    raise web.HTTPConflict(text='ElevenLabs conversation is unavailable.')
+                self.speech.accept(body['id'], sid, digest)
+                # Context messages have no causal playback acknowledgment. Preserve
+                # unknown, even after a successful socket write; never replay them.
+                reason = 'frontend_context_unconfirmed'
+                try:
+                    await s.live_frontend.verified_reply(body['text'])
+                    reason = 'frontend_context_submitted'
+                except asyncio.CancelledError:
+                    self.speech.set(body['id'], 'unknown', reason)
+                    raise
+                except Exception:
+                    pass
+                self.speech.set(body['id'], 'unknown', reason)
+                return web.json_response(self.speech.public(self.speech.get(body['id'])))
             if s.speaking or any(self.speech.get(key)['sessionId'] == sid for key in self.speech_tasks):
                 raise web.HTTPConflict(text='Speech is already playing.')
             receipt=self.speech.accept(body['id'], sid, digest)
@@ -1446,6 +1475,9 @@ class Service:
         async def qualification_readiness(request):
             return web.json_response(acoustic_readiness(self.env), headers={'Cache-Control':'no-store'})
         app.router.add_get('/audio-qualification/readiness',qualification_readiness)
+        async def streaming_voice_readiness(request):
+            return web.json_response(await eleven_readiness(self), headers={'Cache-Control':'no-store'})
+        app.router.add_get('/voice/elevenlabs/readiness',streaming_voice_readiness, allow_head=False)
         self.text_devices.routes(app)
         app.router.add_get('/internal/ledger-backup',self.ledger_backup, allow_head=False)
         async def device_readiness(request):

@@ -841,6 +841,37 @@ describe("native protocol integration without live traffic", () => {
     });
     f.store.close();
   });
+  it("records ElevenLabs ownership and submits the initial task narration only once", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    const request = async (url: string | URL | Request, init?: RequestInit) =>
+      new URL(String(url)).pathname.endsWith("/activate")
+        ? new Response(
+            JSON.stringify({
+              activated: true,
+              conversationFrontend: "elevenlabs",
+            }),
+          )
+        : f.request(url, init);
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      request as typeof fetch,
+    );
+    const observe = (id: string, state: any, qualified?: boolean) =>
+      f.app.observeCall(id, state, qualified);
+    await transport.pollCalls(observe);
+    await transport.pollCalls(observe);
+    expect(f.store.get("media", mediaSessionId(f.attention.id))).toMatchObject({
+      conversationFrontend: "elevenlabs",
+      state: "active",
+    });
+    const speech = f.requests.filter((r) => r.url.endsWith("/speak"));
+    expect(speech).toHaveLength(1);
+    expect(speech[0]!.body.text).toBe("Fixture question");
+    f.store.close();
+  });
   it("confirmed GPTLive activation omits legacy question while retaining old receipt reconciliation", async () => {
     const f = fixture();
     await f.app.drain();
@@ -1891,4 +1922,24 @@ describe("read-only document call preparation", () => {
       f.store.close();
     },
   );
+});
+
+describe("same-chat streaming voice dial readiness", () => {
+  it("refuses missing dedicated voice configuration before media preparation or dialing", async () => {
+    const f = fixture();
+    f.store.put("session", {
+      ...f.agent.session,
+      voiceFrontend: { version: 1, provider: "elevenlabs" },
+    });
+    await expect(
+      f.transport.call(f.attention, f.pair.pairing, `${f.attention.id}:call`),
+    ).rejects.toThrow("no call was placed");
+    expect(
+      f.requests.some(
+        (r) => new URL(r.url).pathname === "/voice/elevenlabs/readiness",
+      ),
+    ).toBe(true);
+    expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+    f.store.close();
+  });
 });

@@ -72,7 +72,7 @@ export interface NativeTransportConfig {
 }
 interface MediaRecord {
   audioQualification?: true;
-  conversationFrontend?: "gpt_live";
+  conversationFrontend?: "gpt_live" | "elevenlabs";
   documentOnly?: true;
   documentSessionId?: string;
   id: string;
@@ -715,6 +715,20 @@ export class NativeTransport implements Transport {
     }
   }
   /** GET-only, fixed-schema readiness; never provisions credentials or starts media. */
+  async elevenLabsReadiness() {
+    try {
+      return z
+        .object({
+          configured: z.boolean(),
+          agentValidated: z.boolean(),
+          ready: z.boolean(),
+        })
+        .strict()
+        .parse(await this.media("/voice/elevenlabs/readiness"));
+    } catch {
+      return { configured: false, agentValidated: false, ready: false };
+    }
+  }
   async audioQualificationReadiness() {
     try {
       const raw = await this.media("/audio-qualification/readiness");
@@ -879,6 +893,13 @@ export class NativeTransport implements Transport {
     else if (activeAudioQualification(this.store, pairing))
       throw new DomainError(403, "Audio qualification reserves this line.");
     await this.requireReady(pairing, "call", !qualification && !documentOnly);
+    if (
+      owner?.voiceFrontend?.provider === "elevenlabs" &&
+      !(await this.elevenLabsReadiness()).ready
+    )
+      throw new PreflightBlocked(
+        "Dedicated streaming voice frontend is not ready; no call was placed.",
+      );
     if (qualification) {
       const readiness = await this.audioQualificationReadiness();
       if (
@@ -1735,8 +1756,12 @@ export class NativeTransport implements Transport {
           const active: MediaRecord = {
             ...session,
             state: "active",
-            ...(activation.conversationFrontend === "gpt_live"
-              ? { conversationFrontend: "gpt_live" as const }
+            ...(activation.conversationFrontend === "gpt_live" ||
+            activation.conversationFrontend === "elevenlabs"
+              ? {
+                  conversationFrontend: activation.conversationFrontend as
+                    "gpt_live" | "elevenlabs",
+                }
               : {}),
           };
           this.store.put("media", active);

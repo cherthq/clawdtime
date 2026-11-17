@@ -11,6 +11,7 @@ final class CameraSingleFrameStream: NSObject, SCStreamOutput, SCStreamDelegate,
   private var stream: SCStream?
   private var timer: DispatchWorkItem?
   private var completed = false
+  private let startGate = CaptureStartGate<CGImage>()
 
   func capture(filter: SCContentFilter, configuration: SCStreamConfiguration) async throws -> CGImage {
     try await withCheckedThrowingContinuation { continuation in
@@ -22,7 +23,10 @@ final class CameraSingleFrameStream: NSObject, SCStreamOutput, SCStreamDelegate,
       let timeout = DispatchWorkItem { [self] in finish(.failure(CaptureFailure(.frameDeadline))) }
       timer = timeout
       DispatchQueue.global().asyncAfter(deadline: .now() + 1.5, execute: timeout)
-      stream.startCapture { [self] error in if let error { finish(.failure(CaptureFailure(.streamStart, underlying: error))) } }
+      stream.startCapture { [self] error in
+        if let error { finish(.failure(CaptureFailure(.streamStart, underlying: error))) }
+        else if let image = startGate.started() { finish(.success(image)) }
+      }
     }
   }
 
@@ -40,13 +44,14 @@ final class CameraSingleFrameStream: NSObject, SCStreamOutput, SCStreamDelegate,
     guard let result = CIContext(options: [.cacheIntermediates: false]).createCGImage(image, from: image.extent) else {
       finish(.failure(CaptureFailure(.frameDecode))); return
     }
-    finish(.success(result))
+    if let image = startGate.receive(result) { finish(.success(image)) }
   }
 
   private func finish(_ result: Result<CGImage, Error>) {
     lock.lock()
     guard !completed else { lock.unlock(); return }
     completed = true
+    startGate.cancel()
     let continuation = self.continuation; self.continuation = nil
     let stream = self.stream; self.stream = nil
     timer?.cancel(); timer = nil
@@ -54,7 +59,7 @@ final class CameraSingleFrameStream: NSObject, SCStreamOutput, SCStreamDelegate,
     // Publish only after successful bounded stop acknowledgment. The gate owns
     // the pending image so a missing/late callback cannot retain it indefinitely.
     if let stream, let continuation {
-      let gate = CaptureStopGate(result: result) { continuation.resume(with: $0) }
+      let gate = CaptureStopGate(result: result, retaining: stream) { continuation.resume(with: $0) }
       stream.stopCapture { error in gate.acknowledged(error: error) }
     } else { continuation?.resume(with: result) }
   }

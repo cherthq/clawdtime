@@ -76,7 +76,9 @@ export async function startMcp(options: {
   conversation?: ProtocolOptions["conversation"];
   documentAccess?: ProtocolOptions["documentAccess"];
   screenCamera?: ProtocolOptions["screenCamera"];
+  voiceFrontend?: ProtocolOptions["voiceFrontend"];
 }) {
+  sessionCapabilities(options);
   const connection = loadConnection(
     options.connection,
     options.project,
@@ -131,7 +133,9 @@ export async function startMcp(options: {
       JSON.stringify(run.session.documentAccess) !==
         JSON.stringify(options.documentAccess) ||
       JSON.stringify(run.session.screenCamera) !==
-        JSON.stringify(options.screenCamera))
+        JSON.stringify(options.screenCamera) ||
+      JSON.stringify(run.session.voiceFrontend) !==
+        JSON.stringify(options.voiceFrontend))
   )
     throw new Error(
       "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
@@ -165,10 +169,18 @@ export async function startMcp(options: {
             conversation: options.conversation,
             documentAccess: options.documentAccess,
             screenCamera: options.screenCamera,
+            voiceFrontend: options.voiceFrontend,
           });
           run = { ...run, session: result.session, token: result.token };
           secureWrite(statePath, run);
         }
+        if (
+          JSON.stringify(run.session?.voiceFrontend) !==
+          JSON.stringify(options.voiceFrontend)
+        )
+          throw new Error(
+            "Server did not confirm the selected voice frontend. Preserve this registration; do not downgrade or retry it.",
+          );
         const scoped = new ClawdTimeClient(connection.baseUrl, run.token!);
         // Reconnect refreshes liveness immediately, but expired/stopped tokens stay rejected.
         await scoped.heartbeat();

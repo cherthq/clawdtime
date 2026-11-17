@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { VoicePresentation } from "./control/voice-presentation.js";
+import { voiceEventSchema, voiceCameraSchema } from "./voice-contracts.js";
 import { ScreenCamera } from "./control/camera.js";
 import { timelineFor } from "./transport/conversation-timeline.js";
 import {
@@ -58,6 +60,12 @@ import {
 
 export interface AppOptions {
   screenCameraEnabled?: boolean;
+  elevenLabsEnabled?: boolean;
+  elevenLabsReadiness?: () => Promise<{
+    configured: boolean;
+    agentValidated: boolean;
+    ready: boolean;
+  }>;
   conversation?: JobConversation;
   textDevice?: TextDesktopPort;
   remoteRunner?: RemoteExecutionRunner;
@@ -112,7 +120,12 @@ export function createApp(
     enabled: options.websiteAnalyticsEnabled === true,
   });
   const setup = new SetupService(service);
-  const camera = new ScreenCamera(service, control, options.screenCameraEnabled === true);
+  const camera = new ScreenCamera(
+    service,
+    control,
+    options.screenCameraEnabled === true,
+  );
+  const voicePresentation = new VoicePresentation(service, camera);
   const interruptions = new Interruptions(service);
   const execution = new ExecutionCoordinator(
     service,
@@ -123,9 +136,19 @@ export function createApp(
     },
     async (token, requestId, frameId, reference) => {
       const view = await camera.status(token, requestId);
-      if (view.state !== "live" || view.moving || view.sourceFrameId !== frameId || (reference && (
-          view.revision !== reference.revision || view.geometryGeneration !== reference.geometryGeneration || view.sourceFrameId !== reference.sourceFrameId)))
-        throw new DomainError(409, "Observe a current stable camera view before input.");
+      if (
+        view.state !== "live" ||
+        view.moving ||
+        view.sourceFrameId !== frameId ||
+        (reference &&
+          (view.revision !== reference.revision ||
+            view.geometryGeneration !== reference.geometryGeneration ||
+            view.sourceFrameId !== reference.sourceFrameId))
+      )
+        throw new DomainError(
+          409,
+          "Observe a current stable camera view before input.",
+        );
     },
   );
   const allowedOrigins = new Set([
@@ -793,9 +816,54 @@ export function createApp(
       ),
     ),
   );
-  app.get("/api/doctor", (c) =>
-    c.json(service.doctor(bearer(c.req.header("authorization")))),
-  );
+  async function voiceReady(token: string) {
+    const session = service.authenticateSession(token);
+    if (!session.voiceFrontend) return true;
+    if (
+      !options.elevenLabsEnabled ||
+      !options.twoWayVoiceEnabled ||
+      !options.remoteAudioIsolated
+    )
+      return false;
+    if (options.simulation) return true;
+    try {
+      return (await options.elevenLabsReadiness?.())?.ready === true;
+    } catch {
+      return false;
+    }
+  }
+  async function requireVoiceReady(token: string) {
+    if (!(await voiceReady(token)))
+      throw new DomainError(
+        409,
+        "Dedicated streaming voice frontend is not ready; no call was placed.",
+      );
+  }
+  app.get("/api/doctor", async (c) => {
+    const token = bearer(c.req.header("authorization"));
+    const result = service.doctor(token);
+    if (!result.session?.voiceFrontend) return c.json(result);
+    const ready = await voiceReady(token);
+    return c.json({
+      ...result,
+      ready: result.ready && ready,
+      voiceFrontendReady: ready,
+      readiness: {
+        ...result.readiness,
+        liveReady: result.readiness.liveReady && ready,
+        checks: [
+          ...result.readiness.checks,
+          {
+            id: "streaming_voice",
+            status: ready ? "pass" : "fail",
+            message: ready
+              ? "Dedicated streaming voice configuration validated; handset performance is unverified."
+              : "Enable and validate the dedicated ElevenLabs frontend before calling.",
+          },
+        ],
+      },
+    });
+  });
   app.get("/api/setup/test", (c) =>
     c.json(setup.get(bearer(c.req.header("authorization")))),
   );
@@ -834,9 +902,12 @@ export function createApp(
       z.object({})
         .strict()
         .parse(await c.req.json());
+      if (path === "/api/setup/test/start")
+        await requireVoiceReady(bearer(c.req.header("authorization")));
       return c.json(action(bearer(c.req.header("authorization"))));
     });
   app.post("/api/attention", async (c) => {
+    await requireVoiceReady(bearer(c.req.header("authorization")));
     const request = service.requestAttention(
       bearer(c.req.header("authorization")),
       await c.req.json(),
@@ -967,6 +1038,7 @@ export function createApp(
       c.req.param("id"),
     );
     execution.stop(c.req.param("id"));
+    voicePresentation.clear(c.req.param("id"));
     await control.stopPairing(r.request.pairingId);
     return c.json(r);
   });
@@ -999,11 +1071,40 @@ export function createApp(
       ),
     ),
   );
+  app.post("/api/attention/:id/conversation/voice/prepare", async (c) => {
+    const token = bearer(c.req.header("authorization"));
+    const request = service.status(token, c.req.param("id"));
+    const session = service.authenticateSession(token);
+    const check = () => {
+      const ctx = qualifiedVoice(mediaId(request.id));
+      if (ctx.session.id !== session.id)
+        throw new DomainError(403, "Exact voice session required.");
+    };
+    return c.json(
+      await voicePresentation.prepare(
+        session,
+        request.id,
+        await c.req.json(),
+        check,
+      ),
+    );
+  });
   app.get("/api/attention/:id/conversation/camera", async (c) =>
-    c.json(await camera.status(bearer(c.req.header("authorization")), c.req.param("id"))),
+    c.json(
+      await camera.status(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+      ),
+    ),
   );
   app.post("/api/attention/:id/conversation/camera", async (c) =>
-    c.json(await camera.command(bearer(c.req.header("authorization")), c.req.param("id"), await c.req.json())),
+    c.json(
+      await camera.command(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        await c.req.json(),
+      ),
+    ),
   );
   app.post("/api/attention/:id/conversation/observe", async (c) => {
     const b = z
@@ -1303,6 +1404,128 @@ export function createApp(
       );
     await next();
   });
+  function qualifiedVoice(id: string) {
+    const context = mediaContext(id);
+    const { request, session, call, pairing } = context;
+    const now = service.clock();
+    if (
+      !options.elevenLabsEnabled ||
+      !options.twoWayVoiceEnabled ||
+      !options.remoteAudioIsolated ||
+      session.voiceFrontend?.provider !== "elevenlabs" ||
+      session.protocolVersion !== 2 ||
+      session.conversation ||
+      session.documentAccess ||
+      isAudioQualification(context) ||
+      session.capabilities.voiceInteractionVersion !== 1 ||
+      session.state === "stopped" ||
+      pairing.revokedAt !== undefined ||
+      now - (session.lastSeenAt ?? session.createdAt) >= 20000 ||
+      (session.lastSeenAt ?? session.createdAt) > now + 1000 ||
+      request.deadline <= now ||
+      !["connected", "awaiting_input"].includes(request.state) ||
+      !call ||
+      request.callId !== call.id ||
+      call.state !== "connected" ||
+      !call.remoteParticipantQualified ||
+      service.store.state(`muted:${request.id}`) ||
+      service.store.state(`listening-stopped:${request.id}`)
+    )
+      throw new DomainError(
+        403,
+        "Qualified same-chat streaming voice required.",
+      );
+    service.assertExecutionAllowed(session);
+    return { ...context, call };
+  }
+  function voiceInput(id: string, value: { callId: string }) {
+    const ctx = qualifiedVoice(id);
+    if (value.callId !== ctx.call.id)
+      throw new DomainError(403, "Voice call identity mismatch.");
+    return ctx;
+  }
+  app.get("/media/:id/voice/context", (c) => {
+    const { request } = qualifiedVoice(c.req.param("id"));
+    const after = z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .safe()
+      .default(0)
+      .parse(c.req.query("after"));
+    const prepared = voicePresentation.context(request.id);
+    const activity = presentationFor(service).projection(request.id);
+    const sequence = activity?.sequence ?? 0;
+    return c.json({
+      sequence,
+      context: service.store.state(`view-stopped:${request.id}`)
+        ? "Screen sharing is stopped. " + request.question.slice(0, 1900)
+        : (prepared?.context ?? request.question.slice(0, 2000)),
+      cameraTargets:
+        prepared?.targets.map((t) => ({ id: t.id, label: t.label })) ?? [],
+      updates:
+        activity && sequence > after
+          ? [
+              {
+                id: `progress_${sequence}`,
+                revision: sequence,
+                text: JSON.stringify({
+                  state: activity.work,
+                  summary: activity.currentSummary,
+                  outcome: activity.outcome,
+                }),
+              },
+            ]
+          : [],
+    });
+  });
+  app.post("/media/:id/voice/intent", async (c) => {
+    const value = voiceEventSchema
+      .extend({ text: z.string().trim().min(1).max(8000) })
+      .strict()
+      .parse(await c.req.json());
+    const { request, pairing, call } = voiceInput(c.req.param("id"), value);
+    const result = await human.receive({
+      eventId: `voice-intent:${request.id}:${value.eventId}`,
+      requestId: request.id,
+      memberId: pairing.memberId,
+      lineId: pairing.lineId,
+      conversationId: pairing.conversationId,
+      channel: "voice",
+      text: value.text,
+      callId: call.id,
+      qualifiedRemoteAudio: true,
+    });
+    return c.json(result);
+  });
+  app.post("/media/:id/voice/camera", async (c) => {
+    const value = voiceCameraSchema.parse(await c.req.json());
+    const { request, session, pairing } = voiceInput(c.req.param("id"), value);
+    if (value.action === "stop") {
+      service.store.saveState(`view-stopped:${request.id}`, true);
+      voicePresentation.clear(request.id);
+      execution.stop(request.id);
+      await control.stopPairing(pairing.id);
+      return c.json({ accepted: true, reply: "Sharing stopped." });
+    }
+    return c.json(
+      await voicePresentation.command(session, request.id, value, () => {
+        voiceInput(c.req.param("id"), value);
+      }),
+    );
+  });
+  app.post("/media/:id/voice/end", async (c) => {
+    const value = voiceEventSchema.parse(await c.req.json());
+    const { request, session, call, pairing } = voiceInput(
+      c.req.param("id"),
+      value,
+    );
+    service.endConversationFromBoundCall(request.id, session.id, call.id);
+    voicePresentation.clear(request.id);
+    execution.stop(request.id);
+    await control.stopPairing(pairing.id);
+    return c.json({ accepted: true, reply: "Call ending; cleanup requested." });
+  });
   function conversationalMedia(id: string) {
     const context = mediaContext(id);
     const { request, call, session } = context;
@@ -1453,6 +1676,10 @@ export function createApp(
       } catch {}
     }
     const open =
+      (!session.voiceFrontend ||
+        (options.elevenLabsEnabled &&
+          options.twoWayVoiceEnabled &&
+          options.remoteAudioIsolated)) &&
       documentAuthorized &&
       !pairing.revokedAt &&
       session.state !== "stopped" &&
@@ -1475,14 +1702,21 @@ export function createApp(
     const selection =
       open &&
       !session.documentAccess &&
-      (!session.screenCamera || (options.screenCameraEnabled === true && c.req.header("X-ClawdTime-Camera") === "1" && lease?.cameraVersion === 1 && isDeepStrictEqual(lease.surface, session.screenCamera.surface))) &&
+      (!session.screenCamera ||
+        (options.screenCameraEnabled === true &&
+          c.req.header("X-ClawdTime-Camera") === "1" &&
+          lease?.cameraVersion === 1 &&
+          isDeepStrictEqual(lease.surface, session.screenCamera.surface))) &&
       !service.store.state(`view-stopped:${request.id}`) &&
       lease &&
       (session.protocolVersion === 2 || session.state === "yielded") &&
       session.controlEpoch === lease.epoch
         ? {
-            ...(options.screenCameraEnabled && session.screenCamera && lease.cameraVersion === 1
-              ? { cameraVersion: 1, surface: lease.surface } : {}),
+            ...(options.screenCameraEnabled &&
+            session.screenCamera &&
+            lease.cameraVersion === 1
+              ? { cameraVersion: 1, surface: lease.surface }
+              : {}),
             leaseId: lease.id,
             deviceId: lease.deviceId,
             alias: "Paired Mac",
@@ -1507,13 +1741,15 @@ export function createApp(
       sessionId: session.id,
       muted: service.store.state(`muted:${request.id}`) === true,
       protocolVersion: session.protocolVersion ?? 1,
-      ...(options.conversation &&
-      session.conversation?.version === 1 &&
-      options.twoWayVoiceEnabled &&
-      options.remoteAudioIsolated &&
-      session.capabilities.voiceInteractionVersion === 1
-        ? { conversationVersion: 1, conversationFrontend: "gpt_live" }
-        : {}),
+      ...(session.voiceFrontend?.provider === "elevenlabs"
+        ? { conversationVersion: 1, conversationFrontend: "elevenlabs" }
+        : options.conversation &&
+            session.conversation?.version === 1 &&
+            options.twoWayVoiceEnabled &&
+            options.remoteAudioIsolated &&
+            session.capabilities.voiceInteractionVersion === 1
+          ? { conversationVersion: 1, conversationFrontend: "gpt_live" }
+          : {}),
       ...(session.protocolVersion === 2
         ? {
             voiceMode:
@@ -1614,7 +1850,8 @@ export function createApp(
       input.participantIdentity !== `worker-${c.req.param("id")}` ||
       service.store.state(`muted:${request.id}`) === true ||
       service.store.state(`listening-stopped:${request.id}`) ||
-      service.store.state(`view-stopped:${request.id}`)
+      (service.store.state(`view-stopped:${request.id}`) &&
+        !session.voiceFrontend)
     )
       throw new DomainError(403, "Qualified two-way audio required.");
     const receipt = interruptions.accept(request.id, input);
@@ -1744,6 +1981,7 @@ export function createApp(
       });
     }
     execution.stop(request.id);
+    voicePresentation.clear(request.id);
     service.store.saveState(`view-started:${request.id}`, true);
     service.store.saveState(`view-stopped:${request.id}`, true);
     return c.json({ stopped: true });
@@ -1767,6 +2005,7 @@ export function createApp(
     } catch {
       // Cleanup and its original effect ID remain authoritative.
     }
+    voicePresentation.clear(request.id);
     service.failCall(request.id, "media_failure");
     await control.stopPairing(pairing.id);
     return c.json({ ok: true });

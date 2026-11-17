@@ -184,6 +184,11 @@ class Gateway:
             raise web.HTTPForbidden()
         async with self.http.request(method,config['url']+'/v1/leases'+suffix,
                 headers={'Authorization':'Bearer '+config['key']},
+                # Native camera waits up to 1.5s for a frame plus 350ms for
+                # acknowledged stop. Let that bounded operation report its result;
+                # frame() still rejects pixels older than two seconds. Input and
+                # lease requests retain the original short/uncertain-outcome limit.
+                **({'timeout':ClientTimeout(total=3,connect=.7)} if frame and body.get('cameraVersion')==1 else {}),
                 **({'json':payload} if payload is not None else {}),allow_redirects=False) as response:
             limit = MAX_FRAME if frame else 16384
             chunks, size = [], 0

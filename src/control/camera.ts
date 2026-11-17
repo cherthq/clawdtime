@@ -8,7 +8,7 @@ import {
 import type { ClawdTime } from "../attention/service.js";
 import { DomainError } from "../attention/service.js";
 import type { ControlCoordinator } from "./coordinator.js";
-import type { ControlLease } from "../contracts.js";
+import type { AgentSession, ControlLease } from "../contracts.js";
 import { localPolicySchema, type PolicyDevice } from "./execution.js";
 
 /** Camera-only operations reuse viewing authority; they never acquire an executor. */
@@ -18,9 +18,20 @@ export class ScreenCamera {
     readonly control: ControlCoordinator,
     readonly enabled = false,
   ) {}
-  private context(token: string, requestId: string) {
-    const session = this.service.authenticateSession(token);
-    const request = this.service.status(token, requestId);
+  private context(token: string | AgentSession, requestId: string) {
+    const session =
+      typeof token === "string"
+        ? this.service.authenticateSession(token)
+        : token;
+    this.service.assertExecutionAllowed(session);
+    const request =
+      typeof token === "string"
+        ? this.service.status(token, requestId)
+        : this.service.store.get<import("../contracts.js").AttentionRequest>(
+            "attention",
+            requestId,
+          );
+    if (!request) throw new DomainError(404, "Unknown attention request.");
     if (request.sessionId !== session.id)
       throw new DomainError(403, "Exact session required.");
     if (
@@ -48,7 +59,7 @@ export class ScreenCamera {
     else this.control.check(lease.id, lease.memberId);
     return { session, lease };
   }
-  private async ready(token: string, requestId: string) {
+  private async ready(token: string | AgentSession, requestId: string) {
     const before = this.context(token, requestId);
     const device = this.control.device as typeof this.control.device &
       Partial<PolicyDevice>;
@@ -100,7 +111,7 @@ export class ScreenCamera {
       throw new DomainError(409, "Camera frame is stale.");
     return result;
   }
-  async status(token: string, requestId: string) {
+  async status(token: string | AgentSession, requestId: string) {
     const before = await this.ready(token, requestId);
     const raw = await this.control.device.cameraStatus!(before.lease);
     const after = this.context(token, requestId);
@@ -108,7 +119,7 @@ export class ScreenCamera {
       throw new DomainError(409, "Camera authority changed.");
     return this.validate(raw, after.lease);
   }
-  async command(token: string, requestId: string, raw: unknown) {
+  async command(token: string | AgentSession, requestId: string, raw: unknown) {
     const command = cameraCommandSchema.parse(raw);
     const before = await this.ready(token, requestId);
     // Media serializes revision, frame, rate and dedupe checks with its frame lock.

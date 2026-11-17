@@ -219,6 +219,7 @@ async function cameraFixture(
   opted = true,
   selection: CameraSelection = displayCamera,
   nativeSharedSurface = false,
+  voice = false,
 ) {
   const f = registrationFixture();
   class CameraDevice extends SimulatedDevice {
@@ -355,8 +356,17 @@ async function cameraFixture(
       ? {
           ...registration,
           screenCamera: selection,
+          ...(voice
+            ? {
+                voiceFrontend: {
+                  version: 1 as const,
+                  provider: "elevenlabs" as const,
+                },
+              }
+            : {}),
           capabilities: {
             ...registration.capabilities,
+            ...(voice ? { voiceInteractionVersion: 1 as const } : {}),
             ...(nativeSharedSurface
               ? { nativeControl: "desktop" as const, sharedSurface: true }
               : {}),
@@ -382,6 +392,9 @@ async function cameraFixture(
     simulation: true,
     mediaToken: "m".repeat(64),
     screenCameraEnabled: enabled,
+    elevenLabsEnabled: voice,
+    twoWayVoiceEnabled: voice,
+    remoteAudioIsolated: voice,
   });
   const api = (body?: unknown, token = agent.token) =>
     app.request(`/api/attention/${request.id}/conversation/camera`, {
@@ -1112,5 +1125,245 @@ describe("selected-window native ownership uses the current host without enablin
       ).status,
     ).toBe(200);
     expect(f.device.inputs).toHaveLength(0);
+  });
+});
+
+describe("Argos same-chat voice and prepared presentation", () => {
+  const prepared = {
+    version: 1,
+    context: "Review the disposable selected region.",
+    geometryGeneration: "geometry_1",
+    contentRevision: "content_1",
+    targets: [
+      {
+        id: "review",
+        label: "Review region",
+        rect: { x: 0.2, y: 0.2, width: 0.3, height: 0.3 },
+        annotation: { kind: "highlight" },
+      },
+    ],
+  };
+  async function fixture() {
+    const f = await cameraFixture(true, true, displayCamera, true, true);
+    const call =
+      f.store.all<import("../src/contracts.js").CallSession>("call")[0]!;
+    const media = (route: string, body?: unknown, token = "m".repeat(64)) =>
+      f.app.request(`/media/${mediaSessionId(f.request.id)}/voice/${route}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    const command = (eventId: string, action: string, targetId?: string) => ({
+      eventId,
+      action,
+      callId: call.id,
+      qualifiedRemoteAudio: true,
+      ...(targetId ? { targetId } : {}),
+    });
+    return { ...f, media, command, call };
+  }
+  it("selects streaming voice without a managed executor and keeps native control", async () => {
+    const f = await fixture();
+    expect(await (await f.policy()).json()).toMatchObject({
+      conversationFrontend: "elevenlabs",
+      voiceMode: "two_way",
+    });
+    expect(f.agent.session.conversation).toBeUndefined();
+    expect(f.agent.session.capabilities.nativeControl).toBe("desktop");
+    expect(() =>
+      f.service.registerSession(f.pairing.token, {
+        ...registration,
+        externalSessionId: "invalid-voice",
+        voiceFrontend: { version: 1, provider: "elevenlabs" },
+      }),
+    ).toThrow();
+    expect(() =>
+      f.service.registerSession(f.pairing.token, {
+        ...registration,
+        externalSessionId: f.agent.session.externalSessionId,
+      }),
+    ).toThrow("binding differs");
+  });
+  it("queues the original utterance once and supplies asynchronous verified progress", async () => {
+    const f = await fixture();
+    const body = {
+      eventId: "utterance_1",
+      callId: f.call.id,
+      qualifiedRemoteAudio: true,
+      text: "Inspect the project and explain the result.",
+    };
+    expect((await f.media("intent", body)).status).toBe(200);
+    expect((await f.media("intent", body)).status).toBe(200);
+    const poll = await (await f.execution("turns")).json();
+    expect(poll.turns).toHaveLength(1);
+    expect(poll.turns[0].text).toBe(body.text);
+    await f.execution("ack", { turnId: poll.turns[0].id });
+    await f.execution("progress", {
+      turnId: poll.turns[0].id,
+      state: "executing",
+      presentation: {
+        version: 1,
+        activity: {
+          activityId: "checking",
+          kind: "status",
+          summary: "Inspecting the disposable project.",
+        },
+      },
+    });
+    const context = await (await f.media("context")).json();
+    expect(context.updates).toHaveLength(1);
+    expect(context.updates[0].text).toContain(
+      "Inspecting the disposable project.",
+    );
+    expect(f.device.inputs).toHaveLength(0);
+    expect((await f.media("intent", { ...body, callId: "wrong" })).status).toBe(
+      403,
+    );
+    expect((await f.media("intent", body, "wrong")).status).toBe(401);
+  });
+  it("connects prepared focus/annotation/overview without desktop input and deduplicates tools", async () => {
+    const f = await fixture();
+    expect((await f.execution("voice/prepare", prepared)).status).toBe(200);
+    expect(await (await f.media("context")).json()).toMatchObject({
+      cameraTargets: [{ id: "review", label: "Review region" }],
+    });
+    const focus = f.command("focus_event", "focus", "review");
+    expect((await f.media("camera", focus)).status).toBe(200);
+    expect((await f.media("camera", focus)).status).toBe(200);
+    expect(f.device.commands).toHaveLength(1);
+    expect(f.device.commands[0]).toMatchObject({
+      op: "focus_region",
+      rect: prepared.targets[0]!.rect,
+      durationMs: 450,
+    });
+    expect(
+      (await f.media("camera", f.command("mark_event", "annotate", "review")))
+        .status,
+    ).toBe(200);
+    expect(f.device.commands[1]).toMatchObject({
+      op: "annotation_upsert",
+      annotation: { kind: "highlight" },
+    });
+    expect(
+      (await f.media("camera", f.command("wide_event", "overview"))).status,
+    ).toBe(200);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(
+      (await f.media("camera", { ...focus, action: "clear" })).status,
+    ).toBe(409);
+  });
+  it("refuses stale content/geometry, expired preparation, unknown targets and Stop", async () => {
+    const f = await fixture();
+    await f.execution("voice/prepare", prepared);
+    expect(
+      (await f.media("camera", f.command("bad", "focus", "unknown"))).status,
+    ).toBe(409);
+    for (const change of [
+      { contentRevision: "content_2" },
+      { geometryGeneration: "geometry_2" },
+    ]) {
+      f.device.statusOverride = change;
+      expect(
+        (await f.media("camera", f.command("stale", "focus", "review"))).status,
+      ).toBe(409);
+    }
+    f.device.statusOverride = {};
+    expect((await f.media("camera", f.command("stop", "stop"))).status).toBe(
+      200,
+    );
+    expect(
+      (await f.media("camera", f.command("after_stop", "focus", "review")))
+        .status,
+    ).toBe(409);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.leases.size).toBe(0);
+    expect(await (await f.media("context")).json()).toMatchObject({
+      cameraTargets: [],
+    });
+    expect(await (await f.policy()).json()).toMatchObject({
+      state: "listening",
+      conversationFrontend: "elevenlabs",
+    });
+    expect(
+      (
+        await f.media("end", {
+          eventId: "hangup",
+          callId: f.call.id,
+          qualifiedRemoteAudio: true,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await (await f.policy()).json()).toMatchObject({ state: "ended" });
+  });
+  it("rejects a stale preparation and a revoked call during camera observation", async () => {
+    const f = await fixture();
+    f.device.statusOverride = { contentRevision: "new_content" };
+    expect((await f.execution("voice/prepare", prepared)).status).toBe(409);
+    f.device.statusOverride = {};
+    await f.execution("voice/prepare", prepared);
+    f.device.beforeStatus = () => {
+      f.store.put("call", { ...f.call, state: "ended" });
+    };
+    expect(
+      (await f.media("camera", f.command("revoked", "focus", "review"))).status,
+    ).toBe(409);
+    expect(f.device.commands).toHaveLength(0);
+  });
+  it("requires operator opt-in and fails closed instead of selecting legacy speech", async () => {
+    const f = await fixture();
+    const disabled = createApp(f.service, f.control, f.human, {
+      origin: "http://127.0.0.1",
+      simulation: true,
+      mediaToken: "m".repeat(64),
+      screenCameraEnabled: true,
+      twoWayVoiceEnabled: true,
+      remoteAudioIsolated: true,
+    });
+    const reply = await disabled.request(
+      `/media/${mediaSessionId(f.request.id)}/policy`,
+      { headers: { authorization: `Bearer ${"m".repeat(64)}` } },
+    );
+    expect(await reply.json()).toMatchObject({
+      state: "ended",
+      conversationFrontend: "elevenlabs",
+    });
+    expect(
+      (
+        await disabled.request(
+          `/media/${mediaSessionId(f.request.id)}/voice/context`,
+          { headers: { authorization: `Bearer ${"m".repeat(64)}` } },
+        )
+      ).status,
+    ).toBe(403);
+  });
+  it("bounds new camera effects while retaining original receipts", async () => {
+    const f = await fixture();
+    await f.execution("voice/prepare", prepared);
+    const cmd = f.command("original", "focus", "review");
+    expect((await f.media("camera", cmd)).status).toBe(200);
+    f.store.saveState(`voice-camera-count:${f.request.id}`, 512);
+    expect(
+      (await f.media("camera", f.command("overflow", "overview"))).status,
+    ).toBe(429);
+    expect((await f.media("camera", cmd)).status).toBe(200);
+    expect(f.device.commands).toHaveLength(1);
+  });
+  it("retains an unknown camera outcome without dispatching it again", async () => {
+    const f = await fixture();
+    await f.execution("voice/prepare", prepared);
+    f.device.beforeCommand = () => {
+      throw new Error("lost acknowledgement");
+    };
+    const cmd = f.command("unknown_outcome", "focus", "review");
+    expect((await f.media("camera", cmd)).status).toBe(409);
+    f.device.beforeCommand = undefined;
+    const repeated = await (await f.media("camera", cmd)).json();
+    expect(repeated).toMatchObject({ accepted: false });
+    expect(repeated.reply).toContain("unknown");
+    expect(f.device.commands).toHaveLength(0);
   });
 });

@@ -45,6 +45,22 @@ packages now installed in media. Authenticated silent GPT-Live sessions passed
 locally and on the deployed server, with provider-confirmed clean closure. Voice remains
 unqualified for full-duplex speakerphone use. See [release evidence and rollout](docs/CONVERSATIONAL_CONTROL_RELEASE.md).
 
+## Argos-style voice and presentation
+
+The explicit same-chat ElevenLabs frontend now connects streaming conversation to
+the current coding agent and prepared camera focus/annotations. It preserves native
+CUA ownership and approval controls; IDE integration is optional. Native selected-
+window capture also includes the start/stop lifecycle repair validated with sustained
+Finder frames. These changes are locally tested, not yet phone-qualified or deployed.
+See [the review and acceptance evidence](docs/IMPLEMENTATION_ARGOS_REVIEW.md) and
+[voice setup](docs/MEDIA_INTEGRATION.md#same-chat-elevenlabs-streaming-frontend).
+
+Run `npm run test:voice:camera` for a local synthetic end-to-end presentation check;
+it does not connect a voice provider, microphone or phone. The provider protocol
+loopback tests and a network-free dedicated-agent configuration builder are described
+in [media checks](media/README.md). Existing sessions retain their selected voice path;
+new voice sessions must explicitly use `--voice-frontend elevenlabs`.
+
 ## Local screen camera preview
 
 The Argos slice adds explicit display/window capture, native-resolution

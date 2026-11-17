@@ -468,7 +468,7 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
-      let cameraModes = ["--camera-list", "--camera-frame", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      let cameraModes = ["--camera-list", "--camera-frame", "--camera-probe", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
       if args.contains(where: { $0.hasPrefix("--camera-") && !cameraModes.contains($0) }) {
         throw HelperError(400, "Unsupported camera development mode; rebuild the development helper.")
       }
@@ -500,6 +500,37 @@ struct HelperStatus: Codable {
               let surface = try JSONDecoder().decode(CameraSurface.self, from: bytes)
               if args.contains("--camera-inspect") {
                 print(String(data: try JSONEncoder().encode(await capture.cameraInspect(surface)), encoding: .utf8)!)
+                exit(0)
+              }
+              if args.contains("--camera-probe") {
+                // Explicit development-only capture of the same chosen surface.
+                // Bounded count/runtime, no configuration, listener or pixel output.
+                let deadline = DispatchWorkItem {
+                  fputs("Camera probe stopped at its 35-second development deadline.\n", stderr)
+                  exit(2)
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 35, execute: deadline)
+                defer { deadline.cancel() }
+                guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
+                _ = try await capture.cameraTarget(surface, initial: true)
+                let started = Date()
+                var frames = 0
+                do {
+                  while frames < 120 && Date().timeIntervalSince(started) < 30 {
+                    guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
+                    let frameStarted = Date()
+                    _ = try await capture.cameraFrame(surface)
+                    guard LocalSessionGuard().available, Date().timeIntervalSince(frameStarted) < 2 else {
+                      throw HelperError(409, "Capture session changed or frame became stale.")
+                    }
+                    frames += 1
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                  }
+                } catch {
+                  print("{\"frames\":\(frames),\"completed\":false,\"elapsedMs\":\(Int(Date().timeIntervalSince(started) * 1000))}")
+                  throw error
+                }
+                print("{\"frames\":\(frames),\"completed\":true,\"elapsedMs\":\(Int(Date().timeIntervalSince(started) * 1000))}")
                 exit(0)
               }
               let started = Date()
