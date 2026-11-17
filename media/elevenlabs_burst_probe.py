@@ -28,13 +28,14 @@ async def probe(legacy=False, seconds=30):
               'peakQueuedBytes': 0, 'peakQueuedEvents': 0, 'toolEffects': 0}
     class SafeFaultHandler(logging.Handler):
         def emit(self, record):
-            if (record.msg == 'voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d'
-                    and isinstance(record.args, tuple) and len(record.args) == 4
+            if (record.msg == 'voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d publicationQueueDepth=%d'
+                    and isinstance(record.args, tuple) and len(record.args) == 5
                     and record.args[1] in module.FAULT_CODES):
                 result['failure'] = record.args[1]
                 result['failureStage'] = record.args[0]
                 result['peakQueuedBytes'] = max(result['peakQueuedBytes'], record.args[2])
                 result['peakQueuedEvents'] = max(result['peakQueuedEvents'], record.args[3])
+                result['failurePublicationQueueDepth'] = record.args[4]
     handler = SafeFaultHandler()
     logging.getLogger().addHandler(handler)
     logging.getLogger().setLevel(logging.ERROR)

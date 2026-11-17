@@ -1,5 +1,47 @@
 ## November 17, 2026 — first streaming-voice call and audio correction
 
+## November 17, 2026 — second streaming-voice demo
+
+One newly authorized call connected after deployment of the bounded audio-burst
+fix. The human confirmed audible voice; three spoken requests reached and were
+acknowledged by this same coding chat. The Research/Drafts target catalog was
+accepted, but no zoom or annotation result was established on the handset.
+
+Screen capture delivered 51 fresh Finder frames, then stopped after about 35
+seconds. Native helper frame HTTP 409 was normalized to `helper_stopped`/410 by
+the gateway (native request 69 ms, media round trip 161 ms). The Mac remained
+armed; there was no lead native input or executor claim during the call. Later
+metadata showed the exact window off-Space with a valid nonminimized AX witness.
+That does not identify the earlier refusal: a transient lifecycle check is plausible,
+while a permission loss, lease timeout and user Stop are not established.
+The current diagnostic hides which native 409 guard failed; no capture safeguard
+was relaxed and no automatic lease reacquisition occurred.
+
+The call subsequently ended with a distinct voice fault: `stage=output`,
+`code=task_timeout`, at 167,918 ms elapsed. This is separate from the screen stop.
+The audio producer's 300 ms queue-write deadline conflicts with the publisher's
+legitimate up-to-two-second playout barrier. The original larger-audio-chunk
+failure did not recur. The streaming reply receipt remains `unknown` intentionally:
+provider context submission cannot prove handset narration, and it was not replayed.
+The final attempted reply/progress commands were rejected before dispatch after
+the call became terminal. Existing receipts remain intact.
+
+Cleanup confirmed both services idle, no active or unknown call effects, no view
+lease or unresolved input, and local sharing stopped. No further call is authorized.
+Physical visibility, zoom/annotation behavior and perceived response speed remain
+unconfirmed pending the human's feedback and a later supervised test.
+
+The playback correction uses a three-second continuously-full queue bound with
+atomic authorization/epoch checks before enqueue and interruptible 20 ms waits.
+The provider reader remains independent; Stop cancels blocked output without late
+enqueues. A real-publisher regression reproduced the exact former timeout signature
+with a legitimate 550 ms playout pause; the actual production pause remains unproven.
+Independent review and 48 focused tests passed. A real-provider synthetic audio-only
+probe passed in 25,667 ms with 579 paced frames, a 157,344-byte valid chunk, peak
+queued PCM 338,896 bytes, no tool effects, and empty queues after Stop.
+The full media suite passed 379 tests (13 optional SDK tests skipped) in 55.948s.
+
+
 One newly authorized demo call reached the phone; the user reported that it hung
 up. Backend diagnostics record a media `capture_loop` task failure shortly after
 the first ElevenLabs response audio began. This category covers voice ingress and

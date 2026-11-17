@@ -412,19 +412,101 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         await self.frontend.handle({'type': 'interruption', 'interruption_event': {'event_id': 1}})
         self.assertEqual(self.frontend.audio_bytes, 0)
         self.assertTrue(self.frontend.audio_events.empty())
+
         self.assertTrue(self.parent.audio.empty())
         await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 2, 'audio_base_64': 'AAA='}})
         await asyncio.sleep(.02)
         self.assertGreaterEqual(self.frontend.audio_bytes, 0)
-        # A put already waiting when interruption occurred may complete, but is
-        # stamped with the invalidated generation and cannot be played.
-        while not self.parent.audio.empty():
-            generation, _ = self.parent.audio.get_nowait()
-            self.assertLess(generation, self.parent.playback_generation)
+        # A blocked old producer never enqueues after cutoff.
+        self.assertTrue(self.parent.audio.empty())
         self.parent.request_failure.assert_not_called()
         await self.frontend.close()
         self.assertEqual(self.frontend.audio_bytes, 0)
         self.assertTrue(self.frontend.audio_events.empty())
+
+    async def test_real_session_publisher_playout_pause_does_not_fail_burst(self):
+        # Exercise the production publisher, including its prior SDK barrier.
+        # The 300 ms output queue deadline fails while that legal wait lasts.
+        entered, release, published = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def playout():
+            entered.set()
+            await release.wait()
+        async def capture(frame):
+            if any(bytes(frame.data)):
+                published.set()
+        self.parent.source = SimpleNamespace(wait_for_playout=playout, capture_frame=capture)
+        self.parent.speech_cancelled = False
+        previous = asyncio.get_running_loop().create_future()
+        self.parent.audio.put_nowait((0, previous))
+        publisher = asyncio.create_task(Session.publish(self.parent))
+        output = None
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+                'audio_base_64': base64.b64encode(b'\x01\x00' * 48000).decode()}})
+            output = self.frontend.spawn(self.frontend.output(), 'output')
+            await asyncio.sleep(.55)
+            self.assertEqual(self.parent.audio.qsize(), 100)
+            self.assertEqual(self.frontend.audio_bytes, 96000)
+            self.assertFalse(output.done())
+            self.parent.request_failure.assert_not_called()
+            release.set()
+            await asyncio.wait_for(published.wait(), 1)
+            self.parent.request_failure.assert_not_called()
+        finally:
+            publisher.cancel()
+            await asyncio.gather(publisher, return_exceptions=True)
+            if output:
+                output.cancel()
+                await asyncio.gather(output, return_exceptions=True)
+
+    async def test_blocked_output_checks_authority_epoch_and_cancellation(self):
+        for reason in ('authority', 'epoch', 'generation', 'close', 'cancel'):
+            with self.subTest(reason=reason):
+                self.parent.allowed = True
+                self.frontend.closed = False
+                self.parent.policy_at = time.monotonic()
+                self.parent.audio = asyncio.Queue(maxsize=1)
+                self.parent.audio.put_nowait((self.parent.playback_generation, b'occupied'))
+                barrier = asyncio.get_running_loop().create_future()
+                queued = asyncio.create_task(self.frontend.enqueue_output(
+                    self.parent.playback_generation, self.frontend.output_epoch, barrier))
+                await asyncio.sleep(.03)
+                if reason == 'authority': self.parent.allowed = False
+                elif reason == 'epoch': self.frontend.cutoff()
+                elif reason == 'generation': self.parent.playback_generation += 1
+                elif reason == 'close': self.frontend.closed = True
+                else: queued.cancel()
+                if reason == 'cancel':
+                    with self.assertRaises(asyncio.CancelledError):
+                        await queued
+                else:
+                    self.assertFalse(await asyncio.wait_for(queued, .2))
+                self.assertTrue(barrier.cancelled())
+                self.parent.audio.get_nowait()
+                await asyncio.sleep(.03)
+                self.assertTrue(self.parent.audio.empty())
+        self.frontend.closed = False
+
+    async def test_nonprogressing_output_stops_at_three_second_bound(self):
+        self.parent.audio = asyncio.Queue(maxsize=1)
+        self.parent.audio.put_nowait((0, b'occupied'))
+        async def refresh_policy():
+            while True:
+                self.parent.policy_at = time.monotonic()
+                await asyncio.sleep(.02)
+        refreshing = asyncio.create_task(refresh_policy())
+        barrier = asyncio.get_running_loop().create_future()
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(FrontendFault, 'playback_queue_stalled'):
+                await asyncio.wait_for(self.frontend.enqueue_output(0, 0, barrier), 4)
+            self.assertGreaterEqual(time.monotonic() - started, 3)
+            self.assertTrue(barrier.cancelled())
+            self.assertEqual(self.parent.audio.qsize(), 1)
+        finally:
+            refreshing.cancel()
+            await asyncio.gather(refreshing, return_exceptions=True)
 
     async def test_audio_event_capacity_rejection_is_atomic(self):
         event = {'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': 'AAA='}}

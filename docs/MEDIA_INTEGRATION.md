@@ -860,6 +860,26 @@ in-flight interruption, event/queue bounds and log privacy. This supports the
 packet-limit diagnosis as a likely explanation for the earlier call failure;
 that call's exact exception was not retained.
 
+A subsequent call retained the more specific `stage=output code=task_timeout`
+failure. The frontend's former 300 ms publication-queue deadline was shorter than
+the publisher's existing two-second SDK playout-barrier allowance. A regression
+using the real `Session.publish` loop, a synthetic 550 ms SDK barrier and a
+three-second audio burst reproduces that exact fault signature with the old
+deadline, including zero remaining source-queue bytes after cleanup. It does not
+establish which downstream operation delayed the actual call's publisher.
+
+Output enqueue now waits at most three seconds for a continuously full publication
+queue, rechecking fresh authorization and exact playback/output generations every
+20 ms. Each successful enqueue is atomic with its authority check; no blocked
+queue-put task survives cancellation or inserts old speech after a cutoff. This
+applies to PCM frames, resampler tails and completion barriers. Unqueued barriers
+are canceled on authority loss, Stop, cancellation or timeout. Sustained lack of
+progress still fails closed as `playback_queue_stalled`; safe fault logs now also
+include the integer publication-queue depth. No queue capacity, policy-freshness
+limit, provider retry behavior or call-failure safeguard is relaxed. All 48
+frontend tests pass, including the publisher-pause reproduction, the actual
+three-second stall bound and authority/epoch/generation/close cancellation cases.
+
 Authenticated `GET /voice/elevenlabs/readiness` returns only `configured`,
 `agentValidated` and `ready` booleans with `Cache-Control: no-store`. Within a
 six-second overall deadline it reads the selected agent and any referenced tool

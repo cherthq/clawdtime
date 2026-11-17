@@ -30,8 +30,9 @@ AUDIO_QUEUE_EVENTS = 1024
 AUDIO_EVENT_BYTES = 10 * 16000 * 2
 AUDIO_EVENT_ENCODED = 4 * ((AUDIO_EVENT_BYTES + 2) // 3)
 WS_MESSAGE_BYTES = 512 * 1024
+PLAYBACK_QUEUE_STALL_SECONDS = 3.0
 FAULT_CODES = frozenset(('audio_invalid', 'audio_byte_capacity', 'audio_event_capacity',
-                        'audio_event_size',
+                        'audio_event_size', 'playback_queue_stalled',
                         'provider_error', 'provider_disconnected', 'provider_event_invalid',
                         'task_timeout', 'task_invalid', 'task_error'))
 
@@ -359,9 +360,9 @@ class ElevenLabsFrontend:
             if not result.cancelled() and result.exception() and not self.closed and not self.ending:
                 # No exception text/traceback: provider bodies and transcripts
                 # may appear in arbitrary upstream exceptions.
-                logging.error('voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d',
+                logging.error('voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d publicationQueueDepth=%d',
                               stage, failure_code(result.exception()),
-                              self.audio_bytes, self.audio_events.qsize())
+                              self.audio_bytes, self.audio_events.qsize(), self.parent.audio.qsize())
                 self.parent.request_failure('task_failed', 'capture_loop')
         task.add_done_callback(done)
         return task
@@ -561,6 +562,30 @@ class ElevenLabsFrontend:
             if self.parent.stream is stream:
                 self.parent.stream = None
 
+    async def enqueue_output(self, generation, epoch, value):
+        # The publisher may spend up to two seconds at a previous SDK playout
+        # barrier. A 300 ms queue-put timeout mistakes that bounded wait for a
+        # failed call. Wait at most three seconds, checking authority before
+        # each atomic enqueue; never leave a blocked put behind after cutoff.
+        deadline = time.monotonic() + PLAYBACK_QUEUE_STALL_SECONDS
+        queued = False
+        try:
+            while (self.authorized() and generation == self.parent.playback_generation
+                   and epoch == self.output_epoch):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise FrontendFault('playback_queue_stalled')
+                try:
+                    self.parent.audio.put_nowait((generation, value))
+                    queued = True
+                    return True
+                except asyncio.QueueFull:
+                    await asyncio.sleep(min(.02, remaining))
+            return False
+        finally:
+            if not queued and isinstance(value, asyncio.Future) and not value.done():
+                value.cancel()
+
     async def output(self):
         parent = self.parent
         pending = bytearray()
@@ -576,10 +601,12 @@ class ElevenLabsFrontend:
                             pending.extend(bytes(frame.data))
                         while pending:
                             chunk = bytes(pending[:1920]); del pending[:1920]
-                            await asyncio.wait_for(parent.audio.put((generation, chunk.ljust(1920, b'\0'))), .3)
+                            if not await self.enqueue_output(generation, epoch, chunk.ljust(1920, b'\0')):
+                                pending.clear()
+                                break
                         barrier = asyncio.get_running_loop().create_future()
-                        await asyncio.wait_for(parent.audio.put((generation, barrier)), .3)
-                        self.spawn(self.drain(generation, barrier), 'drain')
+                        if await self.enqueue_output(generation, epoch, barrier):
+                            self.spawn(self.drain(generation, barrier), 'drain')
                     pending.clear()
                     resampler = rtc.AudioResampler(16000, 48000)
                     generation = None
@@ -607,7 +634,9 @@ class ElevenLabsFrontend:
                     if generation != parent.playback_generation or epoch != self.output_epoch or not self.authorized():
                         pending.clear()
                         break
-                    await asyncio.wait_for(parent.audio.put((generation, chunk)), .3)
+                    if not await self.enqueue_output(generation, epoch, chunk):
+                        pending.clear()
+                        break
             finally:
                 if item_epoch == self.output_epoch:
                     self.audio_bytes = max(0, self.audio_bytes - len(pcm))
