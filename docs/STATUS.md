@@ -1,3 +1,39 @@
+## November 17, 2026 — dedicated voice configured and components deployed
+
+User authorized configuring a dedicated ElevenLabs agent and deploying ClawdTime
+for the existing 9741 binding, preserving records and assignment, with **no new
+FaceTime call**. The lead performed provider/deployment operations; the agent team
+reviewed provider compatibility, native installation and route evidence.
+
+- Dedicated seven-client-tool agent created and GET-validated. Gemini 2.5 Flash,
+  Eleven Flash v2, 16 kHz PCM, authenticated connections, no provider queueing,
+  voice recording disabled and zero-day retention. The prior lab agent was untouched.
+- Backend `79f6575c-0676-45a4-9c61-4be251d860a8` and media
+  `c3ad1969-28f7-4376-bba5-48db57296512` both SUCCESS. Deployed media's authenticated
+  ElevenLabs readiness returns configured/agentValidated/ready all true, using only
+  agent/tool GETs. No provider conversation or audio session was started.
+- Installed Companion 0.4.0/build 6 and restarted the existing gateway. Effective
+  Screen Recording and Accessibility both true after refreshing only ClawdTime's
+  stale permissions. Existing helper/gateway/pairing configuration byte-identical.
+  Sharing stopped, no lease, zero unresolved inputs; historical outcomes preserved.
+- Same-volume database snapshots retained. Backend entities/events/effects and
+  cursor/receipt/unknown metadata match the pre-rollout snapshot; all seven prior
+  media tables match. Live line configuration is byte-identical. No reassignment,
+  re-pairing, cursor initialization, provider worker update or shared-line change.
+
+**Not yet call-ready:** a fresh project-scoped Chert Calls inventory returns HTTP
+200 with zero visible lines for the saved HackPton project. The existing dashboard
+sign-in also no longer exposes platform-admin access. This is current evidence,
+not proof that the line was reassigned. Current 9741 worker/session/build isolation
+cannot be established, so backend duplex and remote-isolation gates remain false.
+Resolve visibility of the existing binding before enabling those gates; do not
+reassign a line to make the check pass. A new explicit same-chat ElevenLabs session
+and separately authorized physical acceptance call remain next steps.
+
+Final media validation: 371 run, 358 passed and 13 optional SDK skips; all 40
+focused ElevenLabs tests passed. See IMPLEMENTATION_ARGOS_REVIEW.md for exact
+deployment and validation evidence.
+
 ## November 17, 2026 — Argos same-chat integration locally validated
 
 The prior checkpoint was pushed to origin/ArgosClawd at user request. The next

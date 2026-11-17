@@ -1,5 +1,78 @@
 # IMPLEMENTATION_ARGOS review
 
+## Authorized dedicated voice rollout — November 17, 2026
+
+The user authorized provider configuration and ClawdTime deployment for 9741,
+without changing the assignment or existing records and without another FaceTime
+call. This section supersedes earlier statements that build 6 was local-only.
+
+### Changes and deployed evidence
+
+Provider creation first received a definitive HTTP 422 for missing string-parameter
+descriptions. The rejected intent/response was retained privately, a fresh agent
+inventory confirmed no matching creation, and the corrected request created one
+new dedicated agent. The existing Argos lab agent was read only and unchanged.
+The dedicated agent has exactly seven client tools, authenticated connections,
+Gemini 2.5 Flash / Eleven Flash v2, 16 kHz PCM, no provider queueing, recording off
+and zero-day retention. No conversation, signed session URL, WebSocket or call was
+created as part of configuration validation.
+
+Compatibility correction `89e6816` accepts only inert empty workflow metadata,
+rejects active workflows/MCP/procedures, compares inline and resolved tool schemas,
+and provides required parameter descriptions. A deployed GET-only preflight then
+exposed partial HTTP chunk parsing. Correction `f4ffe03` accumulates through EOF
+under the existing timeout and 128 KiB cap; three real loopback HTTP regressions
+cover split JSON strings, invalid trailing content and fragmented overflow.
+
+- Backend deployment: `79f6575c-0676-45a4-9c61-4be251d860a8`, SUCCESS,
+  source `89e6816` (backend source unchanged by the subsequent media-only fix).
+- Final media deployment: `c3ad1969-28f7-4376-bba5-48db57296512`, SUCCESS,
+  source `f4ffe03`; supersedes the first media deployment `198a52fe-7d66-434b-b8a9-096fbab3282f`.
+- Authenticated production `/voice/elevenlabs/readiness` returned
+  `configured:true, agentValidated:true, ready:true` at 13:36 UTC. This validates
+  configuration, not physical latency, duplex interruption or handset playback.
+- Companion build 6 installed at the existing stable application path, hash
+  `924621661e8d441a4dbe836070f7fd3c695f402deb296f82a055878088b0acfa`.
+  Prior app/state/plist backed up privately; gateway uses its existing arguments.
+  Explicit custom helper configuration preserved. Only ClawdTime's stale
+  Screen Recording/Accessibility approvals and app registration were refreshed;
+  no global TCC reset. Both effective permissions true, armed false, no lease,
+  unresolved inputs zero. Existing 37 observed/4 unverified historical outcomes
+  were retained, not replayed or reclassified.
+
+### Preservation and limits
+
+Backend entities, events and effects were compared against the same-volume
+pre-rollout SQLite snapshot and are identical. Retained cursor/receipt/unknown
+metadata matches. Media sessions, speech, device_actions, screen_diagnostics,
+lifecycle_diagnostics, text_leases and text_actions all match their snapshot.
+Live line configuration and local helper/gateway/pairing configuration are
+byte-identical. Existing databases/encryption material, credentials, line assignment,
+provider software and shared lines were not replaced. Operational readiness caches
+may refresh normally; no business event or external effect was created.
+
+Both services are healthy/idle, gateway connected, active calls/media zero,
+pending/unknown effects zero. Backend ElevenLabs selection is enabled, but backend
+**two-way voice and remote-audio-isolation assertions remain false**: a fresh GET of
+Chert's project-scoped Calls inventory returns HTTP 200 with `total:0` for the saved
+HackPton project. The existing dashboard session, after refreshing sign-in, reports
+platform-admin access required. Therefore current 9741 assignment/worker/session
+and qualified build cannot be freshly verified. Historical digital-isolation
+qualification alone cannot authorize a newly invisible route. Nothing was reassigned
+or granted to work around this. Resolve project visibility for the existing binding,
+then verify fresh exact identity, accepting heartbeat and qualified process-isolated
+build before enabling duplex. Physical audio/zoom/annotation acceptance still needs
+a separately authorized call and fresh explicit same-chat ElevenLabs session.
+
+Local validation for these rollout fixes: 40 focused ElevenLabs tests passed;
+the final full media suite ran 371 tests in 48.748 seconds: **358 passed and 13
+optional SDK skips**, no failures. Prior integrated release evidence remains 978 TypeScript tests, 59 Swift tests, 40 gateway tests and
+the real Finder/local prepared-camera checks in the next section.
+
+Private deployment intents/receipts and metadata evidence are retained under the
+operator recovery directory, outside Git. Secrets, provider IDs, transcript data,
+screens and audio are excluded from this review.
+
 ## Argos same-chat integration implemented locally — November 17, 2026
 
 The user authorized pushing the existing checkpoint and using agent teams to finish
