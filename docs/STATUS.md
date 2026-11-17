@@ -1,3 +1,35 @@
+## November 17, 2026 — prepared presentation deployed with new admission off
+
+Production source `c7af884` is committed and pushed on `ArgosClawd`. Backend
+`3419147a-df04-4166-a4a9-5f32e6681c42` and media
+`4c7de1a8-32b2-4e31-ba3d-c51dad365185` both deployed successfully. The installed
+companion is 0.4.0 build 7 and the existing gateway was restarted against the
+matching source. Exact helper/gateway configuration hashes and gateway lease/action
+ledger hashes were unchanged; helper receipt counts and existing Screen Recording/
+Accessibility permissions were preserved. The companion remains disarmed with no
+active lease. No new permission, call or message was sent.
+
+Backend readiness reported zero active calls, pending effects and unknown effects.
+Media is healthy with zero active sessions and the gateway connected. The new
+backend route rejects an unauthenticated request. Initial scoped readiness probes
+returned HTTP 503 around rollout; a later probe returned HTTP 200 with the correct
+device/display permissions. That recovery does not prove the earlier failure's
+cause. SSH verification was unavailable; release evidence uses the frozen committed
+upload, deployment success, HTTP route checks, and installed artifact checks.
+
+**The new walkthrough capability is NOT enabled.** Both new admission gates remain
+unset/default-off. Production already uses snapshot capture, so the experimental
+persistent preview stream is not promoted. The original agent retains all native
+CUA; the new helper endpoint resolves metadata only. Before enabling admission,
+qualify the real remote resolver/frame-bracket freshness budgets and automatic
+cross-Space behavior. The local snapshot demo and same-session follow-up passed;
+handset performance and production walkthrough acceptance remain unverified.
+
+Release checks passed: 1,129 backend/connector tests across 68 files plus build;
+88 Swift tests; 49 gateway tests; 460 media tests run with 13 optional SDK skips.
+Independent reviews covered capability negotiation, expired qualification replies,
+agent/media session identity, Stop, durable receipts and no replay.
+
 ## November 17, 2026 — prepared walkthroughs and live target resolution implemented
 
 Agent teams added prepared window-relative scenes, per-step read-only target/frame

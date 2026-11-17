@@ -87,7 +87,8 @@ The source now includes explicitly negotiated prepared-scene commands and a
 read-only Mac target resolver over the authenticated gateway. Native window actions
 remain with the original chat's qualified CUA. New backend/media admission defaults
 off through `CLAWDTIME_LIVE_PRESENTATION_ENABLED`; existing sessions do not upgrade.
-This is a staged capability pending remote timing and handset qualification.
+This capability is deployed with new admission off, pending remote timing and
+handset qualification. The updated companion remains disarmed.
 See [production staging](docs/DEPLOYMENT.md#prepared-live-presentation-staging).
 
 ## Local two-app presentation walkthrough

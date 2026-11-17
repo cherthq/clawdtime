@@ -2,6 +2,15 @@
 
 ## November 17, 2026 — production integration, explicit staged admission
 
+**Staged deployment result:** committed source `c7af884` is running on backend
+`3419147a-df04-4166-a4a9-5f32e6681c42` and media
+`4c7de1a8-32b2-4e31-ba3d-c51dad365185`; both deployments succeeded. Companion 0.4.0
+build 7 and the matching gateway are installed. Existing permissions, configuration
+hashes and gateway receipt/lease hashes were preserved. Backend and media are idle;
+the companion is disarmed. New admission remains default-off. Scoped readiness
+recovered to HTTP 200 after earlier 503 probes; remote target timing remains
+unqualified. No call was placed. See STATUS.md for the acceptance limits.
+
 The user authorized moving toward production while retaining the no-call boundary.
 Final release checks: 1,129 backend/connector tests across 68 files plus build,
 88 Swift tests, 49 gateway tests, and 460 media tests run with 13 optional SDK skips.
