@@ -1,3 +1,25 @@
+## November 17, 2026 — user-authorized new project and line assignment
+
+At the user's explicit request, created a new Chert project named **Clawdtime**
+under the existing operator account and moved line ending 9741 from its currently
+shown provisioning customer project to it. The older similarly named ClawdTime
+project remains intact. Current authenticated admin UI confirmed the move;
+the new project's detail page shows the full expected phone number and original
+logical line ID. New project has one line and zero active calls; former provisioning
+customer has zero assigned lines. Calls remain **paused**, routing unassigned/reject.
+No call, runtime reinstall, provider code change or other line mutation was performed.
+
+The earlier dashboard admin-access blocker was transient: current authenticated
+administration works. Phone-number search in the assignment UI omitted this row
+because it displays a masked identity; searching the screenshot's Liam Su account
+resolved the exact row, then project detail confirmed 9741 after assignment.
+
+Existing ClawdTime backend credentials/configuration still target the prior HackPton
+project and were not silently replaced. Next step is a preserving credential/config
+handoff to the newly created project, current route/worker validation and deliberate
+call activation. Existing records/cursors and unknown outcomes must remain intact.
+The user has not authorized another FaceTime call.
+
 ## November 17, 2026 — dedicated voice configured and components deployed
 
 User authorized configuring a dedicated ElevenLabs agent and deploying ClawdTime
