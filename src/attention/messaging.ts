@@ -1,7 +1,13 @@
+import {
+  isAudioQualification,
+  activeAudioQualification,
+} from "./audio-qualification.js";
 import type {
   AgentSession,
   AttentionRequest,
   EffectReceipt,
+  ConversationJob,
+  Pairing,
 } from "../contracts.js";
 import type { ClawdTime } from "./service.js";
 import type { ConversationTurn } from "./conversation.js";
@@ -21,6 +27,7 @@ const ttl = 10 * 60_000;
 
 export function messagesEnabled(session: AgentSession) {
   return (
+    !isAudioQualification(session) &&
     session.protocolVersion === 2 &&
     session.interaction?.version === 1 &&
     session.interaction.commandChannel === "imessage_first"
@@ -131,6 +138,27 @@ export function messageUpdateAuthorized(
   service: ClawdTime,
   effect: EffectReceipt,
 ) {
+  const requestOwner = service.store.get<AttentionRequest>(
+    "attention",
+    String(effect.payload.requestId),
+  );
+  const owner = service.store.get<AgentSession>(
+    "session",
+    String(requestOwner?.sessionId ?? effect.payload.sessionId),
+  );
+  const pairingOwner = service.store.get<Pairing>(
+    "pairing",
+    String(requestOwner?.pairingId ?? effect.payload.pairingId),
+  );
+  if (
+    effect.kind === "message" &&
+    (isAudioQualification(requestOwner) ||
+      isAudioQualification(owner) ||
+      (pairingOwner && activeAudioQualification(service.store, pairingOwner)))
+  )
+    return false;
+  if (effect.payload.brokerUpdate === 1)
+    return brokerMessageAuthorized(service, effect);
   if (effect.payload.conversationUpdate !== 1) return true;
   const request = service.store.get<AttentionRequest>(
     "attention",
@@ -182,7 +210,8 @@ export function messageUpdateAuthorized(
 }
 
 export function redactMessageEffect(effect: EffectReceipt): EffectReceipt {
-  return effect.payload.conversationUpdate === 1
+  return effect.payload.conversationUpdate === 1 ||
+    effect.payload.brokerUpdate === 1
     ? { ...effect, payload: { ...effect.payload, text: undefined } }
     : effect;
 }
@@ -190,7 +219,8 @@ export function redactMessageEffect(effect: EffectReceipt): EffectReceipt {
 export function pruneMessageEffects(service: ClawdTime) {
   for (const effect of service.store.effects()) {
     if (
-      effect.payload.conversationUpdate !== 1 ||
+      (effect.payload.conversationUpdate !== 1 &&
+        effect.payload.brokerUpdate !== 1) ||
       effect.payload.text === undefined
     )
       continue;
@@ -209,4 +239,47 @@ export function pruneMessageEffects(service: ClawdTime) {
         }),
       );
   }
+}
+
+/** Broker text has its own exact session authority; an attention/call is optional. */
+function brokerMessageAuthorized(service: ClawdTime, effect: EffectReceipt) {
+  const session = service.store.get<AgentSession>(
+    "session",
+    String(effect.payload.sessionId),
+  );
+  const pairing = service.store.get<Pairing>(
+    "pairing",
+    String(effect.payload.pairingId),
+  );
+  const job = effect.payload.jobId
+    ? service.store.get<ConversationJob>(
+        "conversation_job",
+        String(effect.payload.jobId),
+      )
+    : undefined;
+  return !!(
+    session &&
+    pairing &&
+    pairing.revokedAt === undefined &&
+    pairing.memberId === effect.payload.memberId &&
+    session.pairingId === pairing.id &&
+    session.protocolVersion === 2 &&
+    session.conversation?.version === 1 &&
+    session.state !== "stopped" &&
+    service.clock() - (session.lastSeenAt ?? session.createdAt) < 20_000 &&
+    (session.lastSeenAt ?? session.createdAt) <= service.clock() + 1000 &&
+    service.store.state<number>(`job-stream:${session.id}`) ===
+      effect.payload.sequence &&
+    typeof effect.payload.expiresAt === "number" &&
+    effect.payload.expiresAt > service.clock() &&
+    typeof effect.payload.text === "string" &&
+    hash(effect.payload.text) === effect.payload.textFingerprint &&
+    (!effect.payload.jobId ||
+      (job &&
+        job.sessionId === session.id &&
+        job.pairingId === pairing.id &&
+        job.memberId === pairing.memberId &&
+        job.revision === effect.payload.jobRevision &&
+        job.state === effect.payload.jobState))
+  );
 }

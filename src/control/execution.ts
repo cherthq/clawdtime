@@ -1,3 +1,4 @@
+import { presentationReferenceSchema, type PresentationReference } from "../camera-contracts.js";
 import { z } from "zod";
 import type { ClawdTime } from "../attention/service.js";
 import { DomainError } from "../attention/service.js";
@@ -21,6 +22,7 @@ export const executionTransition = z
   })
   .strict();
 export const localPolicySchema = z.object({
+  cameraVersion: z.literal(1).optional(),
   controlPolicy: z.enum([
     "view_only",
     "agent_tools_only",
@@ -73,6 +75,7 @@ export class ExecutionCoordinator {
       requestId: string,
       expectedCursor?: number,
     ) => void,
+    private readonly cameraGuard?: (token: string, requestId: string, frameId: string, reference?: PresentationReference) => Promise<void>,
   ) {
     for (const e of service.store.all<ExecutionOwnership>("execution"))
       if (e.executor !== "none" && e.state !== "uncertain")
@@ -90,8 +93,13 @@ export class ExecutionCoordinator {
         403,
         "Exact version 2 conversation owner required.",
       );
+    this.service.assertExecutionAllowed(s);
+    if (r.audioQualification !== undefined)
+      throw new DomainError(403, "Audio qualification cannot execute.");
     const p = this.service.pairing(r.pairingId);
     const call = this.service.store.get<CallSession>("call", r.callId ?? "");
+    if (call?.audioQualification !== undefined)
+      throw new DomainError(403, "Audio qualification cannot execute.");
     if (
       requireOpen &&
       (s.state === "stopped" ||
@@ -180,6 +188,8 @@ export class ExecutionCoordinator {
     const correlation = this.control.timing.attempt(requestId);
     this.control.timing.record(requestId, "ownership_started", correlation);
     try {
+      if (input.executor === "clawdtime" && s.screenCamera?.surface.kind === "window")
+        throw new DomainError(409, "Selected-window fallback input is unavailable until exact hit-target qualification.");
       if (input.executor !== "none")
         this.inputGuard?.(token, requestId, input.expectedCursor);
       const before = this.status(token, requestId);
@@ -441,6 +451,7 @@ export class ExecutionCoordinator {
         actionId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
         frameId: z.string().min(1).max(160),
         action: actionSchema,
+        presentation: presentationReferenceSchema.optional(),
         expectedCursor: z.number().int().nonnegative().safe().optional(),
       })
       .strict()
@@ -460,7 +471,14 @@ export class ExecutionCoordinator {
       policy.policyRevision !== e.policyRevision
     )
       throw new DomainError(403, "Local fallback policy changed.");
-    this.check(token, requestId, input.epoch);
+    const current = this.check(token, requestId, input.epoch);
+    if (input.presentation && input.action.kind === "type")
+      throw new DomainError(400, "Presentation coordinates require a point action.");
+    if ((input.presentation || current.s.screenCamera) && !this.service.store.get<ActionReceipt>("action", input.actionId)) {
+      if (!this.cameraGuard) throw new DomainError(409, "Camera input validation unavailable.");
+      await this.cameraGuard(token, requestId, input.frameId, input.presentation);
+      this.check(token, requestId, input.epoch);
+    }
     return this.control.act(
       lease.id,
       p.memberId,
@@ -468,6 +486,7 @@ export class ExecutionCoordinator {
       input.frameId,
       input.action,
       () => this.inputGuard?.(token, requestId, input.expectedCursor),
+      input.presentation,
     );
   }
 }

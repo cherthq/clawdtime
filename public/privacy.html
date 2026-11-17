@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f1e8" />
+    <!-- WEBSITE_METADATA -->
+    <link rel="stylesheet" href="/assets/landing.css" />
+    <script src="/assets/website-analytics.js" defer></script>
+  </head>
+  <body data-website-analytics="off" data-availability="preview">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="wordmark" href="/" aria-label="ClawdTime home"
+        >clawdtime<span class="brand-dot">_</span></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="/integrations/codex">Codex</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/guides/getting-started">Setup guide</a>
+      </nav>
+      <a
+        class="button button-small"
+        href="/#availability"
+        data-metric-action="availability"
+        >Pilot availability ↗</a
+      >
+    </header>
+    <main id="main" class="section-wrap guide-page">
+      <header class="guide-hero">
+        <p class="eyebrow">SCREEN ACCESS / DATA</p>
+        <h1>Your screen.<br />Your permission.</h1>
+        <p class="lede">
+          ClawdTime separates calling, screen viewing and computer input. The
+          pilot shares only after explicit setup and local permission, and
+          provides a local Stop control.
+        </p>
+        <p class="guide-date">ClawdTime team · Checked November 13, 2026</p>
+      </header>
+      <div class="guide-body">
+        <section>
+          <h2>What can be shared?</h2>
+          <p>
+            You choose the Mac display and authorize the paired session. A
+            selected display may include every visible app on that display; it
+            is not application-level isolation. Close private material before
+            enabling sharing.
+          </p>
+          <p>
+            Screen viewing does not grant input permission. Computer input needs
+            a separate supported control mode, macOS permission and current
+            session authorization. The connected agent keeps its own native
+            approval policy.
+          </p>
+        </section>
+        <section>
+          <h2>How do I stop it?</h2>
+          <p>
+            Use <strong>Stop sharing and control</strong> in the Mac Control
+            Panel. Local Stop, lock and sleep end ClawdTime capture/input.
+            Call-bound sharing ends with the call. Cancellation of a native tool
+            already running is cooperative and depends on that tool; a stop
+            request is not proof its action was undone.
+          </p>
+          <p>
+            Mute and End call are separate controls. Reconnecting does not
+            silently restore a revoked screen selection.
+          </p>
+        </section>
+        <section>
+          <h2>What data does the pilot handle?</h2>
+          <div
+            class="table-wrap"
+            tabindex="0"
+            role="region"
+            aria-label="Pilot data handling"
+          >
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Data</th>
+                  <th scope="col">Handling</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Screen frames and audio</th>
+                  <td>
+                    Transient media, not saved by ClawdTime as recordings.
+                    Provider processing is part of the call path.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Pairing and authorization</th>
+                  <td>
+                    Operational records bind the intended member, device,
+                    project and session and support revocation.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Delivery and action outcomes</th>
+                  <td>
+                    Receipts and uncertain outcomes are retained to avoid
+                    duplicate calls, messages or inputs.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Your coding agent and Messages</th>
+                  <td>
+                    Those applications and their providers have their own
+                    handling and retention. ClawdTime’s transient-media behavior
+                    does not erase their history.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            We do not claim that nothing is stored or that a submitted input
+            proves an action succeeded. Ask your pilot contact about the
+            configured services before sharing sensitive material.
+          </p>
+        </section>
+        <section>
+          <h2>Optional website measurement</h2>
+          <p>
+            When enabled, the public website counts page views and selected CTA
+            clicks in daily aggregates. It stores a fixed public-page name,
+            per-page referrer category, button placement, pilot availability and
+            count. Reports cover the past 90 days. Older counts are removed when
+            a new event or report is processed.
+          </p>
+          <p>
+            This measurement uses no cookies, persistent visitor IDs, raw
+            referrers or full URLs. It does not collect phone numbers, pairing
+            tokens, message text, screen/audio content or project paths. It
+            excludes the operational setup and pairing pages, ignores recognized
+            bot user agents, and honors Global Privacy Control and Do Not Track
+            signals.
+          </p>
+          <p>
+            Counts are not unique visitors or verified human activity. An opened
+            Messages draft is not a sent message or completed setup. There is no
+            session replay.
+          </p>
+        </section>
+        <section>
+          <h2>Questions about your pilot?</h2>
+          <p>
+            Contact the person who issued your invitation for setup, access or
+            data-handling questions. Keep personal links and credentials out of
+            public repository issues.
+          </p>
+        </section>
+        <section class="related-links">
+          <h2>Related information</h2>
+          <a href="/guides/getting-started">Setup checklist</a
+          ><a href="/integrations/codex">Codex compatibility</a
+          ><a href="/integrations/claude-code">Claude Code compatibility</a>
+        </section>
+      </div>
+    </main>
+    <footer class="site-footer section-wrap">
+      <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
+      <nav aria-label="Footer">
+        <a href="/integrations/codex">Codex</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/guides/getting-started">Setup</a
+        ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
+          >GitHub ↗</a
+        >
+      </nav>
+      <span>© 2026 ClawdTime · Built on Chert</span>
+    </footer>
+  </body>
+</html>

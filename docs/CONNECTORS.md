@@ -1,10 +1,346 @@
 # Agent connectors
 
-Current as of November 12, 2026. The v2 backend/media (`8efbacc`) are deployed;
-the installed companion is 0.2.1 (`d10c801`) and the project skill is updated. One
-voice-directed native Messages task passed in the originating Codex desktop chat
-through the foreground bridge. See [STATUS.md](STATUS.md) for the release and
-physical evidence; the client/surface limits below still apply.
+## Scoped local document host
+
+The `remote-documents` runner implements read-only discovery, first-page preview
+and preparation of an explicitly selected attachment. It uses deterministic local
+file access, not Codex prompts or generated scripts. It shares the conversational
+broker and ordered voice/text instructions, but has no desktop control capability.
+The hosted backend requires an authenticated local worker to access the selected
+directory. It cannot read the Mac merely from a registered path.
+
+Use a protected connection already authorized for the exact canonical directory
+and a fresh managed session. Choose a fixed ISO expiry within the next hour (30
+minutes recommended); do not renew an expired session by changing its saved file:
+
+```sh
+npm run cli -- setup-session --agent codex --project /absolute/authorized/documents --run-id NEW_DOCUMENT_RUN_ID --runner remote-documents --execution-session api_managed --document-access-until EXPLICIT_ISO_EXPIRY
+npm run cli -- executor-worker --run /absolute/protected/connections/KEY/runs/RUN.json
+```
+
+The `codex` connector identity is retained for registration compatibility; this
+worker starts no Codex subprocess. It fetches the server's exact root grant and
+checks it again before each read/render/upload phase. No FaceTime call, screen
+lease, filesystem write permission or arbitrary upload destination is granted.
+Ctrl-C immediately starts the authenticated document Stop request and aborts local
+work. Stop revokes the grant and pending transfers; an already attempted external
+effect remains unknown until its original receipt is reconciled. A failed Stop
+acknowledgment is reported honestly. Fixed expiry also bounds authorization if
+the local process disappears. Reconnect does not rearm a revoked grant.
+
+Discovery is flat and bounded: at most 256 directory entries, 32 regular files,
+10 MiB per file and 64 MiB scanned bytes. Symlinks, package directories, unsafe
+filenames and unsupported contents are excluded. PDF, OOXML DOCX and modern ZIP
+Pages structures are recognized from bytes, including supported extensionless
+files. Candidates have opaque manifest IDs, MIME, size and SHA-256; arbitrary
+model-provided paths are never accepted. Reads use `O_NOFOLLOW`, exact canonical
+root checks, descriptor/path identity checks and a fresh digest. Source changes
+require discovery and selection again. Worker restart loses its transient
+manifest, so old candidate IDs cannot silently select another file.
+
+On macOS, fixed `/usr/bin/qlmanage` arguments render a private verified copy into
+one bounded PNG (at most 2 MiB, 1280 pixels per dimension). This is a **first-page
+preview**, not proof that every page is shown or reviewed. The adapter uses the
+OS QuickLook service boundary; it does not claim an additional network-denying
+sandbox. This host rejects nested `sandbox-exec`. No application UI is opened and
+there is no fallback to agent scripts. Private copies and buffers are cleared
+after use. PDF and DOCX rendering have been exercised with generated synthetic
+documents. An authorized local read-only preflight also rendered four actual
+documents successfully: one DOCX at 997×1280 in 189 ms, and three Pages documents
+at 790×1024 in 248, 123 and 116 ms. Discovery took 10 ms; the complete preflight
+took 705 ms. One unsupported binary regular file was excluded; no extensionless
+regular document was present. Temporary copies were removed, and no original
+files were changed, uploaded or sent. These samples establish bounded local
+rendering for those documents, not full-document review or handset visibility.
+Other unsupported QuickLook outputs still fail closed.
+
+Sending requires a fresh selected preview and a distinct explicit send instruction
+to the paired recipient. Original bytes are re-read and verified before a single
+binary upload; metadata uses base64url UTF-8 JSON in `X-ClawdTime-Document`.
+Preview/transfer assets are transient. Attachment receipts bind the exact selected
+digest, size, candidate, session, paired recipient and stable effect ID. The worker
+does not retry an ambiguous asset upload. Result acknowledgment retries preserve
+the same result identity and never repeat execution. Provider acceptance is
+reported separately from handset delivery. Neither discovery nor preview sends
+the original document automatically.
+
+Reproducible development proofs (synthetic documents only):
+
+```sh
+npx tsx tests/connectors-document-preview-spike.ts
+npx tsx tests/connectors-document-http-spike.ts
+# Optional: operator supplies the existing scoped text-model environment first.
+npx tsx tests/connectors-document-http-spike.ts --real-model
+```
+
+The November 13 local HTTP proof used the actual worker, broker, document host and
+QuickLook with a scripted frontend and simulated attachment provider: discovery
+95 ms, preview 185 ms, transfer 97 ms, total 420 ms; 3/3 jobs accepted and verified,
+one simulated stage/send, duplicate send suppressed and local Stop verified.
+These are individual local development samples, not p95 measurements or physical
+acceptance. The first attempt failed because its simulated provider compared a
+`Uint8Array` with a `Buffer`; the resulting upload remained unknown as designed.
+After correcting only that fixture assertion, the next fresh synthetic run passed.
+No personal documents, external Messages sends, native desktop inputs or calls
+were used. A real recipient receipt and handset preview/delivery remain separate
+release acceptance steps.
+
+The extended browser proof also opens the actual private preview page through
+Playwright/Chrome, checks the synthetic filename and decoded 1280×640 image,
+confirms the capability fragment is cleared, advances the page clock to prove
+image removal, and verifies revoked access is refused. Its latest local sample
+loaded the browser image in 108 ms; the preview phase including browser startup
+and screenshot took 745 ms, and the whole three-job proof took 981 ms. The
+synthetic screenshot is `.data/document-demo/synthetic-preview.png`; no preview
+token is logged or placed in the image. This is browser UI validation, not native
+CUA qualification or evidence of FaceTime handset visibility.
+
+The HTTP harness defaults to its scripted frontend. `--real-model` selects
+`configuredTextModel(process.env)` and labels the result accordingly; it never
+loads credentials from files. This mode has a 90-second proof deadline and a
+120-second local grant. Attachment delivery always remains simulated and all
+documents remain newly generated fixtures. The coordinating lead's real-provider
+trial passed all three jobs: discovery 1,417 ms, preview 1,959 ms and transfer
+1,694 ms, total 7,140 ms, with a 66 ms browser image load. The first two attempts
+failed before creating a job because document context was passed as a second
+system-role message, rejected as `AI_InvalidPromptError`. Moving that context
+into the single system prompt fixed the actual provider boundary; the successful
+trial used real model intent, HTTP worker, QuickLook and browser UI with simulated
+attachment receipts. It does not establish external attachment delivery or
+FaceTime handset acceptance.
+
+## Conversational broker and selected execution host — November 13 source
+
+New sessions can explicitly select `conversation: {version: 1, runnerId:
+"codex-app-server", executionSession: "api_managed"}`. This uses the shared broker
+for responsive voice/text and a separate API-managed Codex execution session.
+The original desktop chat is not taken over or silently replaced. Old sessions
+retain the v1/v2 behavior documented below and cannot be upgraded in place.
+
+The local runner uses the installed Codex App Server's documented stdio
+`initialize`, `thread/start`, `turn/start`, progress notifications and
+`turn/interrupt` protocol. It keeps an ephemeral managed thread per exact selected
+session while the process is alive. It never connects to the desktop daemon's
+socket. The runner advertises **no native desktop or browser CUA**: this chat's
+native CUA tools are not available to its daemon. Claude Code's existing cooperative
+MCP connector remains supported; an asynchronous Claude runner is not implemented.
+
+Codex is enabled only when explicitly configured, its binary passes `--version`,
+and operator configuration supplies allowed local project roots. The selected
+project must exactly match a canonical allowlisted root on the executor host.
+A hosted backend cannot run a project on the user's Mac merely because a connector
+sent that path. The explicit `remote-codex-app-server` pull worker connects the
+selected local project to an authenticated broker; cloud services do not need Codex or the Mac
+workspace. It remains a separate API-managed session, never the original desktop
+chat.
+
+Fresh connector registration:
+
+```sh
+npm run cli -- setup-session --agent codex --project /absolute/allowed/project --run-id NEW_STABLE_RUN_ID --runner codex-app-server --execution-session api_managed
+```
+
+These flags only select a configured backend runner; they do not start a call,
+provide a control grant, grant native approvals or install/start the local worker.
+The same flags work on `mcp`; `run` refuses them because it cannot safely rewrite
+the owned MCP configuration. Keep the foreground connection alive for heartbeats.
+Managed sessions suppress legacy automatic progress replies; the conversational
+frontend owns delivery. The existing `conversation_*` tools describe legacy
+foreground execution; do not use them as a second output/execution owner for a
+managed broker session.
+
+Jobs preserve dispatch IDs and explicit acceptance. Process loss, lost acceptance,
+timeout or an interrupted input lacking terminal input receipt returns `unknown`
+and poisons the managed session. There is no automatic replay, second adapter or
+new thread used to evade it. A turn interruption RPC acknowledgment alone is not
+cancellation proof. Completed turns require an independent bounded file read with
+a project-confined application-owned predicate; model prose is not verification.
+Native approval requests emit `waiting_approval`, are declined (never approved by
+conversation) and trigger cooperative interruption. This build has no remote
+native-approval UI; an approval-dependent job therefore cannot complete unattended.
+Raw prompts, tool text and files are not logged by this adapter. Ephemeral agent
+context is lost on restart; the broker must clarify missing queued intent and
+retain uncertain dispatched effects. It must not reconstruct and replay them.
+
+### Explicit local pull worker for a hosted broker
+
+Use a **fresh** registration selecting `--runner remote-codex-app-server
+--execution-session api_managed`, preserving its protected run file. Then start
+one foreground local worker:
+
+```sh
+npm run cli -- executor-worker --run /absolute/protected/connections/KEY/runs/RUN.json
+```
+
+The worker finds the matching protected `connection.json` one directory above
+`runs`; pass `--connection PRIVATE_FILE` when using another owned layout. Never
+pass tokens on the command line. It validates the saved session, project, adapter
+and selected runner before startup, and does not call, install services, enable
+capture or access this chat's native tools. Stop with Ctrl-C; retain the adjacent
+`.executor.json` receipt ledger and any unknown effects. A second process using
+the same run is rejected by an owner lock. The worker keeps the existing registered
+session alive and polls authenticated scoped dispatches. The backend must have
+conversational admission enabled; absent workers advertise unavailable.
+
+Before executing, the worker saves the dispatch intent in an owner-only ledger,
+then fsyncs both the file and its directory entry. A flush failure refuses execution.
+It saves the exact structured result before sending it. Repeated dispatches only
+reconcile that result; lost result acknowledgments retry the same result identity,
+never the agent task. A worker restart converts an unfinished local receipt to
+`unknown`. No prompt/file contents are stored in the ledger. Cancellation is
+polled at most every 500 ms plus HTTP time; authorization/transport loss requests
+cooperative stop, and uncertainty remains unknown. Receipt capacity is bounded at
+1,000; reconcile and archive intentionally rather than deleting history to resume.
+
+A late result from a still-authenticated worker is retained by the backend as a
+`remote_result_receipt`, without overwriting an already-unknown job or permitting
+another dispatch. Reconciliation must explicitly resolve the original outcome.
+If credentials expired or were revoked, the protected local result ledger remains
+the evidence; the worker does not obtain a new session or replay the task.
+
+The worker implements `/api/executor/{ready,next,events,result,command}` with the
+existing exact session bearer. A readiness heartbeat attests the actual local
+Codex version and exact project/session identity. A daemon never uses MCP to wake
+an idle native chat. Native approvals still cannot be granted through voice/text.
+
+For a supervised hosted file demo, first select an explicitly authorized project
+and a protected connection already bound to that exact canonical directory. A
+disposable project is preferable for the initial proof; do not copy or relabel an
+existing repository connection to broaden its scope silently. A coordinating
+operator may create a new protected connection for a separately authorized root
+using the same pairing credential; the backend pairing credential is not bound
+to a project, but every new session and local worker is. Preserve the old
+connection and omit its installed-MCP ownership metadata from the new connection.
+With the current build,
+run these in two foreground terminals:
+
+```sh
+node dist/cli/main.js setup-session --agent codex --project /CANONICAL/AUTHORIZED/DEMO --connection /PRIVATE/connection.json --run-id NEW_STABLE_16PLUS_ID --runner remote-codex-app-server --execution-session api_managed
+node dist/cli/main.js executor-worker --run /PRIVATE/runs/NEW_STABLE_16PLUS_ID.json --connection /PRIVATE/connection.json
+```
+
+Keep the registration process open. Its ready event must identify
+`currentChat:false`, `executionSession:api_managed`, and the remote runner. Before
+submitting the file task, inspect authenticated `/api/jobs` and require
+`runner.available:true` with the observed Codex version, then select that exact
+session in Messages using `/sessions` and `/use SESSION_ID`. These commands do not
+authorize a call or desktop control. The worker's exact project root is its
+allowlist; it does not supply native CUA tools from the desktop chat.
+
+An absent worker refuses submission. Readiness expires after ten seconds without
+a worker heartbeat; queued work then needs clarification instead of remaining
+queued indefinitely. A claimed dispatch with no result becomes `unknown` after
+the bounded 120-second remote deadline. Keep that receipt and reconcile it; do
+not submit the same effect through another runner. A separately running
+registration heartbeat cannot substitute for worker readiness.
+
+### Real executor qualification
+
+Official docs checked against installed-generated schema:
+[Codex App Server](https://learn.chatgpt.com/docs/app-server).
+Installed versions: Codex CLI `0.166.0-alpha.5.1`, Claude Code `2.1.311`.
+The qualified model was the installed account default `gpt-6-astra`; no unsupported
+model substitution was made. Opt-in local fixture proof:
+
+```sh
+npx tsx tests/connectors-runner-spike.ts
+```
+
+The Codex version probe and App Server child do not inherit ClawdTime,
+media/backend, OpenAI frontend, AI Gateway, LiveKit, Deepgram, deployment or
+database environment namespaces. The executor uses its existing Codex login or
+explicit host `CODEX_API_KEY`; frontend `OPENAI_API_KEY` is intentionally not
+forwarded. `HOME`, `PATH` and `CODEX_HOME` remain available for the executor's own
+installation and authentication. This is scoped namespace redaction, not a
+promise that arbitrary unrelated environment variables or host files are secret-free.
+
+This makes an actual model request using existing Codex login and writes only a
+new disposable project fixture. On November 13 the implementation accepted at
+309 ms, emitted actual command progress at 4,096/6,998 ms, independently verified
+the exact output file at 8,360 ms, and finished at 8,362 ms. A preceding direct
+protocol proof accepted at 221 ms and independently verified at 13,481 ms.
+Both passed; two samples are not a latency distribution, CUA benchmark or physical
+handset acceptance. The fuller broker proof also passed:
+
+```sh
+npx tsx tests/connectors-broker-spike.ts
+```
+
+This uses a scripted **synthetic** clarification frontend and simulated Messages,
+with the **real** managed Codex executor. Clarification preceded durable submission;
+executor acceptance was 301 ms, a status question during deliberately slow work
+returned in 0.654 ms, independent verification completed at 20,670 ms, and the
+final result was reported through the simulated outbox. Total elapsed was 20,688
+ms with three simulated message receipts and zero calls. This demonstrates
+conversation/execution independence, not real text-model latency or provider delivery. No calls, Messages delivery, UI input, acoustic echo or native
+CUA were exercised. Lifecycle tests cover unavailable host, identity, duplicate
+dispatch, approval, cancellation, unknown outcomes and scoped verification.
+
+The actual authenticated HTTP pull-worker path also passed:
+
+```sh
+npx tsx tests/connectors-remote-spike.ts
+```
+
+This runs the real application routes, shared broker and local worker against the
+installed Codex executable. The frontend and Messages transport remain synthetic.
+Executor acceptance reached the backend at 415 ms; concurrent status returned in
+2.155 ms; independent file verification occurred at 11,975 ms; the result reached
+the backend at 11,982 ms and was reported. Total elapsed was 12,002 ms, with zero
+calls. The temporary server, runner and worker closed afterward. This is local
+loopback HTTP qualification, not a hosted deployment or real iMessage delivery.
+
+Use `npx tsx tests/connectors-remote-spike.ts --lifecycle` for the additional real
+executor revision and cancellation probe. It revises an accepted job, independently
+waits for original executor quiescence and explicit revision confirmation, checks
+the revised file, then cancels another accepted job and checks that its
+output is absent. An ambiguous cancellation is reported as `unknown` and fails
+the qualification rather than replaying the work. The frontend remains scripted,
+HTTP remains local, and Messages remain simulated.
+
+On November 13, the `0.3.2` source lifecycle probe passed with installed Codex
+`0.166.0-alpha.5.1`: acceptance 480 ms, concurrent status 3.375 ms, initial exact
+file verification 13,555 ms and result receipt 13,572 ms. An accepted-job revision
+canceled the original dispatch, waited for explicit confirmation, then verified
+the revised file; correction-to-result took 7,439 ms. A separate accepted job
+canceled in 109 ms with no unresolved effects and no output file. Total was
+21,402 ms, with zero calls. These are individual local samples, not production
+latency or handset acceptance. The first lifecycle harness expected automatic
+revision continuation and timed out; it was corrected to exercise the existing
+confirmation requirement, with no relaxation of broker policy.
+
+The earlier Codex file-predicate probe did not cover document discovery, preview
+selection or attachment transfer. Its verifier checks an explicitly expected
+UTF-8 substring in a bounded file. Those operations now use the separate scoped
+`remote-documents` host described above, including manifest, exact selection,
+preview and attachment receipt contracts. A real résumé demo still requires an
+authorized folder, a current exact-file/paired-recipient send instruction and
+physical acceptance. No original résumé or real recipient was used by these
+fixture probes.
+
+For the independently orchestrated voice frontend proof, the lead can start
+`npx tsx tests/connectors-voice-executor-spike.ts --handshake PRIVATE_NEW_FILE`
+with the real configured text-model environment. It binds only loopback, writes
+an exclusive mode-600 handshake containing a random fixture bearer, and runs for
+at most 90 seconds before cleanup. The authenticated `/fixture/turn` endpoint
+accepts the real `GPTLiveFrontend` callback shape; `/fixture/jobs` returns actual
+broker state and `/fixture/finish` stops the fixture early. It connects the real
+text model, broker, HTTP worker and installed Codex using a disposable project.
+No transport drain runs, so no Messages or calls are dispatched. Output contains
+only state, verification and timing metadata. The Python voice frontend and
+provider path must be measured separately; launching this harness alone proves
+neither voice delegation nor handset audio.
+
+### Bounded desktop adapter qualification limits
+
+`tests/connectors-desktop-adapters.test.ts` exercises the shared native/custom
+policy lifecycle with supplied **synthetic** ports: one bounded action, local
+grant rechecks, fresh observations, semantic verification, correction/Stop/hold,
+exclusive ownership, unknown acquisition/input/release, stable dispatch identity
+and no adapter fallback. It also checks the flat gateway/helper wire mapping.
+These tests do not provide native desktop tools to the managed runner, measure
+latency/success rates, qualify speakerphone behavior or satisfy controlled
+physical trials. `auto` selection remains unavailable until those trials pass.
 
 ## iMessage-first interaction and timing — source implementation
 
@@ -48,9 +384,9 @@ failures and missing stages remain counted. These boundaries do not measure hidd
 native tool internals, model inference, handset audibility or phone screen lag.
 Recorded source support and isolated tests do not establish physical acceptance.
 
-## Agent-owned protocol v2 (default for new sessions)
+## Legacy agent-owned protocol v2 (default without managed opt-in)
 
-ClawdTime transports human turns and speaks replies authored by the exact existing
+In legacy sessions, ClawdTime transports human turns and speaks replies authored by the exact existing
 coding session. It does not start a replacement agent or silently use the legacy
 standalone conversational model. New MCP and foreground bridge registrations send
 `protocolVersion: 2`. Existing protected runs preserve their recorded session and
@@ -928,3 +1264,107 @@ screen/control permission, wrong binding, unreachable gateway, native approval
 and unresolved prior effect. Reasons come from explicit categories/check IDs,
 never prose or an inference that an unreachable Mac is asleep. Rechecks do not
 call, capture, input, enable, install, reset permissions or grant a lease.
+
+## Opt-in general screen camera v1 (local implementation)
+
+The camera presents one explicitly selected display or window independently of an
+IDE. It pans/crops the outgoing presentation; it does not change an app's zoom,
+scroll, selection, or files. It adds no agent session and grants no native or
+fallback input permission. The existing session and call remain the owners.
+
+For a **new** v2 MCP or foreground `setup-session` registration, opt in with:
+
+```sh
+--screen-camera true --camera-display DISPLAY_ID
+# Or one exact window on that display, with its current owner process:
+--screen-camera true --camera-display DISPLAY_ID --camera-window WINDOW_ID --camera-owner-pid PID
+```
+
+IDs come from the local capture surface listing. The session stores immutable
+`screenCamera:{version:1,surface:{kind,id,displayId,ownerPid?}}` and advertises
+`capabilities.screenCameraVersion:1`. These flags record a selected capability;
+local viewing permission, helper opt-in, current leases and Stop still govern
+capture. Omission leaves the camera off. Protocol v1 and document-only runners
+cannot opt in. `run` refuses these flags because it does not rewrite the owned MCP
+configuration. Reopening a protected run with a changed camera selection fails;
+finish its cleanup and explicitly select a new session to change surfaces. Never
+replace a session to evade unresolved input or call receipts.
+
+MCP and foreground JSONL expose the same commands:
+
+- `screen_camera_status({requestId})` reads current metadata through authenticated
+  `GET /api/attention/:id/conversation/camera`. It returns the exact session/device/
+  lease, source frame and geometry identity, revision, live/paused/unavailable
+  state, crop and output viewport. It contains no screenshot. Success requires a
+  fully validated version-1 response from the current backend/media/helper path;
+  a connector flag alone does not establish support.
+- `screen_camera_command({requestId,command})` sends one strict command through
+  `POST` at the same route. It probes status first when support is unknown. Old,
+  unavailable or malformed peers fail without a legacy fallback or a mutation.
+
+Every mutation carries `version:1`, stable `commandId`, `expectedRevision`,
+`sourceFrameId`, and `geometryGeneration` from the status being acted on. The
+operation is `focus_region`, `zoom_out`, `overview`, `pin`, `unpin`, `freeze`,
+`resume`, `annotation_upsert`, `annotation_remove`, `clear`, or `context`.
+Rectangles are normalized source coordinates (`x,y,width,height`) contained in
+`[0,1]`, with minimum width/height 0.01. Focus transitions accept 0–1500 ms and
+an optional `automatic` flag; zoom-out accepts a factor of 1–8. An annotation has
+a stable `id`, `kind` (`pointer`, `arrow`, `rectangle`, `highlight`, `label`),
+rectangle, optional text and `ttlMs`. Text is at most 160 characters without
+control characters; TTL is 100–10000 ms. Context takes text and TTL. The renderer
+bounds active annotations to 16. Full limits and lifecycle enforcement are in
+the shared schema and camera engine. A pin preserves coordinates, not semantic
+tracking of an app object.
+
+```json
+{
+  "requestId": "synthetic-request",
+  "command": {
+    "version": 1,
+    "commandId": "focus-1",
+    "expectedRevision": 0,
+    "sourceFrameId": "fresh-source-frame",
+    "geometryGeneration": "current-geometry",
+    "op": "focus_region",
+    "rect": {"x": 0.2, "y": 0.2, "width": 0.4, "height": 0.4},
+    "durationMs": 450
+  }
+}
+```
+
+Receipts report accepted/superseded command identity and revision, never handset
+visibility. No connector automatically retries a camera write or input. After an
+uncertain result, inspect status and reconcile the original command. Foreground
+camera mutations are transient and do not append to its durable effect ledger;
+server generation/revision and bounded command receipts determine duplicate
+behavior. Camera labels, context and frame metadata are not written to protected
+run files. A restart must revalidate current authority and source state.
+
+`act_on_shared_screen` retains the existing executor, epoch, action ID, pristine
+observation frame, fresh-input and verification requirements. Its optional
+`presentation:{revision,geometryGeneration,sourceFrameId}` means click/scroll x/y
+are normalized outgoing-video coordinates. The backend/media path checks the
+exact current transform and maps into the existing source-input path. Letterbox,
+stale or frozen-view input is rejected. Without `presentation`, the original
+source-coordinate contract remains. The foreground JSONL bridge still refuses
+fallback observation/input; use image-capable MCP or separately qualified native
+tools under exclusive ownership. Camera-only commands never submit OS input.
+
+Selected-window **viewing** is implemented; selected-window ClawdTime fallback
+input is unavailable pending exact hit-target/occlusion qualification. A window
+capture can show content behind another app, so global mouse input cannot safely
+be inferred from its pixels. Use a separately authorized display camera for the
+existing fallback path, or the actual connected agent's independently qualified
+native tools. This is a capability limit, not permission to widen capture or
+silently switch surfaces.
+
+Connector checks for this slice:
+
+```sh
+npx vitest run tests/connectors-camera.test.ts tests/connectors-camera-mcp.test.ts tests/connectors-conversation-mcp.test.ts tests/connectors-conversation-bridge.test.ts tests/connectors-conversation.test.ts tests/connectors-interaction.test.ts
+```
+
+These include an actual stdio MCP process against a synthetic local HTTP peer,
+immutable surface restart rejection, strict status/command negotiation, no camera
+input, no retry after uncertain writes, and foreground transient-data checks.
+They do not establish real-app capture, OS input or FaceTime acceptance.

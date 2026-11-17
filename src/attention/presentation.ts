@@ -1,3 +1,4 @@
+import { isAudioQualification } from "./audio-qualification.js";
 import { z } from "zod";
 import type { ClawdTime } from "./service.js";
 import type {
@@ -169,6 +170,8 @@ export class PresentationStore {
     return !!(
       r &&
       agent &&
+      !isAudioQualification(agent) &&
+      !isAudioQualification(r) &&
       pairing &&
       !pairing.revokedAt &&
       agent.state !== "stopped" &&

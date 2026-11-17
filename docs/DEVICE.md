@@ -356,3 +356,56 @@ receipts to permit replay. Startup fails closed if a reconciled record changes.
 The native Control Panel distinguishes blocking input from historical observed or
 unverified results. Existing `unresolvedActionCount` status now reports only
 blocking input; separate historical counts are available from helper status.
+
+## Text-session local control grants
+
+New source supports explicit text-only grants independently of FaceTime. The helper
+advertises `textControlVersion:1` and `localEnableGeneration` in readiness. The
+backend proposes a `TextControlGrant` through the authenticated gateway; this only
+creates a pending proposal. On the Mac, open the menu-bar companion and choose
+**Review text control request…**, inspect the exact project, session, member,
+display, actions and expiry, then select **Allow scoped session**. Reject and local
+Stop retire the ID. A remote request cannot approve itself or open a confirmation
+window automatically. The helper must already be enabled locally, with existing
+viewer/controller ACLs and required macOS permissions.
+
+The initial supported `surface` is exactly `display:<displayId>`: authorization
+covers the selected whole display, not an application sandbox. The project root is
+an exact binding, not a permission to execute arbitrary paths. Grants last at most
+15 minutes and permit only the listed click/type/scroll actions. Each lease still
+expires within 30 seconds and cannot outlive the grant. Native/fallback ownership
+uses the same lease/epoch and local policy. The normal local fallback preference is
+still required for helper input.
+
+Protocol 3 is an additive wire variant: omit `callId`, include
+`authority:{kind:"text_session",grantId,projectId}` and the existing exact
+session/executorEpoch/policyRevision/executor fields. `projectId` is the absolute
+project root, and the local approved grant identifies the same device/member/
+session/display. Old call-bound leases/receipts keep their original semantics.
+Text receipts record grant authority and session/epoch/revision; no fake call ID is
+created. Local Stop, lock/sleep/session loss, expiry, policy change, and process
+restart revoke the in-memory grant. A later Enable cannot revive it.
+
+This implementation was built and tested without replacing the installed companion
+or touching macOS permission grants. Physical text-only input, native/custom
+comparison trials, and local UI acceptance require an authorized current grant and
+freshly installed matching components. The local Stop controls ClawdTime's helper
+path; it cannot forcibly kill arbitrary tools running independently in another
+application. Native adapters must cooperate with the same broker ownership policy.
+
+Authenticated DELETE of the exact text-grant ID narrows authority and returns
+`{revoked:true}`; it cannot approve or replace a grant. Backend session loss or
+revocation uses this route without waiting for a call. Lost revoke acknowledgements
+remain unknown; local Stop and bounded lease/grant expiry still apply.
+
+## Argos general camera local source
+
+The opt-in general camera adds exact window/display selection and native-resolution
+capture, using the existing helper authorization and gateway. Window identity
+includes owning process and selected display, and cannot widen silently. Independent
+window capture does **not** qualify window input: this slice refuses selected-window
+fallback input until exact hit-target/focused-window qualification. The existing
+authorized display click/type/scroll path is retained. [The companion README](../mac/README.md#selected-surface-camera-capture-local-argos-slice)
+and [Argos review](IMPLEMENTATION_ARGOS_REVIEW.md) contain commands and current local
+evidence. Building this source does not replace the installed companion or modify
+its grants/configuration. Local Stop, lock/sleep and lease expiry retain their gates.

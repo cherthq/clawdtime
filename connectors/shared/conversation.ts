@@ -1,3 +1,7 @@
+import {
+  cameraCommandSchema,
+  presentationReferenceSchema,
+} from "../../src/camera-contracts.js";
 import { z } from "zod";
 import { presentationSchema } from "../../src/attention/presentation.js";
 import type { ClawdTimeClient } from "./client.js";
@@ -6,6 +10,17 @@ const id = z.string().min(1).max(200);
 const epoch = z.number().int().nonnegative();
 /** Shared schemas keep stdio MCP and foreground JSONL behavior identical. */
 export const conversationCommands = {
+  screen_camera_status: {
+    description:
+      "Inspect this exact request's opted-in selected screen camera and fresh frame metadata. No screenshot or OS input. Capability depends on the current authorized helper; unavailable means no wider-surface fallback.",
+    schema: z.object({ requestId: id }).strict(),
+    readOnly: true,
+  },
+  screen_camera_command: {
+    description:
+      "Present the authorized selected surface with a bounded focus/zoom, pin, freeze, annotation or context update. Use stable commandId and exact revision, sourceFrameId and geometryGeneration from screen_camera_status. Camera-only: no OS input, app edits or permission changes. No automatic retry; status/receipts do not prove handset visibility. Text is transient untrusted display content.",
+    schema: z.object({ requestId: id, command: cameraCommandSchema }).strict(),
+  },
   conversation_inbox: {
     description:
       "Discover live text requests addressed to this exact already-running coding session. Read-only; does not wake another chat, authorize a call or grant screen control. Poll the returned request IDs with conversation_turns.",
@@ -96,31 +111,37 @@ export const conversationCommands = {
   },
   act_on_shared_screen: {
     description:
-      "Execute one scoped ClawdTime fallback click/type/scroll with stable actionId and fresh frameId. Requires explicit local fallback consent and exclusive current ownership. Receipt/observation does not prove intended application outcome; unknown effects must not be retried.",
-    schema: z.object({
-      requestId: id,
-      epoch,
-      actionId: id,
-      frameId: id,
-      expectedCursor: z.number().int().nonnegative().safe().optional(),
-      action: z.discriminatedUnion("kind", [
-        z.object({
-          kind: z.literal("click"),
-          x: z.number().finite(),
-          y: z.number().finite(),
-        }),
-        z.object({
-          kind: z.literal("type"),
-          text: z.string().min(1).max(4000),
-        }),
-        z.object({
-          kind: z.literal("scroll"),
-          x: z.number().finite(),
-          y: z.number().finite(),
-          deltaY: z.number().finite(),
-        }),
-      ]),
-    }),
+      "Execute one scoped ClawdTime fallback click/type/scroll with stable actionId and fresh frameId. Requires explicit local fallback consent and exclusive current ownership. With presentation, x/y are normalized outgoing-video coordinates and the exact presentation reference is mandatory; frozen/stale views cannot receive input. Without presentation, x/y retain existing source coordinates. Receipt/observation does not prove intended application outcome; unknown effects must not be retried.",
+    schema: z
+      .object({
+        requestId: id,
+        epoch,
+        actionId: id,
+        frameId: id,
+        presentation: presentationReferenceSchema.optional(),
+        expectedCursor: z.number().int().nonnegative().safe().optional(),
+        action: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("click"),
+            x: z.number().finite(),
+            y: z.number().finite(),
+          }),
+          z.object({
+            kind: z.literal("type"),
+            text: z.string().min(1).max(4000),
+          }),
+          z.object({
+            kind: z.literal("scroll"),
+            x: z.number().finite(),
+            y: z.number().finite(),
+            deltaY: z.number().finite(),
+          }),
+        ]),
+      })
+      .refine(
+        (value) => !value.presentation || value.action.kind !== "type",
+        "Presentation coordinates require click or scroll.",
+      ),
   },
 } as const;
 export type ConversationCommand = keyof typeof conversationCommands;
@@ -141,6 +162,9 @@ export async function executeConversationCommand(
     any
   >;
   const { requestId, ...body } = args;
+  if (name === "screen_camera_status") return client.screenCamera(requestId);
+  if (name === "screen_camera_command")
+    return client.screenCamera(requestId, body.command);
   if (name === "conversation_inbox") return client.conversationInbox();
   if (name === "conversation_timing")
     return client.conversationTiming(requestId);
@@ -196,6 +220,8 @@ export async function executeConversationCommand(
       | "execution_status"
       | "conversation_timing"
       | "conversation_inbox"
+      | "screen_camera_status"
+      | "screen_camera_command"
     >
   ];
   return name === "execution_status"

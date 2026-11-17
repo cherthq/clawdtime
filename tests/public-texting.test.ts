@@ -38,8 +38,12 @@ describe("public Messages entry point", () => {
         expect(
           html.includes('href="sms:+15550000001?body=Hey%20ClawdTime"'),
         ).toBe(mode.published);
-        expect(html.includes('href="#text-it" data-text-it')).toBe(
-          !mode.published,
+        expect(html.includes("data-pilot-setup")).toBe(!mode.published);
+        expect(html).toMatch(/href="#availability"/);
+        expect(html).toContain(
+          'data-availability="' +
+            (mode.published ? "invited" : "preview") +
+            '"',
         );
         expect(html.includes('id="text-it" data-text-ready')).toBe(
           mode.published,
@@ -58,7 +62,10 @@ describe("public Messages entry point", () => {
       "person@example.com",
     ])
       expect(() =>
-        publicPage('<a href="#text-it" data-text-it>Text</a>', value),
+        publicPage(
+          '<a href="/guides/getting-started" data-pilot-setup>Setup</a>',
+          value,
+        ),
       ).toThrow();
   });
 });

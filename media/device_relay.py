@@ -124,7 +124,7 @@ class DeviceRelay:
                     if future.done():continue
                     raw=base64.b64decode(item['body'],validate=True)
                     if len(raw)>MAX_BODY or type(item['status']) is not int or not 100<=item['status']<=599 or not isinstance(item.get('headers'),dict):raise ValueError()
-                    headers={k.lower():v for k,v in item['headers'].items() if isinstance(k,str) and isinstance(v,str) and len(k)<100 and len(v)<300}
+                    headers={k.lower():v for k,v in item['headers'].items() if isinstance(k,str) and isinstance(v,str) and len(k)<100 and len(v)<(2049 if k.lower()=='x-camera-frame' else 300)}
                     future.set_result((item['status'],raw,headers))
                 except Exception:
                     await socket.close(code=1008,message=b'Invalid gateway response')
@@ -137,7 +137,7 @@ class DeviceRelay:
         return socket
 
     async def request(self,method,path,body=None,device=None):
-        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel))',path) or ('/devices/' in path and method!=('POST' if path.endswith('/panel') else 'GET')):
+        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))',path) or ('/devices/' in path and method not in (('POST',) if path.endswith(('/panel','/text-grants')) else ('GET','DELETE') if '/text-grants/' in path else ('GET',))):
             if not self.connected:raise ConnectionError('Device gateway unavailable')
             raise ValueError('Invalid relay operation')
         socket=self.route(path,body,device)

@@ -72,11 +72,26 @@ public func authenticated(_ candidate: String, secret: String) -> Bool {
   guard a.count == b.count else { return false }
   return zip(a, b).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
 }
+public struct CameraSurface: Codable, Equatable {
+  public var kind: String
+  public var id: String
+  public var displayId: UInt32
+  public var ownerPid: Int?
+  public init(kind: String, id: String, displayId: UInt32, ownerPid: Int? = nil) { self.kind = kind; self.id = id; self.displayId = displayId; self.ownerPid = ownerPid }
+  public func validate(display: UInt32) throws {
+    guard ["display", "window"].contains(kind), let numeric = UInt32(id), numeric > 0,
+      String(numeric) == id, displayId == display, kind != "display" || (numeric == display && ownerPid == nil),
+      kind != "window" || (ownerPid != nil && ownerPid! > 0) else {
+      throw HelperError(400, "Invalid explicit camera surface.")
+    }
+  }
+}
 public struct Lease: Codable, Equatable {
   public var id: String
   public var deviceId: String
   public var memberId: String
-  public var callId: String
+  public var callId: String?
+  public var authority: TextLeaseAuthority?
   public var displayId: UInt32
   public var mode: String
   public var expiresAt: Date
@@ -85,15 +100,18 @@ public struct Lease: Codable, Equatable {
   public var executorEpoch: Int?
   public var policyRevision: Int?
   public var executor: String?
+  public var cameraVersion: Int?
+  public var surface: CameraSurface?
   public init(
-    id: String, deviceId: String, memberId: String, callId: String, displayId: UInt32, mode: String,
+    id: String, deviceId: String, memberId: String, callId: String?, displayId: UInt32, mode: String,
     expiresAt: Date, protocolVersion: Int? = nil, sessionId: String? = nil,
-    executorEpoch: Int? = nil, policyRevision: Int? = nil, executor: String? = nil
+    executorEpoch: Int? = nil, policyRevision: Int? = nil, executor: String? = nil, authority: TextLeaseAuthority? = nil, cameraVersion: Int? = nil, surface: CameraSurface? = nil
   ) {
     self.id = id
     self.deviceId = deviceId
     self.memberId = memberId
     self.callId = callId
+    self.authority = authority
     self.displayId = displayId
     self.mode = mode
     self.expiresAt = expiresAt
@@ -102,6 +120,8 @@ public struct Lease: Codable, Equatable {
     self.executorEpoch = executorEpoch
     self.policyRevision = policyRevision
     self.executor = executor
+    self.cameraVersion = cameraVersion
+    self.surface = surface
   }
 }
 public struct FrameStamp {
@@ -181,6 +201,10 @@ public final class DevicePolicy {
   public private(set) var lease: Lease?
   public private(set) var frame: FrameStamp?
   public private(set) var generation = 0
+  public private(set) var localEnableGeneration = 0
+  public private(set) var pendingTextGrant: TextControlGrant?
+  public private(set) var textGrant: TextControlGrant?
+  private var retiredTextGrants = Set<String>()
   private var retired = Set<String>()
   public init(config: HelperConfig, preferences: ControlPreferences? = nil) throws {
     try config.validate()
@@ -197,13 +221,70 @@ public final class DevicePolicy {
     stop(disarm: true)
     preferences = next
   }
-  public func arm() { armed = true }
+  public func arm() {
+    guard !armed else { return }
+    localEnableGeneration += 1
+    armed = true
+  }
+  public func proposeTextGrant(_ grant: TextControlGrant, now: Date, sessionAvailable: Bool) throws {
+    try check(now: now, sessionAvailable: sessionAvailable)
+    try grant.validate(now: now)
+    guard grant.deviceId == config.deviceId, grant.policyRevision == preferences.revision,
+      grant.localEnableGeneration == localEnableGeneration,
+      !retiredTextGrants.contains(grant.id),
+      let permission = config.displays.first(where: { String($0.displayId) == grant.displayId }),
+      permission.viewers.contains(grant.memberId), permission.controllers.contains(grant.memberId),
+      preferences.policy != .viewOnly else {
+      throw HelperError(403, "Text control requires the exact enabled local binding.")
+    }
+    if let textGrant {
+      guard textGrant == grant else { throw HelperError(409, "Revoke the previous grant locally first.") }
+      return
+    }
+    if let pendingTextGrant {
+      guard pendingTextGrant == grant else { throw HelperError(409, "A different proposal awaits local review.") }
+      return
+    }
+    pendingTextGrant = grant
+  }
+  public func approveTextGrant(id: String, now: Date, sessionAvailable: Bool) throws {
+    try check(now: now, sessionAvailable: sessionAvailable)
+    guard let pendingTextGrant, pendingTextGrant.id == id, lease == nil else {
+      throw HelperError(409, "No matching pending grant, or another lease is active.")
+    }
+    try pendingTextGrant.validate(now: now)
+    guard pendingTextGrant.localEnableGeneration == localEnableGeneration,
+      pendingTextGrant.policyRevision == preferences.revision else {
+      throw HelperError(409, "Local authority changed before approval.")
+    }
+    textGrant = pendingTextGrant
+    self.pendingTextGrant = nil
+  }
+  public func revokeTextGrant(id: String) {
+    if pendingTextGrant?.id == id { pendingTextGrant = nil }
+    if textGrant?.id == id {
+      textGrant = nil
+      if lease?.authority?.grantId == id { stop() }
+    }
+    retiredTextGrants.insert(id)
+  }
+  public func rejectTextGrant() {
+    if let pendingTextGrant { retiredTextGrants.insert(pendingTextGrant.id) }
+    pendingTextGrant = nil
+  }
   public func stop(disarm: Bool = false) {
     if let lease { retired.insert(lease.id) }
     lease = nil
     frame = nil
     generation += 1
-    if disarm { armed = false }
+    if disarm {
+      armed = false
+      localEnableGeneration += 1
+      if let textGrant { retiredTextGrants.insert(textGrant.id) }
+      if let pendingTextGrant { retiredTextGrants.insert(pendingTextGrant.id) }
+      textGrant = nil
+      pendingTextGrant = nil
+    }
   }
   public func check(now: Date, sessionAvailable: Bool) throws {
     if !sessionAvailable {
@@ -213,6 +294,14 @@ public final class DevicePolicy {
     guard armed else {
       throw HelperError(423, "Sharing is stopped locally. Enable it on the Mac first.")
     }
+    if let textGrant, textGrant.expiresAt <= now.timeIntervalSince1970 * 1000 {
+      retiredTextGrants.insert(textGrant.id)
+      self.textGrant = nil
+      if lease?.protocolVersion == 3 { stop() }
+    }
+    if let pendingTextGrant, pendingTextGrant.expiresAt <= now.timeIntervalSince1970 * 1000 {
+      rejectTextGrant()
+    }
     if let lease, lease.expiresAt <= now {
       stop()
       throw HelperError(410, "Lease expired. A fresh request is required.")
@@ -220,16 +309,39 @@ public final class DevicePolicy {
   }
   private func authorize(_ proposed: Lease, now: Date, accessibility: Bool) throws {
     guard proposed.deviceId == config.deviceId,
-      [proposed.id, proposed.memberId, proposed.callId].allSatisfy(validID),
+      [proposed.id, proposed.memberId].allSatisfy(validID),
       ["view", "control"].contains(proposed.mode), proposed.expiresAt > now,
       proposed.expiresAt.timeIntervalSince(now) <= 30
     else { throw HelperError(400, "Invalid lease binding or expiration (maximum 30 seconds).") }
+    if proposed.cameraVersion != nil || proposed.surface != nil {
+      guard proposed.protocolVersion == 2, proposed.cameraVersion == 1, let surface = proposed.surface else {
+        throw HelperError(400, "Camera capture requires explicit versioned session selection.")
+      }
+      try surface.validate(display: proposed.displayId)
+    }
     guard let permission = config.displays.first(where: { $0.displayId == proposed.displayId }),
       permission.viewers.contains(proposed.memberId)
     else { throw HelperError(403, "Viewing this display is not authorized.") }
+    if proposed.protocolVersion == 3 {
+      guard proposed.callId == nil, let authority = proposed.authority,
+        authority.kind == "text_session", let grant = textGrant,
+        authority.grantId == grant.id, authority.projectId == grant.projectRoot,
+        proposed.sessionId == grant.sessionId, proposed.memberId == grant.memberId,
+        String(proposed.displayId) == grant.displayId,
+        grant.localEnableGeneration == localEnableGeneration,
+        grant.policyRevision == preferences.revision,
+        proposed.expiresAt.timeIntervalSince1970 * 1000 <= grant.expiresAt,
+        grant.expiresAt > now.timeIntervalSince1970 * 1000 else {
+        throw HelperError(403, "Text input requires a current explicitly approved local grant.")
+      }
+    } else {
+      guard proposed.callId.map(validID) == true, proposed.authority == nil else {
+        throw HelperError(400, "Call-bound lease requires its original call identity.")
+      }
+    }
     let versionFields = [proposed.sessionId != nil, proposed.executorEpoch != nil,
                          proposed.policyRevision != nil, proposed.executor != nil]
-    if proposed.protocolVersion == 2 {
+    if [2, 3].contains(proposed.protocolVersion ?? 0) {
       guard let sessionId = proposed.sessionId, validID(sessionId),
         let epoch = proposed.executorEpoch, epoch >= 0,
         proposed.policyRevision == preferences.revision,
@@ -240,7 +352,7 @@ public final class DevicePolicy {
     } else if proposed.protocolVersion != nil || versionFields.contains(true) {
       throw HelperError(400, "Unsupported lease protocol.")
     }
-    if proposed.protocolVersion == 2 && proposed.executor != "none"
+    if [2, 3].contains(proposed.protocolVersion ?? 0) && proposed.executor != "none"
       && !permission.controllers.contains(proposed.memberId) {
       throw HelperError(403, "Computer control requires this display's local controller permission.")
     }
@@ -277,7 +389,7 @@ public final class DevicePolicy {
     try check(now: now, sessionAvailable: sessionAvailable)
     guard var current = lease else { throw HelperError(410, "No active lease.") }
     current.expiresAt = proposed.expiresAt
-    if current.protocolVersion == 2 && proposed.protocolVersion == 2,
+    if [2, 3].contains(current.protocolVersion ?? 0) && current.protocolVersion == proposed.protocolVersion,
       let nextEpoch = proposed.executorEpoch, let previousEpoch = current.executorEpoch,
       nextEpoch > previousEpoch {
       current.executorEpoch = nextEpoch
@@ -315,13 +427,18 @@ public final class DevicePolicy {
     guard lease.mode == "control" else {
       throw HelperError(403, "Viewing does not authorize input.")
     }
-    if lease.protocolVersion == 2 {
+    if [2, 3].contains(lease.protocolVersion ?? 0) {
       guard action.executorEpoch == lease.executorEpoch, action.policyRevision == lease.policyRevision,
         action.sessionId == lease.sessionId, lease.executor == "clawdtime" else {
         throw HelperError(409, "Input belongs to an old computer-control owner.")
       }
     } else if action.executorEpoch != nil || action.policyRevision != nil || action.sessionId != nil {
       throw HelperError(409, "Input protocol does not match this lease.")
+    }
+    if lease.protocolVersion == 3 {
+      guard textGrant?.actions.contains(action.type) == true else {
+        throw HelperError(403, "Action is outside the local text-control grant.")
+      }
     }
     try action.validate()
     guard let frame, frame.id == action.frameId, frame.leaseId == leaseId,

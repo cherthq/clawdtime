@@ -1,3 +1,8 @@
+import {
+  cameraCommandSchema,
+  cameraStatusSchema,
+  cameraReceiptSchema,
+} from "../../src/camera-contracts.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -40,6 +45,7 @@ export class ClawdTimeClient {
   readonly origin: string;
   private presentationSupport = new Map<string, boolean>();
   private interactionSupport = new Map<string, boolean>();
+  private cameraSupport = new Map<string, boolean>();
   private readonly timing = new ConnectorTiming();
   constructor(
     origin: string,
@@ -196,6 +202,44 @@ export class ClawdTimeClient {
     this.interactionSupport.set(id, capabilities?.interactionVersion === 1);
     return result;
   }
+  private async requireCamera(id: string) {
+    if (!this.cameraSupport.get(id)) await this.screenCamera(id);
+  }
+  async screenCamera(id: string, command?: unknown): Promise<unknown> {
+    if (command !== undefined) {
+      await this.requireCamera(id);
+      // No retry or legacy fallback, even if the write outcome is uncertain.
+      const parsed = cameraCommandSchema.safeParse(command);
+      if (!parsed.success)
+        throw new Error("Invalid bounded camera command; no effect submitted.");
+      const receipt = cameraReceiptSchema.safeParse(
+        await this.api(
+          `/api/attention/${encodeURIComponent(id)}/conversation/camera`,
+          parsed.data,
+        ),
+      );
+      if (!receipt.success || receipt.data.commandId !== parsed.data.commandId)
+        throw new Error(
+          "Camera receipt is invalid; outcome is uncertain. Inspect status without retrying.",
+        );
+      return receipt.data;
+    }
+    const parsed = cameraStatusSchema.safeParse(
+      await this.api(
+        `/api/attention/${encodeURIComponent(id)}/conversation/camera`,
+      ),
+    );
+    if (!parsed.success) {
+      this.cameraSupport.delete(id);
+      throw new Error(
+        "This exact request has not negotiated screen camera v1. No camera or input effect was submitted; preserve the session and inspect its selected surface.",
+      );
+    }
+    if (this.cameraSupport.size >= 100 && !this.cameraSupport.has(id))
+      this.cameraSupport.delete(this.cameraSupport.keys().next().value!);
+    this.cameraSupport.set(id, true);
+    return parsed.data;
+  }
   conversationInbox() {
     return this.api<{
       requests: Array<{
@@ -243,6 +287,13 @@ export class ClawdTimeClient {
       | "act",
     body: unknown,
   ) {
+    if (
+      operation === "act" &&
+      body &&
+      typeof body === "object" &&
+      "presentation" in body
+    )
+      await this.requireCamera(id);
     if (
       body &&
       typeof body === "object" &&

@@ -372,6 +372,15 @@ class CaptionRenderer:
             draw.text((472,353),summary,font=self.label_font,fill='white')
         return Image.alpha_composite(image,layer)
 
+    def camera_overlay(self, image, snapshot):
+        # Reserve the bottom strip, outside the source viewport and context row.
+        image=image.copy();draw=ImageDraw.Draw(image)
+        label,lines=self.subtitle(snapshot,1)
+        text=clean_text(label+' · '+(' '.join(lines)),140)
+        while text and draw.textlength(text,font=self.label_font)>1232:text=text[:-1]
+        draw.text((24,692),text,font=self.label_font,fill='#b5c3d7')
+        return image
+
     def render(self, snapshot):
         # Center-safe for a 9:16 phone crop of the 16:9 transport. All essential
         # text stays within 336 px and the top/bottom call-control safe insets.
@@ -408,12 +417,14 @@ class CaptionRenderer:
 
 
 class CaptionPublisher:
-    def __init__(self, scene, room, sdk=None, screen=None):
+    def __init__(self, scene, room, sdk=None, screen=None, document=None):
         if sdk is None:
             from livekit import rtc
             sdk = rtc
         self.scene, self.room, self.sdk = scene, room, sdk
         self.screen = screen
+        self.fps = 15 if getattr(getattr(screen, "owner", None), "env", {}).get("CLAWDTIME_SCREEN_CAMERA_ENABLED") == "true" else FPS
+        self.document = document
         self.renderer = CaptionRenderer()
         self.source = None
         self.publication = None
@@ -428,10 +439,14 @@ class CaptionPublisher:
         snapshot = self.scene.snapshot()
         if self.screen:
             self.screen.expire()
+        if self.document:
+            self.document.expire()
+        use_document = bool(self.document and self.document.image is not None)
         use_screen = bool(self.screen and (self.screen.screen_call or self.screen.selection or self.screen.starting))
-        revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen)
-        if revision != self.last_revision:
-            image = self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot)
+        revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen,
+                    self.document.revision if self.document else None, use_document)
+        if revision != self.last_revision or (self.screen and getattr(self.screen,'camera',None)):
+            image = self.document.render() if use_document else (self.renderer.camera_overlay(self.screen.render(), snapshot) if use_screen and getattr(self.screen,'camera',None) else self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot))
             self.frame = self.sdk.VideoFrame(WIDTH, HEIGHT, self.sdk.VideoBufferType.RGBA, image.tobytes())
             self.last_revision = revision
         self.source.capture_frame(self.frame)
@@ -445,7 +460,7 @@ class CaptionPublisher:
         try:
             track = self.sdk.LocalVideoTrack.create_video_track('clawdtime-screen', self.source)
             options = self.sdk.TrackPublishOptions(source=self.sdk.TrackSource.SOURCE_CAMERA,
-                simulcast=False, video_encoding=self.sdk.VideoEncoding(max_framerate=FPS, max_bitrate=1500000),
+                simulcast=False, video_encoding=self.sdk.VideoEncoding(max_framerate=self.fps, max_bitrate=1500000),
                 video_codec=self.sdk.VideoCodec.H264)
             self.publication = await self.room.local_participant.publish_track(track, options)
             self.emit()
@@ -457,7 +472,10 @@ class CaptionPublisher:
     async def run(self):
         try:
             while not self.closed:
-                await asyncio.sleep(1 / FPS)
+                # The encoding ceiling supports later negotiated camera motion;
+                # legacy peers retain their original publication cadence.
+                cadence = 15 if self.screen and getattr(self.screen, "camera", None) else FPS
+                await asyncio.sleep(1 / cadence)
                 self.emit()
         except asyncio.CancelledError:
             raise

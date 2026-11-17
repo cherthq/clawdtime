@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { cameraFrameSchema, presentationReferenceSchema, type PresentationReference } from "../camera-contracts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -86,6 +88,9 @@ export class ControlCoordinator {
       request?.callId && this.store.get<CallSession>("call", request.callId);
     if (
       !request ||
+      request.audioQualification !== undefined ||
+      session?.audioQualification !== undefined ||
+      (call && call.audioQualification !== undefined) ||
       !pairing ||
       !session ||
       !call ||
@@ -285,6 +290,7 @@ export class ControlCoordinator {
       throw new ControlPreflightError("frame_unavailable");
     }
     const frame: Frame = {
+      ...(raw.camera ? { camera: cameraFrameSchema.parse(raw.camera) } : {}),
       id: raw.id,
       capturedAt: raw.capturedAt,
       width: raw.width,
@@ -301,8 +307,14 @@ export class ControlCoordinator {
   }
   /** Validate an image-bearing device observation without capturing a second frame. */
   acceptFrame(leaseId: string, memberId: string, frame: Frame) {
-    this.check(leaseId, memberId);
+    const lease = this.check(leaseId, memberId);
     this.fresh(frame);
+    if (lease.cameraVersion === 1 ? (!frame.camera || !isDeepStrictEqual(frame.camera.surface, lease.surface) || frame.width !== frame.camera.source.width || frame.height !== frame.camera.source.height) : !!frame.camera)
+      throw new ControlPreflightError("frame_unavailable");
+    if (frame.camera) cameraFrameSchema.parse(frame.camera);
+    // Store bounded metadata only, even when a port returns an image-bearing frame.
+    frame = { id: frame.id, capturedAt: frame.capturedAt, width: frame.width, height: frame.height,
+      ...(frame.camera ? {camera: cameraFrameSchema.parse(frame.camera)} : {}) };
     this.store.saveState(`frame:${leaseId}`, frame);
   }
   private fresh(frame: Frame) {
@@ -325,13 +337,18 @@ export class ControlCoordinator {
     frameId: string,
     input: InputAction,
     beforeDispatch?: () => void,
+    presentation?: PresentationReference,
   ): Promise<ActionReceipt> {
     const lease = this.check(leaseId, memberId);
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(actionId))
       throw new Error("Invalid action ID.");
     const action = actionSchema.parse(input);
+    if (presentation) {
+      presentation = presentationReferenceSchema.parse(presentation);
+      if (action.kind === "type") throw new Error("Presentation requires a point action.");
+    }
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify({ leaseId, frameId, action }))
+      .update(JSON.stringify({ leaseId, frameId, action, ...(presentation ? {presentation} : {}) }))
       .digest("hex");
     const previous = this.store.get<ActionReceipt>("action", actionId);
     if (previous) {
@@ -361,6 +378,8 @@ export class ControlCoordinator {
     if (!frame || frame.id !== frameId)
       throw new Error("Observe the current frame before acting.");
     this.fresh(frame);
+    if (presentation && (presentation.sourceFrameId !== frame.id || presentation.geometryGeneration !== frame.camera?.geometryGeneration))
+      throw new Error("Presentation and pristine observation must identify the same source frame.");
     const receipt: ActionReceipt = {
       id: actionId,
       leaseId,
@@ -379,7 +398,7 @@ export class ControlCoordinator {
     try {
       this.check(leaseId, memberId);
       beforeDispatch?.();
-      const result = await this.device.action(lease, frame, action, actionId);
+      const result = await this.device.action(lease, frame, action, actionId, presentation);
       if (!result.submitted) throw new Error("Input outcome is unknown.");
       this.store.put("action", { ...receipt, state: "submitted" });
       this.timing.record(lease.requestId, "input_submitted", correlation);

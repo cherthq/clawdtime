@@ -14,6 +14,7 @@ from captions import WIDTH, HEIGHT, CaptionRenderer
 from policy import capture_allowed
 from screen_diagnostics import ScreenDiagnostics
 from device_relay import RelayFailure
+from camera import ScreenCamera, CameraError, surface, decode_header
 
 
 def timestamp(value):
@@ -64,6 +65,7 @@ class ScreenController:
         self.applied_epoch=None
         self.applied_lease=None
         self.policy_at=0
+        self.camera=None
         self.frame=None
         self.frame_id=None
         self.captured_at=None
@@ -90,6 +92,7 @@ class ScreenController:
         self.diagnostics=ScreenDiagnostics((lambda data: persist(self.session.id,data)) if callable(persist) else None)
 
     def clear(self,state):
+        if self.camera:self.camera.clear()
         self.frame=None;self.frame_id=None;self.captured_at=None
         self.state=state;self.revision+=1
 
@@ -100,6 +103,7 @@ class ScreenController:
         if (not self.selection or self.selection['leaseId']!=lease_id or
                 self.frame_id!=frame_id): return
         self.frame_id=None
+        if self.camera:self.camera.clear()
         self.state='awaiting_frame'
         self.hold_until=0
 
@@ -130,6 +134,7 @@ class ScreenController:
                     data=io.BytesIO();self.frame.save(data,'JPEG',quality=85)
                     raw=data.getvalue()
                     if len(raw)>2*1024*1024:raise ValueError('Frame exceeds bound')
+                    if self.camera and self.camera.meta:current['camera']=self.camera.meta
                     current.update(width=self.frame.width,height=self.frame.height,
                         sha256=hashlib.sha256(raw).hexdigest(),jpegBase64=base64.b64encode(raw).decode())
             elif include_frame:
@@ -141,7 +146,12 @@ class ScreenController:
         if not isinstance(selection,dict) or not self.session.active or self.session.closing or policy.get('callId')!=self.session.call_id or not capture_allowed(policy):return None
         required={'leaseId','deviceId','alias','memberId','callId','displayId','mode','expiresAt'}
         authority={'protocolVersion','sessionId','executorEpoch','policyRevision','executor'}
-        if set(selection) not in (required,required|authority) or selection.get('callId')!=self.session.call_id or selection.get('mode') not in ('view','control'):return None
+        camera={'cameraVersion','surface'}
+        if set(selection) not in (required,required|authority,required|authority|camera) or selection.get('callId')!=self.session.call_id or selection.get('mode') not in ('view','control'):return None
+        if 'cameraVersion' in selection or 'surface' in selection:
+            if self.owner.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true' or selection.get('protocolVersion')!=2 or type(selection.get('cameraVersion')) is not int or selection['cameraVersion']!=1:return None
+            try:surface(selection['surface'],selection['displayId'])
+            except (ValueError,KeyError):return None
         if 'protocolVersion' in selection:
             if selection['protocolVersion']!=2 or not isinstance(selection['sessionId'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',selection['sessionId']) or any(type(selection[k]) is not int or selection[k]<0 for k in ('executorEpoch','policyRevision')) or selection['policyRevision']<1 or selection['executor'] not in ('none','native','clawdtime') or (selection['mode']=='control' and selection['executor']!='clawdtime'):return None
         if any(not isinstance(selection[k],str) or not 0<len(selection[k])<=160 for k in ('leaseId','deviceId','alias','memberId','callId')):return None
@@ -164,13 +174,14 @@ class ScreenController:
             self.revision+=1
         binding=lambda s: {k:v for k,v in s.items() if k not in ('expiresAt','alias')} if s else None
         if selected and self.selection and selected.get('protocolVersion')==2 and self.selection.get('protocolVersion')==2 and selected['leaseId']==self.selection['leaseId']:
-            stable=('leaseId','deviceId','memberId','callId','displayId','sessionId')
-            if any(selected[k]!=self.selection[k] for k in stable):selected=None
+            stable=('leaseId','deviceId','memberId','callId','displayId','sessionId','cameraVersion','surface')
+            if any(selected.get(k)!=self.selection.get(k) for k in stable):selected=None
             elif selected['executorEpoch']<self.selection['executorEpoch']:
                 return  # stale policy cannot renew or restore an old executor
             elif selected['executorEpoch']>self.selection['executorEpoch']:
                 self.selection=selected
-                self.frame_id=None  # keep video pixels only while still fresh
+                self.frame_id=None  # keep legacy video pixels only while still fresh
+                if self.camera:self.camera.clear()
                 self.state='awaiting_frame';self.hold_until=0
                 self.policy_at=time.monotonic()
                 return  # same capture loop renews authority, then captures a new frame
@@ -184,6 +195,7 @@ class ScreenController:
             generation=self.generation
             self.selection=selected
             self.clear('unavailable' if selected else 'stopped')
+            self.camera=ScreenCamera(selected) if selected and selected.get('cameraVersion')==1 else None
             if old_task:old_task.cancel()
             self.task=None
             if old:
@@ -308,10 +320,11 @@ class ScreenController:
                     captured=headers['x-captured-at'];frame_id=headers['x-frame-id']
                     if headers.get('content-type','').split(';')[0]!='image/jpeg' or not -.5<=time.time()-timestamp(captured)<2 or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',frame_id):raise ValueError('Stale frame')
                     width,height=int(headers['x-frame-width']),int(headers['x-frame-height'])
-                    if not 0<width<=1280 or not 0<height<=720:raise ValueError('Invalid frame dimensions')
+                    if not 0<width<=(8192 if self.camera else 1280) or not 0<height<=(8192 if self.camera else 720) or width*height>32_000_000:raise ValueError('Invalid frame dimensions')
                     with Image.open(io.BytesIO(raw)) as image:
                         if image.format!='JPEG' or image.size!=(width,height):raise ValueError('Invalid frame')
                         image.load();frame=image.convert('RGB')
+                    metadata=decode_header(headers.get('x-camera-frame'),selection['surface'],width,height) if self.camera else None
                     if generation!=self.generation:return
                     self.expire()
                     # Discard a successful frame if authority expired in flight.
@@ -319,6 +332,7 @@ class ScreenController:
                     # same-binding policy refreshes do not spawn another poller.
                     if time.monotonic()-self.policy_at>=2 or min(timestamp(selection['expiresAt']),timestamp(self.selection['expiresAt']))<=time.time():continue
                     if self.frame_id!=frame_id:
+                        if self.camera:self.camera.accept(frame,frame_id,timestamp(captured),metadata)
                         self.frame=frame;self.frame_id=frame_id;self.captured_at=captured;self.received_at=time.monotonic();self.revision+=1
                         self.diagnostics.frame(captured)
                     self.state='viewing'
@@ -330,6 +344,7 @@ class ScreenController:
 
     def render(self):
         self.expire()
+        if self.camera:return self.camera.render()
         canvas=Image.new('RGBA',(WIDTH,HEIGHT),'#0c1017')
         if not self.frame:
             if self.startup_renderer is None:self.startup_renderer=CaptionRenderer()

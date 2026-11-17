@@ -91,6 +91,26 @@ describe("agent-owned connector conversation", () => {
       mcpOutput({ dataUrl: "https://untrusted.invalid/image" }),
     ).toThrow("Invalid transient");
   });
+  it("accepts the full bounded native-camera JPEG byte budget without persisting its base64", () => {
+    const bytes = Buffer.alloc(2 * 1024 * 1024, 23);
+    const image = mcpOutput({
+      frame: { id: "synthetic-native-frame" },
+      dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`,
+    });
+    expect(image.content[0]).toEqual({
+      type: "text",
+      text: '{"frame":{"id":"synthetic-native-frame"}}',
+    });
+    expect(image.content[1]).toMatchObject({
+      type: "image",
+      mimeType: "image/jpeg",
+    });
+    expect(() =>
+      mcpOutput({
+        dataUrl: `data:image/jpeg;base64,${Buffer.alloc(2 * 1024 * 1024 + 1).toString("base64")}`,
+      }),
+    ).toThrow("Invalid transient");
+  });
   it("defaults to v2 without inventing native surface or cancellation capability", () => {
     const options = protocolOptions({});
     expect(options.protocolVersion).toBe(2);

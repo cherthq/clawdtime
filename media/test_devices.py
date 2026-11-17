@@ -173,7 +173,7 @@ class DeviceRouteTests(unittest.IsolatedAsyncioTestCase):
             posts.append(method)
             if method=='POST':raise TimeoutError()
             return 200,b'{"id":"action","leaseId":"lease-1","state":"submitted"}',{}
-        session.screen=SimpleNamespace(update=lambda p:None,selection=bound,status=lambda:{'state':'viewing','frameId':'frame'},request=request,close=AsyncMock(),clear=Mock())
+        session.screen=SimpleNamespace(frame_lock=asyncio.Lock(),camera=None,invalidate_input=Mock(),update=lambda p:None,selection=bound,status=lambda:{'state':'viewing','frameId':'frame'},request=request,close=AsyncMock(),clear=Mock())
         session.close=AsyncMock();self.service.sessions[sid]=session
         self.service.backend=AsyncMock(return_value=policy(bound))
         body={k:bound[k] for k in ('leaseId','callId','memberId','deviceId','displayId')}

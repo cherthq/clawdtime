@@ -15,7 +15,7 @@ from relay_diagnostics import milliseconds, stamp
 
 # Ping every 20 s; a peer gets 10 s to answer before the socket is declared dead.
 HEARTBEAT=20
-PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel))$')
+PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))$')
 
 def trusted_tls_context():
     # Isolated trust roots: macOS framework Python may have no default CA file.
@@ -75,7 +75,7 @@ async def relay(gateway,url):
                             result={'id':item['id'],'status':503,'headers':{},'body':''}
                             try:
                                 method,path=item['method'],item['path']
-                                if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or ('/devices/' in path and method!=('POST' if path.endswith('/panel') else 'GET')):raise ValueError()
+                                if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or ('/devices/' in path and method not in (('POST',) if path.endswith(('/panel','/text-grants')) else ('GET','DELETE') if '/text-grants/' in path else ('GET',))):raise ValueError()
                                 record('forwarded')
                                 async with http.request(method,local+path,headers={'Authorization':'Bearer '+key,'X-ClawdTime-Relay-Request':identity or ''},**({'json':item['body']} if item.get('body') is not None else {}),allow_redirects=False) as response:
                                     chunks=[];size=0
@@ -83,7 +83,7 @@ async def relay(gateway,url):
                                         size+=len(chunk)
                                         if size>MAX_FRAME:raise ValueError()
                                         chunks.append(chunk)
-                                    result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height')})
+                                    result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height','x-camera-frame')})
                             except asyncio.CancelledError:
                                 record('cancelled');raise
                             except Exception as error:

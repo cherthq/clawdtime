@@ -4,6 +4,8 @@ Lease/action metadata is durable; frames are never cached or persisted. Unknown
 creation or input outcomes are not retried. Local stop requires a fresh lease ID.
 """
 import asyncio
+import base64
+import math
 from datetime import datetime, timezone
 import hashlib
 import hmac
@@ -48,15 +50,30 @@ def valid_origin(value):
 def validate_lease(body):
     required={'id','deviceId','memberId','callId','displayId','mode','expiresAt'}
     authority={'protocolVersion','sessionId','executorEpoch','policyRevision','executor'}
-    if not isinstance(body, dict) or set(body) not in (required,required|authority):
+    camera={'cameraVersion','surface'}
+    text_required=(required-{'callId'})|authority|{'authority'}
+    if not isinstance(body, dict) or set(body) not in (required,required|authority,text_required,required|authority|camera):
         raise web.HTTPBadRequest()
-    if any(not isinstance(body[k], str) or not ID.fullmatch(body[k]) for k in ('id','deviceId','memberId','callId')):
+    if any(not isinstance(body[k], str) or not ID.fullmatch(body[k]) for k in ('id','deviceId','memberId') + (('callId',) if 'callId' in body else ())):
         raise web.HTTPBadRequest()
     if type(body['displayId']) is not int or not 0 <= body['displayId'] <= 0xffffffff or body['mode'] not in ('view','control'):
         raise web.HTTPBadRequest()
     if 'protocolVersion' in body:
-        if body['protocolVersion']!=2 or not isinstance(body['sessionId'],str) or not ID.fullmatch(body['sessionId']) or any(type(body[k]) is not int or body[k]<0 for k in ('executorEpoch','policyRevision')) or body['policyRevision']<1 or body['executor'] not in ('none','native','clawdtime') or (body['mode']=='control' and body['executor']!='clawdtime'):
+        if type(body['protocolVersion']) is not int or body['protocolVersion'] not in (2,3) or not isinstance(body['sessionId'],str) or not ID.fullmatch(body['sessionId']) or any(type(body[k]) is not int or body[k]<0 for k in ('executorEpoch','policyRevision')) or body['policyRevision']<1 or body['executor'] not in ('none','native','clawdtime') or (body['mode']=='control' and body['executor']!='clawdtime'):
             raise web.HTTPBadRequest()
+    if 'cameraVersion' in body or 'surface' in body:
+        target=body.get('surface')
+        if (body.get('protocolVersion')!=2 or type(body.get('cameraVersion')) is not int or body['cameraVersion']!=1 or
+                not isinstance(target,dict) or target.get('kind') not in ('display','window') or
+                set(target)!=({'kind','id','displayId'}|({'ownerPid'} if target.get('kind')=='window' else set())) or
+                target.get('displayId')!=body['displayId'] or type(target.get('displayId')) is not int or
+                not isinstance(target.get('id'),str) or not re.fullmatch(r'[1-9][0-9]{0,9}',target['id']) or not 0<int(target['id'])<=0xffffffff or
+                (target['kind']=='display' and int(target['id'])!=body['displayId']) or
+                (target['kind']=='window' and (type(target.get('ownerPid')) is not int or not 0<target['ownerPid']<=0x7fffffff))):raise web.HTTPBadRequest()
+    if body.get('protocolVersion') == 3:
+        a=body.get('authority')
+        if 'callId' in body or not isinstance(a,dict) or set(a)!={'kind','grantId','projectId'} or a['kind']!='text_session' or not isinstance(a['grantId'],str) or not ID.fullmatch(a['grantId']) or not isinstance(a['projectId'],str) or not a['projectId'].startswith('/') or len(a['projectId'])>1024 or not a['projectId'].isprintable():raise web.HTTPBadRequest()
+    elif 'authority' in body or 'callId' not in body:raise web.HTTPBadRequest()
     try:
         remaining = timestamp(body['expiresAt']) - time.time()
         if not 0 < remaining <= 30:
@@ -174,7 +191,15 @@ class Gateway:
         fingerprint = validate_lease(body)
         if body['deviceId'] not in self.devices:
             raise web.HTTPForbidden()
-        old = self.db.execute('SELECT fingerprint,state FROM leases WHERE id=?',(body['id'],)).fetchone()
+        if body.get('cameraVersion')==1:
+            config=self.devices[body['deviceId']]
+            async with self.http.get(config['url']+'/v1/status',headers={'Authorization':'Bearer '+config['key']},allow_redirects=False) as response:
+                raw=await response.content.read(16385)
+                if response.status!=200 or len(raw)>16384:raise web.HTTPBadGateway()
+                helper=json.loads(raw)
+                if helper.get('deviceId')!=body['deviceId'] or type(helper.get('cameraVersion')) is not int or helper['cameraVersion']!=1:
+                    raise web.HTTPConflict(text='Helper does not support selected camera capture.')
+        old = self.db.execute('SELECT fingerprint,state FROM leases WHERE id=?' ,(body['id'],)).fetchone()
         if old:
             if old[0] != fingerprint:raise web.HTTPConflict()
             self.active(body['id'])
@@ -202,7 +227,7 @@ class Gateway:
         if body['id'] != lease_id:raise web.HTTPConflict()
         if transition:
             mutable={'mode','executorEpoch','policyRevision','executor','expiresAt'}
-            if old.get('protocolVersion')!=2 or body.get('protocolVersion')!=2 or body['executorEpoch']<=old['executorEpoch'] or any(body[k]!=v for k,v in old.items() if k not in mutable):raise web.HTTPConflict()
+            if old.get('protocolVersion') not in (2,3) or body.get('protocolVersion')!=old.get('protocolVersion') or body['executorEpoch']<=old['executorEpoch'] or any(body[k]!=v for k,v in old.items() if k not in mutable):raise web.HTTPConflict()
             if self.db.execute("SELECT id FROM actions WHERE lease=? AND state IN ('accepted','unknown','dispatching')",(lease_id,)).fetchone():raise web.HTTPConflict(text='Input outcome requires reconciliation.')
             # Persist the proposed authority before the helper effect. Lost replies
             # leave a tombstone; no old owner may continue dispatching.
@@ -247,12 +272,19 @@ class Gateway:
             frame_id = normalized['x-frame-id']
             captured = timestamp(normalized['x-captured-at'])
             width,height = int(normalized['x-frame-width']),int(normalized['x-frame-height'])
-            if normalized.get('content-type','').split(';')[0]!='image/jpeg' or not ID.fullmatch(frame_id) or not -.5 <= time.time()-captured <= 2 or not 0 < width <= 1280 or not 0 < height <= 720 or not raw.startswith(b'\xff\xd8'):
+            if normalized.get('content-type','').split(';')[0]!='image/jpeg' or not ID.fullmatch(frame_id) or not -.5 <= time.time()-captured <= 2 or not 0 < width <= (8192 if body.get('cameraVersion')==1 else 1280) or not 0 < height <= (8192 if body.get('cameraVersion')==1 else 720) or width*height>32_000_000 or not raw.startswith(b'\xff\xd8'):
                 raise ValueError()
         except (KeyError,ValueError,TypeError):
             raise web.HTTPBadGateway(text='Invalid or stale device frame.')
-        self.db.execute('UPDATE leases SET frame=?,captured=? WHERE id=?',(frame_id,captured,lease_id));self.db.commit()
-        return web.Response(body=raw,content_type='image/jpeg',headers={k:normalized[k.lower()] for k in ('X-Frame-Id','X-Captured-At','X-Frame-Width','X-Frame-Height')})
+        if body.get('cameraVersion')==1:
+            try:
+                encoded=normalized['x-camera-frame']
+                if len(encoded)>2048:raise ValueError()
+                metadata=json.loads(base64.b64decode(encoded,validate=True))
+                if metadata.get('version')!=1 or metadata.get('surface')!=body['surface'] or metadata.get('source',{}).get('width')!=width or metadata['source'].get('height')!=height:raise ValueError()
+            except (KeyError,ValueError,TypeError):raise web.HTTPBadGateway(text='Invalid camera frame identity.')
+        self.db.execute('UPDATE leases SET frame=?,captured=? WHERE id=?' ,(frame_id,captured,lease_id));self.db.commit()
+        return web.Response(body=raw,content_type='image/jpeg',headers={k:normalized[k.lower()] for k in ('X-Frame-Id','X-Captured-At','X-Frame-Width','X-Frame-Height')+ (('X-Camera-Frame',) if body.get('cameraVersion')==1 else ())})
 
     async def action(self, request):
         lease_id = request.match_info['id']
@@ -263,7 +295,7 @@ class Gateway:
             if prior != (lease_id,fingerprint):raise web.HTTPConflict()
             return await self.action_receipt(lease_id,action['id'])
         body,frame,captured = self.active(lease_id)
-        if body.get('protocolVersion')==2:
+        if body.get('protocolVersion') in (2,3):
             if any(action.get(k)!=body[k] for k in ('sessionId','executorEpoch','policyRevision')) or body['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
         elif any(k in action for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
         if body['mode'] != 'control' or frame != action['frameId'] or captured is None or time.time()-captured > 2:
@@ -278,7 +310,12 @@ class Gateway:
         return await self.action_receipt(lease_id,action['id'],refresh=False)
 
     def record_receipt(self, body, action_id, receipt):
-        if any(receipt.get(k) != v for k,v in {'id':action_id,'leaseId':body['id'],'deviceId':body['deviceId'],'memberId':body['memberId'],'callId':body['callId']}.items()) or receipt.get('state') not in ('dispatching','submitted','unknown'):
+        binding={'id':action_id,'leaseId':body['id'],'deviceId':body['deviceId'],'memberId':body['memberId']}
+        if body.get('protocolVersion')==3:
+            if 'callId' in receipt:raise ValueError('Text receipt must not fabricate a call')
+            binding.update({key:body[key] for key in ('authority','sessionId','executorEpoch','policyRevision','protocolVersion')})
+        else:binding['callId']=body['callId']
+        if any(receipt.get(k) != v for k,v in binding.items()) or receipt.get('state') not in ('dispatching','submitted','unknown'):
             raise ValueError('Receipt ownership mismatch')
         self.db.execute('UPDATE actions SET state=?,receipt=? WHERE id=?',(receipt['state'],json.dumps(receipt),action_id));self.db.commit()
 
@@ -327,6 +364,10 @@ class Gateway:
         if active_lease is not None and (not isinstance(active_lease,str) or not ID.fullmatch(active_lease)):
             raise web.HTTPBadGateway(text='Invalid active helper lease identity.')
         local={'activeLeaseId':active_lease} if active_lease is not None else {}
+        if status.get('textControlVersion')==1 and type(status.get('localEnableGeneration')) is int and status['localEnableGeneration']>=0:
+            local.update(textControlVersion=1,localEnableGeneration=status['localEnableGeneration'])
+        if type(status.get('cameraVersion')) is int and status['cameraVersion']==1:
+            local['cameraVersion']=1
         if type(status.get('presentationVersion')) is int and status['presentationVersion']==1:
             local['presentationVersion']=1
         if 'controlPolicy' in status or 'policyRevision' in status:
@@ -363,6 +404,22 @@ class Gateway:
             if len(raw)>16384:raise web.HTTPBadGateway()
             return web.Response(status=response.status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
 
+    async def text_grant(self, request):
+        device=request.match_info['device']
+        config=self.devices.get(device)
+        if not ID.fullmatch(device) or not config:raise web.HTTPNotFound()
+        grant=request.match_info.get('grant')
+        if grant is not None and not ID.fullmatch(grant):raise web.HTTPBadRequest()
+        body=await request.json() if request.method=='POST' else None
+        if body is not None and (not isinstance(body,dict) or body.get('deviceId')!=device):raise web.HTTPBadRequest()
+        path='/v1/text-grants'+('/'+grant if grant else '')
+        async with self.http.request(request.method,config['url']+path,
+                headers={'Authorization':'Bearer '+config['key']},
+                **({'json':body} if body is not None else {}),allow_redirects=False) as response:
+            raw=await response.content.read(16385)
+            if len(raw)>16384:raise web.HTTPBadGateway()
+            return web.Response(status=response.status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
+
     def app(self):
         @web.middleware
         async def auth(request,handler):
@@ -379,6 +436,9 @@ class Gateway:
         app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
         app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)
         app.router.add_post('/v1/devices/{device}/panel',self.panel)
+        app.router.add_post('/v1/devices/{device}/text-grants',self.text_grant)
+        app.router.add_get('/v1/devices/{device}/text-grants/{grant}',self.text_grant)
+        app.router.add_delete('/v1/devices/{device}/text-grants/{grant}',self.text_grant)
         app.router.add_post('/v1/leases',self.create)
         app.router.add_post('/v1/leases/{id}/renew',self.renew)
         app.router.add_delete('/v1/leases/{id}',self.close)

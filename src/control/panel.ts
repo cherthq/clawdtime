@@ -46,6 +46,9 @@ export class PanelSynchronizer {
         const s = this.service.store.get<AgentSession>("session", r.sessionId);
         const c = this.service.store.get<CallSession>("call", r.callId ?? "");
         if (
+          r.audioQualification !== undefined ||
+          s?.audioQualification !== undefined ||
+          c?.audioQualification !== undefined ||
           s?.protocolVersion !== 2 ||
           s.state === "stopped" ||
           c?.state !== "connected" ||

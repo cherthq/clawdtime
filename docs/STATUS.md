@@ -1,5 +1,384 @@
 # ClawdTime implementation status
 
+## Argos local review checkpoint — November 16, 2026
+
+The user reviewed **zoom and annotations in the synthetic developer preview** and
+requested a local commit of all pending work. This checkpoints the camera slice,
+reload-authentication fix and earlier conversation/document/CUA/media/website work
+on `ArgosClawd`. It does not push, deploy, change installed services or place a call.
+
+The preview displays generated fixtures, not live screen sharing. Its mapped fake
+click is an inverse-coordinate diagnostic, not OS input; existing ClawdTime CUA
+remains the execution path. Real selected-window streaming is still unresolved:
+one Finder snapshot succeeded, but sustained capture hit geometry/visibility
+checks. Selected-window fallback input remains disabled pending target validation.
+
+The next milestone is a usable explicit-window local share on disposable Finder
+content, followed by IDE/paused-editor capture and existing-CUA transform acceptance.
+Keep the synthetic diagnostics clearly separate from that review flow. No IDE
+extension is required. FaceTime/handset acceptance follows a later reviewed result
+and separate authorization.
+
+Validation and preservation inventory:
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md). Prior local checks:
+901 Node tests; 306 media passes with 13 optional skips; 37 gateway tests; 47 Swift
+tests; 21 Mac script tests. The follow-up reload fix passed browser regressions for
+refresh, missing/rejected/expired access, Stop/reload and camera controls, with no
+page errors. These results do not establish physical acceptance.
+
+## 0.4.0 implemented; hosting promotion blocked — November 13, 2026, 23:25 UTC
+
+**The résumé recording demo is not ready in production.** Voice completion reporting
+and the scoped document discovery/preview/send flow are implemented and validated
+as source 0.4.0. Railway failed all three submitted release uploads before a build
+could start: `Failed to snapshot repository. Please try again in a few minutes.`
+Each failed deployment has `snapshotId:null`; no new application image ran.
+
+Restored and verified production **0.3.2** using its prior image and custom
+variables. Backend `51db1940-dcbd-46ca-836b-d3d484a1ca4e` is SUCCESS; media
+`7c884f0c-02af-4f0a-92bd-43a33acb084e` remains SUCCESS. All 74 JavaScript,
+18 Python and 10 public asset hashes match prior manifest
+`c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
+Running configuration, database entities/events/effects/Messages cursors and media
+ledgers are unchanged. No database restore occurred. Normal conversation/document/
+voice/desktop admission remains disabled; the previous execution-disabled audio
+test remains available. Both services' separately staged new feature flags were reset to false after
+verifying that rollback restored running configuration but retained staged edits.
+No additional service restart was needed. No pending rollout remains.
+
+The validated 0.4.0 source archive is retained with manifest
+`913b60d7f52a249335bebe536135041ae2044c55acf6ad1f73b4da208d889140`, archive SHA-256
+`6ef5ec3603beb1589e6db96c03f58a378e171243ab051b30279a1fd37b9ad8c6`.
+Checkout `npm run check`: **872 tests / 55 files**, typecheck and build pass.
+Exact isolated archive: **851 tests / 53 files**, typecheck/build pass. Media:
+**294 passed, 13 optional skips**; qualified SDK suite **63 passed**. This release
+also fixes actual-provider document prompt compatibility, Stop/grant expiry cleanup,
+document-only presentation policy and confirmed GPT-Live speech ownership.
+
+Two real GPT-Live → text model → HTTP broker → Codex trials independently verified
+file results, acknowledged their completion context and closed the provider. One
+trial deliberately delayed execution by fifteen seconds; a concurrent spoken
+status turn returned current backend state in **3 ms**. Completion context ACKs
+were **721 ms** and **645 ms** after observation/queueing respectively. Total trials
+were 25.534 s and 43.391 s including synthetic speech and deliberate waiting.
+These are individual fixtures, not handset playback latency or controlled p95.
+The real text-model document flow verified all three jobs: discovery **1,417 ms**,
+preview **1,959 ms**, transfer preparation **1,694 ms**, total **7,140 ms** with a
+simulated attachment provider. Private Chrome preview loaded in **66 ms**.
+The first two real-model document probes failed before any job due to a second
+system-role message; consolidation into the provider instructions fixed it.
+
+Local authorized read-only preflight rendered **4/4 supported documents** (one
+Word, three Pages), 116–248 ms each. No real document was uploaded, sent or changed.
+The user explicitly **skipped the synthetic attachment delivery test**. Real
+provider attachment acceptance/handset delivery, FaceTime preview readability,
+resumed duplex and audible completion remain unaccepted. The earlier physical
+speakerphone result remains one execution-disabled cutoff/no-noticeable-echo trial.
+
+Installed digital audio-route provenance is now established independently of
+physical echo acceptance: running build `262acc83…` maps to `cd19dc255…`; its
+inclusive UID/path/generation-validated FaceTime/avconferenced taps exclude the
+worker and fail closed. Fresh exact-line session health proves the line-session
+branch is enabled even though the customer API omits its protocol capability.
+This supports the process-isolation assertion when 0.4.0 is successfully deployed.
+No upstream files or runtime state were copied or modified.
+
+Final health: zero active calls/media, pending/unknown effects and unresolved
+execution ownership; gateway connected. No new managed production session, call,
+sample message or résumé send occurred. Exact current pairing credentials and the
+local folder were checked read-only. A bounded foreground document-worker launcher
+is prepared locally, but was not started against the restored older backend.
+A fresh user readiness statement is still required before any call.
+
+Fresh encrypted backups `/data/backup-before-documents-040-20261113.enc` on both
+volumes passed offline integrity checks. Private metadata-only rollout, failure,
+source, test, route and restoration evidence is in `.data/document-demo-20261113/`.
+The exact remaining gap is Railway source snapshot creation for this project;
+retry the retained archive after that facility recovers, keeping one backend
+SQLite writer and rechecking idle ownership first. Reapply only the documented
+0.4.0 flags after successful source deployment; verify hashes before starting a
+fresh local root grant. No fresh account, GPT-Live key or helper upgrade is needed.
+
+Both conversational planning/handoff files and the unrelated phone-control plan
+remain untracked and unstaged. No files were committed or staged; unrelated website
+work is preserved and excluded from the deployment archive. See
+[release details](CONVERSATIONAL_CONTROL_RELEASE.md) and
+[document host setup](CONNECTORS.md).
+
+## Tool correctness patch deployed — November 13, 2026, 22:43 UTC
+
+**0.3.2 code is deployed; normal conversational execution and the résumé demo are
+not enabled or accepted.** Backend `2e5a67d8-cf69-4370-944d-6349d2b024bf` and media
+`7c884f0c-02af-4f0a-92bd-43a33acb084e` are SUCCESS. Exact isolated source manifest:
+`c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
+All 74 JavaScript, 18 Python and 10 public asset hashes match. Configuration,
+backend entities/events/effects/Messages cursors and media ledgers are preserved.
+Zero active calls/media, pending/unknown effects or execution ownership remain;
+gateway connected. The installed helper and gateway were not replaced/restarted.
+
+The patch hardens broker launch/interpretation ordering, stale completion reports,
+older unresolved-job checks, speech-item/delegation ordering, playback generations,
+provider commentary context receipts and executor environment separation. No
+frontend/control-plane credentials are inherited by the Codex subprocess. Installed
+Codex login or explicit executor-host CODEX_API_KEY remains the authentication path.
+
+Real local file-worker lifecycle proof: executor acceptance **480 ms**, concurrent
+status **3.375 ms**, independently verified result **13.555 s**, cancellation with
+confirmed quiescence **109 ms**. Revision stopped prior work, required renewed
+confirmation and verified the revised result. These are individual observations.
+
+A separate real GPT-Live → actual text model → local HTTP broker → real Codex test
+used synthetic speech and a disposable project, with no handset or outbound
+Messages. The short request created the exact expected file and independently
+verified it. Provider startup **2,020.1 ms**; text interpretation **2,381 ms**;
+executor acceptance **261.13 ms after dispatch**; verification completed **7,393.08
+ms after durable job acceptance**; Python observed verified state **22,644.1 ms
+from probe start**, which includes synthesized instruction playback. Two provider
+context updates were acknowledged, but the check did **not** observe the verified
+completion commentary acknowledgment. No audible completion acceptance is claimed.
+A deterministic replay of the frozen source identifies a possible cause: a trailing,
+nondelegated SDK speech item leaves the interpretation hold active, retaining the
+verified job but suppressing completion commentary. A control replay without that
+item produces the commentary. This explains a reproducible liveness limitation;
+the actual provider trial did not retain enough broker metadata to attribute its
+failure conclusively. The private probe now captures bounded hold/item/job counts
+for diagnosis. The ACK matcher itself showed no defect in review or SDK tests.
+
+The longer synthetic request reached the backend once and got one context ACK but
+created no job; it timed out. An earlier harness startup race failed before any
+voice request. Another provider attempt observed an executing job, but its final
+result was lost when the collector reread a deleted temporary handshake; that
+collection defect was fixed and the outcome remains unqualified. Retain all four
+attempt records under `.data/tool-hardening-20261113/`. These varying probes are
+not the controlled 30-trial matrix or a reliability/success-rate estimate.
+
+Validation: checkout `npm run check` **811 tests/51 files**, exact archive **790
+/49**, both typecheck/build pass. Media **275 passed, 13 optional skipped**;
+qualified SDK suite **44 passed**. The proof harness subsequently gained only
+metadata interpretation diagnostics and a private synthetic prompt input; deployed
+production source is unchanged. These checks do not substitute for physical tests.
+
+The user selected a real résumé folder. Only bounded file metadata was inspected;
+no document was uploaded or sent. The current file_contains verifier cannot safely
+represent résumé candidate discovery, exact selection, preview or attachment
+transfer. Those application contracts and delivery reconciliation remain to be
+implemented; upstream attachment retry safety must not be assumed. Normal voice
+also needs reliable utterance finality, completion reporting, route isolation and
+supervised interruption/resumption acceptance. A further call requires fresh
+readiness; no call was placed during this promotion.
+
+Only the existing execution-disabled audio test remains admitted; its read-only
+controller check is ready. Both new planning/handoff files and the unrelated phone
+plan remain untracked/unstaged. No files were committed or staged. Fresh encrypted
+backups `/data/backup-before-tools-032-20261113.enc` passed offline integrity checks
+on both services. Exact prior 0.3.1 source and new 0.3.2 archives are retained for
+rollback; preserve newer state and stop/reconcile before any code rollback.
+
+
+## First speakerphone qualification — November 13, 2026, 22:26 UTC
+
+One fresh user-authorized speakerphone call ran on deployed 0.3.1. The listener
+reported that output went quiet **after deliberately interrupting**, with **no
+noticeable echo**. This is one qualitative physical trial, not a latency percentile,
+repeatability result, headphone comparison or ordinary conversational acceptance.
+
+The dedicated GPT-Live session started, received audio and published audio. One
+speech-onset interruption was detected; output latched off and remained muted as
+designed. Stop ended the exact call. Native and media cleanup are confirmed;
+zero active calls/media sessions and zero pending/unknown effects remain. No redial
+was attempted. The visible foreground controller also confirmed cleanup.
+
+Same-process metadata: connection-notice TTS request to first publication **265 ms**;
+last notice publication to first model-audio publication **5,191 ms**; detected onset
+to local queue clear **0 ms at millisecond resolution**, with 10 queued frames at
+onset. These are server publication/queue timings, not handset audibility or cutoff.
+The user did not supply a measured audible tail; the <=300 ms handset target remains
+unproven. The first-model publication interval also needs further investigation;
+it is not an end-of-user-utterance measurement.
+
+The final `cutoffs:3` counter includes cleanup clears, not three human interruptions.
+All 77 transcript events were discarded; no transcript/audio/screen content was
+retained. Private metadata-only evidence:
+`.data/audio-speaker-test-20261113-222414/result.json` and observations. Physical
+findings do not enable any normal conversation, desktop-control or isolation gate.
+A further call requires fresh readiness/authorization.
+
+## Audio-only qualification deployed — November 13, 2026, 22:05 UTC
+
+**Source 0.3.1 is ready for a supervised handset test. No call was placed.** This is
+an execution-disabled acoustic test, not acceptance of ordinary full-duplex work.
+The user must still explicitly state readiness for each new call.
+
+- Backend: `2dc6293e-81c1-49a2-b97d-21c8249f8b36`, SUCCESS, Node 24.22.3.
+- Media: `b683019a-6bae-4ac2-be65-ec540cf1d22a`, SUCCESS, Python 3.12.16.
+- Isolated uncommitted source manifest:
+  `9e50e96d4db5aa9746ca2e7d4679dcbd3eef073fa41628a8a0e151030cfa4768`,
+  atop `a5af1f3` on preserved `improvements`; unrelated website work excluded.
+- Verified 74 deployed JS, 18 Python and 10 public-asset hashes. The only protected
+  configuration changes are the two dedicated audio-qualification admission flags.
+  Normal broker/runner/desktop/GPT-Live/duplex/isolation gates remain off. The
+  existing helper 0.2.1 and local gateway were not replaced or restarted.
+- Backend entity/event/effect/cursor hashes and all existing media ledger tables
+  are preserved. Final health: zero active calls/media sessions, pending/unknown
+  effects or unresolved execution ownership; gateway connected. No new managed
+  session, invitation, message, screen lease or desktop grant was created.
+
+The mode has a fresh immutable session identity, no executor/broker/approval path,
+no screen capture/captions, a three-minute foreground controller (five-minute hard
+ceiling), and independent local Stop. It discards all model delegation/transcript
+events. Ordinary Messages instructions are suppressed during the test. The native
+call path retains exact line/member preflight and once-only effect receipts while
+skipping unnecessary desktop permissions. Stop during preparation closes media
+before dial; unconfirmed cleanup remains unknown. Heartbeats cannot renew expiry.
+
+The readonly deployed controller check reports `ready:true` and
+`executionDisabled:true`. Actual identical GPT-Live test configuration started in
+**1,202.0 ms locally** and **832.4 ms on the cloud host**; both received confirmed
+provider closure (cloud total 2,285 ms). No input audio, handset or FaceTime call
+was used. These are two access checks, not speech latency or a reliability cohort.
+
+Validation: checkout `npm run check` **801 tests / 50 files**, typecheck and build
+passed. Exact isolated deployment archive: **780 tests / 48 files**, typecheck and
+build passed. New coverage includes 41 backend/native qualification regressions
+and five controller tests. Media: **271 passed + 12 optional skips** (283 total);
+qualified SDK/RTC/probe suite: **27 passed**. Tests initially exposed two real
+edge cases (Stop during media preparation and malformed heartbeat); both were fixed
+before the final passing runs. Mac helper/gateway code did not change in this phase;
+prior component validation remains separate evidence.
+
+**One interruption measurement per call:** local output clears and remains latched
+off until the call ends. No automatic resume is claimed. The upstream output has
+no verified handset playback-flush acknowledgment. Audible startup, echo, false
+interruptions and the actual cutoff/tail must be measured on the handset. Physical
+acceptance and latency/success targets remain unproven.
+
+[AUDIO_QUALIFICATION.md](AUDIO_QUALIFICATION.md) gives exact controller commands,
+foreground Stop, fresh-call readiness and headphone/speakerphone procedure. The
+owner-only operator configuration is prepared locally; it contains no new account
+credential and is ignored by Git. API access remains qualified, with key expiry
+December 13, 2026. Both protected planning files and the unrelated phone-control
+plan remain untracked/unstaged; no implementation files were staged or committed.
+
+Rollback artifacts and metadata are in `.data/audio-qualification-20261113/`.
+Encrypted consistent backups on each service volume are
+`/data/backup-before-audio-031-20261113.enc`; both decrypted and passed offline
+integrity checks without touching the live databases. Previous backend `f8932374`
+and media `c197bb86` exact source archives were verified against their running
+hashes before replacement. Disable qualification, Stop and reconcile ownership
+before any rollback. Retain newer code disabled while outcomes are unknown;
+never restore an older database/cursor or redial as recovery.
+
+## GPT-Live credential and SDK qualified — November 13, 2026, 21:47 UTC
+
+The user authorized creation of the ClawdTime OpenAI project service-account key.
+It is securely configured in production media and expires December 13, 2026.
+No additional key setup is needed. Media `c197bb86-a198-4f72-906a-7f6ab1d97f83`
+is SUCCESS, source 0.3.0 manifest
+`1d658394b7349003083d7d1c1bd99cfd1e94d3c0b0006dd607432076eb5746aa`.
+Backend `f8932374-b6a1-4039-9a43-d15697633713` is unchanged. Optional pinned
+Agents/plugin 1.8.12 and OpenAI 3.50.0 are installed; runtime gates remain off.
+Real silent client-delegation session startup: local 1,317.7 ms, deployed 1,234.7 ms,
+both provider-confirmed clean closure. The initial local TLS failure was resolved
+using certifi with verification enabled and retained as evidence. Media base tests:
+266 passed, 10 optional skipped; qualified SDK/probe tests: 10 passed. All 17
+deployed Python hashes match; backend/configuration/durable ledgers and cursors
+are preserved. Zero active calls/media sessions or pending/unknown effects.
+
+**API access is ready; handset testing is not yet ready.** An execution-disabled
+acoustic qualification mode is still required; echo, remote-only routing and
+handset interruption are unqualified. No calls or audio were used. No files staged
+or committed; both protected planning documents remain untracked. See
+[rollout and user steps](CONVERSATIONAL_CONTROL_RELEASE.md). The records below are
+historical where they describe credentials or optional dependencies as absent.
+
+## Gated 0.3.0 rollout — November 13, 2026, 21:32 UTC
+
+Authorized backend/media deployment completed without a call or test message.
+Backend `f8932374-b6a1-4039-9a43-d15697633713` and media
+`720d1ffa-fd1c-4d8b-bf79-996074e3d4e5` are SUCCESS. The isolated uncommitted source
+snapshot is `3302d324035ddf69be3ee78a4ce4a59b274d250f54dac7354b2e475b36081a56`;
+it excludes the unrelated website sprint. Deployed JS/Python/public asset hashes
+match. The current audited configuration and binding were preserved.
+
+All new conversation/GPT-Live/desktop/duplex admission remains disabled. Legacy
+pilot behavior remains. Zero active calls, media sessions, pending/unknown transport
+effects or unresolved execution ownership; gateway connected. Durable backend and
+media records match pre-rollout hashes. Encrypted backups passed offline integrity
+verification, and exact previous code archives are retained. No live database was
+restored. No planning files or implementation files were staged/committed.
+
+Exact release: 734 tests/46 files plus typecheck/build pass. Mixed checkout:
+755/48 plus typecheck/build pass after a synthetic screenshot timeout and successful
+focused/full reruns. Media 257 (one optional skip), actual SDK loopback 1, gateway35,
+Swift44 and Mac scripts21 pass. Companion 0.3.0 build4 is packaged/ad hoc signed;
+installed helper0.2.1 and gateway process were not replaced/restarted.
+
+GPT-Live direct key and optional deployed dependencies are absent. Account-session,
+remote audio isolation, execution-disabled echo testing, handset interruption and
+new control acceptance remain unqualified. Native managed-host CUA is unavailable.
+The user must supply the key securely and state fresh call readiness; no previous
+call approval will be reused. See [deployment/rollback and exact user steps](CONVERSATIONAL_CONTROL_RELEASE.md).
+The sections below retain historical implementation and test evidence.
+
+## Conversational control source release — November 13, 2026
+
+Implemented source package **0.3.0** on the preserved `improvements` branch atop
+`a5af1f3`; implementation is uncommitted. Both new planning/handoff documents and
+the unrelated phone-control plan remain untracked and unstaged. See
+[release evidence, commands and rollback](CONVERSATIONAL_CONTROL_RELEASE.md).
+
+The new opt-in architecture shares durable submit/status/revise/cancel jobs across
+text and voice. Conversation is independent of execution. It records actual
+executor acceptance and independent verification, preserves unknown outcomes and
+uses one reply owner. A running correction requests stop and waits for renewed
+clarification after quiescence. Restart cannot replay a lost transient request.
+
+A separately identified Codex App Server session is the tested managed executor;
+no desktop-chat takeover or native CUA export is claimed. The authenticated local
+worker connects the broker to the exact local project using a durable intent/result
+ledger and single-worker lock. File verification is a bounded independent read.
+Native approvals are not converted to voice/text permissions. Custom text-only
+control has an actual locally approved grant and helper/gateway protocol 3; it
+never manufactures a call. Automatic desktop adapter selection remains disabled.
+
+Real evidence from disposable fixtures:
+
+- Actual Codex runner: acceptance **309 ms**, independently verified result **8.362 s**.
+- Real text model + actual slow runner: clarification → queued → verified result →
+  report, **18.146 s** total; concurrent status **0.889 ms**. Messages simulated.
+- Actual authenticated HTTP broker + local worker + Codex: acceptance **415 ms**,
+  independent verification **11.975 s**, **12.002 s** total; concurrent HTTP status
+  **2.155 ms**. Scripted frontend and Messages simulated; zero calls.
+- Two real Gateway text-model candidates chose expected clarification/submission
+  intent **10/10** times in synthetic probes. Five Luna samples: **1.988–3.337 s**;
+  five Terra samples: **2.402–2.870 s**. An additional final-schema Luna clarification
+  succeeded at **1.573 s**. No p95 ≤2 s claim or Messages delivery measurement.
+
+Validation: `npm run check` passed **731 TypeScript tests across 46 files**, typecheck
+and build. Media ran **257 tests (one optional skip)**; the optional actual SDK
+loopback test passed separately. Gateway **35**, Swift **44**, and Mac setup scripts
+**21** passed. Swift release build passed. Optional Agents/plugin **1.8.12**, OpenAI
+SDK **3.50.0**, RTC **1.2.1** and API **1.2.2** compatibility was exercised through
+client-delegation startup and synthetic PCM transmission, without a provider call.
+
+Earlier source-qualification evidence recorded backend
+`c6d304b4-d42b-4deb-8130-0fd5f8bf1063` (source `7f1b687`) and media
+`cb123fed-509f-499b-93b5-a30b88a2d3cc` (source `f7611d2`) SUCCESS. Zero active
+calls/media sessions, pending effects or unknown transport effects; gateway
+connected. That source-qualification phase made no live deployment, line change,
+service restart, message or call; the authorized rollout above followed later. Installed companion remains **0.2.1**; source packaging is **0.3.0 build 4**.
+Historical native execution uncertainty is retained separately from transport health.
+
+Not physically accepted: authenticated GPT-Live (no direct OpenAI credential in
+protected configuration), speakerphone/headset echo, handset interruption cutoff,
+new worker Messages delivery, installed text-grant control or native/custom CUA
+comparison. There are **zero new physical control trials**, so the required
+30-trial cohorts and ≤3 s typing target are unproven. A native managed-host desktop
+adapter remains unavailable. Matching component installation, a fresh local grant,
+provider access and explicit new-call readiness precede supervised acceptance.
+The upstream worker/handset flush acknowledgment is not available as a measured
+contract here. This is an implemented, tested source release, not production-ready.
+
 ## Live interaction test — November 13, 2026
 
 The post-fix call stayed active for approximately 134 seconds until the user

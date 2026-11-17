@@ -82,6 +82,33 @@ export const mediaFailureSchema = z.object({
 const lifecycleDiagnosticsSchema = z.object({
   version: z.literal(1),
   speech: speechPipelineSchema.optional(),
+  voiceCommentary: z
+    .object({
+      version: z.literal(1),
+      queued: z.number().int().min(0).max(999999999),
+      acknowledged: z.number().int().min(0).max(999999999),
+      rejected: z.number().int().min(0).max(999999999),
+      unknown: z.number().int().min(0).max(999999999),
+      pending: z.number().int().min(0).max(64),
+      lastAckMs: z.number().int().min(0).max(60000).nullable(),
+    })
+    .optional(),
+  audioQualification: z
+    .object({
+      version: z.literal(1),
+      executionDisabled: z.literal(true),
+      started: z.boolean(),
+      finalized: z.boolean(),
+      outputLatched: z.boolean(),
+      elapsedMs: z.number().int().min(0).max(300000),
+      inputFrames: z.number().int().min(0).max(999999999),
+      outputChunks: z.number().int().min(0).max(999999999),
+      discardedOutputChunks: z.number().int().min(0).max(999999999),
+      discardedDelegations: z.number().int().min(0).max(999999999),
+      discardedTranscriptEvents: z.number().int().min(0).max(999999999),
+      cutoffs: z.number().int().min(0).max(999999999),
+    })
+    .optional(),
   firstFailure: mediaFailureSchema.optional(),
   lastUtterance: z
     .object({

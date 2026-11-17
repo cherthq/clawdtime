@@ -20,15 +20,20 @@ from aiohttp import web, ClientSession, ClientTimeout, WSMsgType
 from livekit import api, rtc
 
 from captions import CaptionScene, CaptionPublisher
+from document_preview import DocumentPreview
 from devices import ScreenController, gateway_request
 from device_actions import DeviceActions
+from text_devices import TextDevices
 from device_relay import DeviceRelay
 from playback import SpeechLedger, TERMINAL
 from utterances import UtteranceAssembler
 from voice_interaction import SpeechOnset, two_way_allowed
+from conversational import GPTLiveFrontend, live_requested, live_allowed, sdk_readiness
+from acoustic import AcousticFrontend, QUALIFICATION_NOTICE, allowed as acoustic_allowed, requested as acoustic_requested, readiness as acoustic_readiness
 from speech_diagnostics import SpeechDiagnostics
 from ledger_backup import encrypted_snapshot
 from lifecycle_diagnostics import LifecycleDiagnostics, CATEGORIES
+from camera_http import camera_request
 from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, priority_stop_requested, validate_session_id
 
 RATE = 48000
@@ -64,6 +69,9 @@ class Session:
         self.allowed = False
         self.speaking = False
         self.protocol_version = 1
+        self.live_frontend = None
+        self.audio_qualification = 'audioQualification' in spec
+        self.qualification_video = None
         self.two_way = False
         self.playback_generation = 0
         self.conversation_revision = 0
@@ -104,8 +112,10 @@ class Session:
         self.priority_stop_id = None
         self.priority_stop_state = None
         self.priority_stop_task = None
-        self.caption_scene = CaptionScene(spec['meetingId']) if spec.get('captions') is True or spec.get('screen') is True else None
-        self.screen = ScreenController(self) if self.caption_scene and owner.env.get('MEDIA_DEVICES_ENABLED') == 'true' and (owner.env.get('DEVICE_GATEWAY_URL') or owner.env.get('DEVICE_GATEWAY_RELAY')=='true') and len(owner.env.get('DEVICE_GATEWAY_KEY','')) >= 32 else None
+        self.document_only = spec.get('documentOnly') is True
+        self.caption_scene = CaptionScene(spec['meetingId']) if not self.audio_qualification and (spec.get('captions') is True or spec.get('screen') is True) else None
+        self.screen = ScreenController(self) if self.caption_scene and not self.document_only and owner.env.get('MEDIA_DEVICES_ENABLED') == 'true' and (owner.env.get('DEVICE_GATEWAY_URL') or owner.env.get('DEVICE_GATEWAY_RELAY')=='true') and len(owner.env.get('DEVICE_GATEWAY_KEY','')) >= 32 else None
+        self.document_preview = DocumentPreview(self) if self.caption_scene else None
         self.caption_publisher = None
 
     def task(self, coro, category="unspecified"):
@@ -175,13 +185,29 @@ class Session:
         self.source = rtc.AudioSource(RATE, 1, queue_size_ms=100)
         track = rtc.LocalAudioTrack.create_audio_track('clawdtime-audio', self.source)
         await self.room.local_participant.publish_track(track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+        if self.audio_qualification:
+            # Preserve the provider video handshake with inert pixels only.
+            # No CaptionScene, desktop capture, device lease or presentation data.
+            self.qualification_video = rtc.VideoSource(640, 360)
+            video = rtc.LocalVideoTrack.create_video_track('acoustic-test-blank', self.qualification_video)
+            await self.room.local_participant.publish_track(video, rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_CAMERA, simulcast=False,
+                video_encoding=rtc.VideoEncoding(max_framerate=2, max_bitrate=150000), video_codec=rtc.VideoCodec.H264))
+            self.task(self.publish_qualification_video(), 'audio_publish')
         if self.caption_scene:
-            self.caption_publisher = CaptionPublisher(self.caption_scene, self.room, screen=self.screen)
+            self.caption_publisher = CaptionPublisher(self.caption_scene, self.room, screen=self.screen, document=self.document_preview)
             await self.caption_publisher.start()
         self.task(self.publish(), "audio_publish")
         self.task(self.monitor_loop_lag(), "audio_publish")
-        self.task(self.deliver(), "segment_delivery")
+        if not self.audio_qualification:
+            self.task(self.deliver(), "segment_delivery")
         self.task(self.watch_policy(), "policy_watch")
+
+    async def publish_qualification_video(self):
+        frame = rtc.VideoFrame(640, 360, rtc.VideoBufferType.RGBA, bytes((0, 0, 0, 255)) * (640 * 360))
+        while not self.closing:
+            self.qualification_video.capture_frame(frame)
+            await asyncio.sleep(.5)
 
     async def publish(self):
         silence = bytes(SAMPLES * 2)
@@ -251,7 +277,8 @@ class Session:
         return self.speaking and not self.two_way
 
     def apply_voice_policy(self, policy):
-        enabled = two_way_allowed(policy, self.owner.env)
+        enabled = (acoustic_allowed(policy, self.owner.env, call_id=self.call_id)
+                   if self.audio_qualification else two_way_allowed(policy, self.owner.env))
         revision = policy.get('conversationRevision', 0)
         if type(revision) is not int or not 0 <= revision <= 9007199254740991:
             revision = 0
@@ -270,6 +297,8 @@ class Session:
             self.onset.reset()
             return
         onset = self.onset.feed(pcm)
+        if self.audio_qualification and not self.speaking:
+            return
         # New sustained audio evidence renews a short action hold; this is not a
         # retry of an uncertain callback. Quiet input never refreshes the hold.
         now = time.monotonic()
@@ -287,6 +316,8 @@ class Session:
             self.playback_event('speech_onset')
         self.playback_event('interruption_detected')
         self.owner.cancel_speech(self.id, reason='human_interruption')
+        if self.audio_qualification:
+            return  # Acoustic onset never submits an interruption or holds a job.
         # This notification is not a command or a recognized transcript. A lost
         # receipt is never retried and cannot block local playback cancellation.
         if self.interruption_task and not self.interruption_task.done():
@@ -322,6 +353,18 @@ class Session:
                     self.policy_at = time.monotonic()
                     self.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
                     self.apply_voice_policy(policy)
+                    if self.document_only and (policy.get('sessionId') != self.spec.get('documentSessionId')
+                            or policy.get('screenSelection') is not None or policy.get('presentationBinding') is not None):
+                        await self.close('policy_ended')
+                        return
+                    if self.audio_qualification:
+                        if (not self.live_frontend or not self.live_frontend.policy_allowed(policy)
+                                or self.pause_latched):
+                            await self.close('policy_ended')
+                            return
+                    elif acoustic_requested(policy) or (self.live_frontend is not None and not live_allowed(policy, self.owner.env)):
+                        await self.close('policy_ended')
+                        return
                     authorized = self.recording and capture_allowed(policy) and policy.get('callId') == self.call_id
                     if not authorized or policy.get('muted') is True:
                         self.owner.cancel_speech(self.id)
@@ -331,6 +374,8 @@ class Session:
                         self.pause_latched = False
                         self.seen_pause = False
                     self.allowed = authorized and not self.playback_blocks_capture and not self.pause_latched and policy.get('muted') is not True
+                    if self.document_preview:
+                        self.document_preview.update(policy if authorized and not self.pause_latched and policy.get('muted') is not True else {})
                     if self.screen:
                         self.screen.update(policy if authorized and not self.pause_latched else {})
                     if self.caption_scene:
@@ -346,6 +391,11 @@ class Session:
                 except Exception:
                     self.allowed = False
                     self.owner.cancel_speech(self.id)
+                    if self.audio_qualification:
+                        await self.close('policy_ended')
+                        return
+                    if self.document_preview:
+                        self.document_preview.clear()
                     if self.screen:
                         self.screen.update({})
                         self.screen.diagnostics.phase('policy_unavailable','backend_unavailable')
@@ -391,6 +441,10 @@ class Session:
                 await asyncio.sleep(.1)
                 continue
             generation = self.generation
+            if self.live_frontend is not None:
+                await self.live_frontend.capture(self.track)
+                await asyncio.sleep(.05)
+                continue
             try:
                 async with self.owner.http.ws_connect('wss://api.deepgram.com/v1/listen', params={'model':self.owner.env.get('DEEPGRAM_STT_MODEL','nova-3'),'encoding':'linear16','sample_rate':str(RATE),'channels':'1','interim_results':'true','endpointing':'400','utterance_end_ms':'1000','vad_events':'true','smart_format':'true','mip_opt_out':'true'},headers={'Authorization':'Token '+self.owner.env['DEEPGRAM_API_KEY']},heartbeat=5,max_msg_size=128*1024) as ws:
                     self.ws = ws
@@ -461,6 +515,8 @@ class Session:
                 'participantIdentity':self.worker_identity}
 
     def accept_transcript(self, message, generation):
+        if self.audio_qualification:
+            return False
         if not self.allowed or self.playback_blocks_capture or self.closing or generation != self.generation:
             return False
         if not isinstance(message, dict):
@@ -538,6 +594,8 @@ class Session:
         return self.protocol_version == 2 and (self.utterances.has_text or self.delivering or not self.segments.empty())
 
     def queue_segment(self, segment):
+        if self.audio_qualification:
+            return False
         if isinstance(segment,dict) and segment.get('id') in self.priority_stop_seen:
             return True
         if self.priority_stop_id is not None:
@@ -732,6 +790,8 @@ class Session:
                 self.speech_diagnostics.flush()
 
     async def say(self,text):
+        if self.audio_qualification and (text != QUALIFICATION_NOTICE or self.greeted):
+            raise web.HTTPConflict(text='Only the once-only connection notice is permitted.')
         if self.speaking or self.closing:
             raise web.HTTPConflict()
         self.speaking = True
@@ -744,7 +804,7 @@ class Session:
         if not self.two_way:
             self.allowed = False
         text = text[:1600]
-        if self.protocol_version == 2 and not self.greeted and text != NOTICE:
+        if not self.audio_qualification and self.protocol_version == 2 and not self.greeted and text != NOTICE:
             text = 'Hey, this is your agent. ' + text
         self.greeted = True  # Never retry an uncertain greeting.
         if not self.two_way:
@@ -806,13 +866,18 @@ class Session:
                         if (self.closing or self.pause_latched or not capture_allowed(policy)
                                 or policy.get('callId') != self.call_id):
                             raise web.HTTPConflict()
+                        if self.audio_qualification and (not self.live_frontend or not self.live_frontend.policy_allowed(policy)):
+                            raise web.HTTPConflict()
                         self.apply_voice_policy(policy)
                         self.policy_at = time.monotonic()
                         self.active = True
+                        if self.audio_qualification:
+                            self.allowed = True
+                            self.live_frontend.watchdog = self.task(self.live_frontend.watch(), 'deadline')
                         # Remain subject to policy polling while TTS is pending.
                         self.policy_wakeup.set()
                         if policy.get('muted') is not True:
-                            self.connection_notice = asyncio.create_task(self.say(NOTICE))
+                            self.connection_notice = asyncio.create_task(self.say(QUALIFICATION_NOTICE if self.audio_qualification else NOTICE))
                             try:
                                 await asyncio.wait_for(self.connection_notice, CONNECTION_NOTICE_TIMEOUT)
                             except asyncio.CancelledError:
@@ -836,6 +901,8 @@ class Session:
                         if self.screen: self.screen.diagnostics.phase('notice_completed')
                     self.active = True
                     self.policy_wakeup.set()
+                    if self.live_frontend is not None:
+                        await asyncio.wait_for(self.live_frontend.start(), 8)
                 except Exception:
                     await self.fail("activation_failed", "activation")
                     raise
@@ -872,6 +939,8 @@ class Session:
             self.allowed = False
             self.speech_cancelled = True
             self.owner.cancel_speech(self.id)
+            if self.document_preview:
+                await self.document_preview.close()
             if self.screen:
                 await self.screen.close()
             if self.caption_scene:
@@ -879,6 +948,8 @@ class Session:
             if self.caption_publisher:
                 await self.caption_publisher.close()
             await self.stop_stt()
+            if self.live_frontend is not None:
+                await self.live_frontend.close()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self.segments.join(),8)
             for t in list(self.tasks):
@@ -887,6 +958,8 @@ class Session:
             if self.source:
                 self.source.clear_queue()
                 await self.source.aclose()
+            if self.qualification_video:
+                await self.qualification_video.aclose()
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.room.disconnect(),3)
             # Scoped room deletion prevents reconnect after token replay. No global room cleanup.
@@ -920,6 +993,7 @@ class Service:
         self.db.commit()
         self.speech = SpeechLedger(self.db)
         self.device_actions = DeviceActions(self)
+        self.text_devices = TextDevices(self)
         self.device_relay = DeviceRelay()
 
     def record_screen_diagnostic(self,sid,data):
@@ -943,11 +1017,16 @@ class Service:
         return all(self.env.get(k) for k in ['MEDIA_API_KEY','BACKEND_URL','LIVEKIT_URL','LIVEKIT_API_KEY','LIVEKIT_API_SECRET','DEEPGRAM_API_KEY'])
 
     async def backend(self,path,body=None):
+        bound = re.fullmatch(r'/media/(ct_[a-f0-9]{40})/(.+)', path)
+        if bound:
+            session = self.sessions.get(bound.group(1))
+            if session and session.audio_qualification and bound.group(2) not in ('policy', 'failure'):
+                raise BackendRequestError('callback_refused')
         # A bounded conversational turn may legitimately await several tools.
         # Its single callback response must outlive that 45-second turn; other
         # policy and cleanup requests retain their existing shorter deadlines.
         segment_timeout={'timeout':ClientTimeout(total=60,connect=5,sock_read=55)} if re.fullmatch(r'/media/ct_[a-f0-9]{40}/segments',path) else {}
-        async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY'], 'X-ClawdTime-Presentation':'1'},**({} if body is None else {'json':body}),allow_redirects=False,**segment_timeout) as response:
+        async with self.http.request('GET' if body is None else 'POST',self.env['BACKEND_URL']+path,headers={'Authorization':'Bearer '+self.env['MEDIA_API_KEY'], 'X-ClawdTime-Presentation':'1',**({'X-ClawdTime-Camera':'1'} if self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')=='true' else {})},**({} if body is None else {'json':body}),allow_redirects=False,**segment_timeout) as response:
             raw=await response.content.read(128*1024+1)
             if len(raw)>128*1024:
                 raise BackendRequestError('callback_invalid_response', response.status)
@@ -1016,11 +1095,24 @@ class Service:
         spec=await request.json()
         required = {'id','meetingId','lineId'}
         if (not isinstance(spec,dict) or not required.issubset(spec)
-                or not set(spec).issubset(required | {'captions','screen'})
+                or not set(spec).issubset(required | {'captions','screen','audioQualification','documentOnly','documentSessionId'})
                 or not validate_session_id(spec['id'])
                 or any(not isinstance(spec[k],str) or not 0<len(spec[k])<=160 for k in required)
                 or any(k in spec and not isinstance(spec[k],bool) for k in ('captions','screen'))):
             raise web.HTTPBadRequest()
+        if 'documentOnly' in spec and (spec['documentOnly'] is not True or spec.get('captions') is not True
+                or spec.get('screen') is not False or 'audioQualification' in spec
+                or not isinstance(spec.get('documentSessionId'),str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',spec['documentSessionId'])):
+            raise web.HTTPBadRequest()
+        if 'documentSessionId' in spec and spec.get('documentOnly') is not True:
+            raise web.HTTPBadRequest()
+        if 'audioQualification' in spec:
+            if spec['audioQualification'] is not True or spec.get('captions') is not False or spec.get('screen') is not False:
+                raise web.HTTPBadRequest()
+            q = acoustic_readiness(self.env)
+            if not all((q['enabled'], q['directKeyConfigured'], q['sdk']['available'], q['websocketQualified'])):
+                raise web.HTTPServiceUnavailable(text='Acoustic qualification unavailable.')
         if spec.get('captions') is True and self.env.get('MEDIA_CAPTIONS_ENABLED') != 'true':
             raise web.HTTPServiceUnavailable(text='Live captions are not enabled on this media service.')
         if spec.get('screen') is True and (self.env.get('MEDIA_DEVICES_ENABLED') != 'true' or not (self.env.get('DEVICE_GATEWAY_URL') or self.env.get('DEVICE_GATEWAY_RELAY')=='true') or len(self.env.get('DEVICE_GATEWAY_KEY',''))<32):
@@ -1058,14 +1150,16 @@ class Service:
             finally:
                 self.preparing.pop(sid,None)
         result = {'id':sid,'silentPublisherReady':True,'credentials':s.credentials}
-        if spec.get('captions') is True or spec.get('screen') is True:
-            result['videoPublisherReady'] = bool(s.caption_publisher and not s.caption_publisher.failed)
+        if spec.get('captions') is True or spec.get('screen') is True or s.audio_qualification:
+            result['videoPublisherReady'] = bool(s.qualification_video if s.audio_qualification else s.caption_publisher and not s.caption_publisher.failed)
         return web.json_response(result)
 
     def cancel_speech(self, sid, reason='capture_stopped'):
         session = self.sessions.get(sid)
         if session:
             started = time.monotonic()
+            if session.live_frontend is not None:
+                session.live_frontend.cutoff()
             session.speech_cancelled = True
             if session.connection_notice and not session.connection_notice.done():
                 session.connection_notice.cancel()
@@ -1225,12 +1319,39 @@ class Service:
             recording = capture_allowed(policy)
             if not body.get('callId') or policy.get('callId')!=body['callId'] or not (recording or call_only_allowed(policy)):
                 raise web.HTTPConflict()
+            if s.document_only and (policy.get('sessionId') != s.spec.get('documentSessionId')
+                    or policy.get('screenSelection') is not None or policy.get('presentationBinding') is not None):
+                raise web.HTTPConflict(text='Document-only session binding mismatch.')
+            if s.audio_qualification or acoustic_requested(policy):
+                if not s.audio_qualification or not acoustic_allowed(policy, self.env, call_id=body.get('callId')):
+                    raise web.HTTPConflict(text='Acoustic policy or preparation mismatch.')
+                if s.activation is None:
+                    s.live_frontend = AcousticFrontend(s, policy)
+                elif not isinstance(s.live_frontend, AcousticFrontend) or not s.live_frontend.policy_allowed(policy):
+                    raise web.HTTPConflict(text='Acoustic mode is immutable.')
+            elif live_requested(policy):
+                if not live_allowed(policy, self.env) or not sdk_readiness()['available']:
+                    raise web.HTTPServiceUnavailable(text='GPT-Live provider, SDK or qualified audio is unavailable.')
+                if s.activation is None:
+                    s.live_frontend = GPTLiveFrontend(s)
+                elif s.live_frontend is None:
+                    raise web.HTTPConflict(text='Conversation frontend is immutable for this call.')
+            elif s.live_frontend is not None:
+                raise web.HTTPConflict(text='Conversation frontend is immutable for this call.')
             s.protocol_version = 2 if policy.get('protocolVersion') == 2 else 1
             s.apply_voice_policy(policy)
             if s.caption_scene:
                 s.caption_scene.apply_policy({**policy, 'twoWayListening': s.two_way})
-            return web.json_response(await s.activate(body.get('callId'), recording=recording))
+            result = await s.activate(body.get('callId'), recording=recording)
+            # Report the owner actually started, not requested flags/capabilities.
+            if isinstance(s.live_frontend, GPTLiveFrontend):
+                result = {**result, 'conversationFrontend': 'gpt_live'}
+            elif isinstance(s.live_frontend, AcousticFrontend):
+                result = {**result, 'audioQualification': True}
+            return web.json_response(result)
         if action=='speak':
+            if s.audio_qualification or s.live_frontend is not None:
+                raise web.HTTPConflict(text='GPT-Live owns speech for this session.')
             expected_segments = s.segment_count
             if (not isinstance(body, dict) or not {'id','text'}.issubset(body) or not set(body).issubset({'id','text','callId','expectedRevision'})
                     or not isinstance(body['id'],str) or not 0<len(body['id'])<=200
@@ -1322,6 +1443,10 @@ class Service:
             devices_configured=self.env.get('MEDIA_DEVICES_ENABLED')=='true' and len(self.env.get('DEVICE_GATEWAY_KEY',''))>=32 and bool(self.env.get('DEVICE_GATEWAY_URL') or self.env.get('DEVICE_GATEWAY_RELAY')=='true')
             return web.json_response({'ok':True,'service':'clawdtime-media','configured':self.ready(),'activeSessions':sum(not s.closed for s in self.sessions.values()),'deviceGatewayConnected':self.device_relay.connected,'devicesConfigured':devices_configured})
         app.router.add_get('/health',health)
+        async def qualification_readiness(request):
+            return web.json_response(acoustic_readiness(self.env), headers={'Cache-Control':'no-store'})
+        app.router.add_get('/audio-qualification/readiness',qualification_readiness)
+        self.text_devices.routes(app)
         app.router.add_get('/internal/ledger-backup',self.ledger_backup, allow_head=False)
         async def device_readiness(request):
             device=request.match_info['device']
@@ -1335,12 +1460,15 @@ class Service:
             if status!=200:raise web.HTTPServiceUnavailable(text='Registered helper readiness unavailable.')
             value=json.loads(raw)
             if not isinstance(value,dict) or value.get('deviceId')!=device:raise web.HTTPBadGateway()
+            if self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true':value.pop('cameraVersion',None)
             return web.json_response(value,headers={'Cache-Control':'no-store'})
         async def device_panel(request):
             device=request.match_info['device']
             if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',device):raise web.HTTPBadRequest()
             body=await request.json()
             if not isinstance(body,dict):raise web.HTTPBadRequest()
+            if any(s.audio_qualification and s.call_id == body.get('callId') for s in self.sessions.values()):
+                raise web.HTTPConflict(text='Acoustic sessions cannot use device panels.')
             # Display actual state from this exact media call, never another
             # active call. Terminal/local mute status remains backend-owned.
             if body.get('callState') not in ('ended','muted'):
@@ -1365,6 +1493,13 @@ class Service:
         app.router.add_post('/sessions',self.prepare)
         app.router.add_get('/sessions/{id}',self.status)
         app.router.add_get('/sessions/{id}/speech/{utterance}',self.speech_status)
+        async def screen_camera(request):
+            session=self.sessions.get(request.match_info['id'])
+            if self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true' or not session or not session.active or session.closing:
+                raise web.HTTPConflict(text='Camera session unavailable.')
+            return await camera_request(session.screen,request)
+        app.router.add_get('/sessions/{id}/screen/camera',screen_camera)
+        app.router.add_post('/sessions/{id}/screen/camera',screen_camera)
         async def screen_status(request):
             session=self.sessions.get(request.match_info['id'])
             if not session or not session.screen:raise web.HTTPNotFound()

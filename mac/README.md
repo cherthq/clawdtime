@@ -410,3 +410,38 @@ Readiness metadata uses fixed reason categories and concrete local next steps; D
 shows the check timestamp. Unknown categories, stale timestamps and arbitrary
 remote next-step text are not displayed. This read-only status never enables sharing
 or requests macOS permissions.
+
+New text-session control uses an explicit local review action and protocol-3 lease
+with no call ID. See [Text-session local control grants](../docs/DEVICE.md#text-session-local-control-grants).
+Building this source does not update the installed helper or grant control.
+
+## Selected-surface camera capture (local Argos slice)
+
+The helper advertises `cameraVersion:1`; camera capture occurs only for a new
+protocol-2 lease with `cameraVersion:1,surface:{kind,id,displayId,ownerPid?}`.
+Window selections require their owning process ID; display selections forbid it.
+The surface is immutable for the lease. Native-resolution pixels are captured via
+macOS-14 ScreenCaptureKit APIs, with single-window shadows disabled. Window
+`sourceRect` is intentionally unused because Apple ignores it; the media compositor
+crops the native frame before resizing. The original display-only path is unchanged.
+`X-Camera-Frame` is bounded base64 JSON with version, exact surface, geometry hash,
+content hash and pixel/point/display-origin geometry. Pixels remain transient.
+
+Bounds are 8192 per dimension, 32 million pixels and 2 MiB JPEG. Large captures
+fail; no downscale or wider-surface substitution occurs. Current owner, on-screen
+presence and wholly-contained authorized-display geometry are checked before and
+after capture. Movement/resize changes the geometry hash. Closed/minimized or moved
+off-display windows are unavailable. The existing lock, sleep, Stop and lease
+checks remain authoritative.
+
+Selected-window fallback input is refused: independent-window capture can show
+content behind another window while global input would hit the occluder. Display
+CUA remains available under existing ownership and permission rules; exact window
+hit-target/focused-element qualification is a separate acceptance step.
+
+Development-only `--camera-list` returns surface IDs and owning process IDs after
+permission preflight. `--camera-frame --surface '<exact JSON>'` returns a single
+bounded frame over stdout for the local preview. These modes read no helper config,
+create no listener or receipt store, never grant privacy permissions, and submit no
+input. They require the active unlocked session. See the media README for the local
+preview with visible Start/Stop and synthetic fixtures.

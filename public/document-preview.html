@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Document preview · ClawdTime</title>
+    <style>
+      body {
+        margin: 0;
+        background: #eef0ed;
+        color: #18231d;
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 850px;
+        margin: auto;
+        padding: 24px;
+      }
+      header {
+        margin-bottom: 20px;
+      }
+      small {
+        color: #526257;
+      }
+      h1 {
+        font-size: 23px;
+        overflow-wrap: anywhere;
+        margin: 8px 0;
+      }
+      #image {
+        display: none;
+        width: 100%;
+        height: auto;
+        background: white;
+        border-radius: 6px;
+        box-shadow: 0 4px 30px #15241c15;
+      }
+      #status {
+        padding: 14px 0;
+      }
+      footer {
+        margin: 20px 0;
+        color: #526257;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <small>ClawdTime · Private preview</small>
+        <h1 id="name">Opening your document…</h1>
+        <div>First page · Sending shares the original file</div>
+      </header>
+      <p id="status" role="status"></p>
+      <img id="image" alt="First page of the selected document" />
+      <footer>
+        Check the file, then tell ClawdTime “send this document to me.” This
+        preview expires automatically.
+      </footer>
+    </main>
+    <script src="/document-preview.js"></script>
+  </body>
+</html>

@@ -86,3 +86,74 @@ it("rejects arbitrary event categories, excessive history and unbounded telemetr
     }).success,
   ).toBe(true);
 });
+
+it("exposes commentary receipt counters without content or correlation identifiers", () => {
+  const voiceCommentary = {
+    version: 1,
+    queued: 999999999,
+    acknowledged: 2,
+    rejected: 1,
+    unknown: 0,
+    pending: 64,
+    lastAckMs: 60000,
+  };
+  const parsed = mediaStatusSchema.parse({
+    ...fixture(),
+    lifecycleDiagnostics: {
+      version: 1,
+      voiceCommentary: {
+        ...voiceCommentary,
+        text: "PRIVATE",
+        commentaryId: "PRIVATE",
+        jobId: "PRIVATE",
+        receipts: [{ content: "PRIVATE" }],
+      },
+    },
+  });
+  expect(parsed.lifecycleDiagnostics?.voiceCommentary).toEqual(voiceCommentary);
+  expect(JSON.stringify(parsed)).not.toContain("PRIVATE");
+  const beforeAck = mediaStatusSchema.parse({
+    ...fixture(),
+    lifecycleDiagnostics: {
+      version: 1,
+      voiceCommentary: { ...voiceCommentary, lastAckMs: null },
+    },
+  });
+  expect(beforeAck.lifecycleDiagnostics?.voiceCommentary?.lastAckMs).toBeNull();
+});
+
+it("rejects malformed or unbounded commentary counters and timing", () => {
+  const valid = {
+    version: 1,
+    queued: 0,
+    acknowledged: 0,
+    rejected: 0,
+    unknown: 0,
+    pending: 0,
+    lastAckMs: null,
+  };
+  for (const invalid of [
+    { version: 2 },
+    { queued: 1000000000 },
+    { acknowledged: -1 },
+    { rejected: 0.5 },
+    { unknown: Infinity },
+    { pending: 65 },
+    { pending: -1 },
+    { lastAckMs: 60001 },
+    { lastAckMs: NaN },
+    { lastAckMs: -1 },
+    { lastAckMs: 1.5 },
+    { lastAckMs: "1" },
+  ]) {
+    expect(
+      mediaStatusSchema.safeParse({
+        ...fixture(),
+        lifecycleDiagnostics: {
+          version: 1,
+          voiceCommentary: { ...valid, ...invalid },
+        },
+      }).success,
+    ).toBe(false);
+  }
+});

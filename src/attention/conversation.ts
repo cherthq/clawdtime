@@ -1,3 +1,7 @@
+import {
+  isAudioQualification,
+  activeAudioQualification,
+} from "./audio-qualification.js";
 import { timelineFor } from "../transport/conversation-timeline.js";
 import { messagesEnabled, queueMessageUpdate } from "./messaging.js";
 import type { NativeMessage } from "../transport/native-messages.js";
@@ -110,7 +114,13 @@ export class ConversationService {
   private owned(raw: string, requestId: string, requireOpen = false) {
     this.service.expireSessions();
     const session = this.service.authenticateSession(raw);
+    this.service.assertExecutionAllowed(session);
     const request = this.service.status(raw, requestId);
+    if (isAudioQualification(request))
+      throw new DomainError(
+        403,
+        "Audio qualification cannot deliver agent turns.",
+      );
     if (session.protocolVersion !== 2)
       throw new DomainError(
         409,
@@ -120,6 +130,12 @@ export class ConversationService {
     return { session, request };
   }
   private open(session: AgentSession, request: AttentionRequest) {
+    this.service.assertExecutionAllowed(session);
+    if (isAudioQualification(request))
+      throw new DomainError(
+        403,
+        "Audio qualification cannot deliver agent turns.",
+      );
     if (
       session.state === "stopped" ||
       session.pairingId !== request.pairingId ||
@@ -146,6 +162,12 @@ export class ConversationService {
       request && store.get<AgentSession>("session", request.sessionId);
     if (!request || !session || session.protocolVersion !== 2)
       throw new DomainError(404, "Agent-owned conversation is unavailable.");
+    this.service.assertExecutionAllowed(session);
+    if (isAudioQualification(request))
+      throw new DomainError(
+        403,
+        "Audio qualification cannot ingest task responses.",
+      );
     const pairing = this.service.pairing(request.pairingId);
     if (
       pairing.memberId !== value.memberId ||
@@ -332,7 +354,9 @@ export class ConversationService {
         .filter(
           (session) =>
             session.pairingId === pairing.id &&
-            messagesEnabled(session) &&
+            !isAudioQualification(session) &&
+            !activeAudioQualification(this.service.store, pairing) &&
+            (messagesEnabled(session) || session.conversation?.version === 1) &&
             session.state !== "stopped" &&
             now - (session.lastSeenAt ?? session.createdAt) < 20_000 &&
             (session.lastSeenAt ?? session.createdAt) <= now + 1000,
@@ -365,7 +389,10 @@ export class ConversationService {
           expiresAt: now + 600_000,
         });
         return remember({
-          reply: `Selected ${selected.adapter} session ${selected.id}. Send your instruction; screen control still requires an authorized call.`,
+          reply:
+            selected.conversation?.version === 1
+              ? `Selected API-managed execution session ${selected.id}. Send your instruction; desktop input requires a current scoped local grant.`
+              : `Selected ${selected.adapter} session ${selected.id}. Send your instruction; screen control still requires an authorized call.`,
         });
       }
       const selected = this.service.store.state<{
@@ -383,6 +410,11 @@ export class ConversationService {
           reply: sessions.length
             ? "Choose an available session with /sessions then /use SESSION_ID. No instruction was dispatched."
             : "No available running text-enabled session. Open your coding chat and start its ClawdTime inbox loop.",
+        });
+      if (session.conversation?.version === 1)
+        return remember({
+          reply:
+            "The selected conversational executor is unavailable here. No instruction was dispatched.",
         });
       const pending = this.service.store
         .all<AttentionRequest>("attention")

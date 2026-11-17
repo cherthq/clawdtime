@@ -26,6 +26,7 @@ import {
   type Connection,
 } from "../connectors/shared/state.js";
 import { protocolOptions } from "../connectors/shared/protocol.js";
+import { startExecutorWorker } from "../connectors/shared/executor-worker.js";
 import { startMcp } from "../connectors/shared/mcp.js";
 import {
   installConfiguration,
@@ -53,12 +54,23 @@ export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
   if (command === "help" || command === "--help") {
     console.log(
-      "ClawdTime internal build (no npm publication implied)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID [--message-updates true|false] (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",
+      "ClawdTime internal build (no npm publication implied)\nexecutor-worker --run PRIVATE_REGISTERED_RUN [--connection PRIVATE_CONNECTION] (explicit local managed worker, no native chat takeover)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID [--message-updates true|false] [--screen-camera true --camera-display ID [--camera-window ID --camera-owner-pid PID]] [--runner codex-app-server|remote-codex-app-server|remote-documents --execution-session api_managed] [--document-access-until ISO_TIMESTAMP] (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",
     );
     return;
   }
   const separator = args.indexOf("--");
   const flags = options(args.slice(1, separator < 0 ? undefined : separator));
+  if (command === "executor-worker") {
+    if (!flags.run)
+      throw new Error(
+        "Use --run PATH to an existing protected remote managed run.",
+      );
+    await startExecutorWorker({
+      runFile: flags.run,
+      connectionFile: flags.connection,
+    });
+    return;
+  }
   const adapter = flags.agent as Adapter;
   if (!["codex", "claude-code"].includes(adapter))
     throw new Error("--agent must be codex or claude-code.");
@@ -73,6 +85,13 @@ export async function main(args = process.argv.slice(2)) {
       "shared-surface",
       "native-cancellation",
       "message-updates",
+      "screen-camera",
+      "camera-display",
+      "camera-window",
+      "camera-owner-pid",
+      "runner",
+      "execution-session",
+      "document-access-until",
     ].some((key) => flags[key] !== undefined)
   )
     throw new Error(

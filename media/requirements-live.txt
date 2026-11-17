@@ -1,0 +1,5 @@
+# Optional, version-qualified GPT-Live frontend. Install alongside requirements.txt.
+livekit-agents==1.8.12
+livekit-plugins-openai==1.8.12
+openai==3.50.0
+websockets==15.0.1

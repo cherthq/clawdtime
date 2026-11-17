@@ -1,4 +1,9 @@
 import {
+  activeAudioQualification,
+  isAudioQualification,
+  audioQualificationSchema,
+} from "../attention/audio-qualification.js";
+import {
   recordTerminationIntent,
   type TerminationSource,
 } from "../attention/termination.js";
@@ -12,11 +17,13 @@ import { mediaStatusSchema } from "./media-diagnostics.js";
 import { z } from "zod";
 import type {
   AttentionRequest,
+  AgentSession,
   Pairing,
   EffectReceipt,
   Transport,
   CallSession,
   SetupTest,
+  DocumentRootGrant,
 } from "../contracts.js";
 import { Store } from "../storage/store.js";
 import {
@@ -61,6 +68,10 @@ export interface NativeTransportConfig {
   handoff: LineHandoff;
 }
 interface MediaRecord {
+  audioQualification?: true;
+  conversationFrontend?: "gpt_live";
+  documentOnly?: true;
+  documentSessionId?: string;
   id: string;
   requestId: string;
   state:
@@ -217,7 +228,7 @@ export class NativeTransport implements Transport {
   }
   /** GET-only: no cursor movement, line mutation, media allocation or capture. */
   async preflight(
-    options: { requireIdle?: boolean } = {},
+    options: { requireIdle?: boolean; requireDeviceGateway?: boolean } = {},
   ): Promise<TransportReadiness> {
     const checks = configurationChecks(this.config),
       now = Date.now();
@@ -374,12 +385,22 @@ export class NativeTransport implements Transport {
       "Independent ClawdTime media service readiness must be verified.",
       "Check the independent media deployment, provider configuration and protected media origin.",
     );
-    add(
-      "media_gateway",
-      !!m && m.devicesConfigured === true && m.deviceGatewayConnected === true,
-      "The paired-device gateway must be configured and connected.",
-      "Start the independent outbound gateway; do not expose or silently arm the helper.",
-    );
+    if (options.requireDeviceGateway === false)
+      checks.push({
+        id: "media_gateway",
+        status: "not_applicable",
+        message:
+          "This explicitly scoped media-only mode does not use the paired-device gateway.",
+      });
+    else
+      add(
+        "media_gateway",
+        !!m &&
+          m.devicesConfigured === true &&
+          m.deviceGatewayConnected === true,
+        "The paired-device gateway must be configured and connected.",
+        "Start the independent outbound gateway; do not expose or silently arm the helper.",
+      );
     const unknownNotices = this.store
       .all<{ id: string; state: string }>("notice")
       .filter((n) => n.state === "unknown");
@@ -403,6 +424,9 @@ export class NativeTransport implements Transport {
         message: `${retiredSetupInvitations} expired setup invitation(s) retain unknown delivery under an exact operator supersession audit; none may be retried.`,
       });
     const uncertain =
+      this.store
+        .all<{ state: string }>("attachment_dispatch")
+        .filter((item) => item.state === "unknown").length +
       unknownEffects.length -
       retiredSetupInvitations +
       this.store.all<CallSession>("call").filter((c) => c.state === "unknown")
@@ -560,8 +584,15 @@ export class NativeTransport implements Transport {
     this.store.saveState(`device-readiness:${pairing.id}`, report);
     return report;
   }
-  private async requireReady(pairing: Pairing, kind: "call" | "message") {
-    const report = await this.preflight({ requireIdle: kind === "call" });
+  private async requireReady(
+    pairing: Pairing,
+    kind: "call" | "message",
+    requiresDevice = true,
+  ) {
+    const report = await this.preflight({
+      requireIdle: kind === "call",
+      requireDeviceGateway: requiresDevice,
+    });
     const required = report.checks.filter(
       (c) =>
         kind === "call" ||
@@ -573,7 +604,7 @@ export class NativeTransport implements Transport {
       throw new PreflightBlocked(
         "Live transport preflight is blocked; inspect readiness before dispatch.",
       );
-    if (kind === "call") {
+    if (kind === "call" && requiresDevice) {
       const device = await this.preflightDevice(pairing);
       if (
         device.checks.some(
@@ -658,9 +689,184 @@ export class NativeTransport implements Transport {
       );
     }
   }
+  /** GET-only, fixed-schema readiness; never provisions credentials or starts media. */
+  async audioQualificationReadiness() {
+    try {
+      const raw = await this.media("/audio-qualification/readiness");
+      const sdk = z.object({
+        available: z.boolean(),
+        reason: z.enum([
+          "optional_sdk_missing",
+          "sdk_version_mismatch",
+          "qualified_version",
+        ]),
+        versions: z
+          .object({
+            "livekit-agents": z.string().max(64),
+            "livekit-plugins-openai": z.string().max(64),
+            openai: z.string().max(64),
+          })
+          .optional(),
+      });
+      return z
+        .object({
+          version: z.literal(1),
+          enabled: z.boolean(),
+          directKeyConfigured: z.boolean(),
+          sdk,
+          websocketQualified: z.boolean(),
+        })
+        .parse(raw);
+    } catch {
+      return {
+        version: 1 as const,
+        enabled: false,
+        directKeyConfigured: false,
+        sdk: { available: false, reason: "unavailable" },
+        websocketQualified: false,
+      };
+    }
+  }
+  private assertQualificationDial(
+    attention: AttentionRequest,
+    pairing: Pairing,
+    effectId: string,
+  ) {
+    const marker = audioQualificationSchema.safeParse(
+      attention.audioQualification,
+    );
+    const current = this.store.get<AttentionRequest>("attention", attention.id),
+      session = this.store.get<AgentSession>("session", attention.sessionId);
+    const call = this.store
+      .all<CallSession>("call")
+      .find((item) => item.requestId === attention.id);
+    if (
+      !marker.success ||
+      !current ||
+      !session ||
+      !call ||
+      effectId !== `${attention.id}:call` ||
+      current.callId !== call.id ||
+      current.sessionId !== session.id ||
+      current.pairingId !== pairing.id ||
+      session.pairingId !== pairing.id ||
+      call.pairingId !== pairing.id ||
+      session.adapter !== "audio-qualification" ||
+      session.protocolVersion !== 2 ||
+      session.state !== "active" ||
+      session.conversation ||
+      session.interaction ||
+      session.capabilities.nativeControl !== "none" ||
+      session.capabilities.polling ||
+      session.capabilities.cooperativePause ||
+      current.state !== "queued" ||
+      current.deadline !== marker.data.expiresAt ||
+      !Number.isFinite(session.createdAt) ||
+      !Number.isFinite(session.lastSeenAt) ||
+      marker.data.expiresAt > session.createdAt + 300_000 ||
+      marker.data.expiresAt <= Date.now() ||
+      Date.now() - (session.lastSeenAt ?? session.createdAt) >= 20_000 ||
+      (session.lastSeenAt ?? session.createdAt) > Date.now() + 1000 ||
+      JSON.stringify(current.audioQualification) !==
+        JSON.stringify(attention.audioQualification) ||
+      JSON.stringify(session.audioQualification) !==
+        JSON.stringify(attention.audioQualification) ||
+      JSON.stringify(call.audioQualification) !==
+        JSON.stringify(attention.audioQualification)
+    )
+      throw new DomainError(
+        403,
+        "Exact active execution-disabled audio qualification is required.",
+      );
+  }
+  private assertDocumentDial(
+    attention: AttentionRequest,
+    pairing: Pairing,
+    effectId: string,
+  ) {
+    const request = this.store.get<AttentionRequest>("attention", attention.id),
+      session = this.store.get<AgentSession>("session", attention.sessionId),
+      now = Date.now();
+    const grant =
+      session &&
+      this.store.get<DocumentRootGrant>(
+        "document_root_grant",
+        `docgrant_${hash(session.id).slice(0, 40)}`,
+      );
+    const call = this.store.get<CallSession>(
+      "call",
+      mediaSessionId(attention.id),
+    );
+    if (
+      !request ||
+      !session ||
+      !grant ||
+      !call ||
+      request.sessionId !== session.id ||
+      request.pairingId !== pairing.id ||
+      call.requestId !== request.id ||
+      call.pairingId !== pairing.id ||
+      call.state !== "prepared" ||
+      call.providerCallId ||
+      effectId !== `${request.id}:call` ||
+      (request.callId !== undefined && request.callId !== call.id) ||
+      request.state !== "queued" ||
+      request.deadline <= now ||
+      session.pairingId !== pairing.id ||
+      session.protocolVersion !== 2 ||
+      session.conversation?.runnerId !== "remote-documents" ||
+      session.conversation.executionSession !== "api_managed" ||
+      session.documentAccess?.version !== 1 ||
+      session.documentAccess.readOnly !== true ||
+      session.documentAccess.expiresAt <= now ||
+      session.documentAccess.expiresAt > session.createdAt + 3600000 ||
+      session.state !== "active" ||
+      !Number.isFinite(session.lastSeenAt) ||
+      now - session.lastSeenAt! >= 20000 ||
+      session.lastSeenAt! > now + 1000 ||
+      grant.state !== "active" ||
+      grant.sessionId !== session.id ||
+      grant.pairingId !== pairing.id ||
+      grant.memberId !== pairing.memberId ||
+      grant.projectRoot !== session.projectRoot ||
+      grant.hostId !== session.hostId ||
+      grant.expiresAt !== session.documentAccess.expiresAt ||
+      grant.expiresAt <= now ||
+      this.store.state(`listening-stopped:${request.id}`) ||
+      this.store.state(`view-stopped:${request.id}`)
+    )
+      throw new DomainError(
+        403,
+        "Exact active read-only document grant is required for document-only calling.",
+      );
+    return session;
+  }
   async call(attention: AttentionRequest, pairing: Pairing, effectId: string) {
     this.guard(pairing);
-    await this.requireReady(pairing, "call");
+    const qualification = isAudioQualification(attention);
+    const owner = this.store.get<AgentSession>("session", attention.sessionId);
+    const documentOnly =
+      owner?.documentAccess !== undefined ||
+      owner?.conversation?.runnerId === "remote-documents";
+    if (documentOnly) this.assertDocumentDial(attention, pairing, effectId);
+    if (qualification)
+      this.assertQualificationDial(attention, pairing, effectId);
+    else if (activeAudioQualification(this.store, pairing))
+      throw new DomainError(403, "Audio qualification reserves this line.");
+    await this.requireReady(pairing, "call", !qualification && !documentOnly);
+    if (qualification) {
+      const readiness = await this.audioQualificationReadiness();
+      if (
+        !readiness.enabled ||
+        !readiness.directKeyConfigured ||
+        !readiness.sdk.available ||
+        !readiness.websocketQualified
+      )
+        throw new PreflightBlocked(
+          "Audio qualification media readiness is unavailable; no call was placed.",
+        );
+      this.assertQualificationDial(attention, pairing, effectId);
+    }
     if (!this.messages.cursor())
       throw new DomainError(
         409,
@@ -673,19 +879,24 @@ export class NativeTransport implements Transport {
         return { callId: old.providerCallId, accepted: true };
       // A media service 503 is refused before it creates any session, and no
       // dial followed, so the same media ID may be prepared again.
-      if (
-        !(
-          old.requestId === attention.id &&
-          old.state === "closed" &&
-          old.notDialed?.retryable === true
-        )
-      )
+      if (!(
+        old.requestId === attention.id &&
+        old.state === "closed" &&
+        old.notDialed?.retryable === true
+      ))
         throw new DomainError(
-        409,
-        "Existing media/call outcome requires reconciliation.",
-      );
+          409,
+          "Existing media/call outcome requires reconciliation.",
+        );
     }
     const record: MediaRecord = {
+      ...(qualification ? { audioQualification: true as const } : {}),
+      ...(documentOnly
+        ? {
+            documentOnly: true as const,
+            documentSessionId: attention.sessionId,
+          }
+        : {}),
       id,
       requestId: attention.id,
       state: "preparing",
@@ -698,8 +909,12 @@ export class NativeTransport implements Transport {
         id,
         meetingId: attention.id,
         lineId: pairing.lineId,
-        captions: true,
-        screen: true,
+        captions: !qualification,
+        screen: !qualification && !documentOnly,
+        ...(documentOnly
+          ? { documentOnly: true, documentSessionId: attention.sessionId }
+          : {}),
+        ...(qualification ? { audioQualification: true } : {}),
       });
       if (
         media.id !== id ||
@@ -718,6 +933,12 @@ export class NativeTransport implements Transport {
       if (!currentPairing)
         throw new DomainError(403, "Pairing no longer exists.");
       this.guard(currentPairing);
+      if (documentOnly)
+        this.assertDocumentDial(attention, currentPairing, effectId);
+      if (qualification)
+        this.assertQualificationDial(attention, currentPairing, effectId);
+      else if (activeAudioQualification(this.store, currentPairing))
+        throw new DomainError(403, "Audio qualification reserves this line.");
       const current = this.store.get<AttentionRequest>(
         "attention",
         attention.id,
@@ -779,11 +1000,20 @@ export class NativeTransport implements Transport {
         );
       }
       if (!dialSent) {
-        // No native dial was sent, so the human cannot have been called. The
-        // unactivated media session self-closes on its activation timeout.
+        // Qualification Stop must confirm inert media cleanup as well as no dial.
+        // Preserve uncertain cleanup; a later attempt cannot replay this allocation.
+        let mediaClosed = !qualification && !documentOnly;
+        if (qualification || documentOnly) {
+          try {
+            await this.media(`/sessions/${id}/close`, {});
+            mediaClosed = true;
+          } catch {
+            /* An unacknowledged close remains unknown. */
+          }
+        }
         this.store.put("media", {
           ...current,
-          state: "closed",
+          state: mediaClosed ? "closed" : "unknown",
           notDialed: { phase, at: Date.now() },
         });
         throw new NotDialed(
@@ -795,6 +1025,16 @@ export class NativeTransport implements Transport {
       throw e;
     }
   }
+  /** Attachment preflight shares the exact line/allowlist and authority gates. */
+  async attachmentPreflight(pairing: Pairing) {
+    this.guard(pairing);
+    if (activeAudioQualification(this.store, pairing))
+      throw new DomainError(403, "Audio qualification reserves this line.");
+    await this.requireReady(pairing, "message");
+    this.guard(pairing);
+    if (activeAudioQualification(this.store, pairing))
+      throw new DomainError(403, "Audio qualification reserves this line.");
+  }
   async message(
     pairing: Pairing,
     text: string,
@@ -802,9 +1042,18 @@ export class NativeTransport implements Transport {
     beforeDispatch?: () => void,
   ) {
     this.guard(pairing);
+    const before = () => {
+      if (activeAudioQualification(this.store, pairing))
+        throw new DomainError(
+          403,
+          "Messages are disabled during audio qualification.",
+        );
+      beforeDispatch?.();
+    };
+    before();
     await this.requireReady(pairing, "message");
-    beforeDispatch?.();
-    return this.messages.send(pairing, text, effectId, beforeDispatch);
+    before();
+    return this.messages.send(pairing, text, effectId, before);
   }
   async endCall(callId: string, effectId: string) {
     const owned = this.store
@@ -1147,6 +1396,14 @@ export class NativeTransport implements Transport {
       return;
     const utteranceId = `${attention.id}:question`;
     const previous = this.store.get<QuestionSpeech>("speech", utteranceId);
+    // A confirmed live frontend owns speech. Retained legacy receipts remain
+    // reconcilable, but never create a legacy utterance in that active mode.
+    if (
+      !previous &&
+      (session.audioQualification === true ||
+        session.conversationFrontend === "gpt_live")
+    )
+      return;
     // Setup is already authorized in the originating chat. Do not narrate its
     // internal test question. Existing utterances still reconcile by their exact
     // receipt; omission is never permission to erase or repeat uncertain speech.
@@ -1444,11 +1701,21 @@ export class NativeTransport implements Transport {
             continue;
           this.guard(pairing);
           observe(session.requestId, "connected", true);
-          await this.media(`/sessions/${session.id}/activate`, {
-            callId: session.id,
-          });
-          this.store.put("media", { ...session, state: "active" });
-          await this.question(session);
+          const activation = await this.media(
+            `/sessions/${session.id}/activate`,
+            {
+              callId: session.id,
+            },
+          );
+          const active: MediaRecord = {
+            ...session,
+            state: "active",
+            ...(activation.conversationFrontend === "gpt_live"
+              ? { conversationFrontend: "gpt_live" as const }
+              : {}),
+          };
+          this.store.put("media", active);
+          await this.question(active);
         }
         if (
           !options.cleanupOnly &&

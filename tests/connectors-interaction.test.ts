@@ -29,6 +29,35 @@ describe("iMessage-first connector negotiation", () => {
     expect(() => protocolOptions({ "message-updates": "perhaps" })).toThrow();
   });
 
+  it("requires explicit separate managed execution and forbids inherited desktop attestations", () => {
+    const managed = protocolOptions({
+      runner: "codex-app-server",
+      "execution-session": "api_managed",
+    });
+    expect(managed.conversation).toEqual({
+      version: 1,
+      runnerId: "codex-app-server",
+      executionSession: "api_managed",
+    });
+    expect(sessionInteraction(managed)?.messageUpdates).toBe(false);
+    expect(sessionCapabilities(managed).nativeControl).toBe("none");
+    expect(() => protocolOptions({ runner: "codex-app-server" })).toThrow();
+    expect(() =>
+      protocolOptions({
+        runner: "codex-app-server",
+        "execution-session": "api_managed",
+        "protocol-version": "1",
+      }),
+    ).toThrow();
+    expect(() =>
+      protocolOptions({
+        runner: "codex-app-server",
+        "execution-session": "api_managed",
+        "native-control": "desktop",
+      }),
+    ).toThrow();
+  });
+
   it.each([undefined, 1])(
     "never silently changes explicit text to voice on server version %s",
     async (version) => {

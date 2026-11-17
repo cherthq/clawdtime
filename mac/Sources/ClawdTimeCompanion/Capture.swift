@@ -72,11 +72,11 @@ struct CapturedFrame {
   }
 }
 
-@MainActor func postInput(_ action: InputAction, displayId: UInt32) throws {
+@MainActor func postInput(_ action: InputAction, displayId: UInt32, surfaceBounds: CGRect? = nil) throws {
   guard AXIsProcessTrusted(), !IsSecureEventInputEnabled(), CGDisplayIsActive(displayId) != 0 else {
     throw HelperError(403, "Accessibility, active display and non-secure input are required.")
   }
-  let bounds = CGDisplayBounds(displayId)
+  let bounds = surfaceBounds ?? CGDisplayBounds(displayId)
   if action.type == "type" {
     // Keyboard input goes to the focused UI element. Reject elements on a
     // different display instead of assuming the selected screen has focus.

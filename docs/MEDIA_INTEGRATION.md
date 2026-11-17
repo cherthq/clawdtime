@@ -1,5 +1,10 @@
 # Attention media integration
 
+The current source adds [asynchronous GPT-Live conversation](#asynchronous-conversation-frontend-november-13-source)
+and [text-session control](#text-session-control-route), both default-off and awaiting
+provider/physical qualification. The existing paths below remain compatibility
+behavior for sessions that did not negotiate the new capability.
+
 The Python media service is a separately runnable selective migration with no
 workspace engine. It retains LiveKit room lifecycle, qualified worker audio,
 Deepgram STT/TTS, a stable screen video track, bounded device inputs, speech/action
@@ -515,3 +520,281 @@ across processes are never subtracted into a latency claim.
 `npx tsx scripts/inspect-session.ts` defaults to an isolated fixture and accepts only
 explicit file input/export, with an allowlisted report rather than a raw response
 dump. No production configuration is discovered implicitly.
+
+## Asynchronous conversation frontend (November 13 source)
+
+New sessions may negotiate `conversationVersion:1` and
+`conversationFrontend:"gpt_live"`. This is additive to protocol 2; existing sessions
+retain their recorded speech behavior. The media gate requires
+`MEDIA_GPT_LIVE_ENABLED=true`, the existing two-way/isolated-remote-audio gates,
+a direct `OPENAI_API_KEY`, and exactly `livekit-agents==1.8.12` plus
+`livekit-plugins-openai==1.8.12`, with `openai==3.50.0`. These pins are in `media/requirements-live.txt`.
+The optional container build argument is `ENABLE_GPT_LIVE=true`. Neither flag is
+enabled by default. Missing prerequisites reject activation, never silently switch
+an active session's speech owner.
+
+The real optional adapter uses LiveKit `AgentSession` with
+`openai.realtime.GPTLiveModel(model="gpt-live-1", delegation="client")` and custom
+bounded input/output connected to the existing authenticated FaceTime track. It
+keeps the same room and existing screen compositor. No video is sent to GPT-Live.
+Legacy STT/turn-TTS is bypassed for these calls; the existing once-only bounded
+connection greeting finishes before the new speech owner starts. Recorded audio,
+transcripts, and SDK session hosting are disabled. No automatic provider reconnect
+replays work; a provider close fails the media session conservatively.
+
+`delegation_created` supplies correlation metadata, not executable arguments. The
+frontend now aggregates bounded SDK speech fragments in source order. A turn needs
+all fragments finalized and at least 1,000 ms of actual quiet PCM (RMS below .003)
+after the last text change before submission. This is a local endpoint heuristic,
+not a provider commit or proof that the speaker has finished their intended request.
+The public AudioInput consumes every frame through this gate, including synthetic
+probe input. Non-silent audio cannot advance its quiet window; wall time cannot
+release a hold. Late finals join the pending turn; retired source identities cannot
+repeat an effect. Oversized/incomplete speech remains held rather than truncated.
+
+Every settled turn goes to authenticated `POST /media/:id/conversation/turn`, even
+without model delegation. This lets the backend explicitly adjudicate trailing
+chit-chat before releasing a verified completion. General context uses
+`delegation_id:null`; provider delegation IDs remain correlated where available.
+Up to eight public chat messages (3000 total characters), excluding the current
+aggregated source items, accompany the text as untrusted transient context. Neither
+model history nor delegation grants permission. Backend intent/approval rules stay
+authoritative. Callbacks serialize in spoken order; executor work is asynchronous.
+Independent jobs polling reports current verified facts through `append_commentary`.
+
+New audio activity blocks old narration immediately. New transcript changes hold
+reports and supersede an in-flight older reply. Quiet, stale, duplicate and unknown
+backend responses do not silently release a semantic hold. A valid current backend
+interpretation does. Timed-out submissions never retry under replacement IDs.
+Workers never send independent TTS. The quiet endpoint adds a one-second software
+budget after the last input/text change; provider lag and backend interpretation
+can add more. It is not evidence of the two-second audible p95 target.
+
+Speech interruption clears the application/SDK output queue and holds the existing
+execution path through the interruption callback; it does not cancel a job. SDK
+interruption cannot establish downstream silence: FaceTime worker and handset
+buffered audio remain outside this queue. The prior playback-generation timing fix
+is retained. The custom output sink now binds in-flight audio and drain completion
+to their original playback generation: old frames cannot adopt a newer generation,
+and an old drain cannot clear a newer speaking state. First audio publication
+remains different from handset audibility.
+
+The pinned SDK's public `openai_client_event_queued` and
+`openai_server_event_received` hooks correlate commentary appends with their
+`client_event_id` acknowledgments. Bounded `lifecycleDiagnostics.voiceCommentary`
+metadata records queued, acknowledged, rejected, unknown, pending and lastAckMs;
+no content or IDs are persisted. A missing acknowledgment becomes unknown after
+30 seconds or closure and is never automatically retried. An acknowledgment is
+context acceptance, not spoken delivery. SDK diagnostics are scrubbed because
+disabling recording alone does not prevent SDK error paths from logging transcripts
+or provider error content. Provider startup is awaited explicitly; TLS validation
+uses certifi, and shutdown releases transient audio/chat references.
+
+### Ordinary voice promotion audit
+
+These hardening changes have a real pinned-SDK loopback proof: provider transcript
+delta and `session.delegation.created` → SDK final speech item → authenticated local
+HTTP turn submission → queued commentary acknowledgment → authoritative fixture job
+state → independently-verified-result commentary acknowledgment. The test also
+rejects an unverified completion and duplicate delegation, and now includes a
+nondelegated trailing utterance that must get a second backend interpretation
+before the verified completion context ACK. It feeds non-silent PCM across the
+SDK’s provisional final boundary and verifies fragments remain one request. Its backend/provider are
+local fixtures; it is not a production execution or handset acceptance result.
+
+The SDK's `is_final` is a segmentation heuristic, not an OpenAI commit event: it
+finalizes after 800 ms of pushed input audio without another transcript fragment,
+or a transcript-timestamp gap. Continuous non-silent input still advances that
+timer. The new independent PCM-quiet gate covers that concrete failure; delayed
+transcripts and real background noise still need workload qualification before
+ordinary voice execution is promoted. The SDK similarly resumes interrupted playback at inferred
+output silence/gap boundaries; this is not a provider truncation or handset flush
+acknowledgment. The execution-disabled acoustic latch remains unchanged.
+
+The November 13 speakerphone record contains one qualitative deliberate cutoff,
+no noticeable echo reported, 265 ms notice-request-to-first-publication, 5,191 ms
+notice-last-publication-to-model-first-publication, and 0 ms detected-onset-to-local
+clear at millisecond resolution. It contains no quantified handset cutoff, source
+tap/AEC provenance, repeatability cohort or headphone comparison. Those metadata
+cannot establish `remoteAudioIsolated:true`, safe post-interruption resumption or
+the target handset latency percentiles. Keep ordinary voice/control/isolation gates
+off until the specific route and complete tool/correction/interruption workflow
+have passed fresh supervised acceptance.
+
+Official references checked against downloaded and isolated-installed 1.8.12 wheels:
+[GPT-Live delegation](https://developers.openai.com/api/docs/guides/live-delegation)
+and [LiveKit GPT-Live](https://docs.livekit.io/agents/models/realtime/gpt-live/).
+The earlier optional SDK deployment and authenticated silent-session
+qualification used successful media deployment `c197bb86-a198-4f72-906a-7f6ab1d97f83`,
+with source manifest SHA-256
+`1d658394b7349003083d7d1c1bd99cfd1e94d3c0b0006dd607432076eb5746aa`.
+Its qualified runtime is Python 3.12.16, LiveKit Agents/OpenAI plugin 1.8.12,
+OpenAI SDK 3.50.0, websockets 15.0.1 and certifi 2026.10.23. At that stage runtime
+feature flags remained false; installing dependencies did not enable voice or control.
+The scoped OpenAI project service-account credential expires December 13, 2026.
+
+`media/probe_live.py` confirmed authenticated `gpt-live-1` client-delegation
+session acceptance locally in 1.3177 seconds and in the deployed cloud runtime in
+1.2347 seconds. Both sessions confirmed `session.closed` with `close_requested`;
+neither sent audio, executed work or placed a call. The probe uses one attempt,
+bounded startup and close waits, verified TLS, no SDK/error-body logging, and
+sanitized metadata output. Run details and exact interpretation are in
+[media README](../media/README.md).
+
+These results establish credential/model session access, not handset readiness.
+The execution-disabled qualification mode below is now deployed as described in
+the current release evidence. Physical acceptance remains outstanding. Real continuous
+audio, echo isolation, interruption timing and downstream worker/handset flush
+acceptance remain **unqualified**. Loopback SDK tests establish adapter
+API/runtime compatibility only.
+
+### Execution-disabled acoustic qualification
+
+Current release: source **0.3.1**, manifest SHA-256
+`9e50e96d4db5aa9746ca2e7d4679dcbd3eef073fa41628a8a0e151030cfa4768`.
+Backend deployment `2dc6293e-81c1-49a2-b97d-21c8249f8b36` and media deployment
+`b683019a-6bae-4ac2-be65-ec540cf1d22a` both reached SUCCESS. The lead verified
+matching hashes for 74 JavaScript, 18 Python and 10 public files; state and
+cursors were preserved. Post-deployment checks found zero active calls, media
+sessions, pending effects or unknown outcomes. Only the new qualification flags
+are enabled; ordinary voice/control flags remain false and
+`remoteAudioIsolated` remains false. Controller preflight reports `ready:true`
+and `executionDisabled:true`.
+
+The exact qualification startup configuration was accepted by authenticated
+provider checks locally in **1202.0 ms** and in the cloud in **832.4 ms**
+(cloud total **2285 ms**). Both confirmed provider closure, with no input audio or
+calls. These are session startup measurements, not conversational or handset
+latency. Automated validation was **271 passed + 12 skipped** out of 283 media
+tests, plus **27 passed** in the qualified SDK environment. The release is ready
+for a supervised one-interruption handset test; **no physical acceptance has been
+performed**. Use the [supervised qualification runbook](AUDIO_QUALIFICATION.md)
+for fresh call authorization, the local Stop controller and acceptance records.
+
+`MEDIA_AUDIO_QUALIFICATION_ENABLED` defaults false, independent of ordinary
+duplex/GPT-Live/control flags. New preparation must include
+`audioQualification:true,captions:false,screen:false`; an existing session cannot
+change mode. A dedicated solid black 640×360 H.264 video track preserves the
+FaceTime handshake. There is no CaptionScene, ScreenController, desktop capture,
+presentation binding or device lease.
+
+Authenticated policy must retain the exact call binding, protocol version 2,
+`voiceMode:"audio_qualification"`, truthful `remoteAudioIsolated:false`,
+`captionsEnabled:false` and
+`audioQualification:{version:1,executionDisabled:true,expiresAt:<ISO timestamp>}`.
+Expiry is fixed at admission and within five minutes. Screen/presentation/
+conversation fields, paused/muted state, changed call or expiry, missing authority
+and mode upgrades are refused. A monotonic watchdog revokes audio at expiry or
+after two seconds without fresh policy, including blocked policy I/O. The foreground
+controller's local Stop and heartbeat loss revoke backend policy. The Mac helper
+is not armed or involved; its panel Stop is not claimed for this mode. Handset
+hangup closes the bound session. Old call approval and reconnect cannot revive it.
+
+The fixed notice “ClawdTime audio test. Execution is disabled.” is serialized once
+before provider startup, within the existing six-second notice bound. The separate
+`acoustic.py` frontend uses OpenAI SDK 3.50.0 public Live WebSocket events with
+client delegation, `store:false`, verified TLS and zero retries. It converts
+LiveKit's 48 kHz PCM to/from documented mono PCM16LE 24 kHz provider audio. The
+fixed prompt discusses only acoustic testing. It creates no agent chat history,
+broker, task poller or tools. Transcript and delegation payloads are discarded.
+External `/speak`, legacy transcript submission and per-call device actions are
+blocked. Media's callback boundary permits only policy and failure callbacks for
+qualification, never conversation, segments or interruption callbacks.
+
+Local speech onset clears application/LiveKit output queues and latches further
+model output off until the call ends. This permits **one interruption measurement
+per call**, not resumable conversation after interruption. Interruption during the
+notice also latches later model output. Zero PCM, elapsed time and instruction
+acknowledgments never re-enable playback. Primary Live WebSockets provide no
+reliable output-turn-complete or downstream flush acknowledgment. Local PCM and
+queue state are only a speaking heuristic, never handset silence evidence. Caller
+audio may contain echo; isolation stays false and execution remains disabled.
+
+Protected `GET /audio-qualification/readiness` performs no connection or capture
+and returns `{version:1,enabled,directKeyConfigured,sdk,websocketQualified}`. Key
+presence is not fresh provider access proof. `lifecycleDiagnostics.audioQualification`
+contains only bounded metadata: version, executionDisabled, started, finalized,
+outputLatched, elapsedMs, inputFrames, outputChunks, discardedOutputChunks,
+discardedDelegations, discardedTranscriptEvents and cutoffs. Existing monotonic
+speech diagnostics retain onset, queue-clear and publication timing. No screens,
+audio, transcripts or provider error payloads are retained.
+
+Official contracts rechecked: [Live WebSocket formats](https://developers.openai.com/api/docs/guides/voice-websockets#choose-the-audio-format)
+and [playback controls](https://developers.openai.com/api/docs/guides/voice-server-controls#control-playback-when-needed).
+The pinned SDK/RTC loopback test covers exact startup configuration, bidirectional
+synthetic PCM, ignored delegation/transcripts and confirmed cleanup. It uses no
+provider credential or handset. The lead ran `media/probe_live.py
+--audio-qualification` with protected credentials to validate the identical startup
+configuration without input audio or playback, with results above. Neither test proves physical echo,
+audibility, interruption latency or upstream queue flushing.
+
+## Text-session control route
+
+`MEDIA_TEXT_CONTROL_ENABLED=true` independently enables the authenticated
+`/devices/:device/text-grants` proposal/status routes and `/text-leases` execution
+routes. These create no call, room, participant, or FaceTime identity. A proposal
+is pending until the person reviews it on the Mac. Protocol-3 leases omit `callId`
+and carry exact `authority:{kind:"text_session",grantId,projectId}`, where projectId
+is the selected absolute project root. See [device grant documentation](DEVICE.md#text-session-local-control-grants).
+The gateway/helper enforce scope, local Enable, policy revision, exclusive lease,
+frame freshness, action bounds and receipts. Media persists only lease/action IDs,
+bindings/hashes and states; raw frames and typed text stay transient. Unknown
+creation/input remains blocked across restart and cannot switch to another adapter.
+Release during uncertain creation cannot prove quiescence; it retains unknown even
+if an overtaking DELETE was acknowledged. There is no automatic expiry reconciliation
+for that media tombstone in this release.
+
+Reproducible SDK compatibility commands are in [media README](../media/README.md).
+The fixture uses actual pinned SDK session/runtime and PCM plumbing against a local
+WebSocket server with synthetic credentials. It cannot establish provider model
+access, live response latency or verified task success. Physical trial counts for
+this new voice frontend and text-only grant path are zero as of this source change;
+no native/custom latency default is selected from simulated tests.
+
+
+### Scoped document first-page preview (source, not physical acceptance)
+
+Document-only preparation is immutable: `documentOnly:true`, exact
+`documentSessionId`, `captions:true`, `screen:false`. This mode constructs no
+ScreenController or desktop lease, even if device support is enabled. The selected
+local document adapter supplies a bounded first-page PNG; the backend binds its
+source SHA-256 and image SHA-256 to the selected artifact, read-only grant, coding
+session and call. Media receives `documentPreview` policy metadata and fetches
+`GET /media/:mediaId/document-preview/:previewId` with existing media authentication.
+
+The compositor checks exact call/session, first-page marker, hashes, PNG type,
+2 MiB byte cap, image dimensions and a fixed maximum two-minute lifetime. It uses
+the existing H.264 video publication, labels the selected filename and “First page
+preview”, and sends no image to GPT-Live. Pixels are memory-only and clear on policy
+loss, expiry, replacement, local Stop or call end. A revoked/expired preview ID
+cannot reacquire automatically. A fresh preview request needs a new identity.
+Rendering/upload/source selection and attachment-send receipts belong to the local
+adapter/backend; publishing a video frame is not proof the handset displayed it or
+that a résumé was sent. No actual résumé or handset preview was used in media tests.
+
+
+Verified document jobs use the backend-constructed `job.report` for candidate
+names, selected preview status and transfer receipts. Raw worker summaries cannot
+substitute for those reports. In particular, provider acceptance remains distinct
+from confirmed delivery. The same verified-result, revision and speech-hold checks
+apply. Reports are capped at 1,200 characters and sent as ordered, labeled context
+chunks of at most 480 UTF-8 bytes each, preserving non-ASCII filenames within the
+provider append budget. Context ACKs still do not prove spoken or handset delivery.
+
+## Argos camera and annotations (local source)
+
+The default-off `CLAWDTIME_SCREEN_CAMERA_ENABLED` gate adds a version-negotiated
+camera to the existing ScreenController/CaptionPublisher. Camera-aware policy uses
+`X-ClawdTime-Camera:1`; unsupported peers cannot receive a selected-window session
+as a legacy full-display stream. Native source frames remain pristine for observation;
+cropped/annotated outgoing frames are separate. A bounded context/caption footer
+sits outside the source viewport. Mutation IDs/revisions and short-lived annotations
+are transient; unknown input receipts retain their existing durable semantics.
+
+The local preview uses the production gateway, source controller, camera handlers
+and compositor with synthetic pixels or an explicitly selected development capture
+source. Its input sink is synthetic and actual mode submits no OS input. Full
+connector/API smoke validation, physical capture coverage and remaining acceptance
+steps are recorded in [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md).
+No FaceTime/live-media acceptance or deployment is implied. See [media README](../media/README.md#general-screen-camera-argos-local-slice)
+for precise limits, preview and cleanup commands.

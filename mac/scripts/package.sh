@@ -13,12 +13,12 @@ cat > "$output/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.clawdtime.companion</string>
 <key>CFBundleName</key><string>ClawdTime Companion</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.1</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleShortVersionString</key><string>0.3.0</string>
+<key>CFBundleVersion</key><string>4</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSScreenCaptureUsageDescription</key><string>Show your selected screen in your authorized ClawdTime call.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Show your selected screen during an authorized ClawdTime call or explicitly approved text session.</string>
 </dict></plist>
 PLIST
 identity="${CLAWDTIME_SIGNING_IDENTITY:--}"

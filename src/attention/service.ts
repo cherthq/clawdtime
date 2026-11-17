@@ -1,4 +1,11 @@
+import {
+  activeAudioQualification,
+  assertAudioQualificationIdle,
+  isAudioQualification,
+  audioQualificationSchema,
+} from "./audio-qualification.js";
 import { explainReadiness } from "../../connectors/shared/readiness.js";
+import { cameraSelectionSchema } from "../camera-contracts.js";
 import { presentationFor } from "./presentation.js";
 import { timelineFor } from "../transport/conversation-timeline.js";
 import {
@@ -49,11 +56,28 @@ const registration = z
     externalSessionId: nonempty,
     hostId: nonempty,
     protocolVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+    screenCamera: cameraSelectionSchema.optional(),
     interaction: z
       .object({
         version: z.literal(1),
         commandChannel: z.literal("imessage_first"),
         messageUpdates: z.boolean(),
+      })
+      .strict()
+      .optional(),
+    conversation: z
+      .object({
+        version: z.literal(1),
+        runnerId: nonempty,
+        executionSession: z.literal("api_managed"),
+      })
+      .strict()
+      .optional(),
+    documentAccess: z
+      .object({
+        version: z.literal(1),
+        readOnly: z.literal(true),
+        expiresAt: z.number().finite().int().positive(),
       })
       .strict()
       .optional(),
@@ -65,6 +89,7 @@ const registration = z
         sharedSurface: z.boolean().optional(),
         nativeCancellation: z.boolean().optional(),
         voiceInteractionVersion: z.literal(1).optional(),
+        screenCameraVersion: z.literal(1).optional(),
       })
       .strict(),
   })
@@ -173,6 +198,221 @@ export class ClawdTime {
     this.pairing(s.pairingId);
     return s;
   }
+  /** Deterministic fence shared by domain and HTTP/control callers. */
+  assertExecutionAllowed(session: AgentSession) {
+    const current =
+      this.store.get<AgentSession>("session", session.id) ?? session;
+    if (
+      isAudioQualification(session) ||
+      isAudioQualification(current) ||
+      activeAudioQualification(this.store, this.pairing(current.pairingId))
+    )
+      throw new DomainError(403, "Audio qualification is execution-disabled.");
+  }
+  /** Operator-authenticated route only. No ordinary pairing/session credential can call this route. */
+  requestAudioQualification(input: {
+    pairingId: string;
+    idempotencyKey: string;
+    durationSeconds: number;
+    readyForOneCall: true;
+  }): { session: AgentSession; request: AttentionRequest; token?: string } {
+    const value = z
+      .object({
+        pairingId: nonempty,
+        idempotencyKey: nonempty,
+        durationSeconds: z.number().int().min(30).max(300),
+        readyForOneCall: z.literal(true),
+      })
+      .strict()
+      .parse(input);
+    const key = `audio-qualification:${value.pairingId}:${hash(value.idempotencyKey)}`;
+    const fingerprint = hash(JSON.stringify(value));
+    this.expire();
+    return this.store.transaction(() => {
+      const prior = this.store.event<{ requestId: string }>(key);
+      if (prior) {
+        if (prior.fingerprint !== fingerprint)
+          throw new DomainError(409, "Qualification request identity changed.");
+        const existing = this.audioQualificationStatus(prior.result.requestId);
+        return { session: existing.session, request: existing.request };
+      }
+      const pairing = this.pairing(value.pairingId);
+      assertAudioQualificationIdle(this.store, pairing, this.clock());
+      const now = this.clock(),
+        requestId = id("attention"),
+        sessionId = id("session"),
+        callId = `ct_${hash(requestId).slice(0, 40)}`;
+      const audioQualification = {
+        version: 1 as const,
+        executionDisabled: true as const,
+        expiresAt: now + value.durationSeconds * 1000,
+      };
+      const session: AgentSession = {
+        id: sessionId,
+        pairingId: pairing.id,
+        adapter: "audio-qualification",
+        adapterVersion: "1",
+        projectRoot: "audio-qualification",
+        externalSessionId: `audio-qualification:${requestId}`,
+        hostId: "operator-audio-qualification",
+        createdAt: now,
+        lastSeenAt: now,
+        protocolVersion: 2,
+        state: "active",
+        controlEpoch: 0,
+        audioQualification,
+        capabilities: {
+          cooperativePause: false,
+          polling: false,
+          nativeControl: "none",
+          sharedSurface: false,
+          nativeCancellation: false,
+          voiceInteractionVersion: 1,
+        },
+      };
+      const request: AttentionRequest = {
+        id: requestId,
+        sessionId,
+        pairingId: pairing.id,
+        taskId: "audio-qualification",
+        idempotencyKey: value.idempotencyKey,
+        reason: "review",
+        question:
+          "Audio-only qualification. Execution, screen capture and task instructions are disabled.",
+        createdAt: now,
+        deadline: audioQualification.expiresAt,
+        state: "queued",
+        callId,
+        audioQualification,
+      };
+      this.store.put("session", session);
+      this.store.put("attention", request);
+      this.store.put<CallSession>("call", {
+        id: callId,
+        requestId,
+        pairingId: pairing.id,
+        state: "prepared",
+        remoteParticipantQualified: false,
+        createdAt: now,
+        audioQualification,
+      });
+      this.enqueue(`${requestId}:call`, "call", {
+        requestId,
+        pairingId: pairing.id,
+        localCallId: callId,
+      });
+      this.store.recordEvent(key, fingerprint, { requestId });
+      return { session, request, token: this.issue("session", sessionId) };
+    });
+  }
+  /** Operator read-only projection; never reconstructs a lost session credential. */
+  audioQualificationStatus(requestId: string) {
+    const request = this.store.get<AttentionRequest>(
+      "attention",
+      nonempty.parse(requestId),
+    );
+    const session =
+      request && this.store.get<AgentSession>("session", request.sessionId);
+    const call =
+      request &&
+      this.store
+        .all<CallSession>("call")
+        .find((item) => item.requestId === request.id);
+    const marker =
+      request && audioQualificationSchema.safeParse(request.audioQualification);
+    if (
+      !request ||
+      !session ||
+      !call ||
+      !marker?.success ||
+      !isAudioQualification(session) ||
+      !isAudioQualification(call) ||
+      session.pairingId !== request.pairingId ||
+      call.pairingId !== request.pairingId ||
+      call.requestId !== request.id ||
+      session.protocolVersion !== 2 ||
+      session.adapter !== "audio-qualification" ||
+      session.conversation ||
+      session.interaction ||
+      session.capabilities.nativeControl !== "none" ||
+      session.capabilities.cooperativePause ||
+      session.capabilities.polling ||
+      request.deadline !== marker.data.expiresAt ||
+      JSON.stringify(session.audioQualification) !==
+        JSON.stringify(request.audioQualification) ||
+      JSON.stringify(call.audioQualification) !==
+        JSON.stringify(request.audioQualification)
+    )
+      throw new DomainError(404, "Audio qualification is unavailable.");
+    const media = this.store
+      .all<{ requestId: string; state: string }>("media")
+      .filter((item) => item.requestId === request.id);
+    const callEffect = this.store.effect(`${request.id}:call`),
+      endEffect = this.store.effect(`${request.id}:end`);
+    const cleanupConfirmed =
+      call.state === "ended" &&
+      media.every((item) => item.state === "closed") &&
+      (!call.providerCallId ||
+        (this.transport.mode === "simulation"
+          ? endEffect?.state === "done"
+          : media.length > 0 &&
+            media.every((item) => item.state === "closed") &&
+            endEffect?.state === "done"));
+    return {
+      session,
+      request,
+      call,
+      callEffect,
+      endEffect,
+      cleanupConfirmed,
+      mediaState: media.length
+        ? media.every((item) => item.state === "closed")
+          ? "closed"
+          : "unconfirmed"
+        : "absent",
+    };
+  }
+  stopAudioQualification(requestId: string) {
+    const { request } = this.audioQualificationStatus(requestId);
+    return this.closeAudioQualification(request, "canceled");
+  }
+  private closeAudioQualification(
+    request: AttentionRequest,
+    state: "canceled" | "expired",
+  ) {
+    return this.store.transaction(() => {
+      const { session, call } = this.audioQualificationStatus(request.id);
+      if (session.state !== "stopped")
+        this.store.put("session", {
+          ...session,
+          state: "stopped",
+          controlEpoch: session.controlEpoch + 1,
+        });
+      if (!terminal.has(request.state))
+        this.store.put("attention", { ...request, state });
+      this.store.saveState(`listening-stopped:${request.id}`, true);
+      this.store.saveState(`view-stopped:${request.id}`, true);
+      const effect = this.store.effect(`${request.id}:call`);
+      if (effect?.state === "pending" && !call.providerCallId) {
+        this.store.putEffect({
+          ...effect,
+          state: "failed",
+          result: { reason: "Qualification closed before native dial." },
+        });
+        this.store.put("call", {
+          ...call,
+          state: "ended",
+          remoteParticipantQualified: false,
+          endedAt: this.clock(),
+        });
+      }
+      this.endOwnedCall(
+        request,
+        state === "expired" ? "request_expired" : "request_completed",
+      );
+      return this.audioQualificationStatus(request.id);
+    });
+  }
   createPairingInvite(input: InviteInput) {
     const binding = z
       .object({
@@ -244,15 +484,49 @@ export class ClawdTime {
     const c = this.credential(raw, "pairing"),
       p = this.pairing(c.subjectId),
       value = registration.parse(input);
+    if (activeAudioQualification(this.store, p))
+      throw new DomainError(
+        409,
+        "Audio qualification reserves this pairing and line.",
+      );
     if (value.protocolVersion === 2 && !value.capabilities.polling)
       throw new DomainError(
         409,
         "Agent-owned conversations require bounded polling.",
       );
+    if (
+      !!value.screenCamera !== (value.capabilities.screenCameraVersion === 1) ||
+      (value.screenCamera &&
+        (value.protocolVersion !== 2 ||
+          value.documentAccess !== undefined ||
+          String(value.screenCamera.surface.displayId) !== p.displayId))
+    )
+      throw new DomainError(
+        409,
+        "Screen camera requires an explicit version 2 surface on the paired display and matching capability.",
+      );
     if (value.interaction && value.protocolVersion !== 2)
       throw new DomainError(
         409,
         "iMessage-first interaction requires protocol version 2.",
+      );
+    if (value.conversation && value.protocolVersion !== 2)
+      throw new DomainError(
+        409,
+        "Asynchronous execution requires protocol version 2.",
+      );
+    if (
+      (value.conversation?.runnerId === "remote-documents") !==
+        !!value.documentAccess ||
+      (value.documentAccess &&
+        (value.protocolVersion !== 2 ||
+          value.conversation?.executionSession !== "api_managed" ||
+          value.documentAccess.expiresAt <= this.clock() ||
+          value.documentAccess.expiresAt > this.clock() + 3600000))
+    )
+      throw new DomainError(
+        409,
+        "Document access requires an explicit bounded read-only managed document session.",
       );
     return this.store.transaction(() => {
       const previous = this.store
@@ -261,6 +535,11 @@ export class ClawdTime {
           (s) =>
             s.pairingId === p.id &&
             s.externalSessionId === value.externalSessionId,
+        );
+      if (previous && isAudioQualification(previous))
+        throw new DomainError(
+          403,
+          "Qualification sessions cannot register or reconnect as agents.",
         );
       if (
         previous &&
@@ -271,7 +550,13 @@ export class ClawdTime {
           JSON.stringify(previous.capabilities) !==
             JSON.stringify(value.capabilities) ||
           JSON.stringify(previous.interaction) !==
-            JSON.stringify(value.interaction))
+            JSON.stringify(value.interaction) ||
+          JSON.stringify(previous.conversation) !==
+            JSON.stringify(value.conversation) ||
+          JSON.stringify(previous.documentAccess) !==
+            JSON.stringify(value.documentAccess) ||
+          JSON.stringify(previous.screenCamera) !==
+            JSON.stringify(value.screenCamera))
       )
         throw new DomainError(
           409,
@@ -313,6 +598,7 @@ export class ClawdTime {
     const session = this.authenticateSession(raw),
       value = attentionInput.parse(input),
       pairing = this.pairing(session.pairingId);
+    this.assertExecutionAllowed(session);
     return this.store.transaction(() => {
       const key = `attention-key:${session.id}:${hash(value.idempotencyKey)}`;
       const old = this.store.state<{ fingerprint: string; requestId: string }>(
@@ -438,6 +724,7 @@ export class ClawdTime {
   }
   ack(raw: string, requestId: string, responseId: string) {
     const { session, request } = this.owned(raw, requestId);
+    this.assertExecutionAllowed(session);
     if (session.protocolVersion === 2)
       throw new DomainError(
         409,
@@ -467,14 +754,30 @@ export class ClawdTime {
     });
   }
   heartbeat(raw: string) {
+    this.expire();
     this.expireSessions();
     const session = this.authenticateSession(raw);
     return this.store.transaction(() => {
       const now = this.clock();
+      if (
+        isAudioQualification(session) &&
+        (!session.audioQualification ||
+          session.audioQualification.expiresAt <= now)
+      ) {
+        const request = this.store
+          .all<AttentionRequest>("attention")
+          .find(
+            (item) =>
+              item.sessionId === session.id && isAudioQualification(item),
+          );
+        if (request) this.closeAudioQualification(request, "expired");
+        throw new DomainError(403, "Audio qualification expired.");
+      }
       const current = this.store.put<AgentSession>("session", {
         ...session,
         lastSeenAt: now,
       });
+      if (isAudioQualification(current)) return current;
       if (
         current.protocolVersion !== 2 &&
         (current.state !== "yielded" || !current.capabilities.cooperativePause)
@@ -602,6 +905,7 @@ export class ClawdTime {
   }
   yieldSession(raw: string) {
     const session = this.authenticateSession(raw);
+    this.assertExecutionAllowed(session);
     if (!session.capabilities.cooperativePause)
       throw new DomainError(409, "Adapter cannot establish cooperative pause.");
     return this.store.put<AgentSession>("session", {
@@ -611,6 +915,7 @@ export class ClawdTime {
   }
   resume(raw: string, requestId: string, controlEpoch: number) {
     const { session, request } = this.owned(raw, requestId);
+    this.assertExecutionAllowed(session);
     if (session.protocolVersion === 2)
       throw new DomainError(
         409,
@@ -666,6 +971,7 @@ export class ClawdTime {
   acknowledgeTerminal(raw: string, requestId: string, controlEpoch: number) {
     return this.store.transaction(() => {
       const { session, request } = this.owned(raw, requestId);
+      this.assertExecutionAllowed(session);
       if (
         ![
           "canceled",
@@ -813,6 +1119,7 @@ export class ClawdTime {
   complete(raw: string, requestId: string, text: string) {
     const { session, request } = this.owned(raw, requestId),
       result = textSchema.parse(text);
+    this.assertExecutionAllowed(session);
     if (session.protocolVersion === 2)
       throw new DomainError(
         409,
@@ -870,6 +1177,16 @@ export class ClawdTime {
       value.requestId,
     );
     if (!request) throw new DomainError(404, "Unknown attention request.");
+    const responseSession = this.store.get<AgentSession>(
+      "session",
+      request.sessionId,
+    );
+    if (isAudioQualification(request) || !responseSession)
+      throw new DomainError(
+        403,
+        "Audio qualification cannot ingest task responses.",
+      );
+    this.assertExecutionAllowed(responseSession);
     const p = this.pairing(request.pairingId);
     if (
       this.store.get<AgentSession>("session", request.sessionId)
@@ -1019,6 +1336,8 @@ export class ClawdTime {
   /** Explicit v2 end closes the call, never interprets one delivered turn as completion. */
   endConversation(raw: string, requestId: string) {
     const { session, request } = this.owned(raw, requestId);
+    if (isAudioQualification(session) || isAudioQualification(request))
+      return this.stopAudioQualification(request.id).request;
     if (session.protocolVersion !== 2)
       throw new DomainError(
         409,
@@ -1093,7 +1412,26 @@ export class ClawdTime {
     }
   }
   disconnect(raw: string) {
-    const c = this.credential(raw),
+    const credential = this.credential(raw);
+    if (credential.kind === "session") {
+      const session = this.store.get<AgentSession>(
+        "session",
+        credential.subjectId,
+      );
+      if (isAudioQualification(session)) {
+        const request = this.store
+          .all<AttentionRequest>("attention")
+          .find(
+            (item) =>
+              item.sessionId === session!.id && isAudioQualification(item),
+          );
+        if (!request)
+          throw new DomainError(404, "Qualification request unavailable.");
+        this.stopAudioQualification(request.id);
+        return { revoked: false, stopped: true };
+      }
+    }
+    const c = credential,
       pairingId =
         c.kind === "pairing"
           ? c.subjectId
@@ -1120,6 +1458,25 @@ export class ClawdTime {
   }
   expire() {
     pruneMessageEffects(this);
+    for (const qualification of this.store.all<AttentionRequest>("attention"))
+      if (
+        isAudioQualification(qualification) &&
+        qualification.deadline <= this.clock()
+      ) {
+        try {
+          this.closeAudioQualification(qualification, "expired");
+        } catch {
+          // Malformed marker data cannot stall cleanup for unrelated work.
+          const session = this.store.get<AgentSession>(
+            "session",
+            qualification.sessionId,
+          );
+          if (session?.pairingId === qualification.pairingId)
+            this.store.put("session", { ...session, state: "stopped" });
+          this.store.put("attention", { ...qualification, state: "unknown" });
+          this.endOwnedCall(qualification, "request_expired");
+        }
+      }
     for (const request of this.store.all<AttentionRequest>("attention"))
       if (
         !terminal.has(request.state) &&
@@ -1188,7 +1545,16 @@ export class ClawdTime {
           setupSession.pairingId === setup.pairingId &&
           setupSession.state !== "stopped";
         if (
-          (!request && !setupAuthorized) ||
+          (effect.kind === "message" &&
+            (isAudioQualification(request) ||
+              isAudioQualification(setupSession) ||
+              isAudioQualification(
+                this.store.get<AgentSession>(
+                  "session",
+                  String(effect.payload.sessionId),
+                ),
+              ))) ||
+          (!request && !setupAuthorized && effect.payload.brokerUpdate !== 1) ||
           !pairing ||
           (effect.kind !== "end_call" && pairing.revokedAt !== undefined) ||
           !messageUpdateAuthorized(this, effect) ||
@@ -1518,7 +1884,13 @@ export class ClawdTime {
     const retiredSetupInvitationCount = unknown.filter((e) =>
       setupInvitationRetirementValid(this.store, e, now),
     ).length;
-    const blockingUnknownEffects = unknownEffects - retiredSetupInvitationCount;
+    const unknownAttachmentCount = this.store
+      .all<{ pairingId: string; state: string }>("attachment_dispatch")
+      .filter(
+        (item) => item.pairingId === pairing.id && item.state === "unknown",
+      ).length;
+    const blockingUnknownEffects =
+      unknownEffects - retiredSetupInvitationCount + unknownAttachmentCount;
     const checks: ReadinessCheck[] = [];
     const mode =
       this.store.state<string>("runtime:mode") ?? this.transport.mode;
@@ -1634,6 +2006,7 @@ export class ClawdTime {
       ...(session ? { session } : {}),
       ready: mode === "simulation" ? pairing.allowView : liveReady,
       unknownEffects,
+      unknownAttachmentCount,
       retiredSetupInvitationCount,
       blockingUnknownEffects,
       physicalAcceptance: false,

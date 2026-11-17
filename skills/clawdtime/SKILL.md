@@ -5,9 +5,26 @@ description: Call your paired human and receive ordered conversation turns in th
 
 # ClawdTime
 
-ClawdTime carries iMessage commands, calls, speech and screen sharing. **This existing coding session
-owns the conversation, reasoning and tools.** Never start a replacement coding
-agent or let a separate ClawdTime model take over an agent-owned conversation.
+ClawdTime carries iMessage commands, calls, speech and screen sharing. Inspect
+`status.session.conversation` or the returned session first. A fresh explicitly
+selected `conversation.version: 1` session uses the shared conversational broker
+and its named `api_managed` execution runner. That runner is a separate session;
+never describe it as this desktop chat or assume it can call this chat's CUA tools.
+The frontend owns conversation while the runner works; progress and completion
+must come from durable jobs and independent verification. Do not independently
+reply or execute the same managed job through legacy tools.
+
+Without that capability, **this existing coding session owns the conversation,
+reasoning and tools** using the legacy workflow below. Never silently start a
+replacement agent or change an active session's architecture. New managed
+registrations require explicit `--runner codex-app-server --execution-session
+api_managed`, an available backend runner and allowed local project root. They do
+not grant screen control, native approvals or call authorization. For a hosted
+backend, explicitly choose `remote-codex-app-server` and run the
+foreground local `executor-worker --run PRIVATE_REGISTERED_RUN` using its exact
+protected connection/session. The worker performs authenticated pull dispatch;
+this does not wake a desktop chat or export native CUA. Never start a worker
+against an old stopped run, delete its receipt ledger or replay unknown work.
 
 ## Check the exact session
 
@@ -51,7 +68,7 @@ During an interruption, speech can stop before the agent receives the final word
 Treat `hold.active` as a reason to withhold new conflicting actions and keep polling;
 provisional speech is not an executable command. Do not replay a canceled reply.
 
-## Agent-owned conversation (v2, default)
+## Legacy agent-owned conversation (v2 without managed opt-in)
 
 1. For text work, obtain the exact requestId through `conversation_inbox`. For
    a viewing/voice call, request one authorized call with a stable task and

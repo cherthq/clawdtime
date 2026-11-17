@@ -1,8 +1,14 @@
 <h1 align="center">ClawdTime</h1>
+
+The 0.4.0 source adds scoped résumé discovery, private first-page preview and
+explicit paired-iMessage attachment sending, plus verified voice completion
+reporting. See [release evidence and acceptance](docs/CONVERSATIONAL_CONTROL_RELEASE.md)
+and [local document host setup](docs/CONNECTORS.md). Physical demo readiness is
+reported separately from tests and deployment.
 <p align="center"><strong>Your coding agent can FaceTime you.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/backend-0.2.0-blue" alt="Backend 0.2.0">
+  <img src="https://img.shields.io/badge/backend-0.3.1-blue" alt="Backend 0.3.1">
   <img src="https://img.shields.io/badge/Mac_companion-0.2.1-blue" alt="Mac companion 0.2.1">
   <a href="https://www.clawdtime.com"><img src="https://img.shields.io/badge/ClawdTime-Website-black" alt="ClawdTime website"></a>
   <img src="https://img.shields.io/badge/agents-Claude_Code_%2B_Codex-8b5cf6" alt="Claude Code and Codex integrations">
@@ -11,39 +17,63 @@
 
 You step away. Your agent needs a decision. Your phone rings.
 
-ClawdTime lets your existing coding session call you on FaceTime, show your Mac
-screen, hear your answer, and keep working. **The same Codex or Claude session
-owns the conversation and uses its own tools throughout the call.** ClawdTime
-provides the call, speech, screen sharing and control coordination.
+ClawdTime connects a paired person to coding and desktop work through iMessage
+and FaceTime. Source version **0.3.1** adds a responsive conversational layer over
+shared asynchronous jobs. Backend and media **0.3.1** are deployed with ordinary execution/voice gates off; the
+existing foreground-chat pilot behavior remains active. Direct GPT-Live access is
+qualified. The separate execution-disabled audio test mode is deployed and ready; handset
+qualification remains required. See the [supervised audio test](docs/AUDIO_QUALIFICATION.md). See the [rollout and next steps](docs/CONVERSATIONAL_CONTROL_RELEASE.md).
 
-## The flow
+## Conversational jobs — opt-in source implementation
 
-**Work → reach a question → use the ClawdTime skill → FaceTime → answer → watch the agent continue.**
+Text and qualified voice frontends use the same submit/status/revise/cancel broker.
+Conversation can continue while the executor works. A queued receipt, actual runner
+acceptance, native approval, verified completion and unknown outcome are distinct.
+A real local proof used the text model plus Codex App Server, independently checked
+the result file, and answered status during deliberately slow execution. Messages
+transport was simulated; there is no new handset qualification.
 
-“Use the blue heading.” “Change that sentence.” “Send the message.”
+New sessions explicitly select an **API-managed execution session**, separate from
+the original desktop conversation. The local Codex App Server runner uses an exact
+project allowlist and preserves native approvals. An authenticated foreground
+executor worker connects a hosted broker to the selected local project. It cannot
+wake an idle chat or obtain this desktop chat's native CUA tools. Existing sessions
+are immutable and keep the legacy workflow described below and in the guide.
 
-The agent receives ordered voice or text turns and supplies the replies you hear.
-Screen sharing can continue while it reasons, edits files or uses a permitted
-computer tool. It remains in your original chat and follows its normal approvals.
+GPT-Live client delegation is implemented behind gates with pinned optional LiveKit
+packages now installed in media. Authenticated silent GPT-Live sessions passed
+locally and on the deployed server, with provider-confirmed clean closure. Voice remains
+unqualified for full-duplex speakerphone use. See [release evidence and rollout](docs/CONVERSATIONAL_CONTROL_RELEASE.md).
 
-The latest source adds **iMessage-first commands and replies**, selection of an
-already-running session, gated two-way voice with playback interruption, and CUA
-stage timing. These changes are deployed; handset tests are pending and two-way
-voice remains gated off. See the [pilot guide](docs/GUIDE.md) for flags, session selection and
-remaining limits. Existing installed sessions keep their negotiated behavior.
+## Local screen camera preview
 
-## Native computer use and optional fallback
+The uncommitted Argos slice adds explicit display/window capture, native-resolution
+crop/zoom, transient annotations, pinning and pause/resume without an IDE plugin.
+Run `npm run preview:camera` for a localhost-only synthetic preview using the real
+backend/media/gateway path; `npm run preview:camera -- --smoke` checks the connector
+and existing CUA ownership/receipt path with a fake input sink. No call is placed.
+Actual capture is separately opt-in; see [the review and commands](docs/IMPLEMENTATION_ARGOS_REVIEW.md).
+Selected-window fallback input remains unavailable pending exact hit-target
+qualification; display CUA retains its existing permission and ownership gates.
 
-**Native tools are the default.** The agent uses the computer/browser tools already
-available in that chat, on the visible shared surface. ClawdTime coordinates
-exclusive input ownership around those tool calls. Tool availability and app
-restrictions still apply; the tested native tool cannot control the Codex app itself.
+## Desktop control
 
-**ClawdTime fallback is optional and off by default.** When you enable it locally,
-the same agent can use ClawdTime's observe/click/type/scroll tools. Fallback changes
-the execution tool, not the conversational agent. It needs an image-capable MCP
-connection; the foreground JSONL bridge supports native tools but cannot carry
-fallback screenshots/input. Unknown actions are reconciled rather than replayed.
+The new bounded workflow observes, proposes one action, checks a fresh matching
+screen and current authority, submits once, independently verifies the visible
+result, and releases ownership. Native and custom supplied adapters share these
+rules. The managed Codex runner has **no qualified native desktop CUA adapter**.
+Automatic adapter selection is disabled pending comparable physical trials.
+
+Text-only desktop control uses a distinct device/session/project grant accepted in
+the Mac's local Control Panel. It does not create a fake FaceTime call. The current
+grant covers the selected whole display, with explicit allowed actions and expiry;
+it is not application-level isolation. Local Stop, lock, policy change and restart
+revoke it. Backend session loss also requests revocation once and preserves an
+uncertain receipt. A submitted input or fresh frame alone is never UI success.
+
+The deployed legacy path still supports the original chat's native tools and an
+optional image-capable MCP custom path. Neither its old native default nor its
+past physical evidence qualifies the new managed runner.
 
 ## The Mac Control Panel
 

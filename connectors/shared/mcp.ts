@@ -42,8 +42,13 @@ export function mcpOutput(value: unknown) {
     const { dataUrl, ...metadata } = value as Record<string, unknown>;
     if (
       typeof dataUrl !== "string" ||
-      dataUrl.length > 2_000_000 ||
-      !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(dataUrl)
+      dataUrl.length >
+        "data:image/jpeg;base64,".length +
+          Math.ceil((2 * 1024 * 1024) / 3) * 4 ||
+      !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(dataUrl) ||
+      Buffer.from(dataUrl.slice("data:image/jpeg;base64,".length), "base64")
+        .length >
+        2 * 1024 * 1024
     )
       throw new Error(
         "Invalid transient screen image; no image or input returned.",
@@ -68,6 +73,9 @@ export async function startMcp(options: {
   sharedSurface?: boolean;
   nativeCancellation?: boolean;
   messageUpdates?: boolean;
+  conversation?: ProtocolOptions["conversation"];
+  documentAccess?: ProtocolOptions["documentAccess"];
+  screenCamera?: ProtocolOptions["screenCamera"];
 }) {
   const connection = loadConnection(
     options.connection,
@@ -116,6 +124,18 @@ export async function startMcp(options: {
     run.runId !== runId
   )
     throw new Error("Run identity mismatch.");
+  if (
+    run.session &&
+    (JSON.stringify(run.session.conversation) !==
+      JSON.stringify(options.conversation) ||
+      JSON.stringify(run.session.documentAccess) !==
+        JSON.stringify(options.documentAccess) ||
+      JSON.stringify(run.session.screenCamera) !==
+        JSON.stringify(options.screenCamera))
+  )
+    throw new Error(
+      "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
+    );
   secureWrite(statePath, run);
   let client: ClawdTimeClient | undefined;
   let connecting: Promise<ClawdTimeClient> | undefined;
@@ -142,6 +162,9 @@ export async function startMcp(options: {
             protocolVersion: options.protocolVersion ?? 2,
             capabilities: sessionCapabilities(options),
             interaction: sessionInteraction(options),
+            conversation: options.conversation,
+            documentAccess: options.documentAccess,
+            screenCamera: options.screenCamera,
           });
           run = { ...run, session: result.session, token: result.token };
           secureWrite(statePath, run);

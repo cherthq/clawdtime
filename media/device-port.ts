@@ -1,3 +1,5 @@
+import { cameraFrameSchema, cameraCommandSchema, cameraStatusSchema, cameraReceiptSchema, type CameraCommand, type PresentationReference } from "../src/camera-contracts.js";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import type {
   ControlLease,
@@ -130,6 +132,12 @@ export class MediaDevicePort implements DevicePort {
     )
       throw new Error("Media lease binding mismatch.");
   }
+  async cameraStatus(lease: ControlLease) {
+    return cameraStatusSchema.parse(await this.api(this.path(lease, "/camera")));
+  }
+  async cameraCommand(lease: ControlLease, command: CameraCommand) {
+    return cameraReceiptSchema.parse(await this.api(this.path(lease, "/camera"), cameraCommandSchema.parse(command)));
+  }
   async frame(lease: ControlLease): Promise<ScreenFrame> {
     // Read-only retries allow the video capture loop to produce its next frame.
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -152,13 +160,16 @@ export class MediaDevicePort implements DevicePort {
           !Number.isInteger(result.width) ||
           !Number.isInteger(result.height) ||
           Number(result.width) < 1 ||
-          Number(result.width) > 1280 ||
+          Number(result.width) > (lease.cameraVersion === 1 ? 8192 : 1280) ||
           Number(result.height) < 1 ||
-          Number(result.height) > 720 ||
+          Number(result.height) > (lease.cameraVersion === 1 ? 8192 : 720) ||
           typeof result.jpegBase64 !== "string" ||
           typeof result.sha256 !== "string"
         )
           throw new Error("Fresh bound screen frame required.");
+        const camera = lease.cameraVersion === 1 ? cameraFrameSchema.parse(result.camera) : undefined;
+        if (camera && (!isDeepStrictEqual(camera.surface, lease.surface) || camera.source.width !== result.width || camera.source.height !== result.height))
+          throw new Error("Camera source geometry mismatch.");
         const image = Buffer.from(result.jpegBase64, "base64");
         if (
           image.length > 2 * 1024 * 1024 ||
@@ -166,6 +177,7 @@ export class MediaDevicePort implements DevicePort {
         )
           throw new Error("Screen frame integrity mismatch.");
         return {
+          ...(camera ? {camera} : {}),
           id: result.frameId,
           capturedAt: at,
           width: Number(result.width),
@@ -187,6 +199,7 @@ export class MediaDevicePort implements DevicePort {
     const observed = await this.frame(lease);
     return {
       frame: {
+        ...(observed.camera ? {camera: observed.camera} : {}),
         id: observed.id,
         capturedAt: observed.capturedAt,
         width: observed.width,
@@ -200,6 +213,7 @@ export class MediaDevicePort implements DevicePort {
     frame: Frame,
     action: InputAction,
     actionId: string,
+    presentation?: PresentationReference,
   ): Promise<{ submitted: boolean }> {
     const { kind, ...fields } = action;
     const result = await this.api(this.path(lease, "/actions"), {
@@ -211,6 +225,7 @@ export class MediaDevicePort implements DevicePort {
       displayId: Number(lease.displayId),
       frameId: frame.id,
       type: kind,
+      ...(presentation ? {presentation} : {}),
       ...(lease.protocolVersion === 2
         ? {
             sessionId: lease.sessionId,

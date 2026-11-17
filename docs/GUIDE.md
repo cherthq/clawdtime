@@ -1,5 +1,41 @@
 # ClawdTime pilot guide
 
+## Read-only résumé demo
+
+Select one local folder with a fresh expiring document-session grant and start
+its foreground worker as documented in CONNECTORS.md. The phone and text frontend
+share the same ordered job state. Ask to find your résumé, choose a named candidate,
+and inspect its first-page preview. Then explicitly say “send this document to me.”
+That sends the exact original to the paired iMessage conversation; another
+recipient is not supported. A provider-accepted report does not confirm that the
+handset has displayed or downloaded the attachment.
+
+A different candidate needs a new preview. Preview links expire after two minutes.
+If the original changes, discover and select again. “Stop speaking” interrupts
+speech separately; literal “Stop” revokes document access and pending transfers.
+Ctrl-C in the local worker also revokes its grant. Never repeat an ambiguous send
+through another adapter. Resume requires fresh authority, not an expired call.
+
+
+## New conversational architecture (admission disabled)
+
+Use [the conversational release guide](CONVERSATIONAL_CONTROL_RELEASE.md) for the
+new broker, explicit API-managed runner, local executor worker, optional GPT-Live
+frontend and text-session control grant. New sessions opt in; existing sessions
+are never upgraded. Text remains responsive during asynchronous jobs; status and
+results come from executor state and independent verification. Native desktop CUA,
+GPT-Live access and physical handset qualification are separate gates.
+
+Backend/media 0.3.1 are deployed with ordinary feature gates off; the installed Mac
+helper remains 0.2.1. Direct GPT-Live access is verified. The separate
+[execution-disabled audio test](AUDIO_QUALIFICATION.md) is deployed and ready; physical acceptance remains
+outstanding. This bounded mode latches output after the first interruption and
+does not enable task execution.
+See [rollout and exact next steps](CONVERSATIONAL_CONTROL_RELEASE.md).
+
+The sections below describe the retained legacy foreground-chat pilot. Their rule
+that this original chat produces every reply applies only to that legacy path.
+
 The deployed backend/media/gateway use the agent-owned v2 protocol. Companion
 0.2.1 and the installed skill include the native-control repair. The existing
 coding session receives human turns, uses its normal tools and supplies spoken
@@ -17,7 +53,7 @@ See [STATUS.md](STATUS.md) for exact versions, checks and limits.
 
 ### Deployed follow-up: text first and gated two-way voice
 
-The following behavior is deployed as source `7f1b687`; **handset qualification
+The following behavior originated in `7f1b687` and is retained in 0.3.0; **handset qualification
 is pending and two-way voice remains disabled**. Newly registered v2 connectors opt into iMessage-first
 control. Existing saved runs keep their negotiated behavior. Text `/sessions` to
 list available sessions and `/use SESSION_ID` to select one; selection lasts ten

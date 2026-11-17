@@ -143,3 +143,22 @@ Readiness also returns the validated exact `activeLeaseId` when the helper has a
 active lease, alongside `activeLease`. Execution handoff checks that identity and
 current local armed/available/permission status after helper acknowledgement;
 a late acknowledgement cannot substitute another lease or override local Stop.
+
+Protocol-3 text-session leases omit `callId` and carry exact grant/project authority.
+`POST /v1/devices/:device/text-grants` only proposes a grant; the companion's local
+menu review is the sole approval action. Read status with
+`GET /v1/devices/:device/text-grants/:grant`. No relay route can approve a grant.
+Existing epoch/freshness/unknown-effect rules apply, and text receipts validate the
+exact grant/session rather than substituting a call. See [local grant scope](../docs/DEVICE.md#text-session-local-control-grants).
+
+## Camera wire compatibility
+
+Camera-version-1 leases are additive only to protocol 2 and require an exact
+selected surface. Creation checks the registered helper's advertised camera
+version; an old helper is refused before a camera lease is forwarded. The gateway
+forwards only the bounded `X-Camera-Frame` metadata header (up to 2048 base64
+characters) alongside the existing frame headers. Native camera dimensions may be
+up to 8192×8192 with a 32-million-pixel budget; the existing 2 MiB frame payload cap
+still applies. Non-camera leases retain 1280×720 bounds. Selection/owner fields
+cannot change in a renewal, including during executor transitions. The relay never
+caches pixels and retains existing tombstones/unknown-action receipts.
