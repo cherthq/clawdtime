@@ -431,10 +431,15 @@ struct HelperStatus: Codable {
           frame = CapturedFrame(jpeg: captured.jpeg, width: captured.metadata.source.width, height: captured.metadata.source.height)
         } else { frame = try await capture.capture(lease.displayId) }
         _ = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
-        guard policy.generation == generation, Date().timeIntervalSince(startedAt) <= 2,
-          CGDisplayBounds(lease.displayId) == bounds
-        else {
-          throw HelperError(409, "Capture ended or switched while awaiting the frame.")
+        if lease.surface != nil {
+          guard policy.generation == generation else { throw CaptureRefusal(.authorityChanged) }
+          guard Date().timeIntervalSince(startedAt) <= 2 else { throw CaptureRefusal(.frameStale) }
+          guard CGDisplayBounds(lease.displayId) == bounds else { throw CaptureRefusal(.displayChanged) }
+        } else {
+          guard policy.generation == generation, Date().timeIntervalSince(startedAt) <= 2,
+            CGDisplayBounds(lease.displayId) == bounds else {
+            throw HelperError(409, "Capture ended or switched while awaiting the frame.")
+          }
         }
         let stamp = FrameStamp(
           id: UUID().uuidString, leaseId: leaseId, displayId: lease.displayId,
@@ -468,7 +473,7 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
-      let cameraModes = ["--camera-list", "--camera-frame", "--camera-probe", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      let cameraModes = ["--camera-list", "--camera-frame", "--camera-probe", "--camera-check", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
       if args.contains(where: { $0.hasPrefix("--camera-") && !cameraModes.contains($0) }) {
         throw HelperError(400, "Unsupported camera development mode; rebuild the development helper.")
       }
@@ -498,6 +503,12 @@ struct HelperStatus: Codable {
               guard let index = args.firstIndex(of: "--surface"), index + 1 < args.count,
                 let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Explicit --surface JSON required.") }
               let surface = try JSONDecoder().decode(CameraSurface.self, from: bytes)
+              if args.contains("--camera-check") {
+                // Run current exact-target guards without starting a capture.
+                _ = try await capture.cameraTarget(surface)
+                print("{\"captureAvailable\":true}")
+                exit(0)
+              }
               if args.contains("--camera-inspect") {
                 print(String(data: try JSONEncoder().encode(await capture.cameraInspect(surface)), encoding: .utf8)!)
                 exit(0)
@@ -520,9 +531,8 @@ struct HelperStatus: Codable {
                     guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
                     let frameStarted = Date()
                     _ = try await capture.cameraFrame(surface)
-                    guard LocalSessionGuard().available, Date().timeIntervalSince(frameStarted) < 2 else {
-                      throw HelperError(409, "Capture session changed or frame became stale.")
-                    }
+                    guard LocalSessionGuard().available else { throw CaptureRefusal(.authorityChanged) }
+                    guard Date().timeIntervalSince(frameStarted) < 2 else { throw CaptureRefusal(.frameStale) }
                     frames += 1
                     try await Task.sleep(nanoseconds: 200_000_000)
                   }
@@ -543,7 +553,9 @@ struct HelperStatus: Codable {
             }
             exit(0)
           } catch {
-            if let failure = error as? CaptureFailure {
+            if let refusal = error as? CaptureRefusal {
+              fputs("Camera preview refused: \(refusal.reason.rawValue)\n", stderr)
+            } else if let failure = error as? CaptureFailure {
               fputs("Camera preview unavailable: \(failure.reason.rawValue), native_code=\(failure.nativeCode.map(String.init) ?? "none")\n", stderr)
             } else {
               fputs("Camera preview unavailable: \((error as? HelperError)?.message ?? "capture failed")\n", stderr)

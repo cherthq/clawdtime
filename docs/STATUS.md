@@ -1,3 +1,65 @@
+## November 17, 2026 — diagnosis and consolidated receipt
+
+### Diagnosis
+
+The two reproduced audio defects are corrected in deployed ClawdTime media:
+valid ElevenLabs PCM bursts exceeded the former event/queue limits, and the
+producer's 300 ms output timeout conflicted with legitimate publisher playout
+pauses. Both have bounded regression coverage and real-provider synthetic tests.
+The latest playback repair is deployed but has not had another handset test.
+
+The separate screen failure remains intermittent and its exact native guard is
+unproven. The incident was a native frame HTTP 409 after 51 Finder frames/~35s;
+the gateway normalized it to 410/helper_stopped and closed the lease. Its 69 ms
+native request duration rules out the two-second stale-frame deadline for that
+request. Permissions remained granted, local Enable remained on, and session
+heartbeats were fresh. A transient window-lifecycle/identity/geometry refusal is
+plausible; neither an expired lease nor a user Stop is established.
+
+Three bounded, exact-Finder local probes completed: installed helper 76 frames /
+30,167 ms and 78 frames / 30,354 ms; newly built diagnostic helper 77 frames /
+30,109 ms. No pixels were persisted or transmitted. These did not reproduce the
+failure or prove reliability across Space transitions. A keyboard attempt expanded
+the disposable Drafts row instead of establishing a desktop switch; its collapsed
+state was restored. The new metadata-only target check also passed.
+
+Added allowlisted native refusal codes for lifecycle, identity, placement,
+dimensions, authority and freshness. The gateway logs/forwards only these fixed
+codes, while still stopping the lease, clearing stale frames and refusing retries.
+The new build is local only: the installed companion and production gateway were
+not replaced. Existing diagnostics cannot retroactively identify the old guard.
+
+### Cumulative delivery and acceptance
+
+- Dedicated Clawdtime project and line ending 9741 connected; existing pairing,
+  records and other shared lines preserved.
+- ElevenLabs realtime duplex voice deployed with bounded tools; this original
+  coding chat remains the executor and received three spoken requests.
+- General selected-window/display camera, smooth zoom, realtime annotations and
+  prepared target catalog implemented; IDE support remains optional.
+- Existing native CUA approvals and exclusive execution retained; optional fallback
+  remains off. No native input was performed in the latest handset demo.
+- Human confirmed initial Finder visibility and subjectively faster voice. Sustained
+  screen sharing, handset zooms/annotations, latest playback repair and handset CUA
+  still require acceptance; no new call was placed during this diagnosis.
+
+### Validation and operational receipt
+
+Fresh npm check: 978 tests across 59 files, TypeScript checking and build passed.
+Diagnostic change: 61 Swift tests, release build, 42 gateway tests and 12 affected
+media relay tests passed; independent review found no blockers. Prior deployed
+playback repair: 379 media tests passed, 13 optional SDK tests skipped, plus a
+real-provider audio-only probe. Worktree was clean before this diagnostic change.
+
+Current backend deployment: `ae254fac-7cb2-4af3-b160-5d074f91ce32`.
+Current media deployment: `4db02d42-291d-477e-a6f3-d7e4ad5762e3`, from `f0426b4`.
+Post-deployment checks verified matching running-source hash, voice readiness,
+unchanged environment and all seven media ledger tables preserved. Fresh diagnosis
+checks confirmed idle services, no active call/view lease/unresolved input, and
+local sharing stopped. Diagnostic code is committed separately from these deployed
+components. Next: use the new refusal reason to isolate the intermittent capture
+failure locally, then arrange one separately authorized end-to-end handset test.
+
 ## November 17, 2026 — second streaming-voice demo
 
 One newly authorized call connected after deployment of the bounded audio-burst

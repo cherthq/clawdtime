@@ -12,6 +12,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from test_execution_policy import ExecutionPolicyTests, lease
 from service import validate_lease, Gateway
+from relay import response_headers
 
 class CameraLeaseTests(unittest.TestCase):
     def test_explicit_v2_surface_binding_and_old_shape_compatibility(self):
@@ -50,6 +51,55 @@ del ExecutionPolicyTests
 
 
 class CameraFailureDiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    async def test_refusal_reason_is_allowlisted_and_lease_stays_stopped(self):
+        calls=0
+        reason='lifecycle_witness_unavailable'
+        async def helper(request):
+            nonlocal calls
+            calls+=1
+            return web.Response(status=409,headers={'X-ClawdTime-Camera-Refusal':reason},
+                text='PRIVATE window title and native error')
+        app=web.Application();app.router.add_get('/v1/leases/lease/frame',helper)
+        server=TestServer(app);await server.start_server()
+        with tempfile.TemporaryDirectory() as directory:
+            gateway=Gateway({'DEVICE_GATEWAY_KEY':'g'*32,'DEVICE_GATEWAY_DATABASE_PATH':str(Path(directory)/'gateway.sqlite')},
+                {'mac':{'url':str(server.make_url('')).rstrip('/'),'key':'h'*32}})
+            client=TestClient(TestServer(gateway.app()));await client.start_server()
+            try:
+                selected={**lease(),'cameraVersion':1,'surface':{'kind':'window','id':'99','displayId':1,'ownerPid':123}}
+                gateway.db.execute('INSERT INTO leases VALUES(?,?,?,?,?,?,?)',
+                    ('lease','mac',json.dumps(selected),validate_lease(selected),'active','old-frame',time.time()))
+                gateway.db.commit()
+                with self.assertLogs(level='WARNING') as captured:
+                    response=await client.get('/v1/leases/lease/frame',headers={'Authorization':'Bearer '+'g'*32})
+                    self.assertEqual(response.status,410)
+                    self.assertEqual(response.headers['X-ClawdTime-Camera-Refusal'],reason)
+                    self.assertNotIn('PRIVATE',await response.text())
+                self.assertIn('helper_camera_refused reason='+reason,' '.join(captured.output))
+                self.assertNotIn('PRIVATE',' '.join(captured.output))
+                self.assertEqual(gateway.lease('lease')[1],'stopped')
+                self.assertIsNone(gateway.lease('lease')[2])
+                self.assertEqual((await client.get('/v1/leases/lease/frame',headers={'Authorization':'Bearer '+'g'*32})).status,410)
+                self.assertEqual(calls,1)
+                reason='PRIVATE_UNKNOWN_REASON'
+                gateway.db.execute("UPDATE leases SET state='active' WHERE id='lease'");gateway.db.commit()
+                with self.assertLogs(level='WARNING') as captured:
+                    response=await client.get('/v1/leases/lease/frame',headers={'Authorization':'Bearer '+'g'*32})
+                    self.assertEqual(response.status,410)
+                    self.assertNotIn('X-ClawdTime-Camera-Refusal',response.headers)
+                self.assertNotIn('PRIVATE',' '.join(captured.output))
+                self.assertEqual(gateway.lease('lease')[1],'stopped')
+            finally:
+                await client.close();await server.close()
+
+    def test_relay_forwards_only_known_frame_refusal_without_private_headers(self):
+        headers={'X-ClawdTime-Camera-Refusal':'frame_stale','X-Private':'PRIVATE'}
+        self.assertEqual(response_headers(headers,410,'GET','/v1/leases/lease/frame'),
+                         {'X-ClawdTime-Camera-Refusal':'frame_stale'})
+        for status,method,path in [(200,'GET','/v1/leases/lease/frame'),(410,'POST','/v1/leases/lease/renew')]:
+            self.assertEqual(response_headers(headers,status,method,path),{})
+        self.assertEqual(response_headers({'X-ClawdTime-Camera-Refusal':'PRIVATE'},410,'GET','/v1/leases/lease/frame'),{})
+
     async def test_camera_capture_deadline_does_not_relax_frame_freshness(self):
         selected={**lease(),'cameraVersion':1,'surface':{'kind':'window','id':'99','displayId':1,'ownerPid':123}}
         stale=False

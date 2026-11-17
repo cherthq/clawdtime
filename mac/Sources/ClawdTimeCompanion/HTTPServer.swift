@@ -13,6 +13,10 @@ struct HTTPResponse {
     return HTTPResponse(status: status, body: try encoder.encode(value))
   }
   static func error(_ error: Error) -> HTTPResponse {
+    if let refusal = error as? CaptureRefusal {
+      return HTTPResponse(status: refusal.status, headers: refusal.headers,
+        body: Data("{\"error\":\"Selected camera capture refused; pixels discarded.\"}".utf8))
+    }
     if let capture = error as? CaptureFailure {
       return HTTPResponse(status: 503, headers: capture.headers,
         body: Data("{\"error\":\"Selected camera capture failed; pixels discarded.\"}".utf8))

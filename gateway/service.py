@@ -29,6 +29,16 @@ ID = re.compile(r'^[A-Za-z0-9_-]{1,160}$')
 MAX_FRAME = 2 * 1024 * 1024
 CAPTURE_ERRORS = frozenset(('output_registration','stream_start','stream_interrupted',
     'frame_deadline','frame_decode','stop_deadline','stop_failed','target_before','target_after'))
+CAMERA_REFUSALS = frozenset(('window_missing','window_owner_changed','window_owner_unavailable',
+    'window_layer','window_geometry','initial_placement','other_display','app_hidden',
+    'capture_window_ambiguous','lifecycle_witness_unavailable','lifecycle_witness_ambiguous',
+    'lifecycle_witness_unreadable','window_minimized','capture_busy','capture_dimensions',
+    'authority_changed','frame_stale','display_changed'))
+
+
+def camera_refusal_headers(headers):
+    reason=headers.get('X-ClawdTime-Camera-Refusal')
+    return {'X-ClawdTime-Camera-Refusal':reason} if reason in CAMERA_REFUSALS else {}
 
 
 def capture_error_headers(headers):
@@ -208,8 +218,13 @@ class Gateway:
                 if response.status==425 and frame and body.get('cameraVersion')==1:
                     raise CameraGeometryChanged(text='Selected camera geometry changed; pixels discarded.')
                 if response.status in (403,404,409,410,423):
+                    diagnostic={}
+                    if response.status==409 and frame and body.get('cameraVersion')==1:
+                        diagnostic=camera_refusal_headers(response.headers)
+                        if diagnostic:
+                            logging.warning('helper_camera_refused reason=%s',diagnostic['X-ClawdTime-Camera-Refusal'])
                     self.stop(body['id'])
-                    raise web.HTTPGone(text='Device lease stopped; request a fresh lease explicitly.')
+                    raise web.HTTPGone(text='Device lease stopped; request a fresh lease explicitly.',headers=diagnostic)
                 raise web.HTTPServiceUnavailable()
             return raw,dict(response.headers)
 

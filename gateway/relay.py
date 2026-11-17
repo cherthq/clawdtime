@@ -10,12 +10,18 @@ import time
 import certifi
 from urllib.parse import urlsplit
 from aiohttp import ClientSession,ClientTimeout,TCPConnector,WSMsgType,web
-from service import Gateway,MAX_FRAME
+from service import Gateway,MAX_FRAME,camera_refusal_headers
 from relay_diagnostics import milliseconds, stamp
 
 # Ping every 20 s; a peer gets 10 s to answer before the socket is declared dead.
 HEARTBEAT=20
 PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))$')
+
+def response_headers(headers, status, method, path):
+    result={k:v for k,v in headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height','x-camera-frame')}
+    if status==410 and method=='GET' and path.endswith('/frame'):
+        result.update(camera_refusal_headers(headers))
+    return result
 
 def trusted_tls_context():
     # Isolated trust roots: macOS framework Python may have no default CA file.
@@ -83,7 +89,7 @@ async def relay(gateway,url):
                                         size+=len(chunk)
                                         if size>MAX_FRAME:raise ValueError()
                                         chunks.append(chunk)
-                                    result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height','x-camera-frame')})
+                                    result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers=response_headers(response.headers,response.status,method,path))
                             except asyncio.CancelledError:
                                 record('cancelled');raise
                             except Exception as error:

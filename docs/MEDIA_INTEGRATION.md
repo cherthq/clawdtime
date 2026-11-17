@@ -809,6 +809,37 @@ and UI verification belong to the original agent; the media readiness response i
 not proof of those properties. No FaceTime connection or installed-service update is
 performed by this local mode.
 
+Selected-camera refusal diagnostics now distinguish the native guards that
+previously shared HTTP 409. `CaptureRefusal` emits only the fixed
+`X-ClawdTime-Camera-Refusal` code: exact window missing/owner/layer/geometry,
+initial placement or another display, hidden/minimized or unverifiable/ambiguous
+lifecycle evidence, capture busy/dimensions, changed authority/display, or stale
+frame. Native messages, window IDs/titles, geometry and arbitrary exception text
+are excluded from this header. Both pre-capture and post-capture target checks
+preserve the typed 409; the gateway logs the allowlisted reason and still stops
+the lease with HTTP 410. Its outbound relay forwards that fixed header only for
+failed frame requests. Unknown codes are discarded. No retry, lease revival,
+freshness extension or wider capture fallback is introduced.
+
+The development binary supports `--camera-check --surface '<exact surface JSON>'`
+to run the current target guards without capturing pixels. Its `captureAvailable`
+result means only those target guards passed: it does not validate a lease, local
+session authority, post-capture identity, frame freshness or successful capture.
+The existing `--camera-probe` uses the same explicit surface and checks capture
+for at most 30 seconds/120 frames, returning counts and fixed refusal codes without
+printing or saving pixels. These development modes neither load installed helper
+configuration nor arm sharing. The diagnostic source and local release build are
+not an installed-helper update. The earlier production native 409's exact guard
+remains unproven; two lead-run installed-helper probes passed 76 and 78 frames
+over approximately 30 seconds each without reproducing it. The newly built
+diagnostic binary also passed `--camera-check` and captured 77 frames in 30,109 ms;
+no actual Space transition was verified during these probes. The local commands
+are `mac/.build/release/ClawdTimeCompanion --camera-check --surface '<exact surface JSON>'`
+and the same command with `--camera-probe`, only for the explicitly authorized
+disposable surface. Validation passed
+61 Swift tests, 42 gateway tests and 12 affected media-relay tests; independent
+review found no blocking changes to the existing refusal/Stop boundaries.
+
 ## Same-chat ElevenLabs streaming frontend
 
 The optional `elevenlabs` frontend connects one continuous bidirectional voice

@@ -71,9 +71,13 @@ extension ScreenCapture {
   }
 
   private func cameraWindowAvailable(_ window: SCWindow, windows: [SCWindow]) -> Bool {
+    cameraWindowRefusal(window, windows: windows) == nil
+  }
+
+  private func cameraWindowRefusal(_ window: SCWindow, windows: [SCWindow]) -> CaptureRefusal.Reason? {
     guard let owner = window.owningApplication,
-      let app = NSRunningApplication(processIdentifier: owner.processID), !app.isTerminated else { return false }
-    return WindowCapturePolicy.available(frame: window.frame, onScreen: window.isOnScreen,
+      let app = NSRunningApplication(processIdentifier: owner.processID), !app.isTerminated else { return .windowOwnerUnavailable }
+    return WindowCapturePolicy.unavailableReason(frame: window.frame, onScreen: window.isOnScreen,
       active: window.isActive, appHidden: app.isHidden,
       witnesses: window.isOnScreen || window.isActive ? [] : cameraLifecycleWitnesses(pid: owner.processID),
       matchingCaptureWindows: windows.filter { $0.windowLayer == 0 && $0.owningApplication?.processID == owner.processID && $0.frame == window.frame }.count)
@@ -247,22 +251,22 @@ extension ScreenCapture {
     let bounds: CGRect
     if surface.kind == "window" {
       guard let window = content.windows.first(where: { String($0.windowID) == surface.id }) else {
-        throw HelperError(409, "Exact selected window ID is absent from ScreenCaptureKit.")
+        throw CaptureRefusal(.windowMissing)
       }
       guard window.owningApplication.map({ Int($0.processID) }) == surface.ownerPid else {
-        throw HelperError(409, "Exact selected window owner no longer matches.")
+        throw CaptureRefusal(.windowOwnerChanged)
       }
       guard window.windowLayer == 0 else {
-        throw HelperError(409, "Exact selected window is no longer a normal application window.")
+        throw CaptureRefusal(.windowLayer)
       }
       guard window.frame.width > 0, window.frame.height > 0 else {
-        throw HelperError(409, "Exact selected window has empty geometry.")
+        throw CaptureRefusal(.windowGeometry)
       }
       let others = content.displays.filter { $0.displayID != surface.displayId && CGDisplayIsActive($0.displayID) != 0 }.map { CGDisplayBounds($0.displayID) }
       guard WindowCapturePolicy.placementAllowed(frame: window.frame, selectedDisplay: displayBounds, otherDisplays: others, initial: initial) else {
-        throw HelperError(409, initial ? "Initially selected window must be wholly inside its authorized display and overlap no other display." : "Selected window intersects another active display; select it again explicitly.")
+        throw CaptureRefusal(initial ? .initialPlacement : .otherDisplay)
       }
-      guard cameraWindowAvailable(window, windows: content.windows) else { throw HelperError(409, "Selected window is minimized, hidden, or its lifecycle cannot be verified.") }
+      if let reason = cameraWindowRefusal(window, windows: content.windows) { throw CaptureRefusal(reason) }
       filter = SCContentFilter(desktopIndependentWindow: window)
       bounds = window.frame
     } else {
@@ -281,11 +285,12 @@ extension ScreenCapture {
   }
 
   func cameraFrame(_ surface: CameraSurface) async throws -> CameraCapturedFrame {
-    guard !busy else { throw HelperError(409, "A frame is already being captured.") }
+    guard !busy else { throw CaptureRefusal(.captureBusy) }
     busy = true; defer { busy = false }
     let filter: SCContentFilter
     let geometry: CameraGeometry
     do { (filter, geometry) = try await cameraTarget(surface) }
+    catch let error as CaptureRefusal { throw error }
     catch let error as HelperError { throw error }
     catch { throw CaptureFailure(.targetBefore, underlying: error) }
     let config = SCStreamConfiguration()
@@ -299,13 +304,14 @@ extension ScreenCapture {
       : SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     let after: CameraGeometry
     do { (_, after) = try await cameraTarget(surface) }
+    catch let error as CaptureRefusal { throw error }
     catch let error as HelperError { throw error }
     catch { throw CaptureFailure(.targetAfter, underlying: error) }
     guard geometry == after else {
       throw HelperError(425, "Selected surface geometry changed during capture (origin \(geometry.originX),\(geometry.originY) to \(after.originX),\(after.originY); size \(geometry.pointWidth)x\(geometry.pointHeight) to \(after.pointWidth)x\(after.pointHeight)).")
     }
     guard image.width == geometry.width, image.height == geometry.height else {
-      throw HelperError(409, "Native capture dimensions differ from selected geometry (expected \(geometry.width)x\(geometry.height), returned \(image.width)x\(image.height)).")
+      throw CaptureRefusal(.captureDimensions)
     }
     let bitmap = NSBitmapImageRep(cgImage: image)
     guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85]), data.count <= 2 * 1024 * 1024 else {
