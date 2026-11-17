@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
 from PIL import Image, ImageDraw, ImageFont
@@ -140,16 +141,17 @@ document.getElementById('click').onclick=async()=>{try{const value=await api('/p
 if(token)refresh();else halt('Preview access is missing. Reopen the full URL printed by the preview command, or start a new preview session.');
 </script>'''
 
-def preview_html(mode, selected, label=None):
+def preview_html(mode, selected, label=None, native_control=False):
     if mode!='actual':return HTML
     kind=selected['kind']
     owner=' · process '+str(selected['ownerPid']) if 'ownerPid' in selected else ''
     identity=kind.capitalize()+' '+selected['id']+' · display '+str(selected['displayId'])+owner
+    control_note='native control coordinated separately; no preview input' if native_control else 'view only · no OS input'
     label=html.escape(label[:160]) if isinstance(label,str) and label.strip() else 'Selected '+kind
     identity=html.escape(identity)
     return (HTML.replace('ClawdTime screen camera</h1>', 'Actual '+kind+' sharing</h1>',1)
         .replace('Local preview · camera only · IDE support optional · input uses a disposable fake sink.',
-                 'Live pixels from one explicitly selected '+kind+' · view only · no OS input.',1)
+                 'Live pixels from one explicitly selected '+kind+' · '+control_note+'.',1)
         .replace('<p id="source"></p>','<p id="source">'+label+'</p>',1)
         .replace('<pre id="receipt"></pre>','<details><summary>Diagnostics</summary><p>'+identity+'</p><pre id="camera-details"></pre><pre id="receipt"></pre></details>',1)
         .replace('<p id="guidance"></p>','<p id="guidance">Capture is off until you press Start sharing. Keep this exact window open. Moving it onto another display requires a new selection.</p>',1)
@@ -168,6 +170,17 @@ class Preview:
         self.config=config; self.token=config.get('token') or secrets.token_urlsafe(32)
         self.sid=config.get('sessionId','ct_'+'a'*40);self.mode=config.get('mode','synthetic')
         if self.mode=='actual' and 'surface' not in config:raise ValueError('Actual capture requires an explicitly selected --surface JSON.')
+        self.native_control=config.get('nativeControl') is True
+        if 'nativeControl' in config and type(config['nativeControl']) is not bool:raise ValueError('nativeControl must be an explicit boolean.')
+        if self.native_control:
+            try:
+                backend=urlsplit(config.get('backendOrigin',''))
+                valid=(self.mode=='actual' and backend.scheme=='http' and backend.hostname=='127.0.0.1'
+                    and backend.port is not None and not backend.username and not backend.password
+                    and backend.path in ('','/') and not backend.query and not backend.fragment
+                    and isinstance(config.get('backendToken'),str) and len(config['backendToken'])>=32)
+            except (ValueError,TypeError):valid=False
+            if not valid:raise ValueError('Native review requires an actual selected surface and authenticated literal-loopback backend.')
         self.kind='coding';self.stopped=False;self.started=False;self.start_lock=asyncio.Lock();self.deadline=time.monotonic()+min(900,config.get('durationSeconds',900));self.expires_at=time.time()*1000+min(900,config.get('durationSeconds',900))*1000
         self.tmp=tempfile.TemporaryDirectory(prefix='clawdtime-camera-');self.runners=[];self.frame_count=0;self.inputs=[];self.lease=None;self.last_frame=None;self.process=None
         self.surface=surface(config.get('surface',{'kind':'display','id':str(config.get('displayId',1)),'displayId':config.get('displayId',1)}))
@@ -282,7 +295,7 @@ class Preview:
             if request.method=='POST' and request.headers.get('Origin') not in (None,self.origin):raise web.HTTPForbidden()
             response=await handler(request);response.headers['Cache-Control']='no-store';response.headers['Referrer-Policy']='no-referrer';return response
         app=web.Application(middlewares=[auth],client_max_size=16384)
-        async def home(request):return web.Response(text=preview_html(self.mode,self.surface,self.config.get('surfaceLabel')),content_type='text/html',headers={'Content-Security-Policy':"default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"})
+        async def home(request):return web.Response(text=preview_html(self.mode,self.surface,self.config.get('surfaceLabel'),self.native_control),content_type='text/html',headers={'Content-Security-Policy':"default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"})
         async def info(request):
             retired=self.selection['leaseId'] in self.screen.stopped
             reason=(getattr(self,'capture_error',None) or 'Selected surface authorization or capture became unavailable.') if retired else None
@@ -317,9 +330,12 @@ class Preview:
         async def readiness(request):
             if request.match_info['device']!=self.selection['deviceId']:raise web.HTTPNotFound()
             return web.json_response({'deviceId':self.selection['deviceId'],'memberId':self.selection['memberId'],'displayId':str(self.selection['displayId']),
-                'armed':not self.stopped,'available':not self.stopped,'screenPermission':True,'controlPermission':self.mode=='synthetic','viewAllowed':True,'controlAllowed':self.mode=='synthetic',
+                'armed':not self.stopped,'available':not self.stopped,'screenPermission':True,'controlPermission':self.mode=='synthetic' or self.native_control,'viewAllowed':True,'controlAllowed':not self.stopped and (self.mode=='synthetic' or self.native_control),
                 'displayAttached':True,'activeLease':bool(self.lease),'activeLeaseId':self.selection['leaseId'] if self.lease else None,
-                'cameraVersion':1,'policyRevision':1,'controlPolicy':'agent_tools_with_fallback' if self.mode=='synthetic' else 'view_only','unresolvedActionCount':0,'preview':True})
+                'cameraVersion':1,'policyRevision':1,'controlPolicy':'agent_tools_with_fallback' if self.mode=='synthetic' else 'agent_tools_only' if self.native_control else 'view_only','unresolvedActionCount':0,'preview':True})
+        async def fallback_input(request):
+            if self.mode=='actual':raise web.HTTPConflict(text='Actual preview does not submit fallback input; use coordinated native tools.')
+            return await self.actions.post(request)
         async def fake_input(request):
             if self.mode!='synthetic':raise web.HTTPForbidden(text='Actual sharing is view only; no fake or OS input is available.')
             body=await request.json();state=self.screen.camera.status()
@@ -331,7 +347,7 @@ class Preview:
         app.router.add_post('/preview/start',start);app.router.add_post('/preview/stop',stop);app.router.add_post('/preview/fixture',fixture_change);app.router.add_post('/preview/fake-input',fake_input)
         app.router.add_get('/sessions/{id}/screen/camera',command);app.router.add_post('/sessions/{id}/screen/camera',command)
         app.router.add_get('/sessions/{id}/screen/frame',frame);app.router.add_post('/sessions/{id}/screen/lease',lease);app.router.add_post('/sessions/{id}/screen/stop',stop)
-        app.router.add_post('/sessions/{id}/screen/actions',self.actions.post);app.router.add_get('/sessions/{id}/screen/actions/{action_id}',self.actions.get)
+        app.router.add_post('/sessions/{id}/screen/actions',fallback_input);app.router.add_get('/sessions/{id}/screen/actions/{action_id}',self.actions.get)
         app.router.add_get('/devices/{device}/readiness',readiness);app.router.add_get('/devices/{device}/readiness/{member}/{display}',readiness)
         self.origin=await self.listen(app,self.config.get('port',0))
         if self.mode=='synthetic' or self.config.get('capture') is True:

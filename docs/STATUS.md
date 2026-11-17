@@ -1,5 +1,187 @@
 # ClawdTime implementation status
 
+## First authorized 9741 camera call — November 17, 2026
+
+The user authorized live activation and one Finder FaceTime demo, then explicitly
+requested restoring their existing HackPton admin membership **persistently**.
+The audited membership routine restored that exact account/project role; the
+existing recipient verification became valid again. The line, assignment
+generation, provider binary and other projects/lines were unchanged.
+
+Backend live activation: `cc7e5656-802c-4d7e-90a9-c237db5e57f4` (SUCCESS).
+The fresh database was initialized through the adapter's verified retained event
+anchor before activation, without replaying earlier messages. The earlier no-camera
+foreground bridge was closed cleanly; a fresh same-chat v2 bridge registered the
+exact harmless Finder window and native desktop capability. Local Enable was
+confirmed and every transport/device readiness check passed before requesting
+one call with a stable idempotency key.
+
+**Physical result: audio connected, screen sharing failed.** The human confirmed
+they could hear the agent. Spoken turns arrived in this same coding chat; a spoken
+reply completed playback according to its receipt. The camera emitted its first
+frame, then the helper returned HTTP 503 and media correctly cleared the screen
+and released the lease. The human reported no visible screen share. No zoom,
+annotation or CUA handset acceptance was achieved. The attempt was explicitly
+ended; provider reports ended, backend call ended and media closed. No redial.
+
+A bounded local reproduction against the installed helper captured four frames,
+then returned `Selected camera stream did not stop cleanly; frame discarded.` in
+107 ms. The temporary view-only diagnostic lease was released; no OS input or
+screenshots were saved. This is a native stream-stop failure, not a permission or
+line-assignment problem. New diagnostic source changes preserve the primary error
+and expose bounded categories; they are not yet a proven capture fix or installed
+release. The gateway's separate 1.5-second timeout mismatch also needs review.
+
+**Experience gap acknowledged:** the deployed demo used the older half-duplex
+voice path. Realtime GPT voice and two-way voice flags remained disabled. The user
+expects the Argos experience: a fast duplex voice model calling tools, prepared
+camera movement/zoom/annotations, combined with ClawdTime's general cross-app
+capture and CUA. This parity is not implemented/physically verified by the above
+call. Agent-team source comparison and corrective implementation follow the
+requested commit checkpoint; do not describe readiness as experience parity.
+
+The user requested committing all current changes before that audit. Private
+credentials, runtime databases, captured media and operational receipts stay out
+of Git. No push was requested. Backend remains live on the same selected line;
+no active call/capture remains. Additional calls require specific permission.
+
+
+## Authorized deployment and fresh pairing — November 17, 2026
+
+The user explicitly approved deploying ClawdTime and finishing Mac pairing.
+The backend and media release is now deployed; **runtime remains standby** with
+live traffic disabled. No setup-test notice, message, FaceTime call, capture lease
+or OS input was submitted. The native provider upgrade remains withdrawn.
+9741 remains in HackPton with assignment generation 4 and no competing connector;
+no Chert provider software, line assignment or other shared line was changed.
+
+- Backend: `41f8ee37-ab4b-4ded-b852-dae6f33c57e4`, SUCCESS, version 0.4.0.
+- Media: `b8f97d2c-3871-42e4-afb5-d415745949ec`, SUCCESS, healthy,
+  gateway connected, zero active sessions.
+- Companion: 0.4.0/build 5 installed at the existing stable app path. Existing
+  helper/gateway configuration, keys, receipt histories and control policy were
+  preserved byte-for-byte; only the ClawdTime gateway was restarted.
+- Fresh exact-line pairing claimed once with viewing/control permission. A new
+  v2 foreground bridge in this same chat is registered and heartbeating;
+  `connectionReady:true`, `liveReady:false` correctly reflects standby. Existing
+  MCP configuration/runs were preserved and are not claimed to have hot-reloaded.
+
+The fresh line uses a separate database and encryption key with explicit
+`standard_once`. Old database/config pairs remain on the existing volume, with
+an additional same-volume archive of the prior active database/configuration.
+Old business entities, events and effects match the pre-rollout archive. Old
+cursors and receipt metadata also match; only heartbeat/readiness cache entries
+changed while the previous runtime finished shutting down. The fresh database contains one pairing and one session, zero calls, setup tests,
+leases, actions or effects. No native event cursor was seeded or advanced.
+
+Two rollout problems were resolved without replaying effects: native transport
+construction requires truthful ownership evidence even in standby; and the
+private source archive's 0600 file modes prevented the container's unprivileged
+runtime from reading package/assets. The reviewed source-only deployment context
+was normalized to files 0644/directories 0755 under its protected parent; all
+347 source hashes remain unchanged. The original archive and failed deployment
+records are retained. Do not normalize permissions on runtime/configuration files.
+
+macOS showed saved permission switches enabled while the new ad-hoc signed build
+reported denial. Re-adding only the exact installed ClawdTime app in Accessibility
+and Screen Recording repaired both. Authenticated running-helper checks now report
+`screenPermission:true`, `controlPermission:true`, `cameraVersion:1`, `armed:false`
+and zero unresolved input. macOS Quit & Reopen selected the default view-only
+configuration; the lead relaunched with the retained control-capable configuration
+and verified both viewer and controller ACLs. No global TCC reset was used.
+
+The current foreground session has native desktop capability but no camera surface
+selection. The previously reviewed Finder window was no longer a verifiable visible
+surface; no full-desktop substitute was selected. Before the production demo:
+select a visible harmless window in a fresh camera-configured session, refresh and
+seed a verified retained event boundary in the new database, enable live dispatch,
+then obtain permission for the specific FaceTime call. Pairing/deployment alone do
+not establish physical acceptance or authorize a call. Local Enable remains off.
+
+Validation reused the reviewed 950-test/58-file source release, typecheck/build,
+12 preview tests, 3 gateway camera tests and 53 Swift tests. Deployment health,
+exact-line claim, session heartbeat, matching loaded ACLs and permission checks
+were verified after rollout. Changes remain uncommitted and unpushed.
+
+
+## Native provider upgrade withdrawn — November 17, 2026
+
+Implemented and locally validated: explicit `textTransport: "standard_once"`
+uses the existing native send API; strict remains the default. HTTP 200 plus a
+real GUID and positive send evidence is required. Unknown/queued/malformed
+outcomes are retained without resubmission across repeated drains and restart.
+No receipt lookup or native provider installation is required by this mode.
+`npm run check` passed 950 tests/58 files, typecheck and build. Component checks:
+12 preview, 3 gateway camera, 53 Swift. Companion 0.4.0/build 5 is built and locally
+signature-verified, not installed. A source-only release archive and private
+disabled 9741 configuration are staged; GET-only preflight passes identity,
+cursor, project line, worker and media checks. Activation and fresh Mac pairing
+are still pending. No deployment, message or call occurred.
+
+The user dropped the proposed 9741 native messaging upgrade and authorized
+continuing toward the production demo. Its locally built candidate is withdrawn
+and must not be installed. Keep 9741 in HackPton with its existing provider
+software, credentials, callback and records. Adapt ClawdTime explicitly to the
+existing standard send API; unknown submissions remain blocked, never requeued
+or automatically resubmitted. The earlier strict-receipt-only diagnostic below
+is historical and is not a universal camera/CUA requirement. No FaceTime call is
+authorized by this preparation step.
+
+## HackPton binding and receipt compatibility — November 17, 2026
+
+The user confirmed the existing line ending 9741 within HackPton is the target;
+do not reassign any line. The prior Argos chat and operational README confirm
+successful recipient verification and a physical audio/synthetic-camera test.
+This does not establish a ClawdTime pairing or strict text receipt compatibility.
+
+Current authenticated GETs confirm exact native identity and healthy service,
+plus project-scoped Calls access to the available, unoccupied selected line.
+The native service lacks ClawdTime's required receipt lookup: generic 404 instead
+of the structured missing-receipt response; status also reports no trusted bridge.
+The existing Mac recovery credential belongs to an older line, not 9741.
+
+Local preflight now requires `native_text_receipts`; unsupported services cannot
+advance inbound polling or create a welcome effect. Checks use authenticated GET
+only and preserve cursors and unknown outcomes. `npm run check`: 923 tests across
+58 files, typecheck and build pass. The actual selected service diagnostic used
+two GETs: exact identity passed, receipt compatibility blocked, no cursor/effect
+created. No provider software, live configuration, assignment, message, call, or
+old runtime record changed. Mac reconnection remains incomplete pending receipt
+compatibility and a fresh exact-line pairing. Changes remain uncommitted.
+
+## Connection recovery prerequisite — November 17, 2026
+
+User-authorized recovery inspection found matching saved connection/setup/companion
+credentials, but a fresh live doctor still returns 401. Both configured canonical
+and documented backend public health endpoints return HTTP 200; reachability is
+not the blocker. The supported existing-setup path reuses the rejected credential
+and has no refresh operation. A fresh operator-issued recovery authorization and
+reconciliation of preserved unknown registration intents are required before a
+new claim. Requested that missing authorization/access route; no local state was
+removed, no pairing or live service changed, and no call was placed.
+
+## Native CUA with real window sharing — November 16, 2026
+
+Local integration passed through the existing connector/backend ownership path:
+claim native → select **02 Drafts** in the disposable Finder window with this
+chat's native CUA tool → independently observe the selection and transmitted
+pixels → release to idle. Stop removed pixels and refused subsequent camera access
+and native claim. `npm run preview:camera:cua` reproduces this isolated setup;
+it uses simulation transport with actual window pixels, no phone call or live config.
+Window fallback remains disabled, with gateway rejection before receipt creation.
+
+Checks: 910 Node tests/typecheck/build; 72 focused backend/control tests;
+38 gateway tests; 12 preview tests; synthetic end-to-end smoke and browser
+regression passed.
+Changes after `440919b` remain uncommitted. See
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md) for scope and evidence.
+
+FaceTime preflight is blocked: both configured MCP connection status and CLI live
+doctor returned **401 invalid/revoked credential**. Next: restore an authorized
+project connection without discarding prior receipts, verify installed stack and
+exclusive line readiness, then perform the supervised handset test. No pairing,
+installed service, deployment, push or FaceTime call was changed in this follow-up.
+
 ## Real Finder sharing accepted locally — November 16, 2026
 
 Local view-only sharing now captures the exact disposable Finder window through

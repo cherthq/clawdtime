@@ -1,5 +1,5 @@
 // Narrow DM extraction from Apple Teams src/chert/messages.ts at be47b11.
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Pairing } from "../contracts.js";
 import { Store } from "../storage/store.js";
@@ -13,6 +13,8 @@ export interface MessageBinding {
   phone: string;
   instanceId: string;
 }
+export const textTransportSchema = z.enum(["strict_receipts", "standard_once"]);
+export type TextTransport = z.infer<typeof textTransportSchema>;
 export interface NativeMessage {
   id: string;
   lineId: string;
@@ -128,13 +130,17 @@ export async function jsonRequest(
   url: string,
   init: RequestInit,
   request: typeof fetch = fetch,
+  expectedStatus?: number,
 ) {
   const response = await request(url, {
     ...init,
     redirect: "error",
     signal: AbortSignal.timeout(15000),
   });
-  if (!response.ok)
+  if (
+    !response.ok ||
+    (expectedStatus !== undefined && response.status !== expectedStatus)
+  )
     throw new Error(`Provider returned HTTP ${response.status}.`);
   const text = await response.text();
   if (text.length > 2 * 1024 * 1024)
@@ -150,7 +156,10 @@ export class NativeMessages {
     readonly store: Store,
     readonly binding: MessageBinding,
     readonly request: typeof fetch = fetch,
-    private readonly options: { readOnly?: boolean } = {},
+    private readonly options: {
+      readOnly?: boolean;
+      textTransport?: TextTransport;
+    } = {},
   ) {
     const u = new URL(binding.origin);
     if (
@@ -161,7 +170,7 @@ export class NativeMessages {
     )
       throw new Error("Native origin must be a bare HTTPS origin.");
   }
-  async api(path: string, body?: unknown) {
+  private requestOptions(body?: unknown): RequestInit {
     if (this.options.readOnly && body !== undefined)
       throw new DomainError(
         403,
@@ -169,20 +178,47 @@ export class NativeMessages {
       );
     const raw = body === undefined ? "" : JSON.stringify(body),
       ts = Math.floor(Date.now() / 1000);
+    return {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${this.binding.token}`,
+        "x-chert-signature": `v1,${ts},${createHmac("sha256", this.binding.signingSecret).update(`${ts}.${raw}`).digest("hex")}`,
+        "content-type": "application/json",
+        "ngrok-skip-browser-warning": "true",
+      },
+      ...(raw ? { body: raw } : {}),
+    };
+  }
+  async api(path: string, body?: unknown) {
     return jsonRequest(
       this.binding.origin + path,
-      {
-        method: body === undefined ? "GET" : "POST",
-        headers: {
-          authorization: `Bearer ${this.binding.token}`,
-          "x-chert-signature": `v1,${ts},${createHmac("sha256", this.binding.signingSecret).update(`${ts}.${raw}`).digest("hex")}`,
-          "content-type": "application/json",
-          "ngrok-skip-browser-warning": "true",
-        },
-        ...(raw ? { body: raw } : {}),
-      },
+      this.requestOptions(body),
       this.request,
     );
+  }
+  /** Probe an unused identity without reserving or dispatching a text operation. */
+  async verifyTextReceipts() {
+    // GET does not reserve this native-format origin; a fresh UUID avoids existing receipts.
+    const origin = `text_${randomUUID().replaceAll("-", "")}`;
+    const response = await this.request(
+      `${this.binding.origin}/api/v1/text-operations/v1/${origin}?from=${encodeURIComponent(this.binding.phone)}`,
+      {
+        ...this.requestOptions(),
+        redirect: "error",
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+    if (response.status !== 404)
+      throw new Error("Native text receipt protocol is unavailable.");
+    const text = await response.text();
+    if (text.length > 4096)
+      throw new Error("Native text receipt response is invalid.");
+    const parsed = z
+      .object({ found: z.literal(false), origin: z.literal(origin) })
+      .strict()
+      .safeParse(JSON.parse(text));
+    if (!parsed.success)
+      throw new Error("Native text receipt response is invalid.");
   }
   async verify() {
     const result = await this.api("/api/v1/whoami"),
@@ -323,6 +359,47 @@ export class NativeMessages {
       text,
     };
     beforeDispatch?.();
+    if (this.options.textTransport === "standard_once") {
+      // The durable caller records intent before this single POST. Never retry or
+      // fall back when acknowledgement is absent, even if the provider queued it.
+      const result = await jsonRequest(
+        this.binding.origin + "/send",
+        this.requestOptions({
+          to: operation.to,
+          message: text,
+          idempotency_key: operation.origin,
+          native_sms_disabled: true,
+        }),
+        this.request,
+        200,
+      );
+      const acknowledged = z
+        .object({
+          success: z.literal(true),
+          guid: z.string().uuid(),
+          delivery: z.object({ isSent: z.literal(true), error: z.literal(0) }),
+          queued: z.literal(false).optional(),
+          duplicate: z.literal(false).optional(),
+          suppressed: z.literal(false).optional(),
+          error: z.null().optional(),
+          delivery_error: z.union([z.literal(0), z.null()]).optional(),
+          status: z.enum(["sent", "acknowledged"]).optional(),
+          from: z.literal(operation.from).optional(),
+          to: z.literal(operation.to).optional(),
+          phone_line_id: z.literal(this.binding.providerLineId).optional(),
+        })
+        .safeParse(result);
+      if (!acknowledged.success)
+        throw new Error(
+          "Standard text acknowledgement missing; outcome unknown.",
+        );
+      return {
+        accepted: true,
+        receiptId: acknowledged.data.guid,
+        status: "acknowledged",
+        operationOrigin: operation.origin,
+      };
+    }
     const r = await this.api("/api/v1/text-operations/v1", operation);
     const fingerprint = hash(
       JSON.stringify([

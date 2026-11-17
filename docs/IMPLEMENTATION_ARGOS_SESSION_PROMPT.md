@@ -4,6 +4,49 @@ You are **IMPLEMENTATION_ARGOS**, the coordinating implementation lead for
 ClawdTime's general screen camera, smooth zoom, and realtime presentation annotations.
 Work in `/Users/garygao/clawdtime` on the existing branch **`ArgosClawd`**.
 
+### Latest review correction — November 17, 2026
+
+One user-authorized9741 call connected audio and delivered voice turns into this
+chat, but selected-window capture failed after its first frame. The human expects
+Argos realtime duplex/tool-call latency and prepared camera movement, not the
+old half-duplex ClawdTime path used in that attempt. Commit the existing checkpoint,
+then audit/implement experience parity with agent teams. Persistent restoration of
+the user's HackPton admin membership was explicitly approved and completed; do not
+remove it. Backend is now live; old standby notes below are historical. No redial
+without new call authorization. See the newest review section for exact evidence.
+
+### Latest deployed state — November 17, 2026
+
+ClawdTime 0.4.0 backend/media and Companion build 5 are deployed/installed under
+explicit user approval. Fresh 9741/HackPton pairing and this chat's foreground v2
+session are connected in standby, with both macOS permissions repaired and local
+sharing stopped. No message or FaceTime call was made. Existing records, other
+lines and Chert software are preserved. See the newest deployment section in
+`docs/IMPLEMENTATION_ARGOS_REVIEW.md` before using older operational notes below.
+The native provider candidate is withdrawn. No live cursor has been seeded;
+a fresh reviewed boundary and explicit runtime activation remain for the demo.
+
+### Operational follow-up — November 17, 2026
+
+**Latest decision:** drop the proposed native messaging worker/helper upgrade.
+Do not install its prepared candidate or alter 9741's provider software. Continue
+toward the production demo using an explicitly selected standard messaging
+adapter in ClawdTime, preserving uncertain outcomes without automatic resubmission.
+Receipt lookup is not a universal prerequisite for camera/CUA. Validate the
+selected adapter locally and prepare matching ClawdTime camera artifacts. No
+FaceTime call is authorized yet; the existing assignment remains unchanged.
+
+The user subsequently authorized live ClawdTime configuration repair and Mac
+reconnection, but **no FaceTime call**. Use the existing service line ending
+**9741 within HackPton**. Do not reassign it or another line. The user confirmed
+HackPton is intentional; no replacement setup prompt is needed. The prior
+“Compare Argos with ClawdTime” chat records successful Argos verification/audio
+and a synthetic camera test on that assignment. That test did not create a
+ClawdTime pairing or establish compatibility with its strict message receipts.
+Preserve all older connections, databases, cursors, and uncertain outcomes.
+The older Liam/Mia/Noah handoff records are historical, not current instructions.
+See `IMPLEMENTATION_ARGOS_REVIEW.md` for current diagnostics and remaining work.
+
 First context yourself using the reading sequence below. Then implement and validate
 the approved local slice. Do not stop at another plan or a scaffold. Complete the
 working path and local checks, then leave it ready for the user's review. The user

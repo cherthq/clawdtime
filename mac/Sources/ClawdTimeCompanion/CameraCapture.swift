@@ -283,7 +283,11 @@ extension ScreenCapture {
   func cameraFrame(_ surface: CameraSurface) async throws -> CameraCapturedFrame {
     guard !busy else { throw HelperError(409, "A frame is already being captured.") }
     busy = true; defer { busy = false }
-    let (filter, geometry) = try await cameraTarget(surface)
+    let filter: SCContentFilter
+    let geometry: CameraGeometry
+    do { (filter, geometry) = try await cameraTarget(surface) }
+    catch let error as HelperError { throw error }
+    catch { throw CaptureFailure(.targetBefore, underlying: error) }
     let config = SCStreamConfiguration()
     config.width = geometry.width; config.height = geometry.height
     config.showsCursor = false; config.capturesAudio = false
@@ -293,7 +297,10 @@ extension ScreenCapture {
     let image = try await surface.kind == "window"
       ? CameraSingleFrameStream().capture(filter: filter, configuration: config)
       : SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-    let (_, after) = try await cameraTarget(surface)
+    let after: CameraGeometry
+    do { (_, after) = try await cameraTarget(surface) }
+    catch let error as HelperError { throw error }
+    catch { throw CaptureFailure(.targetAfter, underlying: error) }
     guard geometry == after else {
       throw HelperError(425, "Selected surface geometry changed during capture (origin \(geometry.originX),\(geometry.originY) to \(after.originX),\(after.originY); size \(geometry.pointWidth)x\(geometry.pointHeight) to \(after.pointWidth)x\(after.pointHeight)).")
     }

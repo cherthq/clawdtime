@@ -646,7 +646,8 @@ such a tool. Do not end the interaction or call setup complete while waiting.
 #### Existing Mac, fresh line pairing
 
 An installed companion can be reused, but a pairing belongs to its original line,
-member, device and display. A fresh line requires its own newly texted setup link.
+member, device and display. A fresh line requires its own one-use setup link,
+issued through onboarding or the authenticated operator route below.
 `--existing true` means the same pairing, not merely the same app or project.
 The CLI refuses a fresh link over a prior connection/checkpoint; the companion
 also refuses replacing a different claimed binding. Neither token is transferable.
@@ -686,6 +687,56 @@ desktop project, automatic discovery uses the primary folder. The current chat
 can read the installed skill directly and use the bridge without claiming MCP
 hot reload. [Official skill guidance](https://learn.chatgpt.com/docs/customization/overview#skills),
 [project discovery](https://learn.chatgpt.com/docs/projects#use-local-projects-for-folders-and-codebases).
+
+#### No-call production-demo staging
+
+Use the user's confirmed existing provider project and line; do not reassign the
+line. The current demo plan uses an explicitly selected
+`NativeTransportConfig.textTransport: "standard_once"` with the existing messaging
+service. A native receipt-service upgrade is not a prerequisite for this plan.
+Omitting this setting retains `strict_receipts`; a failed receipt lookup never
+switches adapters automatically. Standard mode submits an authorized text once
+and requires a positive native acknowledgment. It has no durable receipt lookup:
+timeouts, ambiguous responses and unknown outcomes remain unretryable. Its
+read-only readiness result does not prove message sending or handset delivery.
+
+The coordinating lead can prepare the connection without sending onboarding text:
+
+1. Preserve the old database with its configuration, connection directories,
+   companion receipts and unresolved runs. Stage the new exact line binding in
+   separate protected state; never relabel an old pairing or copy its token into
+   a different binding. Reuse an existing grant only if its line, member, recipient,
+   device and display match the intended authorization.
+2. With operator authentication, `POST /internal/pairing` creates a one-use link
+   for the exact `memberId`, `recipient`, `conversationId`, `lineId`, `deviceId`
+   and `displayId` (optional `ttlSeconds`, maximum 900). This route stores an
+   invitation without queuing a text or call. Keep its response private. Claim
+   it once through `POST /api/pairing/claim` with the matching device/display and
+   explicitly authorized view/control permissions. Preserve an uncertain claim
+   for reconciliation instead of attempting it again.
+3. Save the resulting grant as a new owner-only connector `Connection`, bound to
+   the actual canonical project, adapter and host. Its `installed` field is
+   optional for the foreground bridge. Keep the existing project MCP entry and
+   skill intact; a new private connection path does not refresh a running MCP
+   process. Do not invoke `connect` or installation over existing owned entries.
+   Reuse the installed Mac application and permissions, while preparing any new
+   companion binding through the documented Mac procedure above.
+4. Start the foreground bridge in this same chat with a fresh run ID and the
+   verified connection. Select the actual camera surface and attest native tools
+   only after verifying they operate that same surface:
+
+```sh
+node /absolute/path/to/clawdtime/dist/cli/main.js setup-session --agent codex --project /absolute/project --connection /absolute/private/new-connection.json --run-id NEW_CURRENT_CHAT_RUN_ID --native-control desktop --shared-surface true --native-cancellation false --screen-camera true --camera-display DISPLAY_ID --camera-window WINDOW_ID --camera-owner-pid OWNER_PID
+```
+
+Keep stdin open and inspect `status`; registration and heartbeats do not dial.
+During this staging phase, do not issue `invite`, `authorize`, `start`,
+`request_attention` or any call command. In particular, bridge `invite` means
+`POST /api/setup/test`, which queues an informational text; it is distinct from
+the operator pairing invitation above. This prepares the exact same-chat session
+without a new agent or managed runner. Production camera transmission, native
+claim/action/release and handset visibility still require the separately
+authorized supervised call; staging does not establish that acceptance.
 
 #### Foreground setup-session protocol
 

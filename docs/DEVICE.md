@@ -18,6 +18,53 @@ Build/package with `./mac/scripts/package.sh`. This creates
 `CLAWDTIME_SIGNING_IDENTITY` can choose an installed Developer ID; notarization and
 external clean installation are separate, unverified release requirements.
 No build operation launches the app or changes macOS permissions.
+The bundle version comes from the root `package.json` (three numeric components).
+`CLAWDTIME_BUILD_NUMBER` selects an integer from 1 to 9999 and defaults to `5`;
+invalid version/build values fail before compilation or packaging. For example,
+`CLAWDTIME_BUILD_NUMBER=5 ./mac/scripts/package.sh` prepares the current `0.4.0`
+local review bundle. The label alone does not establish compatibility with a
+deployed stack: match exact artifact hashes and negotiated `cameraVersion:1`.
+Packaging alone does not install or release-qualify the app, and it does not
+contain or upgrade a native messaging provider.
+
+Local packaging check, November 17, 2026: current source produced version `0.4.0`,
+build `5`, arm64, with strict deep signature verification passing. Executable
+SHA-256: `2b325885a18d1ffeb341b42cdb721f959a669f2a15ac9de2db1e4958c3dc188e`.
+The signature is ad hoc with no Team ID. Bash syntax and seven invalid
+version/build fixtures passed; invalid values refused before compilation.
+This artifact includes selected-surface `cameraVersion:1` and existing native
+ownership integration; selected-window fallback input remains refused. That
+packaging check launched no app and performed no capture or installation; the
+subsequent authorized installation is recorded below.
+
+## Installed camera companion — November 17, 2026
+
+The coordinating lead installed version **0.4.0, build 5** at the stable
+`~/Applications/ClawdTime Companion.app` path. The existing private
+`~/Library/Application Support/ClawdTimeCompanion/mia-control-20261111`
+configuration, helper/gateway keys and receipt state were preserved. The helper
+was explicitly relaunched with that directory's `helper.json`; its loaded ACL
+contains both viewer and controller access for the same retained member and display.
+
+After the ad-hoc bundle update, authenticated helper status initially reported
+Screen Recording and Accessibility unavailable despite enabled Settings toggles.
+The lead removed and re-added **only the exact ClawdTime Companion entries** through
+macOS Settings. No global TCC reset occurred. Subsequent authenticated metadata
+reported `screenPermission:true`, `controlPermission:true`, `cameraVersion:1`,
+`armed:false` and `unresolvedActionCount:0`. Sharing remains stopped locally; these
+checks establish permission/readiness metadata, not capture or input acceptance.
+
+macOS **Quit & Reopen** dropped the custom configuration argument and loaded the
+default view-only `setup/helper.json`. The lead corrected this by explicitly
+relaunching the installed app with the retained custom control configuration and
+verifying its loaded ACL. Until deliberately migrated, this installation requires
+the same explicit `--config` path on each relaunch; ordinary opening does not
+select the custom configuration.
+
+Ad-hoc signed updates may require refreshing grants for the exact stable bundle.
+Developer ID distribution, notarization and clean-install acceptance remain
+unqualified. No screen capture, OS input or phone call was performed during this
+installation/readiness check, and no native messaging provider was upgraded.
 
 See mac/README.md for the pairing-receipt configuration generator, metadata-only
 display enumeration and launch. Installer refuses existing files and missing
@@ -409,3 +456,29 @@ authorized display click/type/scroll path is retained. [The companion README](..
 and [Argos review](IMPLEMENTATION_ARGOS_REVIEW.md) contain commands and current local
 evidence. Building this source does not replace the installed companion or modify
 its grants/configuration. Local Stop, lock/sleep and lease expiry retain their gates.
+
+### Native CUA alongside selected-window viewing
+
+The minimal local integration keeps independent-window capture as a presentation
+source and uses the original agent's existing native tools as the executor. Before
+an input, the agent must hold the current `native` executor epoch, satisfy current
+cursor/hold and local authorization checks, and independently identify the exact
+selected app/window in a fresh native-tool observation. Camera crops and annotations
+do not select a native input target. After one harmless fixture action, inspect the
+actual UI and the next shared frame; report verification separately from submission
+and release ownership. A native timeout is uncertain and must not be retried or
+converted into fallback input.
+
+The helper's existing global `CGEvent` click/scroll path and focused-element bounds
+check do not prove a selected-window hit target or focused-window identity. They
+remain unavailable for selected-window fallback. Qualifying such a future path
+requires exact target ownership/focus and occlusion checks, fresh geometry at dispatch,
+secure-input refusal, and local physical acceptance; native sharing acceptance alone
+is insufficient. Media, gateway and helper refuse this path before OS input; the
+gateway also refuses it before creating a new action receipt.
+
+Local Stop prevents further cooperating native dispatch, invalidates camera/control
+authority, and clears presentation. It cannot forcibly cancel an unrelated tool
+already running in the agent host; cancellation capability and uncertain outcomes
+must be reported honestly. The isolated native-review readiness policy is not an
+installed-device permission grant or evidence of handset/FaceTime acceptance.

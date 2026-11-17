@@ -1,5 +1,11 @@
 # ArgosClawd: local agent connector, general screen presentation, and conversation
 
+Current operational checkpoint (November 17): the user-approved ClawdTime release
+is deployed and this Mac has a fresh 9741/HackPton pairing in standby. Both macOS
+permissions pass after refreshing the exact companion entries; capture stays off.
+See `docs/IMPLEMENTATION_ARGOS_REVIEW.md` for deployment IDs and remaining demo
+steps. Provider upgrade remains withdrawn; no reassignment or FaceTime call.
+
 Draft: November 16, 2026. Revised for general app presentation and CUA.
 First local implementation slice reviewed in simulation; local commit authorized.
 Workspace: `/Users/garygao/clawdtime`, branch `ArgosClawd`.
@@ -7,6 +13,18 @@ Reference lab commit: `43441ad`; Argos upstream reference:
 `7ee7310da8c902f3770861b27bdaf0941b301589`.
 
 ## 0. Current implementation handoff and scope
+
+### Production-demo preparation — November 17, 2026
+
+Use the existing 9741 assignment within HackPton. The user dropped the proposed
+native messaging upgrade; its candidate must not be installed. ClawdTime now has
+an explicit `standard_once` adapter for the existing send API, with durable unknown
+outcomes and no automatic resubmission or route fallback. Strict receipt mode
+remains the default for older configurations. Matched camera source and companion
+artifacts are prepared locally; production rollout and a fresh exact-line Mac
+pairing remain pending. Preserve all existing records and assignments. No FaceTime
+call is authorized yet. See the current demo section of the implementation review
+for 950-test validation, component checks and GET-only 9741 preflight evidence.
 
 The next coding session is **IMPLEMENTATION_ARGOS**. Its executable handoff is
 [IMPLEMENTATION_ARGOS_SESSION_PROMPT.md](IMPLEMENTATION_ARGOS_SESSION_PROMPT.md).
@@ -21,7 +39,10 @@ zoom and annotations and authorized committing all pending work locally; no push
 or deployment is authorized. The subsequent local Finder-sharing request is now
 implemented with real source pixels. The user accepted the real Finder-sharing
 preview and requested a local commit and log on November 16, 2026. Cross-app,
-actual CUA targeting and handset acceptance remain pending.
+broader CUA targeting and handset acceptance remain pending. A subsequent local
+native-CUA check selected a disposable Finder row under exclusive ownership,
+independently verified its UI/camera result, released ownership and verified Stop.
+FaceTime preflight currently fails with an invalid/revoked project credential (401).
 See [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md)
 for the exact change inventory, runnable preview, validation and acceptance gaps.
 

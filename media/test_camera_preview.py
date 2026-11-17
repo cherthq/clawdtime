@@ -156,3 +156,36 @@ class ActualPreviewModeTests(unittest.IsolatedAsyncioTestCase):
         release.set();response=await task
         self.assertEqual(response.status,410);await response.read();response.release()
         self.assertFalse(self.preview.started);self.assertEqual(self.preview.frame_count,0)
+
+
+class NativeReviewConfigurationTests(unittest.TestCase):
+    def test_native_review_is_explicit_actual_and_loopback_authenticated(self):
+        surface={'kind':'window','id':'99','displayId':1,'ownerPid':123}
+        base={'mode':'actual','surface':surface,'nativeControl':True,
+            'backendOrigin':'http://127.0.0.1:4215','backendToken':'b'*32}
+        for changes in [{'mode':'synthetic'},{'backendOrigin':''},{'backendOrigin':'https://example.com'},
+            {'backendOrigin':'http://127.0.0.1:123@evil.example'},{'backendToken':''},{'nativeControl':'true'}]:
+            with self.assertRaises(ValueError):Preview({**base,**changes})
+
+class NativeReviewPreviewTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.preview=Preview({'mode':'actual','surface':{'kind':'window','id':'99','displayId':1,'ownerPid':123},
+            'nativeControl':True,'backendOrigin':'http://127.0.0.1:1','backendToken':'b'*32,'durationSeconds':30})
+        self.info=await self.preview.setup();self.http=ClientSession();self.headers={'Authorization':'Bearer '+self.preview.token};self.base=self.info['origin']
+    asyncTearDown=ActualPreviewModeTests.asyncTearDown
+    async def test_native_readiness_does_not_enable_capture_or_preview_input(self):
+        async with self.http.get(self.base+'/devices/preview_device/readiness',headers=self.headers) as response:
+            state=await response.json()
+            self.assertEqual(state['controlPolicy'],'agent_tools_only')
+            self.assertTrue(state['controlAllowed']);self.assertTrue(state['controlPermission'])
+            self.assertFalse(state['activeLease']);self.assertTrue(state['preview'])
+        async with self.http.get(self.base+'/preview/info',headers=self.headers) as response:
+            state=await response.json();self.assertEqual(state['inputSink'],'none');self.assertFalse(state['started'])
+        async with self.http.get(self.base+'/') as response:
+            html=await response.text();self.assertIn('native control coordinated separately; no preview input',html)
+        async with self.http.post(self.base+'/sessions/'+self.preview.sid+'/screen/actions',headers=self.headers,json={}) as response:self.assertEqual(response.status,409)
+        self.assertEqual(self.preview.db.execute('SELECT count(*) FROM device_actions').fetchone()[0],0)
+        self.assertEqual(self.preview.frame_count,0);self.assertEqual(self.preview.inputs,[])
+        async with self.http.post(self.base+'/preview/stop',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        async with self.http.get(self.base+'/devices/preview_device/readiness',headers=self.headers) as response:
+            self.assertFalse((await response.json())['controlAllowed'])

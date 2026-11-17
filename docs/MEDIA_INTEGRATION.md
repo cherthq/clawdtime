@@ -798,3 +798,13 @@ connector/API smoke validation, physical capture coverage and remaining acceptan
 steps are recorded in [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md).
 No FaceTime/live-media acceptance or deployment is implied. See [media README](../media/README.md#general-screen-camera-argos-local-slice)
 for precise limits, preview and cleanup commands.
+
+For isolated native CUA review, actual preview can advertise `agent_tools_only`
+with explicit `nativeControl: true` and authenticated loopback-backend configuration.
+This lets the real ownership broker coordinate the original agent's native tools
+while media continues to capture only the selected window. Preview input remains
+absent, including a pre-receipt rejection of all actual-mode fallback actions.
+Default actual mode stays view-only. Native-host qualification, native tool results,
+and UI verification belong to the original agent; the media readiness response is
+not proof of those properties. No FaceTime connection or installed-service update is
+performed by this local mode.

@@ -38,6 +38,8 @@ import { DomainError, hash, Vault } from "../storage/security.js";
 import {
   NativeMessages,
   jsonRequest,
+  textTransportSchema,
+  type TextTransport,
   type MessageBinding,
   type EventAnchor,
 } from "./native-messages.js";
@@ -57,6 +59,7 @@ export interface LineHandoff {
 }
 export interface NativeTransportConfig {
   enabled: boolean;
+  textTransport?: TextTransport;
   binding: MessageBinding;
   callsOrigin: string;
   projectId: string;
@@ -162,7 +165,15 @@ export class NativeTransport implements Transport {
       )
         throw new Error("Live service origins must be bare HTTPS.");
     }
-    this.messages = new NativeMessages(store, config.binding, request, options);
+    const textTransport = textTransportSchema.parse(
+      config.textTransport === undefined
+        ? "strict_receipts"
+        : config.textTransport,
+    );
+    this.messages = new NativeMessages(store, config.binding, request, {
+      ...options,
+      textTransport,
+    });
     this.vault = new Vault(config.encryptionKey);
     if (!options.readOnly) this.guard();
     this.store.saveState(
@@ -217,6 +228,7 @@ export class NativeTransport implements Transport {
     return hash(
       JSON.stringify({
         binding: c.binding,
+        textTransport: c.textTransport ?? "strict_receipts",
         projectId: c.projectId,
         projectKey: c.projectKey,
         callsOrigin: c.callsOrigin,
@@ -252,7 +264,20 @@ export class NativeTransport implements Transport {
         : Promise.reject(new Error("No handoff boundary.")),
       this.lineInventory(),
       this.media("/health"),
+      this.config.textTransport === "standard_once"
+        ? Promise.resolve()
+        : this.messages.verifyTextReceipts(),
     ]);
+    add(
+      "native_text_transport",
+      results[4].status === "fulfilled" && results[0].status === "fulfilled",
+      this.config.textTransport === "standard_once"
+        ? "Standard once-only submission is explicitly configured; exact native identity is checked separately. Send capability is untested and durable receipt lookup is unavailable; unknown submissions cannot be retried."
+        : results[4].status === "fulfilled"
+          ? "Native text receipt lookup supports the exact bound sender and strict missing-receipt protocol."
+          : "Native text receipt lookup is unavailable or incompatible; message delivery cannot be qualified.",
+      "Check the explicitly configured text transport and exact native identity; do not send a diagnostic message, switch modes automatically, or retry an unknown operation.",
+    );
     add(
       "native_identity",
       results[0].status === "fulfilled",

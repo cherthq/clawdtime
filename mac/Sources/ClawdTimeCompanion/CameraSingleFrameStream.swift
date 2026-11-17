@@ -18,15 +18,17 @@ final class CameraSingleFrameStream: NSObject, SCStreamOutput, SCStreamDelegate,
       let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
       self.stream = stream
       do { try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "clawdtime.camera.frame")) }
-      catch { finish(.failure(error)); return }
-      let timeout = DispatchWorkItem { [self] in finish(.failure(HelperError(503, "Selected window did not produce a fresh frame within the capture deadline."))) }
+      catch { finish(.failure(CaptureFailure(.outputRegistration, underlying: error))); return }
+      let timeout = DispatchWorkItem { [self] in finish(.failure(CaptureFailure(.frameDeadline))) }
       timer = timeout
       DispatchQueue.global().asyncAfter(deadline: .now() + 1.5, execute: timeout)
-      stream.startCapture { [self] error in if let error { finish(.failure(error)) } }
+      stream.startCapture { [self] error in if let error { finish(.failure(CaptureFailure(.streamStart, underlying: error))) } }
     }
   }
 
-  func stream(_ stream: SCStream, didStopWithError error: Error) { finish(.failure(error)) }
+  func stream(_ stream: SCStream, didStopWithError error: Error) {
+    finish(.failure(CaptureFailure(.streamInterrupted, underlying: error)))
+  }
   func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
     guard type == .screen, sampleBuffer.isValid,
       let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
@@ -36,7 +38,7 @@ final class CameraSingleFrameStream: NSObject, SCStreamOutput, SCStreamDelegate,
     guard !done else { return }
     let image = CIImage(cvPixelBuffer: buffer)
     guard let result = CIContext(options: [.cacheIntermediates: false]).createCGImage(image, from: image.extent) else {
-      finish(.failure(HelperError(503, "Selected camera frame could not be decoded."))); return
+      finish(.failure(CaptureFailure(.frameDecode))); return
     }
     finish(.success(result))
   }

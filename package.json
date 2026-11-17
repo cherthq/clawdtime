@@ -17,6 +17,7 @@
     "demo": "tsx scripts/demo.ts",
     "preview:camera": "tsx scripts/preview-camera.ts",
     "preview:camera:window": "tsx scripts/preview-camera-window.ts",
+    "preview:camera:cua": "tsx scripts/preview-camera.ts --native-window",
     "test:camera:browser": "tsx scripts/check-camera-preview.ts",
     "cli": "tsx cli/index.ts",
     "test:onboarding:browser": "npm run build && tsx tests/onboarding.browser.ts",

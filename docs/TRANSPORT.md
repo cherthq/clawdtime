@@ -167,6 +167,43 @@ No live number or secret belongs in this repository. Default execution uses
 are not FaceTime delivery evidence. No ClawdTime live call has been qualified by
 the transport unit tests.
 
+## Explicit standard text compatibility
+
+`NativeTransportConfig.textTransport` accepts `strict_receipts` (the default when
+omitted) or the explicitly selected `standard_once`. The normalized mode is part
+of the binding fingerprint; unknown values fail configuration validation. A failed
+receipt probe never switches modes automatically. Existing line assignments,
+databases, pairings, event boundaries and unknown outcomes remain unchanged.
+
+Strict mode requires the signed, sender-bound GET receipt lookup to return HTTP 404
+with exactly `{found:false,origin:<requested unused origin>}`. A generic 404 does
+not qualify. The `native_text_transport` readiness check in `standard_once` instead
+requires the explicitly configured mode and healthy exact native identity. Its
+message states that send capability is untested and durable operation lookup is
+unavailable; this is not physical message acceptance.
+
+Standard mode sends one authenticated native `POST /send` containing the exact
+paired `to`, `message`, stable effect-derived `idempotency_key`, and
+`native_sms_disabled:true`. Fresh `/api/v1/whoami` evidence binds the configured
+provider line, E.164 sender and instance before dispatch; the request is restricted
+to the exact paired direct conversation. It does not use the public queued-send
+endpoint, alternate routes, or an automatic fallback after an error.
+
+Only HTTP 200 with `success:true`, a UUID `guid`, `delivery.isSent:true`, and
+`delivery.error:0` qualifies as provider-reported acknowledgement. Queued,
+duplicate, suppressed, contradictory identity, error, missing-GUID, malformed JSON
+and timeout responses cannot supply that acknowledgement. A GUID is not proof of
+handset delivery; no delivered state is inferred from this compatibility path.
+
+The existing dispatcher commits a running intent before the single submission.
+An ambiguous outcome remains unknown through repeated draining and restart, with
+the original effect identity and cursor retained. ClawdTime never resubmits an
+unknown operation or invents a receipt. The provider may manage its own internal
+queue and retries; this mode guarantees no automatic ClawdTime resubmission, not
+provider-wide exactly-once delivery. Text-only setup does not authorize a FaceTime
+call. All compatibility validation is synthetic until a separately authorized
+message is observed by the intended person.
+
 ## Validation
 
 `npx vitest run tests/backend.test.ts` exercises the local durable loop, repeat

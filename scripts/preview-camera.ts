@@ -1,7 +1,12 @@
-/** Disposable local integration: connector → real backend policy → media → fake helper.
- * No installed configuration, provider, agent runner, or OS input is used. */
+/** Disposable connector/backend/media integration with synthetic or explicit window pixels.
+ * No installed configuration, provider, replacement agent, or OS-input dispatch here. */
 import { serve } from "@hono/node-server";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  execFile,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
@@ -26,19 +31,54 @@ import type {
   CameraCommand,
   PresentationReference,
 } from "../src/camera-contracts.js";
+import { cameraSurfaceSchema } from "../src/camera-contracts.js";
 
 const args = process.argv.slice(2);
 if (
   args.some(
-    (a, i) => !["--smoke", "--port"].includes(a) && args[i - 1] !== "--port",
+    (a, i) =>
+      !["--smoke", "--port", "--native-window"].includes(a) &&
+      args[i - 1] !== "--port",
   )
 )
   throw new Error(
-    "Use --smoke and/or --port PORT. Actual capture uses the separately opt-in Python preview.",
+    "Use --smoke, --port PORT, or --native-window for explicit local Finder/native-tool review.",
   );
+const nativeWindow = args.includes("--native-window");
+if (nativeWindow && args.includes("--smoke"))
+  throw new Error("Native review never submits synthetic fallback input.");
+const nativeBinary = resolve("mac/.build/debug/ClawdTimeCompanion");
+let selectedSurface = cameraSurfaceSchema.parse({
+  kind: "display",
+  id: "1",
+  displayId: 1,
+});
+if (nativeWindow) {
+  const run = promisify(execFile);
+  await run("swift", ["build", "--package-path", "mac"], {
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  const found = await run(
+    nativeBinary,
+    [
+      "--camera-find-window",
+      "--query",
+      JSON.stringify({
+        bundleId: "com.apple.finder",
+        title: "ClawdTime Sharing Review",
+      }),
+    ],
+    { timeout: 10000, maxBuffer: 16384 },
+  );
+  selectedSurface = cameraSurfaceSchema.parse(JSON.parse(found.stdout));
+  if (selectedSurface.kind !== "window")
+    throw new Error("Exact Finder window required.");
+}
 const port = args.includes("--port")
   ? Number(args[args.indexOf("--port") + 1])
-  : 3348;
+  : nativeWindow
+    ? 3350
+    : 3348;
 if (!Number.isInteger(port) || port < 1024 || port > 65535)
   throw new Error("Invalid local port.");
 const origin = `http://127.0.0.1:${port}`,
@@ -51,13 +91,16 @@ let preview:
   | { origin: string; token: string; url?: string; previewUrl?: string }
   | undefined;
 let shuttingDown = false;
+let reviewInput: ReturnType<typeof createInterface> | undefined;
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 class PreviewPort implements DevicePort {
   async readiness(deviceId: string, memberId: string, displayId: string) {
     if (remote) return remote.readiness(deviceId, memberId, displayId);
     return {
       cameraVersion: 1,
-      controlPolicy: "agent_tools_with_fallback",
+      controlPolicy: nativeWindow
+        ? "agent_tools_only"
+        : "agent_tools_with_fallback",
       policyRevision: 1,
       controlAllowed: true,
       armed: true,
@@ -108,7 +151,16 @@ class PreviewPort implements DevicePort {
       });
       python.stdin.end(
         JSON.stringify({
-          mode: "synthetic",
+          mode: nativeWindow ? "actual" : "synthetic",
+          ...(nativeWindow
+            ? {
+                nativeBinary,
+                nativeControl: true,
+                capture: true,
+                surfaceLabel:
+                  "Finder — ClawdTime Sharing Review · native CUA review",
+              }
+            : {}),
           port: 0,
           token: mediaToken,
           sessionId: mediaSessionId(lease.requestId),
@@ -165,10 +217,10 @@ const paired = service.claimPairing({
     conversationId: "synthetic",
     lineId: "synthetic",
     deviceId: "preview_device",
-    displayId: "1",
+    displayId: String(selectedSurface.displayId),
   }).token,
   deviceId: "preview_device",
-  displayId: "1",
+  displayId: String(selectedSurface.displayId),
   allowView: true,
   allowControl: true,
 });
@@ -183,17 +235,26 @@ const agent = service.registerSession(paired.token, {
     cooperativePause: true,
     polling: true,
     screenCameraVersion: 1,
+    ...(nativeWindow
+      ? {
+          nativeControl: "desktop" as const,
+          sharedSurface: true,
+          nativeCancellation: false,
+        }
+      : {}),
   },
   screenCamera: {
     version: 1,
-    surface: { kind: "display", id: "1", displayId: 1 },
+    surface: selectedSurface,
   },
 });
 const request = service.requestAttention(agent.token, {
   taskId: "preview",
   idempotencyKey: "preview",
   reason: "review",
-  question: "Synthetic local camera",
+  question: nativeWindow
+    ? "Local Finder and native CUA review; no external call"
+    : "Synthetic local camera",
   timeoutSeconds: 900,
 });
 await service.drain();
@@ -212,6 +273,7 @@ const tick = setInterval(() => {
 async function close() {
   if (shuttingDown) return;
   shuttingDown = true;
+  reviewInput?.close();
   clearInterval(tick);
   clearTimeout(expiry);
   service.store.saveState(`view-stopped:${request.id}`, true);
@@ -255,14 +317,113 @@ try {
   assert.equal(
     status?.state,
     "live",
-    "Real backend/media path must produce a fresh synthetic frame",
+    "Backend/media path must produce a fresh selected frame",
   );
   console.log(
-    `Synthetic camera preview: ${preview?.url ?? preview?.previewUrl ?? `${preview!.origin}/#${mediaToken}`}`,
+    `${nativeWindow ? "Native CUA camera review" : "Synthetic camera preview"}: ${preview?.url ?? preview?.previewUrl ?? `${preview!.origin}/#${mediaToken}`}`,
   );
   console.log(
     "Local simulation only. Stop clears capture. Session expires after 15 minutes. Ctrl-C exits.",
   );
+  if (nativeWindow) {
+    console.log(
+      JSON.stringify({
+        ready: true,
+        surface: selectedSurface,
+        requestId: request.id,
+        nativeInput:
+          "Use this chat's verified native tool only after claim and fresh execution_status. This bridge never submits OS input.",
+      }),
+    );
+    const input = createInterface({ input: process.stdin });
+    reviewInput = input;
+    let pending = Promise.resolve();
+    const receipts = new Map<
+      string,
+      { fingerprint: string; result: unknown }
+    >();
+    const allowed = new Set([
+      "execution_status",
+      "transfer_execution",
+      "conversation_turns",
+      "screen_camera_status",
+      "screen_camera_command",
+    ]);
+    input.on("line", (line) => {
+      pending = pending.then(async () => {
+        let id: unknown;
+        try {
+          if (line.length > 16384) throw new Error("Command too large.");
+          const command = JSON.parse(line);
+          id = command.id;
+          if (
+            typeof id !== "string" ||
+            !/^[A-Za-z0-9_-]{1,80}$/.test(id) ||
+            !allowed.has(command.command)
+          )
+            throw new Error("Invalid local review command.");
+          if (
+            command.args?.executor &&
+            !["native", "none"].includes(command.args.executor)
+          )
+            throw new Error(
+              "Only native ownership is available in this review.",
+            );
+          const fingerprint = JSON.stringify(command);
+          const effect =
+            command.command === "transfer_execution" ||
+            command.command === "screen_camera_command";
+          const old = receipts.get(id);
+          if (old) {
+            if (old.fingerprint !== fingerprint)
+              throw new Error(
+                "Command ID already used with different arguments.",
+              );
+            console.log(JSON.stringify(old.result));
+            return;
+          }
+          const release =
+            command.command === "transfer_execution" &&
+            command.args?.executor === "none";
+          if (effect && receipts.size >= (release ? 256 : 255))
+            throw new Error(
+              "Review mutation limit reached; status and one reserved ownership release remain available.",
+            );
+          // Reserve before dispatch: uncertain effects cannot be replayed.
+          if (effect)
+            receipts.set(id, {
+              fingerprint,
+              result: {
+                id,
+                error:
+                  "Prior result unavailable; inspect ownership before continuing. Do not replay the effect.",
+              },
+            });
+          const result = await executeConversationCommand(
+            client,
+            command.command,
+            { ...command.args, requestId: request.id },
+          );
+          const response = { id, result };
+          if (effect) receipts.set(id, { fingerprint, result: response });
+          console.log(JSON.stringify(response));
+        } catch (error) {
+          console.log(
+            JSON.stringify({
+              id,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Review command failed; inspect state.",
+            }),
+          );
+        }
+      });
+    });
+    input.once("close", () => {
+      void pending.then(close);
+    });
+  }
   if (args.includes("--smoke")) {
     let commandNumber = 0;
     const command = async (fields: Record<string, unknown>) => {

@@ -218,6 +218,7 @@ async function cameraFixture(
   enabled = true,
   opted = true,
   selection: CameraSelection = displayCamera,
+  nativeSharedSurface = false,
 ) {
   const f = registrationFixture();
   class CameraDevice extends SimulatedDevice {
@@ -351,7 +352,16 @@ async function cameraFixture(
   const agent = f.service.registerSession(
     f.pairing.token,
     opted
-      ? { ...registration, screenCamera: selection }
+      ? {
+          ...registration,
+          screenCamera: selection,
+          capabilities: {
+            ...registration.capabilities,
+            ...(nativeSharedSurface
+              ? { nativeControl: "desktop" as const, sharedSurface: true }
+              : {}),
+          },
+        }
       : {
           ...registration,
           screenCamera: undefined,
@@ -895,5 +905,212 @@ describe("screen camera preserves the existing CUA ownership and receipts", () =
     ).toBe(400);
     expect(f.device.inputs).toHaveLength(0);
     expect(f.store.all("action")).toHaveLength(0);
+  });
+});
+
+describe("selected-window native ownership uses the current host without enabling fallback", () => {
+  const selectedWindow: CameraSelection = {
+    version: 1,
+    surface: { kind: "window", id: "7", displayId: 1, ownerPid: 123 },
+  };
+  const claim = {
+    expectedEpoch: 0,
+    executor: "native",
+    previousOutcome: "idle",
+    backgroundActorsStopped: true,
+    expectedCursor: 0,
+  };
+  const receive = (
+    f: Awaited<ReturnType<typeof cameraFixture>>,
+    eventId: string,
+    text: string,
+  ) =>
+    f.human.receive({
+      eventId,
+      requestId: f.request.id,
+      memberId: "fixture-human",
+      lineId: "fixture-line",
+      conversationId: "fixture-conversation",
+      channel: "text",
+      text,
+    });
+
+  it("claims and releases native ownership while preserving exact view-only surface authority", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    f.device.readinessOverride = { controlPolicy: "agent_tools_only" };
+    const original = f.store.all<ControlLease>("lease")[0]!;
+    const response = await f.execution("execution", claim);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      executor: "native",
+      epoch: 1,
+      state: "working",
+    });
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+    expect(f.store.all<ControlLease>("lease")[0]).toMatchObject({
+      id: original.id,
+      mode: "view",
+      executor: "native",
+      executorEpoch: 1,
+      cameraVersion: 1,
+      surface: selectedWindow.surface,
+    });
+    expect((await f.api()).status).toBe(200);
+    expect((await f.api(focus)).status).toBe(200);
+    expect((await f.execution("observe", { epoch: 1 })).status).toBe(403);
+    expect(
+      (
+        await f.execution("act", {
+          epoch: 1,
+          actionId: "native_is_not_fallback",
+          frameId: "source_1",
+          action: { kind: "click", x: 0.5, y: 0.5 },
+          expectedCursor: 0,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "clawdtime",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(200);
+    expect(f.store.all<ControlLease>("lease")[0]).toMatchObject({
+      id: original.id,
+      mode: "view",
+      executor: "none",
+      executorEpoch: 2,
+      surface: selectedWindow.surface,
+    });
+    expect(f.service.authenticateSession(f.agent.token).state).toBe("active");
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+  });
+
+  it("requires verified host capabilities and local control permission for native window ownership", async () => {
+    const unverified = await cameraFixture(true, true, selectedWindow);
+    expect((await unverified.execution("execution", claim)).status).toBe(403);
+    expect(unverified.store.all("execution")).toHaveLength(0);
+    for (const readinessOverride of [
+      { controlPolicy: "view_only" },
+      { controlAllowed: false },
+    ]) {
+      const f = await cameraFixture(true, true, selectedWindow, true);
+      f.device.readinessOverride = readinessOverride;
+      expect((await f.execution("execution", claim)).status).toBe(403);
+      expect(f.store.all("execution")).toHaveLength(0);
+      expect(f.device.inputs).toHaveLength(0);
+    }
+  });
+
+  it("requires acknowledgement of the latest human cursor before a native claim", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    await receive(f, "native_correction", "Use the disposable second item.");
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    const poll = await (await f.execution("turns")).json();
+    expect(
+      (await f.execution("ack", { turnId: poll.turns[0].id })).status,
+    ).toBe(200);
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    expect(
+      (await f.execution("execution", { ...claim, expectedCursor: 1 })).status,
+    ).toBe(200);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("keeps native outcome uncertain after Stop and prevents release from claiming completion", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    expect((await f.execution("execution", claim)).status).toBe(200);
+    await receive(f, "stop_native_window", "stop sharing");
+    const state = await (await f.execution("execution")).json();
+    expect(state).toMatchObject({
+      executor: "native",
+      state: "uncertain",
+      epoch: 2,
+    });
+    expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    expect(await (await f.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 2,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(409);
+    expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+    expect(f.device.leases.size).toBe(0);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("does not acknowledge native ownership if Stop wins during helper synchronization", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    const create = f.device.createLease.bind(f.device);
+    f.device.createLease = async (lease) => {
+      await create(lease);
+      f.store.saveState(`view-stopped:${f.request.id}`, true);
+    };
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "uncertain",
+    });
+    expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("unknown");
+    expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("refuses dispatch permission for a correction arriving during a confirmed native claim", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    const create = f.device.createLease.bind(f.device);
+    let corrected = false;
+    f.device.createLease = async (lease) => {
+      await create(lease);
+      if (!corrected) {
+        corrected = true;
+        await receive(
+          f,
+          "native_during_claim",
+          "Wait for a fresh observation.",
+        );
+      }
+    };
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    // Grant acknowledgement succeeded; it remains reconcilable, not a fake input outcome.
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "working",
+      epoch: 1,
+      pendingDelivery: true,
+    });
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(200);
+    expect(f.device.inputs).toHaveLength(0);
   });
 });

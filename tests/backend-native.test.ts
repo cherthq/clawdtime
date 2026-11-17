@@ -57,6 +57,11 @@ function fixture() {
       path = parsed.pathname,
       body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ url: String(url), method: init?.method ?? "GET", body });
+    if (path.startsWith("/api/v1/text-operations/v1/"))
+      return new Response(
+        JSON.stringify({ found: false, origin: path.split("/").at(-1) }),
+        { status: 404 },
+      );
     let result: unknown = {};
     if (path === "/api/v1/whoami")
       result = {

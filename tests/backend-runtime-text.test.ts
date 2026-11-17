@@ -74,6 +74,7 @@ describe("runtime text routing compatibility", () => {
           "line_handoff",
           "handoff_boundary",
           "native_identity",
+          "native_text_transport",
           "native_cursor",
           "logical_identity",
           "line_occupancy",

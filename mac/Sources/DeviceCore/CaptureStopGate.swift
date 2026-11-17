@@ -12,21 +12,24 @@ public final class CaptureStopGate<Value>: @unchecked Sendable {
     completion: @escaping (Result<Value, Error>) -> Void) {
     pending = result; self.completion = completion
     let timer = DispatchWorkItem { [self] in
-      resolve(failure: HelperError(503, "Selected camera stream stop was not acknowledged before the deadline."))
+      resolve(failure: CaptureFailure(.stopDeadline))
     }
     self.timer = timer
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
   }
 
   public func acknowledged(error: Error?) {
-    resolve(failure: error == nil ? nil : HelperError(503, "Selected camera stream did not stop cleanly; frame discarded."))
+    resolve(failure: error.map { CaptureFailure(.stopFailed, underlying: $0) })
   }
 
   private func resolve(failure: Error?) {
     lock.lock()
     guard let completion else { lock.unlock(); return }
     let result: Result<Value, Error>
-    if let failure { result = .failure(failure) }
+    // Cleanup of a failed start can also fail because no stream is running.
+    // Preserve the original cause; either outcome still publishes no image.
+    if case .failure(let error)? = pending { result = .failure(error) }
+    else if let failure { result = .failure(failure) }
     else if let pending { result = pending }
     else { lock.unlock(); return }
     self.pending = nil; self.completion = nil

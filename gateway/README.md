@@ -162,3 +162,10 @@ up to 8192×8192 with a 32-million-pixel budget; the existing 2 MiB frame payloa
 still applies. Non-camera leases retain 1280×720 bounds. Selection/owner fields
 cannot change in a renewal, including during executor transitions. The relay never
 caches pixels and retains existing tombstones/unknown-action receipts.
+
+Selected-window fallback actions are refused at the gateway before reserving an
+action receipt or contacting the helper. This matches the media/backend/native
+window-input guard and avoids turning a known unsupported target into an unknown
+external-effect receipt. Existing receipts remain queryable/reconcilable without
+reposting. Native CUA uses its own qualified tools under broker ownership; window
+camera coordinates never authorize a global click or keyboard target.

@@ -146,3 +146,32 @@ ClawdTime is independent of Apple Teams, selectively derived from source baselin
 
 **Topics:** AI agents · FaceTime · iMessage · human-in-the-loop · computer use · CUA ·
 MCP · Claude Code · Codex · macOS · remote work.
+
+### Local native CUA and camera review
+
+`npm run preview:camera:cua` explicitly starts capture of the disposable Finder
+window titled **ClawdTime Sharing Review**, with a local in-memory backend,
+simulation transport, real camera and native-only execution ownership. Run it
+only after verifying that this same chat's desktop CUA tool can see that exact
+window. It never loads installed credentials or places a call. Sharing follows
+that window if Finder navigates; the title is not a folder-access restriction.
+
+The foreground process accepts newline-delimited JSON commands on stdin:
+`execution_status`, `conversation_turns`, `transfer_execution`,
+`screen_camera_status`, and `screen_camera_command`. Each command has a unique
+`id`, `command`, and `args`; the harness supplies its exact request ID. No image
+bytes or OS-input commands are returned through this bridge. Read-only polling
+is uncached; bounded mutation receipts reserve one final ownership release.
+
+Before native input: read/drain turns, inspect the exact fresh camera and native
+window, claim `native` with the current epoch/cursor, then recheck execution status.
+Use this chat's normal CUA tool, inspect its actual result, and release to `none`
+with `previousOutcome: completed` only when the tool is finished. On an uncertain
+result, preserve uncertainty instead. Native targeting uses the tool's fresh
+window observation, not global coordinates derived from the camera crop. Stop
+clears capture and forbids the next claim; it does not forcibly cancel an already
+running native tool. Window fallback input stays disabled.
+
+The browser's Stop button and Ctrl-C end this disposable local review. It expires
+after 15 minutes. This harness proves local wiring, not installed-stack readiness
+or FaceTime acceptance; see `docs/IMPLEMENTATION_ARGOS_REVIEW.md`.

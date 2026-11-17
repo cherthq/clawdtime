@@ -27,6 +27,17 @@ class CameraGeometryChanged(web.HTTPClientError):
 
 ID = re.compile(r'^[A-Za-z0-9_-]{1,160}$')
 MAX_FRAME = 2 * 1024 * 1024
+CAPTURE_ERRORS = frozenset(('output_registration','stream_start','stream_interrupted',
+    'frame_deadline','frame_decode','stop_deadline','stop_failed','target_before','target_after'))
+
+
+def capture_error_headers(headers):
+    reason=headers.get('X-ClawdTime-Capture-Error')
+    if reason not in CAPTURE_ERRORS:return {}
+    result={'X-ClawdTime-Capture-Error':reason}
+    code=headers.get('X-ClawdTime-Capture-Code','')
+    if re.fullmatch(r'-?(?:0|[1-9][0-9]{0,4})',code):result['X-ClawdTime-Capture-Code']=code
+    return result
 
 
 def timestamp(value):
@@ -183,6 +194,12 @@ class Gateway:
             raw = b''.join(chunks)
             if response.status >= 300:
                 logging.warning('helper_response_refused operation=%s status=%s','frame' if frame else 'lease',response.status)
+                if response.status==503 and frame and body.get('cameraVersion')==1:
+                    diagnostic=capture_error_headers(response.headers)
+                    if diagnostic:
+                        logging.warning('helper_capture_failed reason=%s native_code=%s',
+                            diagnostic['X-ClawdTime-Capture-Error'],diagnostic.get('X-ClawdTime-Capture-Code','none'))
+                        raise web.HTTPServiceUnavailable(headers=diagnostic)
                 if response.status==425 and frame and body.get('cameraVersion')==1:
                     raise CameraGeometryChanged(text='Selected camera geometry changed; pixels discarded.')
                 if response.status in (403,404,409,410,423):
@@ -300,6 +317,8 @@ class Gateway:
             if prior != (lease_id,fingerprint):raise web.HTTPConflict()
             return await self.action_receipt(lease_id,action['id'])
         body,frame,captured = self.active(lease_id)
+        if body.get('cameraVersion')==1 and body.get('surface',{}).get('kind')=='window':
+            raise web.HTTPConflict(text='Selected-window fallback input is unavailable; use qualified native tools.')
         if body.get('protocolVersion') in (2,3):
             if any(action.get(k)!=body[k] for k in ('sessionId','executorEpoch','policyRevision')) or body['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
         elif any(k in action for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()

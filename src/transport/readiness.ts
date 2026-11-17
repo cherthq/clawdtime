@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DomainError } from "../storage/security.js";
 import type { NativeTransportConfig } from "./native.js";
+import { textTransportSchema } from "./native-messages.js";
 export class PreflightBlocked extends DomainError {
   constructor(message: string) {
     super(503, message);
@@ -119,6 +120,7 @@ export function configurationChecks(
       mediaKey: z.string().min(32),
       encryptionKey: z.string().regex(/^[a-f0-9]{64}$/i),
       testerAllowlist: z.array(z.string().regex(/^\+[1-9]\d{7,14}$/)).min(1),
+      textTransport: textTransportSchema.optional(),
     })
     .safeParse(config);
   const independent =

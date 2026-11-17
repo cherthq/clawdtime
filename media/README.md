@@ -219,3 +219,16 @@ identity until Resume; actual resize or display-geometry change resets presentat
 Paused preview controls offer Resume and Clear only. Camera command failures remain
 visible separately from live status, and an earlier receipt is cleared before each
 new command so it cannot be mistaken for the new command's result.
+
+The isolated native-review harness may set `nativeControl: true` in its stdin
+configuration only with actual selected-surface capture and an authenticated
+literal-loopback backend. Its readiness then advertises `agent_tools_only` and
+native-control eligibility to that local broker; it does not qualify an arbitrary
+agent host. The default actual preview remains `view_only`. Native review retains
+`inputSink: none`: every actual-preview fallback action is refused before a receipt
+is created, and fake-click routes remain unavailable. Capture still needs Start or
+the launcher's explicit capture opt-in; native capability alone never starts it.
+Stop removes control eligibility. The original agent's native tools must obtain
+exclusive broker ownership, observe the exact window through their own fresh native
+state, perform one authorized action, verify the UI separately, and release ownership.
+No installed helper/service configuration or FaceTime line is changed by this mode.

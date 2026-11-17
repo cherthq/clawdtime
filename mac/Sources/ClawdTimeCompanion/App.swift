@@ -512,8 +512,11 @@ struct HelperStatus: Codable {
             }
             exit(0)
           } catch {
-            let failure = error as NSError
-            fputs("Camera preview unavailable: \((error as? HelperError)?.message ?? "capture failed (\(failure.domain), code \(failure.code))")\n", stderr)
+            if let failure = error as? CaptureFailure {
+              fputs("Camera preview unavailable: \(failure.reason.rawValue), native_code=\(failure.nativeCode.map(String.init) ?? "none")\n", stderr)
+            } else {
+              fputs("Camera preview unavailable: \((error as? HelperError)?.message ?? "capture failed")\n", stderr)
+            }
             exit((error as? HelperError)?.status == 425 ? 75 : 2)
           }
         }

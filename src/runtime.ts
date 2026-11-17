@@ -385,6 +385,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       "line_handoff",
       "handoff_boundary",
       "native_identity",
+      "native_text_transport",
       "native_cursor",
       "logical_identity",
       "line_occupancy",
@@ -396,7 +397,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env) {
       )
     )
       throw new Error(
-        "Inbound polling requires verified exclusive ownership and an exact retained boundary.",
+        "Inbound polling requires verified exclusive ownership, an exact retained boundary, and the configured text transport.",
       );
   }
   async function pollInbox() {
