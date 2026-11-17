@@ -10,6 +10,7 @@ import base64
 from collections import deque
 import hashlib
 import json
+import math
 import re
 import time
 from urllib.parse import urlsplit
@@ -73,12 +74,67 @@ def client_tool_definitions():
         'stop_sharing': 'Stop screen sharing when requested by the human. Does not claim coding work was cancelled.',
         'end_call': 'End this call only following an explicit current human hangup request. Cleanup is requested, not assumed complete.',
     }
+    parameter_descriptions = {
+        'text': 'Copy the exact latest actual human transcript verbatim. Do not summarize, rewrite, infer an instruction or quote an application report.',
+        'target_id': 'Use an exact ID from the currently advertised prepared cameraTargets. Never invent an ID, path, coordinate or target.',
+    }
     return [{'type': 'client', 'name': name, 'expects_response': True,
              'response_timeout_secs': 10,
              'description': descriptions[name],
-             'parameters': {'type': 'object', 'properties': {key: {'type': 'string'} for key in keys},
+             'parameters': {'type': 'object', 'properties': {key: {'type': 'string', 'description': parameter_descriptions[key]} for key in keys},
                             'required': list(keys)}}
             for name, keys in TOOL_PARAMETERS.items()]
+
+
+def empty_workflow(value):
+    if value is None:
+        return True
+    if not (isinstance(value, dict) and set(value) <= {'nodes', 'edges', 'prevent_subagent_loops', 'version', 'subgraphs', 'frames'}
+            and isinstance(value.get('nodes', {}), dict) and len(value.get('nodes', {})) <= 1
+            and isinstance(value.get('edges', {}), dict) and not value.get('edges')
+            and type(value.get('prevent_subagent_loops', False)) is bool
+            and type(value.get('version', 1)) is int and value.get('version', 1) == 1
+            and value.get('subgraphs', {}) == {} and value.get('frames', []) in ([], {})):
+        return False
+    for node in value.get('nodes', {}).values():
+        if (not isinstance(node, dict) or not {'type', 'edge_order', 'position'}.issubset(node)
+                or set(node) - {'type', 'edge_order', 'position', 'parent_subgraph_id', 'parent_frame_id'}
+                or node.get('parent_subgraph_id') is not None or node.get('parent_frame_id') is not None
+                or node['type'] != 'start' or node['edge_order'] != []
+                or not isinstance(node['position'], dict) or set(node['position']) != {'x', 'y'}
+                or any(type(coordinate) not in (int, float) or not math.isfinite(coordinate)
+                       for coordinate in node['position'].values())):
+            return False
+    return True
+
+
+def canonical_tool(tool):
+    """Compare inline and ID-resolved definitions without provider-added defaults.
+
+    This normalization never discards unknown fields or nondefault values. Both
+    complete tool sets still pass the same local authority checks afterward.
+    """
+    defaults = {'assignments': [], 'dynamic_variables': {'dynamic_variable_placeholders': {}},
+                'execution_mode': 'immediate', 'interruption_mode': 'allow',
+                'pre_tool_speech': 'auto', 'tool_call_sound': None,
+                'tool_call_sound_behavior': 'auto', 'tool_error_handling_mode': 'auto'}
+    value = {**tool}
+    for key, default in defaults.items():
+        if value.get(key) == default:
+            value.pop(key, None)
+    def schema(item):
+        if not isinstance(item, dict):
+            return item
+        result = {**item}
+        for key, default in {'description': '', 'dynamic_variable': '', 'constant_value': None,
+                             'is_omitted': False, 'required_constraints': None, 'enum': None}.items():
+            if result.get(key) == default:
+                result.pop(key, None)
+        if isinstance(result.get('properties'), dict):
+            result['properties'] = {name: schema(prop) for name, prop in result['properties'].items()}
+        return result
+    value['parameters'] = schema(value.get('parameters'))
+    return json.dumps(value, sort_keys=True, separators=(',', ':'))
 
 
 def validate_agent(config, tools):
@@ -92,10 +148,11 @@ def validate_agent(config, tools):
             or conversation.get('tts', {}).get('agent_output_audio_format') != 'pcm_16000'
             or conversation.get('tts', {}).get('model_id') != 'eleven_flash_v2'
             or prompt.get('llm') != 'gemini-2.5-flash'
-            or prompt.get('knowledge_base') or prompt.get('mcp_server_ids')
+            or prompt.get('knowledge_base') or prompt.get('mcp_server_ids') or prompt.get('native_mcp_server_ids')
             or any(value for value in prompt.get('built_in_tools', {}).values())
-            or config.get('workflow') or conversation.get('language_presets')
+            or not empty_workflow(config.get('workflow')) or config.get('procedures') or conversation.get('language_presets')
             or platform.get('auth', {}).get('enable_auth') is not True
+            or platform.get('queueing_config', {}).get('enabled') is not False
             or privacy.get('record_voice') is not False or type(privacy.get('retention_days')) is not int or privacy['retention_days'] != 0
             or privacy.get('delete_transcript_and_pii') is not True
             or privacy.get('delete_audio') is not True
@@ -173,13 +230,19 @@ async def validate_configured_agent(owner, getter=None):
         tools = prompt.get('tools', [])
         ids = prompt.get('tool_ids', [])
         if ids:
-            if tools or not isinstance(ids, list) or len(ids) != len(TOOL_PARAMETERS) or any(
+            if not isinstance(ids, list) or len(ids) != len(TOOL_PARAMETERS) or len(set(ids)) != len(ids) or any(
                     not isinstance(item, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', item) for item in ids):
                 raise ValueError('ElevenLabs tool binding differs')
             definitions = await asyncio.gather(*(getter('/tools/' + item) for item in ids))
             if any(value.get('id') != identity or value.get('response_mocks') for identity, value in zip(ids, definitions)):
                 raise ValueError('ElevenLabs tool response binding differs')
-            tools = [item.get('tool_config') for item in definitions]
+            resolved = [item.get('tool_config') for item in definitions]
+            validate_agent(config, resolved)
+            if tools:
+                validate_agent(config, tools)
+                if sorted(map(canonical_tool, tools)) != sorted(map(canonical_tool, resolved)):
+                    raise ValueError('ElevenLabs inline and referenced tools differ')
+            tools = resolved
         validate_agent(config, tools)
 
 

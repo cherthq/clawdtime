@@ -26,6 +26,7 @@ def configuration(voice_id):
                            'tools': client_tool_definitions(), 'built_in_tools': {}}}},
         'platform_settings': {
             'auth': {'enable_auth': True},
+            'queueing_config': {'enabled': False},
             'call_limits': {'agent_concurrency_limit': 1, 'daily_limit': 10, 'bursting_enabled': False},
             'privacy': {'record_voice': False, 'retention_days': 0, 'delete_transcript_and_pii': True, 'delete_audio': True},
             'overrides': {'conversation_config_override': {'agent': {'prompt': {'prompt': True}, 'first_message': True}}}},

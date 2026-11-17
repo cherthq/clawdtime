@@ -874,7 +874,11 @@ with this contract and must not be modified implicitly. Creating/configuring a
 provider agent is a separate operator action; no deployment or provider mutation
 is performed by this local implementation. Agent GET responses may supply inline
 tools or tool IDs; IDs are resolved with read-only GETs and every definition is
-validated. Workflows, external tools, MCP and built-in actions are refused.
+validated. Matching inline and ID-resolved tool definitions may coexist after
+normalizing documented inactive defaults. Active workflows, external tools, MCP,
+procedures and built-in actions are refused; the provider's inert single start
+node is allowed only with no edges, parents, subgraphs or frames. Provider queueing
+is explicitly disabled in the builder and checked at readiness.
 
 The tools are `send_to_agent({text})`, `show_target({target_id})`,
 `show_overview({})`, `annotate_target({target_id})`, `clear_annotations({})`,

@@ -38,7 +38,7 @@ def agent_config():
         'tts': {'agent_output_audio_format': 'pcm_16000', 'model_id': 'eleven_flash_v2'},
         'agent': {'prompt': {'llm': 'gemini-2.5-flash', 'tools': client_tool_definitions()}},
         'conversation': {'client_events': ['audio', 'interruption', 'user_transcript', 'agent_response']}},
-        'platform_settings': {'auth': {'enable_auth': True},
+        'platform_settings': {'auth': {'enable_auth': True}, 'queueing_config': {'enabled': False},
             'privacy': {'record_voice': False, 'retention_days': 0, 'delete_audio': True, 'delete_transcript_and_pii': True},
             'overrides': {'conversation_config_override': {'agent': {'prompt': {'prompt': True}, 'first_message': True}}}}}
 
@@ -355,10 +355,40 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProviderContractTests(unittest.TestCase):
+    def test_empty_provider_workflow_is_allowed_but_execution_surfaces_are_not(self):
+        config = agent_config()
+        inert = {'nodes': {'synthetic_start': {'type': 'start', 'edge_order': [], 'position': {'x': 0, 'y': 0},
+                                             'parent_subgraph_id': None, 'parent_frame_id': None}},
+                 'edges': {}, 'subgraphs': {}, 'frames': [], 'prevent_subagent_loops': True, 'version': 1}
+        for workflow in (None, {}, {'nodes': {}, 'edges': {}, 'prevent_subagent_loops': False}, inert,
+                         {**inert, 'frames': {}}):
+            validate_agent({**config, 'workflow': workflow}, client_tool_definitions())
+        for workflow in ({'nodes': {'start': {'type': 'start'}}}, {'edges': {'edge': {}}},
+                         {'unknown_execution': {}}, {'nodes': []}, {'prevent_subagent_loops': 'false'}):
+            with self.assertRaises(ValueError): validate_agent({**config, 'workflow': workflow}, client_tool_definitions())
+        for workflow in ({**inert, 'subgraphs': {'nested': {}}}, {**inert, 'frames': [{}]},
+                         {**inert, 'frames': {'synthetic_frame': {}}},
+                         {**inert, 'version': 2}, {**inert, 'nodes': {**inert['nodes'], 'second': inert['nodes']['synthetic_start']}}):
+            with self.assertRaises(ValueError): validate_agent({**config, 'workflow': workflow}, client_tool_definitions())
+        for key in ('parent_subgraph_id', 'parent_frame_id'):
+            changed = copy.deepcopy(inert); changed['nodes']['synthetic_start'][key] = 'synthetic_parent'
+            with self.assertRaises(ValueError): validate_agent({**config, 'workflow': changed}, client_tool_definitions())
+        with self.assertRaises(ValueError):
+            validate_agent({**config, 'procedures': {'procedure': {'type': 'free_form'}}}, client_tool_definitions())
+        changed = copy.deepcopy(config)
+        changed['conversation_config']['agent']['prompt']['native_mcp_server_ids'] = ['native_mcp_fixture']
+        with self.assertRaises(ValueError): validate_agent(changed, client_tool_definitions())
+        changed = copy.deepcopy(config); changed['platform_settings']['queueing_config']['enabled'] = True
+        with self.assertRaises(ValueError): validate_agent(changed, client_tool_definitions())
+
     def test_offline_builder_matches_validation_without_secrets(self):
         config = configuration('fixture_voice')
         validate_agent(config, config['conversation_config']['agent']['prompt']['tools'])
         self.assertEqual(len(config['conversation_config']['agent']['prompt']['tools']), 7)
+        properties = [prop for tool in config['conversation_config']['agent']['prompt']['tools']
+                      for prop in tool['parameters']['properties'].values()]
+        self.assertEqual(len(properties), 3)
+        self.assertTrue(all(isinstance(prop.get('description'), str) and len(prop['description']) > 20 for prop in properties))
         for value in ('', '../other', 'voice?secret=value'):
             with self.assertRaises(ValueError): configuration(value)
 
@@ -480,6 +510,26 @@ class ServiceSpeechTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(call.args[0].startswith(('/agents/', '/tools/')) for call in fake.await_args_list))
         tools[0]['type'] = 'webhook'
         with self.assertRaises(ValueError): await validate_configured_agent(self.service, fake)
+
+    async def test_dual_tool_representation_requires_equal_definitions_after_default_normalization(self):
+        config = agent_config()
+        prompt = config['conversation_config']['agent']['prompt']
+        prompt['tool_ids'] = ['tool_' + str(index) for index in range(7)]
+        resolved = copy.deepcopy(prompt['tools'])
+        for tool in resolved:
+            tool.update(execution_mode='immediate', interruption_mode='allow', pre_tool_speech='auto',
+                        assignments=[], tool_call_sound=None, tool_call_sound_behavior='auto',
+                        tool_error_handling_mode='auto', dynamic_variables={'dynamic_variable_placeholders': {}})
+            tool['parameters'].update(description='', dynamic_variable='', constant_value=None, is_omitted=False)
+            for prop in tool['parameters']['properties'].values():
+                prop.update(dynamic_variable='', constant_value=None, is_omitted=False, enum=None)
+        async def getter(path):
+            if path.startswith('/agents/'): return config
+            identity = path.split('/')[-1]
+            return {'id': identity, 'tool_config': resolved[int(identity.split('_')[-1])]}
+        await validate_configured_agent(self.service, getter)
+        resolved[0]['description'] = 'Different instruction semantics'
+        with self.assertRaises(ValueError): await validate_configured_agent(self.service, getter)
 
 
 class LoopbackProtocolTests(unittest.IsolatedAsyncioTestCase):
