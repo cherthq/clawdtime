@@ -1,5 +1,34 @@
 # IMPLEMENTATION_ARGOS review
 
+## November 17, 2026 — first streaming-voice call and audio correction
+
+One newly authorized demo call reached the phone; the user reported that it hung
+up. Backend diagnostics record a media `capture_loop` task failure shortly after
+the first ElevenLabs response audio began. This category covers voice ingress and
+frontend tasks; it is not evidence that Finder capture failed. Seven fresh Finder
+frames reached media and 212 video frames were emitted before cleanup. Handset
+screen visibility was not confirmed. Call ended, view lease released, services
+idle with no pending/unknown effects; local sharing was stopped. No redial occurred.
+
+A provider-only synthetic probe reproduced a concrete defect: a valid 79,882-byte
+PCM chunk (106,512 base64 characters, about 2.5 seconds) exceeded the old per-event
+limit. The old two-second total queue was also too small for normal faster-than-
+playback synthesis. Updated handling accepts bounded ten-second events with a
+512 KiB WebSocket envelope and a twenty-second queued PCM budget, includes the
+in-flight chunk in accounting, and keeps interruption/Stop independent of the
+queue. Oversized/invalid data still fails closed. New fault diagnostics expose
+only allowlisted stage/code/count metadata, never exception text or audio.
+
+The corrected real-provider synthetic probe completed in 26,511 ms with 216 paced
+frames, a valid 82,304-byte audio chunk, no failure and empty queues after Stop.
+No phone call, microphone, speaker playback or backend tool effect was used.
+Independent review and 45 focused frontend tests passed. The complete media suite
+passed 376 tests (13 optional SDK tests skipped) in 52.206 seconds. The original production
+exception was generic, so this reproduction identifies a real compatibility bug,
+not forensic proof that it was the only cause of the hang-up. Physical acceptance
+and the prepared zoom/annotation walkthrough remain incomplete.
+
+
 ## Demo preflight completed — November 17, 2026
 
 Both previously recorded verification gaps are resolved. Read-only production

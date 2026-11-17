@@ -14,6 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from livekit import rtc
 
 from elevenlabs_frontend import (ElevenLabsFrontend, TOOL_PARAMETERS, allowed,
+                                AUDIO_QUEUE_BYTES, AUDIO_QUEUE_EVENTS, AUDIO_EVENT_BYTES, FrontendFault,
                                 bounded_context, client_tool_definitions, validate_agent, validate_configured_agent, provider_get)
 from server import Service, Session
 from speech_diagnostics import SpeechDiagnostics
@@ -349,9 +350,102 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         for encoded in ('bad!', base64.b64encode(b'\x01').decode()):
             with self.assertRaises(ValueError):
                 await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': encoded}})
-        self.frontend.audio_bytes = 64000
-        with self.assertRaises(ValueError):
+        self.frontend.audio_bytes = AUDIO_QUEUE_BYTES
+        with self.assertRaisesRegex(FrontendFault, 'audio_byte_capacity'):
             await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': 'AAA='}})
+
+    async def test_provider_burst_exceeding_old_bound_drains_at_real_time(self):
+        # Three seconds synthesized immediately, played at the production 20 ms
+        # cadence. The old two-second provider queue fails before output starts.
+        event = {'type': 'audio', 'audio_event': {'event_id': 1,
+            'audio_base_64': base64.b64encode(b'\x01\x00' * 1600).decode()}}
+        for _ in range(30):
+            await self.frontend.handle(event)
+        self.assertEqual(self.frontend.audio_bytes, 96000)
+        completed = asyncio.Event()
+        frames = []
+        async def consume():
+            while True:
+                self.parent.policy_at = time.monotonic()
+                generation, item = await self.parent.audio.get()
+                if isinstance(item, asyncio.Future):
+                    item.set_result(None)
+                    completed.set()
+                else:
+                    frames.append(item)
+                    await asyncio.sleep(.02)
+        consumer = asyncio.create_task(consume())
+        self.frontend.spawn(self.frontend.output(), 'output')
+        try:
+            await asyncio.wait_for(completed.wait(), 5)
+            self.assertGreaterEqual(len(frames), 150)
+            self.assertTrue(all(len(frame) == 1920 for frame in frames))
+            self.assertEqual(self.frontend.audio_bytes, 0)
+            self.parent.request_failure.assert_not_called()
+        finally:
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+
+    async def test_observed_provider_packet_shape_and_event_size_bounds(self):
+        # Real probe metadata observed 79,882 decoded bytes (2.496 seconds),
+        # valid PCM16; use fresh synthetic zero samples, never provider content.
+        for size in (79882, AUDIO_EVENT_BYTES):
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+                'audio_base_64': base64.b64encode(bytes(size)).decode()}})
+        self.assertEqual(self.frontend.audio_bytes, 79882 + AUDIO_EVENT_BYTES)
+        before = self.frontend.audio_events.qsize()
+        with self.assertRaisesRegex(FrontendFault, 'audio_event_size'):
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+                'audio_base_64': base64.b64encode(bytes(AUDIO_EVENT_BYTES + 2)).decode()}})
+        self.assertEqual(self.frontend.audio_events.qsize(), before)
+        self.assertEqual(self.frontend.audio_bytes, 79882 + AUDIO_EVENT_BYTES)
+
+    async def test_burst_interruption_clears_queued_and_inflight_audio(self):
+        self.parent.audio = asyncio.Queue(maxsize=1)
+        event = {'type': 'audio', 'audio_event': {'event_id': 1,
+            'audio_base_64': base64.b64encode(b'\x01\x00' * 16000).decode()}}
+        for _ in range(10):
+            await self.frontend.handle(event)
+        self.frontend.spawn(self.frontend.output(), 'output')
+        await asyncio.sleep(.02)
+        self.assertEqual(self.frontend.audio_bytes, 320000)  # Includes blocked chunk.
+        await self.frontend.handle({'type': 'interruption', 'interruption_event': {'event_id': 1}})
+        self.assertEqual(self.frontend.audio_bytes, 0)
+        self.assertTrue(self.frontend.audio_events.empty())
+        self.assertTrue(self.parent.audio.empty())
+        await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 2, 'audio_base_64': 'AAA='}})
+        await asyncio.sleep(.02)
+        self.assertGreaterEqual(self.frontend.audio_bytes, 0)
+        # A put already waiting when interruption occurred may complete, but is
+        # stamped with the invalidated generation and cannot be played.
+        while not self.parent.audio.empty():
+            generation, _ = self.parent.audio.get_nowait()
+            self.assertLess(generation, self.parent.playback_generation)
+        self.parent.request_failure.assert_not_called()
+        await self.frontend.close()
+        self.assertEqual(self.frontend.audio_bytes, 0)
+        self.assertTrue(self.frontend.audio_events.empty())
+
+    async def test_audio_event_capacity_rejection_is_atomic(self):
+        event = {'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': 'AAA='}}
+        for _ in range(AUDIO_QUEUE_EVENTS):
+            await self.frontend.handle(event)
+        with self.assertRaisesRegex(FrontendFault, 'audio_event_capacity'):
+            await self.frontend.handle(event)
+        self.assertEqual(self.frontend.audio_bytes, 2 * AUDIO_QUEUE_EVENTS)
+        self.assertEqual(self.frontend.audio_events.qsize(), AUDIO_QUEUE_EVENTS)
+
+    async def test_background_failure_logs_only_allowlisted_metadata(self):
+        async def broken():
+            raise ValueError('PRIVATE_TRANSCRIPT_AND_PROVIDER_BODY')
+        with self.assertLogs(level='ERROR') as logs:
+            task = self.frontend.spawn(broken(), 'read')
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn('stage=read code=task_invalid queuedBytes=0 queuedEvents=0', logs.output[0])
+        self.assertNotIn('PRIVATE', logs.output[0])
+        self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
 
 
 class ProviderContractTests(unittest.TestCase):

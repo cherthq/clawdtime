@@ -10,6 +10,7 @@ import base64
 from collections import deque
 import hashlib
 import json
+import logging
 import math
 import re
 import time
@@ -21,6 +22,36 @@ from livekit import rtc
 from voice_interaction import two_way_allowed
 
 API = 'https://api.elevenlabs.io/v1/convai'
+# Provider synthesis can arrive much faster than real-time playout. Bound the
+# burst buffer separately from the two-second paced publication queue. Never
+# block the socket reader: interruption and Stop must bypass queued speech.
+AUDIO_QUEUE_BYTES = 20 * 16000 * 2
+AUDIO_QUEUE_EVENTS = 1024
+AUDIO_EVENT_BYTES = 10 * 16000 * 2
+AUDIO_EVENT_ENCODED = 4 * ((AUDIO_EVENT_BYTES + 2) // 3)
+WS_MESSAGE_BYTES = 512 * 1024
+FAULT_CODES = frozenset(('audio_invalid', 'audio_byte_capacity', 'audio_event_capacity',
+                        'audio_event_size',
+                        'provider_error', 'provider_disconnected', 'provider_event_invalid',
+                        'task_timeout', 'task_invalid', 'task_error'))
+
+
+class FrontendFault(ValueError):
+    def __init__(self, code):
+        self.code = code if code in FAULT_CODES else 'task_error'
+        super().__init__(self.code)
+
+
+def failure_code(error):
+    if isinstance(error, FrontendFault):
+        return error.code
+    if isinstance(error, TimeoutError):
+        return 'task_timeout'
+    if isinstance(error, (ValueError, TypeError, KeyError)):
+        return 'task_invalid'
+    return 'task_error'
+
+
 TOOL_PARAMETERS = {
     'send_to_agent': ('text',),
     'show_target': ('target_id',),
@@ -297,7 +328,7 @@ class ElevenLabsFrontend:
         self.tool_receipts = {}
         self.intent_receipts = {}
         self.pending_tools = 0
-        self.audio_events = asyncio.Queue(maxsize=32)
+        self.audio_events = asyncio.Queue(maxsize=AUDIO_QUEUE_EVENTS)
         self.audio_bytes = 0
         self.last_audio_id = -1
         self.cutoff_id = -1
@@ -319,12 +350,18 @@ class ElevenLabsFrontend:
         return (not self.closed and p.active and p.allowed and not p.closing
                 and not p.pause_latched and p.two_way and time.monotonic() - p.policy_at < 2)
 
-    def spawn(self, coro):
+    def spawn(self, coro, stage='other'):
+        stage = stage if stage in ('read', 'output', 'poll', 'report', 'tool', 'drain') else 'other'
         task = asyncio.create_task(coro)
         self.tasks.add(task)
         def done(result):
             self.tasks.discard(result)
             if not result.cancelled() and result.exception() and not self.closed and not self.ending:
+                # No exception text/traceback: provider bodies and transcripts
+                # may appear in arbitrary upstream exceptions.
+                logging.error('voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d',
+                              stage, failure_code(result.exception()),
+                              self.audio_bytes, self.audio_events.qsize())
                 self.parent.request_failure('task_failed', 'capture_loop')
         task.add_done_callback(done)
         return task
@@ -348,7 +385,7 @@ class ElevenLabsFrontend:
         # aiohttp invokes client middleware again for retries; the second attempt
         # fails before dispatch. Non-101 responses never follow redirects.
         self.socket_http = ClientSession(timeout=ClientTimeout(total=4), middlewares=[single_attempt])
-        return await self.socket_http.ws_connect(url, max_msg_size=256 * 1024, heartbeat=10)
+        return await self.socket_http.ws_connect(url, max_msg_size=WS_MESSAGE_BYTES, heartbeat=10)
 
     async def start(self):
         agent = self.parent.owner.env['ELEVENLABS_AGENT_ID']
@@ -365,14 +402,14 @@ class ElevenLabsFrontend:
         self.ws = await self.open_socket(url)
         await self.send({'type': 'conversation_initiation_client_data',
                          'conversation_config_override': {'agent': {'prompt': {'prompt': PROMPT}, 'first_message': ''}}}, force=True)
-        self.spawn(self.read())
+        self.spawn(self.read(), 'read')
         await asyncio.wait_for(self.ready.wait(), 4)
         if self.closed or self.ws.closed:
             raise ValueError('ElevenLabs startup unavailable')
         await self.context(initial)
-        self.spawn(self.output())
-        self.spawn(self.poll())
-        self.spawn(self.report())
+        self.spawn(self.output(), 'output')
+        self.spawn(self.poll(), 'poll')
+        self.spawn(self.report(), 'report')
 
     async def send(self, value, *, force=False):
         async with self.send_lock:
@@ -383,13 +420,13 @@ class ElevenLabsFrontend:
     async def read(self):
         async for message in self.ws:
             if message.type != WSMsgType.TEXT:
-                raise ValueError('ElevenLabs stream ended')
+                raise FrontendFault('provider_disconnected')
             value = json.loads(message.data)
             if not isinstance(value, dict):
-                raise ValueError('ElevenLabs event invalid')
+                raise FrontendFault('provider_event_invalid')
             await self.handle(value)
         if not self.closed and not self.ending:
-            raise ValueError('ElevenLabs stream disconnected')
+            raise FrontendFault('provider_disconnected')
 
     async def handle(self, value):
         kind = value.get('type')
@@ -451,12 +488,14 @@ class ElevenLabsFrontend:
             if self.pending_tools >= 8:
                 raise ValueError('Voice tool capacity reached')
             self.pending_tools += 1
-            self.spawn(self.tool(call))
+            self.spawn(self.tool(call), 'tool')
         elif kind == 'audio':
             event = value.get('audio_event', {})
             identity, encoded = event.get('event_id'), event.get('audio_base_64')
-            if type(identity) is not int or identity < 0 or not isinstance(encoded, str) or len(encoded) > 88000:
-                raise ValueError('Invalid provider audio')
+            if type(identity) is not int or identity < 0 or not isinstance(encoded, str):
+                raise FrontendFault('audio_invalid')
+            if len(encoded) > AUDIO_EVENT_ENCODED:
+                raise FrontendFault('audio_event_size')
             if identity < self.last_audio_id:
                 return
             self.last_audio_id = identity
@@ -465,13 +504,22 @@ class ElevenLabsFrontend:
             if self.latest and not self.first_audio_after_transcript:
                 self.diagnostic('voice_response_audio', self.latest['id'], (time.monotonic() - self.latest['at']) * 1000)
                 self.first_audio_after_transcript = True
-            pcm = base64.b64decode(encoded, validate=True)
-            if not pcm or len(pcm) % 2 or self.audio_bytes + len(pcm) > 64000:
-                raise ValueError('Provider audio queue exceeds bound')
-            self.audio_bytes += len(pcm)
+            try:
+                pcm = base64.b64decode(encoded, validate=True)
+            except ValueError:
+                raise FrontendFault('audio_invalid') from None
+            if not pcm or len(pcm) % 2:
+                raise FrontendFault('audio_invalid')
+            if len(pcm) > AUDIO_EVENT_BYTES:
+                raise FrontendFault('audio_event_size')
+            if self.audio_bytes + len(pcm) > AUDIO_QUEUE_BYTES:
+                raise FrontendFault('audio_byte_capacity')
+            if self.audio_events.full():
+                raise FrontendFault('audio_event_capacity')
             self.audio_events.put_nowait((self.output_epoch, identity, pcm))
+            self.audio_bytes += len(pcm)
         elif kind in ('error', 'client_error', 'agent_error', 'guardrail_triggered'):
-            raise ValueError('ElevenLabs provider unavailable')
+            raise FrontendFault('provider_error')
 
     def cutoff(self):
         self.cutoff_id = max(self.cutoff_id, self.last_audio_id)
@@ -531,36 +579,38 @@ class ElevenLabsFrontend:
                             await asyncio.wait_for(parent.audio.put((generation, chunk.ljust(1920, b'\0'))), .3)
                         barrier = asyncio.get_running_loop().create_future()
                         await asyncio.wait_for(parent.audio.put((generation, barrier)), .3)
-                        self.spawn(self.drain(generation, barrier))
+                        self.spawn(self.drain(generation, barrier), 'drain')
                     pending.clear()
                     resampler = rtc.AudioResampler(16000, 48000)
                     generation = None
                 continue
-            if item_epoch == self.output_epoch:
-                self.audio_bytes = max(0, self.audio_bytes - len(pcm))
-            if not self.authorized() or item_epoch != self.output_epoch or identity <= self.cutoff_id:
-                continue
-            if epoch != self.output_epoch:
-                pending.clear()
-                resampler = rtc.AudioResampler(16000, 48000)
-                epoch, generation = self.output_epoch, None
-            if generation is None:
-                parent.playback_generation += 1
-                generation = parent.playback_generation
-                parent.first_audio_published = False
-                parent.active_reply_id = 'eleven_output_' + str(identity)
-                parent.playback_event('playback_started')
-            parent.speaking = True
-            parent.speech_cancelled = False
-            parent.playback_revision = parent.conversation_revision
-            for frame in resampler.push(bytearray(pcm)):
-                pending.extend(bytes(frame.data))
-            while len(pending) >= 1920:
-                chunk = bytes(pending[:1920]); del pending[:1920]
-                if generation != parent.playback_generation or epoch != self.output_epoch or not self.authorized():
+            try:
+                if not self.authorized() or item_epoch != self.output_epoch or identity <= self.cutoff_id:
+                    continue
+                if epoch != self.output_epoch:
                     pending.clear()
-                    break
-                await asyncio.wait_for(parent.audio.put((generation, chunk)), .3)
+                    resampler = rtc.AudioResampler(16000, 48000)
+                    epoch, generation = self.output_epoch, None
+                if generation is None:
+                    parent.playback_generation += 1
+                    generation = parent.playback_generation
+                    parent.first_audio_published = False
+                    parent.active_reply_id = 'eleven_output_' + str(identity)
+                    parent.playback_event('playback_started')
+                parent.speaking = True
+                parent.speech_cancelled = False
+                parent.playback_revision = parent.conversation_revision
+                for frame in resampler.push(bytearray(pcm)):
+                    pending.extend(bytes(frame.data))
+                while len(pending) >= 1920:
+                    chunk = bytes(pending[:1920]); del pending[:1920]
+                    if generation != parent.playback_generation or epoch != self.output_epoch or not self.authorized():
+                        pending.clear()
+                        break
+                    await asyncio.wait_for(parent.audio.put((generation, chunk)), .3)
+            finally:
+                if item_epoch == self.output_epoch:
+                    self.audio_bytes = max(0, self.audio_bytes - len(pcm))
 
     async def drain(self, generation, barrier):
         # Local publication only, never a claim of handset audibility.

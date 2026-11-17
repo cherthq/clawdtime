@@ -26,6 +26,19 @@ test suite uses synthetic credentials, a loopback WebSocket and fake backend;
 it does not contact ElevenLabs, LiveKit or Chert. The adapter uses the existing
 pinned `aiohttp` and `livekit` dependencies; no optional SDK install is required.
 
+For an explicitly authorized provider-only synthetic burst check, run
+`media/.venv/bin/python media/elevenlabs_burst_probe.py --seconds 30` with the
+dedicated agent's `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` already supplied
+privately in the environment. It creates one provider conversation and sends a
+fixed synthetic folder question; this can use provider credits. It uses the actual
+frontend with a paced 20 ms memory-only consumer, refuses backend effects and
+never calls FaceTime, connects to LiveKit, captures a microphone/screen, plays
+audio or saves provider content. Output contains only bounded counts, event
+shape/size metadata and allowlisted failure codes. `--legacy-bound` reproduces the
+old queue bounds in that probe process. On macOS Python installations missing a
+default CA file, set `SSL_CERT_FILE` to a trusted CA bundle (for example the path
+returned by `media/.venv/bin/python -m certifi`); never disable TLS verification.
+
 The existing compositor displays ephemeral human captions and one spoken reply per
 turn. “Backend accepted” means the media callback was accepted; “Received by agent”
 requires the coding session's acknowledgment. Visual-only activity, native approval,

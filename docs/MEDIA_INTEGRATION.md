@@ -827,6 +827,39 @@ redirects, authentication failures, incompatible audio formats, tool drift and
 unexpected provider disconnects fail closed. There is no reconnect or automatic
 effect retry. Reads of backend progress may retry while current policy remains valid.
 
+Provider audio arrives in synthesis bursts, independently of the 20 ms publication
+cadence. A provider-only synthetic probe reproduced rejection of a valid 79,882-byte
+PCM event (about 2.5 seconds) by the former 88,000-character base64 limit. This
+reproduces a frontend failure mode; the earlier call's generic `capture_loop`
+failure metadata alone did not identify its exact exception. That lifecycle category
+also includes voice frontend background tasks and does not by itself identify a
+screen-camera failure.
+
+The adapter now bounds each PCM16/16 kHz event to ten seconds (320,000 bytes),
+the WebSocket message to 512 KiB, and queued plus currently converted source PCM
+to twenty seconds (640,000 bytes) and 1,024 events. A single event's resampled
+48 kHz buffer is additionally bounded to approximately 960 KiB; the existing
+two-second outgoing publication queue remains separate. The socket reader never
+waits for playout, so interruptions can clear queued speech immediately. Cutoff
+invalidates the output generation, clears transient source buffers, and ensures
+an old in-flight chunk cannot decrement a newer generation's byte count or play
+after cancellation. Malformed audio, capacity overflow, stale authority and task
+failure remain fail-closed; no provider reconnect or speech replay is added.
+`voice_frontend_failed` logs contain only a fixed task stage, allowlisted failure
+code and queue counts, never exception text, transcripts or audio. See the
+provider-only probe instructions in `media/README.md`; these tests do not establish
+physical handset audibility or duplex acceptance.
+
+The coordinating lead's fixed provider-only probe passed for 26,511 ms: largest
+base64 event 109,740 characters / 82,304 decoded bytes, peak queued source PCM
+82,304 bytes, 216 paced publication frames, no frontend failure, no tool effects,
+and zero queued bytes/events after Stop. The legacy probe rejected a valid
+79,882-byte event. Local validation passed 45 frontend tests, ten lifecycle tests
+and five speech-diagnostic tests, including real-time paced synthetic burst drain,
+in-flight interruption, event/queue bounds and log privacy. This supports the
+packet-limit diagnosis as a likely explanation for the earlier call failure;
+that call's exact exception was not retained.
+
 Authenticated `GET /voice/elevenlabs/readiness` returns only `configured`,
 `agentValidated` and `ready` booleans with `Cache-Control: no-store`. Within a
 six-second overall deadline it reads the selected agent and any referenced tool
