@@ -26,6 +26,20 @@ exception was generic, so this reproduction identifies a real compatibility bug,
 not forensic proof that it was the only cause of the hang-up. Physical acceptance
 and the prepared zoom/annotation walkthrough remain incomplete.
 
+The correction is committed/pushed as `0a1424a` and deployed to media as
+`9106feea-eb70-4058-b5cf-58ba56bbaf59` (SUCCESS). Running frontend SHA-256
+`0c3049b639ad7ff3df8fad3a74e2a55a836b81a83d97102bf14dd6f4fff61b37`
+exactly matches tested source. Voice readiness reports configured, agent validated,
+and ready. All seven existing media ledger tables match the same-volume pre-deploy
+snapshot; environment values are unchanged. Both services are idle. Backend,
+Mac installation, line assignment and provider software remain unchanged.
+
+An initial deployment upload incorrectly selected the root backend Dockerfile.
+Deployment `5faa0936-73d3-4745-91d9-3d733255a27b` was canceled and confirmed
+REMOVED while the previous media deployment remained SUCCESS and healthy. The
+successful deployment used the frozen commit's `media/` directory as its root.
+No additional call was placed; a newly authorized handset test remains next.
+
 ## November 17, 2026 — demo prerequisites verified and duplex enabled
 
 Continued at the user's request to reach the supervised demo. A scoped read-only
