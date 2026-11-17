@@ -1,3 +1,40 @@
+## November 17, 2026 — new project connected without resetting records
+
+Continued the user-authorized Clawdtime project move. Created a replacement
+project-scoped Calls credential for the existing service, then changed only
+`projectId` and `projectKey` in the deployed backend's live configuration.
+Backend deployment `5248f2f4-a38a-48d7-85a1-179902292d29` is SUCCESS, reusing
+its existing reviewed image. Media deployment and variables are unchanged.
+This supersedes the prior pending project-credential handoff below.
+
+Verified on the deployed backend: original database retained; entities/events/effects
+identical to the new same-volume pre-change snapshot; cursor/receipt/unknown metadata
+unchanged. Native messaging identity and retained event anchor pass with the new
+Calls project. Native binding credentials, pairing, encryption material, handoff
+baseline and tester allowlist were preserved. The Mac remains connected, both
+permissions granted, locally disarmed, agent-tools-only, no lease/unresolved inputs.
+
+Fresh checks resolve the exact original logical line in the new project. Assignment
+and runtime acknowledgement generations both equal 8; the confirmed line session
+has a recent accepting heartbeat. All 15 preflight checks except `calls_worker`
+pass: worker declares media readiness, but the line remains deliberately paused.
+Backend/media are healthy and idle with no pending or unknown effects. Dedicated
+ElevenLabs configuration is ready; no voice conversation was started.
+
+Remaining before a new call: validate recipient eligibility under the new project
+(old HackPton proof is project/assignment-bound), qualify the current worker binary's
+remote-audio isolation, and activate the paused line for a separately authorized
+call. Current worker build `97823a1da14c605b8f78c2f9330192b0c0014e1d0ab0cedd262ac8f4e245e6de`
+differs from the previously qualified binary. The team found unchanged isolation
+source, but no exact current binary-to-source build receipt. Backend duplex and
+remote-isolation assertions remain false. No call admission POST was used as a
+probe. The current Lines UI exposes no recipient-verification card; this absence
+is not proof of either recipient eligibility or rejection.
+
+No new FaceTime call, message, provider software update, runtime reinstall, line reassignment,
+shared-line change, or record reset occurred in this continuation. Private receipts
+and snapshots remain outside Git. Full physical voice/screen acceptance is still pending.
+
 ## November 17, 2026 — user-authorized new project and line assignment
 
 At the user's explicit request, created a new Chert project named **Clawdtime**

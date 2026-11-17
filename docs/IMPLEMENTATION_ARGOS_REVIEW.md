@@ -1,5 +1,46 @@
 # IMPLEMENTATION_ARGOS review
 
+## New-project connection verified — November 17, 2026
+
+The requested **Clawdtime** project now owns line ending 9741, and the ClawdTime
+backend uses that project's credential. Configuration-only deployment
+`5248f2f4-a38a-48d7-85a1-179902292d29` succeeded at 14:45 UTC using the existing
+backend image. Only the Calls `projectId` and `projectKey` changed. This supersedes
+the old-project visibility blocker recorded below; it does not establish call readiness.
+
+The lead retained a same-volume database/configuration snapshot, staged one environment
+variable, and verified the running process received the intended configuration.
+Entities, events, effects, messaging cursor, receipts and unknown-outcome metadata
+match the snapshot. Native identity and event-anchor checks pass. Media configuration,
+Mac pairing and native messaging credentials were unchanged. Both services are idle;
+the connected Mac is disarmed with effective screen/control permissions and no lease
+or unresolved input. No application code changed, so verification used deployed
+configuration/state comparisons and GET-only readiness checks rather than rerunning
+unrelated unit suites.
+
+The exact line session acknowledges assignment generation 8, declares media readiness
+and has a fresh confirmed heartbeat. Calls remain paused. Fourteen of fifteen
+transport preflight checks pass; `calls_worker` remains failed because the paused
+line is not available. ElevenLabs agent configuration readiness passes independently.
+
+The team's independent review identified two remaining checks before physical testing:
+
+- Recipient verification is project/assignment-bound. Prior HackPton verification
+  cannot be presumed valid in the new project. Current line UI omits the documented
+  recipient-verification card, and no safe public call-admission dry-run is available.
+  Do not probe by attempting a call or reset existing records to work around this.
+- Current worker binary `97823a1da14c605b8f78c2f9330192b0c0014e1d0ab0cedd262ac8f4e245e6de`
+  is not the previously qualified isolation build. Reviewed audio source remains
+  unchanged, but exact binary-to-source provenance and current route selection must
+  be established before enabling backend duplex/remote-isolation assertions. They
+  remain false; provider software was not modified.
+
+Next acceptance remains a fresh explicit same-chat ElevenLabs session, deliberate
+line activation and a separately authorized call measuring audio latency, screen
+arrival, prepared zoom/annotations and response-to-continuation. No new call or
+message was placed in this continuation. Existing records and other lines are intact.
+
+
 ## Authorized dedicated voice rollout — November 17, 2026
 
 The user authorized provider configuration and ClawdTime deployment for 9741,
