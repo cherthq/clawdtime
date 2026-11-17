@@ -516,7 +516,7 @@ its domain equals ScreenCaptureKit's declared error domain (normalized to
 bounded count. This context can distinguish a native stream interruption from
 the idle watchdog or local-session guard; overlap does not establish causation.
 No localized error, userInfo, title or path is returned. Apple documents native
-[stream-stop errors](https://developer.apple.com/documentation/screencapturekit/scstreamdelegate/stream(_:didstopwitherror:));
+[stream-stop errors](<https://developer.apple.com/documentation/screencapturekit/scstreamdelegate/stream(_:didstopwitherror:)>);
 in particular, a confirmed user-stop code remains terminal and is never retried.
 `--camera-inspect --surface '<exact surface JSON>'` reports that identity's window
 frame, ScreenCaptureKit filter content rectangle, pixel scale, display bounds and
@@ -593,11 +593,28 @@ never returned as text. App launch identity and focused/on-screen observations
 are independently checked. No coordinates, keystrokes, text, scroll, app launch,
 Space shortcut, all-window activation or action retry is implemented.
 
-macOS cooperative activation may decline an activation request. API return alone
+The activation operation uses one public
+[`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue)
+write of `kAXFrontmostAttribute=true` on the exact application's AX root. It checks
+the root PID and runtime attribute writability, then rechecks retained identity,
+permissions and original authority immediately before that setter. This replaces
+the earlier AppKit activation request in the preview executor only. Setter failure
+is attempted/unknown, with no fallback, relaunch or second effect. API return alone
 is never UI success: verification requires the same frontmost app, focused exact
 window and on-screen window on the selected display. Activation and raise require
 separate prepared operations. This cannot override the original native tool's
 application restrictions.
+
+The post-effect observer retains its 600 ms settling budget and original
+two-second authority deadline. An explicitly classified CG geometry transition
+may be pending only while exact CG ID/PID, unique CG witness, process lifetime,
+retained AX reference/title, nonminimized state and unchanged selected-display
+authority remain valid. Pending discards older observations. Geometry may return
+during this check, but a subsequent strict resolution still must match the
+original bounds and all three foreground flags. Missing/ambiguous identity,
+Stop/permission/source loss or unresolved geometry at the deadline returns
+unknown. These read-only waits neither repeat an effect nor qualify input or
+relax the production resolver.
 
 Input/output lines are capped at 8 KiB, one operation is processed at a time,
 AX messages have a 100 ms timeout, each request has a two-second process watchdog,
@@ -634,6 +651,17 @@ Finder activation flow and outgoing preview, followed by separate original-nativ
 CUA fixture work and clean Stop/release. Off-Space, full-screen, minimized and
 multiple-display cases remain unqualified. See the
 [physical evidence matrix](../docs/MEDIA_INTEGRATION.md#local-physical-evidence--november-17-2026).
+
+In a subsequent final local rehearsal of the Accessibility activation repair,
+Finder → TextEdit → Finder completed with three `verified` receipts and independent
+active/focused/onscreen flags true. The first two targets began inactive and
+offscreen; returning Finder began inactive and onscreen. Each prepared operation
+was triggered once through CUA, without manual window arrangement or repeated
+effects. Ownership was released after each step; final local Stop released the
+lease and left no preview actors. Earlier unknown receipts remained unchanged.
+This qualifies that exact fixture sequence only, not all Spaces, fullscreen,
+minimized/multiple-monitor cases or the cloud production path. No call occurred;
+the production gate stayed off. Final Swift validation: 98 tests passed.
 
 ### Read-only live presentation resolver
 

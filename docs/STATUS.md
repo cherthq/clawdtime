@@ -1,3 +1,58 @@
+## November 17, 2026 — native foreground activation repair
+
+**Local physical acceptance passed:** Finder → TextEdit → Finder completed with
+three distinct terminal `verified` receipts. Each receipt independently observed
+the exact app active, exact window focused and window on-screen. The first two
+targets were inactive and off-screen when prepared; the final Finder target was
+inactive but on-screen. No manual window arrangement or repeated activation was
+needed during this run. This establishes the prepared native executor on these
+fixtures; it is not a guarantee for every Space/fullscreen/multi-display layout or
+the upstream CUA provider's window actions.
+
+The lead triggered each single prepared operation through the original chat's
+browser CUA. Native ownership was claimed and released per step. After the last
+verified operation, ownership was `none`/`idle` at epoch 6. Local Stop cleared the
+preview and released the lease, leaving `none`/`paused` at epoch 7. All preview and
+native executor processes exited; receipts remain retained and no screen/audio
+was saved. Zooms, annotations, document edits and file moves were not repeated in
+this activation-only acceptance run.
+
+The prepared native executor is distinct from upstream CUA Window-menu and Raise
+actions. A controlled baseline of its old `NSRunningApplication.activate` path
+returned an uncertain `post_observation_unavailable` receipt. The original receipt
+was retained, the local capture stopped, and the executor/controller processes
+were joined before a separate changed-mechanism test.
+
+The candidate replaces that call with one public Accessibility `AXFrontmost=true`
+write to the retained target application. It checks attribute support and exact
+PID, then rechecks original authority, process lifetime and AX window identity
+immediately before dispatch. There is no fallback, launch or repeated effect.
+Connector preparation and pre-dispatch qualification now reject `raise_window`
+when the app is already known to be inactive.
+
+The first candidate brought Finder to the foreground: a later independent
+observation reported all three foreground/focus/on-screen flags true for the same
+window, process and original bounds. Its original receipt nevertheless remains
+uncertain: verification encountered `window_outside_display` during the transition.
+This isolated an additional settling problem; the later observation does not
+retroactively turn that original receipt into success. The repair permits a
+pending read-only observation only for a classified post-effect CG geometry
+transition, while proving the original window/process/AX identity, title and
+display authority remain intact. Pending observations discard earlier samples;
+the next normal resolver must restore original bounds and all three foreground
+checks within the unchanged 600 ms settle and original two-second authority
+deadlines. Missing identity, Stop and permission loss still fail closed. There is
+no repeated native effect.
+
+Validation: `npm run check` passed 1,138 tests across 69 files, typecheck and build;
+Swift build and 98 tests passed. Independent review covered the one-write
+activation guard, transition identity, late/expired observations, early raise
+prerequisites, preserved uncertain receipts and clean test isolation.
+
+Production admission remains off. No call, installed companion update or production
+deployment is part of this local repair. Production's remote resolver remains
+read-only; this repair does not silently add a production native-input endpoint.
+
 ## November 17, 2026 — idle-Mac foreground rehearsal
 
 After the user confirmed they would minimize Codex and leave the Mac idle, the

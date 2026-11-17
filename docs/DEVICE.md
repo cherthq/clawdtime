@@ -537,9 +537,43 @@ ownership and target verification; presentation additionally needs the exact
 window active, focused and onscreen in fresh independent observations. A tool's
 rendered app image or successful AX action cannot substitute for those checks.
 
-The read-only production resolver cannot activate a window. The background preview
-executor can request cooperative activation, but cannot guarantee that the native
-tool's frontend yields focus or that macOS switches Spaces. Keep presentation
-unavailable rather than weaken these guards or retry an uncertain action.
+The read-only production resolver cannot activate a window. The original
+background preview executor used AppKit cooperative activation; that request did
+not establish foreground success in this run. The subsequent Accessibility
+activation change and its bounded physical acceptance are recorded below. Keep
+presentation unavailable when verification fails, without weakening guards or
+retrying an uncertain action.
 See Apple's [foreground-app definition](https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication)
 and [cooperative activation contract](https://developer.apple.com/documentation/appkit/passing-control-from-one-app-to-another-with-cooperative-activation).
+
+### Prepared native activation repair — verified fixture sequence
+
+The lead subsequently verified Finder → TextEdit → Finder using three distinct
+prepared operations, each triggered once through the local preview's authenticated
+CUA button. All three receipts reached `verified` with `exact_window_observed` and
+independent active/focused/onscreen flags true. The first Finder and TextEdit
+preparations had active and onscreen false; the return Finder preparation was
+inactive but onscreen. No manual window arrangement or repeated effect was needed
+for this final sequence. Earlier uncertain receipts were retained unchanged.
+
+The preview executor now uses one public Accessibility `AXFrontmost=true` setter
+on the exact retained application. It first checks the root PID and whether that
+attribute is writable, then rechecks the original qualification deadline,
+permissions, app/process lifetime and exact AX window before dispatch. Setter
+failure remains attempted/unknown; there is no AppKit fallback, relaunch or second
+activation. Acknowledgment still requires independent post-effect verification.
+
+During the unchanged 600 ms read-only settling period, only an explicitly
+classified CG geometry transition may remain pending. The exact CG ID/PID,
+process lifetime, retained AX reference/title, nonminimized state and original
+display authority must remain intact. Pending clears earlier evidence; final
+verification must reacquire the original bounds and all three foreground flags.
+Identity loss, display/permission/Stop changes, original expiry or an unresolved
+transition at the deadline remain unknown. The setter is never retried.
+
+Ownership was released after each step. The final state was `none`/`idle` at epoch
+6; local CUA Stop then produced `none`/`paused` at epoch 7, released the lease and
+left no preview actors running. This was a local, no-call fixture acceptance with
+the production gate off. It does not qualify every Space layout, fullscreen,
+minimized or multiple-monitor cases, the cloud production path, or handset output.
+The final source passed 98 Swift tests and independent safety review.

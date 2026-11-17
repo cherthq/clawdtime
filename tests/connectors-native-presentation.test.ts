@@ -198,6 +198,82 @@ describe("qualified original-chat native presentation executor", () => {
       f.executor.prepare({ ...f.operation, action: "raise_window" }),
     ).rejects.toThrow("different immutable");
   });
+  it("allows a separately prepared raise after terminal app activation without claiming exact-window success", async () => {
+    const f = fixture();
+    f.host.dispatch.mockImplementation(async (operation, fingerprint) => {
+      const reserved: any = f.journal
+        .read()
+        .find(
+          (entry: any) => entry.operation.operationId === operation.operationId,
+        );
+      expect(reserved.phase).toBe("dispatching");
+      if (operation.action === "activate_app") {
+        Object.assign(f.observation, { appActive: true, windowOnScreen: true });
+        return {
+          ...f.terminal(operation, fingerprint),
+          observation: structuredClone(f.observation),
+        };
+      }
+      expect(f.observation.appActive).toBe(true);
+      return f.terminal(operation, fingerprint);
+    });
+    await f.executor.prepare(f.operation);
+    const activated = await f.executor.executePrepared(f.operation.operationId);
+    expect(activated.phase).toBe("returned");
+    expect(activated.hostResult?.observation).toMatchObject({
+      appActive: true,
+      windowFocused: false,
+    });
+    expect(f.host.dispatch).toHaveBeenCalledTimes(1);
+    const raise: NativePresentationOperation = {
+      ...f.operation,
+      operationId: "raise-exact-window",
+      action: "raise_window",
+    };
+    await f.executor.prepare(raise);
+    expect(f.host.dispatch).toHaveBeenCalledTimes(1);
+    const raised = await f.executor.executePrepared(raise.operationId);
+    expect(raised.phase).toBe("verified");
+    expect(f.host.qualify).toHaveBeenCalledTimes(4);
+    expect(f.host.dispatch).toHaveBeenCalledTimes(2);
+    expect(f.executor.status(f.operation.operationId)).toEqual(activated);
+    expect(await f.executor.executePrepared(raise.operationId)).toEqual(raised);
+    expect(f.host.dispatch).toHaveBeenCalledTimes(2);
+  });
+  it("refuses an inactive app before preparing a raise or dispatching a previously prepared raise", async () => {
+    const f = fixture();
+    const raise: NativePresentationOperation = {
+      ...f.operation,
+      action: "raise_window",
+    };
+    await expect(f.executor.prepare(raise)).rejects.toThrow("frontmost");
+    expect(f.host.dispatch).not.toHaveBeenCalled();
+    f.observation.appActive = true;
+    await f.executor.prepare(raise);
+    f.observation.appActive = false;
+    const rejected = await f.executor.executePrepared(raise.operationId);
+    expect(rejected.phase).toBe("rejected");
+    expect(rejected.reason).toBe("pre_dispatch_guard_rejected");
+    expect(f.host.dispatch).not.toHaveBeenCalled();
+  });
+  it("retains terminal unverified evidence when a raised app loses foreground afterward", async () => {
+    const f = fixture();
+    const raise: NativePresentationOperation = {
+      ...f.operation,
+      action: "raise_window",
+    };
+    f.observation.appActive = true;
+    f.host.dispatch.mockImplementation(async (operation, fingerprint) => ({
+      ...f.terminal(operation, fingerprint),
+      observation: { ...f.observation, appActive: false },
+    }));
+    await f.executor.prepare(raise);
+    const result = await f.executor.executePrepared(raise.operationId);
+    expect(result.phase).toBe("returned");
+    expect(result.hostResult?.terminalEvidence).toBeDefined();
+    expect(await f.executor.executePrepared(raise.operationId)).toEqual(result);
+    expect(f.host.dispatch).toHaveBeenCalledTimes(1);
+  });
   it.each([
     { executor: "none" },
     { epoch: 4 },

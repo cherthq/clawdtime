@@ -6,6 +6,7 @@ import DeviceCore
 /// Read-only metadata qualification. Contains no input or activation operations.
 @MainActor final class NativeTargetResolver {
   private(set) var refusalReason = "target_unavailable"
+  private(set) var refusalIsCGGeometry = false
   private func refuse<T>(_ reason: String) -> T? { refusalReason = reason; return nil }
 
   private func read(_ object: AXUIElement, _ key: String) -> CFTypeRef? {
@@ -36,13 +37,14 @@ import DeviceCore
     return true
   }
   private func cgWitness<R: PreviewTargetRequest>(_ request: R) -> [String: Any]? {
+    refusalIsCGGeometry = false
     guard let infos = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else { return refuse("cg_list_unavailable") }
     guard infos.count <= 4096 else { return refuse("cg_list_bound") }
     guard let exact = infos.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == request.target.windowId }) else { return refuse("cg_window_missing") }
     guard (exact[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == request.target.pid else { return refuse("cg_owner_changed") }
     guard let raw = exact[kCGWindowBounds as String] as? NSDictionary, let expected = CGRect(dictionaryRepresentation: raw) else { return refuse("cg_bounds_unavailable") }
-    guard CGDisplayBounds(request.displayId).contains(expected) else { return refuse("window_outside_display") }
-    guard targetFrame(request).map({ $0 == expected }) ?? true else { return refuse("cg_geometry_changed") }
+    guard CGDisplayBounds(request.displayId).contains(expected) else { refusalIsCGGeometry = true; return refuse("window_outside_display") }
+    guard targetFrame(request).map({ $0 == expected }) ?? true else { refusalIsCGGeometry = true; return refuse("cg_geometry_changed") }
     let matches = infos.filter { info in
       guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == request.target.pid,
         let bounds = info[kCGWindowBounds as String] as? NSDictionary,
@@ -55,6 +57,7 @@ import DeviceCore
   }
   func resolve<R: PreviewTargetRequest>(_ request: R) -> (NSRunningApplication, AXUIElement, R, ProcessLifetimeIdentity)? {
     refusalReason = "target_unavailable"
+    refusalIsCGGeometry = false
     guard available(request), let cg = cgWitness(request) else { return nil }
     guard let rawBounds = cg[kCGWindowBounds as String] as? NSDictionary, let expected = CGRect(dictionaryRepresentation: rawBounds) else { return refuse("cg_bounds_unavailable") }
     guard let app = NSRunningApplication(processIdentifier: request.target.pid) else { return refuse("app_unavailable") }
@@ -104,5 +107,51 @@ import DeviceCore
       "observedAt": Date().timeIntervalSince1970 * 1000, "processIdentity": identity,
       "windowBounds": ["x": b.x, "y": b.y, "width": b.width, "height": b.height], "appActive": app.isActive && NSWorkspace.shared.frontmostApplication?.isEqual(app) == true,
       "windowFocused": focused, "windowOnScreen": cgWitness(request)?[kCGWindowIsOnscreen as String] as? Bool == true]
+  }
+
+  /// Post-effect observation only: tolerate moving CG geometry, never a new
+  /// identity or a changed display grant. This does not qualify any effect or
+  /// return a foreground witness; normal exact resolution must subsequently pass.
+  func retainsTransitionIdentity<R: PreviewTargetRequest>(_ request: R, app: NSRunningApplication,
+      window: AXUIElement, lifetime: ProcessLifetimeIdentity, displayBounds: CGRect) -> Bool {
+    guard available(request), CGDisplayBounds(request.displayId) == displayBounds,
+      !app.isTerminated, app.processIdentifier == request.target.pid,
+      app.bundleIdentifier == request.target.bundleId, processLifetime(app) == lifetime,
+      let currentApp = NSRunningApplication(processIdentifier: request.target.pid), currentApp.isEqual(app),
+      processLifetime(currentApp) == lifetime,
+      targetFrame(request) != nil,
+      let infos = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]], infos.count <= 4096 else { return false }
+    let exact = infos.filter { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == request.target.windowId }
+    guard exact.count == 1, let info = exact.first,
+      (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == request.target.pid,
+      let raw = info[kCGWindowBounds as String] as? NSDictionary, let moving = CGRect(dictionaryRepresentation: raw),
+      !moving.isEmpty, !moving.isInfinite, !moving.isNull,
+      [moving.origin.x, moving.origin.y, moving.width, moving.height].allSatisfy({ $0.isFinite }) else { return false }
+    let sameGeometry = infos.filter { item in
+      guard (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == request.target.pid,
+        let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+        let value = CGRect(dictionaryRepresentation: bounds) else { return false }
+      return value == moving
+    }
+    guard sameGeometry.count == 1 else { return false }
+    // Geometry may already have returned while this separate identity check was
+    // running. Still return only pending; the next strict resolver must verify.
+    let root = AXUIElementCreateApplication(request.target.pid)
+    AXUIElementSetMessagingTimeout(root, 0.1)
+    AXUIElementSetMessagingTimeout(window, 0.1)
+    guard let listed = read(root, kAXWindowsAttribute) as? [AXUIElement], listed.count <= 32 else { return false }
+    var supplemental = [AXUIElement]()
+    for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+      if let reference = read(root, attribute), CFGetTypeID(reference) == AXUIElementGetTypeID() {
+        supplemental.append(reference as! AXUIElement)
+      }
+    }
+    guard let windows = BoundedWindowCandidates.merge(listed, supplemental: supplemental, same: { CFEqual($0, $1) }),
+      windows.contains(where: { CFEqual($0, window) }), read(window, kAXMinimizedAttribute) as? Bool == false,
+      let title = read(window, kAXTitleAttribute) as? String, title.utf8.count <= 4096,
+      request.target.titleHash == SHA256.hash(data: Data(title.utf8)).map({ String(format: "%02x", $0) }).joined(),
+      !app.isTerminated, processLifetime(app) == lifetime,
+      CGDisplayBounds(request.displayId) == displayBounds, available(request) else { return false }
+    return true
   }
 }

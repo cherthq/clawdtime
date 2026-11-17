@@ -1418,7 +1418,7 @@ tracking of an app object.
     "sourceFrameId": "fresh-source-frame",
     "geometryGeneration": "current-geometry",
     "op": "focus_region",
-    "rect": {"x": 0.2, "y": 0.2, "width": 0.4, "height": 0.4},
+    "rect": { "x": 0.2, "y": 0.2, "width": 0.4, "height": 0.4 },
     "durationMs": 450
   }
 }
@@ -1610,6 +1610,25 @@ window containment on the selected display. Stop, pending delivery, interruption
 expired leases, changed ownership and unresolved input refuse dispatch. The helper
 must independently check the same live authority immediately before its OS effect.
 
+`raise_window` additionally requires `appActive:true` in the fresh qualification
+both when preparing and immediately before dispatch. This means the exact app is
+active and matches the system foreground app; it does not require the target
+window to be focused already. `activate_app` may start with an inactive app. A
+terminal activation result with the app foreground but the exact window still
+unfocused may be followed by a separately prepared raise with its own stable ID
+and fresh qualification. No automatic activation/raise chain is installed. A
+browser interaction that takes foreground back from the target can invalidate
+that prerequisite; the connector refuses the raise instead of assuming the
+previous activation still holds.
+
+Per-app Accessibility operations, including choosing an app's Window menu item
+or raising its AX window, can succeed without making that app the system
+foreground app. An AX return alone is not foreground evidence. Verification
+requires the exact window's fresh `appActive`, `windowFocused` and
+`windowOnScreen` observations all to be true. If foreground is lost after a
+terminal host return, the connector retains `returned` rather than claiming
+verification or replaying the effect.
+
 `FileNativeSceneJournal` stores bounded metadata in an owner-only directory with
 one exclusive foreground owner. Each write uses atomic replacement and fsyncs
 both the file and directory before reporting success. It permits at most 256
@@ -1637,6 +1656,17 @@ tests/connectors-native-scene-journal.test.ts`. They cover authority races, Stop
 exact identity/PID reuse, forbidden apps, geometry/display bounds, durable intent,
 unknown outcomes, restart, immutable duplicates and terminal evidence validation.
 They do not establish successful macOS foreground activation or handset visibility.
+
+Current physical evidence: with the final read-only settling binary, the lead
+completed Finder → TextEdit → Finder. Each operation had a terminal verified
+receipt with `appActive`, `windowFocused` and `windowOnScreen` all true, without
+manual arrangement during the run. Native ownership was released after each
+step; final Stop left epoch 7, executor none, state paused and the lease released.
+Earlier uncertain receipts, including `window_outside_display` during a Space
+animation, remain unknown; this separate successful fixture does not rewrite or
+replay them. This establishes the local activation fixture only, not general
+fullscreen or multiple-monitor qualification. The production native path has not
+been promoted, and no external call was made.
 
 ### Prepared live targets and follow-up walkthroughs
 

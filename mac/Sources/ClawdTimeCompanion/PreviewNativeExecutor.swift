@@ -56,20 +56,70 @@ import DeviceCore
     // Exactly one native effect per request. A raise needs a fresh qualification
     // after activation; neither an uncertain result nor a timeout is replayed.
     let sent: Bool
-    if request.op == "activate" { sent = current.0.activate(options: []) }
+    let originalDisplayBounds = CGDisplayBounds(request.displayId)
+    if request.op == "activate" {
+      let root = AXUIElementCreateApplication(request.target.pid)
+      AXUIElementSetMessagingTimeout(root, 0.1)
+      let activation = NativeFrontmostRequest.perform(capability: {
+        var pid: pid_t = 0
+        var settable = DarwinBoolean(false)
+        let pidRead = AXUIElementGetPid(root, &pid) == .success
+        let attributeRead = AXUIElementIsAttributeSettable(root, kAXFrontmostAttribute as CFString, &settable) == .success
+        return NativeFrontmostRequest.available(expectedPID: request.target.pid, observedPID: pidRead ? pid : nil,
+          attributeSettable: attributeRead ? settable.boolValue : nil)
+      }, authorized: {
+        // AX capability inspection may wait on the app. Do not carry an old
+        // target/permission/deadline across it into the one setter call.
+        guard let final = self.resolve(request), final.0.isEqual(current.0), !old.0.isTerminated,
+          final.3 == old.2, CFEqual(final.1, old.1),
+          !Task.isCancelled, ProcessInfo.processInfo.systemUptime - old.3 < 2,
+          processLifetime(current.0) == old.2, self.available(request) else { return false }
+        var pid: pid_t = 0
+        return AXUIElementGetPid(root, &pid) == .success && pid == request.target.pid
+          && !Task.isCancelled && ProcessInfo.processInfo.systemUptime - old.3 < 2 && self.available(request)
+      }, setFrontmost: {
+        // Public Accessibility app activation, not a window raise or a launch.
+        // Never fall through to another activation method on failure.
+        AXUIElementSetAttributeValue(root, kAXFrontmostAttribute as CFString, kCFBooleanTrue) == .success
+      })
+      switch activation {
+      case .unavailable: return response(request.requestId, "rejected", "activation_attribute_unavailable")
+      case .authorityChanged: return response(request.requestId, "rejected", "qualification_changed")
+      case .attempted(false): return response(request.requestId, "unknown", "native_request_unconfirmed", attempted: true)
+      case .attempted(true): sent = true
+      }
+    }
     else {
       guard current.0.isActive, NSWorkspace.shared.frontmostApplication?.isEqual(current.0) == true else {
         return response(request.requestId, "rejected", "app_not_active")
       }
       sent = AXUIElementPerformAction(current.1, kAXRaiseAction as CFString) == .success
     }
-    let settled = await ReadOnlySettle.run(now: { ProcessInfo.processInfo.systemUptime },
-      allowed: { !Task.isCancelled && ProcessInfo.processInfo.systemUptime - old.3 < 2 && self.available(request) }, observe: {
-        guard let verified = self.resolve(request), verified.0.isEqual(current.0), !current.0.isTerminated,
-          verified.3 == old.2, CFEqual(verified.1, current.1) else { return nil as ([String: Any], Bool)? }
+    // Only fixed local stage codes cross the pipe, never an AX title or NSError.
+    var postRefusal = "post_observation_deadline"
+    let settled = await ReadOnlySettle.observations(now: { ProcessInfo.processInfo.systemUptime },
+      allowed: {
+        guard !Task.isCancelled, ProcessInfo.processInfo.systemUptime - old.3 < 2 else {
+          postRefusal = "native_request_expired_or_invalid"; return false
+        }
+        guard CGDisplayBounds(request.displayId) == originalDisplayBounds else { postRefusal = "display_changed"; return false }
+        guard self.available(request) else { postRefusal = self.refusalReason; return false }
+        return true
+      }, observe: {
+        guard let verified = self.resolve(request) else {
+          let reason = self.refusalReason; postRefusal = reason
+          if self.resolver.refusalIsCGGeometry,
+            self.resolver.retainsTransitionIdentity(request, app: current.0, window: current.1,
+              lifetime: old.2, displayBounds: originalDisplayBounds) {
+            return ReadOnlySettleObservation<[String: Any]>.pending
+          }
+          return .unavailable
+        }
+        guard verified.0.isEqual(current.0), !current.0.isTerminated,
+          verified.3 == old.2, CFEqual(verified.1, current.1) else { postRefusal = "qualification_changed"; return .unavailable }
         let state = self.observation(request, app: current.0, window: current.1, lifetime: current.3)
-        guard processLifetime(current.0) == old.2 else { return nil }
-        return (state, ["appActive", "windowFocused", "windowOnScreen"].allSatisfy({ state[$0] as? Bool == true }))
+        guard processLifetime(current.0) == old.2 else { postRefusal = "app_launch_identity_unavailable"; return .unavailable }
+        return .observed(state, verified: ["appActive", "windowFocused", "windowOnScreen"].allSatisfy({ state[$0] as? Bool == true }))
       }, sleep: { seconds in try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) })
     switch settled {
     case .verified(let state):
@@ -79,7 +129,7 @@ import DeviceCore
       var result = response(request.requestId, sent ? "submitted" : "unknown", sent ? "foreground_unverified" : "native_request_unconfirmed", attempted: true)
       if let state { result["observation"] = state }; return result
     case .unavailable:
-      return response(request.requestId, "unknown", "post_observation_unavailable", attempted: true)
+      return response(request.requestId, "unknown", postRefusal, attempted: true)
     }
   }
   func run() {

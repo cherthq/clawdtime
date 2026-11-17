@@ -277,6 +277,19 @@ export class NativePresentationExecutor {
       );
     return value;
   }
+  private qualifiedTarget(
+    raw: unknown,
+    operation: NativePresentationOperation,
+    camera: CameraStatus,
+    previous?: NativePresentationObservation,
+  ) {
+    const observation = this.observation(raw, operation, camera, previous);
+    if (operation.action === "raise_window" && !observation.appActive)
+      throw new Error(
+        "Raising a window requires its app to be currently frontmost; no dispatch is permitted.",
+      );
+    return observation;
+  }
   async prepare(raw: unknown) {
     this.open();
     const operation = nativePresentationOperationSchema.parse(raw);
@@ -304,7 +317,7 @@ export class NativePresentationExecutor {
       await this.guard(operation);
       const rawObservation = await this.options.host.qualify(operation);
       const camera = await this.guard(operation);
-      const preparedObservation = this.observation(
+      const preparedObservation = this.qualifiedTarget(
         rawObservation,
         operation,
         camera,
@@ -356,7 +369,7 @@ export class NativePresentationExecutor {
         await this.guard(receipt.operation);
         const target = await this.options.host.qualify(receipt.operation);
         const camera = await this.guard(receipt.operation);
-        this.observation(
+        this.qualifiedTarget(
           target,
           receipt.operation,
           camera,
