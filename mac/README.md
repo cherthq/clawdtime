@@ -428,10 +428,11 @@ crops the native frame before resizing. The original display-only path is unchan
 content hash and pixel/point/display-origin geometry. Pixels remain transient.
 
 Bounds are 8192 per dimension, 32 million pixels and 2 MiB JPEG. Large captures
-fail; no downscale or wider-surface substitution occurs. Current owner, on-screen
-presence and wholly-contained authorized-display geometry are checked before and
-after capture. Movement/resize changes the geometry hash. Closed/minimized or moved
-off-display windows are unavailable. The existing lock, sleep, Stop and lease
+fail; no downscale or wider-surface substitution occurs. Current owner and
+verified lifecycle are checked before and after capture. Initial selection
+requires wholly-contained authorized-display geometry; later window viewing remains
+window-ID scoped when partly or fully off-screen. Movement/resize changes the
+geometry hash. Closed/minimized or cross-display windows are unavailable. The existing lock, sleep, Stop and lease
 checks remain authoritative.
 
 Selected-window fallback input is refused: independent-window capture can show
@@ -445,3 +446,63 @@ bounded frame over stdout for the local preview. These modes read no helper conf
 create no listener or receipt store, never grant privacy permissions, and submit no
 input. They require the active unlocked session. See the media README for the local
 preview with visible Start/Stop and synthetic fixtures.
+
+For a disposable window, development lookup can resolve one exact app bundle and
+window title without listing other titles or capturing pixels:
+
+```sh
+mac/.build/debug/ClawdTimeCompanion --camera-find-window \
+  --query '{"bundleId":"com.apple.finder","title":"ClawdTime Sharing Review"}'
+```
+
+The command refuses absent, ambiguous, minimized, unverifiable or multi-display matches. It
+returns only the selected `CameraSurface`; it never opens or activates an app.
+`--camera-inspect --surface '<exact surface JSON>'` reports that identity's window
+frame, ScreenCaptureKit filter content rectangle, pixel scale, display bounds and
+on-screen flag. These are metadata-only diagnostics with no window title or pixels.
+They do not relax capture's current ID/process/display checks or grant permission.
+
+Window capture enumerates all ScreenCaptureKit windows, preserving the exact ID,
+owner PID, layer and active selected-display anchor before and after each capture.
+A visible or actively streaming window can be captured behind other apps. When both
+`isOnScreen` and `isActive` are false, an existing Accessibility grant must provide
+exactly one same-owner AX window with matching position/size and `AXMinimized=false`.
+Public `AXWindows`, `AXMainWindow`, and `AXFocusedWindow` references are combined
+and deduplicated by AX element identity; Finder can omit off-Space documents from
+`AXWindows` while exposing the same document via its main/focused references.
+The selected rectangle must also be unique among that owner’s layer-zero SCK windows.
+Missing attributes, ambiguity, a hidden app, or a minimized window refuse capture;
+AX only witnesses lifecycle and never selects the pixels. No private AX-to-window-ID
+API is used. This supports eligible windows on another Space without broadening to
+a display or changing the selected identity. Apple's [single-window capture
+explanation](https://developer.apple.com/videos/play/wwdc2022/10155/) describes
+occluded/off-screen capture and minimized-window suspension.
+
+A geometry change between capture's before/after checks discards that image and
+returns HTTP 425 (development CLI exit 75). Only this read-only camera race is
+retryable: gateway/controller clear prior frame authority and annotations, then
+capture the same authorized identity again after fresh policy/Stop/expiry checks.
+Closed, hidden, minimized, cross-display or changed-owner failures remain terminal.
+
+The capture-only development CLI runs a prohibited-activation `NSApplication`
+event loop, without opening a window or reading installed configuration. A plain
+`RunLoop` produced ScreenCaptureKit application-connection interruption (-3805)
+on the test Mac. Selected windows use a screen-only `SCStream`, accept its first
+complete frame, and request stream stop before publishing. Successful stop
+acknowledgment must arrive within 350 ms; stop error/timeout discards pending pixels
+and completes exactly once, even if a late callback arrives. A 1.5-second frame deadline
+refuses an unavailable source; the preview also bounds the child process to 2.5
+seconds. Display capture retains the existing `SCScreenshotManager` path. No audio
+or child-window capture is requested. Exact identity and geometry are revalidated
+after capture, and the existing two-second freshness gate remains unchanged.
+
+For window viewing, `source.display*` describes the active display selected at
+initial authorization; it is an anchor, not a crop boundary. WindowServer may place
+the same window partly or completely outside that rectangle during Space/visibility
+transitions. Continued capture permits that geometry only for the exact selected
+window with a positive lifecycle check and no intersection with another active
+display. The filter always contains only that window, never a display fallback.
+Initial helper lease creation and actual-preview Start still require the window
+wholly inside its selected display. Display capture retains strict containment.
+Selected-window fallback input remains disabled at every layer, so off-screen
+geometry cannot become a global click/type target.

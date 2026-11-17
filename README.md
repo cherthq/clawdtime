@@ -47,12 +47,21 @@ unqualified for full-duplex speakerphone use. See [release evidence and rollout]
 
 ## Local screen camera preview
 
-The uncommitted Argos slice adds explicit display/window capture, native-resolution
+The Argos slice adds explicit display/window capture, native-resolution
 crop/zoom, transient annotations, pinning and pause/resume without an IDE plugin.
 Run `npm run preview:camera` for a localhost-only synthetic preview using the real
 backend/media/gateway path; `npm run preview:camera -- --smoke` checks the connector
 and existing CUA ownership/receipt path with a fake input sink. No call is placed.
-Actual capture is separately opt-in; see [the review and commands](docs/IMPLEMENTATION_ARGOS_REVIEW.md).
+For the local Finder review, open the disposable `/tmp/ClawdTime Sharing Review`
+folder in Finder, keep that window visible on one display, and run
+`npm run preview:camera:window`. Open its printed URL and press **Start sharing**.
+The window is selected by app identity and exact title; missing or ambiguous windows
+are refused. Confirm it is the intended test folder before Start: title matching is
+not a folder-access restriction, and sharing follows that window if you navigate.
+The page uses real selected-window pixels, exposes Stop, and submits
+no OS input. It is separate from the synthetic diagnostic above. Existing Screen
+Recording permission is required; no helper is installed or live service changed.
+Actual capture acceptance is recorded in [the review](docs/IMPLEMENTATION_ARGOS_REVIEW.md).
 Selected-window fallback input remains unavailable pending exact hit-target
 qualification; display CUA retains its existing permission and ownership gates.
 

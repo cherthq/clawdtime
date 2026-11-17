@@ -64,3 +64,95 @@ class PreviewWireTests(unittest.IsolatedAsyncioTestCase):
         status,_=await self.post(self.path+'/actions',{**body,'id':'wrong_owner','executorEpoch':0});self.assertEqual(status,409)
 
 if __name__=='__main__':unittest.main()
+
+class ActualPreviewModeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.preview=Preview({'mode':'actual','surface':{'kind':'window','id':'99','displayId':1,'ownerPid':123},'durationSeconds':30,'surfaceLabel':'Finder — <Review>'})
+        from unittest.mock import AsyncMock
+        self.preview.native_command=AsyncMock(return_value={'surface':self.preview.surface,'windowFrame':[10,10,100,100],'displayBounds':[0,0,1000,800]})
+        self.info=await self.preview.setup();self.http=ClientSession();self.headers={'Authorization':'Bearer '+self.preview.token};self.base=self.info['origin']
+    async def asyncTearDown(self):await self.http.close();await self.preview.close()
+    async def test_actual_ui_requires_start_and_rejects_synthetic_controls(self):
+        self.assertFalse(self.preview.started);self.assertIsNone(self.preview.process);self.assertEqual(self.preview.frame_count,0)
+        async with self.http.get(self.base+'/') as response:
+            html=await response.text()
+            self.assertIn('Actual window sharing</h1>',html)
+            self.assertIn('<select id="fixture" hidden disabled>',html)
+            self.assertIn('<button id="click" hidden disabled>',html)
+            self.assertIn('Window 99 · display 1 · process 123',html)
+            self.assertIn('<p id="source">Finder — &lt;Review&gt;</p>',html)
+            self.assertIn('<details><summary>Diagnostics</summary>',html)
+            self.assertIn('<button id="start">Start sharing</button>',html)
+            self.assertIn('<button disabled data-op="focus_region">',html)
+            self.assertIn('<button id="mark" disabled>',html)
+        async with self.http.get(self.base+'/preview/info',headers=self.headers) as response:
+            info=await response.json();self.assertEqual(info['inputSink'],'none');self.assertIsNone(info['unavailableReason'])
+        for path,body in [('/preview/fixture',{'kind':'finder'}),('/preview/fake-input',{'x':.5,'y':.5})]:
+            async with self.http.post(self.base+path,headers=self.headers,json=body) as response:self.assertIn(response.status,(400,403))
+        self.assertEqual(self.preview.frame_count,0)
+    async def test_actual_source_failure_is_explicit_and_cannot_restart_retired_selection(self):
+        from unittest.mock import AsyncMock
+        self.preview.native=AsyncMock(side_effect=ValueError('Camera preview unavailable: Exact selected window identity is unavailable.'))
+        async with self.http.post(self.base+'/preview/start',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.preview.selection['leaseId'] in self.preview.screen.stopped:break
+            await asyncio.sleep(.01)
+        self.assertEqual(self.preview.native.await_count,1)
+        async with self.http.get(self.base+'/preview/info',headers=self.headers) as response:
+            info=await response.json();self.assertIn('Exact selected window identity is unavailable',info['unavailableReason'])
+        self.assertIsNone(self.preview.screen.frame)
+        async with self.http.post(self.base+'/preview/stop',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        async with self.http.post(self.base+'/preview/start',headers=self.headers,json={}) as response:self.assertEqual(response.status,410)
+
+    async def test_geometry_race_discards_pixels_and_retries_only_same_selection(self):
+        from unittest.mock import AsyncMock
+        from service import CameraGeometryChanged
+        self.preview.native=AsyncMock(side_effect=[CameraGeometryChanged(),ValueError('Camera preview unavailable: Selected window closed.')])
+        async with self.http.post(self.base+'/preview/start',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.preview.native.await_count:break
+            await asyncio.sleep(.005)
+        self.assertNotIn(self.preview.selection['leaseId'],self.preview.screen.stopped)
+        self.assertIsNone(self.preview.screen.frame)
+        self.assertIsNone(self.preview.screen.camera.image)
+        self.assertEqual(self.preview.gateway.lease(self.preview.selection['leaseId'])[1],'active')
+        for _ in range(100):
+            if self.preview.selection['leaseId'] in self.preview.screen.stopped:break
+            await asyncio.sleep(.01)
+        self.assertEqual(self.preview.native.await_count,2)
+        self.assertIn(self.preview.selection['leaseId'],self.preview.screen.stopped)
+
+    async def test_stop_during_geometry_retry_does_not_capture_again(self):
+        from unittest.mock import AsyncMock
+        from service import CameraGeometryChanged
+        self.preview.native=AsyncMock(side_effect=CameraGeometryChanged())
+        async with self.http.post(self.base+'/preview/start',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        for _ in range(100):
+            if self.preview.native.await_count:break
+            await asyncio.sleep(.005)
+        async with self.http.post(self.base+'/preview/stop',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        await asyncio.sleep(.25)
+        self.assertEqual(self.preview.native.await_count,1)
+        self.assertIsNone(self.preview.screen.frame)
+        self.assertTrue(self.preview.stopped)
+
+    async def test_initial_off_display_selection_refuses_before_any_capture(self):
+        self.preview.native_command.return_value['windowFrame']=[-100,10,100,100]
+        async with self.http.post(self.base+'/preview/start',headers=self.headers,json={}) as response:
+            self.assertEqual(response.status,409)
+            self.assertIn('wholly on its chosen display',await response.text())
+        self.assertFalse(self.preview.started);self.assertEqual(self.preview.frame_count,0)
+        self.assertIsNone(self.preview.screen.selection)
+
+    async def test_stop_during_initial_metadata_check_cannot_start_capture(self):
+        entered=asyncio.Event();release=asyncio.Event()
+        async def inspect(mode):
+            entered.set();await release.wait()
+            return {'surface':self.preview.surface,'windowFrame':[10,10,100,100],'displayBounds':[0,0,1000,800]}
+        self.preview.native_command.side_effect=inspect
+        task=asyncio.create_task(self.http.post(self.base+'/preview/start',headers=self.headers,json={}))
+        await entered.wait()
+        async with self.http.post(self.base+'/preview/stop',headers=self.headers,json={}) as response:self.assertEqual(response.status,200)
+        release.set();response=await task
+        self.assertEqual(response.status,410);await response.read();response.release()
+        self.assertFalse(self.preview.started);self.assertEqual(self.preview.frame_count,0)

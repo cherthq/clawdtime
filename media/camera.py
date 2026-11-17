@@ -53,8 +53,9 @@ def frame_metadata(value, selected, width, height):
             any(not 0<source[k]<=32768 for k in ('pointWidth','pointHeight','displayPointWidth','displayPointHeight')) or
             any(abs(source[k])>100000 for k in ('originX','originY','displayOriginX','displayOriginY'))):
         raise CameraError('Invalid camera geometry',400)
-    # A selected window must remain wholly on its authorized display.
-    if (source['originX']<source['displayOriginX'] or source['originY']<source['displayOriginY'] or
+    # Display pixels remain contained. Window identity is the capture boundary;
+    # its display is an active anchor, not a crop (native rejects another display).
+    if selected['kind']=='display' and (source['originX']<source['displayOriginX'] or source['originY']<source['displayOriginY'] or
             source['originX']+source['pointWidth']>source['displayOriginX']+source['displayPointWidth']+.01 or
             source['originY']+source['pointHeight']>source['displayOriginY']+source['displayPointHeight']+.01):
         raise CameraError('Camera surface outside authorized display')
@@ -112,7 +113,15 @@ class ScreenCamera:
         if not valid_id(frame_id) or not number(captured) or not -.5<=self.wall()-captured<2:
             raise CameraError('Stale source frame')
         if self.meta and self.meta['geometryGeneration']!=metadata['geometryGeneration']:
-            self.clear()
+            before=self.meta['source'];after=metadata['source'];origins={'originX','originY'}
+            translated=(self.selected['kind']=='window' and any(before[k]!=after[k] for k in origins)
+                and all(before[k]==after[k] for k in SOURCE_KEYS-origins))
+            if translated:
+                # Desktop translation changes input metadata, but not the window's
+                # normalized presentation. Keep zoom/easing and any frozen pixels;
+                # invalidate old-generation marks and command/input references.
+                self.annotations.clear();self.context=None;self.revision+=1
+            else:self.clear()
         if self.meta and self.meta['contentRevision']!=metadata['contentRevision']:
             if self.annotations or self.context: self.revision+=1
             self.annotations.clear(); self.context=None

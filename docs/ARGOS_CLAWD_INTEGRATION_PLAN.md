@@ -18,7 +18,10 @@ product roadmap and do not authorize implementing/deploying every phase at once.
 
 The first local slice is integrated on `ArgosClawd`. The user reviewed synthetic
 zoom and annotations and authorized committing all pending work locally; no push
-or deployment is authorized. Real-window sharing is not yet usable/accepted.
+or deployment is authorized. The subsequent local Finder-sharing request is now
+implemented with real source pixels. The user accepted the real Finder-sharing
+preview and requested a local commit and log on November 16, 2026. Cross-app,
+actual CUA targeting and handset acceptance remain pending.
 See [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md)
 for the exact change inventory, runnable preview, validation and acceptance gaps.
 
@@ -28,13 +31,16 @@ for the exact change inventory, runnable preview, validation and acceptance gaps
   and guarded presentation-coordinate input through existing CUA receipts.
 - Locally verified: synthetic connector → backend policy → media → gateway → helper
   → compositor, including exclusive fake input and Stop; Python/Swift/Node checks;
-  browser and rendered visual fixtures. No IDE extension is required.
+  browser and rendered visual fixtures. Follow-up real Finder capture received
+  39 distinct frames over 20 seconds and reflected newly added content; browser
+  annotation, Freeze/Resume and Stop checks passed. No IDE extension is required.
 - Restricted: selected-window fallback input is refused until actual hit-target
   identity is qualified. A selected window never expands to a display. A surface
   switch requires a new explicitly authorized selection/session.
-- Still pending: repeatable actual IDE/Finder/paused-video-editor streaming
-  acceptance, real OS-input transform qualification, handset readability and all
-  live call/voice work. One native Finder snapshot is not cross-app acceptance.
+- Still pending: longer Finder lifecycle/multidisplay qualification, actual IDE
+  and paused-video-editor acceptance, real OS-input transform qualification,
+  handset readability and all live call/voice work. The local Finder result
+  does not establish cross-app acceptance.
 
 The later roadmap sections remain future work. No deployment, installed service,
 provider, live line, voice frontend, or FaceTime test was changed by this slice.

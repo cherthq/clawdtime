@@ -10,10 +10,12 @@ import type {
   ActionReceipt,
 } from "../src/contracts.js";
 import type {
+  CameraSelection,
   CameraStatus,
   CameraCommand,
   PresentationReference,
 } from "../src/camera-contracts.js";
+import { cameraFrameSchema } from "../src/camera-contracts.js";
 import {
   ControlCoordinator,
   SimulatedDevice,
@@ -212,7 +214,11 @@ describe("screen camera immutable session negotiation", () => {
   });
 });
 
-async function cameraFixture(enabled = true, opted = true) {
+async function cameraFixture(
+  enabled = true,
+  opted = true,
+  selection: CameraSelection = displayCamera,
+) {
   const f = registrationFixture();
   class CameraDevice extends SimulatedDevice {
     cameraVersion: number | undefined = 1;
@@ -240,7 +246,7 @@ async function cameraFixture(enabled = true, opted = true) {
         height: 1000,
         camera: {
           version: 1,
-          surface: displayCamera.surface,
+          surface: selection.surface,
           geometryGeneration: "geometry_1",
           contentRevision: "content_1",
           source: {
@@ -297,7 +303,7 @@ async function cameraFixture(enabled = true, opted = true) {
         leaseId: lease.id,
         revision: this.revision,
         state: "live",
-        surface: displayCamera.surface,
+        surface: selection.surface,
         sourceFrameId: `source_${this.frameSequence}`,
         capturedAt: f.clock(),
         geometryGeneration: "geometry_1",
@@ -345,7 +351,7 @@ async function cameraFixture(enabled = true, opted = true) {
   const agent = f.service.registerSession(
     f.pairing.token,
     opted
-      ? registration
+      ? { ...registration, screenCamera: selection }
       : {
           ...registration,
           screenCamera: undefined,
@@ -605,6 +611,98 @@ describe("screen camera authenticated API and existing viewing lease", () => {
     expect((await f.api(focus)).status).toBe(409);
     expect(f.device.commands).toHaveLength(1);
     expect(f.device.inputs).toHaveLength(0);
+  });
+});
+
+describe("selected-window presentation remains exact while placement moves offscreen", () => {
+  const selectedWindow: CameraSelection = {
+    version: 1,
+    surface: { kind: "window", id: "7", displayId: 1, ownerPid: 123 },
+  };
+  const windowSource = {
+    width: 1840,
+    height: 872,
+    originX: 130,
+    originY: 277,
+    pointWidth: 920,
+    pointHeight: 436,
+    displayOriginX: 0,
+    displayOriginY: 0,
+    displayPointWidth: 1512,
+    displayPointHeight: 982,
+  };
+
+  it("accepts exact selected-window frame metadata and status at negative or wholly offscreen origins", async () => {
+    const f = await cameraFixture(true, true, selectedWindow);
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const original = await f.device.frame(lease);
+    for (const position of [
+      { originX: 130, originY: 277 },
+      { originX: -837, originY: 277 },
+      { originX: -2000, originY: 277 },
+      { originX: 130, originY: -500 },
+    ]) {
+      const source = { ...windowSource, ...position };
+      const metadata = { ...original.camera!, source };
+      expect(cameraFrameSchema.parse(metadata)).toMatchObject({
+        surface: selectedWindow.surface,
+        source,
+      });
+      f.device.statusOverride = { source };
+      const response = await f.api();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        surface: selectedWindow.surface,
+        source,
+        state: "live",
+      });
+    }
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+  });
+
+  it("still rejects display-source metadata extending outside its authorized display", async () => {
+    const f = await cameraFixture();
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const frame = await f.device.frame(lease);
+    for (const position of [
+      { originX: -1001, originY: 0 },
+      { originX: -1000, originY: -1 },
+      { originX: 1, originY: 0 },
+      { originX: -1000, originY: 1 },
+    ]) {
+      const source = { ...frame.camera!.source, ...position };
+      expect(
+        cameraFrameSchema.safeParse({ ...frame.camera!, source }).success,
+      ).toBe(false);
+      f.device.statusOverride = { source };
+      expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    }
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("keeps selected-window fallback input unavailable even when offscreen viewing works", async () => {
+    const f = await cameraFixture(true, true, selectedWindow);
+    f.device.statusOverride = { source: { ...windowSource, originX: -837 } };
+    expect((await f.api()).status).toBe(200);
+    expect((await f.api(focus)).status).toBe(200);
+    const result = await f.execution("execution", {
+      expectedEpoch: 0,
+      executor: "clawdtime",
+      previousOutcome: "idle",
+      backgroundActorsStopped: true,
+      expectedCursor: 0,
+    });
+    expect(result.status).toBe(409);
+    expect(await result.json()).toMatchObject({
+      error:
+        "Selected-window fallback input is unavailable until exact hit-target qualification.",
+    });
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+    expect(f.store.all<ControlLease>("lease")[0]?.mode).toBe("view");
   });
 });
 

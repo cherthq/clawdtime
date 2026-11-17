@@ -134,17 +134,18 @@ export const cameraSourceSchema = z
   .refine(
     (s) => s.width * s.height <= 32_000_000,
     "Source exceeds pixel budget.",
-  )
-  .refine(
-    (s) =>
-      s.originX >= s.displayOriginX &&
-      s.originY >= s.displayOriginY &&
-      s.originX + s.pointWidth <=
-        s.displayOriginX + s.displayPointWidth + 0.01 &&
-      s.originY + s.pointHeight <=
-        s.displayOriginY + s.displayPointHeight + 0.01,
-    "Source must fit authorized display.",
   );
+// A selected window has its own pixel boundary. WindowServer may place it partly
+// offscreen without changing that identity. Native capture still enforces the
+// selected display anchor/lifecycle; selected-window fallback input is disabled.
+function fitsDisplay(s: z.infer<typeof cameraSourceSchema>) {
+  return (
+    s.originX >= s.displayOriginX &&
+    s.originY >= s.displayOriginY &&
+    s.originX + s.pointWidth <= s.displayOriginX + s.displayPointWidth + 0.01 &&
+    s.originY + s.pointHeight <= s.displayOriginY + s.displayPointHeight + 0.01
+  );
+}
 export const cameraFrameSchema = z
   .object({
     version: z.literal(1),
@@ -153,7 +154,11 @@ export const cameraFrameSchema = z
     contentRevision: id,
     source: cameraSourceSchema,
   })
-  .strict();
+  .strict()
+  .refine(
+    (v) => v.surface.kind === "window" || fitsDisplay(v.source),
+    "Display source must fit authorized display.",
+  );
 export const cameraStatusSchema = z
   .object({
     version: z.literal(1),
@@ -201,7 +206,12 @@ export const cameraStatusSchema = z
       .strict()
       .nullable(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (v) =>
+      v.source === null || v.surface.kind === "window" || fitsDisplay(v.source),
+    "Display source must fit authorized display.",
+  );
 export const cameraReceiptSchema = z
   .object({
     version: z.literal(1),

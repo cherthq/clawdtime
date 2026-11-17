@@ -337,6 +337,9 @@ struct HelperStatus: Codable {
         if ledger.unresolvedActionCount > 0 && (lease.mode == "control" || ([2, 3].contains(lease.protocolVersion ?? 0) && lease.executor != "none")) {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
         }
+        if policy.lease == nil, let surface = lease.surface {
+          _ = try await capture.cameraTarget(surface, initial: true)
+        }
         try policy.begin(
           lease, now: Date(), sessionAvailable: session.available,
           accessibility: AXIsProcessTrusted())
@@ -465,19 +468,40 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
-      if args.contains("--camera-list") || args.contains("--camera-frame") {
-        let allowed: Set<String> = ["--camera-list", "--camera-frame", "--surface"]
+      let cameraModes = ["--camera-list", "--camera-frame", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      if args.contains(where: { $0.hasPrefix("--camera-") && !cameraModes.contains($0) }) {
+        throw HelperError(400, "Unsupported camera development mode; rebuild the development helper.")
+      }
+      if cameraModes.contains(where: args.contains) {
+        let allowed = Set(cameraModes + ["--surface", "--query"])
         guard args.dropFirst().allSatisfy({ allowed.contains($0) || $0.hasPrefix("{") }),
-          args.contains("--camera-list") != args.contains("--camera-frame") else { throw HelperError(400, "Invalid camera preview arguments.") }
+          cameraModes.filter(args.contains).count == 1 else { throw HelperError(400, "Invalid camera preview arguments.") }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
         Task { @MainActor in
           do {
             let capture = ScreenCapture()
             if args.contains("--camera-list") {
               print(String(data: try JSONEncoder().encode(await capture.cameraSurfaces()), encoding: .utf8)!)
+            } else if args.contains("--camera-find-window") || args.contains("--camera-inspect-query") {
+              guard let index = args.firstIndex(of: "--query"), index + 1 < args.count,
+                let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Exact --query JSON required.") }
+              struct Query: Decodable { let bundleId: String; let title: String }
+              let query = try JSONDecoder().decode(Query.self, from: bytes)
+              if args.contains("--camera-inspect-query") {
+                print(String(data: try JSONEncoder().encode(await capture.cameraInspectQuery(bundleId: query.bundleId, title: query.title)), encoding: .utf8)!)
+              } else {
+                let surface = try await capture.cameraFindWindow(bundleId: query.bundleId, title: query.title)
+                print(String(data: try JSONEncoder().encode(surface), encoding: .utf8)!)
+              }
             } else {
               guard let index = args.firstIndex(of: "--surface"), index + 1 < args.count,
                 let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Explicit --surface JSON required.") }
               let surface = try JSONDecoder().decode(CameraSurface.self, from: bytes)
+              if args.contains("--camera-inspect") {
+                print(String(data: try JSONEncoder().encode(await capture.cameraInspect(surface)), encoding: .utf8)!)
+                exit(0)
+              }
               let started = Date()
               guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
               let frame = try await capture.cameraFrame(surface)
@@ -488,11 +512,12 @@ struct HelperStatus: Codable {
             }
             exit(0)
           } catch {
-            fputs("Camera preview unavailable: \((error as? HelperError)?.message ?? "capture failed")\n", stderr)
-            exit(2)
+            let failure = error as NSError
+            fputs("Camera preview unavailable: \((error as? HelperError)?.message ?? "capture failed (\(failure.domain), code \(failure.code))")\n", stderr)
+            exit((error as? HelperError)?.status == 425 ? 75 : 2)
           }
         }
-        RunLoop.main.run()
+        application.run()
         return
       }
       let reconciliationMode = args.contains("--reconcile-legacy-receipts")

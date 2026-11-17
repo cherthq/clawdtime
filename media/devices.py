@@ -312,6 +312,12 @@ class ScreenController:
                     status,raw,headers=await self.request('GET','/v1/leases/'+selection['leaseId']+'/frame',frame=True)
                     if generation!=self.generation:return
                     if selection.get('executorEpoch')!=self.selection.get('executorEpoch'):continue
+                    if status==425 and self.camera:
+                        # Only this typed read-only geometry race may retry.
+                        # Clear presentation and input authority before another capture.
+                        self.clear('unavailable')
+                        await asyncio.sleep(.2)
+                        continue
                     if status in (403,404,409,410,423):
                         await self.terminal(selection,'helper_stopped',status);return
                     if status!=200:

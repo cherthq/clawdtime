@@ -39,6 +39,13 @@ class CameraTests(unittest.TestCase):
             with self.assertRaises(CameraError):frame_metadata({**self.meta,**changes},self.binding['surface'],2560,1440)
         for target in [{'kind':'window','id':'3','displayId':1},{'kind':'display','id':'1','displayId':1,'ownerPid':1}]:
             with self.assertRaises(CameraError):surface(target)
+    def test_offscreen_window_geometry_is_bound_to_identity_not_display_crop(self):
+        selected={'kind':'window','id':'99','ownerPid':123,'displayId':1}
+        metadata={**self.meta,'surface':selected,'source':{**self.source,'originX':-5000}}
+        self.assertEqual(frame_metadata(metadata,selected,2560,1440)['surface'],selected)
+        with self.assertRaises(CameraError):
+            frame_metadata({**metadata,'surface':self.binding['surface']},self.binding['surface'],2560,1440)
+
     def test_frame_binding_order_and_duplicate_expiry(self):
         for field,value in [('expectedRevision',5),('sourceFrameId','other'),('geometryGeneration','forged')]:
             with self.assertRaises(CameraError):self.camera.command({**self.cmd('pin'),field:value})
@@ -54,6 +61,42 @@ class CameraTests(unittest.TestCase):
         self.assertEqual(self.camera.status()['annotations'],[]);self.assertTrue(self.camera.pinned)
         self.camera.accept(self.image,'frame3',self.wall,{**self.meta,'geometryGeneration':'geometry2'})
         self.assertFalse(self.camera.pinned)
+    def test_window_translation_preserves_zoom_but_invalidates_old_input(self):
+        self.binding['surface']={'kind':'window','id':'99','displayId':1,'ownerPid':123}
+        self.meta={**self.meta,'surface':self.binding['surface']}
+        self.camera=ScreenCamera(self.binding,clock=lambda:self.now,wall=lambda:self.wall)
+        self.camera.accept(self.image,'frame1',self.wall,self.meta)
+        self.camera.command(self.cmd('focus_region',rect={'x':.2,'y':.2,'width':.4,'height':.4},durationMs=1000))
+        self.now+=.5
+        old=self.camera.status();reference={k:old[k] for k in ('revision','geometryGeneration','sourceFrameId')}
+        self.camera.annotations['mark']={'expiresAt':self.wall*1000+1000}
+        self.camera.context={'text':'old context','expiresAt':self.wall*1000+1000}
+        moved={**self.meta,'geometryGeneration':'translated','source':{**self.source,'originX':-5000}}
+        self.camera.accept(self.image,'frame2',self.wall,moved)
+        state=self.camera.status()
+        self.assertEqual(state['crop'],old['crop']);self.assertTrue(state['moving'])
+        self.assertEqual(state['geometryGeneration'],'translated');self.assertEqual(state['annotations'],[]);self.assertIsNone(state['context'])
+        with self.assertRaises(CameraError):self.camera.map_input(reference,.5,.5)
+        self.now+=.5;state=self.camera.status();self.assertAlmostEqual(state['crop']['width'],.4,places=2)
+        resized={**moved,'geometryGeneration':'resized','source':{**moved['source'],'width':1280,'pointWidth':640}}
+        self.camera.accept(Image.new('RGB',(1280,1440)),'frame3',self.wall,resized)
+        self.assertEqual(self.camera.status()['crop'],{'x':0.,'y':0.,'width':1.,'height':1.})
+
+    def test_paused_window_translation_keeps_frozen_presentation_and_no_input(self):
+        self.binding['surface']={'kind':'window','id':'99','displayId':1,'ownerPid':123}
+        self.meta={**self.meta,'surface':self.binding['surface']}
+        self.camera=ScreenCamera(self.binding,clock=lambda:self.now,wall=lambda:self.wall)
+        self.camera.accept(self.image,'frame1',self.wall,self.meta)
+        self.camera.command(self.cmd('focus_region',rect={'x':.2,'y':.2,'width':.4,'height':.4},durationMs=0))
+        self.camera.command(self.cmd('freeze'));before=self.camera.status();frozen=self.camera.frozen
+        moved={**self.meta,'geometryGeneration':'translated','source':{**self.source,'originX':-5000}}
+        self.camera.accept(self.image,'frame2',self.wall,moved)
+        state=self.camera.status();self.assertEqual(state['state'],'paused');self.assertEqual(state['crop'],before['crop'])
+        self.assertIs(self.camera.frozen,frozen);self.assertEqual(state['sourceFrameId'],'frame1')
+        self.assertEqual(self.camera.meta['geometryGeneration'],'translated')
+        with self.assertRaises(CameraError):self.camera.map_input({k:state[k] for k in ('revision','geometryGeneration','sourceFrameId')},.5,.5)
+        self.camera.command(self.cmd('resume'));self.assertEqual(self.camera.status()['geometryGeneration'],'translated')
+
     def test_freeze_freshness_resume_and_clear_release_pixels(self):
         self.camera.command(self.cmd('freeze'));self.assertEqual(self.camera.status()['state'],'paused')
         self.camera.accept(self.image,'frame2',self.wall,self.meta)

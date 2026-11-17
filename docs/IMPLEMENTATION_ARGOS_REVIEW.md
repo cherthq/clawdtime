@@ -1,10 +1,11 @@
 # IMPLEMENTATION_ARGOS review
 
-November 16, 2026 · Local source implementation · No live acceptance
+November 16, 2026 · Real Finder sharing accepted locally · No FaceTime acceptance
 
 The camera rendering and command paths are integrated with existing session,
 viewing, media and CUA code. They are off by default and require no IDE plugin.
-The synthetic developer preview works; usable real-window sharing remains pending.
+The synthetic preview works. The follow-up now captures real Finder pixels locally;
+see the current Finder validation below for its tested scope and remaining limits.
 This is a local source checkpoint, not a deployment or FaceTime readiness claim.
 
 ## User review and local commit authorization
@@ -22,7 +23,7 @@ screen. Its mapped fake click only reports inverse presentation coordinates; it
 does not submit OS input or replace ClawdTime's existing CUA executor. Synthetic
 zoom/annotation review does not accept actual capture, click targeting, or FaceTime.
 
-Next work, in order:
+Next work identified at that checkpoint (Finder progress is recorded below):
 
 1. Make explicit selected-window capture repeatable on a disposable Finder folder,
    diagnose geometry/visibility invalidations, and retain exact identity checks.
@@ -35,13 +36,81 @@ Next work, in order:
    selected-window fallback stays disabled until exact click targeting is reliable.
 5. Review local results before separately authorized FaceTime/handset acceptance.
 
-No further implementation, live testing or rollout is started by this commit request.
+The subsequent real-Finder request below separately authorizes local implementation.
+No live testing or rollout is authorized.
 
 Pre-commit validation rerun: `npm run check` passed typecheck, **901 tests in 58
 files**, and build; `media/.venv/bin/python -m unittest discover -s media -p
 'test_camera_preview.py'` passed **4 tests**. `git diff --check` is clean. The
 checkpoint includes all 163 inventoried pending source/test/document/asset paths;
 temporary preview images, development state and ignored files are not included.
+
+## Actual Finder sharing follow-up (after checkpoint `f8a5a2a`)
+
+The user authorized local real-window sharing on a harmless Finder window, with
+no FaceTime. Prepared `/tmp/ClawdTime Sharing Review` containing only disposable
+folders/text. Added `npm run preview:camera:window` to build the development helper,
+resolve only the exact Finder app/title, and launch explicit-Start view-only capture.
+Added bounded metadata-only window lookup/inspection for geometry diagnosis and a
+distinct actual-sharing page without synthetic fixtures or mapped fake input.
+
+The user opened and confirmed the disposable Finder window. The capture fix uses
+an app-initialized, screen-only ScreenCaptureKit stream and its first complete frame,
+then requires successful stream-stop acknowledgement within 350 ms before publishing.
+No image is published on stop error/timeout. Exact window ID/PID and lifecycle checks
+remain in force. Public AX main/focused-window witnesses handle missing on-screen
+flags only when both the AX and selected native geometry are unambiguous.
+
+Initial selection must fit wholly on its chosen display. Once bound, a window may
+move partly or entirely off-screen without widening its desktop-independent window
+filter. Crossing onto another active display is refused. Mid-capture geometry changes
+return a typed 425 read result: discard pixels/marks/input authority, recheck the same
+lease, and capture that exact surface again. Input is never retried by this path.
+
+Actual local evidence: 15 consecutive native captures succeeded in 0.319–0.467 s,
+with 1840×872 source pixels. A 20-second preview sample received 39 distinct frames
+and three content revisions; adding a disposable file after sharing began changed
+the captured content. The browser displayed the real Finder rows and a rectangle
+annotation. Freeze showed Paused, Resume restored Live, and Stop removed the image
+and returned server `stopped: true`. Real source screenshots were inspected only
+transiently. One session retired during a helper rebuild; a fresh finished-build
+session captured successfully.
+
+Final browser checks on the finished build: live Focus region settled at normalized
+crop approximately `(0.16, 0.20, 0.55, 0.38)` and visibly enlarged the real Finder rows.
+Freeze retained this crop; Resume restored Live; Overview returned the whole window.
+Translation-only window motion now preserves focus/easing while clearing marks and
+invalidating old geometry references; resize still resets presentation. Paused UI
+only enables Resume/Clear, normal polling no longer flickers disabled controls, and
+command failures remain visible instead of leaving a misleading older receipt.
+The user-facing session was left live in Overview for their own review.
+
+Validation on this follow-up: `npm run check` passed typecheck, **904 tests in 58
+files**, and build. Media **314 passed / 13 optional skips**, gateway **37 passed**,
+and Swift **53 passed**. After the final translation/UI changes, **21 focused
+camera/preview tests** passed (including two new translation tests); the full media
+count above predates those two added tests. Synthetic smoke passed, and the synthetic
+browser suite was rerun successfully after the final UI changes: authentication,
+focus, annotations/context, freeze/resume, clear and Stop/reload, no script errors. The actual preview uses the real gateway, ScreenController and camera
+compositor with a local policy stub; the synthetic smoke separately exercises the
+connector/backend integration. No installed helper or live service changed.
+
+At joint review on November 16, 2026, the user confirmed “real sharing looks good”
+and requested that these changes be committed and logged. This accepts the local
+view-only Finder sharing milestone and supersedes the follow-up's leave-uncommitted
+state. The changes are recorded in the local commit `feat: enable real local window
+sharing` following `f8a5a2a`, on `ArgosClawd`. No push or deployment is authorized.
+
+Next, qualify move/resize/minimize/close, permission loss, lock and Stop across
+Finder, an IDE without extensions, and a disposable paused video-editor project.
+Then qualify camera-coordinate integration through the existing CUA executor on
+harmless targets, independently observing actual outcomes. A supervised FaceTime
+trial follows only after review and separate authorization.
+
+The longer
+Finder lifecycle/multidisplay matrix, IDE and paused video-editor acceptance, real
+CUA targeting and FaceTime/handset acceptance are still pending. Selected-window
+fallback input stays disabled; this preview is view-only and needs no IDE plugin.
 
 ## Starting state and preservation
 
@@ -101,7 +170,14 @@ observes afterward, releases ownership and verifies Stop refuses further access.
 The browser check uses installed Chrome with a disposable profile; it writes only
 synthetic PNGs to `/tmp/clawdtime-argos-review` and shuts down its fixture processes.
 
-For actual selected capture, first build the development binary and obtain bounded
+For the disposable real Finder review, open `/tmp/ClawdTime Sharing Review` in
+Finder, keep the window visible, and run `npm run preview:camera:window`. Open the
+printed full URL, press **Start sharing**, then use Focus region, annotations,
+Freeze/Resume and Stop. Selecting another row in Finder should appear in the preview.
+The title chooses a window; it does not confine Finder navigation to that folder.
+Keep this window on disposable content. The preview lasts at most 15 minutes.
+
+For other explicit selected capture, build the development binary and obtain bounded
 surface metadata. This does not read installed helper configuration or grant TCC:
 
 ```sh
@@ -112,10 +188,10 @@ media/.venv/bin/python media/camera_preview.py --mode actual \
 ```
 
 Replace every example identity with the intended disposable surface's actual
-metadata. Press **Start selected surface** in the local UI. An explicit display
+metadata. Press **Start sharing** in the local UI. An explicit display
 object is also supported: `{"kind":"display","id":"DISPLAY_ID","displayId":123}`
 with matching numeric identity. Actual mode never supplies OS input and never
-exports captures. A missing/closed/minimized/off-display target becomes unavailable;
+exports captures. A missing/closed/minimized or cross-display target becomes unavailable;
 it does not widen to the desktop. Surface switching requires a new explicitly
 selected session/process. Stop cannot be undone by Resume.
 
@@ -346,7 +422,8 @@ Later, with the user present:
    including Retina, negative origins, letterbox rejection, zoom races and local
    Stop. Independently verify actual UI outcomes. Window CUA needs additional
    exact hit-target/focus qualification before enabling it.
-3. Review the implementation and dirty-tree split before any commit or publishing.
+3. Review further changes before publishing; the local synthetic and Finder
+   milestones have already received explicit commit authorization.
 4. Only after separate authorization, establish current live line ownership and
    exact recipient/session readiness for a supervised view-only FaceTime trial.
    Measure handset delay/readability and stale-display clearing separately from

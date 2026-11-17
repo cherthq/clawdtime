@@ -9,6 +9,7 @@ import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
+import html
 import hmac
 import io
 import json
@@ -28,7 +29,7 @@ from devices import ScreenController
 from device_actions import DeviceActions
 
 sys.path.append(str(Path(__file__).resolve().parents[1]/'gateway'))
-from service import Gateway
+from service import Gateway, CameraGeometryChanged
 
 
 def iso():return datetime.now(timezone.utc).isoformat()
@@ -51,20 +52,21 @@ def fixture(kind='coding'):
     return image
 
 HTML='''<!doctype html><meta charset="utf-8"><title>ClawdTime screen camera preview</title>
-<style>body{background:#101722;color:#e5edf8;font:16px system-ui;margin:24px}button,select{font:inherit;padding:9px;margin:4px;border-radius:7px;border:0}button.stop{background:#dd5151;color:white}img{width:min(100%,1280px);display:block;border:1px solid #334558;border-radius:12px}#status{max-width:1100px;min-height:25px}input{font:inherit;width:340px;padding:9px}</style>
-<h1>ClawdTime screen camera</h1><p>Local preview · camera only · IDE support optional · input uses a disposable fake sink.</p>
+<style>[hidden]{display:none!important}body{background:#101722;color:#e5edf8;font:16px system-ui;margin:24px}button,select{font:inherit;padding:9px;margin:4px;border-radius:7px;border:0}button.stop{background:#dd5151;color:white}img{width:min(100%,1280px);display:block;border:1px solid #334558;border-radius:12px}#status{max-width:1100px;min-height:25px}input{font:inherit;width:340px;padding:9px}</style>
+<h1 id="heading">ClawdTime screen camera</h1><p id="description">Local preview · camera only · IDE support optional · input uses a disposable fake sink.</p>
+<p id="source"></p><p id="guidance"></p>
 <button id="start">Start selected surface</button><button class="stop" id="stop">STOP sharing</button><select id="fixture"><option value="coding">Synthetic coding</option><option value="finder">Synthetic Finder</option><option value="timeline">Synthetic paused timeline</option></select>
 <div><button data-op="focus_region">Focus region</button><button data-op="zoom_out">Zoom out</button><button data-op="overview">Overview</button><button data-op="pin">Pin</button><button data-op="unpin">Unpin</button><button data-op="freeze">Freeze</button><button data-op="resume">Resume</button><button data-op="clear">Clear marks</button></div>
 <div><select id="kind"><option>rectangle</option><option>highlight</option><option>pointer</option><option>arrow</option><option>label</option></select><input id="label" maxlength="160" value="Review this selected region"><button id="mark">Add / update mark</button><button id="remove">Remove mark</button><button id="context">Context card</button><button id="click">Test mapped fake click</button></div>
-<p id="status">Connecting…</p><img id="frame" alt="Selected surface preview"><pre id="receipt"></pre>
+<p id="status">Connecting…</p><p id="feedback" role="status"></p><img id="frame" alt="Selected surface preview" hidden><pre id="receipt"></pre>
 <script>
 const credentialKey='clawdtime.camera.preview.credential.v1';
 const maximumCredentialAge=15*60*1000;
-let token='',credentialExpiresAt=0,sid,latest,stopped=false,halted=false,pollTimer;
+let token='',credentialExpiresAt=0,sid,latest,stopped=false,halted=false,starting=false,startError='',pollTimer;
 const status=document.getElementById('status'),frame=document.getElementById('frame');
 function forgetCredential(){try{sessionStorage.removeItem(credentialKey)}catch{}token='';credentialExpiresAt=0}
-function clearImage(){const old=frame.src;frame.removeAttribute('src');if(old.startsWith('blob:'))URL.revokeObjectURL(old)}
-function halt(message){halted=true;clearTimeout(pollTimer);forgetCredential();clearImage();document.querySelectorAll('button,select,input').forEach(el=>el.disabled=true);status.textContent=message}
+function clearImage(){const old=frame.src;frame.hidden=true;frame.removeAttribute('src');if(old.startsWith('blob:'))URL.revokeObjectURL(old)}
+function halt(message){document.getElementById('feedback').textContent='';halted=true;clearTimeout(pollTimer);forgetCredential();clearImage();document.querySelectorAll('button,select,input').forEach(el=>el.disabled=true);status.textContent=message}
 function saveCredential(){if(halted||stopped||!token)return;try{sessionStorage.setItem(credentialKey,JSON.stringify({token,expiresAt:credentialExpiresAt}))}catch{}}
 function validCredential(value){return value&&typeof value.token==='string'&&/^[A-Za-z0-9_-]{32,512}$/.test(value.token)&&Number.isFinite(value.expiresAt)&&value.expiresAt>Date.now()&&value.expiresAt<=Date.now()+maximumCredentialAge}
 const fragment=location.hash.slice(1);
@@ -92,6 +94,7 @@ async function response(path,body){
 }
 async function api(path,body){return (await response(path,body)).json()}
 function showError(error){if(!halted&&!stopped)status.textContent=error.message}
+function presentationControls(enabled,paused=false){document.querySelectorAll('[data-op],#mark,#remove,#context,#kind,#label').forEach(el=>el.disabled=!enabled||(paused&&!['resume','clear'].includes(el.dataset.op)))}
 async function refresh(){
   if(halted||stopped)return;
   let delay=100;
@@ -100,21 +103,30 @@ async function refresh(){
     if(halted||stopped)return;
     if(info.stopped){halt('Preview stopped. Start a new preview session.');return}
     if(Number.isFinite(info.expiresAt)){credentialExpiresAt=Math.min(credentialExpiresAt,info.expiresAt);saveCredential();requireCredential()}
-    sid=info.sessionId;latest=await api('/sessions/'+sid+'/screen/camera');
+    sid=info.sessionId;
+    if(info.mode==='actual'){
+      document.getElementById('start').disabled=starting||info.started||Boolean(info.unavailableReason);
+      if(info.unavailableReason){presentationControls(false);clearImage();status.textContent='Actual '+info.surface.kind+' sharing unavailable. '+info.unavailableReason+' Keep the selected window open, then start a new preview session.';pollTimer=setTimeout(refresh,1000);return}
+      document.getElementById('guidance').textContent=info.started?'Sharing only the selected '+info.surface.kind+'. Stop immediately clears capture.':'Capture is off. Press Start sharing to share only this '+info.surface.kind+'.';
+      if(!info.started){presentationControls(false);clearImage();status.textContent=starting?'Starting selected '+info.surface.kind+' sharing…':startError?'Cannot start sharing. '+startError:'Ready to share the selected '+info.surface.kind+'. Capture is off.';pollTimer=setTimeout(refresh,500);return}
+    }
+    latest=await api('/sessions/'+sid+'/screen/camera');
     if(halted||stopped)return;
-    status.textContent=info.mode+' · '+latest.state+' · revision '+latest.revision+(latest.moving?' · moving':'')+' · '+latest.surface.kind+' '+latest.surface.id;
+    if(info.mode==='actual'){presentationControls(latest.state!=='unavailable',latest.state==='paused');if(latest.state==='unavailable'){clearImage();status.textContent='Starting selected '+info.surface.kind+' sharing… Waiting for its first authorized frame.';pollTimer=setTimeout(refresh,200);return}}
+    status.textContent=info.mode==='actual'?(latest.state==='paused'?'Paused':'Live')+(latest.moving?' · adjusting view':''):info.mode+' · '+latest.state+' · revision '+latest.revision+(latest.moving?' · moving':'')+' · '+latest.surface.kind+' '+latest.surface.id;
+    const diagnostics=document.getElementById('camera-details');if(diagnostics)diagnostics.textContent=JSON.stringify({revision:latest.revision,state:latest.state,source:latest.source},null,2);
     const blob=await (await response('/preview/image')).blob();
     if(halted||stopped)return;
-    const url=URL.createObjectURL(blob);clearImage();frame.src=url;
-  }catch(e){clearImage();showError(e);delay=1000}
+    const url=URL.createObjectURL(blob);clearImage();frame.src=url;frame.hidden=false;
+  }catch(e){presentationControls(false);clearImage();showError(e);delay=1000}
   if(!halted&&!stopped)pollTimer=setTimeout(refresh,delay);
 }
-async function command(op,extra={}){try{latest=await api('/sessions/'+sid+'/screen/camera');const value=await api('/sessions/'+sid+'/screen/camera',{version:1,commandId:crypto.randomUUID(),expectedRevision:latest.revision,sourceFrameId:latest.sourceFrameId,geometryGeneration:latest.geometryGeneration,op,...extra});if(!halted&&!stopped)document.getElementById('receipt').textContent=JSON.stringify(value)}catch(e){showError(e)}}
+async function command(op,extra={}){const feedback=document.getElementById('feedback'),receipt=document.getElementById('receipt');receipt.textContent='';feedback.textContent='Applying camera change…';try{latest=await api('/sessions/'+sid+'/screen/camera');const value=await api('/sessions/'+sid+'/screen/camera',{version:1,commandId:crypto.randomUUID(),expectedRevision:latest.revision,sourceFrameId:latest.sourceFrameId,geometryGeneration:latest.geometryGeneration,op,...extra});if(!halted&&!stopped){receipt.textContent=JSON.stringify(value);feedback.textContent=value.state==='superseded'?'Automatic focus skipped while pinned.':'Camera change accepted.';}}catch(e){if(!halted&&!stopped)feedback.textContent=e.message}}
 document.querySelectorAll('[data-op]').forEach(b=>b.onclick=()=>command(b.dataset.op,b.dataset.op==='focus_region'?{rect:{x:.16,y:.2,width:.55,height:.38},durationMs:450}:{}));
 document.getElementById('mark').onclick=()=>command('annotation_upsert',{annotation:{id:'preview_mark',kind:document.getElementById('kind').value,rect:{x:.2,y:.25,width:.35,height:.15},text:document.getElementById('label').value,ttlMs:8000}});
 document.getElementById('remove').onclick=()=>command('annotation_remove',{annotationId:'preview_mark'});
 document.getElementById('context').onclick=()=>command('context',{text:document.getElementById('label').value,ttlMs:8000});
-document.getElementById('start').onclick=async()=>{try{await api('/preview/start',{});}catch(e){showError(e)}};
+document.getElementById('start').onclick=async()=>{if(starting||halted||stopped)return;starting=true;startError='';document.getElementById('start').disabled=true;try{await api('/preview/start',{});}catch(e){startError=e.message;showError(e)}finally{starting=false}};
 document.getElementById('stop').onclick=async()=>{
   const stopToken=token;stopped=true;
   halt('Stopping sharing…');
@@ -128,12 +140,35 @@ document.getElementById('click').onclick=async()=>{try{const value=await api('/p
 if(token)refresh();else halt('Preview access is missing. Reopen the full URL printed by the preview command, or start a new preview session.');
 </script>'''
 
+def preview_html(mode, selected, label=None):
+    if mode!='actual':return HTML
+    kind=selected['kind']
+    owner=' · process '+str(selected['ownerPid']) if 'ownerPid' in selected else ''
+    identity=kind.capitalize()+' '+selected['id']+' · display '+str(selected['displayId'])+owner
+    label=html.escape(label[:160]) if isinstance(label,str) and label.strip() else 'Selected '+kind
+    identity=html.escape(identity)
+    return (HTML.replace('ClawdTime screen camera</h1>', 'Actual '+kind+' sharing</h1>',1)
+        .replace('Local preview · camera only · IDE support optional · input uses a disposable fake sink.',
+                 'Live pixels from one explicitly selected '+kind+' · view only · no OS input.',1)
+        .replace('<p id="source"></p>','<p id="source">'+label+'</p>',1)
+        .replace('<pre id="receipt"></pre>','<details><summary>Diagnostics</summary><p>'+identity+'</p><pre id="camera-details"></pre><pre id="receipt"></pre></details>',1)
+        .replace('<p id="guidance"></p>','<p id="guidance">Capture is off until you press Start sharing. Keep this exact window open. Moving it onto another display requires a new selection.</p>',1)
+        .replace('<button id="start">Start selected surface</button>','<button id="start">Start sharing</button>',1)
+        .replace('<button data-op=', '<button disabled data-op=')
+        .replace('<select id="kind">','<select id="kind" disabled>',1)
+        .replace('<input id="label"','<input id="label" disabled',1)
+        .replace('<button id="mark">','<button id="mark" disabled>',1)
+        .replace('<button id="remove">','<button id="remove" disabled>',1)
+        .replace('<button id="context">','<button id="context" disabled>',1)
+        .replace('<select id="fixture">','<select id="fixture" hidden disabled>',1)
+        .replace('<button id="click">','<button id="click" hidden disabled>',1))
+
 class Preview:
     def __init__(self,config):
         self.config=config; self.token=config.get('token') or secrets.token_urlsafe(32)
         self.sid=config.get('sessionId','ct_'+'a'*40);self.mode=config.get('mode','synthetic')
         if self.mode=='actual' and 'surface' not in config:raise ValueError('Actual capture requires an explicitly selected --surface JSON.')
-        self.kind='coding';self.stopped=False;self.started=False;self.deadline=time.monotonic()+min(900,config.get('durationSeconds',900));self.expires_at=time.time()*1000+min(900,config.get('durationSeconds',900))*1000
+        self.kind='coding';self.stopped=False;self.started=False;self.start_lock=asyncio.Lock();self.deadline=time.monotonic()+min(900,config.get('durationSeconds',900));self.expires_at=time.time()*1000+min(900,config.get('durationSeconds',900))*1000
         self.tmp=tempfile.TemporaryDirectory(prefix='clawdtime-camera-');self.runners=[];self.frame_count=0;self.inputs=[];self.lease=None;self.last_frame=None;self.process=None
         self.surface=surface(config.get('surface',{'kind':'display','id':str(config.get('displayId',1)),'displayId':config.get('displayId',1)}))
         self.selection={'leaseId':config.get('leaseId','preview_lease'),'deviceId':config.get('deviceId','preview_device'),
@@ -146,11 +181,13 @@ class Preview:
     def policy(self):
         expiry=(datetime.now(timezone.utc)+timedelta(seconds=20)).isoformat()
         return {'state':'listening','callId':self.selection['callId'],'expiresAt':expiry,'screenSelection':{**self.selection,'expiresAt':expiry}}
-    async def native(self):
+    async def native(self):return await self.native_command("--camera-frame")
+    async def native_command(self,mode):
         binary=self.config.get('nativeBinary',str(Path(__file__).resolve().parents[1]/'mac/.build/debug/ClawdTimeCompanion'))
-        self.process=await asyncio.create_subprocess_exec(binary,'--camera-frame','--surface',json.dumps(self.surface),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        self.process=await asyncio.create_subprocess_exec(binary,mode,'--surface',json.dumps(self.surface),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:
             raw,error=await asyncio.wait_for(self.process.communicate(),2.5)
+            if self.process.returncode==75:raise CameraGeometryChanged(text='Selected camera geometry changed; pixels discarded.')
             if self.process.returncode!=0 or len(raw)>3*1024*1024:
                 detail=error.decode('utf-8',errors='replace').strip()
                 raise ValueError(detail if detail.startswith('Camera preview unavailable: ') and len(detail)<400 else 'Native capture unavailable; check selected surface and Screen Recording permission.')
@@ -158,6 +195,23 @@ class Preview:
         finally:
             if self.process.returncode is None:self.process.kill();await self.process.wait()
             self.process=None
+    async def begin_capture(self):
+        async with self.start_lock:
+            if self.stopped:raise web.HTTPGone(text='Stopped selections cannot resume; start a new preview process.')
+            if self.started:return
+            if self.mode=='actual':
+                try:
+                    metadata=await self.native_command('--camera-inspect')
+                    if metadata.get('surface')!=self.surface:raise ValueError('Selected surface identity changed.')
+                    x,y,w,h=metadata['windowFrame'];dx,dy,dw,dh=metadata['displayBounds']
+                    if not (w>0 and h>0 and dx<=x and dy<=y and x+w<=dx+dw and y+h<=dy+dh):
+                        raise ValueError('Place the selected window wholly on its chosen display before Start sharing.')
+                except (ValueError,KeyError,TypeError) as error:raise web.HTTPConflict(text=str(error))
+            if self.stopped:raise web.HTTPGone(text='Stopped selections cannot resume; start a new preview process.')
+            policy=await self.backend('/media/'+self.sid+'/policy')
+            if self.stopped:raise web.HTTPGone(text='Stopped selections cannot resume; start a new preview process.')
+            self.started=True;self.screen.update(policy)
+
     async def setup(self):
         @web.middleware
         async def helper_auth(request,handler):
@@ -173,6 +227,7 @@ class Preview:
             self.frame_count+=1
             if self.mode=='actual':
                 try:value=await self.native()
+                except CameraGeometryChanged:raise
                 except Exception as error:
                     self.capture_error=str(error) if isinstance(error,ValueError) else 'Selected native capture unavailable.'
                     raise web.HTTPConflict(text='Explicit selected native surface unavailable.')
@@ -227,8 +282,12 @@ class Preview:
             if request.method=='POST' and request.headers.get('Origin') not in (None,self.origin):raise web.HTTPForbidden()
             response=await handler(request);response.headers['Cache-Control']='no-store';response.headers['Referrer-Policy']='no-referrer';return response
         app=web.Application(middlewares=[auth],client_max_size=16384)
-        async def home(request):return web.Response(text=HTML,content_type='text/html',headers={'Content-Security-Policy':"default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"})
-        async def info(request):return web.json_response({'sessionId':self.sid,'mode':self.mode,'inputSink':'fake_only','started':self.started,'stopped':self.stopped,'expiresAt':self.expires_at})
+        async def home(request):return web.Response(text=preview_html(self.mode,self.surface,self.config.get('surfaceLabel')),content_type='text/html',headers={'Content-Security-Policy':"default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"})
+        async def info(request):
+            retired=self.selection['leaseId'] in self.screen.stopped
+            reason=(getattr(self,'capture_error',None) or 'Selected surface authorization or capture became unavailable.') if retired else None
+            return web.json_response({'sessionId':self.sid,'mode':self.mode,'inputSink':'none' if self.mode=='actual' else 'fake_only',
+                'surface':self.surface,'started':self.started,'stopped':self.stopped,'expiresAt':self.expires_at,'unavailableReason':reason})
         async def command(request):return await camera_request(self.screen,request)
         async def image(request):
             self.screen.expire();image=self.screen.render();data=io.BytesIO();image.convert('RGB').save(data,'JPEG',quality=88)
@@ -237,8 +296,7 @@ class Preview:
             try:return web.json_response(await self.screen.observed(include_frame=True))
             except ValueError:raise web.HTTPConflict()
         async def start(request):
-            if self.stopped:raise web.HTTPGone(text='Stopped selections cannot resume; start a new preview process.')
-            self.started=True;self.screen.update(self.policy());return web.json_response({'started':True})
+            await self.begin_capture();return web.json_response({'started':True})
         async def stop(request):await self.stop();return web.json_response({'released':True,'leaseId':self.selection['leaseId']})
         async def fixture_change(request):
             body=await request.json()
@@ -263,6 +321,7 @@ class Preview:
                 'displayAttached':True,'activeLease':bool(self.lease),'activeLeaseId':self.selection['leaseId'] if self.lease else None,
                 'cameraVersion':1,'policyRevision':1,'controlPolicy':'agent_tools_with_fallback' if self.mode=='synthetic' else 'view_only','unresolvedActionCount':0,'preview':True})
         async def fake_input(request):
+            if self.mode!='synthetic':raise web.HTTPForbidden(text='Actual sharing is view only; no fake or OS input is available.')
             body=await request.json();state=self.screen.camera.status()
             try:x,y=self.screen.camera.map_input({k:state[k] for k in ('revision','sourceFrameId','geometryGeneration')},body.get('x'),body.get('y'))
             except ValueError:raise web.HTTPConflict(text='Wait for a fresh stable live view; letterbox clicks are rejected.')
@@ -276,7 +335,7 @@ class Preview:
         app.router.add_get('/devices/{device}/readiness',readiness);app.router.add_get('/devices/{device}/readiness/{member}/{display}',readiness)
         self.origin=await self.listen(app,self.config.get('port',0))
         if self.mode=='synthetic' or self.config.get('capture') is True:
-            self.started=True;self.screen.update(await self.backend('/media/'+self.sid+'/policy'))
+            await self.begin_capture()
         self.task=asyncio.create_task(self.heartbeat())
         return {'origin':self.origin,'url':self.origin+'/#'+self.token,'token':self.token,'sessionId':self.sid,'leaseId':self.selection['leaseId']}
     async def heartbeat(self):

@@ -22,6 +22,9 @@ from urllib.parse import urlsplit
 from aiohttp import ClientSession, ClientTimeout, web
 from relay_diagnostics import RelayDiagnostics, request_id, milliseconds
 
+class CameraGeometryChanged(web.HTTPClientError):
+    status_code = 425
+
 ID = re.compile(r'^[A-Za-z0-9_-]{1,160}$')
 MAX_FRAME = 2 * 1024 * 1024
 
@@ -180,6 +183,8 @@ class Gateway:
             raw = b''.join(chunks)
             if response.status >= 300:
                 logging.warning('helper_response_refused operation=%s status=%s','frame' if frame else 'lease',response.status)
+                if response.status==425 and frame and body.get('cameraVersion')==1:
+                    raise CameraGeometryChanged(text='Selected camera geometry changed; pixels discarded.')
                 if response.status in (403,404,409,410,423):
                     self.stop(body['id'])
                     raise web.HTTPGone(text='Device lease stopped; request a fresh lease explicitly.')

@@ -1,5 +1,31 @@
 # ClawdTime implementation status
 
+## Real Finder sharing accepted locally — November 16, 2026
+
+Local view-only sharing now captures the exact disposable Finder window through
+ScreenCaptureKit, the gateway and camera compositor. A 20-second check received
+39 distinct frames and reflected a file added after sharing began. The browser
+rendered Finder content and annotations; Freeze/Resume and Stop were verified.
+Use `npm run preview:camera:window` with `/tmp/ClawdTime Sharing Review` open in
+Finder, then open the full printed URL and press Start sharing. No IDE is required.
+
+The new native path uses bounded first-frame capture and acknowledged stream stop.
+Exact ID/PID/lifecycle checks remain; initial selection fits one display, later
+window translation does not broaden capture, and cross-display changes are refused.
+This is still a local review build, with selected-window input disabled and no
+FaceTime, installed-service changes, deployment or push. The user confirmed
+“real sharing looks good” and authorized a local commit and log. This milestone
+is recorded as `feat: enable real local window sharing` after `f8a5a2a` on
+`ArgosClawd`. Longer lifecycle/other-app qualification and actual CUA targeting
+are next, before any separately authorized handset trial.
+
+Checks: Node 904 tests/typecheck/build; media 314 passed + 13 optional skips;
+gateway 37 passed; Swift 53 passed. See
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md) for exact evidence,
+remaining gaps and final presentation checks. Final translation/UI fixes passed 21 targeted
+camera/preview tests and a fresh browser regression run; real focused Finder rows
+and retained Freeze crop were visually verified. The earlier checkpoint below is history.
+
 ## Argos local review checkpoint — November 16, 2026
 
 The user reviewed **zoom and annotations in the synthetic developer preview** and

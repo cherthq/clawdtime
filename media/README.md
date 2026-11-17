@@ -131,7 +131,7 @@ The existing `ScreenController` owns one ephemeral `ScreenCamera`. Native pixels
 (up to 8192 per axis, 32 million pixels, 2 MiB JPEG) survive helper/gateway relay
 before cropping and final output resize. Oversized native captures fail explicitly;
 select a smaller window. Window IDs include the process ID and exact display.
-Closed/minimized windows, moved-off-display windows, changed owners, screen changes,
+Closed/minimized windows, windows intersecting another display, changed owners, screen changes,
 lock, stale policy/frame, Stop, release and disconnect clear presentation. Resizing
 or moving within the display invalidates geometry and annotations. There is no
 silent whole-display fallback and no IDE extension requirement.
@@ -188,10 +188,34 @@ media/.venv/bin/python media/camera_preview.py --mode actual \
 ```
 
 Replace all example IDs with the selected disposable window's metadata. Press
-**Start selected surface** locally; Stop is always visible and cannot resume the
+**Start sharing** locally; Stop is always visible and cannot resume the
 retired preview selection. Start a new preview process after Stop. Missing Screen
 Recording permission is reported without prompting/resetting TCC. Actual mode has
 no OS input route and retains no captures. The development binary reads no installed
 configuration and does not restart or replace any installed service. Only synthetic
 images may be exported with the image-rendering command above. These commands do
 not establish real IDE/Finder/video-editor or handset acceptance by themselves.
+
+The actual preview labels **Actual window sharing** (or display sharing), shows the
+selected source label (identity and receipts are in collapsed Diagnostics), and leaves capture off until **Start sharing**. It hides synthetic
+fixture selection and fake-input controls; actual-mode requests to the fake-input
+endpoint are refused. Focus and annotations enable only after a fresh selected
+frame arrives. A lost selected window reports its bounded capture reason, clears
+the image and requires a fresh preview session; it never switches to another window
+or to the full display. Start requires the window wholly within the chosen display;
+afterward the exact window may be occluded or off-screen while that display remains
+active, provided it does not intersect another display. Window metadata describes
+the whole window; the selected display is an anchor, not a crop. Display-source
+metadata retains containment, and window OS input stays disabled. A geometry
+change during capture clears pixels and annotations and retries only a fresh capture
+of the same selection under unchanged Stop/expiry gates. The metadata-only native lookup/inspect commands in the Mac README
+help diagnose Spaces, window placement and geometry without saving screenshots.
+
+Window translation alone preserves normalized zoom and its in-progress easing when
+native/point dimensions and selected-display metadata remain unchanged. Current
+geometry generation and revision still advance; marks/context are cleared and old
+input references are rejected. A frozen view keeps its original pixels and frame
+identity until Resume; actual resize or display-geometry change resets presentation.
+Paused preview controls offer Resume and Clear only. Camera command failures remain
+visible separately from live status, and an earlier receipt is cleared before each
+new command so it cannot be mistaken for the new command's result.
