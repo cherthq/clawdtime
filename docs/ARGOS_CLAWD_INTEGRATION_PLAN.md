@@ -1,5 +1,370 @@
 # ArgosClawd: local agent connector, general screen presentation, and conversation
 
+## Implementation plan — automatic alignment, native CUA and presentation
+
+Prepared November 17, 2026, following the local rehearsal. This section is the
+next implementation plan; it does not claim the capabilities below already work.
+It supersedes treating manual desktop arrangement as an acceptance solution.
+The user subsequently authorized implementation with agent teams and local tests,
+starting with reliable window activation and native CUA. No new call is authorized.
+
+The first work wave now includes an opt-in local Finder/TextEdit activation
+capability, typed executor, persistent operation receipts and authenticated preview
+control. Current-display Finder → TextEdit → Finder activation and native edit/save/
+file move were physically verified. The complete presentation remains blocked by
+framing refusals; other window configurations and repeated polished runs are open.
+See the newest implementation review for evidence. The phases below are not marked
+complete by unit tests or this narrower native-action milestone.
+
+### Prepared walkthrough and live resolution — implemented local slice
+
+The agent now prepares bounded scene intent, window-relative focus and annotation
+before playback. Each step still resolves its exact live window and verifies the
+foreground result. A read-only native resolver brackets a current source frame;
+the media frame lock then commits clear, focus and annotation atomically. Pixel
+changes alone do not invalidate that geometric presentation. Target movement,
+focus loss, Stop, authority changes, stale observations or the three-second scope
+limit clear both crop and marks. This scope never grants input authority or proves
+semantic UI success.
+
+After the final scene, `complete` permits `replan` in the same session for the next
+request. Replanning invalidates queued old work, clears the prior view, preserves
+the original session expiry and retains unknown receipts. Plans are bounded to
+12 scenes each and eight per session. Unknown outcomes block replacement.
+
+The local snapshot diagnostic verified both real apps with outgoing zooms/annotations,
+then a follow-up plan in that same session, with three native activations and clean
+Stop. The user initially placed the windows on the current Space. The updated AX resolver qualifies an
+off-Space Finder through public main/focused-window references, but qualification
+alone does not establish visible activation. Persistent SCK interruption remains
+open; an explicit snapshot-only selected-display diagnostic is separate evidence.
+
+### Intended experience
+
+The user asks for a walkthrough. The original agent prepares scenes, brings the
+right window into view, frames the relevant content, and explains it. The user can
+then ask to edit text, click a control, move a file or switch apps. The agent does
+that work through qualified native CUA and presents the verified result with the
+same camera and annotation style. Routine window arrangement is automatic within
+the authorized display and supported applications.
+
+The agent decides what to do. Native code handles target resolution, focus,
+coordinate conversion and input dispatch. The renderer handles animation. Known
+targets should not require another visual-model planning request for each click.
+Arbitrary language still needs agent interpretation, and unsupported controls may
+need a fresh observation rather than a guessed action.
+
+`prepare → claim → align window → observe target → act → verify → release → present`
+
+### Starting point and constraints
+
+Reuse the existing scene controller, execution broker, selected-display stream,
+camera transforms, annotations, Stop propagation and recent-frame reset fix.
+The existing scene controller choreographs camera commands; it is not a native
+action executor. Local rendering reached about 28 fps in stationary-display tests.
+That is not proof of smooth app transitions, typing, scrolling or drag operations.
+
+Three concrete gaps drive the order of work: foreground activation is unverified;
+SCK interruption `-3805` remains unexplained; and Stop can leave native ownership
+uncertain with no cleanup-only reconciliation path. Preserve all existing receipts
+and the historical Finder409 evidence while addressing these independently.
+
+### Phase 1 — prove a supported native activation path
+
+Build a small capability qualification harness before expanding orchestration.
+Inventory the originating host's supported native activation, window selection,
+click, typing, scrolling, cancellation and tool-completion evidence. Record which
+capabilities are verified for each host/app combination; do not advertise the
+whole native-control flow based on Accessibility access alone.
+
+Resolve exact application identity, process lifetime, window identity and selected
+display. Check a unique Accessibility-to-window match. Request app activation and
+raise only the intended window, with separate bounded receipts. Verify frontmost
+application, focused window, on-screen geometry and a fresh outgoing display frame.
+Missing, ambiguous, minimized or wrong-display targets need explicit handling,
+not title-only selection. Remember original layout when temporarily arranging a
+window and restore only if it still matches the layout the agent applied.
+
+Prefer a qualified host-native activation primitive. If absent, prototype a
+separately negotiated, activation-only companion capability with an explicit
+local grant and the same execution broker. It must preserve host target
+restrictions and must not reuse fallback `/actions` under native ownership.
+A local preview control can invoke a prepared operation during development;
+the UI click itself is never authorization. Do not require a browser button or
+another user click for every scene in the finished experience.
+
+**Exit criterion:** activate Finder and TextEdit from an unrelated foreground app
+without manual rearrangement, then verify the actual outgoing view. Separately
+qualify other Spaces, fullscreen, minimized windows and multiple displays. Publish
+the supported matrix; do not silently capture another display or force unsupported
+Space transitions. If the host/OS cannot support this, foreground automation is a
+product blocker, not a reason to repeat the same setup instructions to the user.
+
+Apple makes activation a cooperative request; a successful call cannot guarantee
+foregrounding. The implementation must prove the supported path rather than
+rely on deprecated forced-activation options. See
+[Apple's cooperative activation guidance](https://developer.apple.com/videos/play/wwdc2023/10054/).
+
+### Phase 2 — reliable native clicks, typing, navigation and file operations
+
+Put a typed native-executor adapter between the original agent and scene
+orchestration. Its narrow operations resolve/activate a target, observe it,
+perform one action, and return a completion receipt. Use stable operation IDs,
+record dispatch before effects, and distinguish not-started, submitted, completed,
+verified and uncertain outcomes. An adapter timeout must not cause redispatch.
+
+Resolve accessible controls by their observed semantic identity. For coordinate
+input, derive coordinates from a fresh source observation and the current window
+bounds, scale and display origin. Re-resolve after movement, resizing, scrolling
+or app switching. Outgoing zoom, padding and annotations must never become an
+implicit coordinate system for native input. Keep camera and input transforms
+separate and retain strict input freshness.
+
+Start with Finder navigation and file moves plus TextEdit selection, typing and
+saving. Verify the edited document through native observation; verify a move in
+both source and destination. Use disposable fixtures and read-only filesystem
+checks as additional evidence, never as a substitute for visible CUA acceptance.
+Expand drag/drop, other apps and coordinate-only controls after these pass.
+
+The existing helper action route requires control mode and the ClawdTime executor.
+If ClawdTime's own native input backend is selected, negotiate its bounded local
+policy explicitly and preserve those checks. Do not silently turn native-only
+sessions into fallback sessions or add a second LLM executor. Only one qualified
+executor may control the shared surface at a time.
+
+**Exit criterion:** repeat the real Finder → TextEdit edit/save → Finder move flow
+with correct destinations and no duplicate input. Moving the window between
+observation and dispatch must cause re-observation or refusal before input.
+
+### Phase 3 — capture stability and cleanup after interruption
+
+Investigate `-3805` with bounded metadata: source-process lifetime, stream start/
+stop, native ownership transitions, snapshot refresh, local Stop and system state.
+Run controlled local comparisons for persistent capture alone, ownership changes,
+native navigation and static-frame refresh. Change one condition per comparison;
+retain no screen/audio content in diagnostics. Repair an evidenced cause and add
+a regression test. Do not label a later successful run as a diagnosis.
+
+Introduce cleanup-only native completion reconciliation, separately from claiming
+control. Require the original bound actor, expected stopped epoch, independently
+available terminal/joined host-tool evidence, no queued/running native dispatch,
+and confirmed lease cleanup. If those proofs are unavailable, keep uncertainty
+and report the exact prerequisite; do not substitute an agent's optimistic claim.
+
+Append immutable evidence and retire current ownership only to none/paused.
+Preserve original uncertain effects and unverified UI results, keep Stop asserted,
+and never renew a lease, restart capture or replay an action through cleanup.
+Stopped/revoked sessions require a separately authenticated operator audit path.
+Any later capture begins with fresh explicit authority and generation.
+
+**Exit criterion:** inject loss before dispatch, after submission, during an action
+and during presentation. No late input/pixels may appear after Stop; no effect may
+be repeated. Recovery must distinguish a finished actor from a verified UI result.
+
+### Phase 4 — connect native execution to prepared and follow-up scenes
+
+Extend the existing controller with explicit aligning, observing, acting,
+verifying, presenting, interrupted and blocked states. A scene carries its
+intended message, exact target binding, action intent, expected result, focus
+target and annotation. Resolve coordinates at execution time.
+
+Add an ephemeral queue of scene amendments for requests such as “rename that,”
+“move it to Approved,” or “show the document again.” A correction invalidates
+queued scenes and stale observations immediately. Join/cancel the current native
+operation through the host's actual capabilities before transferring ownership.
+Preserve uncertainty when cancellation cannot be confirmed. Ordinary reasoning
+and file work continue while sharing; only surface input is exclusive.
+
+Use the same path for the initial presentation and subsequent modifications.
+Narration describes an action's result only after verification. An unavailable
+target produces a useful status, not a fabricated success or an advancing scene.
+
+**Exit criterion:** the user interrupts the prepared walkthrough, requests an edit
+and a move, and receives verified results with matching framing in the same session.
+
+### Phase 5 — presentation quality
+
+Use one motion system for overview, target focus, annotations and return to
+overview. Begin with the existing 450 ms focus transition; tune easing, zoom limits,
+readable margins and dwell against actual text and window movement. Clear stale
+marks during transitions and label any paused view. Display the verified action
+result before beginning the next narration beat. Honor reduced-motion preferences.
+
+Profile capture, rendering and UI latency separately under real motion. The current
+15 fps source cap is a prototype budget; target 30 fps source and output for dynamic
+production presentation if the measured capture/resource budget supports it.
+Keep latest-frame buffers and rendering queues bounded. Do not raise output fps
+alone and describe duplicated source frames as smoother native motion.
+
+Measure distinct source cadence during scrolling/dragging, output cadence, p95
+frame age, switch-to-verified-view latency, render time, CPU and memory. Set release
+thresholds from the target-Mac profile before final acceptance, and compare the
+actual playback against the requested Screen Studio-like quality bar. That bar
+remains unmet if source motion is visibly choppy despite a passing render count.
+
+### Phase 6 — acceptance and rollout
+
+Use one scripted but genuinely native local walkthrough: discover both disposable
+windows; activate Finder; zoom and label folders; open the notes; edit/save the
+heading; return to Finder; move the sample brief; verify source and destination;
+present the result; handle a mid-scene correction; stop. Require three consecutive
+complete runs without user window setup, plus a ten-minute dynamic sharing run.
+These are proposed release gates, not previously completed tests.
+
+Cover wrong/closed/minimized targets, resize and movement, Retina/negative origins,
+multiple displays, Spaces/fullscreen, capture loss, host timeout, duplicate request,
+cursor/epoch change, lock/sleep and local Stop. Run backend/connector checks,
+component tests and independent review. Preserve transient pixels, bounded
+diagnostics and audit evidence throughout.
+
+Only after local acceptance, prepare matching backend, connector, media and helper
+artifacts behind capability negotiation. A lead-owned rollout must preserve
+configuration, signing identity and prior receipts. A supervised handset call
+requires separate explicit authorization; no call is part of this plan's local work.
+Handset readability, motion and voice interruption remain separate acceptance.
+
+### Team ownership and sequence
+
+| Owner                       | Work                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Lead                        | Shared contracts, broker/recovery API, preview integration, acceptance and root docs.                   |
+| Mac specialist              | Activation feasibility, native identity/input adapter, capture diagnosis, renderer and component tests. |
+| Connector specialist        | Host capability/completion evidence, native adapter interface, scene amendments and connector tests.    |
+| Safety/transport specialist | Receipt persistence, fault tests, cleanup reconciliation review and independent authority checks.       |
+
+First wave: activation feasibility, host completion evidence and capture diagnosis
+in parallel. Second wave: reviewed contracts, native actions and cleanup recovery.
+Third wave: scene orchestration, polish and complete local acceptance. Shared
+contracts remain lead-owned; specialists must not alter another owner's files.
+Estimate delivery only after the first wave resolves host/OS capability limits.
+
+## Approved direction — November 17, 2026: desktop presentation with native control
+
+The user selected option 2: explicitly selected-display capture, native window
+switching and CUA, with smooth video zooms and annotations. The original coding
+agent prepares the presentation before the call and remains the reasoning/tool
+owner during it. The requested quality bar is a polished Screen Studio-like
+viewing experience; that is a design goal, not a claim of equivalent capability,
+frame rate or physical acceptance. This direction supersedes treating isolated
+Finder capture repair as the sole route to the next demo. Preserve selected-window
+mode and its unresolved diagnostic evidence; do not relabel the old 409 as fixed.
+
+### How the experience works
+
+The agent prepares a short sequence of scenes: intended message, exact app/window,
+focus target, optional native action, expected observable result, annotation and
+return-to-overview point. Resolve available windows and target identities before
+the call where possible. Store identifiers and intent, not screenshots or stale
+coordinate promises. At execution, resolve the target against fresh state and
+bind its camera/annotation geometry to the current frame/content revision.
+
+The execution sequence is:
+
+`select scene → claim native ownership if needed → activate exact window → verify
+window/focus → perform authorized action → verify result → release ownership →
+frame/zoom/annotate the verified result`
+
+An ordinary presentation-only camera change does not need input ownership. Input
+uses the original chat's qualified native tools and current broker authorization.
+Prefer exact application/window/Accessibility actions over blind swipes or
+repeated coordinate guesses where the host exposes them. Known target resolution,
+input dispatch and camera animation should not require a separate visual-model
+planning request for each step. Arbitrary natural-language intent still requires
+agent interpretation; native tools alone do not decide what the human means.
+The existing optional ClawdTime fallback is not silently enabled by this design.
+
+One authorized display supplies the live source. Zoom, pointer emphasis, labels,
+boxes and context are composed into outgoing video; a physical overlay window on
+the Mac is not required. Preserve a pristine current source for native observations.
+Display capture includes whatever is visible on that display: begin a new explicit
+display selection/session, never broaden an existing window-bound lease or switch
+silently to another display. No call or local Enable is implied by this approval.
+
+### Presentation quality requirements
+
+- Camera motion uses consistent easing, modest zoom, readable framing and deliberate
+  pauses. Avoid chasing every cursor movement or continuous unnecessary zooming.
+- Window activation and action verification precede focus; stale marks clear on
+  layout/content changes. During a switch, use a current overview or explicit
+  transition state, not a stale image represented as live. Wrong/absent targets
+  pause the scene with a useful status rather than advancing blindly.
+- Voice and visual scenes coordinate around observable readiness. Do not announce
+  a demonstrated result before the window/action is verified. The agent supplies
+  scene intent and factual results to the existing ElevenLabs frontend; the frontend
+  does not gain arbitrary native input or become a replacement coding agent.
+- Human interruption takes priority over queued presentation steps. Return to
+  overview, change the scene or stop as requested. Every new action remains subject
+  to fresh context, exclusive execution and native approvals. Unknown effects are
+  reconciled, not retried to keep a demonstration moving.
+- Keep capture/render/voice work independent so reasoning or tools do not freeze
+  video. Existing source polling (up to 5 fps) and camera rendering (15 fps) are a
+  prototype baseline, not proof of polished motion. Profile a sustained display
+  stream and assess a bounded continuous-capture path before promising smooth
+  30 fps output. Increasing render rate alone cannot smooth low-rate source motion.
+- Frames/audio stay transient and bounded. Local Stop, revocation, lock/sleep,
+  freshness limits and display/session binding remain authoritative at every rate.
+
+### Implementation and acceptance sequence
+
+The resumed local rehearsal exposed two prerequisites for reliable execution:
+
+- **Verified foreground activation:** background Accessibility window selection is
+  insufficient. Design a separately negotiated, bounded activate-prepared-window
+  capability under native ownership; do not reuse fallback `/actions` or broaden
+  its policy. Require exact app/window/process identity, current selected-display
+  authority, a stable operation receipt, Stop checks, and independent foreground /
+  focused-window / onscreen verification. macOS activation is cooperative; an API
+  return cannot guarantee foreground visibility. Preserve native-tool target
+  restrictions, including Codex. No shell-driven OS test or forced-activation
+  workaround is authorized by this design note.
+- **Cleanup after capture loss:** ordinary ownership release rejects uncertain or
+  stopped contexts. A separate cleanup-only reconciliation needs terminal host
+  tool evidence, actor quiescence, expected-epoch CAS and an immutable audit. It
+  may retire current ownership to none/paused while keeping Stop asserted, but
+  must retain original uncertain effects and unverified UI outcomes. It must not
+  rearm, renew capture, replay input or treat a fresh session as reconciliation.
+  The current host's terminal-tool evidence must be concretely available before
+  implementing automatic recovery.
+
+The captured SCK failure `-3805` narrows the category to application connection
+interruption; its underlying cause is still unproven. No automatic stream restart
+or speculative capture repair is approved by a successful stationary probe.
+
+1. **Display foundation.** Audit existing display capture/render path, then create
+   an isolated no-call prototype with disposable content on one explicitly chosen
+   display. Measure sustained source/render cadence, latency and resource use;
+   verify Stop/freshness/lock behavior. Choose any continuous capture change from
+   that evidence. Preserve the current installed services during local review.
+2. **Native scene navigation.** Resolve exact Finder and a second disposable app
+   window; activate, observe and verify each through the original agent's supported
+   native tool under existing exclusive ownership. Add bounded adapters only where
+   a needed primitive is absent. Separately qualify Space transitions. No blind
+   swipe loop or assumption that submitted input proves success.
+3. **Agent-prepared scenes.** Extend the existing prepared-target/camera contracts
+   only as necessary for scene ordering, app/window identity, expected outcomes,
+   cancellation and revalidation. A planned scene is not authorization for its
+   native effects. Keep shared contracts lead-owned and use non-overlapping Mac,
+   connector and transport/test specialists during implementation.
+4. **Presentation polish.** Tune one coherent motion/framing system, annotations,
+   pointer emphasis, scene transitions and voice timing. Rehearse a concise Finder
+   → second-app → Finder walkthrough, then interruption and recovery. Evaluate
+   actual live output rather than only synthetic animation or static screenshots.
+5. **Review, rollout and handset acceptance.** Independently review safety and run
+   affected component checks. Preserve records/configuration/signing identity and
+   reconcile predecessor bridges before lead-owned idle deployment and a fresh
+   current-chat session. Use a frozen `media/` build root if media changes. Request
+   fresh authorization for one demo call only when ready. Measure handset motion,
+   readability, sustained sharing, duplex/interruption and visible CUA outcomes;
+   tests and publisher frame counts do not establish physical acceptance.
+
+Local implementation now includes the explicit display prototype, prepared scene
+controller, camera choreography, interruption and Stop propagation. Automated
+checks and a 45-second actual static-display probe pass. The integrated native
+walkthrough remains open after an SCK stream interruption; edits/moves and motion
+quality are not yet accepted. See the latest checkpoint in
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md). The original agent
+must still perform and verify native actions; this controller never dispatches them.
+
 Current operational checkpoint (November 17): the user-approved ClawdTime release
 is deployed and this Mac has a fresh 9741/HackPton pairing in standby. Both macOS
 permissions pass after refreshing the exact companion entries; capture stays off.
@@ -213,17 +578,17 @@ uncommitted ClawdTime work. Those files are implementation candidates, not proof
 that every feature is in the published branch or running deployment. Inventory and
 integrate them deliberately before shipping; preserve unrelated changes.
 
-| Area | Present in inspected source / evidence | Planned change |
-| --- | --- | --- |
-| Agent connection | CLI setup, pairing, MCP, session identity, cooperative conversation tools | Package a simple local connection flow; add app/surface binding and proactive event adapters |
-| Execution | Cooperative current-session path; separate Codex App Server runner and local pull worker | Prefer the selected existing session; expose managed execution as a clearly separate optional mode |
-| Calls | Attention lifecycle, verified recipient, exclusive line checks, durable receipts | Route all new triggers through this one lifecycle, with call preferences and deduplication |
-| Screen | Mac permission/lease checks, ScreenCaptureKit display screenshots, gateway and media relay | Selected-window capture, native-resolution crop, region targeting, optional semantic adapters, view transforms |
-| Presentation | Activity/status receipts, captions, document rendering | A single presentation model for code, diff, test result, blocker card, and annotations |
-| Argos camera | Eased crop/zoom, highlighted cursor-line detection, file navigation, incident overlays | Retain the interaction design; add robust macOS targeting and revision-aware annotations |
-| Voice | Argos ElevenLabs lab; ClawdTime optional GPT-Live frontend and conversation broker | One provider-neutral voice interface; bridge the tested Argos voice path into the session broker |
-| Proactive detection | Cooperative attention tools; Argos process/training detectors | General coding blockers, supported lifecycle events, user-selectable escalation policy |
-| Physical evidence | User confirmed audio and synthetic code camera on the supervised lab call | Still prove real IDE viewing, interruption quality, exact-session continuation, and live edits |
+| Area                | Present in inspected source / evidence                                                     | Planned change                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Agent connection    | CLI setup, pairing, MCP, session identity, cooperative conversation tools                  | Package a simple local connection flow; add app/surface binding and proactive event adapters                   |
+| Execution           | Cooperative current-session path; separate Codex App Server runner and local pull worker   | Prefer the selected existing session; expose managed execution as a clearly separate optional mode             |
+| Calls               | Attention lifecycle, verified recipient, exclusive line checks, durable receipts           | Route all new triggers through this one lifecycle, with call preferences and deduplication                     |
+| Screen              | Mac permission/lease checks, ScreenCaptureKit display screenshots, gateway and media relay | Selected-window capture, native-resolution crop, region targeting, optional semantic adapters, view transforms |
+| Presentation        | Activity/status receipts, captions, document rendering                                     | A single presentation model for code, diff, test result, blocker card, and annotations                         |
+| Argos camera        | Eased crop/zoom, highlighted cursor-line detection, file navigation, incident overlays     | Retain the interaction design; add robust macOS targeting and revision-aware annotations                       |
+| Voice               | Argos ElevenLabs lab; ClawdTime optional GPT-Live frontend and conversation broker         | One provider-neutral voice interface; bridge the tested Argos voice path into the session broker               |
+| Proactive detection | Cooperative attention tools; Argos process/training detectors                              | General coding blockers, supported lifecycle events, user-selectable escalation policy                         |
+| Physical evidence   | User confirmed audio and synthetic code camera on the supervised lab call                  | Still prove real IDE viewing, interruption quality, exact-session continuation, and live edits                 |
 
 Specific limitations found in the source:
 
@@ -287,14 +652,14 @@ the first connection, then leave the connector ready without recording screens.
 
 ### What constitutes a roadblock
 
-| Signal | Initial behavior |
-| --- | --- |
-| Agent explicitly asks for a decision, clarification, or review | High-confidence incident; eligible for calling |
-| Supported native approval/input event | Call to explain and show it; preserve the native approval mechanism |
-| Failed test/build/process | Record evidence; ask the agent whether it can recover before escalating |
-| Same failure after a bounded recovery attempt | Eligible once the agent marks itself blocked |
-| No output for a while / ordinary turn completion | Status signal only; no inferred blocker or automatic ring |
-| Agent/connector offline, provider outage, quota wait | Show unavailable/recovery status; avoid call loops |
+| Signal                                                         | Initial behavior                                                        |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Agent explicitly asks for a decision, clarification, or review | High-confidence incident; eligible for calling                          |
+| Supported native approval/input event                          | Call to explain and show it; preserve the native approval mechanism     |
+| Failed test/build/process                                      | Record evidence; ask the agent whether it can recover before escalating |
+| Same failure after a bounded recovery attempt                  | Eligible once the agent marks itself blocked                            |
+| No output for a while / ordinary turn completion               | Status signal only; no inferred blocker or automatic ring               |
+| Agent/connector offline, provider outage, quota wait           | Show unavailable/recovery status; avoid call loops                      |
 
 Start with an explicit agent tool/skill because it carries intent. Add qualified
 adapter events next. Avoid blanket transcript scraping and broad filesystem/log
@@ -442,15 +807,15 @@ context, never instructions to the voice controller.
 
 Route intents separately:
 
-| Human intent | Owner and behavior |
-| --- | --- |
-| “Show the test,” “zoom out,” “highlight the return” | Presentation controller; no code execution |
-| “Why did you change that?” | Answer from current verified context or request the selected agent's explanation |
-| “Use option one and rerun the test” | Exact-session instruction with ordered receipt; native policy still applies |
-| Speaking over narration | Stop playback promptly, collect the new utterance; task continues unless told otherwise |
-| “Stop the task” | Request cancellation, distinguish requested from confirmed stopped |
-| “Stop sharing” / local Stop | Immediately revoke viewing and overlays; local Stop retains its stronger existing semantics |
-| “Hang up” | End media and reconcile call cleanup; task disposition follows the established session policy |
+| Human intent                                        | Owner and behavior                                                                            |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| “Show the test,” “zoom out,” “highlight the return” | Presentation controller; no code execution                                                    |
+| “Why did you change that?”                          | Answer from current verified context or request the selected agent's explanation              |
+| “Use option one and rerun the test”                 | Exact-session instruction with ordered receipt; native policy still applies                   |
+| Speaking over narration                             | Stop playback promptly, collect the new utterance; task continues unless told otherwise       |
+| “Stop the task”                                     | Request cancellation, distinguish requested from confirmed stopped                            |
+| “Stop sharing” / local Stop                         | Immediately revoke viewing and overlays; local Stop retains its stronger existing semantics   |
+| “Hang up”                                           | End media and reconcile call cleanup; task disposition follows the established session policy |
 
 Return spoken instructions to the originating session with stable turn/intent IDs
 and an acknowledgement. A voice acknowledgement means received/queued, not executed.
@@ -506,17 +871,17 @@ Local agent session -- structured events --> Local ClawdTime connector
 
 Extend existing contracts compatibly; names below are proposals, not existing APIs.
 
-| Contract | Minimum identity and behavior |
-| --- | --- |
-| `WorkspaceBinding` | Canonical allowed roots/worktree, session and device; explicit authorized app surfaces; no implicit cross-root access |
-| `SurfaceBinding` | Window/display/app identity, geometry generation, viewing grant; editor instance only when applicable |
-| `AttentionIncident` | Stable ID, originating session/task, cause/evidence references, blocker generation, call disposition |
-| `PresentationTarget` | Selected source type; relative file/range or authorized surface; buffer revision; freshness |
-| `CameraIntent` | Request ID, session/call, command, target, expected generation; bounded values and receipt |
-| `Annotation` | Owner, semantic range or frame/geometry reference, style enum, bounded label, expiry |
-| `PresentationReceipt` | Requested, adapter-acknowledged where applicable, frame-confirmed, failed/stale; remote visibility separate |
-| `AgentProgress` | Task/turn identity, revision, actual execution state, changed-file references, evidence kind |
-| `ConnectorCapabilities` | Surface/version-qualified trigger, response, navigation, capture, cancellation abilities |
+| Contract                | Minimum identity and behavior                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `WorkspaceBinding`      | Canonical allowed roots/worktree, session and device; explicit authorized app surfaces; no implicit cross-root access |
+| `SurfaceBinding`        | Window/display/app identity, geometry generation, viewing grant; editor instance only when applicable                 |
+| `AttentionIncident`     | Stable ID, originating session/task, cause/evidence references, blocker generation, call disposition                  |
+| `PresentationTarget`    | Selected source type; relative file/range or authorized surface; buffer revision; freshness                           |
+| `CameraIntent`          | Request ID, session/call, command, target, expected generation; bounded values and receipt                            |
+| `Annotation`            | Owner, semantic range or frame/geometry reference, style enum, bounded label, expiry                                  |
+| `PresentationReceipt`   | Requested, adapter-acknowledged where applicable, frame-confirmed, failed/stale; remote visibility separate           |
+| `AgentProgress`         | Task/turn identity, revision, actual execution state, changed-file references, evidence kind                          |
+| `ConnectorCapabilities` | Surface/version-qualified trigger, response, navigation, capture, cancellation abilities                              |
 
 The camera is not a second call owner. The existing attention/call service owns
 placement and cleanup, and existing control leases own capture/input authority.
@@ -538,12 +903,12 @@ logs or test fixtures. Preserve the existing native approval and local Stop gate
 
 ## 7. Implementation map and ownership
 
-| Workstream | Existing files to extend | Proposed additions |
-| --- | --- | --- |
-| Lead / integration | `src/contracts.ts`, `src/app.ts`, `src/control/viewing.ts`, `src/control/execution.ts`, manifests | Shared camera/incident contracts; `src/control/presentation.ts`; capability flags |
-| Connector specialist | `cli/`, `connectors/shared/mcp.ts`, `protocol.ts`, `setup-session.ts`, client adapters, `skills/clawdtime/` | `connectors/shared/attention-events.ts`, `connectors/shared/presentation-bridge.ts`, optional `connectors/editor-vscode/`, adapter-specific trigger handlers |
-| Transport specialist | `src/attention/service.ts`, `conversation.ts`, `presentation.ts`, `jobs.ts`, `src/sessions/`, storage | Incident dedupe/preferences, lifecycle state, bounded presentation metadata |
-| Mac/media specialist | `mac/.../Capture.swift`, `App.swift`, DeviceCore policy, `gateway/`, `media/device_relay.py`, `captions.py`, `conversational.py` | Window-bound capture/crop, transform mapping, camera compositor, annotation lifecycle, ElevenLabs frontend adapter |
+| Workstream           | Existing files to extend                                                                                                         | Proposed additions                                                                                                                                           |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lead / integration   | `src/contracts.ts`, `src/app.ts`, `src/control/viewing.ts`, `src/control/execution.ts`, manifests                                | Shared camera/incident contracts; `src/control/presentation.ts`; capability flags                                                                            |
+| Connector specialist | `cli/`, `connectors/shared/mcp.ts`, `protocol.ts`, `setup-session.ts`, client adapters, `skills/clawdtime/`                      | `connectors/shared/attention-events.ts`, `connectors/shared/presentation-bridge.ts`, optional `connectors/editor-vscode/`, adapter-specific trigger handlers |
+| Transport specialist | `src/attention/service.ts`, `conversation.ts`, `presentation.ts`, `jobs.ts`, `src/sessions/`, storage                            | Incident dedupe/preferences, lifecycle state, bounded presentation metadata                                                                                  |
+| Mac/media specialist | `mac/.../Capture.swift`, `App.swift`, DeviceCore policy, `gateway/`, `media/device_relay.py`, `captions.py`, `conversational.py` | Window-bound capture/crop, transform mapping, camera compositor, annotation lifecycle, ElevenLabs frontend adapter                                           |
 
 Keep shared-contract edits with the lead and coordinate changes to the existing
 presentation store with its owner. Use focused implementation/review waves under
@@ -638,16 +1003,16 @@ produce unwanted calls. Spoken resolution returns to the correct blocked task.
 Automated checks support the rollout but cannot substitute for phone observation.
 Use synthetic content in fixtures; keep real screen/audio out of test artifacts.
 
-| Area | Required cases |
-| --- | --- |
-| Exact session | Two agents/projects/windows; wrong-session response rejected; no silent managed-session substitution |
-| Trigger policy | Duplicate/late hooks, repeated failures, quiet hours, busy line, missed call, restart; no repeated dial |
-| Camera | TS/TSX and other project files, symlink escape, secret path, unsaved buffer, split view, wrapping, Retina, monitor change, minimized window |
-| Visual truth | Correct file/revision/range; dirty baseline attribution; actual diff; stale view visibly unavailable |
-| Annotations | Scroll/edit/layout invalidation, expiry, out-of-order intents, user pin, safe clearing |
-| Voice/execution | Barge-in, echo rejection, ambiguous intent, agent busy, approval pending, cancel requested vs confirmed, no duplicate execution |
-| Lifecycle | Local Stop, lock/sleep, revocation, media/gateway/worker restart, unknown provider outcome, terminal cleanup |
-| Installation | Preserve unrelated settings; repeat setup; version mismatch; disconnect/uninstall removes only owned configuration |
+| Area            | Required cases                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact session   | Two agents/projects/windows; wrong-session response rejected; no silent managed-session substitution                                        |
+| Trigger policy  | Duplicate/late hooks, repeated failures, quiet hours, busy line, missed call, restart; no repeated dial                                     |
+| Camera          | TS/TSX and other project files, symlink escape, secret path, unsaved buffer, split view, wrapping, Retina, monitor change, minimized window |
+| Visual truth    | Correct file/revision/range; dirty baseline attribution; actual diff; stale view visibly unavailable                                        |
+| Annotations     | Scroll/edit/layout invalidation, expiry, out-of-order intents, user pin, safe clearing                                                      |
+| Voice/execution | Barge-in, echo rejection, ambiguous intent, agent busy, approval pending, cancel requested vs confirmed, no duplicate execution             |
+| Lifecycle       | Local Stop, lock/sleep, revocation, media/gateway/worker restart, unknown provider outcome, terminal cleanup                                |
+| Installation    | Preserve unrelated settings; repeat setup; version mismatch; disconnect/uninstall removes only owned configuration                          |
 
 Proposed pilot targets, to measure rather than advertise as achieved:
 

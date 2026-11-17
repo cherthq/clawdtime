@@ -65,6 +65,7 @@ export interface AgentSession {
     nativeCancellation?: boolean;
     voiceInteractionVersion?: 1;
     screenCameraVersion?: 1;
+    livePresentationVersion?: 1;
   };
   state: "active" | "yielded" | "stopped";
   controlEpoch: number;
@@ -217,6 +218,20 @@ export interface DevicePort {
     lease: ControlLease,
     command: CameraCommand,
   ): Promise<CameraReceipt>;
+  resolvePresentation?(
+    lease: ControlLease,
+    input: {
+      commandId: string;
+      window: import("./live-presentation-contracts.js").LivePresentationIntent["window"];
+      expected: import("./live-presentation-contracts.js").LivePresentation["expected"];
+      expiresAt: number;
+    },
+  ): Promise<unknown>;
+  livePresentation?(
+    lease: ControlLease,
+    presentation: import("./live-presentation-contracts.js").LivePresentation,
+    fingerprint: string,
+  ): Promise<unknown>;
   action(
     lease: ControlLease,
     frame: Frame,

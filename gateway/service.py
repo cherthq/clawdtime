@@ -71,6 +71,19 @@ def valid_origin(value):
     raise ValueError('Helper must use HTTPS or a loopback/Tailscale IP')
 
 
+def validate_presentation_resolve(value,lease):
+    if not isinstance(value,dict) or set(value)-{'processIdentity'}!={'version','window','expected','expiresAt'} or type(value['version']) is not int or value['version']!=1:raise web.HTTPBadRequest()
+    w=value['window'];e=value['expected']
+    if not isinstance(w,dict) or set(w)!={'appId','windowId','ownerPid','displayId'} or w['appId'] not in ('com.apple.finder','com.apple.TextEdit') or not isinstance(w['windowId'],str) or not re.fullmatch('[1-9][0-9]{0,9}',w['windowId']) or int(w['windowId'])>0xffffffff or type(w['ownerPid']) is not int or not 0<w['ownerPid']<=0x7fffffff:raise web.HTTPBadRequest()
+    if not isinstance(e,dict) or set(e)!={'requestId','sessionId','leaseId','epoch','cursor','policyRevision','displayId'} or any(not isinstance(e[k],str) or not ID.fullmatch(e[k]) for k in ('requestId','sessionId','leaseId')) or any(type(e[k]) is not int or e[k]<0 for k in ('epoch','cursor','policyRevision','displayId')) or e['policyRevision']<1 or not 0<e['displayId']<=0xffffffff or type(w['displayId']) is not int or w['displayId']!=e['displayId']:raise web.HTTPBadRequest()
+    if 'processIdentity' in value and (not isinstance(value['processIdentity'],str) or not re.fullmatch('[0-9a-f]{64}',value['processIdentity'])):raise web.HTTPBadRequest()
+    if type(value['expiresAt']) not in (int,float) or not math.isfinite(value['expiresAt']) or not time.time()*1000<value['expiresAt']<=time.time()*1000+2000:raise web.HTTPConflict()
+    if (lease.get('protocolVersion')!=2 or lease.get('cameraVersion')!=1 or lease.get('mode')!='view' or lease.get('executor')!='none'
+        or lease.get('surface',{}).get('kind')!='display' or lease.get('surface',{}).get('displayId')!=e['displayId']
+        or any(lease.get(k)!=e[v] for k,v in (('id','leaseId'),('sessionId','sessionId'),('executorEpoch','epoch'),('policyRevision','policyRevision'),('displayId','displayId')))):
+        raise web.HTTPConflict(text='presentation_authority_unavailable')
+
+
 def validate_lease(body):
     required={'id','deviceId','memberId','callId','displayId','mode','expiresAt'}
     authority={'protocolVersion','sessionId','executorEpoch','policyRevision','executor'}
@@ -412,6 +425,8 @@ class Gateway:
             local.update(textControlVersion=1,localEnableGeneration=status['localEnableGeneration'])
         if type(status.get('cameraVersion')) is int and status['cameraVersion']==1:
             local['cameraVersion']=1
+        if scoped.get('viewAllowed') and scoped.get('displayAttached') and type(status.get('livePresentationVersion')) is int and status['livePresentationVersion']==1:
+            local['livePresentationVersion']=1
         if type(status.get('presentationVersion')) is int and status['presentationVersion']==1:
             local['presentationVersion']=1
         if 'controlPolicy' in status or 'policyRevision' in status:
@@ -424,6 +439,35 @@ class Gateway:
                 local['panelCommand']=command
         return web.json_response({**local,**{k:status[k] for k in ('deviceId','armed','available','screenPermission','controlPermission')},
             'activeLease':bool(status.get('activeLeaseId')),'displays':displays,**scoped},headers={'Cache-Control':'no-store'})
+
+    async def presentation_resolve(self, request):
+        lease_id=request.match_info['id'];data=await request.content.read(8193)
+        if len(data)>8192:raise web.HTTPRequestEntityTooLarge(max_size=8192,actual_size=len(data))
+        try:value=json.loads(data)
+        except (ValueError,TypeError):raise web.HTTPBadRequest()
+        lease,_,_=self.active(lease_id)
+        validate_presentation_resolve(value,lease)
+        config=self.devices[lease['deviceId']]
+        # Read-only refusal does not retire a healthy capture lease. No retries.
+        async with self.http.post(config['url']+f'/v1/leases/{lease_id}/presentation/resolve',
+                headers={'Authorization':'Bearer '+config['key']},json=value,allow_redirects=False,timeout=1.5) as response:
+            raw=await response.content.read(8193)
+            if len(raw)>8192:raise web.HTTPBadGateway()
+            if response.status!=200:raise web.HTTPConflict(text='presentation_resolver_unavailable')
+        current,_,_=self.active(lease_id);validate_presentation_resolve(value,current)
+        try:observation=json.loads(raw)
+        except (ValueError,TypeError):raise web.HTTPBadGateway()
+        if not isinstance(observation,dict) or set(observation)!={'window','observedAt','processIdentity','windowBounds','appActive','windowFocused','windowOnScreen'} or observation.get('window')!=value['window']:
+            raise web.HTTPBadGateway()
+        bounds=observation.get('windowBounds');observed=observation.get('observedAt');identity=observation.get('processIdentity')
+        if (not isinstance(identity,str) or not re.fullmatch('[0-9a-f]{64}',identity)
+            or value.get('processIdentity',identity)!=identity
+            or type(observed) not in (int,float) or not time.time()*1000-2000<observed<=time.time()*1000+100
+            or not isinstance(bounds,dict) or set(bounds)!={'x','y','width','height'}
+            or any(type(v) not in (int,float) or not math.isfinite(v) or abs(v)>65536 for v in bounds.values())
+            or bounds['width']<=0 or bounds['height']<=0
+            or any(observation[k] is not True for k in ('appActive','windowFocused','windowOnScreen'))):raise web.HTTPBadGateway()
+        return web.json_response(observation,headers={'Cache-Control':'no-store'})
 
     async def panel(self, request):
         device_id=request.match_info['device']
@@ -487,6 +531,7 @@ class Gateway:
         app.router.add_post('/v1/leases/{id}/renew',self.renew)
         app.router.add_delete('/v1/leases/{id}',self.close)
         app.router.add_get('/v1/leases/{id}/frame',self.frame)
+        app.router.add_post('/v1/leases/{id}/presentation/resolve',self.presentation_resolve)
         app.router.add_post('/v1/leases/{id}/actions',self.action)
         async def receipt(request):return await self.action_receipt(request.match_info['id'],request.match_info['action'])
         app.router.add_get('/v1/leases/{id}/actions/{action}',receipt)

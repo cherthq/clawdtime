@@ -173,6 +173,29 @@ class NativeReviewPreviewTests(unittest.IsolatedAsyncioTestCase):
             'nativeControl':True,'backendOrigin':'http://127.0.0.1:1','backendToken':'b'*32,'durationSeconds':30})
         self.info=await self.preview.setup();self.http=ClientSession();self.headers={'Authorization':'Bearer '+self.preview.token};self.base=self.info['origin']
     asyncTearDown=ActualPreviewModeTests.asyncTearDown
+    async def test_local_stop_notifies_backend_once_and_disarms_first(self):
+        from unittest.mock import AsyncMock
+        seen=[]
+        async def backend(path,body):
+            seen.append((self.preview.stopped,self.preview.screen.frame,path,body))
+            return {'stopped':True}
+        self.preview.backend=AsyncMock(side_effect=backend)
+        self.preview.started=True
+        await self.preview.stop();await self.preview.stop()
+        self.assertEqual(self.preview.backend.await_count,1)
+        self.assertTrue(seen[0][0]);self.assertIsNone(seen[0][1])
+        self.assertEqual(seen[0][2],'/media/'+self.preview.sid+'/screen-stopped')
+        self.assertEqual(seen[0][3]['leaseId'],self.preview.selection['leaseId'])
+        self.assertEqual(self.preview.stop_notice,'acknowledged')
+
+    async def test_failed_stop_notice_is_unknown_and_never_retried(self):
+        from unittest.mock import AsyncMock
+        self.preview.backend=AsyncMock(side_effect=TimeoutError())
+        self.preview.started=True
+        await self.preview.stop();await self.preview.stop()
+        self.assertEqual(self.preview.backend.await_count,1)
+        self.assertEqual(self.preview.stop_notice,'unknown')
+
     async def test_native_readiness_does_not_enable_capture_or_preview_input(self):
         async with self.http.get(self.base+'/devices/preview_device/readiness',headers=self.headers) as response:
             state=await response.json()

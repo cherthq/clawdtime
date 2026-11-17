@@ -77,6 +77,7 @@ export async function startMcp(options: {
   documentAccess?: ProtocolOptions["documentAccess"];
   screenCamera?: ProtocolOptions["screenCamera"];
   voiceFrontend?: ProtocolOptions["voiceFrontend"];
+  livePresentation?: ProtocolOptions["livePresentation"];
 }) {
   sessionCapabilities(options);
   const connection = loadConnection(
@@ -135,7 +136,9 @@ export async function startMcp(options: {
       JSON.stringify(run.session.screenCamera) !==
         JSON.stringify(options.screenCamera) ||
       JSON.stringify(run.session.voiceFrontend) !==
-        JSON.stringify(options.voiceFrontend))
+        JSON.stringify(options.voiceFrontend) ||
+      (run.session.capabilities?.livePresentationVersion === 1) !==
+        (options.livePresentation === true))
   )
     throw new Error(
       "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
@@ -180,6 +183,13 @@ export async function startMcp(options: {
         )
           throw new Error(
             "Server did not confirm the selected voice frontend. Preserve this registration; do not downgrade or retry it.",
+          );
+        if (
+          (run.session?.capabilities?.livePresentationVersion === 1) !==
+          (options.livePresentation === true)
+        )
+          throw new Error(
+            "Server did not confirm the selected live presentation capability. Preserve this registration; do not downgrade or retry it.",
           );
         const scoped = new ClawdTimeClient(connection.baseUrl, run.token!);
         // Reconnect refreshes liveness immediately, but expired/stopped tokens stay rejected.

@@ -174,3 +174,13 @@ window-input guard and avoids turning a known unsupported target into an unknown
 external-effect receipt. Existing receipts remain queryable/reconcilable without
 reposting. Native CUA uses its own qualified tools under broker ownership; window
 camera coordinates never authorize a global click or keyboard target.
+
+The production read-only `POST /v1/leases/:id/presentation/resolve` route accepts
+only an exact window, optional process-lifetime hash, expected authority and its
+original short expiry. It requires the current version-2 selected-display camera
+lease in view mode with executor `none`, checks it again after the helper read,
+and never calls activation/input routes or retries. Resolver refusal does not
+retire an otherwise healthy capture lease. Only bounded metadata is returned;
+helper private error text is discarded. Both relay allowlists permit only this
+exact path with POST. `livePresentationVersion: 1` is forwarded only by scoped
+readiness for an allowed viewer on an attached display.

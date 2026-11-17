@@ -1,3 +1,135 @@
+## November 17, 2026 — prepared walkthroughs and live target resolution implemented
+
+Agent teams added prepared window-relative scenes, per-step read-only target/frame
+verification, atomic focus/annotation and same-session complete/replan for subsequent
+requests. Durable receipts preserve uncertain outcomes and block replay. Target
+movement, focus loss, stale observations and Stop clear geometric presentation.
+Native input still requires exclusive ownership and independent outcome verification.
+
+`npm run check` passed 1,090 tests/65 files plus typecheck/build. New media checks
+and independent review passed; latest component totals and physical results are in
+[the implementation review](IMPLEMENTATION_ARGOS_REVIEW.md). The synthetic two-scene
+integration also passed. No call, installation or deployment occurred.
+
+Physical rehearsal recovered off-Space Finder qualification via bounded public AX
+main/focused-window references. The later snapshot diagnostic completed three verified native activations
+and live zoom/annotations: Finder, TextEdit, then a same-session follow-up Finder
+plan. Stop released the lease with execution `none`/`paused`. The user initially
+placed the windows on the current Space; automatic cross-Space alignment is still
+unverified. Snapshot rendering averaged 22.7 fps; this is not motion-quality
+acceptance. Final Swift: 86 tests/build; media: 448 tests run, 13 optional skips.
+Persistent capture interrupted twice with SCK `-3805`;
+its cause remains unproven. An explicit snapshot-only diagnostic keeps the same
+selected display and guards, without automatic fallback or replay. Original receipts
+and metadata-only stop audits remain private; screens/audio are not retained.
+
+## November 17, 2026 — native switching, edit/save and file move verified locally
+
+Implemented the first native-control work wave with agent teams. On the current
+display, prepared native operations activated Finder, TextEdit and Finder again;
+exact-window receipts and outgoing preview observations passed. Original-chat
+native CUA clicked, edited/saved the disposable heading, and moved the sample file
+from Research to Approved. Native UI and read-only filesystem checks confirmed
+the results with no duplicate edit or move. Stop released the view lease and left
+no native actor in flight. No call, installation or deployment occurred.
+
+Fixed Finder's missing launch-date qualification using supported process-start
+identity metadata, and fixed camera rejection of benign lease expiry renewals.
+Added separate native host credentials, persistent receipts and fixed refusal
+diagnostics. `npm run check`: 1,061 tests/64 files plus typecheck/build passed;
+Swift: 77 tests/build passed; media: 432 tests run, 13 optional SDK skips.
+
+The full polished walkthrough remains incomplete: framing rejected changing source
+content, and a later same-runtime focus attempt returned HTTP 409. Its unknown
+receipt was preserved without replay; capture was stopped cleanly. Current-display
+native actions are verified, while zoom/annotation reliability, other Spaces and
+display configurations, repeated complete runs and dynamic-motion quality remain
+open. See [the implementation review](IMPLEMENTATION_ARGOS_REVIEW.md) for evidence
+and limits. Historical Finder409 and SCK `-3805` are not declared fixed.
+
+## November 17, 2026 — local presentation prototype implemented; native acceptance open
+
+Planning follow-up: the detailed implementation sequence for automatic window
+alignment, native CUA, cleanup recovery, interactive scenes and motion quality is
+at the top of [ARGOS_CLAWD_INTEGRATION_PLAN.md](ARGOS_CLAWD_INTEGRATION_PLAN.md).
+It requires capability qualification first and complete local acceptance without
+manual window setup before rollout. This follow-up changes documentation only;
+no new capture, input, installation, deployment or call was performed.
+
+Latest rehearsal identified native SCK failure code `-3805` (application connection
+interrupted) with no screenshot request active at the recorded failure. Exact
+Finder menu selection completed under native ownership but did not establish
+visible foreground activation. Capture stopped, the view lease released, and the
+backend retained native ownership uncertainty; a stale-epoch release was refused
+and not retried. A local metadata-only audit was retained before shutdown. No
+document edit, file move, call or deployment occurred. Foreground activation,
+capture interruption and audited post-Stop recovery remain engineering gaps.
+
+Follow-up: fixed a content-change race for target-independent clear/overview with
+bounded accepted-frame references; targeted camera/input checks remain strict.
+Independent review, synthetic scene integration and 411 media tests (13 optional
+skips) pass. A fresh actual display run successfully began the prepared scene, but
+the viewer showed another app instead of the test Finder window. Capture was
+stopped and execution/lease release verified before edits or moves. The physical
+walkthrough still needs the test window frontmost after leaving the chat; no new
+call, installation or deployment occurred.
+
+Agent teams implemented selected-display streaming, bounded prepared scenes,
+zoom/annotations, interruption and backend Stop propagation in the local preview.
+Native actions remain with the original chat under exclusive ownership. No new
+call, installation or deployment occurred.
+
+Checks pass: 1,007 TypeScript tests plus typecheck/build; 67 Swift tests/build;
+406 media tests run with 13 optional skips;
+synthetic scene, voice/camera and browser checks. Synthetic Retina benchmark:
+14.5 source / 27.7 rendered fps. Actual static-display probe: 45 seconds,
+1,257 images / 27.93 rendered fps, zero image rejections, clean Stop/process exit.
+Its 3.13 distinct-source fps is not dynamic-motion acceptance. A subsequent complete
+backend-to-preview run also passed 45.02 seconds with 1,275 images / 28.07 fps,
+zero image rejections and backend execution idle/released after Stop.
+
+The disposable Finder/TextEdit windows are prepared and Accessibility observation
+recovered, but native coordinate input returned `noWindowsAvailable`; visible
+activation on the shared desktop is unverified. An earlier integrated run stopped
+on SCK `stream_interrupted` before input. Later capture passed, but the interruption
+cause and complete two-app edit/move presentation remain open. Bounded first-failure
+diagnostics were added without automatic restart. The prototype Retina guard bug
+was fixed; historical Finder409 remains
+unresolved. See [implementation review](IMPLEMENTATION_ARGOS_REVIEW.md) for scope,
+measurements and remaining acceptance. Screen Studio-equivalent polish is not claimed.
+
+## November 17, 2026 — selected-display presentation direction approved
+
+User selected option 2: native window switching/CUA plus video zooms/annotations,
+with scenes prepared by the original coding agent. See the approved direction at
+the top of [ARGOS_CLAWD_INTEGRATION_PLAN.md](ARGOS_CLAWD_INTEGRATION_PLAN.md).
+Next milestone: a local two-app presentation prototype, sustained capture profiling,
+and verified native scene transitions. Existing Finder 409 remains undiagnosed;
+no claim of repair or Screen Studio-equivalent smoothness. Documentation only in
+this follow-up; no deployment, new call or permission change.
+
+## November 17, 2026 — diagnosis-first plan awaiting review
+
+At the user's request, repair/deployment paused after diagnosis. Fresh read-only
+checks confirm the recorded backend/media deployments are successful and idle;
+Companion build 6 uses its retained explicit configuration, both permissions pass,
+sharing is stopped, and no active lease or unresolved input is reported. Two old
+chat bridges remain running and were not reused or changed.
+
+A local diagnostic-only probe extension now permits bounded 1–120-second runs.
+Two requested 90-second exact-Finder probes instead stopped at geometry races:
+43 frames / 18,025 ms and 56 frames / 22,211 ms, both CLI exit 75 / native HTTP 425.
+They did not reproduce the historical native 409 or complete sustained acceptance.
+No controlled Space transition or UI input was performed; pixels were discarded.
+The off-Space AX collector's all-or-nothing witness behavior is a code-review
+hypothesis, not an established cause. No production safeguard was changed.
+
+The concrete investigation, conditional repair, validation, rollout and fresh-call
+plan is in [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md).
+63 Swift tests/build, 42 gateway tests, 23 media wire tests and 51 connector tests
+passed; independent review found no probe blocker. Diagnostic edits are uncommitted.
+No install/deploy, new session, permission change, message or call occurred.
+
 ## November 17, 2026 — diagnosis and consolidated receipt
 
 ### Diagnosis
@@ -112,7 +244,6 @@ the post-call/pre-deploy snapshot and environment values are unchanged. Services
 are idle. No native Mac, line/provider, backend, or pairing changes were made.
 Next: identify the native frame-refusal guard locally before another handset demo;
 no broader capture, automatic recovery, or new call was enabled.
-
 
 ## November 17, 2026 — first streaming-voice call and audio correction
 
@@ -366,7 +497,6 @@ credentials, runtime databases, captured media and operational receipts stay out
 of Git. No push was requested. Backend remains live on the same selected line;
 no active call/capture remains. Additional calls require specific permission.
 
-
 ## Authorized deployment and fresh pairing — November 17, 2026
 
 The user explicitly approved deploying ClawdTime and finishing Mac pairing.
@@ -423,7 +553,6 @@ Validation reused the reviewed 950-test/58-file source release, typecheck/build,
 12 preview tests, 3 gateway camera tests and 53 Swift tests. Deployment health,
 exact-line claim, session heartbeat, matching loaded ACLs and permission checks
 were verified after rollout. Changes remain uncommitted and unpushed.
-
 
 ## Native provider upgrade withdrawn — November 17, 2026
 
@@ -702,7 +831,6 @@ plan remain untracked/unstaged. No files were committed or staged. Fresh encrypt
 backups `/data/backup-before-tools-032-20261113.enc` passed offline integrity checks
 on both services. Exact prior 0.3.1 source and new 0.3.2 archives are retained for
 rollback; preserve newer state and stop/reconcile before any code rollback.
-
 
 ## First speakerphone qualification — November 13, 2026, 22:26 UTC
 

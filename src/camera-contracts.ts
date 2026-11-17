@@ -65,6 +65,9 @@ const envelope = {
   expectedRevision: sequence,
   sourceFrameId: id,
   geometryGeneration: id,
+  // Camera-only commands may reference a recent identical-content frame.
+  // Native/fallback input references retain their exact-current-frame rules.
+  contentRevision: id.optional(),
 };
 export const cameraCommandSchema = z.discriminatedUnion("op", [
   z

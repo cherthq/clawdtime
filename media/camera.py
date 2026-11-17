@@ -4,6 +4,7 @@ The caller owns authorization. Every lifecycle loss must call clear(); freeze
 never creates authority. This renderer never dispatches input or changes an app.
 """
 import base64
+import copy
 import hashlib
 import json
 import math
@@ -100,18 +101,36 @@ class ScreenCamera:
         self.paused=False; self.frozen=None; self.frozen_info=None; self.pinned=False
         self.crop=dict(FULL); self.start_crop=dict(FULL); self.target=dict(FULL)
         self.motion_at=0.; self.duration=0.; self.annotations={}; self.context=None
+        self.recent_frames={}
+        self.reset_frames={}
+        self.target_scope=None
         self.font=ImageFont.truetype(next((str(p) for p in [Path('/System/Library/Fonts/Supplemental/Arial.ttf'),Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')] if p.is_file()),'DejaVuSans.ttf'),22)
 
     def clear(self):
+        self.target_scope=None
         self.image=None; self.meta=None; self.frame_id=None; self.captured=None
         self.paused=False; self.frozen=None; self.frozen_info=None
         self.annotations.clear(); self.context=None; self.pinned=False
         self.crop=dict(FULL); self.target=dict(FULL); self.duration=0; self.revision+=1
+        self.recent_frames.clear()
+        self.reset_frames.clear()
+
+    def prune_references(self):
+        wall=self.wall();now=self.clock()
+        self.recent_frames={key:value for key,value in self.recent_frames.items()
+            if -.5<=wall-value['captured']<2 and 0<=now-value['received']<2}
+        self.reset_frames={key:value for key,value in self.reset_frames.items()
+            if -.5<=wall-value['captured']<2 and 0<=now-value['received']<2}
 
     def accept(self,image,frame_id,captured,metadata):
         metadata=frame_metadata(metadata,self.selected,*image.size)
         if not valid_id(frame_id) or not number(captured) or not -.5<=self.wall()-captured<2:
             raise CameraError('Stale source frame')
+        if self.meta and any(self.meta[k]!=metadata[k] for k in ('geometryGeneration','contentRevision','source')):
+            self.recent_frames.clear()
+        if self.meta and any(self.meta[k]!=metadata[k] for k in ('geometryGeneration','source')):
+            self.reset_frames.clear()
+            self.invalidate_target_scope()
         if self.meta and self.meta['geometryGeneration']!=metadata['geometryGeneration']:
             before=self.meta['source'];after=metadata['source'];origins={'originX','originY'}
             translated=(self.selected['kind']=='window' and any(before[k]!=after[k] for k in origins)
@@ -123,11 +142,24 @@ class ScreenCamera:
                 self.annotations.clear();self.context=None;self.revision+=1
             else:self.clear()
         if self.meta and self.meta['contentRevision']!=metadata['contentRevision']:
-            if self.annotations or self.context: self.revision+=1
-            self.annotations.clear(); self.context=None
+            self.expire_target_scope()
+            kept={key:value for key,value in self.annotations.items() if self.target_scope and key in self.target_scope['annotationIds']}
+            if len(kept)!=len(self.annotations) or self.context: self.revision+=1
+            self.annotations=kept; self.context=None
         self.image=image; self.meta=metadata; self.frame_id=frame_id; self.captured=captured
+        self.prune_references()
+        # Metadata only: no prior pixels. Repeated sample IDs cannot extend age.
+        if frame_id not in self.reset_frames:
+            self.reset_frames[frame_id]={'captured':captured,'received':self.clock(),
+                'geometry':metadata['geometryGeneration'],'content':metadata['contentRevision'],'source':dict(metadata['source'])}
+        if frame_id not in self.recent_frames:self.recent_frames[frame_id]=self.reset_frames[frame_id]
+        # Both indexes share the same <=32 metadata records; targeting entries
+        # are always a subset of reset entries, and contain no prior pixels.
+        while len(self.reset_frames)>32:
+            expired=next(iter(self.reset_frames));self.reset_frames.pop(expired);self.recent_frames.pop(expired,None)
 
     def step(self):
+        self.expire_target_scope()
         now=self.clock()
         t=1 if not self.duration else min(1,max(0,(now-self.motion_at)/self.duration))
         eased=t*t*(3-2*t)
@@ -137,6 +169,47 @@ class ScreenCamera:
         for key in expired:del self.annotations[key]
         if self.context and self.wall()*1000>=self.context['expiresAt']: self.context=None; expired.append('context')
         if expired:self.revision+=1
+
+    def invalidate_target_scope(self, command_id=None):
+        if not self.target_scope or (command_id is not None and self.target_scope['commandId']!=command_id):return False
+        self.target_scope=None;self.annotations.clear();self.context=None
+        self.crop=dict(FULL);self.start_crop=dict(FULL);self.target=dict(FULL);self.duration=0.;self.revision+=1
+        return True
+
+    def expire_target_scope(self):
+        scope=self.target_scope
+        if scope and (self.clock()>=scope['deadline'] or not 0<=self.clock()-scope['confirmedAt']<=.25
+            or self.paused or not self.meta or scope['geometryGeneration']!=self.meta['geometryGeneration']
+            or scope['source']!=self.meta['source']):self.invalidate_target_scope()
+
+    def renew_target_scope(self, command_id, confirmed_at):
+        self.expire_target_scope()
+        if not self.target_scope or self.target_scope['commandId']!=command_id or not 0<=self.clock()-confirmed_at<=.25:return False
+        if confirmed_at<self.target_scope['confirmedAt']:return False
+        self.target_scope['confirmedAt']=confirmed_at
+        return True
+
+    def present_target(self, command_id, target_rect, mark, duration, confirmed_at):
+        """Internal atomic presentation transaction; no externally supplied frame references."""
+        self.step()
+        if self.pinned or self.paused or not 0<=self.clock()-confirmed_at<=.25:raise CameraError('Target presentation unavailable')
+        staged=copy.copy(self)
+        staged.__dict__={key:value if key in ('image','font','frozen','clock','wall') else copy.deepcopy(value) for key,value in self.__dict__.items()}
+        prefix=hashlib.sha256(command_id.encode()).hexdigest()
+        operations=[{'op':'clear'},{'op':'focus_region','rect':target_rect,'durationMs':duration,'automatic':True}]
+        if mark is not None:operations.append({'op':'annotation_upsert','annotation':{**mark,'id':prefix+'_mark','rect':target_rect,'ttlMs':3000}})
+        for index,extra in enumerate(operations):
+            current=staged.status()
+            result=staged.command({'version':1,'commandId':prefix+'_'+str(index),'expectedRevision':current['revision'],
+                'sourceFrameId':current['sourceFrameId'],'geometryGeneration':current['geometryGeneration'],
+                'contentRevision':current['contentRevision'],**extra})
+            if result['state']!='accepted':raise CameraError('Target presentation superseded')
+        if not 0<=self.clock()-confirmed_at<=.25:raise CameraError('Target witness expired')
+        staged.target_scope={'commandId':command_id,'confirmedAt':confirmed_at,'deadline':self.clock()+3,
+            'geometryGeneration':staged.meta['geometryGeneration'],'source':dict(staged.meta['source']),
+            'annotationIds':[prefix+'_mark'] if mark is not None else []}
+        self.__dict__.update(staged.__dict__)
+        return self.status()
 
     def aim(self,target,duration):
         self.step(); self.start_crop=dict(self.crop); self.target=rect(target)
@@ -177,10 +250,11 @@ class ScreenCamera:
         common={'version','commandId','expectedRevision','sourceFrameId','geometryGeneration','op'}
         op=cmd.get('op'); extra={'focus_region':{'rect','durationMs','automatic'},'zoom_out':{'factor','durationMs'},
             'annotation_upsert':{'annotation'},'annotation_remove':{'annotationId'},'context':{'text','ttlMs'}}.get(op,set())
-        if not common<=set(cmd) or set(cmd)-common-extra or op not in ('focus_region','zoom_out','overview','pin','unpin','freeze','resume','clear','annotation_upsert','annotation_remove','context'):
+        if not common<=set(cmd) or set(cmd)-common-extra-{'contentRevision'} or op not in ('focus_region','zoom_out','overview','pin','unpin','freeze','resume','clear','annotation_upsert','annotation_remove','context'):
             raise CameraError('Invalid camera command',400)
         if type(cmd['version']) is not int or cmd['version']!=1 or not valid_id(cmd['commandId']) or type(cmd['expectedRevision']) is not int or cmd['expectedRevision']<0 or not valid_id(cmd['sourceFrameId']) or not valid_id(cmd['geometryGeneration']):
             raise CameraError('Invalid camera envelope',400)
+        if 'contentRevision' in cmd and not valid_id(cmd['contentRevision']):raise CameraError('Invalid content revision',400)
         fingerprint=hashlib.sha256(json.dumps(cmd,sort_keys=True).encode()).hexdigest()
         if cmd['commandId'] in self.receipts:
             prior,receipt=self.receipts[cmd['commandId']]
@@ -188,11 +262,26 @@ class ScreenCamera:
             return dict(receipt)
         self.step(); current=self.current()
         if not current or not self.image or self.wall()-self.captured>=2:raise CameraError('Fresh source frame required')
-        if (cmd['expectedRevision']!=self.revision or cmd['sourceFrameId']!=current[1] or cmd['geometryGeneration']!=current[0]['geometryGeneration']):
+        self.prune_references()
+        same_frame=cmd['sourceFrameId']==current[1]
+        if 'contentRevision' in cmd:
+            reset=self.reset_frames.get(cmd['sourceFrameId'])
+            reset_matches=(op in ('clear','overview') and not self.paused and reset is not None
+                and reset['content']==cmd['contentRevision']
+                and reset['geometry']==current[0]['geometryGeneration'] and reset['source']==current[0]['source'])
+            if cmd['contentRevision']!=current[0]['contentRevision'] and not reset_matches:
+                raise CameraError('Source content changed; observe again')
+            reference=self.recent_frames.get(cmd['sourceFrameId'])
+            same_frame=same_frame or reset_matches or (not self.paused and reference is not None
+                and reference['geometry']==current[0]['geometryGeneration']
+                and reference['content']==current[0]['contentRevision']
+                and reference['source']==current[0]['source'])
+        if (cmd['expectedRevision']!=self.revision or not same_frame or cmd['geometryGeneration']!=current[0]['geometryGeneration']):
             raise CameraError('Presentation changed; observe again')
         self.rates=[at for at in self.rates if self.clock()-at<1]
         if len(self.rates)>=20:raise CameraError('Camera update rate exceeded',429)
         if self.paused and op not in ('resume','clear'):raise CameraError('Resume before changing paused camera')
+        owned_scope=self.target_scope
         superseded=False
         if op=='focus_region':
             target=rect(cmd.get('rect')); duration=cmd.get('durationMs',450); automatic=cmd.get('automatic',False)
@@ -211,7 +300,15 @@ class ScreenCamera:
             self.paused=True;self.frozen=self.image.copy();self.frozen_info=(self.meta,self.frame_id,self.captured)
             self.aim(self.crop,0)
         elif op=='resume':self.paused=False;self.frozen=None;self.frozen_info=None;self.annotations.clear();self.context=None
-        elif op=='clear':self.annotations.clear();self.context=None
+        elif op=='clear':
+            self.annotations.clear();self.context=None
+            # Clearing overlays does not invalidate the current source. Retain
+            # only its original metadata/ages so a following overview can race
+            # an identical new frame without reviving earlier references.
+            reference=self.recent_frames.get(current[1])
+            self.recent_frames={current[1]:reference} if reference else {}
+            reset=self.reset_frames.get(current[1])
+            self.reset_frames={current[1]:reset} if reset else {}
         elif op=='annotation_upsert':
             item=annotation(cmd.get('annotation'))
             if item['id'] not in self.annotations and len(self.annotations)>=16:raise CameraError('Annotation count exceeded',429)
@@ -220,6 +317,11 @@ class ScreenCamera:
             if not valid_id(cmd.get('annotationId')):raise CameraError('Invalid annotation ID',400)
             self.annotations.pop(cmd['annotationId'],None)
         elif op=='context':self.context={'text':label(cmd.get('text')),'expiresAt':self.wall()*1000+ttl(cmd.get('ttlMs'))}
+        if owned_scope and self.target_scope is owned_scope:
+            # Only a successfully validated ordinary command takes ownership.
+            for key in owned_scope['annotationIds']:
+                if op!='annotation_upsert' or item['id']!=key:self.annotations.pop(key,None)
+            self.target_scope=None
         self.revision+=1;self.rates.append(self.clock())
         receipt={'version':1,'commandId':cmd['commandId'],'revision':self.revision,'state':'superseded' if superseded else 'accepted'}
         self.receipts[cmd['commandId']]=(fingerprint,receipt)
@@ -237,18 +339,26 @@ class ScreenCamera:
         crop=state['crop']
         return max(0,min(1,crop['x']+(px-v['x'])/v['width']*crop['width'])),max(0,min(1,crop['y']+(py-v['y'])/v['height']*crop['height']))
 
-    def render(self):
-        state=self.status();canvas=Image.new('RGBA',(1280,720),'#101722');draw=ImageDraw.Draw(canvas)
+    def render_snapshot(self):
+        # Source Images are immutable after accept; the snapshot retains only one
+        # reference while mutable presentation dictionaries are detached.
+        return (copy.deepcopy(self.status()),self.frozen if self.paused else self.image,self.font,self.wall())
+
+    def render(self):return self.render_from_snapshot(self.render_snapshot())
+
+    @staticmethod
+    def render_from_snapshot(snapshot):
+        state,image,font,wall=snapshot
+        canvas=Image.new('RGBA',(1280,720),'#101722');draw=ImageDraw.Draw(canvas)
         if state['state']=='unavailable':
-            draw.text((40,90),'Screen unavailable · select an authorized fresh surface',font=self.font,fill='white');return canvas
-        image=self.frozen if self.paused else self.image
+            draw.text((40,90),'Screen unavailable · select an authorized fresh surface',font=font,fill='white');return canvas
         crop=state['crop'];x0=round(crop['x']*image.width);y0=round(crop['y']*image.height)
         x1=max(x0+1,round((crop['x']+crop['width'])*image.width));y1=max(y0+1,round((crop['y']+crop['height'])*image.height))
         v=state['output']['viewport'];tile=image.crop((x0,y0,x1,y1)).resize((max(1,round(v['width'])),max(1,round(v['height']))),Image.Resampling.LANCZOS)
         canvas.paste(tile,(round(v['x']),round(v['y'])))
         layer=Image.new('RGBA',(1280,720));marks=ImageDraw.Draw(layer)
         def point(x,y):return (v['x']+(x-crop['x'])/crop['width']*v['width'],v['y']+(y-crop['y'])/crop['height']*v['height'])
-        for item in self.annotations.values():
+        for item in state['annotations']:
             r=item['rect'];a=point(r['x'],r['y']);b=point(r['x']+r['width'],r['y']+r['height'])
             if item['kind'] in ('rectangle','highlight'):marks.rectangle((*a,*b),outline='#ffca62',width=4,fill=(255,202,98,40) if item['kind']=='highlight' else None)
             elif item['kind'] in ('pointer','arrow'):
@@ -260,15 +370,15 @@ class ScreenCamera:
                 else:marks.ellipse((b[0]-6,b[1]-6,b[0]+6,b[1]+6),fill='#ffca62')
             if item.get('text'):
                 text=item['text'];tx=max(v['x']+5,min(a[0],v['x']+v['width']-10));ty=max(v['y']+5,min(a[1]-30,v['y']+v['height']-30))
-                while text and marks.textlength(text,font=self.font)>v['x']+v['width']-tx-5:text=text[:-1]
-                marks.rectangle((tx-3,ty-2,tx+marks.textlength(text,font=self.font)+3,ty+28),fill='#101722');marks.text((tx,ty),text,font=self.font,fill='white')
+                while text and marks.textlength(text,font=font)>v['x']+v['width']-tx-5:text=text[:-1]
+                marks.rectangle((tx-3,ty-2,tx+marks.textlength(text,font=font)+3,ty+28),fill='#101722');marks.text((tx,ty),text,font=font,fill='white')
         # Clip every overlay to the source viewport, never leak into labels/captions.
         clip=(round(v['x']),round(v['y']),round(v['x']+v['width']),round(v['y']+v['height']))
         canvas.alpha_composite(layer.crop(clip),dest=clip[:2]);draw=ImageDraw.Draw(canvas)
-        age=max(0,int(self.wall()-state['capturedAt']/1000))
-        title=f"{'Paused · '+str(age)+'s old' if self.paused else 'Live selected surface'} · {self.selected['kind']} {self.selected['id']}" + (' · Pinned' if self.pinned else '')
-        draw.text((24,20),title,font=self.font,fill='#82e8bd')
-        text=self.context['text'] if self.context else 'Camera only · native approvals and input ownership remain required'
-        while text and draw.textlength(text,font=self.font)>1232:text=text[:-1]
-        draw.text((24,654),text,font=self.font,fill='white')
+        age=max(0,int(wall-state['capturedAt']/1000))
+        title=('Paused · '+str(age)+'s old' if state['state']=='paused' else 'Live view') + (' · Pinned' if state['pinned'] else '')
+        draw.text((24,20),title,font=font,fill='#82e8bd')
+        text=state['context']['text'] if state['context'] else 'Ask to focus on a detail.'
+        while text and draw.textlength(text,font=font)>1232:text=text[:-1]
+        draw.text((24,654),text,font=font,fill='white')
         return canvas

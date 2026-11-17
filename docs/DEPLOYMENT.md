@@ -146,3 +146,25 @@ operators must configure protected offsite storage before external deployment.
 For local configuration, export variables through your secret manager or use
 `node --env-file=.env dist/src/server.js` after building; `npm run dev` does not
 implicitly load a dotenv file. Never use an Apple Teams environment file.
+
+## Prepared live presentation staging
+
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED` defaults to false independently in backend and
+media. A new original-chat connector must explicitly register
+`--screen-camera true --camera-display ID --live-presentation true` using
+its normal exact surface arguments. Consult connector help for the complete command;
+existing sessions cannot upgrade their capability. The backend requires the
+versioned helper capability from scoped readiness, current view lease, no input
+owner, and exact conversation cursor. No production native-input endpoint is added.
+
+Release matching backend, media, gateway and companion artifacts. Keep new admission
+off until the selected display, lease-bound resolver, original timestamps and remote
+latency budgets are qualified. Existing sessions and snapshot capture continue on
+their prior path. Do not promote the experimental persistent preview stream as a
+capture repair. No call may be placed without the user's separate authorization.
+
+Backend receipts live in the existing durable entities store; media adds a
+`presentation_receipts` table with session-namespaced command IDs. Old binaries can
+ignore this table during rollback; never delete it or restore an older database to
+replay a command. Record current service deployments and preserve the configuration,
+active cursor and all unknown outcomes before changing running components.

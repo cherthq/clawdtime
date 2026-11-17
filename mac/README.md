@@ -449,11 +449,16 @@ preview with visible Start/Stop and synthetic fixtures.
 
 For an explicitly authorized disposable surface, `--camera-probe --surface '<exact
 JSON>'` repeatedly captures that same identity in one process, stopping at 120
-frames or 30 seconds plus completion of the current bounded frame. It requires
+frames or 30 seconds plus completion of the current bounded frame. Explicit
+`--probe-seconds 90` extends one probe beyond the former 30-second limit;
+accepted durations are integer 1–120 seconds, with at most four times that many
+frames. It requires
 initial display containment and rechecks the unlocked session and two-second
 freshness for every capture. Output contains only frame count, elapsed time and
 completion status; errors use fixed capture categories and bounded native numeric
-codes. A 35-second process deadline also bounds an unresponsive framework call.
+codes. Runtime and freshness use a monotonic clock. A process deadline five seconds
+after the selected duration (35 seconds by default) also bounds an unresponsive
+framework call.
 It never outputs/saves pixels, starts a listener or submits input. This
 development probe uses the identical capture/start/stop implementation as helper
 frame requests; it does not qualify the remote media or handset path.
@@ -468,6 +473,51 @@ mac/.build/debug/ClawdTimeCompanion --camera-find-window \
 
 The command refuses absent, ambiguous, minimized, unverifiable or multi-display matches. It
 returns only the selected `CameraSurface`; it never opens or activates an app.
+
+### Persistent selected-display local preview
+
+Development-only `--camera-stream --surface '<explicit display JSON>'` keeps one
+ScreenCaptureKit display stream alive for the local preview. It rejects windows;
+the existing selected-window mode and installed helper HTTP path are unchanged.
+The parent sends one `frame\n` command at a time over inherited stdin and receives
+one bounded JSON line using the existing frame shape. `stop\n` or EOF terminates
+the process. There is no listener, configuration/credential access, disk capture,
+input API or automatic restart. Use the media preview launcher rather than piping
+frame output to a file or terminal.
+
+The native stream targets at most 15 updates/second, uses Apple's three-buffer
+queue minimum, and retains only its latest decoded sample. Source timestamps come
+from the sample's host-clock presentation time; repeated samples keep their ID and
+timestamp. When a static stream supplies no recent complete sample, a real
+same-display screenshot obtains a new observation. Cached pixels are never
+restamped as fresh. Payload limits remain 2 MiB JPEG, 8192 pixels per axis and
+32 million pixels. The stream compares backing dimensions against the current
+`CGDisplayMode.pixelWidth/pixelHeight` and logical placement against display bounds;
+this preserves the Retina distinction (for example, 1512×982 points versus
+3024×1964 backing pixels). Mode loss/change still refuses publication.
+Geometry/display availability, Screen Recording and unlocked
+local-session checks gate publication. Stream failure retires the process.
+
+Commands are limited to 16 bytes, requests are serialized, a two-second idle
+watchdog bounds lost parent authority, and the process lifetime is at most 15
+minutes. Stop closes the sample slot before bounded native shutdown; late callbacks
+cannot repopulate it. The preview independently clears its rendered/source state
+and terminates a child that does not stop promptly. This source build does not
+install or change the companion, preserve captures, or qualify physical Stop/lock
+delivery. Apple API references: [frame interval](https://developer.apple.com/documentation/screencapturekit/scstreamconfiguration/minimumframeinterval)
+and [queue depth](https://developer.apple.com/documentation/screencapturekit/scstreamconfiguration/queuedepth).
+Backing-size API: [CGDisplayMode pixelWidth](https://developer.apple.com/documentation/coregraphics/cgdisplaymode/pixelwidth).
+Failed stream output reports only fixed stage/refusal categories. The Python
+preview forwards only its explicit allowlist from at most 256 stderr bytes;
+arbitrary native text is replaced by `stream_unavailable`.
+The first stream failure additionally preserves a bounded NSError code only when
+its domain equals ScreenCaptureKit's declared error domain (normalized to
+`screen_capture_kit`), plus whether a same-display screenshot was active and its
+bounded count. This context can distinguish a native stream interruption from
+the idle watchdog or local-session guard; overlap does not establish causation.
+No localized error, userInfo, title or path is returned. Apple documents native
+[stream-stop errors](https://developer.apple.com/documentation/screencapturekit/scstreamdelegate/stream(_:didstopwitherror:));
+in particular, a confirmed user-stop code remains terminal and is never retried.
 `--camera-inspect --surface '<exact surface JSON>'` reports that identity's window
 frame, ScreenCaptureKit filter content rectangle, pixel scale, display bounds and
 on-screen flag. These are metadata-only diagnostics with no window title or pixels.
@@ -522,3 +572,103 @@ Initial helper lease creation and actual-preview Start still require the window
 wholly inside its selected display. Display capture retains strict containment.
 Selected-window fallback input remains disabled at every layer, so off-screen
 geometry cannot become a global click/type target.
+
+### Local preview native activation capability
+
+The development binary's `--preview-native-executor` mode is an inherited-pipe
+component for the explicitly enabled local preview broker. It is separate from
+installed helper actions and never changes `/actions` policy. Do not invoke OS
+effects from shell acceptance probes; the supported rehearsal trigger is the
+preview's authenticated **Execute prepared operation** button through native CUA.
+Only Finder and TextEdit are allowed; Codex and other targets are refused.
+
+The broker/controller qualifies one exact app/window, checks current native
+ownership and live selected-display authority again, reserves a durable receipt,
+and submits one activation or one AXRaise. Each effect consumes a token bound to
+its operation kind, original two-second qualification, exact session/lease/epoch,
+policy, display and retained app/AX identity. Qualification correlates the exact
+CG window ID/PID with unique same-bounds AX and CG witnesses; ambiguous, minimized,
+outside-display or inaccessible windows refuse. Titles are hashed in memory and
+never returned as text. App launch identity and focused/on-screen observations
+are independently checked. No coordinates, keystrokes, text, scroll, app launch,
+Space shortcut, all-window activation or action retry is implemented.
+
+macOS cooperative activation may decline an activation request. API return alone
+is never UI success: verification requires the same frontmost app, focused exact
+window and on-screen window on the selected display. Activation and raise require
+separate prepared operations. This cannot override the original native tool's
+application restrictions.
+
+Input/output lines are capped at 8 KiB, one operation is processed at a time,
+AX messages have a 100 ms timeout, each request has a two-second process watchdog,
+and the process exits after at most 900 seconds. EOF/Stop or controller termination
+ends the process; there is no relaunch or replay after uncertain dispatch. Unit
+tests exercise admission and no-replay behavior without invoking OS effects.
+
+`--camera-local-status` is a metadata-only diagnostic: it reads local console,
+login/lock availability and preflight Screen Recording/Accessibility permissions,
+without opening capture or submitting input. It emits fixed booleans and a fixed
+session reason, never the session dictionary. Stream `authority_changed` reports
+also carry an allowlisted `authority_stage` distinguishing those session reasons,
+permission loss, local stream stop and missing stream geometry. This adds diagnosis
+only; it does not change eligibility or restart a stopped source.
+
+Native process lifetime identity prefers `NSRunningApplication.launchDate`. Apple
+notes that this value may be absent for apps not launched through LaunchServices.
+Only when it is absent, the local activation executor reads the exact PID through
+`sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid)` and uses the exported
+`kinfo_proc.kp_proc.p_starttime` seconds/microseconds. Apple's
+[sysctl(3) documentation](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/sysctl.3.html)
+documents this process query; the public SDK's `sys/proc.h` exports the start-time
+field. No private libproc interface is used. The query must return the full
+expected structure, matching PID and valid nonzero start time. Missing or malformed
+identity refuses; PID alone and observation timestamps never substitute.
+
+The opaque identity hash includes the provider, PID, bundle and original start
+value. Qualification, pre-dispatch and post-dispatch observations recheck that
+same identity; process reuse or switching identity providers refuses. No other
+process metadata is retained or logged.
+
+On November 17 the lead verified the normal current-display Finder → TextEdit →
+Finder activation flow and outgoing preview, followed by separate original-native
+CUA fixture work and clean Stop/release. Off-Space, full-screen, minimized and
+multiple-display cases remain unqualified. See the
+[physical evidence matrix](../docs/MEDIA_INTEGRATION.md#local-physical-evidence--november-17-2026).
+
+### Read-only live presentation resolver
+
+`--preview-presentation-resolver` is a separate inherited-pipe capability for
+prepared camera presentation. It accepts only strict `resolve` requests and
+returns fresh app-active/focused/on-screen window metadata; activation, raise,
+click/type/scroll, action tokens and arbitrary fields refuse before resolution.
+It shares the existing exact app/window/process-lifetime qualification code but
+contains no native effect calls. The process binds one presentation's session,
+lease, epoch, cursor, policy, display, window and process identity, and retains no
+pixels or titles. Requests/responses are capped at 8 KiB, requests at 64 per
+process, each native read at two seconds and process lifetime at 900 seconds.
+The local presentation controller kills its resolver after failure, Stop or the
+three-second presentation lifetime; a new prepared command uses a new resolver.
+
+The exact-window candidate scan also includes the app's public AX main-window and
+focused-window references, because Finder may omit a normal window from AXWindows.
+References are deduplicated by AX element identity, never by geometry; the merged
+list is capped at 32. A failed AXWindows lookup still refuses. Supplemental
+references must pass the same unique CG/PID, geometry, title and lifetime checks.
+They do not force Space changes or qualify off-Space presentation.
+
+The installed helper source now exposes an authenticated, read-only
+`POST /v1/leases/:id/presentation/resolve` capability. It uses the existing exact
+CG/AX/process-lifetime resolver, requires a live selected-display camera lease,
+view mode, executor `none`, matching agent session/epoch/policy/display and no
+unresolved input, and checks local authority before and after observation. The
+backend retains request/cursor authority; those fields are not falsely claimed
+to be stored by the helper lease. Original expiry is mandatory. Only Finder and
+TextEdit exact targets are supported. There is no production activation, raise,
+click, type or scroll capability in this route.
+
+Production selected-display capture remains `SCScreenshotManager` snapshots.
+The preview-only mixed `SCStream`/snapshot experiment has intermittently reported
+`-3805` (application connection interrupted); its underlying cause is unresolved
+and that transport is not promoted by this change. Public cooperative activation
+also does not guarantee a macOS Space switch; no private Space API, preference
+change, broad capture or automatic action retry is introduced.

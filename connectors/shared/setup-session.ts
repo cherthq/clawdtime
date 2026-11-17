@@ -98,6 +98,7 @@ export async function startSetupSession(options: {
   documentAccess?: ProtocolOptions["documentAccess"];
   screenCamera?: ProtocolOptions["screenCamera"];
   voiceFrontend?: ProtocolOptions["voiceFrontend"];
+  livePresentation?: ProtocolOptions["livePresentation"];
   input?: Readable;
   output?: Writable;
   request?: typeof fetch;
@@ -194,7 +195,9 @@ export async function startSetupSession(options: {
         JSON.stringify(run.session.screenCamera) !==
           JSON.stringify(options.screenCamera) ||
         JSON.stringify(run.session.voiceFrontend) !==
-          JSON.stringify(options.voiceFrontend))
+          JSON.stringify(options.voiceFrontend) ||
+        (run.session.capabilities?.livePresentationVersion === 1) !==
+          (options.livePresentation === true))
     )
       throw new Error(
         "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
@@ -234,6 +237,13 @@ export async function startSetupSession(options: {
           "Server did not confirm the selected voice frontend. Preserve this registration; do not downgrade or retry it.",
         );
     }
+    if (
+      (run.session?.capabilities?.livePresentationVersion === 1) !==
+      (options.livePresentation === true)
+    )
+      throw new Error(
+        "Server did not confirm the selected live presentation capability. Preserve this registration; do not downgrade or retry it.",
+      );
     if (bridge.sessionId && bridge.sessionId !== run.session?.id)
       throw new Error("Setup session binding changed.");
     bridge.sessionId = run.session?.id;
@@ -618,7 +628,9 @@ export async function startSetupSession(options: {
             ? {
                 recorded: true,
                 reconcileWith:
-                  "conversation_turns or execution_status using the original request and identifiers",
+                  conversationCommand === "present_prepared_scene"
+                    ? "live_presentation_receipt using the original requestId and commandId"
+                    : "conversation_turns or execution_status using the original request and identifiers",
               }
             : result;
         secureWrite(bridgePath, bridge);

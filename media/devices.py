@@ -53,7 +53,13 @@ async def gateway_request(owner,method,path,body=None,frame=False,device=None):
 
 
 class ScreenController:
-    def __init__(self, session):
+    def __init__(self, session, *, preview_source_fps=None):
+        # Only the in-process local preview opts into a faster source. No wire or
+        # environment field changes the production five-request/second bound.
+        if preview_source_fps is not None and (type(preview_source_fps) is not int or not 1 <= preview_source_fps <= 15):
+            raise ValueError('Invalid local preview source cadence')
+        self.source_interval = 1 / preview_source_fps if preview_source_fps is not None else .2
+        self.preview_pacing = preview_source_fps is not None
         self.session=session
         self.owner=session.owner
         self.use_relay=self.owner.env.get('DEVICE_GATEWAY_RELAY')=='true'
@@ -66,6 +72,7 @@ class ScreenController:
         self.applied_lease=None
         self.policy_at=0
         self.camera=None
+        self.presentation=None
         self.frame=None
         self.frame_id=None
         self.captured_at=None
@@ -91,8 +98,17 @@ class ScreenController:
         persist=getattr(self.owner,'record_screen_diagnostic',None)
         self.diagnostics=ScreenDiagnostics((lambda data: persist(self.session.id,data)) if callable(persist) else None)
 
+    def retire_presentation(self):
+        old=self.presentation;self.presentation=None
+        if old:
+            # Revoke synchronously before scheduling cleanup; a delayed resolver
+            # cannot commit and cleanup cannot retire a newer controller.
+            old.controller.closed=True
+            self.cleanup(old.stop())
+
     def clear(self,state):
         if self.camera:self.camera.clear()
+        self.retire_presentation()
         self.frame=None;self.frame_id=None;self.captured_at=None
         self.state=state;self.revision+=1
 
@@ -182,6 +198,7 @@ class ScreenController:
                 self.selection=selected
                 self.frame_id=None  # keep legacy video pixels only while still fresh
                 if self.camera:self.camera.clear()
+                self.retire_presentation()
                 self.state='awaiting_frame';self.hold_until=0
                 self.policy_at=time.monotonic()
                 return  # same capture loop renews authority, then captures a new frame
@@ -267,6 +284,7 @@ class ScreenController:
         waiting_policy=False
         try:
             while not self.closed and self.selection and generation==self.generation:
+                iteration_started=time.monotonic()
                 selection=dict(self.selection)
                 expiry=timestamp(selection['expiresAt'])
                 # A fresh policy cannot revive a helper grant that expired while
@@ -342,7 +360,7 @@ class ScreenController:
                         self.frame=frame;self.frame_id=frame_id;self.captured_at=captured;self.received_at=time.monotonic();self.revision+=1
                         self.diagnostics.frame(captured)
                     self.state='viewing'
-                await asyncio.sleep(.2)
+                await asyncio.sleep(max(0,self.source_interval-(time.monotonic()-iteration_started)) if self.preview_pacing else self.source_interval)
         except asyncio.CancelledError:raise
         except Exception:
             if generation==self.generation and self.selection:
@@ -379,6 +397,7 @@ class ScreenController:
 
     async def close(self):
         self.closed=True;self.starting=False;self.clear('stopped');self.generation+=1
+        if self.presentation:await self.presentation.stop()
         if self.task:
             self.task.cancel();await asyncio.gather(self.task,return_exceptions=True)
         if self.selection:

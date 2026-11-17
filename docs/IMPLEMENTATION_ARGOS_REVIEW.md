@@ -1,5 +1,452 @@
 # IMPLEMENTATION_ARGOS review
 
+## November 17, 2026 — production integration, explicit staged admission
+
+The user authorized moving toward production while retaining the no-call boundary.
+Final release checks: 1,129 backend/connector tests across 68 files plus build,
+88 Swift tests, 49 gateway tests, and 460 media tests run with 13 optional SDK skips.
+Independent backend/media review found no remaining source blocker after fixing
+original-deadline revalidation and agent-session/media-session identity binding.
+
+The production capture audit found that installed selected-display capture already
+uses fresh snapshots; the failing mixed persistent stream is a development-preview
+transport. It is not promoted or represented as repaired.
+
+A separate immutable `livePresentationVersion:1` capability and default-off
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED` gate now connect the original agent's prepared
+scene intent to production backend/media and the authenticated Mac gateway. Native
+activation and other OS effects remain with the original chat's qualified native
+CUA. The installed helper endpoint is read-only metadata resolution within an
+existing selected-display view lease; it cannot activate or click.
+
+The backend retains hashes and metadata receipts before dispatch, fences scene
+generations, rechecks authority after awaited work, and treats missing responses or
+restart as uncertain without replay. Labels remain transient. The initial resolver
+qualification has its own exact hash and original two-second deadline; an expired
+reply cannot be made current by supplying a fresh timestamp. Media receipts are
+namespaced by media session and survive Stop. Read-only callbacks bind the original
+agent session separately from the media session ID.
+
+Remote observations preserve the Mac's original timestamps and existing short
+witness/monitor budgets. A late or skewed response fails closed; local timing does
+not qualify WAN latency. New admission remains staged off pending matched-artifact
+and remote-path qualification. No call, new permission or broader display grant is
+part of this rollout. Current-Space local switching is verified; automatic
+cross-Space activation and handset motion quality remain open acceptance items.
+
+## November 17, 2026 — prepared plans and per-step live presentation
+
+**Physical local result:** the explicit snapshot-display diagnostic completed
+Finder → TextEdit → Finder with three verified native activation receipts and
+three accepted live presentations. The outgoing preview visibly showed each zoom
+and its label (the viewer screenshot covered the upper portion of the image).
+The initial two-scene plan completed, a new one-scene follow-up was prepared in
+the same session, and that plan completed with a fresh label. No edit or file move
+was repeated. The original expiry and receipt history were preserved.
+
+Local Stop cleared the image, released the lease and left execution `none`/`paused`
+at epoch 7. All original actions returned before release; no actor remained in
+flight. The snapshot diagnostic made 468 captures and rendered 3,556 images at
+22.7 fps over roughly 157 seconds. This establishes the local prepared/live-target
+cycle, not sustained dynamic-motion quality or Screen Studio-equivalent polish.
+The user initially brought the test windows onto the current Space. Cross-Space
+automatic activation remains unverified; the persistent-stream `-3805` remains
+unresolved. No live service or phone path was changed.
+
+Activation postcondition checking now waits up to 600 ms using read-only checks
+after exactly one OS effect, rather than checking only at 50 ms. The original
+request/qualification deadline, Stop, exact AX/CG identity and process lifetime
+remain enforced. There is no repeated activation, forced Space change or retry on
+identity loss. Final component checks: **86 Swift tests/build; 448 media tests run,
+13 optional SDK skips**. Independent review passed.
+
+Agent teams implemented immutable prepared scene intent, window-relative focus,
+read-only live target resolution, atomic focus/annotation, and complete/replan for
+follow-up requests in the same local session. No call, deployment, installation,
+permission change or external message occurred.
+
+The media runtime observes the target, waits for a source frame captured after
+that observation, locks the frame, then observes the same exact target again.
+It rechecks backend/local authority and commits the camera changes together.
+A target-bound monitor preserves geometric marks across pixel changes only while
+window identity, process lifetime, bounds and foreground checks remain valid.
+The original witness must remain younger than 250 ms, with a three-second maximum
+scope. Movement/focus loss/Stop/authority changes clear crop and marks; rendering
+rejects output computed against an expired scope. This is bounded metadata
+verification, not semantic content verification, and cannot detect every A→B→A
+transition between observations. Native input guards remain unchanged.
+
+Durable backend and media receipts precede dispatch. A lost response or changed
+authority retains the original result and blocks replay/replanning. The callback
+under the frame lock reads execution authority only, avoiding camera-lock recursion.
+The authenticated callback supplies the exact command fingerprint, avoiding
+cross-language JSON number-format differences without loosening argument checks.
+
+The same-session cycle supports completion then replacement by a new bounded plan,
+retaining the original session deadline and all unknown records. It does not restart
+the session or repeat prior edits. Plans remain agent-authored; the local prototype
+does not add a general natural-language planning service or production call wiring.
+
+Automated validation before the latest physical rehearsal: `npm run check` passed
+1,090 tests across 65 files plus typecheck/build; 15 live-presentation media tests,
+68 camera/native/display/preview regressions, and 82 Swift tests/build passed at that stage.
+Independent review covered frame bracketing, expiry/render races, callback authority,
+receipt preservation and the bounded AX candidate merge.
+
+Physical rehearsal found Finder's off-Space window absent from AXWindows but present
+in public AXMainWindow/AXFocusedWindow references. The resolver now merges those
+references by AX identity with a hard 32-window bound, preserving ambiguity and
+exact-window checks. Fresh qualification passed. Activation returned with the app
+active and focused but the window still offscreen; a separate raise was refused
+when the app was no longer active. No zoom success is inferred from these receipts.
+
+Two persistent-stream runs stopped with SCK `-3805`: one before native dispatch,
+and another after 106.6 seconds. The latter recorded 1,125 source requests,
+360 distinct frames and 1,424 rendered images. These failures do not establish
+that native input or concurrent snapshot refresh caused the interruption.
+Original native/unknown receipts and metadata-only audits were retained, all tool
+calls returned, and capture/review processes were stopped. No screen/audio was saved.
+A separately selected snapshot-only display mode is available for diagnosis; it is
+not an automatic fallback or evidence that the persistent stream is repaired.
+
+## November 17, 2026 — native activation and CUA milestone physically verified
+
+The lead and three specialists implemented the first approved work wave locally.
+No call, deployment, installation, permission change, provider change or production
+state mutation occurred. The existing branch and earlier work were preserved.
+
+**Verified on the current display:** prepared native activation brought the exact
+Finder fixture forward, switched to the exact TextEdit document, then returned to
+Finder. Each distinct operation retained a durable host receipt and independently
+observed active app, focused window and on-screen window. The lead also saw the
+correct Finder and TextEdit content in the outgoing preview. No manual window
+arrangement was needed during this successful run.
+
+The original chat's native CUA then clicked into TextEdit, selected and replaced
+the disposable heading once, and saved it. Native UI and a read-only file check
+confirmed the saved edit. In Finder, native clicks and shortcuts moved the sample
+brief from Research into Approved. Native observations confirmed the destination
+and empty source; a read-only filesystem check found exactly one matching file.
+All original tool calls returned before ownership release. The view was stopped,
+the lease released, and execution remained `none`/`paused`. Metadata-only audits
+and the native receipts remain in owner-only local review directories. No screen
+or audio content was retained.
+
+### Diagnosed defects and changes
+
+- Finder qualification initially refused `app_launch_identity_unavailable` before
+  any effect. `NSRunningApplication.launchDate` was absent. Apple documents that
+  [this value is only available for LaunchServices-launched apps](https://developer.apple.com/documentation/appkit/nsrunningapplication/launchdate).
+  A missing value now falls back to documented `sysctl(KERN_PROC_PID)` process-start
+  metadata. Exact PID, full structure size and valid start time are required;
+  process lifetime is rechecked around resolution and dispatch. A changed or
+  unavailable identity still refuses input. Independent review passed.
+- Camera checks compared the entire lease across awaited work, so an ordinary
+  expiry extension could trigger HTTP 409. Tests reproduced this with actual
+  viewing renewal during readiness, status and command acknowledgment. Only an
+  expiry extension is now accepted; every other field must remain identical, and
+  both authority checks still run. Expiry reduction and authority/Stop changes
+  remain rejected. All 45 backend camera tests pass.
+- Added an opt-in Finder/TextEdit activation-only helper and typed executor;
+  durable dispatch reservations and host receipts; exact scene/epoch/cursor/
+  source binding; separate host/browser credentials; bounded diagnostics; and
+  single-use qualification tokens. Browser CUA invokes only a prepared ID.
+  Existing fallback input remains disabled and its authority rules unchanged.
+- Added `presentObserved` to sample source metadata and present inside one runtime
+  call. It preserves the original agent's attestation time and every content,
+  geometry, freshness and interruption guard. It does not retry rejected effects.
+
+### Acceptance still open
+
+Native action acceptance is separate from polished presentation acceptance.
+The successful action rehearsal produced 5,086 source requests, 3,020 distinct
+frames and 11,186 rendered images over about 417 seconds, with no source failure
+and approximately 26.82 rendered fps. This mostly static/mixed-motion run is not
+a ten-minute dynamic or 30 fps source acceptance test.
+
+Two scene framing attempts rejected changed content before camera dispatch.
+A subsequent fresh test using `presentObserved` still received HTTP 409 for
+`focus_region`. The original command was preserved as unknown and was not replayed;
+read-only status showed revision 2, overview, no marks and no movement. Stop then
+cleared capture and released the lease with execution `none`/`idle`. Removing the
+external metadata round trip did not establish reliable framing. The exact final
+409 guard is not proven; do not rewrite it as successful focus or weaken input
+freshness to make a demo pass.
+
+An earlier no-input run reported `authority_changed`; its exact subcondition was
+not captured. Fixed diagnostics now distinguish session, permission and local
+stream stages. The earlier SCK `-3805` interruption and historical Finder409 remain
+unresolved. Other Spaces, fullscreen, minimized windows and multiple displays are
+not qualified. Three complete polished runs, follow-up scene amendments, automatic
+post-Stop ownership recovery, production integration and handset acceptance remain
+open. This milestone is not Screen Studio-equivalent presentation readiness.
+
+Validation: `npm run check` passed **1,061 tests across 64 files**, typecheck and
+build; **77 Swift tests** and debug build passed; **432 media tests ran successfully
+with 13 optional SDK skips**. Independent native identity, receipt, broker,
+diagnostic and renewal reviews found no blocking issue in the implemented scope.
+
+## November 17, 2026 — local implementation and acceptance checkpoint
+
+Latest readiness rehearsal: the original chat claimed native ownership at epoch 1,
+read back current ownership, and selected the exact test Finder window through its
+native Window menu. The tool completed and Accessibility showed the intended
+folder, but subsequent SCK/CG metadata still reported that window off-screen;
+the outgoing display had shown another app. No edit or file move was attempted.
+This distinguishes background window access from verified foreground activation.
+
+Capture subsequently stopped with the first-failure diagnostic
+`screen_capture_kit / -3805` (application connection interrupted),
+`snapshotActive:false`, `snapshotCount:5`, after 536 source requests. This narrows
+the native interruption category but does not establish its root cause or prove
+that snapshot capture caused it. Backend Stop released the view lease and moved
+native ownership to epoch 3 / `uncertain`. The epoch-1 release was rejected with
+409, read-only status confirmed the changed state, and it was not replayed.
+All native tool calls had returned; no native tool remained in flight. A separate
+local metadata-only audit preserved the claim, rejected release and uncertain
+state before the isolated preview process was closed. No uncertainty was rewritten
+as success and no production session/state was touched. The next engineering
+review covers exact-window native activation and explicit audited recovery of
+finished native work after capture loss; repeatedly asking for desktop setup is
+not evidence that either capability works.
+
+Follow-up local rehearsal after the user made the Mac available: both fixture
+windows were independently reported on-screen. Display capture remained live
+through 1,038 frame requests (87-second metric sample), but the initial scene's
+`clear` command returned HTTP 409 while full-display content changed. Its original
+unknown receipt was preserved; camera status still showed revision zero, overview
+and no marks. The rehearsal was stopped through the viewer and backend Stop/idle
+release verified before any shared-screen native input.
+
+A reviewed correction permits only target-independent `clear`/`overview` to use a
+known accepted frame across content changes. It retains exact revision, geometry,
+source, current freshness and bounded original reference age; the supplied hash
+must match the recorded frame. Both metadata indexes share a 32-record ceiling.
+All targeted commands and input keep their existing stricter binding. Independent
+camera tests (25) and focused camera/preview/display tests pass; no replay or
+automatic retry was added. Long JSONL plans also require a pipe when the terminal's
+canonical input limit is smaller than the bridge's 16 KiB limit.
+
+The disposable windows were expanded with their native Fill commands. Placement
+must still be rechecked after switching: native Accessibility access alone does
+not imply current-desktop visibility. The native tool explicitly refuses control
+of Codex itself, so the user was asked to minimize the chat for physical rehearsal.
+
+After the user confirmed that setup, a fresh explicit local run successfully
+prepared all three scenes and began the Finder scene (`awaiting_verification`)
+through the corrected clear/overview path. The actual viewer showed another app,
+not the test Finder window. Capture was stopped immediately; backend execution
+returned `none`/`idle`, `viewingStopped:true`, and the lease was released. No edit
+or file move was attempted, and no screenshot was saved. The remaining physical
+prerequisite is the test Finder window frontmost on display 1 after leaving the
+chat, followed by verified native app activation. Final media validation is now
+**411 tests run, 13 optional skips**; independent reset review and synthetic scene
+integration pass. No call, installation or deployment occurred.
+
+The user authorized implementation with agent teams and local testing, with **no
+new call**. The lead integrated separate Mac/capture, connector/scene, and safety
+review work. Changes remain local; no installed companion, deployment, provider,
+pairing or predecessor bridge was changed.
+
+Implemented a bounded agent-prepared scene controller, exact app/window identities,
+fresh result attestations, zoom/annotation choreography, immediate interruption of
+queued steps, and Stop propagation to backend execution. The original chat still
+owns native actions and must claim exclusive execution, observe the actual result,
+and release before presenting it. The scene controller is exposed through the
+local preview JSONL bridge; this is not a newly deployed MCP or autonomous native
+executor. A fixture generator prepares disposable Finder/TextEdit content.
+
+The opt-in display prototype uses one persistent ScreenCaptureKit source (15 fps
+target), transient bounded frames, and a separate bounded rendering worker (30 fps
+target). Source/authority changes invalidate presentation. Recent identical-frame
+camera commands use bounded metadata-only content binding; native input retains
+its strict current-frame check. Independent review covered cancellation, Stop,
+expired annotations, capture identity and unknown effects; no write is replayed
+to conceal an uncertain outcome.
+
+### Measurements and verification
+
+- Full TypeScript check: **1,007 tests in 61 files**, typecheck and build passed.
+- Swift: **67 tests and debug build passed**. Final media suite: **406 tests run,
+  13 optional SDK skips**, including Stop classification and bounded native
+  diagnostics. Synthetic scene, voice/camera and browser walkthroughs pass.
+- Synthetic 3024×1964 source benchmark improved from **6.89 to 14.5 source fps**
+  after moving rendering off the event loop; output was **27.7 fps**, mean render
+  **35.08 ms**, sampled source age **66.15 ms**. These are synthetic measurements.
+- An explicit actual display-1 probe completed **45 seconds**, **1,257 rendered
+  images / 27.93 fps**, zero image rejections, mean render **33.94 ms**. Capture
+  remained live at the endpoint; Stop cleared pixels, closed the source and exited
+  the native process. No screen image was saved and no input was submitted.
+  The mostly static desktop produced **141 distinct source frames / 3.13 fps**;
+  this does not establish dynamic-motion or handset performance.
+- A subsequent **complete backend-to-preview** run passed **45.02 seconds**,
+  **1,275 images / 28.07 rendered fps**, zero rejected images, **34.21 ms** mean
+  render time and **145 distinct source frames / 3.19 fps**. Stop returned 200;
+  backend execution was `none`/`idle` with `viewingStopped:true`, and the local
+  process exited. Pixels were discarded; no native input was submitted.
+- That probe first exposed a new Retina startup bug: logical display dimensions
+  were compared to backing pixels. The prototype now checks current display-mode
+  backing dimensions while retaining exact logical geometry and authority checks.
+  This correction does **not** diagnose the historical Finder HTTP 409.
+
+### Outstanding local acceptance
+
+Native tooling initially returned `cgWindowNotFound`, timeouts and aborted calls.
+TextEdit later recovered; opening the disposable notes and revealing their folder
+through its native title menu restored Finder Accessibility access. Both fixture
+windows were observed, but a native coordinate click subsequently returned
+`noWindowsAvailable`. Accessibility access and a window screenshot do not establish
+visible activation on the currently shared display. No document edit or file move
+has yet been demonstrated under shared execution ownership. Qualify current-desktop
+window activation through the original chat's native tool before that rehearsal.
+
+The first integrated preview failed its startup live-frame check. A fresh stopped-
+and-restarted local run reached ready, then ScreenCaptureKit reported
+`stream_interrupted` after 179 frame requests. The preview stopped, cleared pixels,
+acknowledged backend Stop and released the view lease. No shared-screen input had
+been submitted. The cause of that interruption is not established, and a later
+bounded integrated run passed as recorded above. First-failure diagnostics now
+retain only fixed categories, a recognized SCK domain/numeric error code, and
+bounded snapshot activity/count; never raw native error text. No automatic capture
+restart was added. The intermittent failure and current-desktop native activation
+remain unresolved; a smooth Finder → TextEdit → Finder walkthrough is not yet
+accepted. Physical zoom/readability, edits/moves, Space transitions and handset
+quality remain acceptance work, not test-suite claims.
+
+## November 17, 2026 — option 2 direction approved
+
+The user chose selected-display presentation with native window switching/CUA,
+smooth zooms/annotations and an agent-prepared presentation plan. The updated
+[approved implementation direction](ARGOS_CLAWD_INTEGRATION_PLAN.md#approved-direction--november-17-2026-desktop-presentation-with-native-control)
+defines scene preparation, deterministic actions for known targets, input ownership,
+video composition, interruption handling and staged local/handset acceptance.
+It supersedes the prior Finder-only repair sequence as the primary demo route.
+The historical native 409 remains unresolved; selecting a different capture source
+is not a diagnosis or evidence of repair. Selected-window mode remains supported.
+
+This follow-up changes planning documents only. No new implementation, capture,
+input, registration, installation, deployment or call was performed. Existing
+uncommitted diagnostic work is preserved. Screen Studio-like polish is the stated
+quality goal; the existing source/render rates require measurement and likely
+additional work before making that claim.
+
+## November 17, 2026 — diagnosis-first review and proposed plan
+
+The user requested diagnosis and a plan before fixing. Repair, installation,
+deployment, bridge replacement and demo execution are paused for this review.
+No FaceTime call is authorized. This entry supersedes the earlier instruction to
+proceed immediately through repair/deployment.
+
+### Fresh evidence
+
+- Started on clean `ArgosClawd` at `a99486d`, matching the handoff checkpoint.
+- Exact disposable Finder selection re-resolved to the same window/process/display.
+  Metadata-only checks passed with the selected window reported off-screen; its
+  geometry and ScreenCaptureKit filter rectangle agreed. Off-screen status alone
+  is therefore not sufficient to explain a refusal.
+- Backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` and media deployment
+  `4db02d42-291d-477e-a6f3-d7e4ad5762e3` still report SUCCESS. Backend has zero
+  pending/unknown call effects and active calls; media has zero active sessions
+  and a connected gateway.
+- Installed Companion is still 0.4.0 build 6, executable SHA-256
+  `924621661e8d441a4dbe836070f7fd3c695f402deb296f82a055878088b0acfa`, running
+  with the explicit retained custom configuration. Both permissions pass, local
+  sharing is stopped, no active lease is reported, and unresolved input is zero.
+  Historical observed/unverified counts remain 37/4.
+- Two predecessor-chat foreground bridges remain running. Neither was reused,
+  stopped or replaced in this diagnosis. Their session/effect state must be
+  reconciled before a fresh current-chat registration.
+- The former probe's 30-second ceiling did not cover the incident's ~35-second
+  duration. A diagnostic-only local extension now permits an explicit 1–120-second
+  duration, retains the 30-second default, bounds frame count and process lifetime,
+  and uses monotonic probe timing. It does not change production capture guards.
+- Two explicit 90-second probes each stopped on their first geometry race:
+  **43 frames / 18,025 ms**, then **56 frames / 22,211 ms**. Both exited 75, the
+  development representation of HTTP 425, because the selected window's horizontal
+  position changed between pre/post-capture checks. Target dimensions stayed the
+  same. No test UI input was submitted and no controlled Space switch was performed;
+  these observations do not establish what caused the movement. A fresh target
+  check between probes passed. Pixels were discarded, not saved or transmitted.
+
+### Diagnosis and remaining uncertainty
+
+The historical incident is still an **unidentified native HTTP 409**, not a proven
+geometry-race failure. This session reproduced 425 geometry races, a different
+existing path. The development probe exits at the first 425, whereas the live
+camera path already permits a guarded same-identity read retry for that condition.
+Consequently neither new probe establishes sustained 90-second reliability or
+reproduces the historical terminal failure.
+
+The historical 69 ms native request rules out its two-second freshness deadline.
+Stream lifecycle failures use 503 and a geometry change between capture checks
+uses 425. Remaining 409 candidates include identity/lifecycle/placement/dimension
+checks and post-capture authority/display checks. No evidence establishes lost
+permission, expired lease, user Stop or a particular failing guard.
+
+A concrete code-review hypothesis is the off-Space Accessibility witness collector:
+it returns an empty witness set after enumeration failure, too many windows, any
+unreadable window geometry, or its collection deadline. Thus an unrelated Finder
+window could make the selected window appear unverifiable. This is **not a
+reproduced root cause**. Later successful AX metadata cannot establish the earlier
+state, and unreadable windows must not simply be ignored if uniqueness is unknown.
+The fixed refusal header currently reaches gateway logs/relay, but media's retained
+screen diagnostic still records the generic failure category.
+
+### Proposed plan, before any repair
+
+1. **Collect decision-time evidence.** Extend only bounded diagnostics as needed:
+   identify pre-capture versus post-capture target checks and distinguish AX
+   enumeration, count limit, unreadable geometry, deadline and no-match outcomes.
+   Use fixed codes/counts/booleans only; no titles, pixels, raw errors or credentials.
+   Preserve the allowlisted refusal through retained media diagnostics if needed
+   to correlate a future terminal failure without relying on transient logs.
+2. **Run a representative local reproduction.** Keep the exact disposable window
+   identity. Exercise stationary capture beyond 35 seconds, then an explicitly
+   controlled Space transition and move/resize cases. Use the existing guarded 425
+   behavior (discard pixels, invalidate old frame/presentation state, recheck
+   authority and read only the same identity), recording the number of 425s and
+   actual duration. Stop on any terminal 409 or unknown outcome; never reacquire a
+   failed lease automatically. Verify minimized/closed/hidden/ambiguous targets
+   still refuse capture. No whole-display fallback or call is needed.
+3. **Select the repair from the observed guard.** If AX collection is the cause,
+   propose a narrow consistency/collection change that still proves exact owner,
+   geometry, uniqueness and nonminimized state. If another guard fires, fix that
+   demonstrated condition instead. If no terminal refusal reproduces, report the
+   limitation and propose diagnostic rollout separately; do not call it a fix.
+4. **Validate and independently review.** Add a regression for the reproduced
+   failure plus wrong identity, ambiguity, minimize/close, Stop/revocation,
+   freshness, and no-reacquisition behavior. Run affected Swift/gateway/media
+   checks and `npm run check` when integrating. Repeat bounded real-window trials;
+   tests and frame counts do not establish handset acceptance.
+5. **Roll out only after plan review and evidence.** The coordinating lead audits
+   idle calls/leases/input and preserves configuration, signing identity, ledgers,
+   cursors and unknown outcomes. Install only necessary ClawdTime components with
+   the explicit saved helper configuration; do not reset TCC or expand grants.
+   Restart the existing gateway only after safe reconciliation. If media changes,
+   deploy frozen committed `media/` as build root. Verify running hashes/readiness,
+   unchanged configuration and retained records; commit/push intended changes to
+   `ArgosClawd`. Provider/line assignments and sibling projects stay untouched.
+6. **Prepare the supervised demo.** Reconcile predecessor bridges without borrowing
+   their identity, register this current chat with explicit ElevenLabs v2 and exact
+   camera/native capabilities, and prepare Research/Drafts targets from fresh
+   geometry/content. Only when ready, obtain fresh authorization for one call.
+   Keep this chat polling/acknowledging turns; qualify sustained handset sharing,
+   smooth focus/annotations, latest playback repair, interruption and any explicitly
+   authorized CUA under exclusive ownership with observed UI outcomes.
+
+### Changes and checks at this review point
+
+Only the development probe duration/timing, its two new tests and component docs
+were changed; the production refusal behavior is unchanged. Changes remain local
+and uncommitted. No installation, deployment, permission change, input, bridge
+handoff, new registration, message or call was performed.
+
+Specialist validation: 63 Swift tests and release build passed; independent review
+of the probe extension found no blockers. Independent gateway baseline: 42 tests
+passed. Media wire baseline: 23 tests passed. Connector audit: 51 tests across
+seven suites passed. `git diff --check` passed. The prior 978-test npm result is
+historical; the full npm suite was not rerun for this diagnostic-only review.
+
 ## November 17, 2026 — diagnosis and consolidated receipt
 
 ### Diagnosis
@@ -62,7 +509,6 @@ local sharing stopped. Diagnostic code is committed separately from these deploy
 components. Next: use the new refusal reason to isolate the intermittent capture
 failure locally, then arrange one separately authorized end-to-end handset test.
 
-
 ## November 17, 2026 — second streaming-voice demo
 
 One newly authorized call connected after deployment of the bounded audio-burst
@@ -116,7 +562,6 @@ are idle. No native Mac, line/provider, backend, or pairing changes were made.
 Next: identify the native frame-refusal guard locally before another handset demo;
 no broader capture, automatic recovery, or new call was enabled.
 
-
 ## November 17, 2026 — first streaming-voice call and audio correction
 
 One newly authorized demo call reached the phone; the user reported that it hung
@@ -159,7 +604,6 @@ REMOVED while the previous media deployment remained SUCCESS and healthy. The
 successful deployment used the frozen commit's `media/` directory as its root.
 No additional call was placed; a newly authorized handset test remains next.
 
-
 ## Demo preflight completed — November 17, 2026
 
 Both previously recorded verification gaps are resolved. Read-only production
@@ -180,7 +624,6 @@ At this checkpoint the only failing readiness check is local Enable. The user wa
 asked to enable locally after computer-use actions yielded to their interaction.
 No new call has been placed yet; physical latency, screen arrival, prepared zooms,
 annotations and interruption still require the upcoming supervised demo.
-
 
 ## New-project connection verified — November 17, 2026
 
@@ -221,7 +664,6 @@ Next acceptance remains a fresh explicit same-chat ElevenLabs session, deliberat
 line activation and a separately authorized call measuring audio latency, screen
 arrival, prepared zoom/annotations and response-to-continuation. No new call or
 message was placed in this continuation. Existing records and other lines are intact.
-
 
 ## Authorized dedicated voice rollout — November 17, 2026
 
@@ -395,13 +837,13 @@ is a source comparison and local validation, not another deployment or phone cal
 Three specialists independently reviewed Mac capture, connector ownership, and
 voice/media integration. **Experience parity fails the audit.**
 
-| Experience | Argos evidence | Current ClawdTime finding |
-| --- | --- | --- |
-| Responsive voice frontend | The accepted lab trial used ElevenLabs Conversation with Gemini 2.5 Flash / Eleven Flash v2 and streaming PCM. | The demo used finalized speech segments and separate replies from this chat. The planned ElevenLabs adapter is absent. |
-| Voice while work proceeds | Original Argos execution bridge queues work and returns immediately, supplying results asynchronously. The phone lab did not qualify real coding execution. | Existing realtime GPT frontend is gated on an API-managed executor distinct from this chat. Enabling two-way audio alone cannot connect it to this chat's tools. |
-| Prepared focus and overview | Lab tools directly select prepared synthetic camera regions. | Local general camera, transitions and annotations exist; the voice frontend has no camera tools or prepared target catalog. |
-| Real application sharing | Argos lab was synthetic, not desktop capture. | Local Finder review passed, but the phone attempt failed after its first frame. Repeated native stream-stop failure is reproduced; diagnostics are not a fix. |
-| Duplex/interruption quality | Concurrent audio exists in source; handset interruption quality was not separately confirmed. | The requested combined experience has no physical qualification. Unit tests do not establish perceived latency or visibility. |
+| Experience                  | Argos evidence                                                                                                                                              | Current ClawdTime finding                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Responsive voice frontend   | The accepted lab trial used ElevenLabs Conversation with Gemini 2.5 Flash / Eleven Flash v2 and streaming PCM.                                              | The demo used finalized speech segments and separate replies from this chat. The planned ElevenLabs adapter is absent.                                           |
+| Voice while work proceeds   | Original Argos execution bridge queues work and returns immediately, supplying results asynchronously. The phone lab did not qualify real coding execution. | Existing realtime GPT frontend is gated on an API-managed executor distinct from this chat. Enabling two-way audio alone cannot connect it to this chat's tools. |
+| Prepared focus and overview | Lab tools directly select prepared synthetic camera regions.                                                                                                | Local general camera, transitions and annotations exist; the voice frontend has no camera tools or prepared target catalog.                                      |
+| Real application sharing    | Argos lab was synthetic, not desktop capture.                                                                                                               | Local Finder review passed, but the phone attempt failed after its first frame. Repeated native stream-stop failure is reproduced; diagnostics are not a fix.    |
+| Duplex/interruption quality | Concurrent audio exists in source; handset interruption quality was not separately confirmed.                                                               | The requested combined experience has no physical qualification. Unit tests do not establish perceived latency or visibility.                                    |
 
 Source anchors: integration plan section 5 already requires an ElevenLabs adapter;
 `src/contracts.ts` defines `session.conversation` as `api_managed`;
@@ -491,7 +933,6 @@ credentials, runtime databases, captured media and operational receipts stay out
 of Git. No push was requested. Backend remains live on the same selected line;
 no active call/capture remains. Additional calls require specific permission.
 
-
 ## Authorized deployment and fresh pairing — November 17, 2026
 
 The user explicitly approved deploying ClawdTime and finishing Mac pairing.
@@ -548,7 +989,6 @@ Validation reused the reviewed 950-test/58-file source release, typecheck/build,
 12 preview tests, 3 gateway camera tests and 53 Swift tests. Deployment health,
 exact-line claim, session heartbeat, matching loaded ACLs and permission checks
 were verified after rollout. Changes remain uncommitted and unpushed.
-
 
 November 16, 2026 · Real Finder sharing accepted locally · No FaceTime acceptance
 
@@ -1066,18 +1506,18 @@ source-frame ID and geometry generation. Commands are `focus_region`, `zoom_out`
 pinning suppresses automatic focus, not explicit manual commands or lifecycle loss.
 A pin identifies coordinates, not a semantic object.
 
-| Boundary | Implemented bound |
-| --- | --- |
-| Source pixels | Up to 8192 per axis, 32 million pixels, 2 MiB JPEG; fail instead of silently downscaling |
-| Camera metadata header | At most 2048 characters through authenticated relay |
-| Focus rectangles | Finite normalized source coordinates, minimum width/height 0.01, wholly within source |
-| Animation | 0–1500 ms, default 450 ms; output renders at 15 fps for camera selections |
-| Source polling | Existing maximum 5 fps; not full-motion video qualification |
-| Annotations | At most 16, plain text up to 160 UTF-16 units, TTL 100–10000 ms |
-| Mutation rate | At most 20 accepted commands/second |
-| Command receipts | Last 256 fingerprints/metadata; old revisions reject evicted duplicate commands |
-| Freshness | Existing two-second source/policy limit; short lease/session checks remain authoritative |
-| Output | 1280×720; aspect-preserving crop/letterbox, reserved header and caption/context footer |
+| Boundary               | Implemented bound                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------- |
+| Source pixels          | Up to 8192 per axis, 32 million pixels, 2 MiB JPEG; fail instead of silently downscaling |
+| Camera metadata header | At most 2048 characters through authenticated relay                                      |
+| Focus rectangles       | Finite normalized source coordinates, minimum width/height 0.01, wholly within source    |
+| Animation              | 0–1500 ms, default 450 ms; output renders at 15 fps for camera selections                |
+| Source polling         | Existing maximum 5 fps; not full-motion video qualification                              |
+| Annotations            | At most 16, plain text up to 160 UTF-16 units, TTL 100–10000 ms                          |
+| Mutation rate          | At most 20 accepted commands/second                                                      |
+| Command receipts       | Last 256 fingerprints/metadata; old revisions reject evicted duplicate commands          |
+| Freshness              | Existing two-second source/policy limit; short lease/session checks remain authoritative |
+| Output                 | 1280×720; aspect-preserving crop/letterbox, reserved header and caption/context footer   |
 
 Source content changes conservatively clear marks/context. Geometry changes clear
 camera focus/pinning/freeze state as well. Duplicate mutations cannot extend TTL
@@ -1122,21 +1562,21 @@ host tools under existing ownership; camera support does not attest those tools.
 
 ## Validation actually run
 
-| Command/check | Result |
-| --- | --- |
-| Initial `npm run check` | Passed: typecheck, 872 tests / 55 files, build |
-| Final `npm run check` | Passed: typecheck, 901 tests / 58 files, build |
-| Backend camera + control/execution/presentation regression | 63 tests / 4 files passed, including 20 new camera integration cases |
-| Focused connector/MCP/JSONL regression | 33 tests / 6 files passed, including real stdio MCP against a synthetic HTTP fixture |
-| `npm run preview:camera -- --smoke` | Passed complete local connector/API/policy/gateway path and fake CUA claim→observe→act→observe→release |
-| `npm run test:camera:browser` | Passed focus, marks/context, pause/resume, clear, Stop/no stale-image restoration; zero page script errors |
-| `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'` | 319 run: 306 passed, 13 optional dependency skips |
-| `media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'` | 37 passed |
-| `python3 -m unittest discover -s mac/scripts -p 'test_*.py'` | 21 passed |
-| `cd mac && swift test` | 47 passed |
-| `cd mac && ./scripts/package.sh` | Release build and ad-hoc signing passed; not installed or notarized |
-| Focused Python camera checks after final validation changes | 11 passed |
-| `git diff --check` | Passed |
+| Command/check                                                           | Result                                                                                                     |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Initial `npm run check`                                                 | Passed: typecheck, 872 tests / 55 files, build                                                             |
+| Final `npm run check`                                                   | Passed: typecheck, 901 tests / 58 files, build                                                             |
+| Backend camera + control/execution/presentation regression              | 63 tests / 4 files passed, including 20 new camera integration cases                                       |
+| Focused connector/MCP/JSONL regression                                  | 33 tests / 6 files passed, including real stdio MCP against a synthetic HTTP fixture                       |
+| `npm run preview:camera -- --smoke`                                     | Passed complete local connector/API/policy/gateway path and fake CUA claim→observe→act→observe→release     |
+| `npm run test:camera:browser`                                           | Passed focus, marks/context, pause/resume, clear, Stop/no stale-image restoration; zero page script errors |
+| `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`   | 319 run: 306 passed, 13 optional dependency skips                                                          |
+| `media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'` | 37 passed                                                                                                  |
+| `python3 -m unittest discover -s mac/scripts -p 'test_*.py'`            | 21 passed                                                                                                  |
+| `cd mac && swift test`                                                  | 47 passed                                                                                                  |
+| `cd mac && ./scripts/package.sh`                                        | Release build and ad-hoc signing passed; not installed or notarized                                        |
+| Focused Python camera checks after final validation changes             | 11 passed                                                                                                  |
+| `git diff --check`                                                      | Passed                                                                                                     |
 
 Tests cover malformed/nonfinite geometry, Retina and negative origins, window
 metadata, letterboxing, smooth supersession, pinning, receipt/rate/count/text/TTL

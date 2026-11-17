@@ -19,6 +19,7 @@ struct HelperStatus: Codable {
   let presentationVersion: Int
   let textControlVersion: Int
   let cameraVersion: Int
+  let livePresentationVersion: Int
   let localEnableGeneration: Int
 }
 
@@ -283,7 +284,7 @@ struct HelperStatus: Codable {
             historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
             panelCommand: controlPanel.command,
             retiredPanelCommands: controlPanel.retiredCommands, presentationVersion: 1,
-            textControlVersion: 1, cameraVersion: 1, localEnableGeneration: policy.localEnableGeneration))
+            textControlVersion: 1, cameraVersion: 1, livePresentationVersion: 1, localEnableGeneration: policy.localEnableGeneration))
       }
       if request.method == "POST", request.path == "/v1/text-grants" {
         let grant = try decode(TextControlGrant.self, request.body)
@@ -350,6 +351,27 @@ struct HelperStatus: Codable {
         throw HelperError(404, "Unknown route.")
       }
       let leaseId = parts[2]
+      if request.method == "POST", parts.count == 5, parts[3] == "presentation", parts[4] == "resolve" {
+        let value = try LeasePresentationRequest.decode(request.body, now: Date().timeIntervalSince1970 * 1000)
+        let lease = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
+        guard value.expected.leaseId == leaseId, value.matches(lease, now: Date()), ledger.unresolvedActionCount == 0,
+          let native = value.nativeRequest(now: Date().timeIntervalSince1970 * 1000) else { throw HelperError(409, "presentation_authority_unavailable") }
+        let generation = policy.generation
+        let resolver = NativeTargetResolver()
+        guard let resolved = resolver.resolve(native) else { throw HelperError(409, resolver.refusalReason) }
+        let observation = resolver.observation(resolved.2, app: resolved.0, window: resolved.1, lifetime: resolved.3)
+        guard value.processIdentity.map({ observation["processIdentity"] as? String == $0 }) ?? true,
+          processLifetime(resolved.0) == resolved.3,
+          ["appActive","windowFocused","windowOnScreen"].allSatisfy({ observation[$0] as? Bool == true }),
+          resolver.available(native) else { throw HelperError(409, "presentation_target_changed") }
+        // No await/effect occurs here. All locally retained authority is checked
+        // again; request/cursor authority is owned by the authenticated backend.
+        let current = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
+        guard policy.generation == generation, value.matches(current, now: Date()), ledger.unresolvedActionCount == 0 else {
+          throw HelperError(409, "presentation_authority_unavailable")
+        }
+        return HTTPResponse(headers: ["Cache-Control":"no-store"], body: try JSONSerialization.data(withJSONObject: observation))
+      }
       if parts.count == 5, parts[3] == "actions", request.method == "GET" {
         return try .json(ledger.get(parts[4], leaseId: leaseId))
       }
@@ -473,20 +495,44 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
-      let cameraModes = ["--camera-list", "--camera-frame", "--camera-probe", "--camera-check", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      if args.contains("--preview-presentation-resolver") {
+        guard args.count == 2 else { throw HelperError(400, "Invalid read-only resolver arguments.") }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        PreviewPresentationResolver().run()
+        application.run()
+        return
+      }
+      if args.contains("--preview-native-executor") {
+        guard args.count == 2 else { throw HelperError(400, "Invalid native preview arguments.") }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        PreviewNativeExecutor().run()
+        application.run()
+        return
+      }
+      let cameraModes = ["--camera-list", "--camera-frame", "--camera-stream", "--camera-probe", "--camera-check", "--camera-local-status", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
       if args.contains(where: { $0.hasPrefix("--camera-") && !cameraModes.contains($0) }) {
         throw HelperError(400, "Unsupported camera development mode; rebuild the development helper.")
       }
       if cameraModes.contains(where: args.contains) {
-        let allowed = Set(cameraModes + ["--surface", "--query"])
-        guard args.dropFirst().allSatisfy({ allowed.contains($0) || $0.hasPrefix("{") }),
+        let probeLimits = try CameraProbeLimits(arguments: args)
+        let allowed = Set(cameraModes + ["--surface", "--query", "--probe-seconds"])
+        guard args.indices.dropFirst().allSatisfy({ allowed.contains(args[$0]) || args[$0].hasPrefix("{") || args[$0 - 1] == "--probe-seconds" }),
           cameraModes.filter(args.contains).count == 1 else { throw HelperError(400, "Invalid camera preview arguments.") }
         let application = NSApplication.shared
         application.setActivationPolicy(.prohibited)
         Task { @MainActor in
           do {
             let capture = ScreenCapture()
-            if args.contains("--camera-list") {
+            if args.contains("--camera-local-status") {
+              guard args.count == 2 else { throw HelperError(400, "Local status takes no target arguments.") }
+              let refusal = LocalSessionGuard().refusal
+              let value: [String: Any] = ["sessionAvailable": refusal == nil,
+                "sessionReason": refusal?.rawValue ?? "available", "screenPermission": CGPreflightScreenCaptureAccess(),
+                "accessibilityPermission": AXIsProcessTrusted()]
+              print(String(data: try JSONSerialization.data(withJSONObject: value), encoding: .utf8)!)
+            } else if args.contains("--camera-list") {
               print(String(data: try JSONEncoder().encode(await capture.cameraSurfaces()), encoding: .utf8)!)
             } else if args.contains("--camera-find-window") || args.contains("--camera-inspect-query") {
               guard let index = args.firstIndex(of: "--query"), index + 1 < args.count,
@@ -503,6 +549,10 @@ struct HelperStatus: Codable {
               guard let index = args.firstIndex(of: "--surface"), index + 1 < args.count,
                 let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Explicit --surface JSON required.") }
               let surface = try JSONDecoder().decode(CameraSurface.self, from: bytes)
+              if args.contains("--camera-stream") {
+                try await CameraDisplayStream().run(surface)
+                return
+              }
               if args.contains("--camera-check") {
                 // Run current exact-target guards without starting a capture.
                 _ = try await capture.cameraTarget(surface)
@@ -517,30 +567,30 @@ struct HelperStatus: Codable {
                 // Explicit development-only capture of the same chosen surface.
                 // Bounded count/runtime, no configuration, listener or pixel output.
                 let deadline = DispatchWorkItem {
-                  fputs("Camera probe stopped at its 35-second development deadline.\n", stderr)
+                  fputs("Camera probe stopped at its \(probeLimits.processDeadlineSeconds)-second development deadline.\n", stderr)
                   exit(2)
                 }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 35, execute: deadline)
+                DispatchQueue.global().asyncAfter(deadline: .now() + Double(probeLimits.processDeadlineSeconds), execute: deadline)
                 defer { deadline.cancel() }
                 guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
                 _ = try await capture.cameraTarget(surface, initial: true)
-                let started = Date()
+                let started = ProcessInfo.processInfo.systemUptime
                 var frames = 0
                 do {
-                  while frames < 120 && Date().timeIntervalSince(started) < 30 {
+                  while frames < probeLimits.maxFrames && ProcessInfo.processInfo.systemUptime - started < Double(probeLimits.seconds) {
                     guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
-                    let frameStarted = Date()
+                    let frameStarted = ProcessInfo.processInfo.systemUptime
                     _ = try await capture.cameraFrame(surface)
                     guard LocalSessionGuard().available else { throw CaptureRefusal(.authorityChanged) }
-                    guard Date().timeIntervalSince(frameStarted) < 2 else { throw CaptureRefusal(.frameStale) }
+                    guard ProcessInfo.processInfo.systemUptime - frameStarted < 2 else { throw CaptureRefusal(.frameStale) }
                     frames += 1
                     try await Task.sleep(nanoseconds: 200_000_000)
                   }
                 } catch {
-                  print("{\"frames\":\(frames),\"completed\":false,\"elapsedMs\":\(Int(Date().timeIntervalSince(started) * 1000))}")
+                  print("{\"frames\":\(frames),\"completed\":false,\"elapsedMs\":\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))}")
                   throw error
                 }
-                print("{\"frames\":\(frames),\"completed\":true,\"elapsedMs\":\(Int(Date().timeIntervalSince(started) * 1000))}")
+                print("{\"frames\":\(frames),\"completed\":true,\"elapsedMs\":\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))}")
                 exit(0)
               }
               let started = Date()

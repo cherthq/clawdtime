@@ -60,16 +60,17 @@ struct CapturedFrame {
 
 @MainActor final class LocalSessionGuard {
   var forcedUnavailable = false
-  var available: Bool {
-    guard !forcedUnavailable, let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-      session[kCGSessionOnConsoleKey as String] as? Bool == true,
-      session[kCGSessionLoginDoneKey as String] as? Bool == true
-    else { return false }
+  var refusal: LocalSessionRefusal? {
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     // macOS also exposes lock state here on supported builds; distributed lock
     // notifications below disarm immediately. Physical lock acceptance is
     // required for each installed OS; session activity alone is insufficient.
-    return session["CGSSessionScreenIsLocked"] as? Bool != true
+    return LocalSessionRefusal.evaluate(present: session != nil, forcedUnavailable: forcedUnavailable,
+      onConsole: session?[kCGSessionOnConsoleKey as String] as? Bool,
+      loginDone: session?[kCGSessionLoginDoneKey as String] as? Bool,
+      locked: session?["CGSSessionScreenIsLocked"] as? Bool)
   }
+  var available: Bool { refusal == nil }
 }
 
 @MainActor func postInput(_ action: InputAction, displayId: UInt32, surfaceBounds: CGRect? = nil) throws {

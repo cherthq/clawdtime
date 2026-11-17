@@ -1,4 +1,7 @@
-import { presentationReferenceSchema, type PresentationReference } from "../camera-contracts.js";
+import {
+  presentationReferenceSchema,
+  type PresentationReference,
+} from "../camera-contracts.js";
 import { z } from "zod";
 import type { ClawdTime } from "../attention/service.js";
 import { DomainError } from "../attention/service.js";
@@ -23,6 +26,7 @@ export const executionTransition = z
   .strict();
 export const localPolicySchema = z.object({
   cameraVersion: z.literal(1).optional(),
+  livePresentationVersion: z.literal(1).optional(),
   controlPolicy: z.enum([
     "view_only",
     "agent_tools_only",
@@ -75,7 +79,12 @@ export class ExecutionCoordinator {
       requestId: string,
       expectedCursor?: number,
     ) => void,
-    private readonly cameraGuard?: (token: string, requestId: string, frameId: string, reference?: PresentationReference) => Promise<void>,
+    private readonly cameraGuard?: (
+      token: string,
+      requestId: string,
+      frameId: string,
+      reference?: PresentationReference,
+    ) => Promise<void>,
   ) {
     for (const e of service.store.all<ExecutionOwnership>("execution"))
       if (e.executor !== "none" && e.state !== "uncertain")
@@ -188,8 +197,14 @@ export class ExecutionCoordinator {
     const correlation = this.control.timing.attempt(requestId);
     this.control.timing.record(requestId, "ownership_started", correlation);
     try {
-      if (input.executor === "clawdtime" && s.screenCamera?.surface.kind === "window")
-        throw new DomainError(409, "Selected-window fallback input is unavailable until exact hit-target qualification.");
+      if (
+        input.executor === "clawdtime" &&
+        s.screenCamera?.surface.kind === "window"
+      )
+        throw new DomainError(
+          409,
+          "Selected-window fallback input is unavailable until exact hit-target qualification.",
+        );
       if (input.executor !== "none")
         this.inputGuard?.(token, requestId, input.expectedCursor);
       const before = this.status(token, requestId);
@@ -473,10 +488,22 @@ export class ExecutionCoordinator {
       throw new DomainError(403, "Local fallback policy changed.");
     const current = this.check(token, requestId, input.epoch);
     if (input.presentation && input.action.kind === "type")
-      throw new DomainError(400, "Presentation coordinates require a point action.");
-    if ((input.presentation || current.s.screenCamera) && !this.service.store.get<ActionReceipt>("action", input.actionId)) {
-      if (!this.cameraGuard) throw new DomainError(409, "Camera input validation unavailable.");
-      await this.cameraGuard(token, requestId, input.frameId, input.presentation);
+      throw new DomainError(
+        400,
+        "Presentation coordinates require a point action.",
+      );
+    if (
+      (input.presentation || current.s.screenCamera) &&
+      !this.service.store.get<ActionReceipt>("action", input.actionId)
+    ) {
+      if (!this.cameraGuard)
+        throw new DomainError(409, "Camera input validation unavailable.");
+      await this.cameraGuard(
+        token,
+        requestId,
+        input.frameId,
+        input.presentation,
+      );
       this.check(token, requestId, input.epoch);
     }
     return this.control.act(

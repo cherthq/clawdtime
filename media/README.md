@@ -189,6 +189,23 @@ the helper because independent window capture can show content beneath another a
 exact native hit-target qualification remains pending. Display fallback retains the
 existing click/type/scroll path. No camera command submits input.
 
+Camera commands may additionally carry the observed `contentRevision`. This lets
+a recently observed frame remain a presentation reference when a newer frame has
+identical content and geometry. The camera retains at most 32 metadata-only frame
+references, each younger than two seconds by capture time and monotonic residence.
+Content/geometry changes, even changing away and back, and lifecycle clearing
+invalidate targeting history. Only `clear` and `overview` may use a recent known
+reference across content-only changes: its supplied content revision must match
+the actual observed frame, its geometry/source must still match, and the current
+source and presentation revision must remain valid. These operations remove marks
+or return to the authorized overview; they never use an old target rectangle.
+Their geometry-only index shares the same maximum 32 metadata records, retains
+original ages, and clears on geometry/source/lifecycle changes. Overlay Clear
+retains only the current source reference. Omitting the field preserves exact-current-frame behavior;
+paused views and input coordinate mapping retain their strict existing references.
+The optional field participates in command idempotency, and never permits a retry
+or automatically substitutes a different target.
+
 Local preview, without credentials or calls:
 
 ```sh
@@ -266,3 +283,154 @@ Stop removes control eligibility. The original agent's native tools must obtain
 exclusive broker ownership, observe the exact window through their own fresh native
 state, perform one authorized action, verify the UI separately, and release ownership.
 No installed helper/service configuration or FaceTime line is changed by this mode.
+
+### Local selected-display stream and cadence measurements
+
+An explicit `displayStream: true` in preview stdin configuration, or CLI
+`--display-stream`, opts an **actual display** into one persistent development
+capture process. Window selection refuses this option. Existing actual-window
+snapshot capture and production helper/media defaults remain unchanged.
+
+```sh
+swift build --package-path mac
+media/.venv/bin/python media/camera_preview.py --mode actual --display-stream \
+  --surface '{"kind":"display","id":"EXACT_DISPLAY_ID","displayId":123}'
+```
+
+Replace both IDs with the same explicitly selected display returned by metadata
+discovery. This selection exposes all visible content on that display; it never
+widens a previous window selection. Capture remains off until local Start. Keep
+the preview browser on a different display or hidden to avoid recapturing its own
+output; the native Stop/preview Stop controls must remain reachable.
+
+The local targets are `sourceFps:15` and `renderFps:30` (CLI `--source-fps` and
+`--render-fps`). They are caps/targets, **not measured achieved rates**. Source
+requests still traverse the real local gateway/controller and its authorization
+checks; encoding, polling and rendering costs reduce throughput. Local source
+cadence is bounded to 1–15, browser rendering to 1–30. Production defaults retain
+five source requests/second and 15-fps camera output. The browser image fetch loop
+is independent of metadata/control polling, with only one image request in flight.
+Local rendering/JPEG encoding uses one worker with a detached presentation
+snapshot and immutable source reference, keeping capture/Stop handling responsive.
+Concurrent render requests are refused rather than queued; cancellation holds the
+slot until its worker finishes. Stop, policy expiry, source age, authority generation
+and presentation revision are rechecked before returning bytes. No late worker
+result can restore a stopped or changed presentation. Production rendering remains
+synchronous with the same resampling and pixels.
+
+Authenticated `GET /preview/metrics` reports only counts/timings: source distinct
+delivered frames and elapsed rate, mean pipe-read latency, current original source
+age, image render count/rate and mean render cost. Rendered images count HTTP
+responses generated, not browser paints or handset frames. Distinct delivered
+source frames are not native callback counts. Static scenes may have low distinct
+cadence while their same-display screenshot refreshes remain fresh. No pixels,
+window names, text, tokens or audio enter these metrics.
+
+Native transport retains one timestamped source sample and bounded pipes; idle
+samples are never restamped. Stop immediately clears local presentation, retires
+the child, and sends one existing authenticated `screen-stopped` callback to an
+associated local backend. Its receipt distinguishes acknowledged/unknown callback
+outcomes; unknown notifications are not retried. An acknowledged callback lets the
+backend close broker ownership as well as preview capture. Native input remains separately coordinated and actual
+preview fallback input stays unavailable.
+
+Isolated coverage (no screen capture or native input):
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_preview_stream.py'
+media/.venv/bin/python -m unittest discover -s media -p 'test_display_preview.py'
+media/.venv/bin/python -m unittest discover -s media -p 'test_camera_preview.py'
+swift test --package-path mac
+```
+
+### Explicit local native activation rehearsal
+
+`nativePresentation:true` is a separate preview capability, requiring actual
+selected-display capture, `nativeControl:true`, an authenticated literal-loopback
+backend, a distinct backend-only `nativePresentationToken`, and an absolute
+`nativeReceiptPath` in an existing owner-only directory. The receipt file is
+owner-only and persists after preview cleanup. This does not enable production
+fallback input. Click/type/scroll are not exposed by this capability.
+
+The browser can read `/preview/native/status` and submit only a prepared operation
+ID to `/preview/native/execute`. The backend prepares and journals the immutable
+operation; `/sessions/:id/native/qualify`, `/execute` and `/receipts/:operationId`
+require the separate host credential and reject browser Origin headers. The host
+checks its own live camera/Stop and exact native selection before and after asking
+the broker for scoped authority. The inherited native pipe consumes a fresh exact
+target token once for activation or AXRaise. Each effect has a durable reservation
+before pipe dispatch. Duplicate requests return the existing result; timeout,
+cancellation, stopped capture and uncertain completion never cause retries.
+
+Receipts distinguish rejected, returned, verified and uncertain results. A verified
+result requires independent app-active, exact-window-focused and on-screen evidence;
+activation's return value alone is insufficient. Unknown native results do not carry
+terminal evidence. This mode neither grants screen permissions nor circumvents
+native tool target restrictions. Physical acceptance must be led through the
+prepared-operation browser control, with capture and exclusive native ownership
+still valid; unit tests do not establish OS foregrounding success.
+
+For selected-display refusals, `/preview/metrics` may additionally expose
+`source.failureDiagnostic.authorityStage`: fixed session availability, permission,
+or local-stream lifecycle categories. Unknown values and raw native messages are
+not forwarded. A metadata-only local status check describes its observation time;
+it cannot establish that an earlier transient refusal did not occur.
+
+### Prepared live framing and annotations
+
+The local backend-only `/sessions/:id/native/present` route accepts a complete
+prepared scene presentation, its broker-bound fingerprint, a window-relative focus
+rectangle and optional annotation. It generates camera frame references internally.
+Authority requires owner-none/idle, exact current session/lease/epoch/cursor/display
+and the current immutable prepared scene. The original camera command and input
+reference rules remain unchanged. A persistent metadata-only receipt reserves each
+command before work; duplicate IDs return their original outcome, including unknown
+outcomes, without reapplying presentation or extending its lifetime.
+
+Two read-only target observations bracket the selected source frame's original
+capture timestamp and must agree on exact window, process lifetime and geometry.
+The final authority check and staged focus/annotation transaction run under the
+source frame lock. Pin/paused state, stale frames or any failed command refuse the
+whole transaction. Metadata is copied for staging; source pixels remain immutable
+and are not duplicated or retained in receipts.
+
+Only this new target-bound presentation may survive content-only frame changes.
+Its read-only monitor rechecks target identity, foreground/focus/on-screen state and
+broker authority before and after native reads. Rendering requires a successful
+witness no older than 250 ms using its original observation time, not reply time.
+Movement, lost focus/authority, monitor failure, Stop or the monotonic three-second
+lifetime clears both focus/motion and marks and increments camera revision, so a
+late rendered snapshot cannot publish old targeting. It never re-anchors or retries
+an expired presentation. Ordinary marks retain their content-change invalidation.
+
+This is bounded observational evidence: a transient move away and back between
+metadata observations may go undetected. It does not establish atomic OS geometry
+or create input authority. Physical zoom/annotation walkthrough acceptance is
+separate from the previously qualified activation-only current-display rehearsal.
+
+### Gated production target presentation
+
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED=false` is the default. Matched backend,
+media, gateway and helper sources add a read-only lease-bound resolver and
+prepared zoom/annotation transactions. They use the existing selected-display
+snapshot source (five requests/second ceiling, 15 fps media publication), not the
+experimental preview stream. The production routes never activate apps or send
+OS input; the original chat's separately owned native tools retain that job.
+
+The helper capability `livePresentationVersion: 1` passes through readiness only
+for an authorized attached display; media strips it when the gate is off. Initial
+qualification rechecks backend authority before and after remote metadata. A
+presentation brackets its current captured frame with matching native witnesses,
+then commits focus/marks together. Original timestamps and the 150 ms final
+callback, 200 ms monitor, 250 ms render-witness and three-second overlay budgets
+are unchanged over the network. Delay/skew/Stop/ownership or window changes
+refuse or clear the presentation; no restamping, re-anchoring or automatic retry.
+An undetected move away and back between observations remains an explicit limit.
+
+Namespaced `presentation_receipts` persist metadata/hash-only accepted, rejected
+and uncertain outcomes in the existing media SQLite ledger, including across
+Stop/restart. The encrypted online backup copies the entire SQLite database;
+its verifier recognizes this optional table while retaining old-backup
+compatibility. Unknown receipts are never deleted or replayed during upgrade.
+Remote timing and outgoing-call video remain unqualified; keep the gate off until
+matched artifacts and physical remote acceptance are recorded.

@@ -11,6 +11,14 @@ import type { ControlCoordinator } from "./coordinator.js";
 import type { AgentSession, ControlLease } from "../contracts.js";
 import { localPolicySchema, type PolicyDevice } from "./execution.js";
 
+/** A successful renewal extends validity without changing the bound authority. */
+function sameCameraAuthority(before: ControlLease, after: ControlLease) {
+  return (
+    after.expiresAt >= before.expiresAt &&
+    isDeepStrictEqual({ ...before, expiresAt: after.expiresAt }, after)
+  );
+}
+
 /** Camera-only operations reuse viewing authority; they never acquire an executor. */
 export class ScreenCamera {
   constructor(
@@ -18,7 +26,7 @@ export class ScreenCamera {
     readonly control: ControlCoordinator,
     readonly enabled = false,
   ) {}
-  private context(token: string | AgentSession, requestId: string) {
+  context(token: string | AgentSession, requestId: string) {
     const session =
       typeof token === "string"
         ? this.service.authenticateSession(token)
@@ -74,7 +82,7 @@ export class ScreenCamera {
     );
     const after = this.context(token, requestId);
     if (
-      !isDeepStrictEqual(before.lease, after.lease) ||
+      !sameCameraAuthority(before.lease, after.lease) ||
       local.cameraVersion !== 1 ||
       !local.armed ||
       !local.available ||
@@ -115,7 +123,7 @@ export class ScreenCamera {
     const before = await this.ready(token, requestId);
     const raw = await this.control.device.cameraStatus!(before.lease);
     const after = this.context(token, requestId);
-    if (!isDeepStrictEqual(before.lease, after.lease))
+    if (!sameCameraAuthority(before.lease, after.lease))
       throw new DomainError(409, "Camera authority changed.");
     return this.validate(raw, after.lease);
   }
@@ -128,7 +136,7 @@ export class ScreenCamera {
     );
     const after = this.context(token, requestId);
     if (
-      !isDeepStrictEqual(before.lease, after.lease) ||
+      !sameCameraAuthority(before.lease, after.lease) ||
       receipt.commandId !== command.commandId
     )
       throw new DomainError(

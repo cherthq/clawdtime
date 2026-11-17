@@ -94,6 +94,7 @@ const registration = z
         nativeCancellation: z.boolean().optional(),
         voiceInteractionVersion: z.literal(1).optional(),
         screenCameraVersion: z.literal(1).optional(),
+        livePresentationVersion: z.literal(1).optional(),
       })
       .strict(),
   })
@@ -508,6 +509,19 @@ export class ClawdTime {
       throw new DomainError(
         409,
         "Screen camera requires an explicit version 2 surface on the paired display and matching capability.",
+      );
+    if (
+      value.capabilities.livePresentationVersion === 1 &&
+      (value.protocolVersion !== 2 ||
+        value.screenCamera?.version !== 1 ||
+        value.screenCamera.surface.kind !== "display" ||
+        value.capabilities.screenCameraVersion !== 1 ||
+        value.conversation !== undefined ||
+        value.documentAccess !== undefined)
+    )
+      throw new DomainError(
+        409,
+        "Live presentation requires a fresh same-chat version 2 display camera session.",
       );
     if (
       value.voiceFrontend &&

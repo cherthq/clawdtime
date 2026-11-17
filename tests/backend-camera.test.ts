@@ -237,6 +237,7 @@ async function cameraFixture(
     frameOverride: Partial<Frame> = {};
     readinessOverride: Record<string, unknown> = {};
     receiptCommandId?: string;
+    beforeReadiness?: () => void | Promise<void>;
     beforeStatus?: () => void | Promise<void>;
     beforeCommand?: () => void | Promise<void>;
     async frame(lease: ControlLease): Promise<Frame> {
@@ -280,6 +281,7 @@ async function cameraFixture(
       return result;
     }
     async readiness() {
+      await this.beforeReadiness?.();
       return {
         cameraVersion: this.cameraVersion,
         controlPolicy: "agent_tools_with_fallback",
@@ -449,6 +451,62 @@ const focus = {
 };
 
 describe("screen camera authenticated API and existing viewing lease", () => {
+  it.each(["readiness", "status", "command"] as const)(
+    "accepts an unchanged active viewing lease renewed during camera %s",
+    async (stage) => {
+      const f = await cameraFixture();
+      const original = f.store.all<ControlLease>("lease")[0]!;
+      f.advance(8500);
+      const renew = async () => {
+        await f.viewing.tick();
+        const current = f.store.get<ControlLease>("lease", original.id)!;
+        expect(current.expiresAt).toBeGreaterThan(original.expiresAt);
+        expect({ ...current, expiresAt: original.expiresAt }).toEqual(original);
+      };
+      if (stage === "readiness") f.device.beforeReadiness = renew;
+      if (stage === "status") f.device.beforeStatus = renew;
+      if (stage === "command") f.device.beforeCommand = renew;
+      const response = await f.api(stage === "command" ? focus : undefined);
+      expect(response.status).toBe(200);
+      expect(f.device.commands).toHaveLength(stage === "command" ? 1 : 0);
+      expect(f.device.inputs).toHaveLength(0);
+    },
+  );
+
+  it.each(["readiness", "status", "command"] as const)(
+    "still rejects expiry reduction or real authority changes during camera %s",
+    async (stage) => {
+      for (const patch of [
+        (lease: ControlLease) => ({ expiresAt: lease.expiresAt - 1 }),
+        (lease: ControlLease) => ({
+          policyRevision: (lease.policyRevision ?? 0) + 1,
+        }),
+        (lease: ControlLease) => ({
+          executorEpoch: (lease.executorEpoch ?? 0) + 1,
+        }),
+        (_lease: ControlLease) => ({ state: "unknown" as const }),
+      ]) {
+        const f = await cameraFixture();
+        const change = () => {
+          const lease = f.store.all<ControlLease>("lease")[0]!;
+          f.store.put("lease", {
+            ...lease,
+            expiresAt: lease.expiresAt + 1000,
+            ...patch(lease),
+          });
+        };
+        if (stage === "readiness") f.device.beforeReadiness = change;
+        if (stage === "status") f.device.beforeStatus = change;
+        if (stage === "command") f.device.beforeCommand = change;
+        expect(
+          (await f.api(stage === "command" ? focus : undefined)).status,
+        ).toBeGreaterThanOrEqual(400);
+        expect(f.device.commands).toHaveLength(stage === "command" ? 1 : 0);
+        expect(f.device.inputs).toHaveLength(0);
+      }
+    },
+  );
+
   it("forwards a bounded camera command through the exact lease without claiming input ownership", async () => {
     const f = await cameraFixture();
     const response = await f.api();
@@ -491,6 +549,30 @@ describe("screen camera authenticated API and existing viewing lease", () => {
     expect((await old.api()).status).toBe(409);
     expect((await old.api(focus)).status).toBe(409);
     expect(old.device.commands).toHaveLength(0);
+  });
+
+  it("forwards an optional camera content reference without granting input or weakening Stop", async () => {
+    const f = await cameraFixture();
+    const command = { ...focus, contentRevision: "content_1" };
+    expect((await f.api(command)).status).toBe(200);
+    expect(f.device.commands).toEqual([command]);
+    expect(
+      (
+        await f.api({
+          ...command,
+          commandId: "invalid_content",
+          contentRevision: "",
+        })
+      ).status,
+    ).toBe(400);
+    f.store.saveState(`view-stopped:${f.request.id}`, true);
+    expect((await f.api({ ...command, commandId: "after_stop" })).status).toBe(
+      409,
+    );
+    expect(f.device.commands).toHaveLength(1);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
   });
 
   it("rejects a different registered session before contacting the camera", async () => {
@@ -1072,6 +1154,59 @@ describe("selected-window native ownership uses the current host without enablin
     expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
     expect(f.device.leases.size).toBe(0);
     expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("latches an authenticated media Stop during native display ownership without claiming input completion", async () => {
+    const f = await cameraFixture(true, true, displayCamera, true);
+    expect((await f.execution("execution", claim)).status).toBe(200);
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const notify = (leaseId: string) =>
+      f.app.request(`/media/${mediaSessionId(f.request.id)}/screen-stopped`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${"m".repeat(64)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ leaseId, reason: "helper_stopped" }),
+      });
+    expect((await notify("another_surface_lease")).status).toBe(403);
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "working",
+      epoch: 1,
+      viewingStopped: false,
+    });
+
+    expect((await notify(lease.id)).status).toBe(200);
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "uncertain",
+      epoch: 2,
+      viewingStopped: true,
+    });
+    expect(f.store.state(`view-stopped:${f.request.id}`)).toBe(true);
+    expect(await (await f.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    expect((await f.api(focus)).status).toBe(409);
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 2,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(409);
+    await f.viewing.tick();
+    await f.viewing.tick();
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+    expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+    expect(f.device.leases.size).toBe(0);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
   });
 
   it("does not acknowledge native ownership if Stop wins during helper synchronization", async () => {

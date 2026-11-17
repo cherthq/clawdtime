@@ -137,7 +137,7 @@ class DeviceRelay:
         return socket
 
     async def request(self,method,path,body=None,device=None):
-        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))',path) or ('/devices/' in path and method not in (('POST',) if path.endswith(('/panel','/text-grants')) else ('GET','DELETE') if '/text-grants/' in path else ('GET',))):
+        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|presentation/resolve|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))',path) or (path.endswith('/presentation/resolve') and method!='POST') or ('/devices/' in path and method not in (('POST',) if path.endswith(('/panel','/text-grants')) else ('GET','DELETE') if '/text-grants/' in path else ('GET',))):
             if not self.connected:raise ConnectionError('Device gateway unavailable')
             raise ValueError('Invalid relay operation')
         socket=self.route(path,body,device)

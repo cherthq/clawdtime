@@ -35,6 +35,7 @@ from speech_diagnostics import SpeechDiagnostics
 from ledger_backup import encrypted_snapshot
 from lifecycle_diagnostics import LifecycleDiagnostics, CATEGORIES
 from camera_http import camera_request
+from live_presentation import routes as presentation_routes
 from policy import call_only_allowed, capture_allowed, final_transcript, pause_requested, priority_stop_requested, validate_session_id
 
 RATE = 48000
@@ -1493,6 +1494,7 @@ class Service:
             value=json.loads(raw)
             if not isinstance(value,dict) or value.get('deviceId')!=device:raise web.HTTPBadGateway()
             if self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true':value.pop('cameraVersion',None)
+            if self.env.get('CLAWDTIME_LIVE_PRESENTATION_ENABLED')!='true' or self.env.get('CLAWDTIME_SCREEN_CAMERA_ENABLED')!='true' or not suffix:value.pop('livePresentationVersion',None)
             return web.json_response(value,headers={'Cache-Control':'no-store'})
         async def device_panel(request):
             device=request.match_info['device']
@@ -1577,6 +1579,7 @@ class Service:
         app.router.add_get('/sessions/{id}/screen',screen_status)
         app.router.add_get('/sessions/{id}/screen/frame',screen_frame)
         app.router.add_post('/sessions/{id}/screen/actions',self.device_actions.post)
+        presentation_routes(self,app)
         app.router.add_get('/sessions/{id}/screen/actions/{action_id}',self.device_actions.get)
         app.router.add_post('/sessions/{id}/{action}',self.action)
         app.on_startup.append(self.start)

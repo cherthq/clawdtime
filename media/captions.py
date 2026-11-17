@@ -445,10 +445,19 @@ class CaptionPublisher:
         use_screen = bool(self.screen and (self.screen.screen_call or self.screen.selection or self.screen.starting))
         revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen,
                     self.document.revision if self.document else None, use_document)
+        camera=getattr(self.screen,'camera',None) if use_screen and not use_document else None
+        camera_revision=camera.status()['revision'] if camera else None
         if revision != self.last_revision or (self.screen and getattr(self.screen,'camera',None)):
             image = self.document.render() if use_document else (self.renderer.camera_overlay(self.screen.render(), snapshot) if use_screen and getattr(self.screen,'camera',None) else self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot))
             self.frame = self.sdk.VideoFrame(WIDTH, HEIGHT, self.sdk.VideoBufferType.RGBA, image.tobytes())
             self.last_revision = revision
+        # Rendering/encoding can itself cross a target witness deadline. Never
+        # publish that expired crop or mark, even on the synchronous renderer.
+        if camera:
+            self.screen.expire()
+            if self.screen.camera is not camera or camera.status()['revision']!=camera_revision:
+                self.frame=None;self.last_revision=None
+                return
         self.source.capture_frame(self.frame)
         if self.screen:
             self.screen.diagnostics.emitted(screen=bool(self.screen.frame))

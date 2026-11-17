@@ -2,6 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { VoicePresentation } from "./control/voice-presentation.js";
 import { voiceEventSchema, voiceCameraSchema } from "./voice-contracts.js";
 import { ScreenCamera } from "./control/camera.js";
+import { LivePresentationCoordinator } from "./control/live-presentation.js";
+import { livePresentationSchema } from "./live-presentation-contracts.js";
 import { timelineFor } from "./transport/conversation-timeline.js";
 import {
   presentationSchema,
@@ -60,6 +62,7 @@ import {
 
 export interface AppOptions {
   screenCameraEnabled?: boolean;
+  livePresentationEnabled?: boolean;
   elevenLabsEnabled?: boolean;
   elevenLabsReadiness?: () => Promise<{
     configured: boolean;
@@ -127,6 +130,11 @@ export function createApp(
   );
   const voicePresentation = new VoicePresentation(service, camera);
   const interruptions = new Interruptions(service);
+  const livePresentation = new LivePresentationCoordinator(service, camera, {
+    enabled: options.livePresentationEnabled === true,
+    revision: (requestId) => human.turns.executionRevision(requestId),
+    assertClear: (requestId) => interruptions.assertClear(requestId),
+  });
   const execution = new ExecutionCoordinator(
     service,
     control,
@@ -1057,19 +1065,56 @@ export function createApp(
       ...owner,
       leases,
       actions,
+      viewingStopped: Boolean(
+        service.store.state(`view-stopped:${owner.requestId}`),
+      ),
       ...human.turns.executionRevision(owner.requestId),
       hold: interruptions.status(owner.requestId),
       nativeCancellation: "cooperative_host_dependent",
     });
   });
-  app.post("/api/attention/:id/conversation/execution", async (c) =>
-    c.json(
+  app.post("/api/attention/:id/conversation/execution", async (c) => {
+    service.status(bearer(c.req.header("authorization")), c.req.param("id"));
+    if (livePresentation.hasUnresolved(c.req.param("id")))
+      throw new DomainError(
+        409,
+        "Presentation outcome unresolved; inspect its receipt before transfer.",
+      );
+    return c.json(
       await execution.transition(
         bearer(c.req.header("authorization")),
         c.req.param("id"),
         await c.req.json(),
       ),
+    );
+  });
+  app.get("/api/attention/:id/conversation/presentation", async (c) =>
+    c.json(
+      await livePresentation.status(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+      ),
     ),
+  );
+  app.post("/api/attention/:id/conversation/presentation", async (c) =>
+    c.json(
+      await livePresentation.present(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+        await c.req.json(),
+      ),
+    ),
+  );
+  app.get(
+    "/api/attention/:id/conversation/presentation/receipts/:commandId",
+    (c) =>
+      c.json(
+        livePresentation.receipt(
+          bearer(c.req.header("authorization")),
+          c.req.param("id"),
+          c.req.param("commandId"),
+        ),
+      ),
   );
   app.post("/api/attention/:id/conversation/voice/prepare", async (c) => {
     const token = bearer(c.req.header("authorization"));
@@ -1403,6 +1448,30 @@ export function createApp(
         "Audio qualification cannot deliver instructions.",
       );
     await next();
+  });
+  app.post("/media/:id/presentation-qualification", async (c) => {
+    if (c.req.header("Origin"))
+      throw new DomainError(403, "Server bridge required.");
+    const { session, request } = mediaContext(c.req.param("id"));
+    const body = z
+      .object({ qualification: z.unknown() })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      livePresentation.qualification(session, request.id, body.qualification),
+    );
+  });
+  app.post("/media/:id/presentation-authority", async (c) => {
+    if (c.req.header("Origin"))
+      throw new DomainError(403, "Server bridge required.");
+    const { session, request } = mediaContext(c.req.param("id"));
+    const body = z
+      .object({ presentation: livePresentationSchema })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      livePresentation.authority(session, request.id, body.presentation),
+    );
   });
   function qualifiedVoice(id: string) {
     const context = mediaContext(id);

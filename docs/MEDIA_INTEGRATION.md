@@ -783,6 +783,43 @@ provider append budget. Context ACKs still do not prove spoken or handset delive
 
 ## Argos camera and annotations (local source)
 
+The November 17 selected-display prototype adds opt-in `displayStream:true` to
+the isolated local preview. A persistent development-only SCK source, bounded
+latest sample and inherited request/response pipes replace per-frame CLI launches
+for this explicit display selection. Local source/render targets can reach 15/30
+fps; actual rates require measurement and do not describe production defaults.
+`GET /preview/metrics` exposes original source age, distinct delivered source rate,
+render response rate and mean costs without content. Preview Stop also issues one
+authenticated backend screen-stopped notification, with acknowledged versus
+unknown outcome recorded and no retry. Installed helper/gateway/media services
+are unchanged by this source prototype. See the [local stream workflow](../media/README.md#local-selected-display-stream-and-cadence-measurements)
+for commands, bounds, measurement meanings and acceptance limits.
+
+### Local physical evidence — November 17, 2026
+
+The coordinating lead completed one selected-display rehearsal with normal
+Finder and TextEdit windows on the current display. Prepared Finder activation,
+TextEdit activation and return to Finder each verified the exact app active,
+window focused and window on-screen, with the outgoing preview inspected.
+The original native CUA tool separately changed/saved one disposable document
+heading and moved one disposable file; UI and filesystem observations confirmed
+the results. The new activation executor did not perform those edits or moves.
+
+| Case | Evidence and limit |
+| --- | --- |
+| Normal windows on current selected display | Activation and outgoing preview passed in this rehearsal. |
+| Original native CUA under current ownership | One document edit/save and one file move verified; no general input capability added to the preview executor. |
+| Off-Space, full-screen, minimized or multiple displays | Not qualified. |
+| Stop and release | Capture stopped cleanly, ownership returned to none/paused and the viewing lease released. |
+| FaceTime, handset delivery or installed services | Not exercised or deployed. |
+
+Across approximately 417 seconds, metadata recorded 5,086 source requests, 3,020
+distinct source samples and 11,186 rendered responses (about 26.82 fps), with no
+source failure. The run was mostly static with some motion; these counts do not
+establish sustained high-motion source cadence, 30 fps delivery or latency bounds.
+All native calls returned. Private audit and durable operation receipts were
+retained; no screen content or runtime identities are included here.
+
 The default-off `CLAWDTIME_SCREEN_CAMERA_ENABLED` gate adds a version-negotiated
 camera to the existing ScreenController/CaptionPublisher. Camera-aware policy uses
 `X-ClawdTime-Camera:1`; unsupported peers cannot receive a selected-window session
@@ -793,7 +830,11 @@ are transient; unknown input receipts retain their existing durable semantics.
 
 The local preview uses the production gateway, source controller, camera handlers
 and compositor with synthetic pixels or an explicitly selected development capture
-source. Its input sink is synthetic and actual mode submits no OS input. Full
+source. Its default input sink is synthetic; actual mode defaults to view-only.
+The separately negotiated `nativePresentation:true` local capability adds only
+prepared app activation and window raise, with a backend-only host credential,
+persistent receipts and fresh native ownership. Actual fallback input still
+refuses before dispatch. Full
 connector/API smoke validation, physical capture coverage and remaining acceptance
 steps are recorded in [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md).
 No FaceTime/live-media acceptance or deployment is implied. See [media README](../media/README.md#general-screen-camera-argos-local-slice)
@@ -802,8 +843,9 @@ for precise limits, preview and cleanup commands.
 For isolated native CUA review, actual preview can advertise `agent_tools_only`
 with explicit `nativeControl: true` and authenticated loopback-backend configuration.
 This lets the real ownership broker coordinate the original agent's native tools
-while media continues to capture only the selected window. Preview input remains
-absent, including a pre-receipt rejection of all actual-mode fallback actions.
+while media continues to capture only the explicitly selected surface. Without
+the separate native-presentation capability, preview input remains absent;
+all actual-mode fallback actions retain their pre-receipt rejection.
 Default actual mode stays view-only. Native-host qualification, native tool results,
 and UI verification belong to the original agent; the media readiness response is
 not proof of those properties. No FaceTime connection or installed-service update is
@@ -826,7 +868,11 @@ to run the current target guards without capturing pixels. Its `captureAvailable
 result means only those target guards passed: it does not validate a lease, local
 session authority, post-capture identity, frame freshness or successful capture.
 The existing `--camera-probe` uses the same explicit surface and checks capture
-for at most 30 seconds/120 frames, returning counts and fixed refusal codes without
+for 30 seconds/120 frames by default; explicit `--probe-seconds 90` permits a
+sustained check beyond the incident's approximately 35-second mark. Durations are
+bounded to 1–120 seconds, at most four times that many frames, with a process
+deadline five seconds later. Runtime/freshness use a monotonic clock. It returns
+counts and fixed refusal codes without
 printing or saving pixels. These development modes neither load installed helper
 configuration nor arm sharing. The diagnostic source and local release build are
 not an installed-helper update. The earlier production native 409's exact guard
@@ -1037,3 +1083,31 @@ evidence yet**. Actual provider schema/config access, audio isolation, audible
 reporting, barge-in/recovery, camera responsiveness during work and cleanup still
 require a separately authorized supervised trial. Local test success is not
 Argos-equivalent handset-experience acceptance.
+
+### Prepared two-app presentation and production staging (November 17)
+
+The coordinating lead completed a local snapshot-only, no-call rehearsal on the
+current selected display: Finder → TextEdit → Finder, three verified native
+activations and three accepted target presentations. Each outgoing preview crop
+and label was visually observed. The entire two-scene plan was prepared first;
+a same-session follow-up plan also completed (two plans, generation four).
+Approximately 157 seconds produced 468 snapshot requests and 3,556 rendered frames
+(about 22.7 fps), without capture failure. Stop ended with no owner, paused work,
+epoch seven and the lease released. Pixels stayed transient. These observations
+qualify normal current-display local preview only; they do not qualify FaceTime,
+remote network budgets, cross-Space/fullscreen/minimized/multi-display behavior.
+
+Production source now reuses that selected-display snapshot transport for a
+separately gated read-only live-presentation capability. It adds no production
+activation/input endpoint. The original chat's authorized native tools still
+handle app switching and work. The helper's scoped readiness version, authenticated
+backend authority, exact lease binding, original timestamps, bounded monitored
+window witness, atomic camera commit and durable namespaced receipts must all
+agree. `CLAWDTIME_LIVE_PRESENTATION_ENABLED` remains false by default; staging
+matched artifacts does not establish physical remote acceptance.
+
+The experimental preview-only persistent stream's `SCStreamErrorDomain -3805`
+application-connection interruption remains unexplained. Snapshot success is not
+reported as a persistent-stream repair. Public macOS cooperative activation also
+cannot guarantee that a target moves from another Space into view. No broader
+capture fallback, forced Space change or automatic action replay is introduced.

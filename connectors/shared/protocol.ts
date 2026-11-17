@@ -11,6 +11,7 @@ export interface ProtocolOptions {
   documentAccess?: AgentSession["documentAccess"];
   screenCamera?: AgentSession["screenCamera"];
   voiceFrontend?: AgentSession["voiceFrontend"];
+  livePresentation?: boolean;
 }
 export function sessionInteraction(
   options: ProtocolOptions,
@@ -28,6 +29,16 @@ export function sessionInteraction(
 export function sessionCapabilities(
   options: ProtocolOptions,
 ): AgentSession["capabilities"] {
+  if (
+    options.livePresentation &&
+    (options.protocolVersion === 1 ||
+      options.screenCamera?.surface.kind !== "display" ||
+      options.conversation ||
+      options.documentAccess)
+  )
+    throw new Error(
+      "Live presentation requires a fresh v2 same-chat selected-display camera session.",
+    );
   if (options.screenCamera && options.protocolVersion === 1)
     throw new Error("Screen camera requires protocol v2.");
   if (
@@ -57,6 +68,9 @@ export function sessionCapabilities(
     sharedSurface: options.sharedSurface ?? false,
     nativeCancellation: options.nativeCancellation ?? false,
     ...(options.screenCamera ? { screenCameraVersion: 1 as const } : {}),
+    ...(options.livePresentation
+      ? { livePresentationVersion: 1 as const }
+      : {}),
     ...(options.protocolVersion === 1
       ? {}
       : { voiceInteractionVersion: 1 as const }),
@@ -76,6 +90,7 @@ export function protocolOptions(
     "native-cancellation",
     "message-updates",
     "screen-camera",
+    "live-presentation",
   ])
     if (flags[key] !== undefined && !["true", "false"].includes(flags[key]!))
       throw new Error(`--${key} must be true or false.`);
@@ -165,6 +180,7 @@ export function protocolOptions(
     );
   const result: ProtocolOptions = {
     protocolVersion,
+    livePresentation: flags["live-presentation"] === "true",
     ...(voiceFrontend
       ? {
           voiceFrontend: {

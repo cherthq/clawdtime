@@ -482,3 +482,22 @@ authority, and clears presentation. It cannot forcibly cancel an unrelated tool
 already running in the agent host; cancellation capability and uncertain outcomes
 must be reported honestly. The isolated native-review readiness policy is not an
 installed-device permission grant or evidence of handset/FaceTime acceptance.
+
+### Current-display activation rehearsal — November 17, 2026
+
+The lead physically verified prepared Finder → TextEdit → Finder activation on
+one selected display, including independent foreground/focus/on-screen checks and
+the outgoing preview. The original native CUA tool separately performed one
+verified disposable document edit/save and file move. Stop left no native owner
+and released the viewing lease. This qualifies normal windows on the current
+display only: off-Space, full-screen, minimized and multiple-display behavior remain
+unqualified. No installed helper, FaceTime path or handset was exercised. The
+[media evidence matrix](MEDIA_INTEGRATION.md#local-physical-evidence--november-17-2026)
+records measured cadence and limits.
+
+Native qualification supports a missing `NSRunningApplication.launchDate` using
+Apple's documented exact-PID `sysctl(KERN_PROC_PID)` process-start metadata; it
+never substitutes a PID or observation time for a process lifetime. Missing or
+changed lifetime evidence still refuses. Fixed qualification diagnostics identify
+media/broker authority, app identity, CG matching or AX candidate-scan stages;
+AX candidate failures do not necessarily identify the exact target as the cause.

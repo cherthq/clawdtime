@@ -1460,3 +1460,225 @@ These include an actual stdio MCP process against a synthetic local HTTP peer,
 immutable surface restart rejection, strict status/command negotiation, no camera
 input, no retry after uncertain writes, and foreground transient-data checks.
 They do not establish real-app capture, OS input or FaceTime acceptance.
+
+## Opt-in live prepared-scene connector — November 17, 2026
+
+The production connector source now exposes one camera-only prepared intent at a
+time. Deployment availability remains separately gated: backend and media require
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED=true`, which defaults off. The connector
+must negotiate `capabilities.livePresentationVersion:1`; camera version 1 alone,
+a listed tool, or the local preview result does not establish availability.
+
+A new same-chat v2 MCP or foreground `setup-session` registration may explicitly
+request it with `--screen-camera true --camera-display DISPLAY_ID
+--live-presentation true`. This requires a selected display, not window-only
+capture, managed execution or a document runner. Omission leaves it off. The
+capability is immutable for the protected run and the server must echo it; an
+unsupported registration is preserved without retrying or silently downgrading.
+`run` refuses this flag because it cannot rewrite the owned MCP configuration.
+
+MCP and foreground JSONL expose these strict commands:
+
+- `live_presentation_status({requestId})` reads the current capability, generation,
+  plan/scene IDs and unresolved command at
+  `GET /api/attention/:id/conversation/presentation`.
+- `present_prepared_scene({requestId,intent})` probes that status, then submits one
+  `POST` at the same route. `intent` contains stable `commandId`, `planId`,
+  `sceneId`, the current `generation`, exact native `window` identity, normalized
+  window-relative `focus:{rect,durationMs?}` and optional
+  `annotation:{kind,text?}`. The server resolves the current target and applies the
+  focus and annotation together; no external saved-frame witness is needed.
+- `live_presentation_receipt({requestId,commandId})` reads
+  `GET /api/attention/:id/conversation/presentation/receipts/:commandId` without
+  reissuing the original command.
+
+An accepted receipt means camera acceptance, not semantic task completion or
+handset visibility. No connector tool here activates an app, edits a file,
+dispatches native input, starts a call, or changes viewing permission. Native
+actions remain with this original agent's qualified tools under exclusive
+execution ownership; release that ownership before presenting. The original
+agent prepares and sequences its scenes. The local composite controller and
+qualified activation adapter below remain separate local APIs.
+
+Every write checks current capability and refuses an unresolved command. A POST
+transport error, malformed result or mismatched identity is conservatively
+unknown, including HTTP errors that could follow a committed camera change.
+Inspect the original receipt; do not retry, replace the command ID, create a new
+session or switch paths to bypass uncertainty. A missing receipt does not prove
+that no effect occurred. Foreground bridge mutations persist only the command
+hash and receipt marker, not labels, focus payloads or native observations. Reuse
+of its JSONL command ID cannot replay the POST; reconciliation uses the explicit
+receipt lookup with the original request and camera command IDs.
+
+Synthetic checks in `tests/connectors-live-presentation.test.ts` and
+`tests/connectors-live-presentation-mcp.test.ts` cover explicit negotiation,
+incompatible registrations, status and receipt identity, unknown results,
+foreground privacy/deduplication and an actual stdio MCP process against a fake
+HTTP peer. They do not establish remote latency, installed media compatibility,
+persistent capture or physical call acceptance. Keep the deployment gate off
+until the lead verifies matching artifacts and the remote freshness budget.
+
+## Local agent-prepared scene controller — November 17, 2026
+
+`connectors/shared/presentation-scenes.ts` supplies an ephemeral
+`PresentationSceneController` for an original agent's display walkthrough. It is
+camera choreography, not a native action executor or a replacement agent. The
+lead-owned `src/presentation-scene-contracts.ts` bounds a plan to twelve scenes:
+exact app/window/process/display identity, title, intent, expected observable
+outcome and optional annotation. Plans remain in memory for at most fifteen
+minutes of use; the controller submits at most 256 camera commands.
+
+Construct it with a plan and three existing request-bound ports:
+`cameraStatus()`, `cameraCommand(command)` and `executionStatus()`. These can use
+`ClawdTimeClient.screenCamera` and `conversationExecution`; the local preview
+uses the same authenticated camera/execution path. Prepared live targets additionally
+require the optional `presentLive(intent)` port described below. The controller never claims
+ownership, invokes native tools, sends speech, registers a session or makes a call.
+
+1. `begin(sceneId)` clears marks and returns to overview. `next()` selects the
+   next planned scene. Both invalidate prior verification immediately, before any
+   awaited reset. Neither performs the scene's intended native action.
+2. The original agent performs authorized native navigation/actions under the
+   ordinary exclusive claim/observe/act/verify/release flow. Input submission is
+   not result verification. Release native ownership before presentation.
+3. `observe()` returns `{generation,sceneId,observedAt,camera}` from fresh camera
+   status. It retains at most eight metadata-only samples for two seconds. The
+   agent verifies the exact native window and result and supplies its current
+   normalized display-relative `windowBounds`; no screenshot is retained.
+4. `present(verification, rect)` requires `resultVerified:true`, the current scene
+   generation, exact planned window, a controller-sampled `sourceFrameId`, and its
+   matching lease/geometry/content. The witness and current source must be fresh;
+   the focus rectangle must fit the observed window bounds. A newer current frame
+   is usable only with unchanged geometry/content/lease. The method focuses with a
+   450 ms transition and optionally adds a three-second annotation. This attestation
+   is the original agent's observation, not automated semantic proof of app state.
+5. `interrupt()` immediately invalidates verification and queues clear/overview
+   after any already-dispatched camera command. It suppresses subsequent annotation
+   and scene steps; it does not claim to cancel an in-flight camera or native action.
+
+Every camera mutation obtains fresh status and checks released, idle execution
+both before and after that read, including epoch/cursor drift, pending delivery,
+hold, Stop and unresolved input. Backend authority remains decisive at dispatch;
+this cooperative preflight does not atomically reserve native input. Source,
+lease, geometry or content changes refuse stale presentation. Read-only `status()`
+reports the phase and any uncertain command ID. A failed/malformed camera write
+blocks further effects with its original ID preserved; no automatic retry,
+replacement command, scene advance or ownership release follows. Exact repeated
+successful `present` returns local state without repeating the camera effect.
+Caller command receipts must likewise prevent replaying `begin`/`next`/`interrupt`.
+`presentObserved(attestation, rect)` combines source sampling and presentation in
+the same runtime to avoid an external tool round trip. It validates the original
+agent's scene/window/result attestation before sampling, then uses the existing
+`observe()` and `present()` checks. The agent's original `observedAt` is never
+refreshed; stale attestations, interruptions and intervening content changes still
+refuse presentation without retrying.
+Scene camera commands include the sampled `contentRevision` so the camera may
+validate a bounded recent same-content frame when capture advances before the
+write arrives. This does not relax native/fallback input frame requirements and
+does not retry a failed write. Failure state exposes only the generated command
+ID, fixed operation name and an allowlisted HTTP status, never upstream exception
+text; a status alone does not prove that a rejected write had no effect.
+
+Validation: `npx vitest run tests/connectors-presentation-scenes.test.ts` covers
+source/witness binding, content/geometry/lease changes, execution races, Stop,
+interruptions, unknown writes, replay prevention and bounds. Synthetic tests do
+not establish native UI results or handset presentation quality.
+
+## Qualified local native presentation adapter — November 17, 2026
+
+`NativePresentationExecutor` in `connectors/shared/native-presentation-executor.ts`
+implements two bounded prepared operations: `activate_app` and `raise_window`.
+This local prototype accepts only exact Finder/TextEdit windows. The original
+chat remains the reasoning and native execution owner. Camera scenes remain
+camera-only; preparing one never dispatches OS input or grants authority.
+
+The configured host port exposes `capabilities`, `qualify`, `dispatch` and
+read-only `receipt`. Capabilities explicitly report the host identity, supported
+operations, whether activation has been physically observed, and whether the host
+supplies terminal lifecycle evidence. Local prototype testing may begin with
+`activationObserved:false`; it must not be advertised as qualified activation.
+The adapter itself executes no shell, browser, Accessibility or OS calls. The
+lead's local preview allows a qualified CUA click on **Execute prepared operation**
+to invoke `executePrepared(operationId)`; it does not expose arbitrary action text.
+
+`prepare(operation)` binds the stable operation ID to immutable scene, exact
+window/process/app/display and expected request/session/lease/native epoch/cursor/
+policy revision. It reads the active native owner and fresh selected display,
+qualifies the target, then checks authority again. At execution it repeats these
+checks, including process lifetime identity, unchanged target geometry and full
+window containment on the selected display. Stop, pending delivery, interruption,
+expired leases, changed ownership and unresolved input refuse dispatch. The helper
+must independently check the same live authority immediately before its OS effect.
+
+`FileNativeSceneJournal` stores bounded metadata in an owner-only directory with
+one exclusive foreground owner. Each write uses atomic replacement and fsyncs
+both the file and directory before reporting success. It permits at most 256
+receipts and 1 MiB. Stale locks, malformed receipts and uncertain outcomes are
+preserved for lead reconciliation. No screenshots or audio enter the journal.
+The adapter persists `dispatching` before calling its qualified host exactly once;
+this records intent, not proof of submission. A restart converts unfinished
+`dispatching`/`submitted` entries to `uncertain`. Duplicate operation IDs return
+their original receipt; changed arguments conflict and unknown effects are not
+replayed under a replacement ID.
+
+Host results distinguish rejected, submitted, returned, verified and uncertain.
+Terminal evidence must bind the exact operation, fingerprint and host, including
+when loading a retained journal. Returned native calls do not prove visual success:
+verified presentation requires a fresh matching frontmost/focused/onscreen window
+observation. Stop during an operation can leave its result uncertain even when a
+terminal host receipt is retained. `reconcile(operationId)` only reads that original
+receipt and records host completion; it does not dispatch, release ownership,
+rearm sharing, erase Stop or claim UI success. Any future cleanup-only ownership
+recovery must consume this bound terminal evidence through a separately reviewed
+backend path; no generic completion boolean clears uncertainty.
+
+Synthetic checks: `npx vitest run tests/connectors-native-presentation.test.ts
+tests/connectors-native-scene-journal.test.ts`. They cover authority races, Stop,
+exact identity/PID reuse, forbidden apps, geometry/display bounds, durable intent,
+unknown outcomes, restart, immutable duplicates and terminal evidence validation.
+They do not establish successful macOS foreground activation or handset visibility.
+
+### Prepared live targets and follow-up walkthroughs
+
+A scene may optionally include `focus:{rect,durationMs}`. Its rectangle is
+normalized within the exact planned window, not a saved desktop/frame rectangle.
+`presentLive()` sends this immutable focus and optional annotation through the
+explicitly configured `presentLive(intent)` port. The port resolves the live exact
+native window and commits focus plus annotation on the current authorized frame.
+The controller supplies a stable command ID and plan/scene generation, and checks
+released ownership before submission. It sends no old frame/content hash and
+performs no native input. An accepted result requires fresh metadata for the exact
+active, focused, onscreen window and the committed camera frame. This is geometric
+camera acceptance; it does not establish the scene's expected task outcome or
+handset visibility. Legacy `present`/`presentObserved` guards remain unchanged.
+
+The local live port brackets a captured display frame with two read-only native
+observations of the same process, exact window and unchanged bounds. It rechecks
+authority and the selected frame under the media frame lock before committing
+focus and annotation together. That lock does not freeze the OS desktop. A bounded
+read-only monitor renews the target witness while it remains current; movement,
+lost focus, Stop, expiry or failed observation invalidates the target scope. These
+checks establish current geometric framing, not semantic stability of text inside
+the window. No source pixels enter the scene plan or receipt ledger.
+
+`complete()` explicitly finishes a walkthrough only after its final scene is
+presented. `replan(newPlan, expectedGeneration)` is available after completion or
+interruption: it invalidates old queued work immediately, clears/overviews the old
+scene, then installs the new plan. All replacement windows must remain on the
+selected display. The original session/lease binding, expiry, command sequence,
+256-command budget and unknown outcomes survive replacement. At most eight unique
+plan IDs are accepted; reused or conflicting IDs cannot restart a walkthrough or
+extend its lifetime. Unknown camera outcomes block replanning and are never erased
+by a follow-up plan. The live port is optional and unavailable peers fail without
+fallback or retries.
+
+Local physical evidence on November 17: with the user-arranged fixture windows on
+the current Space, Finder → TextEdit → Finder produced three verified native
+activations and three accepted live presentations. The lead observed the outgoing
+crop and label on the top portion of each window. The initial two-scene walkthrough
+completed, then a one-scene follow-up was prepared and completed in the same session
+(`planCount:2`, generation 4). Stop left executor `none/paused`, epoch 7, with the
+lease released. This used the snapshot capture diagnostic path and made no external
+call. It does not resolve the intermittent persistent-capture failure, qualify
+Space transitions, establish handset acceptance or claim production presentation
+polish.

@@ -81,6 +81,87 @@ Actual capture acceptance is recorded in [the review](docs/IMPLEMENTATION_ARGOS_
 Selected-window fallback input remains unavailable pending exact hit-target
 qualification; display CUA retains its existing permission and ownership gates.
 
+## Production prepared-scene integration
+
+The source now includes explicitly negotiated prepared-scene commands and a
+read-only Mac target resolver over the authenticated gateway. Native window actions
+remain with the original chat's qualified CUA. New backend/media admission defaults
+off through `CLAWDTIME_LIVE_PRESENTATION_ENABLED`; existing sessions do not upgrade.
+This is a staged capability pending remote timing and handset qualification.
+See [production staging](docs/DEPLOYMENT.md#prepared-live-presentation-staging).
+
+## Local two-app presentation walkthrough
+
+The local display prototype uses one selected-display capture stream, a bounded
+agent-prepared scene plan, and the original chat's native tools. It can coordinate
+scene changes, fresh focus/annotations, interruption and Stop. Native window
+activation and edits still run through the chat's qualified desktop tool under
+exclusive ownership; the scene controller never dispatches OS input itself.
+
+```sh
+npm run prepare:presentation
+npm run test:presentation
+# After preparing the disposable Finder/TextEdit windows and verifying this chat's native tool:
+npm run preview:presentation -- --native-display 1
+```
+
+Replace `1` with the explicitly selected display. The last command starts capture
+of that whole display immediately; it does not select or broaden an existing
+window lease. Open the printed private local preview URL on another display or a
+hidden viewer to avoid showing the preview inside itself. Stop is visible in the
+preview; Ctrl-C closes the local processes. No installed configuration, provider,
+FaceTime call or live deployment is used. The source/render targets are 15/30 fps;
+actual results and outstanding native acceptance are recorded in the
+[implementation review](docs/IMPLEMENTATION_ARGOS_REVIEW.md).
+
+The bridge adds `presentation_prepare`, `presentation_status`,
+`presentation_begin`, `presentation_observe`, `presentation_present`,
+`presentation_next`, `presentation_interrupt`, and `preview_metrics` to the
+native-review commands below. Each uses `{id, command, args}`. Prepare at most
+12 scenes with exact current app/window/process/display identities. Begin a scene,
+claim native ownership for any action, verify its actual result, release ownership,
+then observe and present with the fresh window bounds and source metadata.
+See [scene contracts](src/presentation-scene-contracts.ts) and
+[controller workflow](docs/CONNECTORS.md#local-agent-prepared-scene-controller--november-17-2026).
+An interrupted or changed source requires new observation. Unknown camera/input
+outcomes block replay. Native computer-tool availability is an external prerequisite;
+fixture readiness and synthetic tests do not prove real app outcomes.
+
+The local native-activation mode now also supports `presentation_present_live`,
+`presentation_complete`, `presentation_replan`, and `presentation_receipts`.
+Prepare window-relative focus regions and annotations upfront. Before presenting
+each scene, the runtime resolves the exact live window twice around a fresh frame,
+then commits focus and annotation together. A short read-only monitor clears the
+view if the target moves or loses focus. After completion, the next request can
+install another bounded plan in the same session; unknown outcomes block replanning.
+A local snapshot-display rehearsal verified Finder → TextEdit → Finder, all three
+zooms/labels, and a second plan in the same session with clean Stop. The initial
+windows were on the current Space; automatic cross-Space alignment and persistent
+stream stability remain open. This is not yet a qualified phone walkthrough.
+
+Use `--native-display 1 --native-activation` for the explicit local activation
+review. Adding `--snapshot-display` selects a separate diagnostic transport using
+fresh snapshots of that same display (5 fps source target, 30 fps render target).
+It never automatically replaces or restarts a failed persistent stream. Passing
+that diagnostic does not establish that the persistent-stream interruption is fixed.
+
+For long scene plans, feed JSONL through a pipe: macOS terminals can truncate a
+long pasted line before this bridge receives it. Keep the test windows on the
+selected display's current desktop; Accessibility can read an off-screen window
+without proving it is visible in the presentation.
+
+Metadata-only performance commands:
+
+```sh
+media/.venv/bin/python scripts/measure-presentation.py
+# Explicit actual display capture; pixels are discarded, no input is submitted:
+media/.venv/bin/python scripts/probe-presentation-display.py --display 1 --seconds 45
+```
+
+The first command uses synthetic Retina-sized pixels only. The second measures
+the chosen real display locally and checks capture cleanup. Neither establishes
+handset smoothness or two-app native control acceptance.
+
 ## Desktop control
 
 The new bounded workflow observes, proposes one action, checks a fresh matching
@@ -191,3 +272,35 @@ running native tool. Window fallback input stays disabled.
 The browser's Stop button and Ctrl-C end this disposable local review. It expires
 after 15 minutes. This harness proves local wiring, not installed-stack readiness
 or FaceTime acceptance; see `docs/IMPLEMENTATION_ARGOS_REVIEW.md`.
+
+For the separately negotiated **local activation prototype**, use
+`npm run preview:camera -- --native-display 1 --native-activation` after selecting
+the intended display. This starts actual transient capture, with no external call.
+Only Finder and TextEdit `activate_app` / `raise_window` are supported. The original
+chat prepares a scene, begins it, claims native ownership, then sends
+`native_prepare` with `{operationId, sceneId, action, window}`. `window` contains
+the freshly resolved `appId`, `windowId`, `ownerPid` and `displayId`.
+
+The preview's **Execute prepared operation** control invokes that immutable ID;
+use the qualified native/browser CUA tool to click it. Preparation itself sends no
+input. The host rechecks the exact scene, authority, fresh display and process/
+window identity immediately before a single native effect. A returned API call
+does not prove the intended window is visible. `native_status` inspects receipts;
+`native_reconcile` reads the original host receipt without replaying an effect.
+
+The printed `nativeJournal` directory retains owner-only adapter and host receipts
+after shutdown; preserve it when a result is uncertain. Stop cancels the local
+host and prevents further dispatch. The browser cannot submit editable native
+operations, and host requests use a separate ephemeral credential. This prototype
+does not add typing/clicking to the companion, enable fallback, or establish
+production activation reliability. The browser control is a development harness;
+the finished agent experience must not require a user click for each scene.
+
+`presentation_present_observed` accepts `{attestation, rect}` to sample source
+metadata and frame a verified result in the same runtime call. The attestation
+contains `sceneId`, `generation`, the original `observedAt`, exact `window`,
+normalized `windowBounds`, and `resultVerified: true`. This removes a transport
+round trip while retaining the existing content/freshness checks. Actual framing
+still hit HTTP 409 in the latest rehearsal; preserve unknown commands and do not
+replay them. Native switching/edit/save/move passed locally, but the complete
+polished presentation is not yet accepted.

@@ -7,6 +7,11 @@ import {
   voicePreparationSchema,
   voicePreparedReceiptSchema,
 } from "../../src/voice-contracts.js";
+import {
+  livePresentationIntentSchema,
+  livePresentationResultSchema,
+  livePresentationStatusSchema,
+} from "../../src/live-presentation-contracts.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -208,6 +213,63 @@ export class ClawdTimeClient {
   }
   private async requireCamera(id: string) {
     if (!this.cameraSupport.get(id)) await this.screenCamera(id);
+  }
+  async livePresentationStatus(id: string) {
+    const status = livePresentationStatusSchema.parse(
+      await this.api(
+        `/api/attention/${encodeURIComponent(id)}/conversation/presentation`,
+      ),
+    );
+    if (status.requestId !== id)
+      throw new Error(
+        "Live presentation status belongs to another request; no effect was submitted.",
+      );
+    return status;
+  }
+  async presentPreparedScene(id: string, rawIntent: unknown) {
+    const intent = livePresentationIntentSchema.parse(rawIntent);
+    // Capability is checked for every write. Camera v1 alone never enables this path.
+    const status = await this.livePresentationStatus(id);
+    if (status.unresolvedCommandId !== null)
+      throw new Error(
+        "A live presentation outcome is unresolved; read its original receipt before any new intent.",
+      );
+    try {
+      const receipt = livePresentationResultSchema.parse(
+        await this.api(
+          `/api/attention/${encodeURIComponent(id)}/conversation/presentation`,
+          intent,
+        ),
+      );
+      if (
+        receipt.commandId !== intent.commandId ||
+        (receipt.state === "accepted" &&
+          JSON.stringify(receipt.observation!.window) !==
+            JSON.stringify(intent.window))
+      )
+        throw new Error("Live presentation receipt identity mismatch.");
+      return receipt;
+    } catch {
+      // An upstream HTTP failure can follow a committed camera mutation. Do not let
+      // foreground replay handling classify it as a known pre-effect rejection.
+      throw new Error(
+        "Live presentation outcome is unknown. Read live_presentation_receipt with the original requestId and commandId; do not retry or replace the intent.",
+      );
+    }
+  }
+  async livePresentationReceipt(id: string, commandId: string) {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(commandId))
+      throw new Error("Invalid live presentation command ID.");
+    const receipt = livePresentationResultSchema.parse(
+      await this.api(
+        `/api/attention/${encodeURIComponent(id)}/conversation/presentation/receipts/${encodeURIComponent(commandId)}`,
+      ),
+    );
+    if (receipt.commandId !== commandId)
+      throw new Error(
+        "Live presentation receipt belongs to another command; preserve the original intent.",
+      );
+    return receipt;
   }
   async prepareVoicePresentation(id: string, preparation: unknown) {
     const parsed = voicePreparationSchema.safeParse(preparation);
