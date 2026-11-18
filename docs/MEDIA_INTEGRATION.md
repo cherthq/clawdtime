@@ -8,9 +8,12 @@ The audio-only c1 validator remains separate and rejects its video/capture flags
 The first connected supervised visual call showed prepared scenes and the user reported that
 the walkthrough looked good. A spoken change started a new run, correctly retired
 the old presentation, and left the screen dark. Voice then stopped responding.
-That attempt does not qualify the integrated walkthrough; the recovery repair
-below has only offline regression evidence and needs a separately authorized
-physical retest. No additional call is implied by this checkpoint.
+That attempt does not qualify the integrated walkthrough; an offline recovery
+repair followed. In a later separately authorized visual call, the user confirmed
+good visuals; exact result acceptance was recorded and explicit hangup
+worked. Polite acceptance variants exposed a separate confirmation-recovery issue,
+addressed by the bounded recovery below. No additional call is implied by this
+checkpoint; unmeasured timing and unexercised scenarios remain unqualified.
 
 A separate export grant binds the immutable call plan, private room, exact worker
 and agent identities, prepared manifest, capture grant and verified task revision.
@@ -76,6 +79,16 @@ Dialogue guidance asks for missing replacement text, values or targets before
 submitting an instruction. Bare confirmation does not authorize inventing the
 assistant's proposed wording as human source text. This is prompt guidance in
 addition to exact-transcript routing, not a new backend semantic classifier.
+
+A failed or unconfirmed acceptance attempt performs one read-only task-status
+check. Its cached recovery never repeats the acceptance POST or the status read
+for the same finalized utterance. Current `accepted` status can be reported as
+already recorded, without claiming the failed request caused it. An unchanged
+original `review_ready` result permits one optional request for explicit result
+acceptance; a changed result requires fresh review. Unavailable or older status
+remains unknown. The response keeps the acceptance error distinct from status
+facts and uses the read's original speech epoch. Prompt/tool guidance prohibits
+repeated confirmation-error loops or inventing human acceptance wording.
 
 The new controller uses the same private binding, voice, provider, LiveKit,
 control and journal flags as the audio controller, plus `--presentation-file`:

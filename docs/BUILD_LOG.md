@@ -1221,3 +1221,87 @@ passed; no new Swift execution is claimed. `git diff --check` passed; lead revie
 found no unrelated changes, literal credentials or relaxed capture/permission
 checks. Native/media/task ports 3322, 13324 and 13323 are closed. This is a passing
 repair checkpoint, not step-d completion; no step-d tag or step-e work follows.
+
+
+### Step d — accepted final review and natural acceptance repair
+
+Checkpoint `98c7355` was committed and pushed after the previous voice recovery
+checks. The user then authorized one visual retest, up to fifteen minutes, with
+the same temporary ClawdTime-only standby and restoration procedure. The lead
+explained the actual capture path: ScreenCaptureKit selects the exact individual
+window, independent of overlapping windows; prepared cropping, highlights and
+550 ms zooms compose the 15 fps output. This is live app-window capture, not a
+full-desktop crop or synthetic app. Hidden/offscreen and identity guards remain.
+
+Before dialing, the fixture browser and editor were found displaying older text
+with a trailing period. The browser was refreshed. TextEdit automation timed out
+and did not reliably reopen files; the user manually reopened the source and the
+updated revision-27 verification view. All three exact native window targets
+then resolved successfully. Fresh behavior assertions and JavaScript syntax
+checks passed, and a new manifest/grant bound the current verified review.
+
+Exactly one call was placed after fresh exclusive standby/identity/readiness
+checks. Media preparation took 2.881s, dial submission 795ms and media activation
+281ms. These are local phase timings, not handset ringing/speech latencies. The
+user reported that the walkthrough looked good, but the agent repeatedly said it
+could not confirm the result. Two stored finalized replies contained positive
+wording yet failed the old anchored acceptance grammar. No acceptance or new run
+was manufactured from that report. One was ordinary conversational assent; the
+other included negation and remains conservatively ambiguous.
+
+The lead requested one explicit acceptance only if the human wanted to accept.
+The user then confirmed that the agent acknowledged acceptance and hung up after
+the explicit ending request. The durable task is **accepted at revision 28**,
+with the same independently verified run and seven total runs; this review made
+no new coding run. Presentation evidence contains the opening preview and its
+Stop, not a complete three-scene or spoken-revision rehearsal. The user's
+confirmation establishes acceptance/hangup behavior, not all remaining measured
+polish targets or the full revision-continuity trial.
+
+Native and local cleanup are confirmed. Media close took 5ms and native end
+submission 307ms; capture, narration, output and children all joined, and the
+owner lock is released. Restoration was submitted once after cleanup. Deployment
+`d2b307f4-65fc-4bfd-9895-4ebef4914bb1` is successful; the temporary standby instance
+is removed. Every variable matches the pre-call snapshot; fresh runtime evidence
+reports live mode, traffic enabled, zero active calls and no pending/unknown
+effects. Protected receipts remain under `visual-3/`; screens/audio were
+transient. The one-call authorization is consumed. No redial occurred.
+
+The acceptance repair uses a bounded whole-utterance grammar for common discourse
+and courtesy words, current-result pronouns and a positive “I think” judgment.
+It does not strip arbitrary clauses or search for approval inside a longer
+sentence. Negation, conditions, questions, quotations, specific-view compliments
+and additional revision requests remain rejected. Exact finalized provenance,
+connected review, current task/run/revision, independent verification, held-work
+and duplicate-use guards are unchanged. Synthetic API tests cover exactly-once
+acceptance without a new run or deployment. No private transcript was copied into
+tracked files or test fixtures. The accepted task was not rewritten to test the
+new grammar; its existing successful receipt is preserved.
+
+
+Failed/unconfirmed acceptance now performs one bounded authoritative status read
+for that finalized utterance. Its cached recovery distinguishes already accepted,
+the original review still waiting, a changed result requiring fresh review, and
+unavailable status. It never repeats the mutation or invents which request caused
+acceptance. Older status or a response crossing a retirement/interruption cannot
+reopen stale speech. Prompt guidance explains that recovery once rather than
+repeating confirmation failures. These repairs have automated evidence only.
+
+An intermediate full TypeScript run exposed one stale test expectation rejecting
+the deliberately supported positive “I think” form (1 failed / 1,104 passed).
+Transport corrected that expectation and added synthetic bounded positives,
+negated judgments, conditional judgments and added-change refusals; all 85 focused
+acceptance tests passed. Connector independently approved the confined grammar;
+transport reviewed the API integration and updated outcome/handoff documentation.
+
+
+Final checkpoint validation: `npm run check` passed **1,112 tests in 66 files**
+(12.53s), typecheck and build. Full
+`media/.venv/bin/python -m unittest discover -s media -v` passed **351 tests in
+75.111s**. The media specialist's 51 focused tests passed in 9.779s; connector
+independently passed all 85 backend acceptance tests and seven media recovery
+regressions (the recovery subset took 0.060s) and approved the frozen changes.
+`git diff --check` passed; lead reviewed scope, credentials and guard preservation.
+Swift code/interfaces remain unchanged from the passing 31-test/helper-build
+checkpoint `d7bacf8`; no new Swift execution is claimed. Native/media/task ports
+3322, 13324 and 13323 are closed. Step d remains untagged; step e has not begun.

@@ -77,6 +77,8 @@ class API:
             if self.instruction_gate:
                 await self.instruction_gate.wait()
             return {'state': 'held', 'taskId': self.task_id, 'replayed': False}
+        if suffix == '/accept':
+            return {'accepted': True, 'taskId': self.task_id, 'runId': self.value['runId'], 'deployed': False, 'replayed': False}
         if suffix == '/presentation/stop':
             self.value['exportActive'] = self.value['sharingActive'] = False
             if self.owner:
@@ -793,6 +795,117 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             await self.call(name, identity='shape_' + str(index))
             self.assertFalse(self.runtime.response_authorized)
             self.assertFalse(self.runtime.output_allowed)
+
+    async def test_failed_acceptance_reads_status_once_and_never_reposts_same_final(self):
+        await self.start()
+        await self.transcript('Looks good, thanks.')
+        self.delegate.failure = '/accept'
+        before = sum(path == '/context' for path, _ in self.delegate.calls)
+        await self.call('accept_result', identity='first_accept')
+        result = json.loads(json.loads(self.ws.sent[-1]['content'])['result'])
+        self.assertEqual(result['guidance'], 'explicit_acceptance_if_wanted')
+        self.assertEqual(result['attemptOutcome'], 'unconfirmed')
+        self.assertTrue(json.loads(self.ws.sent[-1]['content'])['is_error'])
+        self.assertTrue(self.runtime.response_authorized)
+        await self.call('accept_result', identity='duplicate_accept')
+        self.assertEqual(sum(path == '/accept' for path, _ in self.delegate.calls), 1)
+        self.assertEqual(sum(path == '/context' for path, _ in self.delegate.calls) - before, 1)
+
+    async def test_unconfirmed_acceptance_reports_already_accepted_from_status_only(self):
+        await self.start()
+        await self.transcript('I accept the result')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/accept':
+                self.delegate.calls.append((path, body))
+                self.delegate.value['state'] = 'accepted'
+                raise VoiceError('synthetic_transport_unknown')
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('accept_result')
+        result = json.loads(json.loads(self.ws.sent[-1]['content'])['result'])
+        self.assertEqual(result['guidance'], 'already_accepted')
+        self.assertEqual(result['attemptOutcome'], 'unconfirmed')
+        self.assertEqual(result['taskState'], 'accepted')
+        self.assertNotIn('accepted', {key: value for key, value in result.items() if key != 'taskState'})
+
+    async def test_failed_acceptance_of_changed_result_requires_fresh_review(self):
+        await self.start()
+        await self.transcript('Looks good')
+        self.delegate.failure = '/accept'
+        self.delegate.value.update(runId='new_run', revision=9, sequence=9, state='review_ready')
+        await self.call('accept_result')
+        result = json.loads(json.loads(self.ws.sent[-1]['content'])['result'])
+        self.assertEqual(result['guidance'], 'fresh_review_required')
+        self.assertFalse(any(path == '/instructions' for path, _ in self.delegate.calls))
+
+    async def test_acceptance_recovery_status_failure_is_bounded_and_not_success(self):
+        await self.start()
+        await self.transcript('Looks good')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path in ('/accept', '/context'):
+                self.delegate.calls.append((path, body))
+                raise VoiceError('synthetic_peer_secret_must_not_escape')
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('accept_result')
+        await self.call('accept_result', identity='duplicate')
+        content = json.loads(self.ws.sent[-1]['content'])
+        result = json.loads(content['result'])
+        self.assertEqual(result['guidance'], 'status_unavailable')
+        self.assertTrue(content['is_error'])
+        self.assertNotIn('synthetic_peer_secret', content['result'])
+        self.assertEqual(sum(path == '/accept' for path, _ in self.delegate.calls), 1)
+
+    async def test_retirement_during_recovery_status_read_cannot_reopen_old_speech(self):
+        await self.start()
+        await self.transcript('Looks good')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/accept':
+                raise VoiceError('synthetic_refusal')
+            if path == '/context':
+                await self.runtime.suppress_scene_speech()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('accept_result')
+        self.assertFalse(self.runtime.response_authorized)
+        self.assertFalse(self.runtime.output_allowed)
+
+    async def test_confirmed_acceptance_does_not_run_recovery_check(self):
+        await self.start()
+        await self.transcript('I accept the result')
+        before = sum(path == '/context' for path, _ in self.delegate.calls)
+        await self.call('accept_result')
+        self.assertFalse(json.loads(self.ws.sent[-1]['content'])['is_error'])
+        self.assertEqual(sum(path == '/context' for path, _ in self.delegate.calls), before)
+        self.assertEqual(self.runtime.acceptance_recovery_epochs, {})
+
+    async def test_delayed_older_acceptance_status_cannot_describe_retired_result(self):
+        await self.start()
+        await self.transcript('Looks good')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/accept':
+                self.delegate.calls.append((path, body))
+                raise VoiceError('synthetic_refusal')
+            if path == '/context':
+                old = await original(path, body)
+                self.runtime.context = {**old, 'runId': 'newer_run', 'revision': old['revision'] + 1, 'sequence': old['sequence'] + 1}
+                return old
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('accept_result')
+        content = json.loads(self.ws.sent[-1]['content'])
+        result = json.loads(content['result'])
+        self.assertTrue(content['is_error'])
+        self.assertEqual(result['statusRead'], 'unavailable')
+        self.assertEqual(result['guidance'], 'status_unavailable')
+        self.assertNotIn('taskState', result)
+        self.assertEqual(self.runtime.context['runId'], 'newer_run')
+        self.assertFalse(self.runtime.response_authorized)
+        self.assertEqual(sum(path == '/accept' for path, _ in self.delegate.calls), 1)
 
 
 class ConfigurationTests(unittest.IsolatedAsyncioTestCase):

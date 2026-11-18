@@ -4,6 +4,7 @@ import { TaskVoiceLedger } from "../attention/task-voice-ledger.js";
 import { DomainError, hash, token } from "../storage/security.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
+import { isTaskResultAcceptance } from "./task-voice-acceptance.js";
 import {
   taskWalkthroughVoiceBindingSchema,
   type TaskWalkthroughVoiceBinding,
@@ -407,15 +408,7 @@ export class TaskVoiceService {
       .strict()
       .parse(input);
     const utterance = this.finalized(voice, value.utteranceId);
-    const acceptance = utterance.text
-      .trim()
-      .replace(/[.!]+$/, "")
-      .trim();
-    if (
-      !/^(?:I accept (?:the |this )?result|accept (?:the |this )result|approve (?:the |this )result|looks good|the result looks good)$/i.test(
-        acceptance,
-      )
-    )
+    if (!isTaskResultAcceptance(utterance.text))
       throw new DomainError(
         409,
         "Explicit acceptance of the result is required; ambiguous speech is not approval.",

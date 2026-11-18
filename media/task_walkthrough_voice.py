@@ -23,8 +23,15 @@ clarification before submitting. Do not submit bare confirmations such as
 'Yes, please change that' without an explicit server-bound pending decision.
 The worker receives the exact human words, not your proposed wording; never
 expand your proposal into the instruction. Do not substitute your own instruction.
-Use accept_result only for explicit
-acceptance; use stop_sharing for a request to stop sharing. Stopping sharing does
+Use accept_result only for explicit acceptance. If it returns acceptance_recovery,
+that result already includes one task_status read: use its guidance, do not repeat
+the same acceptance mutation or status check, and do not keep saying there is an
+issue confirming the result. If status says accepted, report that it is already
+recorded without claiming this failed attempt caused it. If the original result
+is still review_ready, say acceptance is not recorded in the current status and
+ask once for explicit result acceptance only if the human wants to accept. If the
+result changed or needs a fresh review, explain that; never fabricate acceptance.
+Use stop_sharing for a request to stop sharing. Stopping sharing does
 not end voice or cancel coding. Use end_call only for an explicit hangup request.
 Never perform computer input or claim to control an application. Interruption
 stops speech, not work or a held correction. Quiet is comfortable; never check
@@ -44,7 +51,7 @@ def walkthrough_settings(context, scenes):
         ('show_scene', 'Show one prepared scene requested by the human, then explain the returned evidence.'),
         ('stop_sharing', 'Stop sharing only after the human requests it; voice and coding continue.'),
         ('submit_instruction', 'Submit the current complete finalized human coding instruction. Ask for a missing replacement text/value/target first; never expand a bare confirmation or supply your own text.'),
-        ('accept_result', 'Record the current human explicit acceptance of the verified result.'),
+        ('accept_result', 'Record the current explicit human result acceptance once. On acceptance_recovery, use the included one-shot task_status guidance; never retry the mutation or repeat confirmation/error loops.'),
         ('end_call', 'End voice after an explicit human hangup request.')):
         properties = {'sceneId': {'type': 'string', 'enum': list(scenes)}} if name == 'show_scene' else {}
         think['functions'].append({'name': name, 'description': description, 'defer_until_eot': True,
@@ -61,6 +68,7 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
         self.response_authorized = False
         self.walkthrough_receipts = {}
         self.receipt_epochs = {}
+        self.acceptance_recovery_epochs = {}
         self.suppression_epoch = 0
         self.final_cutoff = 0
         self.reply_candidate = None
@@ -218,6 +226,37 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
             self.context = fresh
         return await super().register_utterance(utterance_id, text, fresh)
 
+    async def acceptance_recovery(self, key):
+        # This read is part of the original attempt, never a second acceptance.
+        # Its epoch is captured before I/O, so retirement during the read cannot
+        # turn an old status snapshot into new speech authority.
+        epoch = self.suppression_epoch
+        recovery = {'acceptance_recovery': True, 'attemptOutcome': 'unconfirmed',
+            'statusRead': 'unavailable', 'guidance': 'status_unavailable',
+            'message': 'Acceptance is unconfirmed and status is unavailable. Do not repeat the acceptance or status check automatically.'}
+        try:
+            value = await self.api.context()
+            self.check_context(value)
+            if value['sequence'] < self.context['sequence'] or value['revision'] < self.context['revision']:
+                raise VoiceError('acceptance_status_stale')
+            self.context = value
+            recovery.update(statusRead='completed', taskState=value['state'], runId=value['runId'], revision=value['revision'])
+            if value['state'] == 'accepted':
+                recovery.update(guidance='already_accepted',
+                    message='Current task status is accepted. Say acceptance is already recorded; do not claim this unconfirmed attempt caused it or ask for acceptance again.')
+            elif (value['state'] == 'review_ready'
+                    and value['runId'] == value.get('openingRunId')
+                    and value['revision'] == value.get('openingRevision')):
+                recovery.update(guidance='explicit_acceptance_if_wanted',
+                    message='Acceptance is not recorded in the current review_ready status. If the human wants to accept, ask once for explicit result acceptance such as I accept the result. Do not submit another mutation without a new finalized human utterance.')
+            else:
+                recovery.update(guidance='fresh_review_required',
+                    message='This call cannot confirm acceptance of the current result. Explain the current status and that a changed result needs a fresh review; do not ask for repeated acceptance or submit another mutation.')
+            self.acceptance_recovery_epochs[key] = epoch
+        except Exception:
+            pass  # No retry, no fabricated status and no peer exception text.
+        return json.dumps(recovery), True
+
     def function_coroutine(self, call, utterance):
         return self.function(call, utterance, admitted_generation=self.speech_generation, admitted_epoch=self.suppression_epoch)
 
@@ -225,6 +264,7 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
         identity, name = call['id'], call.get('name')
         response_generation = self.speech_generation if admitted_generation is None else admitted_generation
         response_epoch = self.suppression_epoch if admitted_epoch is None else admitted_epoch
+        authoritative_recovery = False
         try:
             try:
                 params = json.loads(call.get('arguments', ''))
@@ -277,10 +317,23 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
                             body = {'eventId': name + '_' + utterance['id'], 'utteranceId': utterance['id']}
                             if name == 'show_scene':
                                 body['sceneId'] = params['sceneId']
-                            value = await self.api.request(routes[name], body)
-                            self.walkthrough_receipts[key] = (json.dumps(value), False)
+                            try:
+                                value = await self.api.request(routes[name], body)
+                                if name == 'accept_result' and (not isinstance(value, dict)
+                                        or value.get('accepted') is not True or value.get('taskId') != self.api.task_id
+                                        or not isinstance(value.get('runId'), str) or not value['runId']
+                                        or value.get('deployed') is not False):
+                                    raise VoiceError('acceptance_unconfirmed')
+                                self.walkthrough_receipts[key] = (json.dumps(value), False)
+                            except Exception:
+                                if name != 'accept_result':
+                                    raise
+                                self.walkthrough_receipts[key] = await self.acceptance_recovery(key)
                             self.receipt_epochs[key] = response_epoch
                         result, error = self.walkthrough_receipts[key]
+                        if name == 'accept_result' and key in self.acceptance_recovery_epochs:
+                            response_epoch = self.acceptance_recovery_epochs[key]
+                            authoritative_recovery = True
                         if name == 'stop_sharing' and not error and not existing_receipt:
                             stopped = json.loads(result)
                             if (isinstance(stopped, dict) and set(stopped) == {'sharingStopped', 'voiceEnded', 'taskCanceled'}
@@ -303,7 +356,7 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
                 # boundary revives capture.
                 await self.send({'type': 'FunctionCallResponse', 'id': identity, 'name': name,
                     'content': json.dumps({'result': result, 'is_error': error})})
-                self.response_authorized = (not error and response_epoch == self.suppression_epoch
+                self.response_authorized = ((not error or authoritative_recovery) and response_epoch == self.suppression_epoch
                     and response_generation == self.speech_generation
                     and identity not in self.cancelled_functions and not self.closed
                     and utterance is self.latest)
