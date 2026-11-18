@@ -22,7 +22,8 @@
     "format:check": "prettier --check src cli connectors scripts tests public media/device-port.ts package.json tsconfig.json tsconfig.build.json docs README.md AGENTS.md",
     "task:service": "tsx scripts/task-server.ts",
     "task:simulate": "tsx scripts/task-simulation.ts",
-    "task:fixture": "tsx scripts/prepare-coding-demo.ts"
+    "task:fixture": "tsx scripts/prepare-coding-demo.ts",
+    "task:desktop": "tsx cli/task-desktop.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.114",

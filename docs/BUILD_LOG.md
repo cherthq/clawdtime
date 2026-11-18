@@ -1305,3 +1305,131 @@ regressions (the recovery subset took 0.060s) and approved the frozen changes.
 Swift code/interfaces remain unchanged from the passing 31-test/helper-build
 checkpoint `d7bacf8`; no new Swift execution is claimed. Native/media/task ports
 3322, 13324 and 13323 are closed. Step d remains untagged; step e has not begun.
+
+## Step e — native desktop implementation checkpoint
+
+The user explicitly asked to proceed with step e, build the desktop panel with
+the same specialist team, and work without routine input. This supersedes the
+earlier implementation-order hold while leaving the remaining step-d physical
+gates deferred. Previous checkpoint `47ec697` is committed/pushed. No new call,
+line operation, provider-secret change or deployment was performed. The previous
+accepted handset task and restored backend were untouched. Steps d/e remain
+untagged pending the complete authorized desktop-to-phone rehearsals and measured
+physical acceptance.
+
+Runnable entry: `npm run task:desktop -- --state PRIVATE_DIR --project PROJECT`.
+Simulation is the default and honestly stays queued. Explicit `--worker codex
+--checks PRIVATE_FILE` runs the existing scoped adapter and independent watcher.
+`bash mac/scripts/package-task-panel.sh` builds a locally signed native bundle.
+See [the desktop guide](CODING_DEMO_DESKTOP.md) for exact setup and recovery.
+
+Lead integrated the task/session facade, private configuration, HTTP routes,
+server/handset composition and root documentation. Connector implemented the
+detached launcher, existing-session attachment, selectable worker outputs and
+subprocess tests. Transport implemented ledger choice persistence, desktop
+backend regressions and independent integration review. Mac implemented the
+AppKit floating panel, Foundation client/receipt storage, Swift tests and device
+documentation. File ownership remained separate; only lead handles integration,
+checkpoint and any future live operations.
+
+The native window provides one selected project, task input, meaningful progress,
+independent checks, product decisions, explicit scoped revisions, review and
+acceptance. Genuine worker-provided choices (2–3 distinct bounded strings) fill
+the answer composer; selecting never submits. Cancel task has a separate exact
+task/run/revision confirmation. Fixed bottom sharing/call Stop controls are
+independent of task pending state. Close hides the window; Quit panel ends only
+the UI. A UI-only notification raises an already-running matching panel.
+
+The launcher starts a detached service or authenticates the exact existing owner.
+Reopen compares project, worker, checks, optional session-file fingerprint and
+desktop identity. Private config/receipt paths stay outside the worker project;
+the UI token differs from session/operator capabilities. State reads and POSTs
+reject browser Origin; the native client refuses redirects and bounds responses.
+No new webview, framework, daemon installer, history browser or paired-text UX
+was added. New optional fields preserve historical stored tasks and worker-test
+responses.
+
+Every mutation reserves a durable operation ID before external effects. Task
+operations and task-pointer changes commit atomically; worker dispatch happens
+after commit. Native persistence contains IDs/digests, not task prose or tokens.
+Reconnect/restart performs receipt GETs, never rePOST. Unknown execution and
+cleanup retain their original identity. Task authorization expiry hides task
+prose and blocks task mutations but does not revoke exact existing cleanup. The
+task-operation capacity cannot disable Stop. A successful admission receipt is
+not labeled worker completion or confirmed remote cleanup.
+
+The standalone default is local-only. `--session-file PRIVATE_FILE` can attach
+an already authenticated same-project session in the same store, preserving its
+ID, expiry and permissions without registration/renewal or granting phone access.
+The existing handset operator optionally accepts `desktopPanel: true`: it creates
+an attempt-bound private config using its existing session, task, engine,
+coordinator and presentation. This panel cannot submit another job. Exact Stop
+closures use the original monitor/presentation cleanup; task actions retire
+before engine shutdown. Call state follows the durable cleanup receipt while a
+worker continues. The database owner lock forbids concurrent standalone/handset
+owners. A future phone rehearsal still needs a confirmed idle handoff, prepared
+views and fresh specific authorization; automatic call dispatch is not added.
+
+Review found and repaired these concrete issues before the checkpoint:
+
+- Dispatch inside a ledger transaction could lose admitted work after rollback;
+  dispatch now occurs only after commit and uncertain completion stays unknown.
+- Clock-based task selection could switch after wall-clock rollback; a durable
+  current-task pointer now owns selection.
+- Session expiry originally hid all controls; UI/cleanup authority is separate
+  while task disclosure and execution stay closed.
+- Verification config hashing and parsing could read different bytes; a single
+  bounded O_NOFOLLOW read supplies both, with private-file checks.
+- A done POST could re-enable stale native task actions before a fresh snapshot;
+  a request-generation barrier now waits for a read begun after mutation.
+- The handset owner could admit a new run after `closeIfIdle`; a synchronous
+  retirement fence now refuses task mutations before the next shutdown await.
+- Preparing/cleanup was mislabeled connected; the panel now says Call active,
+  and native cleanup is distinguished from service/worker lifetime.
+
+Local qualification used a new disposable project, separate from the historical
+handset fixture. Through the actual native UI, lead submitted a real filter task,
+quit the panel during work, and reopened the same service/task at its unresolved
+empty-state decision. The watcher correctly failed the seeded assertion. One
+answer produced one new run; independent assertions and syntax check passed.
+The browser displayed `No tasks match`; Clear filters restored both rows. Lead
+accepted this disposable result in the panel. A confirmed idle service restart
+preserved that accepted task and desktop identity.
+
+A second real task exercised the updated structured choice path: two options
+appeared, selecting one only filled the composer, and Send answer created one
+follow-up run on the same task. The watcher passed; the browser displayed the
+selected `No tasks found` wording and the working reset button. Lead accepted
+that disposable result. Closing and reopening with the same command preserved
+it. These are automated/local observations, not human handset acceptance.
+Screens were transient. One panel screenshot read briefly failed with a native
+capture error; a later native screenshot and AX inspection succeeded, without
+changing visibility guards. No phone capture was started.
+
+Validation before this checkpoint:
+
+- `npm run check`: **1,187 tests in 69 files**, **12.11s**, plus successful
+  TypeScript typecheck and build.
+- `cd mac && swift test`: **46 tests**, zero failures (**0.193s** in lead run;
+  final UI wording adjustment also passed all 46 in specialist run, **0.078s**).
+- `cd mac && swift build --product ClawdTimeTaskPanel`: passed.
+- `cd mac && swift build --product ClawdTimeTaskCapture`: passed. An initial
+  mistyped `ClawdTimeCapture` product command failed because no such target
+  exists; it was corrected, not recorded as a passing build.
+- `bash mac/scripts/package-task-panel.sh`: build and ad-hoc signature
+  verification passed. It installs no daemon and is not a notarized release.
+- `media/.venv/bin/python -m unittest discover -s media -v`: **351 tests in
+  74.654s**, OK. No media Python implementation was changed.
+- Connector's 26 launcher tests include actual isolated detached-process reuse,
+  idle restart, unknown-run nonreplay and existing-session preservation. The
+  backend/ledger/worker focused suite passed 88 tests before the final full run.
+- `git diff --check`: passed. Connector independently approved native lifecycle,
+  ledger changes and handset integration; transport independently approved
+  root scope/cleanup/config and worker choice mapping. Lead reviewed the complete
+  diff for secrets, unrelated changes and weakened guards.
+
+Remaining acceptance is explicit: complete the prepared two-call story starting
+from a desktop task on the paired session, exercise native Stop in that call,
+and finish the plan's three rehearsals and measured polish trials. Those require
+new specific authorization. No step-d or step-e completion tag is warranted by
+this local implementation alone.

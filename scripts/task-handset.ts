@@ -31,6 +31,8 @@ import { TaskService } from "../src/control/task-service.js";
 import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
 import { TaskVoiceService } from "../src/control/task-voice-service.js";
 import { createTaskApp } from "../src/control/task-app.js";
+import { TaskDesktopService } from "../src/control/task-desktop-service.js";
+import { prepareHandsetDesktop } from "../src/control/task-desktop-config.js";
 import {
   TaskAudioCallCoordinator,
   hasConnectedTaskWalkthroughCall,
@@ -100,6 +102,7 @@ const configSchema = z
       .strict()
       .optional(),
     stateDirectory: text,
+    desktopPanel: z.boolean().default(false),
     sessionFile: text,
     taskId: text,
     projectRoot: text,
@@ -592,6 +595,76 @@ async function main() {
     Date.now,
     (reason) => audit("stop", reason),
   );
+  let reserved = false,
+    starting = false,
+    ended = false,
+    ready = false,
+    lastState = "initializing",
+    stopRequested = false;
+  let desktopTasksRetired = false;
+  const desktopSetup = c.desktopPanel
+    ? prepareHandsetDesktop(tasks, {
+        directory: c.attemptDirectory,
+        sessionToken: capability.token,
+        taskId: task.id,
+        attemptId,
+        worker: engine ? "codex" : "simulation",
+      })
+    : undefined;
+  const assertDesktopControl = (controlId: string) => {
+    if (controlId !== plan.id || ended)
+      throw Error("The exact owned handset attempt is no longer available.");
+  };
+  const desktop = desktopSetup
+    ? new TaskDesktopService(
+        tasks,
+        engine,
+        desktopSetup.config,
+        {
+          snapshot: () => {
+            // Read the owned receipt directly: cleanup remains usable after session expiry.
+            let record;
+            if (prepared && presentation) {
+              try {
+                record = presentation.ledger.get(
+                  session.id,
+                  prepared.manifest.id,
+                );
+              } catch {
+                /* No capture receipt exists before preparation. */
+              }
+            }
+            const sharingClean =
+              record?.cleanup &&
+              Object.values(record.cleanup).every((v) => v === true);
+            return {
+              controlId: ended ? null : plan.id,
+              callActive:
+                reserved &&
+                !ended &&
+                !coordinator.status(plan.id).cleanupConfirmed,
+              sharingActive:
+                !!record &&
+                record.stoppedAt === undefined &&
+                ["visible", "narrating"].includes(record.state),
+              canStopCall: !ended && !stopRequested,
+              canStopSharing:
+                !!presenter && !!record && !ended && !sharingClean,
+            };
+          },
+          stopCall: async (controlId, eventId) => {
+            assertDesktopControl(controlId);
+            await stop(`desktop_${eventId}`);
+          },
+          stopSharing: async (controlId, eventId) => {
+            assertDesktopControl(controlId);
+            if (!presenter) throw Error("This attempt has no sharing.");
+            await presenter.stopLocal(`desktop_${hash(eventId)}`);
+          },
+        },
+        () => !desktopTasksRetired,
+      )
+    : undefined;
   const taskServer = serve({
     fetch: createTaskApp(
       tasks,
@@ -604,6 +677,7 @@ async function main() {
         voiceId: admitted.voice.id,
         presentationId: prepared?.manifest.id,
       },
+      desktop,
     ).fetch,
     hostname: "127.0.0.1",
     port: 13323,
@@ -666,12 +740,6 @@ async function main() {
     await presentation?.close();
     await engine?.close();
   });
-  let reserved = false,
-    starting = false,
-    ended = false,
-    ready = false,
-    lastState = "initializing",
-    stopRequested = false;
   let callCleanupReported = false;
   const localOrigin = "http://127.0.0.1:13324";
   async function stop(reason = "operator_stop") {
@@ -740,6 +808,7 @@ async function main() {
         return;
       }
     }
+    desktopTasksRetired = true;
     try {
       const observation = await media.inspect(plan);
       put("shutdown-summary.json", {

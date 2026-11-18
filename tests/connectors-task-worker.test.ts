@@ -198,7 +198,22 @@ describe("independent Codex task worker", () => {
       f.host.requests.find((r) => r.method === "turn/start")?.params,
     ).toMatchObject({
       clientUserMessageId: "run",
-      outputSchema: { required: ["summary", "decision"] },
+      outputSchema: {
+        required: ["summary", "decision", "decisionOptions"],
+        properties: {
+          decisionOptions: {
+            anyOf: [
+              {
+                type: "array",
+                minItems: 2,
+                maxItems: 3,
+                items: { type: "string", minLength: 1, maxLength: 500 },
+              },
+              { type: "null" },
+            ],
+          },
+        },
+      },
     });
   });
   it("returns a bounded unresolved decision without inventing success", async () => {
@@ -213,6 +228,95 @@ describe("independent Codex task worker", () => {
       decision: "Which empty state should appear?",
     });
   });
+  it("preserves concrete model-provided choices with the unresolved decision", async () => {
+    const f = fixture();
+    f.host.onStart = () =>
+      f.host.complete("completed", {
+        summary: "The empty-state copy needs a product choice.",
+        decision: "Which empty-state wording should appear?",
+        decisionOptions: [
+          " No tasks match ",
+          "No matching tasks",
+          "Nothing matches your filters",
+        ],
+      });
+    expect(await f.run()).toMatchObject({
+      outcome: "completed",
+      decision: "Which empty-state wording should appear?",
+      decisionOptions: [
+        "No tasks match",
+        "No matching tasks",
+        "Nothing matches your filters",
+      ],
+    });
+    expect(
+      f.host.requests.find((r) => r.method === "thread/start")?.params
+        .developerInstructions,
+    ).toContain("Do not invent choices when the decision requires free text");
+    expect(
+      f.host.requests.filter((r) => r.method === "turn/start"),
+    ).toHaveLength(1);
+  });
+  it.each([undefined, null])(
+    "keeps a free-text decision without fabricated choices: %s",
+    async (decisionOptions) => {
+      const f = fixture();
+      f.host.onStart = () =>
+        f.host.complete("completed", {
+          summary: "Needs copy.",
+          decision: "What exact text should appear?",
+          decisionOptions,
+        });
+      const result = await f.run();
+      expect(result.outcome).toBe("completed");
+      expect(result.decision).toBe("What exact text should appear?");
+      expect(result).not.toHaveProperty("decisionOptions");
+    },
+  );
+  it("never exposes choices without an unresolved decision", async () => {
+    const f = fixture();
+    f.host.onStart = () =>
+      f.host.complete("completed", {
+        summary: "Finished.",
+        decision: null,
+        decisionOptions: ["Choice one", "Choice two"],
+      });
+    const result = await f.run();
+    expect(result.outcome).toBe("completed");
+    expect(result).not.toHaveProperty("decision");
+    expect(result).not.toHaveProperty("decisionOptions");
+  });
+  it.each(
+    (
+      [
+        [],
+        ["Only one"],
+        ["a", "b", "c", "d"],
+        [" ", "valid"],
+        ["x".repeat(501), "valid"],
+        ["same", "same"],
+        ["Same", " same "],
+        ["valid", 4],
+      ] as unknown[]
+    ).map((decisionOptions) => ({ decisionOptions })),
+  )(
+    "refuses malformed choices %j without retrying the worker",
+    async ({ decisionOptions }) => {
+      const f = fixture();
+      f.host.onStart = () =>
+        f.host.complete("completed", {
+          summary: "Needs decision.",
+          decision: "Which wording?",
+          decisionOptions,
+        });
+      const result = await f.run();
+      expect(result.outcome).toBe("blocked");
+      expect(result).not.toHaveProperty("decisionOptions");
+      expect(
+        f.host.requests.filter((r) => r.method === "turn/start"),
+      ).toHaveLength(1);
+    },
+  );
   it.each([
     {},
     { summary: "x", decision: null, extra: true },

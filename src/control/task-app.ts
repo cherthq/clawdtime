@@ -8,6 +8,7 @@ import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
 import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
+import type { TaskDesktopService } from "./task-desktop-service.js";
 
 export function createTaskApp(
   service: TaskService,
@@ -16,6 +17,7 @@ export function createTaskApp(
   voice?: TaskVoiceService,
   presentation?: TaskPresentationService,
   handset?: { taskId: string; voiceId: string; presentationId?: string },
+  desktop?: TaskDesktopService,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -31,6 +33,7 @@ export function createTaskApp(
       const voiceBase = `${base}/voice/${encodeURIComponent(handset.voiceId)}`;
       const allowed = new Set([
         "GET /health",
+        ...(desktop ? ["GET /desktop/state", "POST /desktop/operations"] : []),
         `GET ${voiceBase}/context`,
         ...[
           "bind",
@@ -49,7 +52,14 @@ export function createTaskApp(
             ]
           : []),
       ]);
-      if (!allowed.has(`${c.req.method} ${c.req.path}`))
+      if (
+        !allowed.has(`${c.req.method} ${c.req.path}`) &&
+        !(
+          desktop &&
+          c.req.method === "GET" &&
+          /^\/desktop\/operations\/[A-Za-z0-9_:-]{1,160}$/.test(c.req.path)
+        )
+      )
         return c.json({ error: "Route outside this handset session." }, 403);
     }
     // A local developer API, not a browser-facing credential or CORS surface.
@@ -83,6 +93,16 @@ export function createTaskApp(
       control: false,
     }),
   );
+  if (desktop) {
+    const credential = (c: any) => bearer(c.req.header("authorization"));
+    app.get("/desktop/state", (c) => c.json(desktop.snapshot(credential(c))));
+    app.get("/desktop/operations/:eventId", (c) =>
+      c.json(desktop.operation(credential(c), c.req.param("eventId"))),
+    );
+    app.post("/desktop/operations", async (c) =>
+      c.json(await desktop.submit(credential(c), await c.req.json())),
+    );
+  }
   if (presentation) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
     const path = "/tasks/:id/presentations/:presentationId";

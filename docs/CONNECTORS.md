@@ -1052,3 +1052,65 @@ or turn voice permission into native worker approval. Source pairing remains
 unchanged when a distinct verified capture device receives explicit export
 authority. Synthetic authority tests establish these boundaries, not handset
 presentation acceptance.
+
+## Independent task desktop launcher
+
+Build the native panel before launching it:
+
+```sh
+swift build --package-path mac --product ClawdTimeTaskPanel
+npm run task:desktop -- --state /absolute/private/task-state --project /absolute/selected-project
+```
+
+The launcher uses simulation by default, on `http://127.0.0.1:13326`. Simulation
+submissions remain queued; no real worker, phone call, screen capture, or control
+is enabled. To explicitly use Codex, add `--worker codex --checks
+/absolute/private/checks.json`; the verification plan must be a bounded owner-only
+file in a private directory outside the selected project. The state directory
+must also be owner-only and outside that project. `--port` selects another
+loopback port. `--panel-binary` may select an absolute native executable; the
+default is `mac/.build/debug/ClawdTimeTaskPanel` in this checkout.
+
+`cli/task-desktop.ts` launches the existing task server in a detached process and
+opens the native panel separately. Closing or quitting the panel never sends
+Cancel, Stop, or a signal to the service. Repeating the same command reuses the
+service only after its private descriptor, owner PID, selected project, worker,
+verification-plan fingerprint and authenticated desktop identity all agree. The
+native panel owns a separate singleton lock; its Show Panel menu restores a
+hidden window. Repeating the command also requests that exact panel to show via
+a UI-only notification after its singleton binding matches. No daemon, launch
+agent or system setting is installed.
+
+The UI credential is read from protected `desktop-panel.json`, never from an
+argument or printed output. Readiness requests carry no browser Origin, reject
+redirects, are bounded, and only read `/desktop/state`. Child processes inherit
+OS/path/locale variables and the explicit Codex home, not arbitrary environment
+credentials. The UI capability is separate from operator and task credentials.
+Opening the panel does not register a new task, retry an operation, change a
+project binding or renew an expired task session.
+
+For an already-authorized session in the same task store, add `--session-file
+/absolute/private/session.json` on the first desktop launch. The bounded private
+file's bytes become part of the immutable desktop configuration fingerprint. The
+service authenticates that existing capability and uses its task history, with no
+new session registration or renewal. The native UI still receives only its
+separate desktop token. Reopening requires the same file contents; changing them
+or omitting the flag does not silently rebind an existing desktop. This enables an
+explicit idle ownership handoff to the handset operator using the same session;
+it does not perform a handoff, stop a service, start a call, or authorize export.
+
+`desktop-launch.lock` serializes launcher startup; the service retains its own
+`owner.lock`. An unreachable existing service, mismatched configuration, or stale
+lock is a refusal, not permission to start another worker or remove ownership.
+A timed-out startup is unconfirmed and is preserved. Establish prior process
+quiescence before any manual stale-lock recovery. Restarted in-flight work is
+reported unknown by the task ledger and is never automatically replayed. If the
+panel fails to start after service readiness, the service remains available for
+an explicit reopen. The launcher does not install restart supervision.
+
+The Codex worker can return two or three short decision choices with an unresolved
+question. Choices are model-provided task data, bounded to 500 characters each,
+trimmed and checked for duplicates. Free-text questions and older results without
+choices remain supported. Choices without a decision are not exposed, and malformed
+choice output is blocked without replaying the run. The panel must display the
+recorded choices as-is; it must not invent defaults or infer a human selection.

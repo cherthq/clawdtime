@@ -47,6 +47,7 @@ export interface CodingRun {
     | "unknown";
   summary?: string;
   decision?: string;
+  decisionOptions?: string[];
   startedAt?: number;
   endedAt?: number;
   cancelRequested?: boolean;
@@ -56,6 +57,7 @@ export interface CodingRun {
 export interface TaskDecision {
   id: string;
   question: string;
+  options?: string[];
   runId: string;
   answer?: string;
   eventId?: string;
@@ -113,6 +115,7 @@ export type TaskCommand = { eventId: string; expectedRevision: number } & (
       outcome: "completed" | "failed" | "blocked" | "canceled" | "unknown";
       summary: string;
       decision?: string;
+      decisionOptions?: string[];
       threadId?: string;
       turnId?: string;
     }
@@ -136,6 +139,7 @@ export interface TaskWorkerResult {
   outcome: "completed" | "failed" | "blocked" | "canceled" | "unknown";
   summary: string;
   decision?: string;
+  decisionOptions?: string[];
   threadId?: string;
   turnId?: string;
 }

@@ -1,5 +1,9 @@
 ClawdTime: Your Agent for Long-Running Work
 
+Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DESKTOP.md)
+documents the runnable local task workflow, explicit Codex setup and current
+handset acceptance limits. The broader product vision below includes later work.
+
 ClawdTime is your agent for long-running work. Give it a task and it runs it end to end, delegating to specialist agents and tools such as Codex, Claude Code, and other apps as needed. When it needs your judgment or has a result to review, it prepares a walkthrough and FaceTimes you. 
 
 You don't babysit Codex. You hand the job to ClawdTime, and it calls you when it matters. 

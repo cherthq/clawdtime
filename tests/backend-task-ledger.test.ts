@@ -97,6 +97,75 @@ function fixture(path = ":memory:") {
 }
 
 describe("independent task ledger", () => {
+  it("preserves suggested answers through verification and explicit follow-up without selecting one", () => {
+    const f = fixture();
+    let task = f.claim(f.create());
+    task = f.result(task, {
+      decision: "Which empty state should appear?",
+      decisionOptions: ["  Show a short explanation  ", "Show a reset button"],
+    });
+    const choices = ["Show a short explanation", "Show a reset button"];
+    expect(task.runs[0]!.decisionOptions).toEqual(choices);
+    task = f.verify(task);
+    expect(task.decision?.options).toEqual(choices);
+    expect(task.decision?.answer).toBeUndefined();
+    expect(task.runs).toHaveLength(1);
+    const restored = new TaskLedger(f.store, f.vault, () => 1000);
+    expect(restored.get(session.id, task.id).decision?.options).toEqual(
+      choices,
+    );
+    task = f.change(task, {
+      action: "decide",
+      runId: task.runs[0]!.id,
+      instruction: "Use custom explanatory copy instead.",
+    });
+    expect(task.runs).toHaveLength(2);
+    expect(task.runs[1]!.instruction).toBe(
+      "Use custom explanatory copy instead.",
+    );
+    expect(task.decision?.answer).toBe(task.runs[1]!.instruction);
+    expect(task.runs[0]!.decisionOptions).toEqual(choices);
+    task = f.verify(f.result(f.claim(task)));
+    expect(task.state).toBe("review_ready");
+    expect(task.decision).toBeUndefined();
+    expect(task.runs[1]!.decisionOptions).toBeUndefined();
+  });
+
+  it.each(
+    [
+      [],
+      ["Only one"],
+      ["A", "B", "C", "D"],
+      ["", "B"],
+      ["   ", "B"],
+      ["A", " a "],
+      ["x".repeat(501), "B"],
+      [1, "B"],
+      "A,B",
+      null,
+    ].map((options) => ({ options })),
+  )(
+    "rejects malformed decision options without changing the running receipt: %j",
+    ({ options }) => {
+      const f = fixture(),
+        task = f.claim(f.create());
+      expect(() =>
+        f.result(task, {
+          decision: "Choose a result",
+          decisionOptions: options,
+        }),
+      ).toThrow();
+      expect(f.ledger.get(session.id, task.id)).toEqual(task);
+    },
+  );
+
+  it("refuses orphan choices without a decision", () => {
+    const f = fixture(),
+      task = f.claim(f.create());
+    expect(() => f.result(task, { decisionOptions: ["A", "B"] })).toThrow();
+    expect(f.ledger.get(session.id, task.id)).toEqual(task);
+  });
+
   it("keeps one task across two distinct scoped runs and verifies before review", () => {
     const f = fixture();
     let task = f.create();

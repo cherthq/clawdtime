@@ -356,3 +356,58 @@ receipts to permit replay. Startup fails closed if a reconciled record changes.
 The native Control Panel distinguishes blocking input from historical observed or
 unverified results. Existing `unresolvedActionCount` status now reports only
 blocking input; separate historical counts are available from helper status.
+
+
+## Independent task desktop panel
+
+`ClawdTimeTaskPanel` is a separate AppKit executable. It does not load the companion,
+capture helper, browser view, provider credentials, or desktop-input machinery.
+Its floating window shows the explicitly selected project, task entry, authoritative
+progress and checks, a decision/revision editor, and result acceptance. Genuine
+worker-supplied choices (two or three, when present) fill the answer editor; selecting
+a choice never submits it. Free text and an explicit **Send answer** remain available.
+Simulation is labeled and queued work is never shown as completed.
+
+Build and validate locally:
+
+```sh
+swift test --package-path mac
+swift build --package-path mac --product ClawdTimeTaskPanel
+mac/scripts/package-task-panel.sh
+```
+
+The optional package is `mac/build/ClawdTime Task Panel.app`, with a separate bundle
+identity and a local ad-hoc signature. It is not installed or notarized. Quit the
+panel before rebuilding its bundle. The CLI launcher uses the direct executable:
+
+```sh
+mac/.build/debug/ClawdTimeTaskPanel --config /absolute/private/desktop-panel.json
+```
+
+The lead-prepared config contains version 1, the exact desktop ID, loopback origin,
+UI-only bearer token, selected project root, private receipt directory, configuration
+fingerprint, and optional bound task ID. The config must be an owner-owned regular
+0600 file inside a 0700 directory, outside the worker project. No token is put in
+arguments or URLs. The client contacts only its configured `127.0.0.1` HTTP facade,
+rejects redirects, uses bounded requests/responses, and never receives operator or
+provider credentials. It cannot initiate calls, sharing, capture, or control.
+
+Each mutation reserves a durable local event/digest record before its single POST.
+The journal contains no task prose or credentials. Unconfirmed outcomes, including
+`not_found`, reconcile through GET only and are never replayed. A completed action
+receipt does not prove completed coding, independent checks, or physical cleanup.
+Task actions remain gated until a new state read after mutation completion; a state
+read already in flight cannot reopen stale affordances.
+
+**Stop sharing** and **Stop call** remain separate, visible controls for the exact
+configured existing call. Their request lanes remain independent of pending task
+operations and task-session expiry. **Cancel task** has a separate confirmation and
+only requests coding cancellation. Closing the window or quitting the panel sends
+none of these actions: the detached service and worker continue. Reopen with the
+menu, Dock, or the same launcher command. A held owner-only panel lock permits an
+exact same-config invocation to send only a UI reopen notification; a different
+config is refused, and a live lock is never stolen. Process exit releases the lock.
+
+Swift tests cover private storage, no-replay receipts, stale action gating, option
+selection, independent Stop controls, exact receipt binding, and real loopback HTTP
+redirect/POST refusal behavior. They do not establish physical handset acceptance.

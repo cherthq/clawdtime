@@ -1,4 +1,25 @@
-# Step d: local accepted; handset integration awaiting physical qualification
+# Step e: desktop implementation; remaining handset qualification deferred
+
+The user explicitly authorized building the desktop panel and proceeding without
+routine input, while moving on from the latest visual test. This overrides the
+earlier step-e implementation gate, but does not declare step d physically passed.
+Read [the desktop guide](CODING_DEMO_DESKTOP.md). The local floating panel uses
+the independent task service with durable operation receipts, real scoped Codex
+runs when explicitly selected, independent verification, decisions, review and
+separate cancellation. Closing or quitting the UI leaves work running.
+
+The standalone launcher defaults to a local-only task session; an explicit private
+session file can attach an already-authorized session without renewal or permission
+changes. It does not dial, capture,
+deploy or upgrade pairing. The handset operator has an opt-in, attempt-bound
+desktop attachment for the same owned task and exact Stop controls; it cannot
+run alongside the standalone owner on one database. A future complete desktop
+to phone rehearsal needs a paired session and a confirmed idle ownership handoff.
+No new live call, line operation or deployment is authorized.
+
+Local desktop qualification uses a separate disposable project/state under
+`/Users/garygao/.local/share/clawdtime-desktop-qualification`. It must not be
+confused with or copied over the accepted historical handset task below.
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
 Latest completed step remains `59b8e24`, annotated `step-c1-done`. Repair
@@ -24,7 +45,7 @@ Original checkout, drafts, Apple Teams and sibling chert-facetime are untouched.
 Local three-scene audio/visuals were accepted. Handset preview and explicit
 result acceptance/hangup have positive human evidence. The latest call did not
 exercise a new spoken revision, all scenes, or the full continuity/interruption/
-zoom/Stop timing targets. Step d remains open; step e is gated. Future rehearsals
+zoom/Stop timing targets. Step d remains open; step e implementation is authorized. Future rehearsals
 need a fresh task/result preparation and separate specific call authorization.
 Keep screens/audio transient.
 
@@ -76,7 +97,7 @@ phrasing while preserving negation/condition refusals and exact review guards.
    still active, preserve its service until the worker and watcher settle.
 5. Prepare the fresh result for a separately authorized final-review call. Finish
    the plan's rehearsals and measured interruption/zoom/timing gates before
-   tagging step d or starting the desktop entry point (step e).
+   tagging step d or declaring the desktop-to-phone demo fully qualified.
 
 Do not rerun used local attempts. Exact source windows can become offscreen after
 returning to chat; fresh target validation is mandatory. Browser automation cannot

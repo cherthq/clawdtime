@@ -332,6 +332,29 @@ export class TaskLedger {
           run.turnId = bounded(command.turnId, "worker turn identity", 200);
         if (command.decision !== undefined)
           run.decision = bounded(command.decision, "decision", 2000);
+        if (command.decisionOptions !== undefined) {
+          const choices = command.decisionOptions;
+          if (
+            command.decision === undefined ||
+            !Array.isArray(choices) ||
+            choices.length < 2 ||
+            choices.length > 3 ||
+            choices.some(
+              (choice) =>
+                typeof choice !== "string" ||
+                !choice.trim() ||
+                choice.trim().length > 500,
+            )
+          )
+            throw new DomainError(400, "Invalid decision options.");
+          const normalized = choices.map((choice) => choice.trim());
+          if (
+            new Set(normalized.map((choice) => choice.toLowerCase())).size !==
+            normalized.length
+          )
+            throw new DomainError(400, "Decision options must be distinct.");
+          run.decisionOptions = normalized;
+        }
         run.state = command.outcome;
         if (command.outcome !== "unknown") run.endedAt = this.clock();
         task.state =
@@ -373,6 +396,9 @@ export class TaskLedger {
           task.decision = {
             id: id("decision"),
             runId: run.id,
+            ...(run.decisionOptions
+              ? { options: [...run.decisionOptions] }
+              : {}),
             question:
               run.decision ??
               (run.state !== "completed"

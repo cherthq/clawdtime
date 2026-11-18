@@ -30,6 +30,12 @@ import {
   taskPresentationManifestSchema,
   taskPresentationGrantSchema,
 } from "../src/task-presentation-contracts.js";
+import { TaskDesktopService } from "../src/control/task-desktop-service.js";
+import {
+  prepareTaskDesktop,
+  writeDesktopPrivateJSON,
+  readDesktopPrivateBytes,
+} from "../src/control/task-desktop-config.js";
 
 const flags = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -45,6 +51,8 @@ for (let i = 2; i < process.argv.length; i += 2) {
       "--worker",
       "--checks",
       "--presentation-config",
+      "--desktop",
+      "--session-file",
     ].includes(key)
   )
     throw new Error(
@@ -52,6 +60,12 @@ for (let i = 2; i < process.argv.length; i += 2) {
     );
   flags.set(key, value);
 }
+if (flags.has("--desktop") && flags.get("--desktop") !== "true")
+  throw Error(
+    "Use --desktop true to enable the separate native panel capability.",
+  );
+if (flags.has("--session-file") && !flags.has("--desktop"))
+  throw Error("An attached session requires --desktop true.");
 if (!flags.has("--state") || !flags.has("--project"))
   throw new Error(
     "An explicit private state directory and selected project are required.",
@@ -149,13 +163,16 @@ const service = new TaskService(store, vault, ledger, {
   projectRoots: [projectRoot],
   simulation: !realWorker,
 });
+const checksBytes = realWorker
+  ? flags.has("--desktop")
+    ? readDesktopPrivateBytes(resolve(flags.get("--checks")!))
+    : readFileSync(flags.get("--checks")!)
+  : undefined;
 const engine = realWorker
   ? new TaskEngine(
       service,
       new CodexTaskWorker({ enabled: true, projectRoots: [projectRoot] }),
-      JSON.parse(
-        readFileSync(flags.get("--checks")!, "utf8"),
-      ) as VerificationPlan,
+      JSON.parse(checksBytes!.toString("utf8")) as VerificationPlan,
     )
   : undefined;
 const voice = new TaskVoiceService(
@@ -202,23 +219,47 @@ if (flags.has("--presentation-config")) {
     prepared,
   );
 }
+const desktopSetup = flags.has("--desktop")
+  ? prepareTaskDesktop(service, {
+      directory,
+      projectRoot,
+      worker: realWorker ? "codex" : "simulation",
+      port,
+      ...(flags.has("--session-file")
+        ? { sessionPath: resolve(flags.get("--session-file")!) }
+        : {}),
+      ...(realWorker
+        ? { checksPath: resolve(flags.get("--checks")!), checksBytes }
+        : {}),
+    })
+  : undefined;
+const desktop = desktopSetup
+  ? new TaskDesktopService(service, engine, desktopSetup.config)
+  : undefined;
 const app = createTaskApp(
   service,
   config.operatorToken,
   engine,
   voice,
   presentation,
+  undefined,
+  desktop,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
       void presentation!.reconcile().catch(() => {});
     }, 100)
   : undefined;
-const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () =>
+const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
+  if (desktopSetup)
+    writeDesktopPrivateJSON(
+      join(directory, "desktop-service.json"),
+      desktopSetup.descriptor,
+    );
   console.log(
     `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
-  ),
-);
+  );
+});
 let shuttingDown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
