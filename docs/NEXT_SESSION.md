@@ -19,7 +19,8 @@ identity. A local fixture source remains explicitly distinct from the real
 handset destination; the existing delegated export grant and native inspector
 establish that boundary. The older standalone handset operator remains available
 but must never run alongside the desktop owner on one database.
-No new live call, line operation or deployment is authorized.
+Live operations require specific authorization; the latest rehearsal's bounded
+authorization and remaining preparation are recorded below.
 
 Local desktop qualification uses a separate disposable project/state under
 `/Users/garygao/.local/share/clawdtime-desktop-qualification`. It must not be
@@ -35,12 +36,24 @@ no-matches requirement fails independent assertions, while syntax passes.
 The app preview on loopback 8767 and TextEdit's `Rehearsal source.txt` and
 `Rehearsal result.txt` were observed and resolved by exact metadata. Revalidate
 all views before a call and refresh source/result snapshots after a new run.
-The attempts directory is empty. No call/export grant or standby evidence has
-been minted. Keep the original desktop service and its unrelated task untouched.
+The attempts directory is empty. The user authorized one visual decision call
+and temporary backend-only standby/restore. Standby was established, but the
+operator request returned HTTP 400 before admission because the venv interpreter
+resolved to a group-writable system binary. The Mac specialist installed a
+byte-identical owner-protected local interpreter at the same configured venv
+path and passed the four SDK smoke tests; global Python was not changed.
+Before resubmission, all prepared windows became offscreen. No second POST,
+capture, provider session or dial occurred. The backend was restored afterward;
+see the latest build log for verification. Preserve the rejected request and
+submission records. Rebuild short-lived grants and current standby evidence
+before a future submission; never replay the stale request. The one-call human
+authorization has not been consumed by a dial, but confirm the user is available
+and has returned the prepared views to the current desktop before proceeding.
+Keep the original desktop service and its unrelated task untouched.
 The fixture session is time-limited; check its expiry before resuming.
 The hosted backend was read-only verified live with a successful deployment.
-Fresh call authorization and temporary backend-only standby/restore authorization
-are the next gates; dynamic deployment evidence belongs to each call request.
+Dynamic deployment evidence belongs to each call request; prior standby evidence
+cannot establish a later deployment's authority.
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
 Latest completed step remains `59b8e24`, annotated `step-c1-done`. Repair

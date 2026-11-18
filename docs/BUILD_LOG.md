@@ -1727,3 +1727,57 @@ synthetic localhost/in-memory SDK boundaries with no actual room, provider or
 capture. No Python or Swift implementation changed. `git diff --check` passed;
 lead reviewed scope and secrets. No live call, deployment, line handoff or
 physical acceptance occurred; d/e tags remain withheld.
+
+## 2026-11-18 — Authorized desktop call preparation; no dial
+
+The user authorized one visual call of at most 15 minutes, exporting only the
+prepared app/source/result views and accepting a spoken task instruction, plus
+temporary ClawdTime-backend-only standby and restoration. No second call or
+automatic redial was authorized. Recorded the human scope privately.
+
+Revalidated the exact ready task and three windows. The first read-only Railway
+runtime probe timed out; a minimal SSH command succeeded and a later read-only
+probe established live runtime with zero pending/unknown effects and zero active
+calls. The native line inventory showed exactly one matching available line.
+Python's system CA setup refused the inventory request; Node's normal verified
+TLS succeeded without disabling certificate verification. Recorded the current
+backend variables privately, then submitted the authorized standby change once.
+Standby deployment and actual running standby/traffic-false state were verified.
+
+The prepared request returned HTTP 400 before durable call admission. Read-only
+status and the empty attempts directory confirmed no attempt or external effect.
+Local validation isolated the cause: the configured venv Python symlink resolved
+to a root-owned system executable with mode 0775. The Mac specialist replaced
+only the ignored venv `bin/python` symlink with a byte-identical owner-protected
+copy at the same path, mode 0700, and retained original symlink/checksum metadata
+privately. Global Python, static configuration, worker state and security guards
+were unchanged. Venv isolation and all six pinned dependencies were verified;
+from `media/`, `.venv/bin/python -m unittest
+test_task_voice_livekit.RealSDKSmokeTests test_task_walkthrough.SDKTests -v`
+passed **4 tests in 0.229s**, exit 0.
+
+Before resubmission, macOS again reported all three exact windows offscreen.
+Metadata rechecks, selecting the prepared browser view, and native-window
+selection did not establish stable current-desktop visibility. User activity
+interrupted the final native selection; further desktop input stopped. No second
+POST was made. No media/provider session, capture or native call was created.
+Requested that the user return the prepared windows to the current desktop;
+restored the backend rather than leaving the hosted dispatcher paused while
+waiting. Preserve the rejected envelope/response and use fresh current views,
+grants and deployment evidence when the user returns. The one-call human
+authorization has no dial against it; no physical acceptance is claimed.
+
+`npm run check` passed **1,239 tests in 73 files in 12.24s**, typecheck and build.
+No tracked Python/Swift implementation changed. Restoration proof and independent
+review are recorded below before this checkpoint is committed.
+
+Restoration deployment `af2ba7ab-6d72-4010-b0fb-acd1884d9008` succeeded.
+Read-only verification established exact equality with the original variable
+snapshot, runtime/environment mode live, traffic true, zero pending/unknown
+effects and zero active calls. The standby deployment was removed. The task
+service remains awaiting_call_authorization with no admission receipts or attempt
+directories. The original unrelated desktop task was untouched.
+
+Transport independently approved the documentation against the observed
+pre-admission refusal, local repair, visibility blocker and restoration facts.
+Lead reviewed scope/secrets and `git diff --check` passed. No d/e tag is claimed.
