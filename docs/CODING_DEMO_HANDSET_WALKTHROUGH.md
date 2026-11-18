@@ -38,7 +38,7 @@ configuration. The existing protected configuration also supplies task state,
 session, provider and LiveKit files, exact destination and native line identity,
 the read-only inspector bundle, standby deployment/restore evidence, and a fresh
 one-call authorization identifier. See the strict schema in
-[`scripts/task-handset.ts`](../scripts/task-handset.ts). Only the coordinating
+[`src/control/task-handset-runtime.ts`](../src/control/task-handset-runtime.ts). Only the coordinating
 lead handles these files, credentials or line operations.
 
 Build the read-only inspector as a compact ESM bundle, with the deployed backend's

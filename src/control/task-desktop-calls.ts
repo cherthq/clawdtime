@@ -251,7 +251,7 @@ export class TaskDesktopCalls implements DesktopControlPort {
       python: c.python,
       native: c.native,
       destination: c.destination,
-      railway: c.railway,
+      railway: { ...c.railway, ...request.standby },
       ...(c.ports ? { ports: c.ports } : {}),
       authorization: {
         id: request.authorizationId,

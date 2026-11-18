@@ -49,8 +49,6 @@ export const desktopCallsConfigSchema = z
         projectId: z.string().uuid(),
         environmentId: z.string().uuid(),
         backendServiceId: z.string().uuid(),
-        deploymentId: z.string().uuid(),
-        restoreRecord: text,
       })
       .strict(),
   })
@@ -68,6 +66,7 @@ export const desktopCallRequestSchema = z
     authorizedAt: z.number().int().nonnegative().safe(),
     expiresAt: z.number().int().nonnegative().safe(),
     callDurationMs: z.number().int().min(30_000).max(900_000),
+    standby: z.object({ deploymentId: z.string().uuid(), restoreRecord: text }).strict(),
     userAuthorizedOneCall: z.literal(true),
     userAuthorizedPreparedWindowExport: z.literal(true),
     userAuthorizedTaskInstructions: z.literal(true),

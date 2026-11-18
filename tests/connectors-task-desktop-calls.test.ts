@@ -2,6 +2,7 @@ import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
+  readFileSync,
   chmodSync,
   realpathSync,
   rmSync,
@@ -163,8 +164,6 @@ function fixture() {
       projectId: lineId,
       environmentId: lineId,
       backendServiceId: lineId,
-      deploymentId: lineId,
-      restoreRecord: "synthetic_readiness_record",
     },
   };
   mkdirSync(config.attemptRoot, { mode: 0o700 });
@@ -447,6 +446,10 @@ function fixture() {
       userAuthorizedOneCall: true,
       userAuthorizedPreparedWindowExport: true,
       userAuthorizedTaskInstructions: true,
+      standby: {
+        deploymentId: lineId,
+        restoreRecord: "synthetic_decision_restore",
+      },
       prepared: {
         manifest,
         grant: {
@@ -540,6 +543,7 @@ describe("same-owner desktop task and prepared call integration", () => {
   it("keeps one service/task/session through decision, spoken run, call Stop, fresh review and acceptance", async () => {
     const f = fixture(),
       initial = await f.snapshot();
+    const staticConfigBytes = readFileSync(f.configPath, "utf8");
     expect(f.factory).not.toHaveBeenCalled();
     expect(f.run).not.toHaveBeenCalled();
     await f.ready();
@@ -557,6 +561,15 @@ describe("same-owner desktop task and prepared call integration", () => {
         await f.api("/operator/desktop-calls", f.operator, {
           ...envelope,
           callDurationMs: 90000,
+        })
+      ).status,
+    ).toBe(409);
+    expect(f.factory).toHaveBeenCalledOnce();
+    expect(
+      (
+        await f.api("/operator/desktop-calls", f.operator, {
+          ...envelope,
+          standby: { ...envelope.standby, restoreRecord: "changed_same_event" },
         })
       ).status,
     ).toBe(409);
@@ -594,14 +607,14 @@ describe("same-owner desktop task and prepared call integration", () => {
     await f.engine.wait(f.get().id);
     expect(f.get().state).toBe("review_ready");
     expect(f.verify).toHaveBeenCalledTimes(2);
+    const reviewEnvelope = f.request("review_call");
+    reviewEnvelope.standby = {
+      deploymentId: "00000000-0000-4000-8000-000000000002",
+      restoreRecord: "synthetic_fresh_review_restore",
+    };
     expect(
-      (
-        await f.api(
-          "/operator/desktop-calls",
-          f.operator,
-          f.request("review_call"),
-        )
-      ).status,
+      (await f.api("/operator/desktop-calls", f.operator, reviewEnvelope))
+        .status,
     ).toBe(202);
     await vi.waitFor(() => expect(f.attempts[1]?.start).toHaveBeenCalledOnce());
     expect(
@@ -635,6 +648,15 @@ describe("same-owner desktop task and prepared call integration", () => {
       ),
     ).toBe(true);
     expect(f.factory).toHaveBeenCalledTimes(2);
+    expect(f.factory.mock.calls[0]![0].railway).toEqual({
+      ...f.config.railway,
+      ...envelope.standby,
+    });
+    expect(f.factory.mock.calls[1]![0].railway).toEqual({
+      ...f.config.railway,
+      ...reviewEnvelope.standby,
+    });
+    expect(readFileSync(f.configPath, "utf8")).toBe(staticConfigBytes);
     expect(f.run).toHaveBeenCalledTimes(2);
   });
 
@@ -707,6 +729,8 @@ describe("same-owner desktop task and prepared call integration", () => {
     "wrong-task",
     "wrong-grant",
     "authorization-id-too-long",
+    "missing-standby",
+    "invalid-standby",
     "no-export",
     "private-mode",
     "worker-project",
@@ -721,6 +745,9 @@ describe("same-owner desktop task and prepared call integration", () => {
       envelope.expiresAt = Date.now() - 1;
     }
     if (kind === "wrong-task") envelope.taskId = "foreign_task";
+    if (kind === "missing-standby") delete (envelope as any).standby;
+    if (kind === "invalid-standby")
+      envelope.standby.deploymentId = "not-a-deployment-id";
     if (kind === "wrong-grant") envelope.prepared.grant.hostId = "foreign_host";
     if (kind === "authorization-id-too-long")
       envelope.authorizationId = "a".repeat(121);

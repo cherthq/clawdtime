@@ -191,8 +191,6 @@ function callsFixture() {
       projectId: uuid,
       environmentId: uuid,
       backendServiceId: uuid,
-      deploymentId: uuid,
-      restoreRecord: join(f.state, "restore.json"),
     },
   };
   f.write(callsFile, config);

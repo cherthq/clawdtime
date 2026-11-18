@@ -1681,3 +1681,49 @@ final orchestration, exact authority, recovery and documentation; Mac specialist
 reviewed shared service ownership and cleanup. `git diff --check` passed; lead
 reviewed scope and secrets. No live call, capture, standby deployment or line
 handoff was performed, and no d/e completion tag is claimed.
+
+## 2026-11-18 — Prepare the first desktop-created decision call
+
+Preparation exposed a configuration lifetime mismatch: each authorized standby
+window creates a new deployment ID, while the desktop fingerprints immutable
+configuration. Moved deployment ID and restore record to the strict per-call
+request. Static config retains the exact project/environment/service. Full request
+deduplication covers the new evidence, and the native inspector still verifies
+actual runtime identity and standby state before dialing. This does not assert
+that a supplied record establishes readiness or authorize a deployment.
+
+Prepared a separate disposable task-list project and fixture source session,
+without copying a database, key or session row or impersonating handset pairing.
+The existing delegated export boundary remains necessary for the real destination.
+Submitted a task through the native desktop panel and observed one actual Codex
+run reach needs_decision revision 3. The independent empty-state assertion failed
+as deliberately seeded; JavaScript syntax passed. In the browser, an uppercase
+filter rendered the matching release-notes task and an unmatched query rendered
+the unfinished empty list. The current source and result snapshots opened in
+TextEdit; all three prepared targets resolved successfully through the helper's
+metadata-only exact-window lookup. Preflight reported unlocked console, complete
+login and existing screen permission. No capture or export grant was started.
+
+The original desktop service and its unrelated existing task were preserved.
+The fresh service remains configured but dormant with zero call attempts. A
+read-only backend lookup reported live mode, live traffic true and a successful
+deployment. Fresh one-call and backend-only standby/restore permission are needed
+next; no historical call authority or deployment evidence is reused. The private
+source session expires and all window identities require revalidation at call time.
+
+Validation: `npm run check` passed **1,239 tests in 73 files in 12.26s**, typecheck
+and build. Tests cover distinct standby evidence across decision/review calls,
+unchanged static configuration, same-event proof conflicts and missing/invalid
+proof rejection before admission. Transport independently approved the final
+change and ran the 52 focused integration/launcher/runtime tests plus typecheck.
+
+Mac/media readiness checks: from `mac/`, `swift build --product
+ClawdTimeTaskCapture` passed (build 0.13s), and `swift test --filter
+TaskCapturePolicyTests` passed **3 tests, 0 failures in 0.002s**. From `media/`,
+`.venv/bin/python -m unittest test_task_voice_livekit.RealSDKSmokeTests -v`
+passed **2 tests in 0.098s** and `.venv/bin/python -m unittest
+test_task_walkthrough.SDKTests -v` passed **2 tests in 0.195s**. These used
+synthetic localhost/in-memory SDK boundaries with no actual room, provider or
+capture. No Python or Swift implementation changed. `git diff --check` passed;
+lead reviewed scope and secrets. No live call, deployment, line handoff or
+physical acceptance occurred; d/e tags remain withheld.

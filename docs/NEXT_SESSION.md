@@ -10,16 +10,37 @@ separate cancellation. Closing or quitting the UI leaves work running.
 
 The standalone launcher defaults to a local-only task session; an explicit private
 session file can attach an already-authorized session without renewal or permission
-changes. It does not dial, capture,
-deploy or upgrade pairing. The handset operator has an opt-in, attempt-bound
-desktop attachment for the same owned task and exact Stop controls; it cannot
-run alongside the standalone owner on one database. A future complete desktop
-to phone rehearsal needs a paired session and a confirmed idle ownership handoff.
+changes. Default launch does not dial, capture, deploy or upgrade pairing.
+The `d628f76` integration adds opt-in prepared calls inside the existing desktop
+service: no database handoff or second task owner is needed. Read
+[desktop calls](CODING_DEMO_DESKTOP_CALLS.md). Each call requires fresh exact
+task/run/revision authorization, prepared views and verified destination/line
+identity. A local fixture source remains explicitly distinct from the real
+handset destination; the existing delegated export grant and native inspector
+establish that boundary. The older standalone handset operator remains available
+but must never run alongside the desktop owner on one database.
 No new live call, line operation or deployment is authorized.
 
 Local desktop qualification uses a separate disposable project/state under
 `/Users/garygao/.local/share/clawdtime-desktop-qualification`. It must not be
 confused with or copied over the accepted historical handset task below.
+
+A fresh desktop-created decision rehearsal is staged under
+`/Users/garygao/.local/share/clawdtime-desktop-call-rehearsal-20261118`.
+Its service on loopback 13336 owns a disposable task-list project and a distinct
+fixture source session; its private `Open rehearsal.command` reconnects the panel.
+The actual panel submission completed one real Codex run and reached
+`needs_decision` revision 3. Filtering works; the deliberately unfinished
+no-matches requirement fails independent assertions, while syntax passes.
+The app preview on loopback 8767 and TextEdit's `Rehearsal source.txt` and
+`Rehearsal result.txt` were observed and resolved by exact metadata. Revalidate
+all views before a call and refresh source/result snapshots after a new run.
+The attempts directory is empty. No call/export grant or standby evidence has
+been minted. Keep the original desktop service and its unrelated task untouched.
+The fixture session is time-limited; check its expiry before resuming.
+The hosted backend was read-only verified live with a successful deployment.
+Fresh call authorization and temporary backend-only standby/restore authorization
+are the next gates; dynamic deployment evidence belongs to each call request.
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
 Latest completed step remains `59b8e24`, annotated `step-c1-done`. Repair

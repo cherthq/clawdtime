@@ -35,7 +35,7 @@ The strict configuration schema is `desktopCallsConfigSchema` in
 `src/control/task-desktop-calls-config.ts`. It contains version 1, protected
 provider/LiveKit file paths, the existing inspector bundle, Python and helper
 executables, an existing owner-only attempt root, exact native destination
-binding and existing Railway standby/restore evidence. Optional distinct
+binding and Railway project/environment/service identity. Optional distinct
 `ports: {task, media, stop}` override the scoped attempt defaults 13323, 3322 and
 13324; none may overlap the desktop port. Executables and inspector must be
 outside the worker project and protected from group/other writes. Do not put
@@ -79,6 +79,13 @@ attempt. Changed content with the same event ID is rejected, including changed
 duration or grants. A final review uses fresh views and a new specifically
 authorized request after the spoken follow-up run and independent checks finish.
 An unanswered call does not authorize redial.
+
+Each request also supplies `standby: {deploymentId, restoreRecord}` for that
+specific authorized standby window. These changing fields are not part of the
+desktop's permanent configuration or fingerprint. The native inspector verifies
+the actual running deployment against this evidence before dialing; supplying
+the fields does not itself establish readiness. Changing this evidence under an
+existing event ID is a conflicting request, not permission to dispatch again.
 
 ## Stop, continuity and recovery
 
