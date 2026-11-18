@@ -1433,3 +1433,57 @@ from a desktop task on the paired session, exercise native Stop in that call,
 and finish the plan's three rehearsals and measured polish trials. Those require
 new specific authorization. No step-d or step-e completion tag is warranted by
 this local implementation alone.
+
+## Desktop appearance — notch and persistent mascot
+
+Following checkpoint `ce72347`, the user requested the supplied second image's
+compact dark notch treatment while preserving the desktop functionality, plus
+minimization to a pet or a circular monochrome logo. The user clarified that the
+sharing controls mean the existing Stop sharing and Stop call actions. Lead chose
+the explicitly offered monochrome badge option, using the supplied mascot PNG
+unchanged; no image-generation service or animated-pet dependency was added.
+
+Mac specialist implemented a 430-point top-centered pill and an independently
+centered 560-point expandable dark translucent task surface. The toolbar retains
+status, expand/collapse, Stop sharing, Stop call and minimize. The 62-point mascot
+badge is draggable, restores the task panel on click, and keeps exact Stop actions
+in its context menu. Close/Cmd-W tuck the interface into the badge; Cmd-Shift-M
+toggles the task body. Menu Show and same-config launcher reopen still restore
+the expanded panel. Windows use visible-screen bounds and join desktop Spaces;
+explicit Quit remains available. This is desktop presence while the app runs,
+not a newly installed login item or installer.
+
+Lead integrated the resource manifest and documentation; the package copies the
+asset into app Resources, with main-bundle loading before the SwiftPM development
+fallback. The previous task service, credentials, operation receipts, task
+actions and capture/call permissions are unchanged. Minimize, restore and drag
+are UI-only. No call, capture, provider operation or deployment was performed.
+There is no Share-on toggle or automatic restart of retired sharing.
+
+Local CUA qualification exposed two issues and guided corrections. Applying a
+background tint directly to NSVisualEffectView left the body light gray; a
+separate noninteractive dark overlay above the native blur now produces the
+intended charcoal surface with readable input placeholders. App reactivation
+could expand a collapsed panel; unnecessary deminiaturization was removed, the
+current window is explicitly made key/main, and reopen preserves an already
+visible collapsed state. The initially full-width toolbar was narrowed to match
+the compact reference while retaining the wider body.
+
+Lead observed the final dark panel and compact notch, expanded it using the
+chevron, minimized using the toolbar button, opened/restored through the mascot,
+and inspected the mascot's Stop menu. An unsent synthetic draft survived
+minimize/restore and was cleared without submission. A native drag gesture kept
+the mascot minimized; exact cross-display placement/fullscreen behavior was not
+physically measured. The accepted disposable task remained intact and no new
+worker was submitted. Screens were transient; reference screenshots were not
+copied into the repository. The supplied mascot alone is the bundled image.
+
+Validation: `npm run check` passed **1,187 tests in 69 files in 12.14s**, typecheck
+and build. Final `swift test --package-path mac` passed **50 tests in 0.092s**;
+new tests cover display-mode/reopen transitions and bounded screen geometry.
+`bash mac/scripts/package-task-panel.sh` passed the panel build and ad-hoc
+signature verification. `git diff --check` passed. Connector independently
+approved the UI lifecycle, Stop bindings, draft reuse, asset loading and final
+geometry. Python/media code and interfaces were unchanged and were not rerun;
+their previous 351-test result belongs to `ce72347`. Remaining handset gates are
+still deferred and no new step-completion tag is claimed.

@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 import TaskPanelCore
 
-private let accent = NSColor.systemTeal
+private let accent = NSColor(calibratedRed: 0.74, green: 0.82, blue: 1, alpha: 1)
 
 final class TaskWindow: NSPanel {
   override var canBecomeKey: Bool { true }
@@ -17,8 +17,8 @@ final class Card: NSView {
   required init?(coder: NSCoder) { fatalError("Unavailable") }
   override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshColors() }
   private func refreshColors() {
-    layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-    layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+    layer?.backgroundColor = NSColor.clear.cgColor
+    layer?.borderColor = NSColor.white.withAlphaComponent(0.07).cgColor
   }
 }
 final class ChoiceButton: NSButton {
@@ -40,7 +40,7 @@ final class Composer: NSTextView {
     super.draw(dirtyRect)
     if string.isEmpty {
       (placeholder as NSString).draw(at: NSPoint(x: textContainerInset.width + 5, y: textContainerInset.height),
-        withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.placeholderTextColor])
+        withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.white.withAlphaComponent(0.52)])
     }
   }
   override var string: String { didSet { needsDisplay = true } }
@@ -56,6 +56,14 @@ final class Composer: NSTextView {
   private var state = PanelState()
   private var pollTask: Task<Void, Never>?
   private var panel: TaskWindow?
+  private var toolbar: TaskWindow?
+  private var badge: TaskWindow?
+  private var badgeView: MascotBadge?
+  private var displayMode: PanelDisplayMode = .expanded
+  private var expandButton: NSButton!
+  private let compactState = label("Ready", size: 12, weight: .medium)
+  private var badgeStopSharing: NSMenuItem?
+  private var badgeStopCall: NSMenuItem?
   private var statusItem: NSStatusItem?
   private let projectLabel = label("Selected project", size: 14, weight: .semibold)
   private let projectPath = label("", size: 11, color: .secondaryLabelColor)
@@ -93,7 +101,7 @@ final class Composer: NSTextView {
   private func button(_ title: String, _ action: Selector, primary: Bool = false) -> NSButton {
     let result = NSButton(title: title, target: self, action: action)
     result.bezelStyle = .rounded; result.font = .systemFont(ofSize: 13, weight: .medium)
-    if primary { result.bezelColor = accent; result.contentTintColor = .white }
+    if primary { result.bezelColor = accent; result.contentTintColor = NSColor(white: 0.08, alpha: 1) }
     result.controlSize = .large
     return result
   }
@@ -123,7 +131,7 @@ final class Composer: NSTextView {
     text.isRichText = false; text.importsGraphics = false; text.isAutomaticQuoteSubstitutionEnabled = false
     text.isAutomaticDashSubstitutionEnabled = false; text.isAutomaticTextReplacementEnabled = false
     text.textContainerInset = NSSize(width: 8, height: 10)
-    text.backgroundColor = .textBackgroundColor
+    text.backgroundColor = NSColor(white: 0.10, alpha: 0.65); text.textColor = .white; text.insertionPointColor = .white
     text.isVerticallyResizable = true; text.isHorizontallyResizable = false
     text.textContainer?.widthTracksTextView = true; text.autoresizingMask = [.width]
     text.minSize = NSSize(width: 0, height: 90); text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -148,6 +156,9 @@ final class Composer: NSTextView {
     let appItem = NSMenuItem(); menu.addItem(appItem)
     let submenu = NSMenu(title: "ClawdTime")
     submenu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "0").target = self
+    let expandMenu = submenu.addItem(withTitle: "Collapse / expand task panel", action: #selector(toggleExpanded), keyEquivalent: "m")
+    expandMenu.target = self; expandMenu.keyEquivalentModifierMask = [.command, .shift]
+    submenu.addItem(withTitle: "Tuck into mascot", action: #selector(minimizeToBadge), keyEquivalent: "w").target = self
     submenu.addItem(.separator())
     submenu.addItem(withTitle: "Quit panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = submenu
@@ -195,79 +206,149 @@ final class Composer: NSTextView {
     if case .alreadyOpen = failure { exitStatus = 0 } else { exitStatus = 2 }
     NSApp.terminate(nil)
   }
+  private func floatingWindow(_ title: String) -> TaskWindow {
+    let window = TaskWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.title = title; window.level = .floating; window.isFloatingPanel = true
+    window.hidesOnDeactivate = false; window.isReleasedWhenClosed = false
+    window.isMovableByWindowBackground = false
+    window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
+    window.appearance = NSAppearance(named: .darkAqua)
+    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    window.delegate = self
+    return window
+  }
+  private func mascotImage() -> NSImage? {
+    guard let url = Bundle.main.url(forResource: "Mascot", withExtension: "png") ?? Bundle.module.url(forResource: "Mascot", withExtension: "png") else { return nil }
+    return NSImage(contentsOf: url)
+  }
+  private func iconButton(_ symbol: String, label: String, action: Selector) -> NSButton {
+    let control = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+    control.bezelStyle = .inline; control.isBordered = false; control.contentTintColor = .white
+    control.toolTip = label; control.setAccessibilityLabel(label)
+    control.widthAnchor.constraint(equalToConstant: 28).isActive = true
+    control.heightAnchor.constraint(equalToConstant: 30).isActive = true
+    return control
+  }
   private func buildWindow() {
-    let window = TaskWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 690),
-      styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-    window.title = "ClawdTime"; window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
-    window.level = .floating; window.isFloatingPanel = true; window.hidesOnDeactivate = false
-    window.isReleasedWhenClosed = false; window.delegate = self
-    window.contentMinSize = NSSize(width: 380, height: 430); window.contentMaxSize = NSSize(width: 560, height: 1100)
-    window.backgroundColor = NSColor.windowBackgroundColor
-    let content = NSView(); window.contentView = content
+    let window = floatingWindow("ClawdTime task panel")
+    let content = GlassSurface(radius: 22); window.contentView = content
+    let bar = floatingWindow("ClawdTime toolbar")
+    let barContent = GlassSurface(radius: 28); bar.contentView = barContent
+    let image = NSImageView(); image.image = mascotImage(); image.imageScaling = .scaleProportionallyUpOrDown
+    image.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    image.heightAnchor.constraint(equalToConstant: 32).isActive = true
+    image.setAccessibilityLabel("ClawdTime")
+    compactState.maximumNumberOfLines = 1; compactState.lineBreakMode = .byTruncatingTail
+    compactState.isSelectable = false
+    compactState.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    expandButton = iconButton("chevron.up", label: "Collapse task panel", action: #selector(toggleExpanded))
     stopSharingButton = button("Stop sharing", #selector(stopSharing))
-    stopCallButton = button("Stop call", #selector(stopCall))
-    let stops = stack([stopSharingButton, stopCallButton], vertical: false); stops.distribution = .fillEqually
+    stopSharingButton.controlSize = .small; stopSharingButton.font = .systemFont(ofSize: 11, weight: .medium)
+    stopSharingButton.toolTip = "Stop existing sharing. Starting sharing requires a separate grant."
+    stopCallButton = button("Stop call", #selector(stopCall)); stopCallButton.controlSize = .small
+    stopCallButton.font = .systemFont(ofSize: 11, weight: .medium)
+    let minimize = iconButton("minus", label: "Minimize to mascot", action: #selector(minimizeToBadge))
+    let barRow = stack([image, compactState, expandButton, stopSharingButton, stopCallButton, minimize], vertical: false, spacing: 9)
+    barContent.addSubview(barRow); barRow.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([barRow.leadingAnchor.constraint(equalTo: barContent.leadingAnchor, constant: 14),
+      barRow.trailingAnchor.constraint(equalTo: barContent.trailingAnchor, constant: -14),
+      barRow.centerYAnchor.constraint(equalTo: barContent.centerYAnchor)])
+
     cancelButton = button("Cancel task…", #selector(cancelTask)); cancelButton.contentTintColor = .systemRed
-    let divider = NSBox(); divider.boxType = .separator
-    let controls = card([callLabel, stops, divider, cancelButton])
-    let footer = Self.label("Work continues when you close this panel.", size: 11, color: .secondaryLabelColor)
-    footer.alignment = .center
+    let footerText = Self.label("Work continues while this panel is tucked away.", size: 11, color: .secondaryLabelColor)
+    let footer = stack([footerText, cancelButton], vertical: false, spacing: 10)
+    footerText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.drawsBackground = false
     scroll.autohidesScrollers = true
     let document = NSView(); scroll.documentView = document
-    content.addSubview(scroll); content.addSubview(footer); content.addSubview(controls)
-    controls.translatesAutoresizingMaskIntoConstraints = false
+    content.addSubview(scroll); content.addSubview(footer)
     scroll.translatesAutoresizingMaskIntoConstraints = false; footer.translatesAutoresizingMaskIntoConstraints = false
     document.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
       scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor), scroll.topAnchor.constraint(equalTo: content.topAnchor),
-      scroll.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -12),
-      controls.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-      controls.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-      controls.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -10),
-      footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-      footer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-      footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+      scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -12),
+      footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
+      footer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
+      footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
       document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)])
-    let symbol = NSImageView(image: NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: nil)!)
-    symbol.contentTintColor = accent; symbol.widthAnchor.constraint(equalToConstant: 34).isActive = true
-    symbol.heightAnchor.constraint(equalToConstant: 34).isActive = true
-    let header = stack([symbol, stack([Self.label("ClawdTime", size: 21, weight: .semibold), modeLabel], spacing: 3)], vertical: false, spacing: 11)
     projectPath.lineBreakMode = .byTruncatingMiddle; projectPath.maximumNumberOfLines = 1
-    let project = stack([projectLabel, projectPath], spacing: 3)
+    let project = stack([projectLabel, projectPath, modeLabel], spacing: 4)
     startButton = button("Start task", #selector(submitTask), primary: true)
-    taskCard = card([Self.label("A task to move forward", size: 13, weight: .semibold),
+    taskCard = card([Self.label("What should we work on?", size: 13, weight: .semibold),
       composer(taskInput, placeholder: "Describe the work you want done…"), startButton])
     goal.maximumNumberOfLines = 5; summary.maximumNumberOfLines = 8
     checks.orientation = .vertical; checks.alignment = .leading; checks.spacing = 7
-    let progress = card([stage, goal, summary, checks])
+    let progress = stack([stage, goal, summary, checks], spacing: 10)
     answerInput.placeholder = "Your answer or requested revision…"
     answerButton = button("Send answer", #selector(sendAnswer), primary: true)
     choices.orientation = .vertical; choices.alignment = .leading; choices.spacing = 6
     decisionCard = card([question, choices, composer(answerInput, placeholder: "Your answer or requested revision…"), answerButton])
     acceptButton = button("Accept result", #selector(acceptResult), primary: true)
     reviseButton = button("Revise", #selector(reviseResult))
-    let reviewButtons = stack([acceptButton, reviseButton], vertical: false)
-    reviewButtons.distribution = .fillEqually
+    let reviewButtons = stack([acceptButton, reviseButton], vertical: false); reviewButtons.distribution = .fillEqually
     reviewCard = card([Self.label("Your review", size: 13, weight: .semibold),
       Self.label("Accept the verified result, or ask for a revision.", size: 12, color: .secondaryLabelColor), reviewButtons])
-    let all = stack([header, project, notice, taskCard, progress, decisionCard, reviewCard], spacing: 16)
+    let all = stack([project, notice, taskCard, progress, decisionCard, reviewCard, callLabel], spacing: 18)
     document.addSubview(all); all.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([all.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 20),
-      all.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -20),
-      all.topAnchor.constraint(equalTo: document.topAnchor, constant: 16),
-      all.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -16)])
+    NSLayoutConstraint.activate([all.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 22),
+      all.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -22),
+      all.topAnchor.constraint(equalTo: document.topAnchor, constant: 22),
+      all.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -10)])
     for child in all.arrangedSubviews { fullWidth(child, in: all) }
-    window.center(); panel = window
+    panel = window; toolbar = bar
+    let badgeWindow = floatingWindow("ClawdTime mascot")
+    let mascot = MascotBadge(image: mascotImage()); badgeWindow.contentView = mascot
+    mascot.restore = { [weak self] in self?.showPanel(nil) }
+    mascot.clampAfterDrag = { [weak self] in self?.clampBadge() }
+    let menu = NSMenu()
+    menu.addItem(withTitle: "Open ClawdTime", action: #selector(showPanel), keyEquivalent: "").target = self
+    badgeStopSharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
+    badgeStopSharing?.target = self
+    badgeStopCall = menu.addItem(withTitle: "Stop call", action: #selector(stopCall), keyEquivalent: "")
+    badgeStopCall?.target = self
+    menu.addItem(.separator())
+    menu.addItem(withTitle: "Quit panel — keep work running", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+    menu.autoenablesItems = false; mascot.menu = menu
+    badge = badgeWindow; badgeView = mascot
+    NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    placeWindows()
   }
+  private func placeWindows() {
+    guard let screen = toolbar?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+    toolbar?.setFrame(PanelLayout.toolbar(in: screen.visibleFrame), display: true)
+    panel?.setFrame(PanelLayout.body(in: screen.visibleFrame), display: true)
+    let previous = badge?.frame.width == 0 ? nil : badge?.frame
+    badge?.setFrame(PanelLayout.badge(in: badge?.screen?.visibleFrame ?? screen.visibleFrame, previous: previous), display: true)
+  }
+  private func clampBadge() {
+    guard let badge, let screen = badge.screen ?? NSScreen.main else { return }
+    badge.setFrame(PanelLayout.badge(in: screen.visibleFrame, previous: badge.frame), display: true)
+  }
+  @objc private func screenChanged(_ notification: Notification) { placeWindows() }
+  private func applyDisplayMode() {
+    expandButton?.image = NSImage(systemSymbolName: displayMode == .expanded ? "chevron.up" : "chevron.down", accessibilityDescription: nil)
+    let expandLabel = displayMode == .expanded ? "Collapse task panel" : "Expand task panel"
+    expandButton?.toolTip = expandLabel; expandButton?.setAccessibilityLabel(expandLabel)
+    if displayMode == .badge { panel?.orderOut(nil); toolbar?.orderOut(nil); badge?.orderFrontRegardless() }
+    else {
+      badge?.orderOut(nil); toolbar?.orderFrontRegardless()
+      if displayMode == .expanded { panel?.makeKeyAndOrderFront(nil); panel?.makeMain() }
+      else { panel?.orderOut(nil); toolbar?.makeKeyAndOrderFront(nil); toolbar?.makeMain() }
+    }
+  }
+  @objc private func toggleExpanded(_ sender: Any?) { displayMode = displayMode.toggled; applyDisplayMode() }
+  @objc private func minimizeToBadge(_ sender: Any?) { displayMode = .badge; applyDisplayMode() }
   @objc func showPanel(_ sender: Any?) {
-    panel?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    displayMode = .expanded; placeWindows(); applyDisplayMode(); NSApp.activate(ignoringOtherApps: true)
   }
-  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(nil); return true }
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    displayMode = displayMode.reopened(hasVisibleWindows: flag)
+    placeWindows(); applyDisplayMode(); return true
+  }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-  func windowShouldClose(_ sender: NSWindow) -> Bool { sender.orderOut(nil); return false }
+  func windowShouldClose(_ sender: NSWindow) -> Bool { minimizeToBadge(nil); return false }
   func applicationWillTerminate(_ notification: Notification) {
-    DistributedNotificationCenter.default().removeObserver(self)
+    DistributedNotificationCenter.default().removeObserver(self); NotificationCenter.default.removeObserver(self)
     pollTask?.cancel(); client?.close()
   }
 
@@ -313,6 +394,16 @@ final class Composer: NSTextView {
     projectPath.stringValue = configuration?.projectRoot ?? ""; projectPath.toolTip = projectPath.stringValue
     modeLabel.stringValue = snapshot?.worker == "simulation" ? "Simulation · tasks stay queued" : (state.connected ? "Codex · independently checked" : "Connecting to your task service…")
     stage.stringValue = state.stage
+    compactState.stringValue = state.stage; compactState.toolTip = state.stage
+    let sharing = snapshot?.controls.sharingActive == true
+    let sharingPending = state.pending.contains { $0.unresolved && $0.action == .stopSharing } ||
+      (snapshot?.operations.contains { !$0.resolved && $0.action == .stopSharing } ?? false)
+    stopSharingButton.toolTip = sharingPending ? "Sharing cleanup is unconfirmed. Checking the existing request." :
+      sharing ? "Sharing is active. Stop only this prepared sharing session." :
+      state.allows(.stopSharing) ? "Sharing is prepared or cleanup is outstanding. Stop sharing." : "No sharing is available to stop."
+    stopCallButton.toolTip = state.allows(.stopCall) ? "Stop the existing call without canceling coding work." : "No call is available to stop."
+    badgeView?.sharing = sharing
+    badgeStopSharing?.isEnabled = state.allows(.stopSharing); badgeStopCall?.isEnabled = state.allows(.stopCall)
     goal.stringValue = task?.goal ?? "Describe the work. Progress and decisions will appear here."
     goal.toolTip = task?.goal
     summary.stringValue = task?.summary ?? ""

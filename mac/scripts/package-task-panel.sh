@@ -5,6 +5,10 @@ swift build --product ClawdTimeTaskPanel
 output="$PWD/build/ClawdTime Task Panel.app"
 mkdir -p "$output/Contents/MacOS" "$output/Contents/Resources"
 cp .build/debug/ClawdTimeTaskPanel "$output/Contents/MacOS/ClawdTimeTaskPanel"
+cp Sources/ClawdTimeTaskPanel/Resources/Mascot.png "$output/Contents/Resources/Mascot.png"
+for resources in .build/debug/*ClawdTimeTaskPanel.bundle; do
+  if [ -d "$resources" ]; then cp -R "$resources" "$output/Contents/Resources/"; fi
+done
 cat > "$output/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

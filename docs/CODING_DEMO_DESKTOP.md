@@ -6,6 +6,32 @@ decision, request a scoped revision, accept a verified result, and separately
 cancel a task. Worker-supplied answer choices fill the composer; **Send answer**
 is still required. Closing or quitting the panel leaves the service running.
 
+## Desktop appearance
+
+The companion has a compact dark notch toolbar and an expandable translucent
+task panel. Hide collapses the task details into the toolbar. Minimize leaves a
+draggable circular desktop badge using the supplied monochrome mascot; clicking
+the badge restores the panel. The badge and notch stay floating while the app
+runs. Explicit Quit remains available and leaves the task service running.
+This does not install a login item or a background UI daemon.
+
+Use the chevron or **⌘⇧M** to expand/collapse the task body. The minus button or
+**⌘W** tucks it into the mascot. The app menu's **Show ClawdTime** restores the
+expanded view. Moving focus back to an already-visible compact notch preserves
+that compact state.
+
+The notch keeps the existing **Stop sharing** and **Stop call** actions. The
+minimized badge exposes them in its context menu. They reflect the actual
+service permissions and stay disabled when unavailable. Minimizing does not
+stop sharing or a call, and restoring the panel never restarts sharing. There
+is no new two-way sharing toggle or permission change.
+
+Task input, choices, revisions, checks, acceptance and separate cancellation use
+the same service and durable receipts as before. Changing the window's appearance
+or minimized state does not submit an action, cancel work or grant screen access.
+The supplied mascot is bundled unchanged as a local resource, with no network
+image loading or animated-pet dependency.
+
 The user authorized step-e implementation while deferring remaining step-d
 handset rehearsals. This is a local implementation checkpoint, not a completed
 phone-acceptance gate. No call, line handoff, deployment, capture or permission
