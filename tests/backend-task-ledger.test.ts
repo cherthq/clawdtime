@@ -346,6 +346,54 @@ describe("independent task ledger", () => {
     expect(task.state).toBe("needs_decision");
   });
 
+  it("retains bounded original Codex identities for reconciliation", () => {
+    const f = fixture();
+    const task = f.claim(f.create());
+    expect(() => f.result(task, { threadId: "x".repeat(201) })).toThrow(
+      /thread identity/,
+    );
+    const completed = f.result(task, {
+      threadId: "thread-fixture",
+      turnId: "turn-fixture",
+    });
+    expect(completed.runs[0]).toMatchObject({
+      threadId: "thread-fixture",
+      turnId: "turn-fixture",
+    });
+    expect(f.ledger.get(session.id, task.id).runs[0]).toMatchObject({
+      threadId: "thread-fixture",
+      turnId: "turn-fixture",
+    });
+  });
+
+  it("prepares task-bound briefs from independent verification and clears obsolete ones", () => {
+    const f = fixture();
+    let task = f.verify(f.result(f.claim(f.create())), "failed");
+    expect(task.brief).toMatchObject({
+      kind: "decision",
+      runId: task.runs[0]!.id,
+      verificationId: task.verification!.id,
+    });
+    expect(task.brief!.opening).toContain("Independent verification failed");
+    expect(task.brief!.opening).not.toContain("checks passed");
+    expect(task.brief!.opening).toContain("fixture test");
+    task = f.change(task, {
+      action: "decide",
+      runId: task.runs[0]!.id,
+      instruction: "Fix the failing fixture.",
+    });
+    expect(task.brief).toBeUndefined();
+    task = f.verify(f.result(f.claim(task)));
+    expect(task.brief).toMatchObject({
+      kind: "review",
+      runId: task.runs[1]!.id,
+      verificationId: task.verification!.id,
+    });
+    expect(task.brief!.opening).toContain(
+      "The configured checks passed. Please review the result.",
+    );
+  });
+
   it("does not claim running cancellation succeeded before terminal evidence", () => {
     const f = fixture();
     let task = f.claim(f.create());
@@ -482,6 +530,10 @@ describe("independent task ledger", () => {
         instruction: "Another change",
       }),
     ).toThrow(/unknown/);
+    task = f.change(task, { action: "cancel" });
+    expect(task.state).toBe("canceled");
+    expect(task.calls.some((call) => call.state === "unknown")).toBe(true);
+    expect(() => f.claim(f.create("After cancellation"))).toThrow(/unresolved/);
   });
 
   it("rejects expired or revoked session creation", () => {

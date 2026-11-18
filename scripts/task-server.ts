@@ -17,6 +17,9 @@ import { Vault, token } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
 import { TaskService } from "../src/control/task-service.js";
 import { createTaskApp } from "../src/control/task-app.js";
+import { TaskEngine } from "../src/control/task-engine.js";
+import type { VerificationPlan } from "../src/control/task-verification.js";
+import { CodexTaskWorker } from "../connectors/codex/task-worker.js";
 
 const flags = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -25,7 +28,7 @@ for (let i = 2; i < process.argv.length; i += 2) {
   if (
     !key?.startsWith("--") ||
     !value ||
-    !["--state", "--project", "--port"].includes(key)
+    !["--state", "--project", "--port", "--worker", "--checks"].includes(key)
   )
     throw new Error(
       "Use --state PRIVATE_DIR --project SELECTED_PROJECT [--port 3320].",
@@ -115,19 +118,36 @@ if (!store.get("pairing", "local-demo-pairing"))
   });
 const vault = new Vault(config.key);
 const ledger = new TaskLedger(store, vault);
+const realWorker = flags.get("--worker") === "codex";
+if (flags.has("--worker") && !realWorker)
+  throw new Error("Only the explicit codex worker is supported.");
+if (realWorker !== flags.has("--checks"))
+  throw new Error(
+    "Real Codex requires an explicit verification plan file; simulation has no real checks.",
+  );
 const service = new TaskService(store, vault, ledger, {
   projectRoots: [projectRoot],
-  simulation: true,
+  simulation: !realWorker,
 });
-const app = createTaskApp(service, config.operatorToken);
+const engine = realWorker
+  ? new TaskEngine(
+      service,
+      new CodexTaskWorker({ enabled: true, projectRoots: [projectRoot] }),
+      JSON.parse(
+        readFileSync(flags.get("--checks")!, "utf8"),
+      ) as VerificationPlan,
+    )
+  : undefined;
+const app = createTaskApp(service, config.operatorToken, engine);
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () =>
   console.log(
-    `Task simulation listening on 127.0.0.1:${port}. Local fixture pairing only; no phone, capture or control. Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. Local fixture pairing only; no phone, capture or control. Operator credential file: ${operatorPath}`,
   ),
 );
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () =>
-    server.close(() => {
+    server.close(async () => {
+      await engine?.close();
       cleanup();
       process.exit(0);
     }),

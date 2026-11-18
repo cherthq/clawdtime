@@ -1,5 +1,58 @@
 # Transport and durable backend
 
+## Independent coding-task ledger (step a)
+
+The coding demo uses `src/attention/task-ledger.ts`, separately from the legacy
+original-chat attention/session protocol. It reuses the existing transactional
+`Store` and AES-256-GCM `Vault`; it does not import the Argos broker's transient
+instruction store or relax its original-chat guards. The task service must have
+one database owner and must authenticate the exact independent session before
+every ledger operation.
+
+Task goals, project references, scoped instructions, bounded worker summaries,
+decisions, verification reports, call openings and event receipts are encrypted
+at rest. Protected envelopes verify their record kind and identity after decrypting.
+The service's protected key is required to reopen the database; a replacement key
+does not recover old context. Screens and audio are never ledger content.
+
+Every mutation checks the task revision and commits its event fingerprint and
+result in one SQLite transaction. Identical delivery returns `replayed:true`; the
+worker caller must never dispatch from a replayed claim. Changed content under the
+same event identity fails. Each invocation has a different run and dispatch ID;
+the original task ID persists through decisions and final review. Verification
+and call histories remain intact across follow-up runs.
+
+Only one worker or verifier can be unresolved globally. Running/unknown run
+receipts and unknown call receipts independently fence new dispatch even when a
+different lifecycle state changes. Startup turns in-flight execution, verification
+and connected calls into unknown outcomes. Queued work stays queued. The exact
+original worker dispatch can supply its terminal receipt; no new run, retry or
+operator assertion substitutes for that evidence. Verification restart recovery
+is deliberately fenced until a future exact verifier-receipt reconciliation path
+is implemented.
+
+Running cancellation records a request and waits for the original worker outcome;
+it does not claim the worker stopped. Call lifecycle updates cannot overwrite a
+newer run's state. A passed check requires exit code zero; empty or inconsistent
+verification reports fail validation. Worker prose alone cannot reach review-ready.
+All calls in step a are explicitly simulated; the ledger rejects live preparation.
+
+Validation: `npx vitest run tests/backend-task-ledger.test.ts` covers encrypted
+restart context, revision/event conflicts, exact session/dispatch binding, global
+serialization, cancellation, call/execution races, unknown outcomes and transaction
+rollback. These synthetic checks do not establish real worker or handset behavior.
+
+Step b adds `src/control/task-engine.ts` over the same ledger. A service-owned
+dispatch claim precedes each Codex invocation. Terminal worker results retain
+bounded original thread/turn references. The watcher runs the explicitly configured
+checks independently; an unavailable executable, interrupted process or unresolved
+child cannot become passing evidence. Raw check output is discarded after counting
+bytes and computing a bounded digest. A brief binds its opening and question to
+the current run and verification report and is cleared when a revision queues the
+next run. Preparing this brief neither dials nor grants presentation authority.
+`tests/backend-task-engine.test.ts` additionally covers actual local verifier
+processes and the HTTP run/decision path, including identical decision replay.
+
 ClawdTime is a single-node SQLite pilot. Its database is independent from Apple
 Teams, owner-only, WAL-mode and uses synchronous commits. No source runtime state
 is imported. Node 24+ provides the SQLite runtime.

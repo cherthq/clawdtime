@@ -840,3 +840,51 @@ the service rejected the operation.
 The step-a simulation establishes local task lifecycle and restart behavior only.
 It does not establish real Codex execution, microphone dialogue, call delivery or
 handset behavior. Native worker approval requests are never voice approvals.
+
+## Scoped Codex task worker (coding demo, step b)
+
+`connectors/codex/task-worker.ts` implements `TaskWorker` for the authoritative task
+engine. `task run --id TASK_ID --session-file PRIVATE_FILE` requests nonblocking
+execution; poll `task status` for its result. The engine durably claims the exact
+run before invoking the adapter and independently verifies tests/build afterward.
+The adapter's `completed` result is a known terminal execution outcome, not verified
+task success. It keeps the model's bounded summary and unresolved decision as
+untrusted context. A later instruction uses a new run and a new ephemeral thread;
+there is no `turn/steer`, native approval bridge or original-chat dependency.
+
+The stdio transport is selectively extracted from ArgosClawd `815d51b`:
+`connectors/codex/app-server.ts`. The task worker reuses the reviewed lifecycle,
+approval refusal and unresolved-tool guards from that baseline's `runner.ts`,
+without importing its old broker/job types, document host or `file_contains`
+completion requirement. The associated environment regression was extracted and
+strengthened to require an explicit OS/path/locale/Codex-home allowlist. No provider,
+frontend, database, arbitrary secret or API-key environment variables enter the
+worker. It uses the existing Codex login, with no credential change.
+
+Before any model turn, the adapter checks the returned `workspaceWrite` sandbox,
+disabled command networking, `on-request` approval policy and selected writable
+root. It disables inherited MCP/plugin entries, apps, browser/computer use, hooks,
+goals, memories, additional agents and web search through task-local configuration.
+It then checks the exact thread's MCP inventory and refuses execution unless every
+entry is disabled. A policy mismatch is a blocked initialization, never permission
+to loosen the worker sandbox.
+
+Command/file approval requests receive `decline`; additional permission requests
+receive an empty turn-scoped grant; unsupported interactive requests are rejected.
+Cancellation or a permission block requests interruption once and waits for the
+original `turn/completed` receipt with no outstanding tool execution. Acknowledging
+the interrupt RPC, disconnecting, or reaching a timeout never proves the worker
+stopped. Unknown results poison the local worker and preserve the service's original
+run receipt without resubmission. Final structured output uses a bounded JSON
+schema; malformed output is a known terminal block requiring independent checks
+and human review.
+
+API compatibility was checked against installed `codex-cli 0.166.0-alpha.5.1`, its
+generated App Server schemas, and the official [App Server documentation](https://learn.chatgpt.com/docs/app-server)
+and [configuration reference](https://developers.openai.com/codex/config-reference/).
+The November 18 initialization-only preflight confirmed `on-request`,
+`workspaceWrite`, networking disabled, no additional writable roots, and all three
+inherited MCP entries disabled. It submitted **zero model turns** and closed the
+isolated App Server. Real end-to-end worker/watcher evidence is recorded separately
+in `docs/BUILD_LOG.md`; initialization tests do not establish coding or handset
+acceptance.

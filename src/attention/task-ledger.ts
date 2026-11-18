@@ -216,6 +216,7 @@ export class TaskLedger {
             "A worker or verification outcome is unresolved.",
           );
         task.state = "running";
+        delete task.brief;
         run.state = "running";
         run.startedAt = this.clock();
         break;
@@ -238,6 +239,14 @@ export class TaskLedger {
         )
           throw new DomainError(400, "Invalid worker outcome.");
         run.summary = bounded(command.summary, "worker summary", 4000);
+        if (command.threadId !== undefined)
+          run.threadId = bounded(
+            command.threadId,
+            "worker thread identity",
+            200,
+          );
+        if (command.turnId !== undefined)
+          run.turnId = bounded(command.turnId, "worker turn identity", 200);
         if (command.decision !== undefined)
           run.decision = bounded(command.decision, "decision", 2000);
         run.state = command.outcome;
@@ -266,14 +275,22 @@ export class TaskLedger {
         this.verifications.put({ ...verification, taskId: task.id });
         task.verification = verification;
         task.verifications.push(verification);
-        if (verification.state === "unknown") task.state = "unknown";
-        else if (
+        if (verification.state === "unknown") {
+          task.state = "unknown";
+          delete task.brief;
+        } else if (
           verification.state === "passed" &&
           run.state === "completed" &&
           !run.decision
         ) {
           task.state = "review_ready";
           delete task.decision;
+          task.brief = {
+            runId: run.id,
+            verificationId: verification.id,
+            kind: "review",
+            opening: `${(run.summary ?? "The requested change is implemented.").replace(/\s+/g, " ").slice(0, 300)} The configured checks passed. Please review the result.`,
+          };
         } else {
           task.state = "needs_decision";
           task.decision = {
@@ -284,6 +301,29 @@ export class TaskLedger {
               (run.state !== "completed"
                 ? "The coding run did not complete successfully. What should change?"
                 : "Independent verification did not pass. What should change?"),
+          };
+          const question = task.decision.question
+            .replace(/\s+/g, " ")
+            .slice(0, 1000);
+          const checks = verification.checks
+            .filter((check) => check.state !== "passed")
+            .slice(0, 3)
+            .map((check) => check.name.replace(/\s+/g, " ").slice(0, 100))
+            .join(", ");
+          const status =
+            verification.state === "failed"
+              ? `Independent verification failed: ${checks}.`
+              : verification.state === "blocked"
+                ? `Independent verification could not finish: ${checks}.`
+                : run.state !== "completed"
+                  ? `The coding run was ${run.state}.`
+                  : "The configured checks passed; I need your choice.";
+          task.brief = {
+            runId: run.id,
+            verificationId: verification.id,
+            kind: "decision",
+            question,
+            opening: `${status} ${question}`,
           };
         }
         break;
@@ -375,6 +415,7 @@ export class TaskLedger {
         }
         task.runs.push(this.newRun(instruction));
         task.state = "queued";
+        delete task.brief;
         break;
       }
       case "accept": {

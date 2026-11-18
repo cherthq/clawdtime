@@ -50,6 +50,8 @@ export interface CodingRun {
   startedAt?: number;
   endedAt?: number;
   cancelRequested?: boolean;
+  threadId?: string;
+  turnId?: string;
 }
 export interface TaskDecision {
   id: string;
@@ -92,6 +94,7 @@ export interface CodingTask {
   call?: TaskCall;
   verifications: TaskVerification[];
   calls: TaskCall[];
+  brief?: { runId: string; verificationId: string; kind: "decision" | "review"; opening: string; question?: string };
   createdAt: number;
   updatedAt: number;
 }
@@ -104,6 +107,8 @@ export type TaskCommand = { eventId: string; expectedRevision: number } & (
       outcome: "completed" | "failed" | "blocked" | "canceled" | "unknown";
       summary: string;
       decision?: string;
+      threadId?: string;
+      turnId?: string;
     }
   | { action: "verify_result"; verification: TaskVerification }
   | {
@@ -125,6 +130,8 @@ export interface TaskWorkerResult {
   outcome: "completed" | "failed" | "blocked" | "canceled" | "unknown";
   summary: string;
   decision?: string;
+  threadId?: string;
+  turnId?: string;
 }
 export interface TaskWorker {
   run(
@@ -134,6 +141,7 @@ export interface TaskWorker {
       revision: number;
       projectRoot: string;
       context: string;
+      dispatchId?: string;
     },
     emit: (event: { phase: string }) => void,
     signal: AbortSignal,

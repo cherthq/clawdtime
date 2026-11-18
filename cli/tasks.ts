@@ -66,6 +66,7 @@ export async function taskCli(
         "task register --pairing-id ID --host-id ID --project PATH --event-id ID [--operator-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
         "task create --goal TEXT --event-id ID [--session-file PRIVATE_PATH]\n" +
         "task status --id ID [--session-file PRIVATE_PATH]\n" +
+        "task run --id ID [--session-file PRIVATE_PATH]\n" +
         "task command --id ID --json JSON [--session-file PRIVATE_PATH]\n" +
         "Use CLAWDTIME_TASK_URL (default http://127.0.0.1:3320). Registration uses CLAWDTIME_TASK_TOKEN as operator credential; other commands use a session file or session token. Never put credentials in arguments. Preserve event IDs when reconciling a lost response; this CLI never retries writes.",
     );
@@ -83,6 +84,7 @@ export async function taskCli(
     ],
     create: ["goal", "event-id", "session-file"],
     status: ["id", "session-file"],
+    run: ["id", "session-file"],
     command: ["id", "json", "session-file"],
   };
   if (
@@ -133,6 +135,10 @@ export async function taskCli(
       break;
     case "status":
       path = `/tasks/${encodeURIComponent(required("id"))}`;
+      break;
+    case "run":
+      path = `/tasks/${encodeURIComponent(required("id"))}/run`;
+      body = {};
       break;
     default:
       path = `/tasks/${encodeURIComponent(required("id"))}/commands`;
