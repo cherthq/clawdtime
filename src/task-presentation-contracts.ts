@@ -67,6 +67,11 @@ export const taskSceneSchema = z
     focus: taskSceneFocusSchema,
     /** Prepared initial framing; transitions never reveal pixels outside it. */
     overview: taskSceneFocusSchema.optional(),
+    /** Prepared source coordinates; never runtime input or arbitrary styling. */
+    annotation: z
+      .object({ rect: taskSceneFocusSchema, label: prose(100) })
+      .strict()
+      .optional(),
     transitionMs: z.number().int().min(450).max(650).default(550),
     artifact: z
       .object({
@@ -91,7 +96,17 @@ export const taskSceneSchema = z
         scene.focus.x + scene.focus.width <= bounds.x + bounds.width &&
         scene.focus.y + scene.focus.height <= bounds.y + bounds.height)
     );
-  }, "Scene focus must stay inside its prepared overview.");
+  }, "Scene focus must stay inside its prepared overview.")
+  .refine((scene) => {
+    const rect = scene.annotation?.rect;
+    return (
+      !rect ||
+      (rect.x >= scene.focus.x &&
+        rect.y >= scene.focus.y &&
+        rect.x + rect.width <= scene.focus.x + scene.focus.width &&
+        rect.y + rect.height <= scene.focus.y + scene.focus.height)
+    );
+  }, "Scene annotation must stay inside its prepared focus.");
 export const taskPresentationManifestSchema = z
   .object({
     version: z.literal(1),

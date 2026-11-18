@@ -13,6 +13,55 @@ from PIL import Image
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pcm_timeline_is_contiguous_bounded_and_stop_fences_late_receipts(self):
+        async def route(request):
+            if request.path == '/':
+                return web.Response(text=Path(__file__).with_name('task_presentation_local.html').read_text(), content_type='text/html')
+            if request.path == '/frame':
+                return web.Response(status=410)
+            return web.json_response({'ready': True, 'state': 'visible'})
+        app = web.Application()
+        app.router.add_route('*', '/{tail:.*}', route)
+        server = TestServer(app)
+        await server.start_server()
+        script = r'''import {chromium} from '@playwright/test';
+const browser=await chromium.launch({channel:'chrome',headless:true});
+try{
+ const page=await browser.newPage();await page.addInitScript(()=>{
+ window.sources=[];window.acks=[];
+ window.AudioContext=class {state='suspended';origin=performance.now();destination={};get currentTime(){return(performance.now()-this.origin)/1000;}async resume(){this.state='running';}async close(){this.state='closed';}
+ createBuffer(channels,length,rate){if(channels!==1||rate!==16000)throw Error('Format changed');const samples=new Float32Array(length);return{duration:length/rate,getChannelData:()=>samples};}
+ createBufferSource(){const context=this;return{connect(){},start(at){this.at=at;this.lead=at+this.buffer.duration-context.currentTime;this.samples=Array.from(this.buffer.getChannelData(0));window.sources.push(this);this.timer=setTimeout(()=>this.onended?.(),Math.max(0,(at+this.buffer.duration-context.currentTime)*1000));},stop(){clearTimeout(this.timer);this.stopped=true;}};}};
+ window.WebSocket=class {static OPEN=1;readyState=1;constructor(){window.fixtureSocket=this;queueMicrotask(()=>this.onopen?.());}send(value){window.acks.push(JSON.parse(value));}close(){this.readyState=3;queueMicrotask(()=>this.onclose?.());}};
+ });await page.goto(process.argv[1]);await page.locator('#start:enabled').waitFor();await page.locator('#start').click();
+ await page.waitForFunction(()=>document.getElementById('state').textContent==='Ready for the prepared walkthrough.');
+ await page.evaluate(async()=>{
+ const expected=[];const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ function send(index){const bytes=new Uint8Array(960),view=new DataView(bytes.buffer);for(let j=0;j<480;j++){const sample=Math.round(Math.sin((index*480+j)*2*Math.PI*440/16000)*8192);view.setInt16(j*2,sample,true);expected.push(sample/32768);}fixtureSocket.onmessage({data:JSON.stringify({kind:'audio',id:index+1,epoch:0,pcm:btoa(String.fromCharCode(...bytes))})});}
+ for(let i=0;i<12;i++){while(sources.length-acks.length>=4)await sleep(1);if(i>=4)await sleep(8);send(i);}
+ while(acks.length<12)await sleep(1);
+ for(let i=0;i<12;i++){if(sources[i].lead>.200001)throw Error('Unbounded lead');if(Math.abs(sources[i].buffer.duration-.03)>1e-12)throw Error('PCM duration changed');if(i&&Math.abs(sources[i].at-sources[i-1].at-.03)>1e-6)throw Error('Gap or overlap between adjacent PCM chunks');}
+ const decoded=sources.slice(0,12).flatMap(source=>source.samples);if(decoded.length!==expected.length||decoded.some((sample,i)=>sample!==expected[i]))throw Error('PCM endian, scaling or continuity changed');
+ for(let i=12;i<16;i++)send(i);const late=sources.slice(12).map(source=>source.onended);document.getElementById('stop').click();for(const callback of late)callback();
+ if(acks.length!==12||sources.slice(12).some(source=>!source.stopped))throw Error('Stop failed to cancel queued samples or late receipts');
+ });await page.close();
+}finally{await browser.close();}'''
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec('node', '--input-type=module', '-e', script, str(server.make_url('/')) + '#synthetic',
+                cwd=Path(__file__).resolve().parents[1], stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+            _, stderr = await asyncio.wait_for(process.communicate(), 20)
+            self.assertEqual(process.returncode, 0, stderr.decode()[-2500:])
+        finally:
+            if process and process.returncode is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(process.wait(), 2)
+                except TimeoutError:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    await process.wait()
+            await server.close()
+
     async def test_stalled_frame_clears_and_stop_fences_delayed_start_and_decode(self):
         events = {'audio': 0, 'closed': 0, 'start': 0, 'stop': 0, 'frames': 0, 'paint': 0, 'terminal': False}
         gate = asyncio.Event()

@@ -10,12 +10,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from aiohttp import WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
 from task_voice import VoiceError
 from task_presentation import TaskPresentationRuntime, PresentationJournal, validate_prepare
-from task_presentation_local import AttachedSink, control_app
+from task_presentation_local import AttachedSink, PresentationBrowserSink, control_app
 from task_presentation_narrator import PresentationNarrator
 from task_presentation_diagnostics import PresentationDiagnostics
 
@@ -205,6 +205,53 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(VoiceError):
                 validate_prepare(binding)
 
+    async def test_annotation_tracks_integer_crop_and_letterboxed_tile_at_twenty_positions(self):
+        scene = self.binding['manifest']['scenes'][0]
+        scene['overview'] = {'x': .101, 'y': .151, 'width': .798, 'height': .748}
+        scene['annotation'] = {'rect': {'x': .251, 'y': .301, 'width': .399, 'height': .349}, 'label': 'Verified empty state'}
+        validate_prepare(self.binding)
+        image = Image.new('RGB', (801, 603), '#568cab')
+        tick = [0.0]
+        self.runtime.clock = lambda: tick[0]
+        self.runtime.scene = scene
+        self.runtime.source_frame = {'image': image, 'capturedAt': time.time() * 1000,
+            'sourceFrameId': 'synthetic', 'geometryGeneration': 'geometry', 'contentRevision': 'a' * 64}
+        self.runtime.authority_at = self.runtime.transition_at = 0
+        self.runtime.authority_generation = self.runtime.generation
+        boxes = []
+        rectangle = ImageDraw.ImageDraw.rectangle
+        def record(draw, box, *args, **kwargs):
+            boxes.append((draw._image.size, box, kwargs))
+            return rectangle(draw, box, *args, **kwargs)
+        with patch.object(image, 'crop', wraps=image.crop) as crops, patch.object(ImageDraw.ImageDraw, 'rectangle', new=record):
+            for index in range(20):
+                tick[0] = index / 19 * .450
+                self.runtime.render()
+                (tw, th), box, style = boxes[-1]
+                x, y, right, bottom = crops.call_args.args[0]
+                expected = (round((.251 * 801 - x) * tw / (right - x)),
+                    round((.301 * 603 - y) * th / (bottom - y)),
+                    round((.650 * 801 - x) * tw / (right - x)),
+                    round((.650 * 603 - y) * th / (bottom - y)))
+                self.assertEqual(box, expected)
+                self.assertGreaterEqual(min(box), 0)
+                self.assertLess(box[2], tw)
+                self.assertLess(box[3], th)
+                self.assertEqual(style, {'outline': '#ffd166', 'width': 3})
+        # Omitting annotation restores the previous renderer bytes exactly.
+        scene.pop('annotation')
+        self.runtime.render(); unchanged = self.runtime.output
+        self.runtime.render(); self.assertEqual(self.runtime.output, unchanged)
+
+    async def test_annotation_rejects_outside_focus_and_arbitrary_style(self):
+        for annotation in ({'rect': {'x': 0, 'y': 0, 'width': 1, 'height': 1}, 'label': 'Outside'},
+                           {'rect': {'x': .3, 'y': .3, 'width': .1, 'height': .1}, 'label': 'x' * 101},
+                           {'rect': {'x': .3, 'y': .3, 'width': .1, 'height': .1}, 'label': 'Bounded', 'style': 'html'}):
+            binding = copy.deepcopy(self.binding)
+            binding['manifest']['scenes'][0]['annotation'] = annotation
+            with self.assertRaises(VoiceError):
+                validate_prepare(binding)
+
     async def test_journal_rejects_symlink_lock_without_modifying_target(self):
         path = Path(self.temp.name) / 'other.sqlite'
         external = Path(self.temp.name) / 'unrelated'
@@ -349,6 +396,46 @@ class NarrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ws.sent[-1], {'type': 'InjectAgentMessage', 'message': 'Prepared sentence.', 'behavior': 'default'})
         self.assertEqual(self.ws.sent[0]['agent']['think']['functions'], [])
         self.assertNotIn('greeting', self.ws.sent[0]['agent'])
+
+    async def test_lookahead_is_bounded_and_eof_waits_every_actual_receipt(self):
+        self.ws.pcm = b'\x01\x00' * 480 * 12
+        receipts, chunks = [], []
+        async def enqueue(pcm, epoch):
+            chunks.append(pcm)
+            future = asyncio.get_running_loop().create_future()
+            receipts.append(future)
+            return future
+        self.sink.enqueue = AsyncMock(side_effect=enqueue)
+        speaking = asyncio.create_task(self.narrator.speak('Prepared sentence.', self.authorize))
+        while len(receipts) < 4:
+            await asyncio.sleep(0)
+        await asyncio.sleep(.01)
+        self.assertEqual(len(receipts), 4)
+        self.assertFalse(speaking.done())
+        for index in range(12):
+            while len(receipts) <= index:
+                await asyncio.sleep(0)
+            self.assertFalse(speaking.done())
+            receipts[index].set_result(None)
+        self.assertTrue((await speaking)['completed'])
+        self.assertEqual(b''.join(chunks), self.ws.pcm)
+        self.assertTrue(all(len(chunk) <= 960 for chunk in chunks))
+        self.assertGreaterEqual(self.authorize.await_count, 12)
+
+    async def test_presentation_sink_bounds_and_clear_cancel_receipts_ignore_late_acks(self):
+        socket = SimpleNamespace(closed=False, send_json=AsyncMock())
+        sink = PresentationBrowserSink(socket)
+        receipts = [await sink.enqueue(b'\x01\x00' * 480, 0) for _ in range(4)]
+        with self.assertRaises(VoiceError):
+            await sink.enqueue(b'\x01\x00' * 480, 0)
+        sink.acknowledge(1, 1)
+        self.assertFalse(receipts[0].done())
+        sink.acknowledge(1, 0)
+        self.assertIsNone(await receipts[0])
+        await sink.clear(1)
+        self.assertTrue(all(receipt.cancelled() for receipt in receipts[1:]))
+        sink.acknowledge(2, 0)
+        self.assertEqual(sink.pending_bytes, 0)
     async def test_wrong_narration_never_reaches_sink(self):
         self.ws.reply = 'Different invented sentence.'
         with self.assertRaises(VoiceError):

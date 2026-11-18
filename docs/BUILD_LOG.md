@@ -888,3 +888,71 @@ Validation for the checkpoint: the complete media suite passed
 Swift source is unchanged since its 31-test passing checkpoint. `npm run check` passed **888 tests in 60 files** in 12.07s, plus typecheck
 and build. `git diff --check` passed. Real three-scene local qualification remains pending;
 no new call, line handoff, deployment or coding run has occurred.
+
+### Step d — real local walkthrough result and remaining polish
+
+Narration repair `042e0cc` is pushed. After the user opened the private launcher
+and enabled local preview, the fresh attempt completed all three show and all
+three narration effects. Show receipt durations were 1,051 / 1,328 / 926 ms;
+narration durations were 7,667 / 8,648 / 9,933 ms. The host captured 106 source
+frames and rendered 535 output frames. Three exact cues released three quarantined
+initial chunks; all 761 audio chunks (729,600 transient PCM bytes) received playback
+completion acknowledgements. No runtime/provider failure was recorded.
+
+The lead visibly inspected readable code and verification views. Clicking visible
+Stop removed the image and showed “Sharing and narration stopped.” Durable Stop
+completed in 2 ms with captureStopped, narrationStopped, outputCleared and
+childrenJoined all true. This receipt timing is not a measured remote Stop latency.
+The presentation host and task server were then stopped; task revision 11 remains
+review-ready, with no new worker run, call or deployment. Original unknown history
+remains preserved. Metadata-only evidence is stored in protected local state;
+no screen or audio was saved.
+
+The user reported that zoom and screen sharing worked, then clarified that the
+audio was crackly or distorted and noted missing annotations/text overlays. This is a successful real-pixel
+and narration-path exercise, not complete polish acceptance. Investigating tiny
+serial playback chunks and adding the plan's restrained highlights is authorized
+implementation work. One optional prepared annotation rectangle and bounded label
+will bind to the existing manifest/grant; no runtime model coordinates, controls,
+arbitrary styles, or new framework. The label belongs in a fixed gutter so source
+text remains readable. Handset acceptance and the full step-d tag remain pending.
+
+The polish checkpoint adds a presentation-only audio sink; the existing voice
+sink is unchanged. It schedules consecutive PCM16LE mono 16 kHz chunks on one
+AudioContext timeline, rather than inserting a browser round trip between every
+30 ms chunk. Admission is bounded to 140 ms PCM and eight receipts, with a 60 ms
+initial cushion and a 200 ms browser scheduling ceiling. Every enqueue rechecks
+current authority and epoch. Completion waits for every actual `onended` receipt;
+Stop cancels queued samples and pending receipts. Source review found matching
+provider/decoder formats; gap removal is a concrete repair, not proof that the
+reported physical crackle is resolved. Relevant APIs were checked against the
+[Web Audio scheduling documentation](https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode/start)
+and [Deepgram audio settings](https://developers.deepgram.com/docs/voice-agent-settings).
+
+One optional `annotation` binds a normalized rectangle and at-most-100-character
+plain label into the existing manifest fingerprint. The rectangle must stay
+inside focus and follows the actual integer crop, resized tile dimensions and
+letterbox placement. Its restrained outline is clipped to the image; the label
+uses a separate bottom gutter. No runtime model coordinates, OS input or arbitrary
+styles are accepted. The real fixture remains unchanged. Its prepared empty-state,
+code-branch and verification highlights require fresh visual qualification.
+
+Final media validation: `media/.venv/bin/python -m unittest discover -s media
+-p 'test_*.py'` passed **299 tests**, 65.669s. Focused presentation tests passed
+**34**, 10.719s; independent review ran the same 34 tests in 10.157s and approved.
+Synthetic Chrome tests verify correct sample format and durations, contiguous
+30 ms scheduling under simulated 8 ms message delay, bounded lead and cancellation
+of future samples/late acknowledgements. Python tests cover actual-receipt EOF
+completion, queue bounds, and 20 fractional annotation projections. Transport's
+12 new annotation regressions cover containment, invalid labels/fields and grant
+fingerprints. Swift is unchanged since its 31-test/helper-build passing checkpoint.
+These automated results do not establish physical audio quality or handset polish.
+
+At the final frozen source, `npm run check` passed **900 tests in 60 files**
+(12.03s), typecheck and build. `git diff --check` passed. Independent review found
+no blockers. A fresh protected three-scene manifest/grant is prepared for a local
+relisten; earlier used and unused manifests remain historical records, with no
+replayed external effects. Current source windows still resolve by exact identity
+but become offscreen after returning to the chat; local Start must revalidate
+visibility after the user opens the preview. Permission, console and unlock
+preflight pass. No current-Space guard has been relaxed. No step-d tag is added.

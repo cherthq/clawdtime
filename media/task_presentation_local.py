@@ -1,6 +1,7 @@
 """Fixed loopback operator boundary and separate local preview capability."""
 import argparse
 import asyncio
+import base64
 import hmac
 import json
 import os
@@ -10,7 +11,7 @@ import secrets
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from task_voice import VoiceError
-from task_voice_local import BrowserSink, private_json
+from task_voice_local import private_json
 from task_voice_deepgram import DeepgramProvider
 from task_presentation import (NativeWindowSource, PresentationAuthority, PresentationJournal,
                                TaskPresentationRuntime, validate_prepare)
@@ -21,12 +22,65 @@ class AttachedSink:
     def __init__(self):
         self.delegate = None
     async def play(self, pcm, epoch):
-        if self.delegate is None:
-            raise VoiceError('local_audio_unavailable')
-        await self.delegate.play(pcm, epoch)
+        await (await self.enqueue(pcm, epoch))
     async def clear(self, epoch):
         if self.delegate:
             await self.delegate.clear(epoch)
+    async def enqueue(self, pcm, epoch):
+        if self.delegate is None:
+            raise VoiceError('local_audio_unavailable')
+        return await self.delegate.enqueue(pcm, epoch)
+
+
+class PresentationBrowserSink:
+    """Ordered admission; receipts mean onended, never merely scheduled."""
+    def __init__(self, socket):
+        self.socket, self.epoch, self.serial = socket, 0, 0
+        self.pending = {}
+        self.pending_bytes = 0
+        self.lock = asyncio.Lock()
+
+    async def enqueue(self, pcm, epoch):
+        async with self.lock:
+            if (epoch != self.epoch or self.socket.closed or not isinstance(pcm, bytes)
+                    or not pcm or len(pcm) % 2 or len(pcm) > 960
+                    or len(self.pending) >= 8 or self.pending_bytes + len(pcm) > 4480):
+                raise VoiceError('presentation_audio_admission_refused')
+            self.serial += 1
+            identity = self.serial
+            future = asyncio.get_running_loop().create_future()
+            self.pending[identity] = (future, len(pcm), epoch)
+            self.pending_bytes += len(pcm)
+            try:
+                await asyncio.wait_for(self.socket.send_json({'kind': 'audio', 'id': identity, 'epoch': epoch,
+                    'pcm': base64.b64encode(pcm).decode('ascii')}), 1)
+            except BaseException:
+                record = self.pending.pop(identity, None)
+                if record:
+                    self.pending_bytes -= record[1]
+                    future.cancel()
+                raise
+            return future
+
+    def acknowledge(self, identity, epoch):
+        if type(identity) is not int or identity <= 0 or type(epoch) is not int or epoch < 0:
+            raise VoiceError('playback_ack_invalid')
+        record = self.pending.get(identity)
+        if record is None or record[2] != epoch or epoch != self.epoch:
+            return
+        self.pending.pop(identity)
+        self.pending_bytes -= record[1]
+        if not record[0].done():
+            record[0].set_result(None)
+
+    async def clear(self, epoch):
+        self.epoch = epoch
+        for future, _, _ in self.pending.values():
+            future.cancel()
+        self.pending.clear()
+        self.pending_bytes = 0
+        if not self.socket.closed:
+            await asyncio.wait_for(self.socket.send_json({'kind': 'clear', 'epoch': epoch}), 1)
 
 
 def control_app(runtime, token, browser_token, port, sink):
@@ -124,15 +178,15 @@ def control_app(runtime, token, browser_token, port, sink):
         used_audio = True
         audio_socket = web.WebSocketResponse(max_msg_size=2048, heartbeat=10)
         await audio_socket.prepare(request)
-        sink.delegate = BrowserSink(audio_socket)
+        sink.delegate = PresentationBrowserSink(audio_socket)
         try:
             async for message in audio_socket:
                 if message.type != WSMsgType.TEXT:
                     raise VoiceError('playback_message_invalid')
                 value = json.loads(message.data)
-                if not isinstance(value, dict) or set(value) != {'kind', 'id'} or value['kind'] != 'played':
+                if not isinstance(value, dict) or set(value) != {'kind', 'id', 'epoch'} or value['kind'] != 'played':
                     raise VoiceError('playback_message_invalid')
-                sink.delegate.acknowledge(value['id'])
+                sink.delegate.acknowledge(value['id'], value['epoch'])
         finally:
             await runtime.stop()
             sink.delegate = None

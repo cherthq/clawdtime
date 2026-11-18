@@ -244,6 +244,76 @@ describe("independent task presentation ledger", () => {
     expect(f.ledger.unresolved()).toHaveLength(0);
   });
 
+  it("binds annotation geometry and label without changing an omitted-annotation fingerprint", () => {
+    const f = fixture(),
+      scene = f.manifest.scenes[0]!;
+    const original = taskPresentationFingerprint(f.manifest);
+    scene.annotation = {
+      rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
+      label: "Filter matches",
+    };
+    const annotated = taskPresentationFingerprint(f.manifest);
+    expect(annotated).not.toBe(original);
+    delete scene.annotation;
+    expect(taskPresentationFingerprint(f.manifest)).toBe(original);
+    scene.annotation = {
+      rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
+      label: "Filter matches",
+    };
+    expect(() => f.prepare()).toThrow(/grant/);
+    f.grant.manifestFingerprint = annotated;
+    expect(f.prepare().presentation.manifest.scenes[0]!.annotation).toEqual(
+      scene.annotation,
+    );
+    scene.annotation.label = "Changed label";
+    expect(taskPresentationFingerprint(f.manifest)).not.toBe(annotated);
+    expect(() => f.prepare()).toThrow(/conflicts/);
+  });
+  it.each([
+    { x: 0.125, y: 0.25, width: 0.25, height: 0.25 },
+    { x: 0.25, y: 0.125, width: 0.25, height: 0.25 },
+    { x: 0.625, y: 0.25, width: 0.25, height: 0.25 },
+    { x: 0.25, y: 0.625, width: 0.25, height: 0.25 },
+  ])("refuses an annotation escaping its focus region %j", (rect) => {
+    const f = fixture(),
+      scene = f.manifest.scenes[0]!;
+    scene.focus = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+    scene.annotation = { rect, label: "Relevant code" };
+    expect(() => f.prepare()).toThrow(/annotation.*focus/i);
+    expect(f.ledger.unresolved()).toHaveLength(0);
+  });
+  it.each([
+    "",
+    "   ",
+    "x".repeat(101),
+    "private\u0000label",
+    "private\u001flabel",
+  ])("rejects invalid annotation label %j", (label) => {
+    const f = fixture();
+    f.manifest.scenes[0]!.annotation = {
+      rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
+      label,
+    };
+    expect(() => f.prepare()).toThrow();
+    expect(f.ledger.unresolved()).toHaveLength(0);
+  });
+  it.each(["annotation", "rect"])(
+    "refuses unrecognized %s fields before admission",
+    (level) => {
+      const f = fixture(),
+        annotation = {
+          rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
+          label: "Matches",
+        };
+      Object.assign(level === "annotation" ? annotation : annotation.rect, {
+        untrustedExtra: "not authorized",
+      });
+      f.manifest.scenes[0]!.annotation = annotation;
+      expect(() => f.prepare()).toThrow();
+      expect(f.ledger.unresolved()).toHaveLength(0);
+    },
+  );
+
   it("refuses setup chatter before the exact prepared task opening", () => {
     const f = fixture();
     f.manifest.scenes[0]!.narration = "Let me set up the windows.";

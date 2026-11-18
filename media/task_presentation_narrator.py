@@ -6,6 +6,7 @@ acknowledgment after onended and current presentation authority. No audio is sav
 import asyncio
 import json
 import time
+from collections import deque
 
 from task_voice import VoiceError
 from task_voice_deepgram import settings
@@ -40,6 +41,7 @@ class PresentationNarrator:
         self.quarantined_bytes = 0
         self.quarantine_deadline = None
         self.quarantine_task = None
+        self.inflight = set()
 
     async def send(self, value):
         async with self.send_lock:
@@ -184,6 +186,18 @@ class PresentationNarrator:
             raise VoiceError('narration_disconnected')
 
     async def play(self):
+        admitted = deque()
+        admitted_bytes = 0
+        async def retire():
+            nonlocal admitted_bytes
+            completion, size = admitted.popleft()
+            await completion
+            admitted_bytes -= size
+
+        async def complete(receipt):
+            await asyncio.wait_for(receipt, 2)
+            self.diagnostics.increment('sinkCompleted')
+
         while not self.closed:
             epoch, pcm = await self.queue.get()
             if pcm is not None:
@@ -192,18 +206,34 @@ class PresentationNarrator:
                 continue
             if pcm is None:
                 self.diagnostics.phase('cue_drain')
+                while admitted:
+                    await retire()
                 await self.authorize()
                 if self.pending and not self.pending.done() and epoch == self.epoch:
                     self.diagnostics.phase('cue_complete')
                     self.pending.set_result({'completed': True, 'evidence': 'playback_completed_not_audibility'})
                 continue
-            for offset in range(0, len(pcm), 3200):
+            for offset in range(0, len(pcm), 960):
+                chunk = pcm[offset:offset + 960]
+                # 140ms PCM + browser's initial60ms cushion <=200ms lead.
+                while admitted and (admitted_bytes + len(chunk) > 4480 or len(admitted) >= 8):
+                    await retire()
                 await self.authorize()
                 if self.closed or epoch != self.epoch:
                     break
                 self.diagnostics.increment('sinkChunks')
-                await asyncio.wait_for(self.sink.play(pcm[offset:offset + 3200], epoch), 2)
-                self.diagnostics.increment('sinkCompleted')
+                enqueue = getattr(self.sink, 'enqueue', None)
+                if callable(enqueue):
+                    receipt = await asyncio.wait_for(enqueue(chunk, epoch), 1)
+                else:
+                    # Credential-free/discard sinks retain actual completion.
+                    receipt = asyncio.create_task(self.sink.play(chunk, epoch))
+                completion = asyncio.create_task(complete(receipt))
+                self.inflight.add(completion)
+                completion.add_done_callback(self.inflight.discard)
+                completion.add_done_callback(self.failed)
+                admitted.append((completion, len(chunk)))
+                admitted_bytes += len(chunk)
 
     async def ping(self):
         while not self.closed:
@@ -275,10 +305,10 @@ class PresentationNarrator:
                 await asyncio.wait_for(asyncio.gather(self.start_task, return_exceptions=True), 8)
             except Exception as error:
                 failures.append(error)
-        for task in (self.reader, self.player, self.keepalive, self.quarantine_task):
+        for task in (self.reader, self.player, self.keepalive, self.quarantine_task, *self.inflight):
             if task:
                 task.cancel()
-        await asyncio.gather(*(task for task in (self.reader, self.player, self.keepalive, self.quarantine_task) if task), return_exceptions=True)
+        await asyncio.gather(*(task for task in (self.reader, self.player, self.keepalive, self.quarantine_task, *self.inflight) if task), return_exceptions=True)
         for operation in ([self.ws.close] if self.ws else []) + [self.provider.close]:
             try:
                 await asyncio.wait_for(operation(), 3)

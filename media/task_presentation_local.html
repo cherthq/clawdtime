@@ -8,22 +8,24 @@
 <script>
 'use strict';
 const start=document.getElementById('start'),stop=document.getElementById('stop'),state=document.getElementById('state'),view=document.getElementById('view');
-let audio,ws,epoch=0,ended=false,started=false,imageURL=null,generation=0,lastFrameAt=0,lastSourceAt=0;
+let audio,ws,epoch=0,ended=false,started=false,imageURL=null,generation=0,lastFrameAt=0,lastSourceAt=0,nextAudioAt=0,lastAudioId=0;
 const playing=new Set();
 async function post(path,body={}){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store',signal:AbortSignal.timeout(2000)});if(!response.ok)throw Error('Local operation refused');return response.json();}
 function blank(){generation++;view.hidden=true;view.removeAttribute('src');if(imageURL){URL.revokeObjectURL(imageURL);imageURL=null;}}
-function clear(){for(const item of playing){item.onended=null;try{item.stop();}catch{}}playing.clear();}
+function clear(){for(const item of playing){item.onended=null;try{item.stop();}catch{}}playing.clear();nextAudioAt=0;}
 async function halt(message='Sharing and narration stopped.'){if(ended)return;ended=true;start.disabled=true;blank();clear();state.textContent=message;ws?.close();const closing=audio?.close();try{await post('/local/stop');}catch{state.textContent='Stopped locally. Cleanup requires inspection.';}await closing;}
 stop.onclick=()=>halt();
 start.onclick=async()=>{if(started||ended)return;started=true;start.disabled=true;const startGeneration=generation;
 const current=()=>!ended&&generation===startGeneration;
 try{audio=new AudioContext({sampleRate:16000});await audio.resume();if(!current()){await audio.close();return;}if(audio.state!=='running')throw Error('Audio unavailable');
 ws=new WebSocket(location.origin.replace('http:','ws:')+'/audio');
-ws.onmessage=event=>{const value=JSON.parse(event.data);if(value.kind==='clear'){epoch=value.epoch;clear();return;}if(value.kind!=='audio'||ended||value.epoch!==epoch)return;
-if(audio.state!=='running'){void halt();return;}const raw=atob(value.pcm),pcm=new DataView(new ArrayBuffer(raw.length));for(let i=0;i<raw.length;i++)pcm.setUint8(i,raw.charCodeAt(i));
+ws.onmessage=event=>{try{const value=JSON.parse(event.data);if(value.kind==='clear'){if(!Number.isSafeInteger(value.epoch)||value.epoch<epoch)throw Error('Invalid clear');epoch=value.epoch;clear();return;}if(value.kind!=='audio'||ended||value.epoch!==epoch)return;
+if(audio.state!=='running'){void halt();return;}const raw=atob(value.pcm);if(!raw.length||raw.length%2||raw.length>960||!Number.isSafeInteger(value.id)||value.id<=lastAudioId||playing.size>=8)throw Error('Invalid audio');const pcm=new DataView(new ArrayBuffer(raw.length));for(let i=0;i<raw.length;i++)pcm.setUint8(i,raw.charCodeAt(i));
 const buffer=audio.createBuffer(1,raw.length/2,16000),samples=buffer.getChannelData(0);for(let i=0;i<samples.length;i++)samples[i]=pcm.getInt16(i*2,true)/32768;
+const now=audio.currentTime,startAt=nextAudioAt>now?nextAudioAt:now+.060;
+if(startAt+buffer.duration-now>.200001)throw Error('Audio lead exceeded');lastAudioId=value.id;nextAudioAt=startAt+buffer.duration;
 const item=audio.createBufferSource();item.buffer=buffer;item.connect(audio.destination);playing.add(item);const admittedEpoch=epoch;
-item.onended=()=>{playing.delete(item);if(!ended&&epoch===admittedEpoch&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({kind:'played',id:value.id}));};item.start();};
+item.onended=()=>{playing.delete(item);if(!ended&&epoch===admittedEpoch&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({kind:'played',id:value.id,epoch:admittedEpoch}));};item.start(startAt);}catch{void halt('Audio playback unavailable. Sharing stopped.');}};
 ws.onclose=()=>{if(!ended)void halt();};await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});if(!current()){ws.close();return;}await post('/local/start');if(!current()){ws.close();return;}state.textContent='Ready for the prepared walkthrough.';void frames();
 }catch{state.textContent='Local preview unavailable.';await halt();}};
 const watchdog=setInterval(()=>{if(!view.hidden&&(performance.now()-lastFrameAt>1500||Date.now()-lastSourceAt>=2000))blank();},100);

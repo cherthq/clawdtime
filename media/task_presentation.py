@@ -82,7 +82,8 @@ def validate_prepare(value):
     seen = set()
     for scene in manifest['scenes']:
         exact(scene, {'id', 'kind', 'title', 'narration', 'expectedOutcome', 'target', 'focus', 'transitionMs'}
-              | ({'artifact'} if 'artifact' in scene else set()) | ({'overview'} if 'overview' in scene else set()))
+              | ({'artifact'} if 'artifact' in scene else set()) | ({'overview'} if 'overview' in scene else set())
+              | ({'annotation'} if 'annotation' in scene else set()))
         if not identity(scene['id']) or scene['id'] in seen or scene['kind'] not in ('code', 'preview', 'verification'):
             fail()
         seen.add(scene['id'])
@@ -101,6 +102,19 @@ def validate_prepare(value):
             if (focus['x'] < overview['x'] or focus['y'] < overview['y']
                     or focus['x'] + focus['width'] > overview['x'] + overview['width']
                     or focus['y'] + focus['height'] > overview['y'] + overview['height']):
+                fail()
+        if 'annotation' in scene:
+            annotation = scene['annotation']
+            exact(annotation, ('rect', 'label'))
+            prose(annotation['label'], 100)
+            rect, focus = annotation['rect'], scene['focus']
+            exact(rect, ('x', 'y', 'width', 'height'))
+            if (not all(number(v) for v in rect.values()) or not 0 <= rect['x'] <= 1 or not 0 <= rect['y'] <= 1
+                    or not 0 < rect['width'] <= 1 or not 0 < rect['height'] <= 1
+                    or rect['x'] + rect['width'] > 1 or rect['y'] + rect['height'] > 1
+                    or rect['x'] < focus['x'] or rect['y'] < focus['y']
+                    or rect['x'] + rect['width'] > focus['x'] + focus['width']
+                    or rect['y'] + rect['height'] > focus['y'] + focus['height']):
                 fail()
         if type(scene['transitionMs']) is not int or not 450 <= scene['transitionMs'] <= 650:
             fail()
@@ -465,6 +479,21 @@ class TaskPresentationRuntime:
         scale = min(WIDTH / tile.width, 640 / tile.height)
         tile = tile.resize((max(1, int(tile.width * scale)), max(1, int(tile.height * scale))), Image.Resampling.LANCZOS)
         canvas = Image.new('RGB', (WIDTH, HEIGHT), '#101722')
+        if 'annotation' in scene:
+            rect = scene['annotation']['rect']
+            # Project from source pixels through the actual integer crop and
+            # resized tile dimensions, never through idealized floating sizes.
+            ax = max(0, min(tile.width - 1, round((rect['x'] * image.width - x) * tile.width / (right - x))))
+            ay = max(0, min(tile.height - 1, round((rect['y'] * image.height - y) * tile.height / (bottom - y))))
+            ar = max(ax, min(tile.width - 1, round(((rect['x'] + rect['width']) * image.width - x) * tile.width / (right - x))))
+            ab = max(ay, min(tile.height - 1, round(((rect['y'] + rect['height']) * image.height - y) * tile.height / (bottom - y))))
+            ImageDraw.Draw(tile).rectangle((ax, ay, ar, ab), outline='#ffd166', width=3)
+            label = ' '.join(scene['annotation']['label'].split())
+            draw = ImageDraw.Draw(canvas)
+            caption_font = self.font
+            while caption_font.size > 12 and draw.textlength(label, font=caption_font) > WIDTH - 48:
+                caption_font = ImageFont.truetype(self.font.path, caption_font.size - 1)
+            draw.text((24, 686), label, fill='#ffd166', font=caption_font)
         canvas.paste(tile, ((WIDTH - tile.width) // 2, 40 + (640 - tile.height) // 2))
         ImageDraw.Draw(canvas).text((24, 8), scene['title'], fill='#e5edf8', font=self.font)
         output = io.BytesIO(); canvas.save(output, 'JPEG', quality=85)

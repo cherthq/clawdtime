@@ -19,7 +19,8 @@ REASONS = frozenset(('presentation_refused', 'presentation_authority_unavailable
     'narration_text_quarantine_timeout', 'narration_text_quarantine_capacity',
     'narration_provider_warning', 'narration_injection_refused', 'narration_unexpected_tool',
     'narration_user_started', 'narration_interrupted', 'narration_busy_or_closed',
-    'narration_cleanup_unconfirmed', 'playback_ack_timeout', 'local_audio_unavailable'))
+    'narration_cleanup_unconfirmed', 'playback_ack_timeout', 'playback_ack_invalid',
+    'presentation_audio_admission_refused', 'local_audio_unavailable'))
 
 
 class PresentationDiagnostics:

@@ -5,6 +5,12 @@
 `task_presentation.py`, `task_presentation_local.py`, and the separate
 `ClawdTimeTaskCapture` Swift executable implement an independent task presentation.
 They do not use the original-chat gateway or widen the handset voice capability.
+The supervised three-scene local walkthrough completed all six show/narration
+effects with fresh native frames and playback receipts. The user confirmed zoom
+and screen sharing worked, but reported crackly/distorted audio; audio quality
+and the newly added annotations still need a fresh human check. This observation
+does not mark step d complete or authorize another phone call.
+
 A prepared manifest binds the task/run/revision, verified artifacts, exact scene
 text, and exact app/window/PID/process-lifetime/display/title hash. A separate
 local-only grant expires within 15 minutes. It cannot place calls, activate apps,
@@ -28,7 +34,12 @@ inside the selected window's pixels. An optional prepared `overview` rectangle
 sets the initial content crop; `focus` must lie inside it. Every transition frame
 stays within that overview, including inward rounding at fractional pixel edges.
 Omitting it preserves the full selected-window starting frame. This is presentation
-framing; it does not hide or change macOS/browser capture indicators. A scene receipt requires a new source frame
+framing; it does not hide or change macOS/browser capture indicators. A scene may
+include one prepared `annotation: {rect, label}`: the normalized rectangle must
+stay inside focus, and the plain-text label is at most 100 characters. A fixed
+three-pixel amber outline projects through the actual integer source crop and
+resized tile, clipped to that tile. Its label stays in the bottom gutter, with
+bounded font sizing; it never covers source content or loads HTML/styles/URLs. A scene receipt requires a new source frame
 after the transition completes; original capture timestamps are never refreshed
 on cached pixels. Browser image decoding and two animation frames produce a
 separate bounded paint acknowledgement. Narration requires that current-scene
@@ -42,8 +53,15 @@ is injected. The provider can deliver audio before its text event; at most 64,00
 bytes are quarantined for at most two seconds, with no playback. The complete
 normalized assistant text must equal the entire prepared cue before any audio
 is released. Divergence, missing text, capacity, or Stop discards the quarantine.
-Completion requires the exact full cue,
-provider audio EOF, and every browser `onended` acknowledgement. This is playback
+Playback admits ordered chunks of at most 30 ms with at most 140 ms of PCM and
+eight outstanding receipts. The browser schedules consecutive buffers on one
+audio timeline with a 60 ms initial cushion and a 200 ms total lead cap. Authority
+is checked before every enqueue. This removes the former per-chunk onended →
+HTTP check → send → immediate-start gap; it does not prove the user’s distortion
+is fully resolved. Signed PCM16 little-endian mono at 16 kHz is decoded without
+sample replacement. Stop clears scheduled sources and fences old epoch receipts.
+Completion requires the exact full cue, provider audio EOF, and every actual
+browser `onended` acknowledgement; enqueue alone never completes narration. This is playback
 completion, not audibility. Stop closes the provider and clears queued audio;
 no reconnect or substitute speech is attempted. This new narration path still
 requires real local provider and speaker qualification.
