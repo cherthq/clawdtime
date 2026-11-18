@@ -48,6 +48,16 @@ export interface TaskMutation {
   replayed: boolean;
 }
 
+function firstResultSentence(summary?: string): string {
+  const normalized = (summary ?? "The requested change is implemented.")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Keep closing quotes with the product result; later worker check notes are stale.
+  const first =
+    normalized.match(/^.*?[.!?]["'”’)]*(?=\s|$)/)?.[0] ?? normalized;
+  return first.length <= 300 ? first : `${first.slice(0, 297).trimEnd()}…`;
+}
+
 /** Pure wording projection of the current independently verified run; no effects or receipt changes. */
 export function buildTaskBrief(
   task: CodingTask,
@@ -75,7 +85,7 @@ export function buildTaskBrief(
       runId: run.id,
       verificationId: verification.id,
       kind: "review",
-      opening: `${(run.summary ?? "The requested change is implemented.").replace(/\s+/g, " ").slice(0, 300)} The configured checks passed. Please review the result.`,
+      opening: `${firstResultSentence(run.summary)} The configured checks passed. Please review the result.`,
     };
   const question = (
     run.decision ??

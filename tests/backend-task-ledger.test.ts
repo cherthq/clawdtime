@@ -418,6 +418,21 @@ describe("independent task ledger", () => {
     },
   );
 
+  it("voices only the first product-result sentence before authoritative verification", () => {
+    const f = fixture();
+    const task = f.verify(
+      f.result(f.claim(f.create()), {
+        summary:
+          "Changed the empty state to “No tasks match.” Preserved the filters. Worker checks failed; independent verification remains pending.",
+      }),
+    );
+    const original = structuredClone(task);
+    expect(buildTaskBrief(task).opening).toBe(
+      "Changed the empty state to “No tasks match.” The configured checks passed. Please review the result.",
+    );
+    expect(task).toEqual(original);
+  });
+
   it("does not claim running cancellation succeeded before terminal evidence", () => {
     const f = fixture();
     let task = f.claim(f.create());

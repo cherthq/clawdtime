@@ -125,6 +125,40 @@ function fixture() {
 }
 
 describe("task-bound voice ledger", () => {
+  it("binds an internal handset smoke session without coding authority or replay upgrades", () => {
+    const f = fixture();
+    const task = f.ready();
+    const input = {
+      eventId: "handset-open",
+      taskId: task.id,
+      runId: task.runs.at(-1)!.id,
+      expectedRevision: task.revision,
+    };
+    const opened = f.voices.open(f.session, input, {
+      callAttemptId: "one_call_attempt",
+    });
+    expect(opened.voice).toMatchObject({
+      mode: "handset_audio_smoke",
+      instructionsAllowed: false,
+      callAttemptId: "one_call_attempt",
+    });
+    expect(
+      f.voices.open(f.session, input, { callAttemptId: "one_call_attempt" })
+        .replayed,
+    ).toBe(true);
+    expect(() => f.voices.open(f.session, input)).toThrow(/conflicts/);
+    expect(() =>
+      f.voices.open(f.session, input, { callAttemptId: "different_attempt" }),
+    ).toThrow(/conflicts/);
+    f.voices.bindProvider(opened.voice.id, "provider-fixture");
+    expect(() => f.voices.finalize(opened.voice.id, f.input(task))).toThrow(
+      /cannot start coding/,
+    );
+    expect(f.tasks.get(f.session.id, task.id).runs).toHaveLength(1);
+    f.voices.end(opened.voice.id, "end-smoke");
+    expect(f.tasks.get(f.session.id, task.id)).toEqual(task);
+  });
+
   it("projects polished wording for an existing bound brief without rewriting task evidence", () => {
     const f = fixture();
     const task = f.ready();
@@ -419,6 +453,24 @@ describe("task-bound voice ledger", () => {
     );
     expect(f.tasks.get(f.session.id, task.id)).toEqual(task);
     expect(f.voices.heldForTask(task.id)).toEqual([]);
+  });
+
+  it("keeps fresh voice admissions fenced after voice end while native cleanup is unresolved", () => {
+    const f = fixture(),
+      task = f.ready();
+    const voice = f.open(task, "original").voice;
+    f.voices.end(voice.id, "stop");
+    new ProtectedTaskStore<{
+      id: string;
+      state: string;
+      plan: { taskSessionId: string; taskId: string };
+    }>(f.store, f.vault, "coding-task-audio-call-v1").put({
+      id: "attempt",
+      state: "unknown",
+      plan: { taskSessionId: f.session.id, taskId: task.id },
+    });
+    expect(f.open(task, "original").replayed).toBe(true);
+    expect(() => f.open(task, "new-local")).toThrow(/unresolved/);
   });
 
   it("does not treat expiry as proof the previous audio runtime ended", () => {

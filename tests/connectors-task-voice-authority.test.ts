@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Store } from "../src/storage/store.js";
+import { ProtectedTaskStore } from "../src/storage/task-store.js";
 import { Vault } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
 import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
@@ -10,7 +11,7 @@ import { TaskService } from "../src/control/task-service.js";
 import { TaskVoiceService } from "../src/control/task-voice-service.js";
 import { createTaskApp } from "../src/control/task-app.js";
 import type { TaskEngine } from "../src/control/task-engine.js";
-import type { TaskCommand } from "../src/contracts.js";
+import type { TaskCommand, TaskVoiceSession } from "../src/contracts.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -297,6 +298,7 @@ describe("independent review: task voice authority", () => {
       presentation: false,
       control: false,
       screen: false,
+      instructions: true,
     });
     expect(f.get().state).toBe("review_ready");
     const noVoice = f.tasks.register({
@@ -315,6 +317,46 @@ describe("independent review: task voice authority", () => {
         })
       ).status,
     ).toBe(403);
+  });
+  it("reports exact handset status-only authority and refuses finalized coding instructions", async () => {
+    const f = fixture();
+    // Trusted coordinator fixture admission; the public voice-open route cannot grant handset mode.
+    new ProtectedTaskStore<TaskVoiceSession>(
+      f.tasks.store,
+      f.tasks.vault,
+      "coding-task-voice-v1",
+    ).put({
+      ...f.opened.voice,
+      mode: "handset_audio_smoke",
+      instructionsAllowed: false,
+      callAttemptId: "synthetic-handset-attempt",
+    });
+    const context = await (await f.api(`${f.base}/context`)).json();
+    expect(context.mode).toBe("handset_audio_smoke");
+    expect(context.callAttemptId).toBe("synthetic-handset-attempt");
+    expect(context.permissions).toEqual({
+      presentation: false,
+      control: false,
+      screen: false,
+      instructions: false,
+    });
+    expect((await f.bind()).status).toBe(200);
+    expect((await f.utterance()).status).toBe(200);
+    expect(
+      (
+        await f.api(`${f.base}/instructions`, f.opened.token, {
+          eventId: "forbidden-handset-instruction",
+          utteranceId: "speech-one",
+        })
+      ).status,
+    ).toBe(403);
+    expect(f.get().runs).toHaveLength(1);
+    expect(f.engine.start).not.toHaveBeenCalled();
+    expect(
+      (await f.api(`${f.base}/end`, f.opened.token, { eventId: "handset-end" }))
+        .status,
+    ).toBe(200);
+    expect(f.get().state).toBe("review_ready");
   });
   it("requires exact bound provider and a finalized recorded utterance, never model-supplied text", async () => {
     const f = fixture();

@@ -381,3 +381,91 @@ required gate is specifically authorized c.1: one voice-only handset smoke test
 through Chert, after verifying the intended test handset and exclusive line
 ownership. Presentation, screen capture and shared-screen control remain disabled.
 No automatic redial or reuse of this local-audio authorization is permitted.
+
+## November 18, 2026 — offline preparation for the deferred handset test
+
+The user deferred c.1 to the morning of November 19 and explicitly asked for as
+much preparation as possible without further input. This did not authorize a
+call tonight or waive the c.1-before-d/e gate. No calls, deployments, live rooms,
+line changes, screen capture or control were performed. The chat is flagged
+“ClawdTime — Nov 19 handset voice test next”; `docs/NEXT_SESSION.md` is the morning
+handoff. Step c remains `46a64fb` / `step-c-done`; no c.1/d/e tag is created here.
+
+Concrete audit findings shaped the work: the existing independent task path was
+local-audio only; the legacy native call route unconditionally enabled screen and
+video. The gateway is a screen/input relay and is not required for voice-only
+media. The local task used a fixture pairing, not a real handset identity. Its
+24-hour session expires before the requested next-morning return. None of those
+facts was bypassed or relabeled as handset readiness.
+
+Implemented preparation:
+- Read-only `task readiness` exposes sanitized ownership/expiry, task/run/revision,
+  verification and unresolved cleanup state, even after expiry. It does not expose
+  task prose or permit expired-session execution. Explicit operator reauthorization
+  preserves exact pairing/member/device/host/project/voice authority and existing
+  token/history; it refuses unresolved runs, held instructions, unended voices and
+  any unresolved handset attempt. Replay does not extend TTL again. There is no
+  automatic renewal or recovery of unknown execution.
+- Separate handset voice admission is internal, immutable and status/end-only.
+  Both backend and media refuse coding instructions. Context exposes its exact
+  mode/call-attempt identity. Local voice retains its previously qualified behavior.
+- Added an encrypted one-call coordinator and narrow Calls/local-media HTTP ports.
+  Default dispatch is disabled; each phase is durably recorded before an external
+  effect. One authorization binds the entire plan and expires within five minutes.
+  Global unknown fences survive restart/voice end; read-only inspection never
+  redials. Explicit Stop in standby can clean owned effects. Local media closed
+  and native cleanup_complete are separate evidence. Delayed prepare/dial/activate
+  cannot release the reservation early or recreate media unnoticed after Stop.
+- Added a separate LiveKit audio-only adapter and loopback controller. Startup and
+  GET status have no room/provider effects. Preparation validates the dedicated
+  provider read-only, creates only a scoped silent audio publisher and never a
+  camera/video track. Activation checks authoritative handset mode/attempt, exact
+  connected call and incoming worker identity. Worker/agent token directions are
+  distinct and validated. Interruption clears the one playback owner; cleanup is
+  joined and preserves uncertain room-create outcomes. No legacy media/session
+  guard, gateway or companion permission was weakened.
+- Review openings now use the first product-result sentence plus the authoritative
+  verification result, omitting later stale worker validation/pending claims.
+
+Independent review found and fixed delayed-cleanup races and a cross-language
+fingerprint mismatch for absent media status. Regression tests now cover those
+cases. Connector reviewed transport/media/authority; transport independently
+reviewed CLI changes. The initial broad TypeScript check found one old exact
+permissions assertion missing the new local instructions:true field. It was fixed
+with an exact assertion plus a new handset status-only/end authority regression;
+no runtime guard was removed to satisfy that test.
+
+Observed non-live runnable checks:
+- Actual loopback-controller CLI started from new owner-only synthetic files;
+  outbound Python sockets were prohibited. Authenticated GET reported absent,
+  the room journal had zero attempt rows, and SIGTERM exited cleanly with code 0.
+  No prepare/activate command was issued. Temporary test configuration was removed.
+- The real local task service shut down, restarted against the same protected
+  store/project/checks and returned readiness: review_ready, revision 11,
+  verification passed, no unended voices or blockers, handsetDispatch:false.
+  No Codex run or voice conversation was started. It was shut down cleanly again;
+  ports 13323/3321 are closed and the task owner lock is absent.
+- A private credential-free next-session record preserves exact resume identities
+  and paths. Three completed runs and four ended local voice sessions are retained.
+  No renewal was performed tonight. An expired parent with an unended voice would
+  still require separate proven cleanup; renewal deliberately cannot bypass it.
+
+Frozen-source pre-commit validation:
+- `npm run check`: all 49 files / 722 tests passed; typecheck and build passed.
+- `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
+  all 244 tests passed in 53.754 seconds, no skips.
+- New handset media tests include real pinned SDK frame/resampler/token-shape
+  checks without a live room, plus fake media/provider transport. Independent
+  focused review ran 47 TypeScript and 27 handset-media tests successfully.
+- No Swift or gateway source changed; Swift checks are not applicable.
+- Original Argos checkout still has the same four untracked product/walkthrough
+  drafts. No Apple Teams or sibling chert-facetime changes were made.
+
+Remaining before the physical test is concrete: fresh specific one-call
+permission; verified real pairing/tester, exact current native line ownership,
+idle/cursor/cleanup evidence; protected Chert and LiveKit configuration; and the
+production authority/readiness composition connecting these prepared components.
+There is deliberately no enabled production entrypoint assembled from fixture or
+synthetic evidence. The live worker's audio-only capability, spoken hangup,
+handset acoustics/timing, quiet pause and interruption behavior remain unverified.
+Presentation and desktop implementation remain gated on the actual c.1 result.

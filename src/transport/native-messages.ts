@@ -128,11 +128,12 @@ export async function jsonRequest(
   url: string,
   init: RequestInit,
   request: typeof fetch = fetch,
+  timeoutMs = 15000,
 ) {
   const response = await request(url, {
     ...init,
     redirect: "error",
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok)
     throw new Error(`Provider returned HTTP ${response.status}.`);

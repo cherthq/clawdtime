@@ -47,6 +47,105 @@ buffers are bounded, and local browser Stop immediately stops mic tracks and
 scheduled audio before requesting backend cleanup. Browser scheduling or queue
 clearing is not proof of audibility or handset interruption latency.
 
+### Handset c.1 adapter prepared offline
+
+`media/task_voice_livekit.py` adds the task-owned LiveKit audio bridge; it does not
+import the legacy media server, captions, screen capture, device gateway or Mac
+helper. This is preparatory software, not handset acceptance or authorization to
+call. Presentation and desktop work remain gated on the separate c.1 result.
+
+The immutable binding contains `mediaSessionId`, `taskId`, `voiceSessionId`,
+`callAttemptId`, `roomName`, `workerIdentity`, `agentIdentity`, `expiresAt` (Unix
+milliseconds), `audio:true`, and `video`, `screen`, `presentation`, `control` all
+false. The room name must be exactly `clawdtime-task-${mediaSessionId}`. The worker
+identity owns incoming native-call audio and the worker JWT; the distinct agent
+identity owns outgoing speech and `credentials.remote_participant_identity`.
+Both tokens allow microphone publication only and disable data publication.
+
+`TaskVoiceLiveKit.prepare(binding)` first verifies authoritative task/voice binding,
+`mode:handset_audio_smoke`, the exact call attempt, and `permissions.instructions:false`.
+It also checks the dedicated provider configuration read-only. It then prepares one
+scoped room and a silent audio publisher. It returns the binding fingerprint,
+status and worker LiveKit credentials; it does not return task/provider secrets,
+open an ElevenLabs conversation, consume incoming audio or publish video.
+`activate({callAttemptId,providerCallId,connected:true})` is reserved for the
+coordinator after exact native connection evidence. It waits for the expected
+worker audio track before starting the same task-owned ElevenLabs runtime.
+Provider startup rechecks configuration and prepared task state. Unexpected
+participants, conflicting audio tracks and reconnects close the local session.
+Video remains unsubscribed and no video stream is constructed.
+
+The c.1 scope is status and hangup. The standard three provider tool names remain,
+but both this adapter and the backend refuse instruction execution for handset
+smoke sessions. Task context polling checks the current authority. Incoming audio
+continues during outgoing speech; only provider interruption events clear output.
+Bounded input is PCM16 mono at 16 kHz. The pinned SDK resamples output to the known
+48 kHz room source; interruption discards both queued output and the old resampler
+tail. SDK acceptance and timing counters do not establish handset audibility.
+
+A private SQLite journal reserves the exact binding before room creation and keeps
+interrupted/unknown tombstones across restart. Its process lock prevents duplicate
+controllers. Preparation is joined before scoped deletion; uncertain creation
+cannot become confirmed cleanup merely because an earlier delete acknowledged.
+No automatic room recreation, provider reconnect, dial retry or unknown-effect
+retry is implemented. Local cleanup sends one voice-end request for a prepared
+attempt, closes capture/provider/output, disconnects and deletes only its journal-
+bound room. `closed:true` describes local cleanup; `nativeCallClosed` remains false.
+The coordinator must independently establish native `cleanup_complete` and the
+voice-end receipt before reporting full call cleanup. Untouched controller startup
+and shutdown do not issue a voice-end mutation.
+
+`media/task_voice_livekit_local.py` provides the runnable controller on literal
+127.0.0.1. It requires an exact Host, loopback peer and separate bearer, refuses
+browser Origin headers, logs no HTTP access, and has no browser UI. Starting it
+opens no room or provider session. Its routes are `GET /status`, `POST /prepare`
+with the full configured binding, `POST /activate` with the activation object,
+and `POST /close` with `{callAttemptId}`. Status before preparation is `absent`;
+preparation returns `silentPublisherReady:true` and `videoPublisherReady:false`.
+Shutdown joins scoped cleanup. The controller does not dial or establish whether
+a submitted `connected:true` reflects genuine native evidence; that authority
+belongs to the authenticated coordinator.
+
+After the separately authorized call is ready to run, the coordinating lead can
+supply owner-only files and start this controller:
+
+```sh
+media/.venv/bin/python media/task_voice_livekit_local.py \
+  --binding-file /absolute/private/handset-binding.json \
+  --voice-file /absolute/private/handset-voice.json \
+  --provider-file /absolute/private/provider.json \
+  --livekit-file /absolute/private/livekit.json \
+  --control-file /absolute/private/controller.json \
+  --journal /absolute/private/handset-media.sqlite --port 3322
+```
+
+The voice and provider files use the existing local voice schemas below. LiveKit
+configuration is `{url,key,secret,allowedHosts}` with one fixed allowed WSS host;
+controller configuration is `{token}`. The journal parent must be owner-only.
+Never place these files in Git. The local task API must be reachable by this
+process. A current task voice capability specifically admitted for the handset
+attempt is required; a local voice capability cannot be substituted.
+
+The remaining external prerequisites are explicit authorization for the one call,
+the exact paired tester and task/run, fresh exclusive line/worker identity and
+idle-state evidence, retained cursor/unknown-effect reconciliation, protected
+native Calls and LiveKit credentials, and native worker support for
+`audio:true,video:false`. No deployment, handset call or line handoff was performed
+by these offline changes. The gateway, Mac screen permissions and companion Enable
+are not audio-only prerequisites. No ten-minute qualification can be inferred from
+a shorter attempt expiry; expiry still ends the media session.
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_task_voice_livekit.py'
+```
+
+These checks use fake room/event ports, an actual localhost fake provider socket,
+and an unconnected real SDK audio source/resampler. They cover silence before
+activation, exact identities and tokens, no video/capture before activation,
+status/end-only authority, input during output, interruption fencing, revocation,
+delayed preparation/activation cleanup, unknown outcomes, restart tombstones and
+controller startup/refusal boundaries. They make no physical call or audio claim.
+
 ### Local entry point and external prerequisite
 
 The connector CLI `task voice-start` creates a mode-0600 voice-only capability

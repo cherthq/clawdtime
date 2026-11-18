@@ -8,6 +8,7 @@ import { DomainError, hash, id, Vault } from "../storage/security.js";
 import { Store } from "../storage/store.js";
 import { ProtectedTaskStore } from "../storage/task-store.js";
 import { buildTaskBrief, TaskLedger } from "./task-ledger.js";
+import { unresolvedTaskAudioCalls } from "./task-audio-call.js";
 
 interface VoiceEvent {
   id: string;
@@ -58,7 +59,7 @@ export class TaskVoiceLedger {
 
   constructor(
     private readonly store: Store,
-    vault: Vault,
+    private readonly vault: Vault,
     private readonly tasks: TaskLedger,
     private readonly clock: () => number = Date.now,
   ) {
@@ -84,8 +85,16 @@ export class TaskVoiceLedger {
       runId: string;
       expectedRevision: number;
     },
+    handset?: { callAttemptId: string },
   ): { voice: TaskVoiceSession; replayed: boolean } {
     text(input.eventId, "voice admission event");
+    if (
+      handset &&
+      !/^[A-Za-z0-9_-]{1,200}$/.test(
+        text(handset.callAttemptId, "handset call attempt", 200),
+      )
+    )
+      throw new DomainError(400, "Invalid handset call attempt.");
     if (
       !session.permissions.voice ||
       session.revokedAt !== undefined ||
@@ -100,6 +109,14 @@ export class TaskVoiceLedger {
           input.taskId,
           input.runId,
           input.expectedRevision,
+          ...(handset
+            ? [
+                {
+                  mode: "handset_audio_smoke",
+                  callAttemptId: handset.callAttemptId,
+                },
+              ]
+            : []),
         ]),
       );
       const prior = this.events.get(eventId);
@@ -108,6 +125,11 @@ export class TaskVoiceLedger {
           throw new DomainError(409, "Voice admission event conflicts.");
         return { voice: this.get(session.id, prior.voiceId), replayed: true };
       }
+      if (unresolvedTaskAudioCalls(this.store, this.vault).length)
+        throw new DomainError(
+          409,
+          "An unresolved handset call still reserves voice admission.",
+        );
       const task = this.tasks.get(session.id, input.taskId);
       const run = task.runs.at(-1)!;
       if (
@@ -136,7 +158,9 @@ export class TaskVoiceLedger {
         opening: buildTaskBrief(task).opening,
         createdAt: this.clock(),
         expiresAt: Math.min(session.expiresAt, this.clock() + 30 * 60_000),
-        mode: "local_audio",
+        mode: handset ? "handset_audio_smoke" : "local_audio",
+        instructionsAllowed: !handset,
+        ...(handset ? { callAttemptId: handset.callAttemptId } : {}),
         permissions: { presentation: false, control: false, screen: false },
       };
       this.voices.put(voice);
@@ -209,6 +233,14 @@ export class TaskVoiceLedger {
       throw new DomainError(400, "Invalid spoken instruction revision.");
     return this.store.transaction(() => {
       const voice = this.voice(voiceId);
+      if (
+        voice.mode === "handset_audio_smoke" ||
+        voice.instructionsAllowed === false
+      )
+        throw new DomainError(
+          403,
+          "Handset audio smoke testing cannot start coding work.",
+        );
       if (
         voice.providerConversationId !== input.providerConversationId ||
         voice.taskId !== input.taskId
@@ -347,6 +379,14 @@ export class TaskVoiceLedger {
     receipt: TaskVoiceInstruction,
     task: CodingTask,
   ): CodingTask {
+    if (
+      voice.mode === "handset_audio_smoke" ||
+      voice.instructionsAllowed === false
+    )
+      throw new DomainError(
+        403,
+        "Handset audio smoke testing cannot start coding work.",
+      );
     const run = task.runs.at(-1)!;
     if (
       run.id !== receipt.runId ||

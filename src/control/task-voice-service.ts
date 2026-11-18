@@ -109,6 +109,8 @@ export class TaskVoiceService {
     const run = task.runs.at(-1)!;
     return {
       voiceSessionId: voice.id,
+      mode: voice.mode,
+      ...(voice.callAttemptId ? { callAttemptId: voice.callAttemptId } : {}),
       taskId,
       runId: run.id,
       revision: task.revision,
@@ -124,7 +126,11 @@ export class TaskVoiceService {
       openingRunId: voice.openedRunId,
       openingRevision: voice.openedRevision,
       active: voice.endedAt === undefined && voice.expiresAt > Date.now(),
-      permissions: voice.permissions,
+      permissions: {
+        ...voice.permissions,
+        instructions:
+          voice.mode === "local_audio" && voice.instructionsAllowed !== false,
+      },
     };
   }
   bind(raw: string, taskId: string, voiceId: string, input: unknown) {
@@ -182,6 +188,11 @@ export class TaskVoiceService {
   }
   instruction(raw: string, taskId: string, voiceId: string, input: unknown) {
     const voice = this.authenticate(raw, taskId, voiceId);
+    if (voice.mode !== "local_audio" || voice.instructionsAllowed === false)
+      throw new DomainError(
+        403,
+        "This voice session permits status and end only.",
+      );
     const value = z
       .object({ eventId: identity, utteranceId: identity })
       .strict()

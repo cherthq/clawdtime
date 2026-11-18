@@ -841,6 +841,49 @@ The step-a simulation establishes local task lifecycle and restart behavior only
 It does not establish real Codex execution, microphone dialogue, call delivery or
 handset behavior. Native worker approval requests are never voice approvals.
 
+### Next-session readiness and explicit reauthorization
+
+Read readiness before resuming an existing task:
+
+```sh
+npm run cli -- task readiness --id TASK_ID \
+  --session-file /absolute/private/task-session.json
+```
+
+This GET uses the saved task credential and remains available for a known expired
+session. It reports sanitized task/run state, verification, session expiry,
+unended voices and blockers. It does not renew authority, dispatch work, create a
+voice session or place a call. Handset dispatch remains disabled. Task status and
+execution still require an active session.
+
+Task sessions last 24 hours. If explicit reauthorization is needed, the operator
+must provide the same pairing, host, project and voice permission:
+
+```sh
+npm run cli -- task reauthorize \
+  --session-file /absolute/private/task-session.json \
+  --operator-file /absolute/private/state/operator.json \
+  --pairing-id PAIRING_ID --host-id HOST_ID --project /absolute/selected/project \
+  --voice true --event-id reauthorize-1
+```
+
+The session file determines the session ID and exact service origin; the separate
+operator file authorizes this POST. Both files are required, and `--voice` must be
+explicit. The service renews the same session for 24 hours while preserving its
+token and tasks; the CLI leaves the existing credential file unchanged. Changed
+identity or permissions, unended voice, active execution and unresolved outcomes
+block renewal. No instruction or unknown effect is replayed. This command never
+retries a lost response; preserve its event ID and inspect readiness before any
+further action. Reauthorization does not authorize a handset call.
+
+Restart the service with the same private state directory, project and verification
+plan. Known terminal tasks persist; interrupted running/verifying work becomes
+unknown and requires reconciliation. Never delete a stale owner lock until prior
+process shutdown is confirmed. Voice capabilities last at most 30 minutes and
+cannot reconnect to an old provider session. Expiry does not prove audio stopped:
+an unended voice continues to block fresh admission. Confirm runtime cleanup and
+explicitly end the old voice while authorized; do not silently clear its receipt.
+
 ## Scoped Codex task worker (coding demo, step b)
 
 `connectors/codex/task-worker.ts` implements `TaskWorker` for the authoritative task

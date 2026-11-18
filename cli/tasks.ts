@@ -75,12 +75,14 @@ export async function taskCli(
         "task register --pairing-id ID --host-id ID --project PATH --event-id ID [--voice true|false] [--operator-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
         "task create --goal TEXT --event-id ID [--session-file PRIVATE_PATH]\n" +
         "task status --id ID [--session-file PRIVATE_PATH]\n" +
+        "task readiness --id ID [--session-file PRIVATE_PATH]\n" +
+        "task reauthorize --session-file PRIVATE_PATH --operator-file PRIVATE_PATH --pairing-id ID --host-id ID --project PATH --voice true|false --event-id ID\n" +
         "task run --id ID [--session-file PRIVATE_PATH]\n" +
         "task command --id ID --json JSON [--session-file PRIVATE_PATH]\n" +
         "task voice-start --id TASK_ID --run-id RUN_ID --revision NUMBER --event-id ID [--session-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
         "task voice-status --voice-file PRIVATE_PATH\n" +
         "task voice-stop --voice-file PRIVATE_PATH --event-id ID\n" +
-        "Use CLAWDTIME_TASK_URL (default http://127.0.0.1:3320). Registration uses CLAWDTIME_TASK_TOKEN as operator credential; other commands use a session file or session token. Never put credentials in arguments. Preserve event IDs when reconciling a lost response; this CLI never retries writes.",
+        "Use CLAWDTIME_TASK_URL (default http://127.0.0.1:3320). Registration uses an operator credential; reauthorization requires both protected files. Other commands use task or voice credentials. Readiness never renews authority. Never put credentials in arguments. Preserve event IDs when reconciling a lost response; this CLI never retries writes.",
     );
     return;
   }
@@ -97,6 +99,16 @@ export async function taskCli(
     ],
     create: ["goal", "event-id", "session-file"],
     status: ["id", "session-file"],
+    readiness: ["id", "session-file"],
+    reauthorize: [
+      "session-file",
+      "operator-file",
+      "pairing-id",
+      "host-id",
+      "project",
+      "voice",
+      "event-id",
+    ],
     run: ["id", "session-file"],
     command: ["id", "json", "session-file"],
     "voice-start": [
@@ -121,6 +133,10 @@ export async function taskCli(
     return value;
   };
   const env = dependencies.env ?? process.env;
+  if (command === "reauthorize") {
+    required("session-file");
+    required("operator-file");
+  }
   const saved = options["session-file"]
     ? sessionFileSchema.parse(secureRead(options["session-file"]))
     : undefined;
@@ -145,16 +161,30 @@ export async function taskCli(
         .parse(secureRead(options["operator-file"]))
     : undefined;
   const token =
-    voice?.voiceToken ??
-    saved?.token ??
-    operator?.token ??
-    env.CLAWDTIME_TASK_TOKEN;
+    command === "reauthorize"
+      ? operator?.token
+      : (voice?.voiceToken ??
+        saved?.token ??
+        operator?.token ??
+        env.CLAWDTIME_TASK_TOKEN);
   if (!token || token.length < 32)
     throw new Error(
       "A protected task session file or CLAWDTIME_TASK_TOKEN is required.",
     );
   let path: string, body: unknown;
   switch (command) {
+    case "reauthorize":
+      if (!["true", "false"].includes(required("voice")))
+        throw new Error("--voice must be true or false.");
+      path = `/sessions/${encodeURIComponent(saved!.sessionId)}/reauthorize`;
+      body = {
+        eventId: required("event-id"),
+        pairingId: required("pairing-id"),
+        hostId: required("host-id"),
+        projectRoot: required("project"),
+        voice: options.voice === "true",
+      };
+      break;
     case "register":
       if (
         options.voice !== undefined &&
@@ -176,6 +206,9 @@ export async function taskCli(
       break;
     case "status":
       path = `/tasks/${encodeURIComponent(required("id"))}`;
+      break;
+    case "readiness":
+      path = `/tasks/${encodeURIComponent(required("id"))}/readiness`;
       break;
     case "run":
       path = `/tasks/${encodeURIComponent(required("id"))}/run`;

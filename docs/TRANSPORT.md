@@ -627,3 +627,47 @@ approval boundaries, cancellation, legacy migration, renewable lifetime, and
 hangup/heartbeat/revocation/Stop. `tests/backend-native.test.ts` includes lost speech
 acceptance and GET-only recovery, including an interrupted intent with no recorded
 native dispatch. All tests are synthetic and produce no live call or message.
+
+### Independent task c.1 audio-call preparation
+
+`TaskAudioCallCoordinator` is an independent, encrypted one-call receipt ledger;
+it does not construct a legacy AgentSession or weaken legacy call guards. Its
+immutable plan binds task/session/run/revision, handset voice, pairing/member/device,
+line, hashed recipient, media room and both participant identities. Explicit
+one-call authorization expires within five minutes and matches the entire plan.
+Audio is true; video, screen, presentation and control are false. Handset voice
+admits status/end only and cannot finalize coding instructions.
+
+Dispatch is disabled by default. Construction never prepares, dials, activates or
+cleans up a call. Each external phase has a durable receipt before dispatch and is
+attempted at most once; unknown outcomes keep the global reservation. Current
+authority and fresh exclusive idle-line evidence are checked between preparation,
+dial and activation. Activation additionally requires exact native connection
+evidence. Fresh voice admissions and reauthorization remain blocked while a call
+attempt is unresolved, even after the voice itself ended.
+
+Explicit Stop remains available for an owned receipt in standby. Local media
+closure and native `cleanup_complete` are separate facts. Delayed preparation,
+dial or activation cannot release the reservation: running forward effects block
+closure, and late media creation invalidates earlier local closure. Reconciliation
+uses GET of the original identities, never a retry of uncertain POST operations.
+No missing dial acknowledgement is replaced by a guessed call ID.
+
+Concrete adapters are available but are not a composed production entrypoint:
+`NativeTaskAudioCalls` uses the fixed Calls create/events/end paths, no redirects
+or retries, and sends `media: {audio: true, video: false}`. The native worker token
+is for the incoming worker; `remote_participant_identity` is the distinct outgoing
+agent. `HttpTaskAudioMediaPort` talks only to a configured bearer-protected
+`http://127.0.0.1:PORT` bridge using `/prepare`, `/activate`, `/status` and `/close`.
+Its immutable room is `clawdtime-task-${mediaSessionId}` and every response must
+match the room/binding fingerprint and audio-only flags. Local prepare/activate
+have 35-second request budgets, close 45 seconds, status 5 seconds. Timeout stays
+unknown; it does not trigger a retry. Existing native HTTP defaults remain 15 seconds.
+
+Before a handset test, the coordinating operator still must assemble production
+`authorize` and `readiness` ports with fresh exact pairing, recipient and exclusive
+native-line ownership evidence, protected Calls/media configuration, an explicit
+one-call grant and a working local media process. Synthetic readiness is never
+production evidence. Neither these adapters nor the dry preflight claim physical
+acceptance. The regression suite uses only fake transports: no call, deployment,
+line handoff, video publisher, or desktop control occurs during this preparation.

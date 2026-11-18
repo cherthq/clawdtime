@@ -109,6 +109,19 @@ export function createTaskApp(
       throw new DomainError(401, "Operator authorization required.");
     return c.json(service.register(await c.req.json()));
   });
+  app.post("/sessions/:id/reauthorize", async (c) => {
+    if (!equal(bearer(c.req.header("authorization")), operatorToken))
+      throw new DomainError(401, "Operator authorization required.");
+    return c.json(service.reauthorize(c.req.param("id"), await c.req.json()));
+  });
+  app.get("/tasks/:id/readiness", (c) =>
+    c.json(
+      service.readiness(
+        bearer(c.req.header("authorization")),
+        c.req.param("id"),
+      ),
+    ),
+  );
   app.post("/tasks", async (c) =>
     c.json(
       service.create(bearer(c.req.header("authorization")), await c.req.json()),

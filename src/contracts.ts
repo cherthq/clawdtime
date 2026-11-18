@@ -153,7 +153,7 @@ export interface TaskWorker {
     signal: AbortSignal,
   ): Promise<TaskWorkerResult>;
 }
-/** Voice is a transient local conversation capability, never execution or screen authority. */
+/** Voice is a scoped conversation capability, never native execution or screen authority. */
 export interface TaskVoiceSession {
   id: string;
   taskId: string;
@@ -165,7 +165,10 @@ export interface TaskVoiceSession {
   createdAt: number;
   expiresAt: number;
   endedAt?: number;
-  mode: "local_audio";
+  mode: "local_audio" | "handset_audio_smoke";
+  /** Handset smoke admission is status/end only; omitted retains existing local voice semantics. */
+  instructionsAllowed?: boolean;
+  callAttemptId?: string;
   permissions: { presentation: false; control: false; screen: false };
 }
 export interface TaskVoiceInstruction {
