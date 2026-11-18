@@ -1,12 +1,22 @@
 # Attention media integration
 
-## Independent coding-task voice candidate — November 18, 2026
+## Independent coding-task voice: locally qualified step c — November 18, 2026
 
 `task_voice.py` and `task_voice_local.py` implement a separate, task-owned local
 audio path. They do not import the legacy original-chat conversation, capture,
-camera, device control or calling runtimes. This is a software candidate for step
-c, not completed local spoken acceptance or handset acceptance. Presentation and
-desktop work remain gated on the specifically authorized c.1 handset test.
+camera, device control or calling runtimes. Step c's local spoken task handoff has
+been observed with the dedicated provider agent. Handset acceptance remains
+pending; presentation and desktop work remain gated on the specifically
+authorized c.1 voice-only handset test.
+
+In the successful local session, a spoken empty-state instruction started run 2
+of the same task, and status remained available while that run was working. The
+independent verifier rejected the singular text “No task match.” A spoken
+correction in the same active voice conversation produced exactly one sequential
+run 3, which reached `review_ready` with verification passed. This establishes
+the observed voice-to-task handoff and correction loop. It does not establish
+measured interruption latency, a 20-second quiet pause, or a ten-minute audio
+conversation; those acceptance checks remain outstanding.
 
 One immutable voice capability binds one task and one non-reconnectable provider
 conversation. The backend prepares the opening from the verified task state. The
@@ -57,12 +67,13 @@ media/.venv/bin/python media/task_voice_local.py provider-template \
 The user authorized protected credential access, creation of a **dedicated
 independent-task ElevenLabs agent**, and local microphone/speaker qualification.
 The coordinating lead created that agent and verified its read-only configuration
-and exact tool definitions. Two local provider sessions completed, but microphone
-qualification failed: the person heard the opening and the provider received no
-finalized human transcript. Both sessions are confirmed ended. See
-[BUILD_LOG.md](../BUILD_LOG.md) for the acceptance evidence. No handset call or
-deployment occurred; step c remains incomplete. The historical original-chat
-agent exposes incompatible tools and must not be silently changed or reused.
+and exact tool definitions. The first two local sessions failed microphone
+qualification and are confirmed ended. After adding local microphone preflight,
+a subsequent session completed the spoken instruction, status, independent
+verification failure, and spoken correction loop described above. See
+[BUILD_LOG.md](../BUILD_LOG.md) for the acceptance and cleanup evidence. No handset
+call or deployment occurred. The historical original-chat agent exposes
+incompatible tools and must not be silently changed or reused.
 
 The template requires authenticated access, the exact three client tools, no
 server tools/MCP/workflows, PCM16 at 16 kHz, prompt/first-message overrides,
@@ -132,7 +143,7 @@ The backend retains bounded finalized utterances and instruction receipts in
 its encrypted ledger for identity, interpretation and deduplication. Use headphones for initial local qualification; actual
 speakerphone echo/interruption remains a separate handset acceptance requirement.
 
-### Candidate validation limits
+### Validation and remaining acceptance limits
 
 The complete media suite also imports the gateway relay. Install both existing
 dependency manifests into the isolated environment:

@@ -309,3 +309,75 @@ A third local voice capability is admitted for the unchanged known-terminal task
 but the user is first checking microphone signal locally. This checkpoint remains
 partial step c: no successful spoken instruction/follow-up-run acceptance yet,
 no step-c tag, and no handset authorization or presentation work.
+
+Local attempt three (after commit `6766062`): the user confirmed the selected
+microphone meter moved and reported the conversation was good. The provider and
+local metadata independently show two human turns, three agent turns, 245 PCM
+chunks/784,000 bytes received and sent, and clean local/provider closure after
+approximately 25 seconds. First output scheduling occurred at 893 ms; this is not
+an audible-latency measurement. No client tool, instruction, or follow-up run was
+created. Thus two-way local speech is observed, but the step-c coding handoff and
+status-while-working result are still unqualified. Browser Stop ended this session;
+voice hangup, deliberate interruption, and a 20-second quiet interval are not
+independently established by its event trace.
+
+The user requested continuation. A fourth, fresh local voice admission is prepared
+for a focused instruction/status/coding-result test against the same task. The
+third session was confirmed ended/done before preparing it. No prior speech or
+external effect was replayed. Step c and c.1 remain untagged.
+
+## November 18, 2026 — step c locally qualified
+
+Runnable result observed on this Mac using the dedicated task-only provider agent
+and real Codex worker: one voice conversation discussed the existing task, accepted
+a spoken instruction, started exactly one distinct follow-up run and answered a
+status question during that run. The user confirmed the status response while the
+backend was running. The independently verified task is now `review_ready`.
+
+Evidence, with content/credentials kept in owner-only storage outside Git:
+- Initial known-terminal run: 21,889 ms, deliberately failed empty-state check.
+- First spoken instruction: exactly one applied receipt and new run, 23,688 ms.
+  Independent verification caught the singular text “No task match”; the Clear
+  filters hook and syntax were present. The worker's completion claim did not pass
+  verification or trigger a false ready state.
+- A spoken correction in the same voice conversation created exactly one further
+  applied receipt/new run after the previous run's verified terminal outcome.
+  It completed in 13,656 ms. All six independent behavior assertions and JavaScript
+  syntax passed; no unresolved decision remains. Two accepted instructions map to
+  two distinct follow-up runs on the original task, without overlapping execution.
+- Local runtime metadata: six finalized human turns, two instruction requests and
+  two returns, one status request/return while the first follow-up run was active,
+  2,120 PCM chunks / 6,784,000 bytes received and sent, no runtime failure event.
+  First output scheduling was 762 ms after runtime start. This is application
+  scheduling evidence only, not a measured audible-response latency.
+- The user reported hearing the verified result and an ending. However, fresh
+  browser/backend observations still showed live audio, and no
+  end-call tool was recorded. The lead pressed visible Stop voice;
+  mic tracks and audio context closed, the backend end receipt returned, the
+  provider reported done/client-disconnect, and runtime cleanup completed. Spoken
+  hangup remains unconfirmed; it is not claimed as a passed acceptance check.
+- The session lasted approximately 212 seconds. Deliberate interruption latency,
+  the quiet 20-second pause, ten-minute continuity and handset behavior remain
+  unqualified. No handset call, screen capture, presentation, control or deployment
+  was performed. No line ownership was changed.
+
+Independent connector review checked the approved step-c runnable gate and the
+same-task sequential revision semantics. A verifier failure followed by a correction
+is an allowed task loop. Step c is locally qualified; this does not qualify the
+c.1 handset smoke test or full release/polish acceptance. Media documentation was
+updated separately by its owner; no runtime code changed after `6766062`.
+
+Pre-commit validation:
+- `npm run check`: 45 files / 671 tests passed, typecheck and build passed.
+- `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
+  all 217 tests passed in 54.943 seconds, no skips.
+- Swift and gateway sources unchanged; Swift checks not applicable.
+- Only BUILD_LOG and MEDIA_INTEGRATION documentation changed in this checkpoint;
+  no protected task transcripts, provider identities, credentials or raw audio are
+  included. Diff/whitespace checks and independent connector documentation review passed.
+
+Checkpoint will be committed and pushed with annotated `step-c-done`. The next
+required gate is specifically authorized c.1: one voice-only handset smoke test
+through Chert, after verifying the intended test handset and exclusive line
+ownership. Presentation, screen capture and shared-screen control remain disabled.
+No automatic redial or reuse of this local-audio authorization is permitted.
