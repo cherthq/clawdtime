@@ -196,7 +196,7 @@ function fixture() {
         store,
         vault,
         "coding-task-voice-v1",
-      ).put({ ...voice, ...patch }),
+      ).put({ ...voice, ...patch } as TaskVoiceSession),
   };
 }
 

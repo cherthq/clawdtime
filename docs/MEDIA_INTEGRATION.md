@@ -1,5 +1,83 @@
 # Attention media integration
 
+## Independent task walkthrough: offline handset adapter
+
+`task_walkthrough_livekit.py`, `task_walkthrough_voice.py`, and
+`task_walkthrough_livekit_local.py` add an explicit `handset_walkthrough` branch.
+The audio-only c1 validator remains separate and rejects its video/capture flags.
+This implementation is under offline verification; it has not established handset
+video, remote blanking, scene narration, spoken corrections, or acceptance.
+
+A separate export grant binds the immutable call plan, private room, exact worker
+and agent identities, prepared manifest, capture grant and verified task revision.
+A local capture grant alone never exports. Dispatch expires within five minutes;
+the separately authorized conversation lasts at most thirty minutes. The original
+capture grant retains its shorter expiry. `exportActive` authorizes prepared
+capture; `sharingActive` describes an actually shown scene. Neither extends a grant.
+
+The loopback controller starts without capture, room creation, or a provider
+conversation. Authenticated `/prepare` inspects every exact prepared window,
+checks provider readiness using read-only requests, creates one audio/video room
+participant and calls the task service's internal `/presentation/opening`.
+That service reserves the first show durably and calls back `/presentation/show`.
+Only a fresh post-transition native frame accepted by the LiveKit SDK makes video
+ready. Frame metadata retains the original source timestamp and exact generation.
+SDK acceptance is explicitly **not evidence that the handset received or saw it**.
+Activation requires the exact connected call, the exact incoming microphone
+participant, and another fresh accepted frame before opening the one dialogue
+provider and again before sending its prepared greeting.
+
+The native worker token can publish microphone audio only. The agent token can
+publish microphone audio and the screen-share video track. The existing renderer
+supplies only the granted window crops and annotations, at a 15 fps deadline.
+There is no handset `PresentationNarrator`: the same Deepgram conversation owns
+listening, interruption and outgoing playback. It can request status, show a
+prepared scene, stop sharing, submit a correction, accept a result, or end voice.
+Every mutating human request uses an admitted finalized utterance ID; model tools
+cannot replace instruction text. The service decides whether a correction runs
+now or remains held. Speech interruption does not erase a submitted correction.
+Scene explanations use the returned authoritative scene description after the
+fresh-frame check. No automatic scene progression or desktop input is enabled.
+
+Sharing Stop permanently revokes source admission, joins the capture child,
+cancels old scene speech, and changes the existing video publisher to blank-only
+frames while voice and coding continue. An independent one-second watchdog does
+the same when source frames stop advancing, even while an authority request waits.
+Automatic source/export failure then submits one durable presentation retirement;
+a root-requested Stop never calls back recursively. Blank SDK acceptance is not
+physical clearance proof. The eventual handset trial must confirm the visible
+result. Full call cleanup additionally joins dialogue, tracks and room cleanup;
+it never infers native call completion.
+
+The new controller uses the same private binding, voice, provider, LiveKit,
+control and journal flags as the audio controller, plus `--presentation-file`:
+
+```json
+{
+  "prepare": {"presentationId": "prepared-id", "manifest": "EXACT_MANIFEST_OBJECT", "grant": "EXACT_CAPTURE_GRANT_OBJECT", "fingerprint": "ROOT_CANONICAL_SHA256"},
+  "taskOrigin": "http://127.0.0.1:13323",
+  "taskToken": "PROTECTED_TASK_CAPABILITY",
+  "helperBinary": "/absolute/worktree/mac/.build/debug/ClawdTimeTaskCapture",
+  "exportGrant": "EXACT_EXPORT_GRANT_OBJECT"
+}
+```
+
+These are placeholders, not runnable credentials. Files must be owner-only in a
+private directory outside the worker project. This branch accepts only the explicit
+Deepgram provider file; the qualified c1 provider configuration is unchanged.
+The operator bearer and exact loopback Host protect `/prepare`, `/activate`,
+`/status`, `/close`, `/presentation/prepare`, `/presentation/show`,
+`/presentation/observe` and `/stop-sharing`. Browser Origins are refused. There
+is no frame download, public endpoint, dialing client or browser capture surface.
+
+Offline validation uses synthetic exact-window frames and fake provider/room
+ports, plus the installed SDK's actual RGBA video frame/source conversion without
+network access:
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p test_task_walkthrough.py -v
+```
+
 ## Independent task walkthrough: local candidate, step d
 
 `task_presentation.py`, `task_presentation_local.py`, and the separate

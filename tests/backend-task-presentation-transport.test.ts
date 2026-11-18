@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { HTTPTaskPresentationHost } from "../src/transport/task-presentation.js";
+import {
+  HTTPTaskPresentationHost,
+  HTTPTaskWalkthroughPresentationHost,
+} from "../src/transport/task-presentation.js";
 import { hash } from "../src/storage/security.js";
 import {
   taskPresentationFingerprint,
   type TaskPresentationManifest,
   type TaskSceneFrame,
 } from "../src/task-presentation-contracts.js";
+import type { TaskWalkthroughPlan } from "../src/task-walkthrough-contracts.js";
 const manifest: TaskPresentationManifest = {
   version: 1,
   id: "presentation",
@@ -208,5 +212,164 @@ describe("strict local presentation host transport", () => {
     f.request.mockResolvedValueOnce(response(cleanup));
     await expect(f.host.stop(manifest.id)).resolves.toEqual(cleanup);
     expect(f.request).toHaveBeenCalledTimes(2);
+  });
+});
+
+function handsetFixture() {
+  let now = 2500;
+  const plan: TaskWalkthroughPlan = {
+    version: 1,
+    mode: "handset_walkthrough",
+    id: "call",
+    taskSessionId: "session",
+    taskId: "task",
+    runId: "run",
+    revision: 4,
+    voiceSessionId: "voice",
+    pairingId: "pair",
+    memberId: "member",
+    deviceId: "mac",
+    lineId: "22222222-2222-4222-8222-222222222222",
+    recipientHash: hash("synthetic"),
+    mediaSessionId: "media",
+    workerIdentity: "worker",
+    agentIdentity: "agent",
+    exportGrantId: "export",
+    callKind: "review",
+    presentationBinding: {
+      presentationId: "presentation",
+      manifestFingerprint: fingerprint,
+      presentationGrantId: "grant",
+      verificationId: "verification",
+      hostId: "host",
+      captureDeviceId: "mac",
+    },
+    dispatchExpiresAt: 5000,
+    expiresAt: 10000,
+    audio: true,
+    video: true,
+    screen: true,
+    presentation: true,
+    instructions: true,
+    control: false,
+    nativeActivation: false,
+    maxCalls: 1,
+  };
+  const request = vi.fn<typeof fetch>();
+  const host = new HTTPTaskWalkthroughPresentationHost(
+    { origin: "http://127.0.0.1:3456", token: "x".repeat(32), plan },
+    request,
+    () => now,
+  );
+  const videoEvidence = {
+    evidence: "sdk_frame_accepted_not_remote_seen",
+    presentationId: frame.presentationId,
+    manifestFingerprint: frame.manifestFingerprint,
+    sceneId: frame.sceneId,
+    generation: frame.generation,
+    sourceFrameId: frame.sourceFrameId,
+    geometryGeneration: frame.geometryGeneration,
+    capturedAt: frame.capturedAt,
+    renderedAt: frame.renderedAt,
+    acceptedAt: 2100.5,
+  };
+  return {
+    request,
+    host,
+    videoEvidence,
+    advance: (ms: number) => {
+      now += ms;
+    },
+    prepare: async () => {
+      request.mockResolvedValueOnce(response({ ready: true }));
+      await host.prepare(prepared);
+    },
+  };
+}
+describe("walkthrough presentation export transport", () => {
+  it("binds exact fresh SDK frame evidence and keeps Stop sharing separate from dialogue", async () => {
+    const f = handsetFixture();
+    await f.prepare();
+    f.request.mockResolvedValueOnce(
+      response({ frame, videoEvidence: f.videoEvidence }),
+    );
+    expect(await f.host.show(show)).toEqual(frame);
+    expect(f.host.evidenceFor(frame)).toEqual(f.videoEvidence);
+    await expect(
+      f.host.narrate({
+        presentationId: manifest.id,
+        operationId: "speech",
+        sceneId: "code",
+        generation: 1,
+        frame,
+        text: manifest.opening,
+      }),
+    ).rejects.toThrow(/single authorized dialogue/);
+    expect(f.request).toHaveBeenCalledTimes(2);
+    const updated = {
+      ...frame,
+      sourceFrameId: "source2",
+      capturedAt: 2200.25,
+      renderedAt: 2200.5,
+    };
+    const video = {
+      ...f.videoEvidence,
+      sourceFrameId: "source2",
+      capturedAt: 2200.25,
+      renderedAt: 2200.5,
+      acceptedAt: 2300.75,
+    };
+    f.request.mockResolvedValueOnce(
+      response({ frame: updated, videoEvidence: video }),
+    );
+    expect(await f.host.observe(manifest.id)).toEqual(updated);
+    expect(() => f.host.evidenceFor(frame)).toThrow(/No current SDK/);
+    expect(f.host.evidenceFor(updated)).toEqual(video);
+    f.request.mockResolvedValueOnce(response(cleanup));
+    await f.host.stop(manifest.id);
+    expect(() => f.host.evidenceFor(updated)).toThrow(/No current SDK/);
+    expect(
+      f.request.mock.calls.map(([url]) => new URL(String(url)).pathname),
+    ).toEqual([
+      "/presentation/prepare",
+      "/presentation/show",
+      "/presentation/observe",
+      "/stop-sharing",
+    ]);
+    expect(JSON.parse(String(f.request.mock.calls.at(-1)![1]!.body))).toEqual({
+      callAttemptId: "call",
+      presentationId: "presentation",
+    });
+  });
+  it.each([
+    "source",
+    "geometry",
+    "scene",
+    "stale",
+    "future",
+    "fractional_geometry",
+  ])("rejects conflicting %s proof", async (kind) => {
+    const f = handsetFixture();
+    await f.prepare();
+    const video = { ...f.videoEvidence };
+    if (kind === "source") video.sourceFrameId = "wrong";
+    if (kind === "geometry") video.geometryGeneration = "wrong";
+    if (kind === "scene") video.sceneId = "wrong";
+    if (kind === "stale") f.advance(3000);
+    if (kind === "future") video.acceptedAt = 4000;
+    const raw =
+      kind === "fractional_geometry"
+        ? { ...video, geometryGeneration: 1 }
+        : video;
+    f.request.mockResolvedValueOnce(response({ frame, videoEvidence: raw }));
+    await expect(f.host.show(show)).rejects.toThrow();
+    expect(() => f.host.evidenceFor(frame)).toThrow();
+  });
+  it("rejects mismatched export provenance before a host request", async () => {
+    const f = handsetFixture();
+    await expect(
+      f.host.prepare({ ...prepared, grant: { ...grant, id: "other" } }),
+    ).rejects.toThrow(/provenance/);
+    expect(f.request).not.toHaveBeenCalled();
   });
 });

@@ -3,16 +3,24 @@ import { DomainError, Vault } from "../storage/security.js";
 import { Store } from "../storage/store.js";
 import { ProtectedTaskStore } from "../storage/task-store.js";
 import {
-  taskAudioFingerprint,
-  taskAudioPlanSchema,
+  taskHandsetFingerprint,
+  taskWalkthroughVideoEvidenceSchema,
+  parseTaskHandsetPlan,
   validateTaskAudioCredentials,
-  type TaskAudioAuthorization,
+  type TaskHandsetAuthorization,
   type TaskAudioCredentials,
-  type TaskAudioMediaObservation,
-  type TaskAudioPlan,
-  type TaskAudioPorts,
-  type TaskAudioReadiness,
+  type TaskHandsetMediaObservation,
+  type TaskHandsetPlan,
+  type TaskHandsetPorts,
+  type TaskHandsetReadiness,
 } from "../transport/task-audio.js";
+
+import {
+  isTaskWalkthroughPlan,
+  taskWalkthroughAuthorizationSchema,
+  taskWalkthroughPresentationBindingSchema,
+} from "../task-walkthrough-contracts.js";
+import type { TaskVoiceSession, CodingTask } from "../contracts.js";
 
 const KIND = "coding-task-audio-call-v1";
 type Phase =
@@ -41,9 +49,9 @@ export interface TaskAudioActivationDiagnostic {
 }
 interface AudioCallRecord {
   id: string;
-  plan: TaskAudioPlan;
+  plan: TaskHandsetPlan;
   fingerprint: string;
-  authorization: TaskAudioAuthorization;
+  authorization: TaskHandsetAuthorization;
   state:
     | "authorized"
     | "preparing"
@@ -62,6 +70,13 @@ interface AudioCallRecord {
   stopRequested: boolean;
   mediaClosed: boolean;
   nativeCleanupComplete: boolean;
+  nativeObservation?: {
+    providerCallId: string;
+    state: "allocated" | "connected" | "terminal";
+    cleanupComplete: boolean;
+    remoteVideoReady?: boolean;
+    observedAt: number;
+  };
   updatedAt: number;
 }
 export interface TaskAudioCallStatus {
@@ -77,6 +92,11 @@ export interface TaskAudioCallStatus {
   mediaClosed: boolean;
   nativeCleanupComplete: boolean;
   cleanupConfirmed: boolean;
+  nativeVideo?: {
+    remoteDecoded: boolean;
+    observedAt: number;
+    evidence: "worker_remote_video_ready_not_human_seen";
+  };
   physicalAcceptance: false;
   diagnostics: TaskAudioActivationDiagnostic[];
 }
@@ -92,6 +112,106 @@ export function unresolvedTaskAudioCalls(store: Store, vault: Vault) {
     }));
 }
 
+/** Local protected receipts only; this never performs a network read or revives an unknown call. */
+export function hasConnectedTaskWalkthroughCall(
+  store: Store,
+  vault: Vault,
+  plan: TaskHandsetPlan,
+  now = Date.now(),
+): boolean {
+  if (!isTaskWalkthroughPlan(plan)) return false;
+  const record = new ProtectedTaskStore<AudioCallRecord>(
+    store,
+    vault,
+    KIND,
+  ).get(plan.id);
+  const proof = record?.nativeObservation;
+  return (
+    !!record &&
+    record.fingerprint === taskHandsetFingerprint(plan) &&
+    record.fingerprint === taskHandsetFingerprint(record.plan) &&
+    record.state === "connected" &&
+    !record.stopRequested &&
+    !record.mediaClosed &&
+    !record.nativeCleanupComplete &&
+    record.plan.expiresAt > now &&
+    record.receipts.native_dial?.state === "done" &&
+    record.receipts.media_activate?.state === "done" &&
+    Object.values(record.receipts).every(
+      (receipt) => receipt.state === "done",
+    ) &&
+    !!proof &&
+    proof.providerCallId === record.providerCallId &&
+    proof.state === "connected" &&
+    !proof.cleanupComplete &&
+    proof.observedAt <= now &&
+    now - proof.observedAt <= 5000
+  );
+}
+export function assertConnectedTaskWalkthroughVoice(
+  store: Store,
+  vault: Vault,
+  voice: TaskVoiceSession,
+  now = Date.now(),
+): void {
+  if (voice.mode !== "handset_walkthrough") return;
+  const record = new ProtectedTaskStore<AudioCallRecord>(
+    store,
+    vault,
+    KIND,
+  ).get(voice.callAttemptId);
+  const plan = record?.plan;
+  if (
+    !plan ||
+    !isTaskWalkthroughPlan(plan) ||
+    plan.taskSessionId !== voice.sessionId ||
+    plan.taskId !== voice.taskId ||
+    plan.voiceSessionId !== voice.id ||
+    plan.exportGrantId !== voice.exportGrantId ||
+    plan.presentationBinding.presentationId !== voice.presentationId ||
+    plan.presentationBinding.manifestFingerprint !==
+      voice.manifestFingerprint ||
+    !hasConnectedTaskWalkthroughCall(store, vault, plan, now)
+  )
+    throw new DomainError(
+      403,
+      "A fresh exact connected walkthrough call is required.",
+    );
+}
+
+/** Acceptance is scoped to the reviewed result of this particular review call. */
+export function assertConnectedTaskWalkthroughReview(
+  store: Store,
+  vault: Vault,
+  voice: TaskVoiceSession,
+  task: CodingTask,
+  now = Date.now(),
+): void {
+  assertConnectedTaskWalkthroughVoice(store, vault, voice, now);
+  if (voice.mode !== "handset_walkthrough")
+    throw new DomainError(403, "An exact walkthrough review call is required.");
+  const record = new ProtectedTaskStore<AudioCallRecord>(
+      store,
+      vault,
+      KIND,
+    ).get(voice.callAttemptId),
+    plan = record?.plan;
+  if (
+    !plan ||
+    !isTaskWalkthroughPlan(plan) ||
+    plan.callKind !== "review" ||
+    plan.runId !== task.runs.at(-1)!.id ||
+    plan.revision !== task.revision ||
+    plan.presentationBinding.verificationId !== task.verification?.id ||
+    task.verification?.runId !== plan.runId ||
+    task.verification.state !== "passed"
+  )
+    throw new DomainError(
+      403,
+      "A fresh final review call for this exact verified result is required.",
+    );
+}
+
 /** Offline-ready c.1 coordinator. Default disabled; no startup scheduling, retries or legacy session grants. */
 export class TaskAudioCallCoordinator {
   private readonly records: ProtectedTaskStore<AudioCallRecord>;
@@ -99,7 +219,7 @@ export class TaskAudioCallCoordinator {
   constructor(
     private readonly store: Store,
     vault: Vault,
-    private readonly ports: TaskAudioPorts,
+    private readonly ports: TaskHandsetPorts,
     private readonly options: {
       dispatchEnabled?: boolean;
       environment?: "simulation" | "native";
@@ -130,11 +250,11 @@ export class TaskAudioCallCoordinator {
   }
 
   reserve(
-    plan: TaskAudioPlan,
-    authorization: TaskAudioAuthorization,
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
   ): TaskAudioCallStatus {
-    const parsed = taskAudioPlanSchema.parse(plan),
-      fingerprint = taskAudioFingerprint(parsed);
+    const parsed = parseTaskHandsetPlan(plan),
+      fingerprint = taskHandsetFingerprint(parsed);
     this.validateAuthorization(parsed, authorization, fingerprint);
     return this.store.transaction(() => {
       const prior = this.records.get(parsed.id);
@@ -182,8 +302,11 @@ export class TaskAudioCallCoordinator {
   }
 
   /** GET/read-only ports only; no media room, dial, activation, end or automatic admission. */
-  async preflight(plan: TaskAudioPlan, authorization: TaskAudioAuthorization) {
-    const fingerprint = taskAudioFingerprint(plan);
+  async preflight(
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
+  ) {
+    const fingerprint = taskHandsetFingerprint(plan);
     this.validateAuthorization(plan, authorization, fingerprint);
     await this.ports.authorize(plan, authorization);
     const evidence = await this.ports.readiness(plan, authorization);
@@ -200,9 +323,9 @@ export class TaskAudioCallCoordinator {
       productionQualified: false,
       permissions: {
         audio: true,
-        video: false,
-        screen: false,
-        presentation: false,
+        video: plan.video,
+        screen: plan.screen,
+        presentation: plan.presentation,
         control: false,
       },
     };
@@ -221,8 +344,13 @@ export class TaskAudioCallCoordinator {
       (current, effectId) => this.ports.media.prepare(current.plan, effectId),
       (current, result) => {
         this.validateMedia(current.plan, result, "prepared");
-        if (result.silentPublisherReady !== true)
+        if (
+          result.silentPublisherReady !== true ||
+          (isTaskWalkthroughPlan(current.plan) &&
+            result.videoPublisherReady !== true)
+        )
           throw new Error("Audio publisher is not ready.");
+        this.validateVideoReady(current.plan, result);
         const credentials = validateTaskAudioCredentials(result.credentials);
         if (
           credentials.remote_participant_identity !== current.plan.agentIdentity
@@ -290,6 +418,16 @@ export class TaskAudioCallCoordinator {
         native.cleanupComplete
       )
         throw new DomainError(409, "Native connection is not confirmed.");
+      this.store.transaction(() => {
+        const current = this.get(id);
+        if (current.nativeObservation?.state === "terminal")
+          throw new DomainError(
+            409,
+            "Native call already reached a terminal outcome.",
+          );
+        current.nativeObservation = { ...native, observedAt: this.clock() };
+        this.records.put(current);
+      });
     };
     await this.diagnose(id, "activation_native_read", confirmConnected);
     const confirmedAt = this.clock();
@@ -321,6 +459,7 @@ export class TaskAudioCallCoordinator {
         ),
       (current, result) => {
         this.validateMedia(current.plan, result, "active");
+        this.validateVideoReady(current.plan, result);
         if (result.providerCallId !== current.providerCallId)
           throw new Error("Media activation call differs.");
         if (!current.stopRequested) current.state = "connected";
@@ -435,6 +574,18 @@ export class TaskAudioCallCoordinator {
       if (
         native.status === "fulfilled" &&
         native.value &&
+        native.value.providerCallId === current.providerCallId
+      ) {
+        if (current.nativeObservation?.state !== "terminal")
+          current.nativeObservation = {
+            ...native.value,
+            observedAt: this.clock(),
+          };
+      } else if (current.nativeObservation?.state !== "terminal")
+        delete current.nativeObservation;
+      if (
+        native.status === "fulfilled" &&
+        native.value &&
         native.value.providerCallId === current.providerCallId &&
         native.value.state === "terminal" &&
         native.value.cleanupComplete === true
@@ -452,7 +603,7 @@ export class TaskAudioCallCoordinator {
     if (
       !record ||
       record.plan.id !== id ||
-      taskAudioFingerprint(record.plan) !== record.fingerprint
+      taskHandsetFingerprint(record.plan) !== record.fingerprint
     )
       throw new DomainError(404, "Task audio call is unavailable.");
     return record;
@@ -462,11 +613,33 @@ export class TaskAudioCallCoordinator {
       throw new DomainError(403, "Task audio dispatch is disabled.");
   }
   private validateAuthorization(
-    plan: TaskAudioPlan,
-    authorization: TaskAudioAuthorization,
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
     fingerprint: string,
   ) {
     const now = this.clock();
+    if (isTaskWalkthroughPlan(plan)) {
+      const parsed =
+        taskWalkthroughAuthorizationSchema.safeParse(authorization);
+      if (
+        !parsed.success ||
+        parsed.data.planFingerprint !== fingerprint ||
+        parsed.data.authorizedAt > now ||
+        parsed.data.expiresAt <= now ||
+        plan.dispatchExpiresAt !== parsed.data.expiresAt ||
+        plan.expiresAt !== parsed.data.callExpiresAt
+      )
+        throw new DomainError(
+          403,
+          "Fresh exact walkthrough dispatch authority is required.",
+        );
+      return;
+    }
+    if ("callExpiresAt" in authorization)
+      throw new DomainError(
+        403,
+        "Walkthrough authority cannot authorize audio smoke.",
+      );
     if (
       !authorization ||
       !/^[A-Za-z0-9_-]{1,200}$/.test(authorization.id) ||
@@ -486,12 +659,15 @@ export class TaskAudioCallCoordinator {
       );
   }
   private validateReadiness(
-    plan: TaskAudioPlan,
+    plan: TaskHandsetPlan,
     fingerprint: string,
-    evidence: TaskAudioReadiness,
+    evidence: TaskHandsetReadiness,
   ) {
     if (
       !evidence ||
+      (isTaskWalkthroughPlan(plan) &&
+        (evidence.videoReady !== true ||
+          evidence.presentationReady !== true)) ||
       evidence.planFingerprint !== fingerprint ||
       evidence.lineId !== plan.lineId ||
       evidence.pairingId !== plan.pairingId ||
@@ -589,19 +765,57 @@ export class TaskAudioCallCoordinator {
       throw error;
     }
   }
+  private validateVideoReady(
+    plan: TaskHandsetPlan,
+    result: TaskHandsetMediaObservation,
+  ) {
+    if (!isTaskWalkthroughPlan(plan)) return;
+    const frame =
+      "videoEvidence" in result
+        ? taskWalkthroughVideoEvidenceSchema.parse(result.videoEvidence)
+        : undefined;
+    if (
+      !frame ||
+      !("sharingActive" in result) ||
+      !result.sharingActive ||
+      frame.presentationId !== plan.presentationBinding.presentationId ||
+      frame.manifestFingerprint !==
+        plan.presentationBinding.manifestFingerprint ||
+      frame.acceptedAt > this.clock() ||
+      this.clock() - frame.capturedAt > 2000
+    )
+      throw new Error("Fresh exact prepared video evidence is required.");
+  }
   private validateMedia(
-    plan: TaskAudioPlan,
-    result: TaskAudioMediaObservation,
-    expected?: TaskAudioMediaObservation["state"],
+    plan: TaskHandsetPlan,
+    result: TaskHandsetMediaObservation,
+    expected?: TaskHandsetMediaObservation["state"],
   ) {
     if (
       !result ||
       result.callAttemptId !== plan.id ||
       result.mediaSessionId !== plan.mediaSessionId ||
       result.audio !== true ||
-      result.video !== false ||
-      result.screen !== false ||
-      result.presentation !== false ||
+      result.video !== plan.video ||
+      result.screen !== plan.screen ||
+      result.presentation !== plan.presentation ||
+      (isTaskWalkthroughPlan(plan) &&
+        (!("mode" in result) ||
+          result.mode !== "handset_walkthrough" ||
+          result.instructions !== true ||
+          result.nativeActivation !== false ||
+          result.planFingerprint !== taskHandsetFingerprint(plan) ||
+          result.exportGrantId !== plan.exportGrantId ||
+          JSON.stringify(
+            taskWalkthroughPresentationBindingSchema.parse(
+              result.presentationBinding,
+            ),
+          ) !==
+            JSON.stringify(
+              taskWalkthroughPresentationBindingSchema.parse(
+                plan.presentationBinding,
+              ),
+            ))) ||
       result.control !== false ||
       !["absent", "prepared", "active", "closed", "unknown"].includes(
         result.state,
@@ -701,6 +915,16 @@ export class TaskAudioCallCoordinator {
       mediaClosed: record.mediaClosed,
       nativeCleanupComplete: record.nativeCleanupComplete,
       cleanupConfirmed: record.state === "closed",
+      ...(isTaskWalkthroughPlan(record.plan) &&
+      record.nativeObservation?.remoteVideoReady !== undefined
+        ? {
+            nativeVideo: {
+              remoteDecoded: record.nativeObservation.remoteVideoReady,
+              observedAt: record.nativeObservation.observedAt,
+              evidence: "worker_remote_video_ready_not_human_seen" as const,
+            },
+          }
+        : {}),
       physicalAcceptance: false,
     };
   }

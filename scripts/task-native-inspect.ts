@@ -4,17 +4,21 @@ import { DatabaseSync } from "node:sqlite";
 import { createInterface } from "node:readline";
 import { NativeTaskAudioReadiness } from "../src/transport/task-audio-readiness.js";
 import {
-  taskAudioPlanSchema,
-  type TaskAudioAuthorization,
+  parseTaskHandsetPlan,
+  type TaskHandsetAuthorization,
 } from "../src/transport/task-audio.js";
 import type { EffectReceipt, Pairing } from "../src/contracts.js";
 import { hash } from "../src/storage/security.js";
-import { taskAudioFingerprint } from "../src/transport/task-audio.js";
+import { taskHandsetFingerprint } from "../src/transport/task-audio.js";
+import {
+  isTaskWalkthroughPlan,
+  taskWalkthroughAuthorizationSchema,
+} from "../src/task-walkthrough-contracts.js";
 import type { Store } from "../src/storage/store.js";
 
 async function inspect(input: any) {
-  const plan = taskAudioPlanSchema.parse(input.plan);
-  const authorization = input.authorization as TaskAudioAuthorization;
+  const plan = parseTaskHandsetPlan(input.plan);
+  const authorization = input.authorization as TaskHandsetAuthorization;
   if (
     process.env.CLAWDTIME_MODE !== "standby" ||
     process.env.CLAWDTIME_LIVE_TRAFFIC !== "false" ||
@@ -83,6 +87,7 @@ async function inspect(input: any) {
       pairing.revokedAt !== undefined ||
       pairing.memberId !== plan.memberId ||
       pairing.deviceId !== plan.deviceId ||
+      (isTaskWalkthroughPlan(plan) && pairing.allowView !== true) ||
       pairing.lineId !== plan.lineId ||
       hash(pairing.recipient) !== plan.recipientHash ||
       config.binding.lineId !== plan.lineId ||
@@ -95,7 +100,7 @@ async function inspect(input: any) {
       return {
         authorized: true,
         checkedAt: Date.now(),
-        planFingerprint: taskAudioFingerprint(plan),
+        planFingerprint: taskHandsetFingerprint(plan),
       };
     }
     // Original handoff identity remains intact; actual current standby supplies
@@ -110,7 +115,12 @@ async function inspect(input: any) {
       ...config,
       handoff: () => handoff,
     });
-    const evidence = await inspector.check(plan, authorization);
+    const evidence = isTaskWalkthroughPlan(plan)
+      ? await inspector.checkWalkthrough(
+          plan,
+          taskWalkthroughAuthorizationSchema.parse(authorization),
+        )
+      : await inspector.check(plan, authorization);
     return evidence;
   } finally {
     db.close();

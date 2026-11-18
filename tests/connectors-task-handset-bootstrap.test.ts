@@ -21,6 +21,10 @@ import { Vault, hash } from "../src/storage/security.js";
 import { ProtectedTaskStore } from "../src/storage/task-store.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
 import { TaskService } from "../src/control/task-service.js";
+import {
+  taskPresentationFingerprint,
+  type TaskPresentationManifest,
+} from "../src/task-presentation-contracts.js";
 
 const directories: string[] = [];
 afterEach(() =>
@@ -259,6 +263,82 @@ function inspect(f: ReturnType<typeof fixture>) {
   }
 }
 
+function walkthrough(f: ReturnType<typeof fixture>) {
+  const config = JSON.parse(readFileSync(f.configPath, "utf8"));
+  const task = f.before,
+    now = Date.now();
+  const manifest: TaskPresentationManifest = {
+    version: 1,
+    id: "synthetic-presentation",
+    sessionId: task.sessionId,
+    taskId: task.id,
+    runId: task.runs.at(-1)!.id,
+    taskRevision: task.revision,
+    verificationId: task.verification!.id,
+    kind: "review",
+    opening: task.brief!.opening,
+    fps: 15,
+    scenes: [
+      {
+        id: "preview",
+        kind: "preview",
+        title: "Synthetic result",
+        narration: task.brief!.opening,
+        expectedOutcome: "Synthetic result visible",
+        target: {
+          appId: "fixture.app",
+          windowId: "1",
+          ownerPid: 123,
+          processIdentity: hash("process"),
+          displayId: 1,
+          titleHash: hash("window"),
+        },
+        focus: { x: 0, y: 0, width: 1, height: 1 },
+        transitionMs: 550,
+      },
+    ],
+  };
+  const presentationFile = join(f.directory, "presentation.json"),
+    checksFile = join(f.directory, "checks.json");
+  f.put(presentationFile, {
+    manifest,
+    grant: {
+      version: 1,
+      id: "local-grant",
+      manifestFingerprint: taskPresentationFingerprint(manifest),
+      sessionId: task.sessionId,
+      taskId: task.id,
+      runId: manifest.runId,
+      taskRevision: task.revision,
+      hostId: "fixture-host",
+      authorizedAt: now,
+      expiresAt: now + 300000,
+      localOnly: true,
+      capture: true,
+      presentation: true,
+      control: false,
+      nativeActivation: false,
+      calls: false,
+    },
+  });
+  f.put(checksFile, [
+    { name: "Unused synthetic check", command: ["/usr/bin/false"] },
+  ]);
+  f.put(config.providerFile, { synthetic: true });
+  f.put(config.livekitFile, { synthetic: true });
+  config.mode = "handset_walkthrough";
+  config.walkthrough = {
+    presentationFile,
+    checksFile,
+    helperBinary: "/usr/bin/false",
+    callDurationMs: 600000,
+    userAuthorizedPreparedWindowExport: true,
+    userAuthorizedTaskInstructions: true,
+  };
+  f.put(f.configPath, config);
+  return config;
+}
+
 describe("handset runner provably undialed bootstrap cleanup", () => {
   it("ends the unused voice and releases ownership when the persistent inspector cannot start", async () => {
     const f = fixture();
@@ -273,6 +353,83 @@ describe("handset runner provably undialed bootstrap cleanup", () => {
     const f = fixture();
     const saved = JSON.parse(readFileSync(f.savedPath, "utf8"));
     f.put(f.savedPath, { ...saved, projectRoot: "/synthetic-wrong-project" });
+    await run(f);
+    expect(inspect(f)).toEqual([]);
+  }, 15000);
+  it("ends an unused walkthrough voice after inspector failure without capture or worker execution", async () => {
+    const f = fixture();
+    walkthrough(f);
+    await run(f);
+    const voices = inspect(f);
+    expect(voices).toHaveLength(1);
+    expect(voices[0]!.mode).toBe("handset_walkthrough");
+    expect(voices[0]!.endedAt).toEqual(expect.any(Number));
+    expect(voices[0]!.providerConversationId).toBeUndefined();
+    const plan = JSON.parse(
+      readFileSync(join(f.directory, "attempt", "plan.json"), "utf8"),
+    );
+    expect(plan).toMatchObject({
+      mode: "handset_walkthrough",
+      audio: true,
+      video: true,
+      screen: true,
+      presentation: true,
+      instructions: true,
+      control: false,
+      nativeActivation: false,
+      maxCalls: 1,
+    });
+    expect(plan.expiresAt - plan.dispatchExpiresAt).toBe(300000);
+    const db = new Store(f.database);
+    try {
+      expect(db.all("coding-task-presentation-v1")).toEqual([]);
+    } finally {
+      db.close();
+    }
+  }, 15000);
+  it.each([
+    "userAuthorizedPreparedWindowExport",
+    "userAuthorizedTaskInstructions",
+  ])(
+    "refuses missing explicit %s before creating ownership or voice",
+    async (field) => {
+      const f = fixture(),
+        config = walkthrough(f);
+      delete config.walkthrough[field];
+      f.put(f.configPath, config);
+      await run(f);
+      expect(inspect(f)).toEqual([]);
+      expect(existsSync(join(f.directory, "attempt"))).toBe(false);
+    },
+    15000,
+  );
+  it.each([29999, 1800001])(
+    "refuses out-of-bound conversation duration %s",
+    async (duration) => {
+      const f = fixture(),
+        config = walkthrough(f);
+      config.walkthrough.callDurationMs = duration;
+      f.put(f.configPath, config);
+      await run(f);
+      expect(inspect(f)).toEqual([]);
+    },
+    15000,
+  );
+  it("rejects operator config inside the worker project before opening state", async () => {
+    const f = fixture(),
+      config = walkthrough(f);
+    const inside = join(config.projectRoot, "provider.json");
+    f.put(inside, { synthetic: true });
+    config.providerFile = inside;
+    f.put(f.configPath, config);
+    await run(f);
+    expect(inspect(f)).toEqual([]);
+    expect(existsSync(join(f.directory, "attempt"))).toBe(false);
+  }, 15000);
+  it("releases ownership when verification configuration is invalid without admitting voice", async () => {
+    const f = fixture(),
+      config = walkthrough(f);
+    f.put(config.walkthrough.checksFile, []);
     await run(f);
     expect(inspect(f)).toEqual([]);
   }, 15000);

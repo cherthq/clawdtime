@@ -501,8 +501,10 @@ class TaskPresentationRuntime:
             self.frame = self.output = None
             return
         self.output = output.getvalue()
+        rendered_at = self.wall() * 1000
         self.output_metadata = {'sourceFrameId': source['sourceFrameId'], 'capturedAt': source['capturedAt'],
-            'geometryGeneration': source['geometryGeneration'], 'sceneId': scene['id'], 'generation': self.generation}
+            'geometryGeneration': source['geometryGeneration'], 'sceneId': scene['id'], 'generation': self.generation,
+            'renderedAt': rendered_at}
         self.output_token = uuid.uuid4().hex
         self.counts['renderedFrames'] = min(1000000, self.counts['renderedFrames'] + 1)
         if t == 1 and self.transition_completed is None:
@@ -512,7 +514,7 @@ class TaskPresentationRuntime:
                 'operationId': self.operation_id, 'sceneId': scene['id'], 'generation': self.generation,
                 'target': copy.deepcopy(scene['target']), 'sourceFrameId': source['sourceFrameId'],
                 'geometryGeneration': source['geometryGeneration'], 'contentRevision': source['contentRevision'],
-                'capturedAt': source['capturedAt'], 'renderedAt': self.wall() * 1000,
+                'capturedAt': source['capturedAt'], 'renderedAt': rendered_at,
                 'transitionCompletedAt': self.transition_completed, 'evidence': 'local_frame_rendered_not_human_seen'}
             self.emitted = {key: frame for key, frame in self.emitted.items() if self.wall() * 1000 - frame['capturedAt'] < 2000}
             key = json.dumps(self.frame, sort_keys=True, separators=(',', ':'))

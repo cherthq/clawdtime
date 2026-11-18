@@ -154,7 +154,7 @@ export interface TaskWorker {
   ): Promise<TaskWorkerResult>;
 }
 /** Voice is a scoped conversation capability, never native execution or screen authority. */
-export interface TaskVoiceSession {
+interface TaskVoiceSessionBase {
   id: string;
   taskId: string;
   sessionId: string;
@@ -165,12 +165,26 @@ export interface TaskVoiceSession {
   createdAt: number;
   expiresAt: number;
   endedAt?: number;
-  mode: "local_audio" | "handset_audio_smoke";
-  /** Handset smoke admission is status/end only; omitted retains existing local voice semantics. */
-  instructionsAllowed?: boolean;
-  callAttemptId?: string;
-  permissions: { presentation: false; control: false; screen: false };
 }
+export type TaskVoiceSession = TaskVoiceSessionBase &
+  (
+    | {
+        mode: "local_audio" | "handset_audio_smoke";
+        /** Smoke is status/end only; omitted retains historical local semantics. */
+        instructionsAllowed?: boolean;
+        callAttemptId?: string;
+        permissions: { presentation: false; control: false; screen: false };
+      }
+    | {
+        mode: "handset_walkthrough";
+        instructionsAllowed: true;
+        callAttemptId: string;
+        exportGrantId: string;
+        presentationId: string;
+        manifestFingerprint: string;
+        permissions: { presentation: true; control: false; screen: true };
+      }
+  );
 export interface TaskVoiceInstruction {
   id: string;
   voiceSessionId: string;
@@ -183,6 +197,19 @@ export interface TaskVoiceInstruction {
   state: "held" | "applied";
   createdAt: number;
   appliedRunId?: string;
+}
+/** Explicit final review acceptance; never deployment or another coding run. */
+export interface TaskVoiceAcceptance {
+  id: string;
+  voiceSessionId: string;
+  taskId: string;
+  runId: string;
+  expectedRevision: number;
+  providerConversationId: string;
+  utteranceId: string;
+  action: "accept";
+  state: "accepted";
+  createdAt: number;
 }
 export interface Pairing {
   id: string;

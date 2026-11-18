@@ -4,6 +4,26 @@ import { TaskVoiceLedger } from "../attention/task-voice-ledger.js";
 import { DomainError, hash, token } from "../storage/security.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
+import {
+  taskWalkthroughVoiceBindingSchema,
+  type TaskWalkthroughVoiceBinding,
+} from "../task-walkthrough-contracts.js";
+export interface TaskVoicePresentationPort {
+  context(voice: TaskVoiceSession): Record<string, unknown>;
+  opening(voice: TaskVoiceSession, eventId: string): Promise<unknown>;
+  show(
+    voice: TaskVoiceSession,
+    input: { eventId: string; utteranceId: string; sceneId: string },
+  ): Promise<unknown>;
+  stop(
+    voice: TaskVoiceSession,
+    input: { eventId: string; utteranceId: string },
+  ): Promise<unknown>;
+  retire(
+    voice: TaskVoiceSession,
+    input: { eventId: string; reason: string },
+  ): Promise<unknown>;
+}
 const identity = z.string().min(1).max(200);
 interface Utterance {
   voiceSessionId: string;
@@ -20,6 +40,7 @@ export class TaskVoiceService {
     readonly tasks: TaskService,
     readonly ledger: TaskVoiceLedger,
     private engine?: TaskEngine,
+    private presentation?: () => TaskVoicePresentationPort | undefined,
   ) {
     tasks.beforeDecision = (taskId) => {
       if (ledger.heldForTask(taskId).length)
@@ -50,11 +71,25 @@ export class TaskVoiceService {
   ) {
     return this.admit(raw, taskId, input, { callAttemptId });
   }
+  /** Protected operator composition only. A public voice request cannot mint export authority. */
+  openWalkthrough(
+    raw: string,
+    taskId: string,
+    input: unknown,
+    binding: TaskWalkthroughVoiceBinding,
+  ) {
+    return this.admit(
+      raw,
+      taskId,
+      input,
+      taskWalkthroughVoiceBindingSchema.parse(binding),
+    );
+  }
   private admit(
     raw: string,
     taskId: string,
     input: unknown,
-    handset?: { callAttemptId: string },
+    handset?: { callAttemptId: string } | TaskWalkthroughVoiceBinding,
   ) {
     const session = this.tasks.authenticate(raw);
     if (!session.permissions.voice)
@@ -132,6 +167,14 @@ export class TaskVoiceService {
       voiceSessionId: voice.id,
       mode: voice.mode,
       ...(voice.callAttemptId ? { callAttemptId: voice.callAttemptId } : {}),
+      ...(voice.mode === "handset_walkthrough"
+        ? {
+            exportGrantId: voice.exportGrantId,
+            presentationId: voice.presentationId,
+            manifestFingerprint: voice.manifestFingerprint,
+            ...this.presentationPort().context(voice),
+          }
+        : {}),
       taskId,
       runId: run.id,
       revision: task.revision,
@@ -150,7 +193,8 @@ export class TaskVoiceService {
       permissions: {
         ...voice.permissions,
         instructions:
-          voice.mode === "local_audio" && voice.instructionsAllowed !== false,
+          ["local_audio", "handset_walkthrough"].includes(voice.mode) &&
+          voice.instructionsAllowed !== false,
       },
     };
   }
@@ -208,8 +252,12 @@ export class TaskVoiceService {
     });
   }
   instruction(raw: string, taskId: string, voiceId: string, input: unknown) {
-    const voice = this.authenticate(raw, taskId, voiceId);
-    if (voice.mode !== "local_audio" || voice.instructionsAllowed === false)
+    // The ledger returns an existing receipt before checking active admission.
+    const voice = this.authenticate(raw, taskId, voiceId, false);
+    if (
+      !["local_audio", "handset_walkthrough"].includes(voice.mode) ||
+      voice.instructionsAllowed === false
+    )
       throw new DomainError(
         403,
         "This voice session permits status and end only.",
@@ -252,5 +300,143 @@ export class TaskVoiceService {
     const value = z.object({ eventId: identity }).strict().parse(input);
     this.ledger.end(voiceId, value.eventId);
     return { ended: true, taskCanceled: false };
+  }
+  private presentationPort() {
+    const port = this.presentation?.();
+    if (!port)
+      throw new DomainError(
+        403,
+        "Prepared handset presentation is unavailable.",
+      );
+    return port;
+  }
+  private finalized(voice: TaskVoiceSession, utteranceId: string): Utterance {
+    const saved = this.tasks.store.state<{ sealed: string }>(
+      `voice-utterance:${hash(`${voice.id}\0${utteranceId}`)}`,
+    );
+    if (!saved)
+      throw new DomainError(
+        409,
+        "An exact finalized human utterance is required.",
+      );
+    const value = this.tasks.vault.open<Utterance>(saved.sealed);
+    if (
+      value.voiceSessionId !== voice.id ||
+      value.providerConversationId !== voice.providerConversationId
+    )
+      throw new DomainError(
+        403,
+        "Finalized utterance belongs to another conversation.",
+      );
+    return value;
+  }
+  async presentationOpening(
+    raw: string,
+    taskId: string,
+    voiceId: string,
+    input: unknown,
+  ) {
+    const voice = this.authenticate(raw, taskId, voiceId);
+    if (voice.mode !== "handset_walkthrough")
+      throw new DomainError(403, "Walkthrough authority required.");
+    const value = z.object({ eventId: identity }).strict().parse(input);
+    // The installed port also requires the exact in-flight media-prepare receipt.
+    return this.presentationPort().opening(voice, value.eventId);
+  }
+  async presentationShow(
+    raw: string,
+    taskId: string,
+    voiceId: string,
+    input: unknown,
+  ) {
+    const voice = this.authenticate(raw, taskId, voiceId);
+    if (voice.mode !== "handset_walkthrough")
+      throw new DomainError(403, "Walkthrough authority required.");
+    const value = z
+      .object({ eventId: identity, utteranceId: identity, sceneId: identity })
+      .strict()
+      .parse(input);
+    this.finalized(voice, value.utteranceId);
+    return this.presentationPort().show(voice, value);
+  }
+  async presentationStop(
+    raw: string,
+    taskId: string,
+    voiceId: string,
+    input: unknown,
+  ) {
+    const voice = this.authenticate(raw, taskId, voiceId);
+    if (voice.mode !== "handset_walkthrough")
+      throw new DomainError(403, "Walkthrough authority required.");
+    const value = z
+      .object({ eventId: identity, utteranceId: identity })
+      .strict()
+      .parse(input);
+    this.finalized(voice, value.utteranceId);
+    return this.presentationPort().stop(voice, value);
+  }
+  async presentationRetire(
+    raw: string,
+    taskId: string,
+    voiceId: string,
+    input: unknown,
+  ) {
+    const voice = this.authenticate(raw, taskId, voiceId, false);
+    if (voice.mode !== "handset_walkthrough")
+      throw new DomainError(403, "Walkthrough authority required.");
+    const value = z
+      .object({
+        eventId: identity,
+        reason: z.enum([
+          "source_unavailable",
+          "frame_stale",
+          "export_unavailable",
+          "task_changed",
+        ]),
+      })
+      .strict()
+      .parse(input);
+    return this.presentationPort().retire(voice, value);
+  }
+  accept(raw: string, taskId: string, voiceId: string, input: unknown) {
+    const voice = this.authenticate(raw, taskId, voiceId, false);
+    if (voice.mode !== "handset_walkthrough")
+      throw new DomainError(403, "Walkthrough review authority required.");
+    const value = z
+      .object({ eventId: identity, utteranceId: identity })
+      .strict()
+      .parse(input);
+    const utterance = this.finalized(voice, value.utteranceId);
+    const acceptance = utterance.text
+      .trim()
+      .replace(/[.!]+$/, "")
+      .trim();
+    if (
+      !/^(?:I accept (?:the |this )?result|accept (?:the |this )result|approve (?:the |this )result|looks good|the result looks good)$/i.test(
+        acceptance,
+      )
+    )
+      throw new DomainError(
+        409,
+        "Explicit acceptance of the result is required; ambiguous speech is not approval.",
+      );
+    const task = this.tasks.ledger.get(voice.sessionId, taskId);
+    const result = this.ledger.acceptFinalized(voiceId, {
+      eventId: value.eventId,
+      providerConversationId: utterance.providerConversationId,
+      utteranceId: utterance.utteranceId,
+      taskId,
+      runId: utterance.runId,
+      expectedRevision: utterance.expectedRevision,
+      currentRevision: task.revision,
+      instruction: utterance.text,
+    });
+    return {
+      accepted: true,
+      taskId,
+      runId: result.receipt.runId,
+      replayed: result.replayed,
+      deployed: false,
+    };
   }
 }

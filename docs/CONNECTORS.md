@@ -1025,3 +1025,30 @@ walkthrough still needs transient inspection of actual editor/preview pixels and
 observed transition/Stop behavior. No raw frames or audio belong in the CLI journal.
 This path imports no original-chat runtime and makes no external call; local tests
 do not qualify handset video, narration timing or a complete decision/review call.
+
+### Separate handset walkthrough authority
+
+`cli/task-walkthrough-authority.ts` provides an operator-composition boundary;
+it is not a new public dispatch command. `TaskAudioAuthority` and the c.1
+audio-only plan/fingerprint remain separate. A local presentation grant alone
+cannot authorize export. The walkthrough authority requires the exact prepared
+manifest, local capture grant, and an explicit `handset_walkthrough` export grant
+bound to the full call-plan fingerprint and destination identity.
+
+`assertInitial(plan, authorization)` requires the original known terminal run,
+independent verification, matching prepared opening and still-valid local capture
+and dispatch grants. It admits both verified review and prepared decision paths.
+`assertOngoing(plan, authorization)` requires the same task/session/voice/export
+authority and a trusted exact connected, unstopped call-receipt callback. The
+callback defaults to refusal; fresh native destination proof remains the operator
+composition's responsibility. A later authorized run, held correction, or expiry
+of the original local presentation grant does not end this conversation. Old
+frames still require their own exact current presentation authority and must stop
+when it expires or the task advances. Cancellation, unknown outcomes, revoked
+ownership, Stop and the separately authorized conversation expiry deny continuation.
+
+The helper does not dispatch calls, release held instructions, mutate task state,
+or turn voice permission into native worker approval. Source pairing remains
+unchanged when a distinct verified capture device receives explicit export
+authority. Synthetic authority tests establish these boundaries, not handset
+presentation acceptance.

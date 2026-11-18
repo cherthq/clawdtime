@@ -11,8 +11,17 @@ import {
   closeSync,
   unlinkSync,
   mkdirSync,
+  realpathSync,
 } from "node:fs";
-import { resolve, join } from "node:path";
+import {
+  resolve,
+  join,
+  relative,
+  isAbsolute,
+  sep,
+  basename,
+  dirname,
+} from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Store } from "../src/storage/store.js";
@@ -22,14 +31,38 @@ import { TaskService } from "../src/control/task-service.js";
 import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
 import { TaskVoiceService } from "../src/control/task-voice-service.js";
 import { createTaskApp } from "../src/control/task-app.js";
-import { TaskAudioCallCoordinator } from "../src/attention/task-audio-call.js";
+import {
+  TaskAudioCallCoordinator,
+  hasConnectedTaskWalkthroughCall,
+} from "../src/attention/task-audio-call.js";
 import { TaskAudioMonitor } from "../src/control/task-audio-monitor.js";
 import { TaskAudioAuthority } from "../cli/task-audio-authority.js";
+import { TaskWalkthroughAuthority } from "../cli/task-walkthrough-authority.js";
+import { TaskEngine } from "../src/control/task-engine.js";
+import { CodexTaskWorker } from "../connectors/codex/task-worker.js";
+import type { VerificationPlan } from "../src/control/task-verification.js";
+import { TaskPresentationLedger } from "../src/attention/task-presentation-ledger.js";
+import { TaskPresentationService } from "../src/control/task-presentation-service.js";
+import { TaskWalkthroughPresentation } from "../src/control/task-walkthrough-presentation.js";
+import { HTTPTaskWalkthroughPresentationHost } from "../src/transport/task-presentation.js";
+import {
+  taskPresentationManifestSchema,
+  taskPresentationGrantSchema,
+  taskPresentationFingerprint,
+} from "../src/task-presentation-contracts.js";
+import {
+  taskWalkthroughPlanSchema,
+  taskWalkthroughAuthorizationSchema,
+  taskWalkthroughExportGrantSchema,
+  isTaskWalkthroughPlan,
+  type TaskHandsetPlan,
+  type TaskHandsetAuthorization,
+} from "../src/task-walkthrough-contracts.js";
 import {
   NativeTaskAudioCalls,
-  HttpTaskAudioMediaPort,
-  taskAudioFingerprint,
-  taskAudioMediaBinding,
+  HttpTaskHandsetMediaPort,
+  taskHandsetFingerprint,
+  taskHandsetMediaBinding,
   taskAudioPlanSchema,
   type TaskAudioReadiness,
 } from "../src/transport/task-audio.js";
@@ -52,6 +85,20 @@ function privateJSON(path: string) {
 const text = z.string().min(1);
 const configSchema = z
   .object({
+    mode: z
+      .enum(["handset_audio_smoke", "handset_walkthrough"])
+      .default("handset_audio_smoke"),
+    walkthrough: z
+      .object({
+        presentationFile: text,
+        helperBinary: text,
+        checksFile: text,
+        callDurationMs: z.number().int().min(30_000).max(1_800_000),
+        userAuthorizedPreparedWindowExport: z.literal(true),
+        userAuthorizedTaskInstructions: z.literal(true),
+      })
+      .strict()
+      .optional(),
     stateDirectory: text,
     sessionFile: text,
     taskId: text,
@@ -93,11 +140,49 @@ const configSchema = z
       .object({ id: text, userAuthorizedOneCall: z.literal(true) })
       .strict(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (c) => (c.mode === "handset_walkthrough") === !!c.walkthrough,
+    "Walkthrough mode requires separate explicit export and instruction authorization.",
+  );
 const setupCleanups: Array<() => void | Promise<void>> = [];
 let setupCleanupFailed = false;
 async function main() {
   const c = configSchema.parse(privateJSON(process.argv[2]!));
+  if (c.walkthrough) {
+    const project = realpathSync(c.projectRoot);
+    const protectedPaths = [
+      process.argv[2]!,
+      c.stateDirectory,
+      c.sessionFile,
+      c.providerFile,
+      c.livekitFile,
+      c.walkthrough.presentationFile,
+      c.walkthrough.checksFile,
+    ];
+    for (const path of protectedPaths) {
+      const part = relative(project, realpathSync(path));
+      if (
+        part === "" ||
+        (part !== ".." && !part.startsWith(".." + sep) && !isAbsolute(part))
+      )
+        throw Error(
+          "Walkthrough credentials and operator configuration must be outside the worker project.",
+        );
+    }
+    const attempt = join(
+      realpathSync(dirname(c.attemptDirectory)),
+      basename(c.attemptDirectory),
+    );
+    const part = relative(project, attempt);
+    if (
+      part === "" ||
+      (part !== ".." && !part.startsWith(".." + sep) && !isAbsolute(part))
+    )
+      throw Error(
+        "Walkthrough attempt state must be outside the worker project.",
+      );
+  }
   if (
     c.native.lineId !== c.destination.lineId ||
     hash(c.native.recipient) !== c.destination.recipientHash
@@ -132,25 +217,66 @@ async function main() {
     simulation: false,
   });
   const voices = new TaskVoiceLedger(store, vault, ledger);
-  const voiceService = new TaskVoiceService(tasks, voices);
+  const prepared = c.walkthrough
+    ? z
+        .object({
+          manifest: taskPresentationManifestSchema,
+          grant: taskPresentationGrantSchema,
+        })
+        .strict()
+        .parse(privateJSON(c.walkthrough.presentationFile))
+    : undefined;
+  const engine = c.walkthrough
+    ? new TaskEngine(
+        tasks,
+        new CodexTaskWorker({ enabled: true, projectRoots: [c.projectRoot] }),
+        privateJSON(c.walkthrough.checksFile) as VerificationPlan,
+      )
+    : undefined;
+  let presenter: TaskWalkthroughPresentation | undefined;
+  let presentation: TaskPresentationService | undefined;
+  const voiceService = new TaskVoiceService(
+    tasks,
+    voices,
+    engine,
+    () => presenter,
+  );
   const session = tasks.authenticate(capability.token),
     task = ledger.get(session.id, c.taskId);
   const attemptId = `handset_${randomUUID()}`;
-  const admitted = voiceService.openHandset(
-    capability.token,
-    task.id,
-    {
-      eventId: attemptId,
-      runId: task.runs.at(-1)!.id,
-      expectedRevision: task.revision,
-    },
-    attemptId,
-  );
+  const exportGrantId = `export_${randomUUID()}`;
+  const admission = {
+    eventId: attemptId,
+    runId: task.runs.at(-1)!.id,
+    expectedRevision: task.revision,
+  };
+  const admitted = prepared
+    ? voiceService.openWalkthrough(capability.token, task.id, admission, {
+        mode: "handset_walkthrough",
+        callAttemptId: attemptId,
+        exportGrantId,
+        presentationId: prepared.manifest.id,
+        manifestFingerprint: taskPresentationFingerprint(prepared.manifest),
+      })
+    : voiceService.openHandset(
+        capability.token,
+        task.id,
+        {
+          eventId: attemptId,
+          runId: task.runs.at(-1)!.id,
+          expectedRevision: task.revision,
+        },
+        attemptId,
+      );
   setupCleanups.push(() => {
     voices.end(admitted.voice.id, `${attemptId}_setup_failed`);
   });
   const now = Date.now(),
-    expiresAt = Math.min(now + 300_000, session.expiresAt);
+    expiresAt = Math.min(
+      now + (c.walkthrough?.callDurationMs ?? 300_000),
+      session.expiresAt,
+    ),
+    dispatchExpiresAt = Math.min(now + 300_000, expiresAt);
   const permissions = {
     audio: true,
     video: false,
@@ -159,7 +285,7 @@ async function main() {
     control: false,
     maxCalls: 1,
   } as const;
-  const plan = taskAudioPlanSchema.parse({
+  const identityPlan = {
     id: attemptId,
     taskSessionId: session.id,
     taskId: task.id,
@@ -171,32 +297,79 @@ async function main() {
     workerIdentity: `worker_${randomUUID()}`,
     agentIdentity: `agent_${randomUUID()}`,
     expiresAt,
-    ...permissions,
-  });
-  const authorization = {
+  };
+  const plan: TaskHandsetPlan = prepared
+    ? taskWalkthroughPlanSchema.parse({
+        ...identityPlan,
+        version: 1,
+        mode: "handset_walkthrough",
+        exportGrantId,
+        callKind: prepared.manifest.kind,
+        dispatchExpiresAt,
+        presentationBinding: {
+          presentationId: prepared.manifest.id,
+          manifestFingerprint: taskPresentationFingerprint(prepared.manifest),
+          presentationGrantId: prepared.grant.id,
+          verificationId: prepared.manifest.verificationId,
+          hostId: session.hostId,
+          captureDeviceId: c.destination.deviceId,
+        },
+        audio: true,
+        video: true,
+        screen: true,
+        presentation: true,
+        instructions: true,
+        control: false,
+        nativeActivation: false,
+        maxCalls: 1,
+      })
+    : taskAudioPlanSchema.parse({
+        ...identityPlan,
+        ...permissions,
+      });
+  const authorization: TaskHandsetAuthorization = {
     id: c.authorization.id,
-    planFingerprint: taskAudioFingerprint(plan),
+    planFingerprint: taskHandsetFingerprint(plan),
     authorizedAt: now,
-    expiresAt,
+    expiresAt: dispatchExpiresAt,
+    ...(isTaskWalkthroughPlan(plan) ? { callExpiresAt: expiresAt } : {}),
     oneCallAuthorized: true,
   } as const;
-  const grant = {
-    taskSessionId: session.id,
-    taskId: task.id,
-    runId: plan.runId,
-    revision: task.revision,
-    sourcePairingId: session.pairingId,
-    projectRoot: c.projectRoot,
-    ...c.destination,
-    planFingerprint: authorization.planFingerprint,
-    authId: authorization.id,
-    expiresAt,
-    ...permissions,
-  };
+  const grant = isTaskWalkthroughPlan(plan)
+    ? taskWalkthroughExportGrantSchema.parse({
+        version: 1,
+        mode: "handset_walkthrough",
+        id: exportGrantId,
+        planFingerprint: authorization.planFingerprint,
+        authorizationId: authorization.id,
+        sourcePairingId: session.pairingId,
+        projectRoot: c.projectRoot,
+        authorizedAt: now,
+        dispatchExpiresAt,
+        expiresAt,
+        exportPreparedWindows: true,
+        instructions: true,
+        control: false,
+        nativeActivation: false,
+        maxCalls: 1,
+      })
+    : {
+        taskSessionId: session.id,
+        taskId: task.id,
+        runId: plan.runId,
+        revision: task.revision,
+        sourcePairingId: session.pairingId,
+        projectRoot: c.projectRoot,
+        ...c.destination,
+        planFingerprint: authorization.planFingerprint,
+        authId: authorization.id,
+        expiresAt,
+        ...permissions,
+      };
   put("plan.json", plan);
   put("authorization.json", authorization);
   put("grant.json", grant);
-  put("binding.json", taskAudioMediaBinding(plan));
+  put("binding.json", taskHandsetMediaBinding(plan));
   put("voice.json", {
     version: 1,
     taskOrigin: "http://127.0.0.1:13323",
@@ -206,8 +379,46 @@ async function main() {
   });
   const controlToken = token();
   put("control.json", { token: controlToken });
-  const authority = new TaskAudioAuthority(tasks, voices, grant);
-  const media = new HttpTaskAudioMediaPort({
+  if (prepared)
+    put("presentation.json", {
+      prepare: {
+        presentationId: prepared.manifest.id,
+        manifest: prepared.manifest,
+        grant: prepared.grant,
+        fingerprint: taskPresentationFingerprint(prepared.manifest),
+      },
+      taskOrigin: "http://127.0.0.1:13323",
+      taskToken: capability.token,
+      helperBinary: c.walkthrough!.helperBinary,
+      exportGrant: grant,
+    });
+  const authority = !isTaskWalkthroughPlan(plan)
+    ? new TaskAudioAuthority(
+        tasks,
+        voices,
+        grant as ConstructorParameters<typeof TaskAudioAuthority>[2],
+      )
+    : undefined;
+  const walkthroughAuthority = isTaskWalkthroughPlan(plan)
+    ? new TaskWalkthroughAuthority(
+        tasks,
+        voices,
+        {
+          ...prepared!,
+          exportGrant: taskWalkthroughExportGrantSchema.parse(grant),
+        },
+        Date.now,
+        (p) => hasConnectedTaskWalkthroughCall(store, vault, p),
+      )
+    : undefined;
+  const assertInitial = () =>
+    isTaskWalkthroughPlan(plan)
+      ? walkthroughAuthority!.assertInitial(
+          plan,
+          taskWalkthroughAuthorizationSchema.parse(authorization),
+        )
+      : authority!.assert(plan, authorization);
+  const media = new HttpTaskHandsetMediaPort({
     origin: "http://127.0.0.1:3322",
     token: controlToken,
   });
@@ -279,34 +490,39 @@ async function main() {
     const result = (await remote()) as TaskAudioReadiness;
     if (Date.now() - result.checkedAt > 10_000)
       throw Error("Native evidence expired in transit.");
+    if (presentation) {
+      assertInitial();
+      presentation.authority(capability.token, task.id, prepared!.manifest.id);
+      // Prepared provenance only: actual target inspection and SDK frame acceptance
+      // must separately complete in media_prepare before native dial admission.
+      return { ...result, presentationReady: true };
+    }
     return result;
+  };
+  const destinationProof = (value: unknown) => {
+    const proof = z
+      .object({
+        authorized: z.literal(true),
+        planFingerprint: z.literal(authorization.planFingerprint),
+        checkedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      })
+      .strict()
+      .parse(value);
+    if (
+      proof.checkedAt > Date.now() + 1000 ||
+      Date.now() - proof.checkedAt > 10_000
+    )
+      throw Error("Fresh destination authority required.");
+    return proof;
   };
   const coordinator = new TaskAudioCallCoordinator(
     store,
     vault,
     {
       authorize: async () => {
-        authority.assert(plan, authorization);
-        const proof = z
-          .object({
-            authorized: z.literal(true),
-            planFingerprint: z.literal(authorization.planFingerprint),
-            checkedAt: z
-              .number()
-              .int()
-              .nonnegative()
-              .max(Number.MAX_SAFE_INTEGER),
-          })
-          .strict()
-          .parse(await remote(true));
-        if (
-          proof.authorized !== true ||
-          proof.planFingerprint !== authorization.planFingerprint ||
-          proof.checkedAt > Date.now() + 1000 ||
-          Date.now() - proof.checkedAt > 10_000
-        )
-          throw Error("Fresh destination authority required.");
-        authority.assert(plan, authorization);
+        assertInitial();
+        destinationProof(await remote(true));
+        assertInitial();
       },
       readiness,
       media,
@@ -314,20 +530,81 @@ async function main() {
     },
     { dispatchEnabled: true, environment: "native" },
   );
+  if (isTaskWalkthroughPlan(plan)) {
+    const videoHost = new HTTPTaskWalkthroughPresentationHost({
+      origin: "http://127.0.0.1:3322",
+      token: controlToken,
+      plan,
+    });
+    presentation = new TaskPresentationService(
+      tasks,
+      new TaskPresentationLedger(store, vault, ledger),
+      videoHost,
+      prepared!,
+    );
+    presenter = new TaskWalkthroughPresentation(
+      presentation,
+      plan,
+      prepared!.manifest,
+      capability.token,
+      (frame) => videoHost.evidenceFor(frame),
+      {
+        initial: assertInitial,
+        ongoing: () =>
+          walkthroughAuthority!.assertOngoing(
+            plan,
+            taskWalkthroughAuthorizationSchema.parse(authorization),
+          ),
+        preparing: () => {
+          const s = coordinator.status(plan.id);
+          return (
+            s.fingerprint === authorization.planFingerprint &&
+            s.state === "preparing" &&
+            s.receipts.media_prepare?.state === "running" &&
+            !s.stopRequested
+          );
+        },
+      },
+    );
+  }
   const monitor = new TaskAudioMonitor(
     coordinator,
     calls,
     plan,
     () => {
       const v = voices.get(session.id, admitted.voice.id);
-      return v.endedAt === undefined && v.expiresAt > Date.now();
+      if (v.endedAt !== undefined || v.expiresAt <= Date.now()) return false;
+      if (isTaskWalkthroughPlan(plan)) {
+        try {
+          const state = coordinator.status(plan.id).state;
+          if (state === "connected")
+            walkthroughAuthority!.assertOngoing(
+              plan,
+              taskWalkthroughAuthorizationSchema.parse(authorization),
+            );
+          else assertInitial();
+        } catch {
+          return false;
+        }
+      }
+      return true;
     },
     Date.now,
     (reason) => audit("stop", reason),
   );
   const taskServer = serve({
-    fetch: createTaskApp(tasks, saved.operatorToken, undefined, voiceService)
-      .fetch,
+    fetch: createTaskApp(
+      tasks,
+      saved.operatorToken,
+      engine,
+      voiceService,
+      presentation,
+      {
+        taskId: task.id,
+        voiceId: admitted.voice.id,
+        presentationId: prepared?.manifest.id,
+      },
+    ).fetch,
     hostname: "127.0.0.1",
     port: 13323,
   });
@@ -337,7 +614,14 @@ async function main() {
   const child = spawn(
     c.python,
     [
-      resolve("media/task_voice_livekit_local.py"),
+      resolve(
+        c.walkthrough
+          ? "media/task_walkthrough_livekit_local.py"
+          : "media/task_voice_livekit_local.py",
+      ),
+      ...(prepared
+        ? ["--presentation-file", join(c.attemptDirectory, "presentation.json")]
+        : []),
       "--binding-file",
       join(c.attemptDirectory, "binding.json"),
       "--voice-file",
@@ -372,12 +656,23 @@ async function main() {
       throw Error("Media process shutdown unconfirmed; preserve owner lock.");
   }
   setupCleanups.push(joinMedia);
+  const presentationWatch = presentation
+    ? setInterval(() => {
+        void presentation!.reconcile().catch(() => {});
+      }, 100)
+    : undefined;
+  setupCleanups.push(async () => {
+    if (presentationWatch) clearInterval(presentationWatch);
+    await presentation?.close();
+    await engine?.close();
+  });
   let reserved = false,
     starting = false,
     ended = false,
     ready = false,
     lastState = "initializing",
     stopRequested = false;
+  let callCleanupReported = false;
   const localOrigin = "http://127.0.0.1:13324";
   async function stop(reason = "operator_stop") {
     if (ended) return;
@@ -390,6 +685,13 @@ async function main() {
     origin: localOrigin,
     stop: () => stop("local_button"),
     status: () => ({ state: lastState, ended }),
+    ...(presenter
+      ? {
+          stopSharing: async () => {
+            await presenter!.stopLocal(`${attemptId}_local_sharing_stop`);
+          },
+        }
+      : {}),
   });
   const uiServer = serve({
     fetch: ui.fetch,
@@ -415,6 +717,29 @@ async function main() {
       return;
     voices.end(admitted.voice.id, `${attemptId}_operator_end`);
     stopRequested = true;
+    await presentation?.close();
+    if (engine) {
+      // Ending the call never cancels a scoped coding run or an admitted correction.
+      const current = ledger.get(session.id, task.id);
+      if (
+        ["queued", "running", "verifying"].includes(current.state) ||
+        !engine.closeIfIdle()
+      ) {
+        await joinMedia();
+        lastState = "Call ended; coding and independent verification continue";
+        if (!callCleanupReported) {
+          callCleanupReported = true;
+          console.log(
+            JSON.stringify({
+              event: "call_cleanup_confirmed_task_continues",
+              cleanupConfirmed: true,
+              taskState: current.state,
+            }),
+          );
+        }
+        return;
+      }
+    }
     try {
       const observation = await media.inspect(plan);
       put("shutdown-summary.json", {
@@ -431,6 +756,8 @@ async function main() {
       audit("shutdown_summary", "unavailable");
     }
     await joinMedia();
+    if (presentationWatch) clearInterval(presentationWatch);
+    await engine?.close();
     await new Promise<void>((r) => taskServer.close(() => r()));
     await inspectorClient.close();
     ended = true;
@@ -457,11 +784,20 @@ async function main() {
     }
     starting = true;
     try {
+      if (presentation)
+        await presentation.prepare(capability.token, task.id, {
+          eventId: `${attemptId}_presentation_prepare`,
+          manifest: prepared!.manifest,
+          grant: prepared!.grant,
+        });
       await coordinator.preflight(plan, authorization);
       coordinator.reserve(plan, authorization);
       reserved = true;
       console.log(
-        JSON.stringify({ event: "preflight_passed", audioOnly: true }),
+        JSON.stringify({
+          event: "preflight_passed",
+          audioOnly: !isTaskWalkthroughPlan(plan),
+        }),
       );
       let s = await coordinator.prepare(plan.id);
       if (s.state !== "prepared")
@@ -488,11 +824,26 @@ async function main() {
     polling = true;
     try {
       if (!reserved) {
-        if (stopRequested || Date.now() >= expiresAt) {
+        if (stopRequested || Date.now() >= dispatchExpiresAt) {
           await stop();
           await finish();
         }
         return;
+      }
+      if (coordinator.status(plan.id).cleanupConfirmed) {
+        await finish();
+        if (ended) clearInterval(interval);
+        return;
+      }
+      if (
+        isTaskWalkthroughPlan(plan) &&
+        !coordinator.status(plan.id).cleanupConfirmed
+      ) {
+        try {
+          destinationProof(await remote(true));
+        } catch {
+          await stop("destination_authority_unavailable");
+        }
       }
       const s = await monitor.tick();
       if (s.state !== lastState) {
@@ -507,8 +858,8 @@ async function main() {
         );
       }
       if (s.cleanupConfirmed) {
-        clearInterval(interval);
         await finish();
+        if (ended) clearInterval(interval);
       }
     } catch {
       console.log(JSON.stringify({ event: "read_failed_preserve_receipts" }));

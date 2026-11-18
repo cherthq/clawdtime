@@ -236,6 +236,36 @@ export class TaskPresentationService {
       throw new DomainError(409, "Fresh exact scene output is required.");
     return frame;
   }
+  /** Validate current output without replaying a previously completed scene effect. */
+  async observeCurrent(raw: string, taskId: string, presentationId: string) {
+    const record = this.record(raw, taskId, presentationId);
+    this.artifacts(record);
+    if (!record.activeSceneId || !record.frame)
+      throw new DomainError(409, "No completed current scene is available.");
+    const frame = this.frame(
+      record,
+      await this.host.observe(presentationId),
+      record.activeSceneId,
+    );
+    const fresh = this.record(raw, taskId, presentationId);
+    this.artifacts(fresh);
+    if (
+      fresh.generation !== record.generation ||
+      fresh.activeSceneId !== record.activeSceneId ||
+      frame.operationId !== record.frame.operationId ||
+      !fresh.effects.some(
+        (e) =>
+          e.id === frame.operationId &&
+          e.action === "show_scene" &&
+          e.state === "done",
+      )
+    )
+      throw new DomainError(
+        409,
+        "The scene changed during output verification.",
+      );
+    return frame;
+  }
   async show(
     raw: string,
     taskId: string,

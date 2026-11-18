@@ -3,8 +3,8 @@ import type {
   TaskAudioCallStatus,
 } from "../attention/task-audio-call.js";
 import type {
-  TaskAudioCallsPort,
-  TaskAudioPlan,
+  TaskHandsetCallsPort,
+  TaskHandsetPlan,
 } from "../transport/task-audio.js";
 
 /** One operator owns this monitor. Polling only repeats GETs, never a forward effect. */
@@ -14,8 +14,8 @@ export class TaskAudioMonitor {
   private busy = false;
   constructor(
     private readonly coordinator: TaskAudioCallCoordinator,
-    private readonly calls: TaskAudioCallsPort,
-    private readonly plan: TaskAudioPlan,
+    private readonly calls: TaskHandsetCallsPort,
+    private readonly plan: TaskHandsetPlan,
     private readonly voiceActive: () => boolean,
     private readonly clock: () => number = Date.now,
     private readonly observe: (reason: string) => void = () => {},

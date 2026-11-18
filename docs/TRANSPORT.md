@@ -764,3 +764,68 @@ capture and checks authority; the adapter neither starts capture on construction
 nor follows redirects or retries uncertain submissions. Only exact prepared
 narration is accepted. Responses retain strict identity and evidence schemas.
 Tests use synthetic ports only and do not establish real-pixel or handset quality.
+
+### Explicit handset walkthrough export (offline integration)
+
+The historical c.1 audio plan, authorization, media binding and fingerprint remain
+unchanged. A separate `handset_walkthrough` plan binds the opening presentation,
+manifest digest, local grant provenance, verification, capture host/device and
+exact voice/call/paired destination. An additional export grant is required;
+`localOnly` presentation consent never becomes handset export consent. The initial
+dispatch/activation deadline is at most five minutes, with a separately authorized
+call lifetime of at most thirty minutes. Each grant still permits one call.
+
+Both modes use `TaskAudioCallCoordinator`, the same encrypted
+`coding-task-audio-call-v1` records, five effect phases and global unresolved-call
+fence. Unknown effects are never replayed. `taskHandsetFingerprint` selects the
+new schema only for its explicit discriminator and delegates historical plans to
+the unchanged c.1 fingerprint. Native Calls receives `video:true` only after the
+new plan schema validates. Startup never prepares, dials or activates a call.
+
+`NativeTaskAudioReadiness.checkWalkthrough` additionally joins the exact line's
+worker from bounded read-only `/api/v1/workers` pages. Both worker and line-session
+capabilities and automatic readiness must agree: video support, outbound audio
+and video protocol 1, matching build/device/config/runtime identities, current
+heartbeats and fresh passed audio prerequisites plus `video_resources` and
+`screen_capture`. Aggregate `video_ready` is insufficient. This proves native
+video readiness only; the coordinator separately requires prepared presentation
+readiness. The existing c.1 `check` keeps its original audio-only dependencies.
+
+`HttpTaskHandsetMediaPort` delegates smoke requests to the unchanged audio adapter.
+The new binding includes the full plan fingerprint, deadlines, export grant and
+presentation provenance. Prepared video requires fresh exact source-frame metadata
+and `sdk_frame_accepted_not_remote_seen` evidence. Fractional source timestamps
+and geometry identities are preserved. Activation must recheck freshness before
+the media runtime starts its single dialogue provider. SDK frame acceptance,
+`bridge_ready`, and native `remote_video_ready` are distinct observations; none
+establish physical handset visibility or audibility. Native video handoff evidence
+is retained separately in sanitized call status.
+
+`HTTPTaskWalkthroughPresentationHost` uses fixed loopback routes
+`/presentation/prepare`, `/presentation/show`, `/presentation/observe` and
+`/stop-sharing`. Preparation validates metadata without capture or room/provider
+allocation. Show and observe return an exact rendered frame plus matching SDK
+acceptance evidence; `evidenceFor(frame)` returns only the current checked pair.
+The adapter refuses narration because the handset has one dialogue owner. Stop
+sharing clears only the presentation/capture output and its children; the scoped
+cleanup proof does not claim the voice room, call or coding task ended.
+
+New finalized walkthrough instructions require a matching protected connected
+call receipt and successful exact native connection observation no older than five
+seconds. Failed reads, Stop, expiry, terminal/unknown calls and mismatched identity
+refuse new admission. Original duplicate receipts are returned before this check.
+Already approved held corrections still release only after their original worker
+has a known terminal result and independent verification, including after hangup;
+they never create parallel worker execution.
+
+Final acceptance has a distinct encrypted receipt and shares the finalized
+utterance use fence with instructions. Only the exact independently passed result
+of a connected review call can be accepted: call run/revision/verification and the
+saved utterance revision must match the current review. A decision call or an old
+review call cannot accept a later result. Acceptance creates no run or deployment;
+its original duplicate can still be read after hangup. Root service classification
+must use explicit acceptance phrases from saved trusted utterances.
+
+This section describes source implementation and synthetic regression evidence.
+It does not authorize a live call, export, line handoff or deployment, and does not
+claim handset walkthrough physical acceptance.

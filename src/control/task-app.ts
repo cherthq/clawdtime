@@ -15,6 +15,7 @@ export function createTaskApp(
   engine?: TaskEngine,
   voice?: TaskVoiceService,
   presentation?: TaskPresentationService,
+  handset?: { taskId: string; voiceId: string; presentationId?: string },
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -24,6 +25,33 @@ export function createTaskApp(
   app.use("*", bodyLimit({ maxSize: 32768 }));
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
+    if (handset) {
+      // The call process serves one admitted voice, not a general task launcher.
+      const base = `/tasks/${encodeURIComponent(handset.taskId)}`;
+      const voiceBase = `${base}/voice/${encodeURIComponent(handset.voiceId)}`;
+      const allowed = new Set([
+        "GET /health",
+        `GET ${voiceBase}/context`,
+        ...[
+          "bind",
+          "utterances",
+          "instructions",
+          "accept",
+          "end",
+          "presentation/opening",
+          "presentation/show",
+          "presentation/stop",
+          "presentation/retire",
+        ].map((path) => `POST ${voiceBase}/${path}`),
+        ...(handset.presentationId
+          ? [
+              `GET ${base}/presentations/${encodeURIComponent(handset.presentationId)}/authority`,
+            ]
+          : []),
+      ]);
+      if (!allowed.has(`${c.req.method} ${c.req.path}`))
+        return c.json({ error: "Route outside this handset session." }, 403);
+    }
     // A local developer API, not a browser-facing credential or CORS surface.
     if (c.req.header("origin"))
       return c.json({ error: "Browser origins are not admitted." }, 403);
@@ -119,6 +147,56 @@ export function createTaskApp(
   if (voice) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
     const voicePath = "/tasks/:id/voice/:voiceId";
+    app.post(`${voicePath}/accept`, async (c) =>
+      c.json(
+        voice.accept(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/presentation/opening`, async (c) =>
+      c.json(
+        await voice.presentationOpening(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/presentation/show`, async (c) =>
+      c.json(
+        await voice.presentationShow(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/presentation/stop`, async (c) =>
+      c.json(
+        await voice.presentationStop(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/presentation/retire`, async (c) =>
+      c.json(
+        await voice.presentationRetire(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
     app.post("/tasks/:id/voice-sessions", async (c) =>
       c.json(voice.open(credential(c), c.req.param("id"), await c.req.json())),
     );

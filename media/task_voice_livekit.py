@@ -187,6 +187,12 @@ class LiveKitAudioPort:
     def _count_output(self, kind):
         self.output_counts[kind] = min(1000000, self.output_counts[kind] + 1)
 
+    def _token_sources(self, identity):
+        return ['microphone']
+
+    def _token_lifetime(self):
+        return 1200
+
     async def prepare(self, binding, on_audio, on_failure):
         from datetime import timedelta
         from livekit import api, rtc
@@ -268,11 +274,11 @@ class LiveKitAudioPort:
             if not self.closing:
                 on_failure('room_reconnect_refused')
 
-        ttl = max(1, min(1200, int(binding['expiresAt'] / 1000 - time.time())))
+        ttl = max(1, min(self._token_lifetime(), int(binding['expiresAt'] / 1000 - time.time())))
         def token(identity):
             return api.AccessToken(self.key, self.secret).with_identity(identity).with_ttl(timedelta(seconds=ttl)).with_grants(
                 api.VideoGrants(room_join=True, room=binding['roomName'], can_publish=True, can_subscribe=True,
-                                can_publish_data=False, can_publish_sources=['microphone'])).to_jwt()
+                                can_publish_data=False, can_publish_sources=self._token_sources(identity))).to_jwt()
         identity = binding['agentIdentity']
         self.create_attempted = True
         await self.client.room.create_room(api.CreateRoomRequest(name=binding['roomName'], empty_timeout=60, max_participants=2))

@@ -986,3 +986,88 @@ For this viewport/acceptance checkpoint, `npm run check` passed **900 tests in
 60 files** (12.12s), typecheck/build, and `git diff --check` passed. No step tag
 was added because the required handset presentation calls are not yet implemented
 or physically qualified.
+
+### Step d — offline handset walkthrough composition
+
+Local acceptance checkpoint `74d1abf` is pushed. Continued with the same three
+specialists and explicit file ownership. The new `handset_walkthrough` branch
+reuses the existing protected call coordinator, five effect receipts and global
+ownership fence. Historical c.1 schemas and fingerprints remain unchanged; a
+local presentation grant never implies export permission. A separate strict
+export grant binds exact task/run/revision/verification, capture manifest/grant,
+source host, real destination device, line and voice identities. Dispatch is at
+most five minutes; the explicitly bounded conversation can last up to thirty
+minutes. The capture grant retains its independent shorter expiry.
+
+The root operator composes one scoped task engine, voice service, presentation
+ledger and native inspector. Fresh readiness must prove exact worker audio/video
+protocols and screen/video-resource checks. Media preparation validates the
+exact prepared native windows, joins one private room and asks the root to
+reserve the first scene. The root's callback shows that scene; only a fresh,
+post-transition frame accepted by the SDK can admit native dialing. Activation
+rechecks the frame before the single Deepgram provider's prepared opening.
+This is SDK evidence, never a claim of remote visibility or audibility.
+
+One dialogue/playback owner handles opening, scene explanations, questions and
+finalized human instructions. There is no second handset narrator. Tools select
+only immutable prepared scene IDs. A new instruction needs a fresh connected-call
+receipt after duplicate lookup; already admitted held corrections can release
+after hangup once the prior run and verification are known. Acceptance has its
+own durable utterance fence and requires the exact fresh review call and current
+verified result. A decision call or old review cannot accept a newer result.
+Model arguments cannot replace the registered human instruction or acceptance.
+
+Sharing Stop immediately closes source admission and switches the existing
+publisher to blank-only frames while voice and coding continue. A one-second
+source watchdog prevents stale scene persistence during a stalled authority
+request. Automatic source failure retires the root presentation once; root Stop
+does not recursively call itself. Full call cleanup blanks before potentially
+slow voice-end receipts. Actual remote clearing time still needs handset evidence.
+
+Independent review found and resolved three integration gaps: fresh scene output
+must match the precise SDK receipt after asynchronous checks; ongoing destination
+proof must use the same strict timestamp/fingerprint schema as initial admission;
+and call cleanup must not abort a worker. The operator now exposes only its exact
+voice and presentation-authority routes, and `TaskEngine.closeIfIdle` refuses to
+close while any owned run or verifier is unsettled. The service stays alive for
+admitted work after native/media cleanup, including a held correction. Unknown
+outcomes remain fenced without automatic replay.
+
+Connector review approved the root composition and 41 focused bootstrap,
+scoped-HTTP, lifetime and Stop regressions. Actual deferred synthetic workers
+exercise claimed/running/verifying, terminal-but-unsettled and second-owned-task
+states. Cross-language coverage feeds the real TypeScript binding/fingerprint,
+prepared manifest/export grant and Hono context/opening responses into Python
+validators and the prepare flow. It verifies the exact opening event and matching
+fingerprint, rejects four widened/misbound wires, blocks socket connections and
+asserts the provider never opens. Transport independently reviewed all three new
+media files, root callbacks and shared hooks; 24 focused Python tests passed in
+7.63s, with no remaining blocker. No test dials, captures user windows or opens a
+provider conversation.
+
+Final voice review also found a delayed tool-response race: scene speech could
+become eligible while its authoritative tool response was still being sent.
+Playback now remains muted until that send completes, and a speech-generation
+recheck prevents a barge-in during the send from reviving obsolete speech. A
+deterministic blocked-send/interruption regression covers both cases.
+Cached successful scene responses likewise revalidate current scene/generation
+and export freshness before allowing speech; receipt reuse cannot revive old
+scene narration after Stop or replay the original scene effect.
+
+The runnable operator path and next one-call scope are documented in
+`docs/CODING_DEMO_HANDSET_WALKTHROUGH.md`. No new call, credential change, line
+operation or deployment occurred. Step d remains untagged; physical handset
+presentation, spoken coding continuation, final acceptance and measured rehearsals
+are still required. Step e remains gated. Fresh specific call/export and any
+standby/restore authorization is the next external prerequisite.
+
+Final frozen-source validation: `npm run check` passed **1,027 tests in 65 files**
+(12.29s), typecheck and build. `media/.venv/bin/python -m unittest discover -s
+media -v` passed **327 tests**, 77.174s; the focused walkthrough
+suite passed 27 in 7.655s. Connector independently approved the final speech
+ordering and cached-scene regressions. `cd mac && swift test && swift build --product
+ClawdTimeTaskCapture` passed **31 tests** (0.089s) and the capture-helper build;
+Swift source is unchanged. `git diff --check` passed. The final diff was reviewed
+for unrelated changes and credentials; the only credential-pattern scan match
+was the explicitly synthetic project key in a bootstrap test fixture. No secrets,
+real screens/audio or runtime records are included.

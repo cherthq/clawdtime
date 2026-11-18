@@ -10,11 +10,21 @@ import {
 } from "./native-messages.js";
 import type { LineHandoff } from "./native.js";
 import {
-  taskAudioFingerprint,
+  taskHandsetFingerprint,
+  type TaskHandsetPlan,
+  type TaskHandsetAuthorization,
+  type TaskHandsetReadiness,
   type TaskAudioPlan,
   type TaskAudioAuthorization,
   type TaskAudioReadiness,
 } from "./task-audio.js";
+
+import {
+  isTaskWalkthroughPlan,
+  taskWalkthroughAuthorizationSchema,
+  type TaskWalkthroughPlan,
+  type TaskWalkthroughAuthorization,
+} from "../task-walkthrough-contracts.js";
 
 /** Read-only native evidence for c.1. No legacy media, gateway, screen or video dependency. */
 export class NativeTaskAudioReadiness {
@@ -46,9 +56,12 @@ export class NativeTaskAudioReadiness {
       );
     this.messages = new NativeMessageReader(config.binding, request);
   }
-  private local(plan: TaskAudioPlan, authorization: TaskAudioAuthorization) {
+  private local(
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
+  ) {
     const now = this.clock(),
-      fingerprint = taskAudioFingerprint(plan),
+      fingerprint = taskHandsetFingerprint(plan),
       b = this.config.binding,
       h = this.config.handoff();
     const pairing = this.store.get<Pairing>("pairing", plan.pairingId),
@@ -61,7 +74,14 @@ export class NativeTaskAudioReadiness {
       authorization.authorizedAt > now ||
       authorization.expiresAt <= now ||
       authorization.expiresAt > authorization.authorizedAt + 300_000 ||
-      plan.expiresAt > authorization.expiresAt ||
+      (isTaskWalkthroughPlan(plan)
+        ? !taskWalkthroughAuthorizationSchema.safeParse(authorization)
+            .success ||
+          !("callExpiresAt" in authorization) ||
+          plan.expiresAt !== authorization.callExpiresAt ||
+          plan.dispatchExpiresAt !== authorization.expiresAt
+        : "callExpiresAt" in authorization ||
+          plan.expiresAt > authorization.expiresAt) ||
       plan.expiresAt <= now
     )
       throw new DomainError(
@@ -186,6 +206,53 @@ export class NativeTaskAudioReadiness {
     plan: TaskAudioPlan,
     authorization: TaskAudioAuthorization,
   ): Promise<TaskAudioReadiness> {
+    return this.checkBound(plan, authorization);
+  }
+  async checkWalkthrough(
+    plan: TaskWalkthroughPlan,
+    authorization: TaskWalkthroughAuthorization,
+  ): Promise<TaskHandsetReadiness> {
+    return this.checkBound(plan, authorization);
+  }
+  private async worker(workerId: string): Promise<Record<string, unknown>> {
+    if (!workerId || workerId.length > 200)
+      throw new DomainError(409, "Exact native worker binding is unavailable.");
+    const matches: Record<string, unknown>[] = [];
+    for (let offset = 0; offset < 2000; offset += 100) {
+      const response = await jsonRequest(
+        `${this.config.callsOrigin}/api/v1/workers?limit=100&offset=${offset}`,
+        {
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${this.config.projectKey}`,
+            "X-Chert-Project-Id": this.config.projectId,
+          },
+        },
+        this.request,
+      );
+      const page = z
+        .object({
+          items: z.array(z.record(z.string(), z.unknown())).max(100),
+          total: z.number().int().nonnegative(),
+          limit: z.literal(100),
+          offset: z.literal(offset),
+        })
+        .parse(response.data);
+      matches.push(...page.items.filter((item) => item.id === workerId));
+      if (matches.length > 1 || (!page.items.length && offset < page.total))
+        throw new DomainError(409, "Native worker inventory conflicts.");
+      if (offset + page.items.length >= page.total) {
+        if (matches.length !== 1)
+          throw new DomainError(409, "Exact native worker is unavailable.");
+        return matches[0]!;
+      }
+    }
+    throw new DomainError(409, "Native worker inventory exceeded its bound.");
+  }
+  private async checkBound(
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
+  ): Promise<TaskHandsetReadiness> {
     const before = this.local(plan, authorization),
       startedAt = this.clock();
     const results = await Promise.allSettled([
@@ -210,6 +277,57 @@ export class NativeTaskAudioReadiness {
       );
     const line = (results[2] as PromiseFulfilledResult<Record<string, unknown>>)
       .value;
+    const worker = isTaskWalkthroughPlan(plan)
+      ? await this.worker(
+          typeof line.worker_id === "string" ? line.worker_id : "",
+        )
+      : undefined;
+    // Worker inspection adds an await: recheck retained identity and ownership again before returning.
+    if (worker) {
+      const final = this.local(plan, authorization);
+      if (
+        final.handoffFingerprint !== before.handoffFingerprint ||
+        JSON.stringify(final.cursor) !== JSON.stringify(before.cursor)
+      )
+        throw new DomainError(
+          409,
+          "Native ownership changed during video verification.",
+        );
+      const session = z
+        .record(z.string(), z.unknown())
+        .parse(line.session_health);
+      const capabilities = z
+        .record(z.string(), z.unknown())
+        .parse(session.capabilities);
+      const workerCapabilities = z
+        .record(z.string(), z.unknown())
+        .parse(worker.capabilities);
+      if (
+        line.supports_video !== true ||
+        line.supports_audio !== true ||
+        worker.enabled !== true ||
+        worker.status !== "accepting" ||
+        worker.current_call_id !== null ||
+        capabilities.video !== true ||
+        capabilities.outbound_video_protocol !== 1 ||
+        workerCapabilities.video !== true ||
+        workerCapabilities.outbound_audio_protocol !== 1 ||
+        workerCapabilities.outbound_video_protocol !== 1 ||
+        !automaticVideoEvidence(worker, this.clock()) ||
+        !automaticVideoEvidence(
+          {
+            ...worker,
+            readiness: session.readiness,
+            last_heartbeat_at: session.last_heartbeat_at,
+          },
+          this.clock(),
+        )
+      )
+        throw new DomainError(
+          503,
+          "Fresh exact automatic native video readiness is unavailable.",
+        );
+    }
     const health = z
       .object({
         line_id: z.literal(plan.lineId),
@@ -258,6 +376,7 @@ export class NativeTaskAudioReadiness {
       cursorPreserved: true,
       cleanupClear: true,
       audioReady: true,
+      ...(worker ? { videoReady: true } : {}),
     };
   }
 }
@@ -327,5 +446,88 @@ function audioEvidence(ready: Record<string, unknown>, now: number): boolean {
       (ready.audio_ready === false &&
         capture.outcome === "at_call_start" &&
         capture.completed_at === null))
+  );
+}
+
+/** Same binding/freshness gates as the source-owned outbound reference, never aggregate video_ready alone. */
+function automaticVideoEvidence(
+  worker: Record<string, unknown>,
+  now: number,
+): boolean {
+  const digest = z.string().regex(/^[a-f0-9]{64}$/),
+    stamp = z.string();
+  const automatic = z.object({
+    version: z.literal(1),
+    worker_id: z.literal(worker.id as string),
+    runtime_id: z.string().uuid(),
+    build: digest,
+    device_binding: digest,
+    config_binding: digest,
+    profile: z.enum(["audio", "audio_optional_video", "audio_video"]),
+    runtime_started_at: stamp,
+    started_at: stamp,
+    completed_at: stamp,
+    checks: z
+      .array(
+        z.object({
+          id: z.string(),
+          outcome: z.string(),
+          completed_at: z.string().nullable(),
+        }),
+      )
+      .max(100),
+  });
+  const parsed = z
+    .object({
+      runtime_id: z.string().uuid(),
+      build: digest,
+      device_binding: digest,
+      config_binding: digest,
+      automatic_transport_missing: z.boolean().optional(),
+      automatic,
+      operating_intent: z
+        .object({ runtime_id: z.string().uuid(), runtime_started_at: stamp })
+        .optional(),
+    })
+    .safeParse(worker.readiness);
+  if (!parsed.success || worker.automatic_readiness_enabled !== true)
+    return false;
+  const ready = parsed.data,
+    a = ready.automatic,
+    heartbeat = Date.parse(String(worker.last_heartbeat_at));
+  const runtime = Date.parse(a.runtime_started_at),
+    start = Date.parse(a.started_at),
+    end = Date.parse(a.completed_at);
+  if (
+    ready.automatic_transport_missing ||
+    ![heartbeat, runtime, start, end].every(Number.isFinite) ||
+    heartbeat > now ||
+    now - heartbeat >= 30000 ||
+    runtime > start ||
+    start > end ||
+    end > now ||
+    ready.runtime_id !== a.runtime_id ||
+    ready.build !== a.build ||
+    ready.device_binding !== a.device_binding ||
+    ready.config_binding !== a.config_binding ||
+    (ready.operating_intent &&
+      (ready.operating_intent.runtime_id !== a.runtime_id ||
+        ready.operating_intent.runtime_started_at !== a.runtime_started_at)) ||
+    new Set(a.checks.map((c) => c.id)).size !== a.checks.length
+  )
+    return false;
+  return [...audioPrerequisites, "video_resources", "screen_capture"].every(
+    (id) =>
+      a.checks.some((c) => {
+        const at = c.completed_at === null ? NaN : Date.parse(c.completed_at);
+        return (
+          c.id === id &&
+          c.outcome === "passed" &&
+          Number.isFinite(at) &&
+          at >= runtime &&
+          at <= end &&
+          now - at < 90000
+        );
+      }),
   );
 }

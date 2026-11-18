@@ -5,10 +5,13 @@ import type {
   TaskCommand,
 } from "../src/contracts.js";
 import { Store } from "../src/storage/store.js";
-import { Vault } from "../src/storage/security.js";
+import { Vault, hash } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
 import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
 import { ProtectedTaskStore } from "../src/storage/task-store.js";
+
+import { taskHandsetFingerprint } from "../src/transport/task-audio.js";
+import type { TaskWalkthroughPlan } from "../src/task-walkthrough-contracts.js";
 
 const stores: Store[] = [];
 afterEach(() => {
@@ -492,5 +495,253 @@ describe("task-bound voice ledger", () => {
         },
       ),
     ).toThrow(/has not ended/);
+  });
+});
+
+function walkthroughVoice(f: ReturnType<typeof fixture>, task: CodingTask) {
+  const voice = f.voices.open(
+    f.session,
+    {
+      eventId: "walkthrough-open",
+      taskId: task.id,
+      runId: task.runs.at(-1)!.id,
+      expectedRevision: task.revision,
+    },
+    {
+      mode: "handset_walkthrough",
+      callAttemptId: "walkthrough-call",
+      exportGrantId: "export",
+      presentationId: "presentation",
+      manifestFingerprint: hash("manifest"),
+    },
+  ).voice;
+  f.voices.bindProvider(voice.id, "provider-fixture");
+  const plan: TaskWalkthroughPlan = {
+    version: 1,
+    mode: "handset_walkthrough",
+    id: "walkthrough-call",
+    taskSessionId: f.session.id,
+    taskId: task.id,
+    runId: task.runs.at(-1)!.id,
+    revision: task.revision,
+    voiceSessionId: voice.id,
+    pairingId: "destination",
+    memberId: "member",
+    deviceId: "mac",
+    lineId: "22222222-2222-4222-8222-222222222222",
+    recipientHash: hash("synthetic"),
+    mediaSessionId: "media",
+    workerIdentity: "worker",
+    agentIdentity: "agent",
+    exportGrantId: "export",
+    callKind: "review",
+    presentationBinding: {
+      presentationId: "presentation",
+      manifestFingerprint: hash("manifest"),
+      presentationGrantId: "local",
+      verificationId: task.verification!.id,
+      hostId: "host",
+      captureDeviceId: "mac",
+    },
+    dispatchExpiresAt: 100000,
+    expiresAt: 100000,
+    audio: true,
+    video: true,
+    screen: true,
+    presentation: true,
+    instructions: true,
+    control: false,
+    nativeActivation: false,
+    maxCalls: 1,
+  };
+  const calls = new ProtectedTaskStore<{ id: string; [key: string]: unknown }>(
+    f.store,
+    f.vault,
+    "coding-task-audio-call-v1",
+  );
+  const connect = () =>
+    calls.put({
+      id: plan.id,
+      plan,
+      fingerprint: taskHandsetFingerprint(plan),
+      state: "connected",
+      stopRequested: false,
+      mediaClosed: false,
+      nativeCleanupComplete: false,
+      providerCallId: "11111111-1111-4111-8111-111111111111",
+      receipts: {
+        native_dial: { state: "done" },
+        media_activate: { state: "done" },
+      },
+      nativeObservation: {
+        providerCallId: "11111111-1111-4111-8111-111111111111",
+        state: "connected",
+        cleanupComplete: false,
+        observedAt: f.clock(),
+      },
+    });
+  return { voice, plan, calls, connect };
+}
+describe("walkthrough finalized voice authority", () => {
+  it("requires connected proof for new instructions but preserves original replay after hangup", () => {
+    const f = fixture(),
+      task = f.ready(),
+      w = walkthroughVoice(f, task),
+      input = f.input(task);
+    expect(() => f.voices.finalize(w.voice.id, input)).toThrow(/connected/);
+    w.connect();
+    const applied = f.voices.finalize(w.voice.id, input);
+    expect(applied.receipt.state).toBe("applied");
+    w.calls.put({ ...w.calls.get(w.plan.id)!, state: "unknown" });
+    f.voices.end(w.voice.id, "end");
+    expect(f.voices.finalize(w.voice.id, input).replayed).toBe(true);
+    expect(() => f.voices.acceptFinalized(w.voice.id, input)).toThrow(
+      /conflicts|coding instruction/,
+    );
+  });
+  it("holds another correction during work and releases it after known verification even after hangup", () => {
+    const f = fixture(),
+      task = f.ready(),
+      w = walkthroughVoice(f, task);
+    w.connect();
+    const next = f.voices.finalize(w.voice.id, f.input(task)).task;
+    const running = f.claim(next),
+      held = f.voices.finalize(w.voice.id, f.input(running));
+    expect(held.receipt.state).toBe("held");
+    f.voices.end(w.voice.id, "end");
+    w.calls.put({ ...w.calls.get(w.plan.id)!, state: "closed" });
+    expect(() => f.voices.releaseHeld(w.voice.id, held.receipt.id)).toThrow();
+    const verified = f.verify(f.result(running));
+    const released = f.voices.releaseHeld(w.voice.id, held.receipt.id);
+    expect(released.task.runs).toHaveLength(verified.runs.length + 1);
+    expect(released.receipt.state).toBe("applied");
+  });
+  it("accepts only independently passed review without a new run and shares the utterance use fence", () => {
+    const f = fixture();
+    let task = f.claim(f.create());
+    task = f.change(task, {
+      action: "run_result",
+      runId: task.runs.at(-1)!.id,
+      dispatchId: task.runs.at(-1)!.dispatchId,
+      outcome: "completed",
+      summary: "Added the filter.",
+    });
+    task = f.verify(task);
+    expect(task.state).toBe("review_ready");
+    const w = walkthroughVoice(f, task),
+      input = { ...f.input(task), instruction: "I accept this result." };
+    expect(() => f.voices.acceptFinalized(w.voice.id, input)).toThrow(
+      /connected/,
+    );
+    w.connect();
+    const accepted = f.voices.acceptFinalized(w.voice.id, input);
+    expect(accepted.task.state).toBe("accepted");
+    expect(accepted.task.runs).toHaveLength(task.runs.length);
+    w.calls.put({ ...w.calls.get(w.plan.id)!, state: "closed" });
+    f.voices.end(w.voice.id, "end");
+    expect(f.voices.acceptFinalized(w.voice.id, input).replayed).toBe(true);
+    expect(() => f.voices.finalize(w.voice.id, input)).toThrow(
+      /conflicts|acceptance/,
+    );
+  });
+  it("rejects acceptance for decision results and stale or mismatched connected evidence", () => {
+    const f = fixture(),
+      task = f.ready(),
+      w = walkthroughVoice(f, task);
+    w.connect();
+    expect(() => f.voices.acceptFinalized(w.voice.id, f.input(task))).toThrow(
+      /verified current review/,
+    );
+    f.advance(5001);
+    expect(() => f.voices.finalize(w.voice.id, f.input(task))).toThrow(
+      /connected/,
+    );
+    w.connect();
+    w.calls.put({
+      ...w.calls.get(w.plan.id)!,
+      plan: { ...w.plan, exportGrantId: "other" },
+    });
+    expect(() => f.voices.finalize(w.voice.id, f.input(task))).toThrow(
+      /connected/,
+    );
+  });
+});
+
+describe("final review acceptance provenance", () => {
+  const reviewed = (
+    f: ReturnType<typeof fixture>,
+    task = f.claim(f.create()),
+  ) =>
+    f.verify(
+      f.change(task, {
+        action: "run_result",
+        runId: task.runs.at(-1)!.id,
+        dispatchId: task.runs.at(-1)!.dispatchId,
+        outcome: "completed",
+        summary: "The filter works.",
+      }),
+    );
+  it.each(["decision_call", "different_verification"])(
+    "refuses %s even with an exact connected conversation",
+    (kind) => {
+      const f = fixture(),
+        task = reviewed(f),
+        w = walkthroughVoice(f, task);
+      w.connect();
+      const changed =
+        kind === "decision_call"
+          ? { ...w.plan, callKind: "decision" as const }
+          : {
+              ...w.plan,
+              presentationBinding: {
+                ...w.plan.presentationBinding,
+                verificationId: "different",
+              },
+            };
+      w.calls.put({
+        ...w.calls.get(w.plan.id)!,
+        plan: changed,
+        fingerprint: taskHandsetFingerprint(changed),
+      });
+      expect(() =>
+        f.voices.acceptFinalized(w.voice.id, {
+          ...f.input(task),
+          instruction: "I accept this result.",
+        }),
+      ).toThrow(/fresh final review call/);
+      expect(f.tasks.get(f.session.id, task.id).state).toBe("review_ready");
+    },
+  );
+  it("requires another final review call for a newer verified run while retaining correction admission", () => {
+    const f = fixture(),
+      task = reviewed(f),
+      w = walkthroughVoice(f, task);
+    w.connect();
+    const next = f.voices.finalize(w.voice.id, f.input(task)).task;
+    const complete = reviewed(f, f.claim(next));
+    expect(() =>
+      f.voices.acceptFinalized(w.voice.id, {
+        ...f.input(complete),
+        instruction: "I accept this result.",
+      }),
+    ).toThrow(/fresh final review call/);
+    expect(f.voices.finalize(w.voice.id, f.input(complete)).receipt.state).toBe(
+      "applied",
+    );
+  });
+  it("never reconciles an acceptance spoken before the verified review revision", () => {
+    const f = fixture(),
+      task = reviewed(f),
+      w = walkthroughVoice(f, task);
+    w.connect();
+    expect(() =>
+      f.voices.acceptFinalized(w.voice.id, {
+        ...f.input(task),
+        expectedRevision: task.revision - 1,
+        currentRevision: task.revision,
+        instruction: "I accept this result.",
+      }),
+    ).toThrow(/verified current review/);
+    expect(f.tasks.get(f.session.id, task.id).state).toBe("review_ready");
   });
 });

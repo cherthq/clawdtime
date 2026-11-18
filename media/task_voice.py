@@ -267,13 +267,13 @@ class TaskVoiceAPI:
         self.http, self.base, self.token = http, origin.rstrip('/') + f'/tasks/{task_id}/voice/{voice_id}', token
         self.task_id, self.voice_id = task_id, voice_id
 
-    async def request(self, suffix, body=None):
+    async def request(self, suffix, body=None, *, timeout_seconds=3):
         # Mutations are submitted once. No redirects, reconnects or effect retries.
         try:
             from aiohttp import ClientTimeout
             async with self.http.request('GET' if body is None else 'POST', self.base + suffix,
                     headers={'Authorization': 'Bearer ' + self.token}, json=body,
-                    allow_redirects=False, timeout=ClientTimeout(total=3)) as response:
+                    allow_redirects=False, timeout=ClientTimeout(total=timeout_seconds)) as response:
                 if response.status not in (200, 201, 202):
                     raise VoiceError('task_request_refused')
                 raw = await bounded_body(response, 65536)

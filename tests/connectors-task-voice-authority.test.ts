@@ -330,6 +330,7 @@ describe("independent review: task voice authority", () => {
       mode: "handset_audio_smoke",
       instructionsAllowed: false,
       callAttemptId: "synthetic-handset-attempt",
+      permissions: { presentation: false, control: false, screen: false },
     });
     const context = await (await f.api(`${f.base}/context`)).json();
     expect(context.mode).toBe("handset_audio_smoke");

@@ -6,6 +6,7 @@ export function createTaskAudioStopApp(options: {
   origin: string;
   stop: () => Promise<void>;
   status: () => { state: string; ended: boolean };
+  stopSharing?: () => Promise<void>;
 }) {
   const secret = token(),
     host = new URL(options.origin).host;
@@ -25,7 +26,7 @@ export function createTaskAudioStopApp(options: {
       `clawdtime_stop=${secret}; HttpOnly; SameSite=Strict; Path=/`,
     );
     return c.html(
-      `<!doctype html><meta name="viewport" content="width=device-width"><title>ClawdTime voice test</title><style>body{font:20px system-ui;max-width:620px;margin:70px auto;padding:24px}button{font:inherit;padding:16px 32px;background:#b21f38;color:white;border:0;border-radius:8px}</style><h1>ClawdTime voice test</h1><p>One audio-only call. You can stop it here or hang up on your handset.</p><p id="state">Preparing</p><button id="stop">Stop call</button><script>const button=document.getElementById('stop'),state=document.getElementById('state');button.onclick=async()=>{button.disabled=true;try{const r=await fetch('/stop',{method:'POST'});if(!r.ok)throw Error();state.textContent='Stopping call'}catch{state.textContent='Stop is unconfirmed. Hang up on your handset.';button.disabled=false}};setInterval(async()=>{try{const r=await fetch('/status');state.textContent=(await r.json()).state}catch{}},1000)</script>`,
+      `<!doctype html><meta name="viewport" content="width=device-width"><title>ClawdTime ${options.stopSharing ? "walkthrough" : "voice test"}</title><style>body{font:20px system-ui;max-width:620px;margin:70px auto;padding:24px}button{font:inherit;padding:16px 32px;background:#b21f38;color:white;border:0;border-radius:8px;margin:5px}</style><h1>ClawdTime ${options.stopSharing ? "walkthrough" : "voice test"}</h1><p>${options.stopSharing ? "One call with the prepared app windows. Stop sharing keeps the conversation and coding task active. Stop call ends only the conversation." : "One audio-only call. You can stop it here or hang up on your handset."}</p><p id="state">Preparing</p>${options.stopSharing ? '<button id="sharing">Stop sharing</button>' : ""}<button id="stop">Stop call</button><script>const button=document.getElementById('stop'),state=document.getElementById('state'),sharing=document.getElementById('sharing');button.onclick=async()=>{button.disabled=true;try{const r=await fetch('/stop',{method:'POST'});if(!r.ok)throw Error();state.textContent='Stopping call'}catch{state.textContent='Stop is unconfirmed. Hang up on your handset.';button.disabled=false}};if(sharing)sharing.onclick=async()=>{sharing.disabled=true;try{const r=await fetch('/stop-sharing',{method:'POST'});if(!r.ok)throw Error();state.textContent='Sharing stopped; conversation and task continue'}catch{state.textContent='Sharing Stop is unconfirmed. Use Stop call.';sharing.disabled=false}};setInterval(async()=>{try{const r=await fetch('/status');state.textContent=(await r.json()).state}catch{}},1000)</script>`,
     );
   });
   app.get("/status", (c) => c.json(options.status()));
@@ -42,6 +43,25 @@ export function createTaskAudioStopApp(options: {
       return c.text("Forbidden", 403);
     await options.stop();
     return c.json({ stopping: true });
+  });
+  app.post("/stop-sharing", async (c) => {
+    const values = (c.req.header("cookie") ?? "")
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => s.startsWith("clawdtime_stop="));
+    if (
+      !options.stopSharing ||
+      c.req.header("origin") !== options.origin ||
+      values.length !== 1 ||
+      values[0] !== `clawdtime_stop=${secret}`
+    )
+      return c.text("Forbidden", 403);
+    await options.stopSharing();
+    return c.json({
+      sharingStopped: true,
+      voiceEnded: false,
+      taskCanceled: false,
+    });
   });
   return app;
 }

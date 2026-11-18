@@ -141,6 +141,12 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
                 or value.get('permissions', {}).get('instructions') is not False):
             raise VoiceError('deepgram_handset_scope_refused')
 
+    def provider_settings(self, context):
+        return settings(context)
+
+    async def before_provider_open(self):
+        pass
+
     async def start(self):
         if self.ws is not None or self.closed:
             raise VoiceError('voice_restart_refused')
@@ -152,6 +158,7 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
             self.check_context(self.context)
             if (self.context['runId'], self.context['revision']) != (self.context.get('openingRunId'), self.context.get('openingRevision')):
                 raise VoiceError('prepared_opening_stale')
+            await self.before_provider_open()
             self.ws = await self.provider.open()
             self.diagnostics.record('provider_open')
             self.spawn(self.read())
@@ -162,7 +169,7 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
                 raise VoiceError('prepared_opening_stale')
             self.context = fresh
             self.settings_sent = True
-            await self.send(settings(fresh))
+            await self.send(self.provider_settings(fresh))
             self.spawn(self.playback.run())
             await self.ready.wait()
             if self.closed or not self.conversation_id:
@@ -274,7 +281,7 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
                     raise VoiceError('tool_capacity')
                 self.function_fingerprints[identity] = digest
                 self.pending_tools += 1
-                self.spawn(self.function(call, self.latest))
+                self.spawn(self.function_coroutine(call, self.latest))
         elif kind == 'FunctionCallCancelled':
             functions = value.get('functions')
             if not isinstance(functions, list) or not 1 <= len(functions) <= 8:
@@ -284,6 +291,9 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
                 if not isinstance(identity, str) or identity not in self.function_fingerprints:
                     raise VoiceError('tool_identity_invalid')
                 self.cancelled_functions.add(identity)
+
+    def function_coroutine(self, call, utterance):
+        return self.function(call, utterance)
 
     async def function(self, call, utterance):
         identity, name = call['id'], call.get('name')

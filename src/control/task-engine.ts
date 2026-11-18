@@ -71,6 +71,12 @@ export class TaskEngine {
   cancel(taskId: string) {
     this.active.get(taskId)?.controller.abort();
   }
+  /** Call cleanup may close an idle engine, but must never abort admitted work. */
+  closeIfIdle(): boolean {
+    if (this.active.size) return false;
+    this.closing = true;
+    return true;
+  }
   async close() {
     this.closing = true;
     for (const value of this.active.values()) value.controller.abort();

@@ -1,6 +1,127 @@
 import { z } from "zod";
 import { hash, DomainError } from "../storage/security.js";
+import { taskSceneFrameSchema } from "../task-presentation-contracts.js";
 import { jsonRequest } from "./native-messages.js";
+import {
+  isTaskWalkthroughPlan,
+  taskWalkthroughPlanSchema,
+  taskWalkthroughFingerprint,
+  taskWalkthroughPresentationBindingSchema,
+  type TaskHandsetPlan,
+  type TaskHandsetAuthorization,
+  type TaskWalkthroughPlan,
+} from "../task-walkthrough-contracts.js";
+export type {
+  TaskHandsetPlan,
+  TaskHandsetAuthorization,
+} from "../task-walkthrough-contracts.js";
+
+/** Preserve c.1's exact serialized schema and hash; only the explicit new mode selects export. */
+export function parseTaskHandsetPlan(plan: TaskHandsetPlan): TaskHandsetPlan {
+  return isTaskWalkthroughPlan(plan)
+    ? taskWalkthroughPlanSchema.parse(plan)
+    : taskAudioPlanSchema.parse(plan);
+}
+export function taskHandsetFingerprint(plan: TaskHandsetPlan): string {
+  return isTaskWalkthroughPlan(plan)
+    ? taskWalkthroughFingerprint(plan)
+    : taskAudioFingerprint(plan);
+}
+export const taskWalkthroughVideoEvidenceSchema = z
+  .object({
+    evidence: z.literal("sdk_frame_accepted_not_remote_seen"),
+    presentationId: z.string().regex(/^[A-Za-z0-9_-]{1,120}$/),
+    manifestFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    sceneId: z.string().regex(/^[A-Za-z0-9_-]{1,120}$/),
+    generation: z.number().int().nonnegative().safe(),
+    sourceFrameId: taskSceneFrameSchema.shape.sourceFrameId,
+    geometryGeneration: taskSceneFrameSchema.shape.geometryGeneration,
+    capturedAt: taskSceneFrameSchema.shape.capturedAt,
+    renderedAt: taskSceneFrameSchema.shape.renderedAt,
+    acceptedAt: z.number().finite().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict()
+  .refine(
+    (frame) =>
+      frame.capturedAt <= frame.renderedAt &&
+      frame.renderedAt <= frame.acceptedAt,
+    "Video evidence timestamps conflict.",
+  );
+export type TaskWalkthroughVideoEvidence = z.infer<
+  typeof taskWalkthroughVideoEvidenceSchema
+>;
+export interface TaskWalkthroughMediaObservation extends Omit<
+  TaskAudioMediaObservation,
+  "video" | "screen" | "presentation"
+> {
+  mode: "handset_walkthrough";
+  sharingActive: boolean;
+  instructions: true;
+  nativeActivation: false;
+  planFingerprint: string;
+  videoEvidence?: TaskWalkthroughVideoEvidence;
+  video: true;
+  screen: true;
+  presentation: true;
+  exportGrantId: string;
+  presentationBinding: TaskWalkthroughPlan["presentationBinding"];
+}
+export type TaskHandsetMediaObservation =
+  TaskAudioMediaObservation | TaskWalkthroughMediaObservation;
+export type TaskHandsetReadiness = TaskAudioReadiness & {
+  videoReady?: boolean;
+  presentationReady?: boolean;
+};
+export interface TaskHandsetMediaPort {
+  prepare(
+    plan: TaskHandsetPlan,
+    effectId: string,
+  ): Promise<
+    TaskHandsetMediaObservation & {
+      credentials: TaskAudioCredentials;
+      silentPublisherReady: true;
+      videoPublisherReady?: boolean;
+    }
+  >;
+  activate(
+    plan: TaskHandsetPlan,
+    providerCallId: string,
+    effectId: string,
+  ): Promise<TaskHandsetMediaObservation>;
+  inspect(plan: TaskHandsetPlan): Promise<TaskHandsetMediaObservation>;
+  close(
+    plan: TaskHandsetPlan,
+    effectId: string,
+  ): Promise<TaskHandsetMediaObservation>;
+}
+export interface TaskHandsetCallsPort {
+  create(
+    plan: TaskHandsetPlan,
+    credentials: TaskAudioCredentials,
+    effectId: string,
+  ): Promise<{ providerCallId: string; lineId: string }>;
+  inspect(
+    plan: TaskHandsetPlan,
+    providerCallId: string,
+  ): Promise<TaskAudioNativeObservation>;
+  end(
+    plan: TaskHandsetPlan,
+    providerCallId: string,
+    effectId: string,
+  ): Promise<{ accepted: true; providerCallId: string }>;
+}
+export interface TaskHandsetPorts {
+  authorize(
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
+  ): Promise<void> | void;
+  readiness(
+    plan: TaskHandsetPlan,
+    authorization: TaskHandsetAuthorization,
+  ): Promise<TaskHandsetReadiness>;
+  media: TaskHandsetMediaPort;
+  calls: TaskHandsetCallsPort;
+}
 
 /** c.1 only: a one-call audio plan is not a desktop, video or coding grant. */
 export interface TaskAudioPlan {
@@ -92,6 +213,8 @@ export interface TaskAudioMediaPort {
   ): Promise<TaskAudioMediaObservation>;
 }
 export interface TaskAudioNativeObservation {
+  /** Worker decoded/handoff evidence, never handset visibility or physical acceptance. */
+  remoteVideoReady?: boolean;
   providerCallId: string;
   state: "allocated" | "connected" | "terminal";
   cleanupComplete: boolean;
@@ -342,6 +465,204 @@ export class HttpTaskAudioMediaPort implements TaskAudioMediaPort {
   }
 }
 
+/** A distinct export binding; omitted fields never upgrade the historical audio binding. */
+export function taskHandsetMediaBinding(plan: TaskHandsetPlan) {
+  if (!isTaskWalkthroughPlan(plan)) return taskAudioMediaBinding(plan);
+  const parsed = taskWalkthroughPlanSchema.parse(plan);
+  return {
+    mediaSessionId: parsed.mediaSessionId,
+    taskId: parsed.taskId,
+    voiceSessionId: parsed.voiceSessionId,
+    callAttemptId: parsed.id,
+    roomName: taskAudioRoomName(parsed.mediaSessionId),
+    workerIdentity: parsed.workerIdentity,
+    agentIdentity: parsed.agentIdentity,
+    mode: parsed.mode,
+    dispatchExpiresAt: parsed.dispatchExpiresAt,
+    expiresAt: parsed.expiresAt,
+    exportGrantId: parsed.exportGrantId,
+    presentationBinding: parsed.presentationBinding,
+    planFingerprint: taskHandsetFingerprint(parsed),
+    audio: true as const,
+    video: true as const,
+    screen: true as const,
+    presentation: true as const,
+    instructions: true as const,
+    control: false as const,
+    nativeActivation: false as const,
+  };
+}
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, canonical(item)]),
+    );
+  return value;
+}
+export function taskHandsetMediaFingerprint(plan: TaskHandsetPlan) {
+  if (!isTaskWalkthroughPlan(plan)) return taskAudioMediaFingerprint(plan);
+  return hash(JSON.stringify(canonical(taskHandsetMediaBinding(plan))));
+}
+
+/** One fixed loopback service, with an explicit new export branch and unchanged c.1 adapter. */
+export class HttpTaskHandsetMediaPort implements TaskHandsetMediaPort {
+  private readonly audio: HttpTaskAudioMediaPort;
+  constructor(
+    private readonly config: { origin: string; token: string },
+    private readonly request: typeof fetch = fetch,
+  ) {
+    this.config = { ...config };
+    this.audio = new HttpTaskAudioMediaPort(this.config, request); // Validate protected origin/token without effects.
+  }
+  private api(path: string, body?: unknown) {
+    return jsonRequest(
+      this.config.origin + path,
+      {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+          authorization: `Bearer ${this.config.token}`,
+          "content-type": "application/json",
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      },
+      this.request,
+      path === "/close" ? 45000 : path === "/status" ? 5000 : 35000,
+    );
+  }
+  private observation(
+    plan: TaskWalkthroughPlan,
+    raw: Record<string, unknown>,
+  ): TaskWalkthroughMediaObservation {
+    const result = z
+      .object({
+        mode: z.literal("handset_walkthrough"),
+        instructions: z.literal(true),
+        nativeActivation: z.literal(false),
+        planFingerprint: z.literal(taskHandsetFingerprint(plan)),
+        callAttemptId: z.literal(plan.id),
+        mediaSessionId: z.literal(plan.mediaSessionId),
+        roomName: z.literal(taskAudioRoomName(plan.mediaSessionId)),
+        bindingFingerprint: z.literal(taskHandsetMediaFingerprint(plan)),
+        exportGrantId: z.literal(plan.exportGrantId),
+        presentationBinding: taskWalkthroughPresentationBindingSchema,
+        state: z.enum(["absent", "prepared", "active", "closed", "unknown"]),
+        providerCallId: z.string().uuid().optional(),
+        closed: z.boolean(),
+        nativeCallClosed: z.literal(false),
+        sharingActive: z.boolean(),
+        videoEvidence: taskWalkthroughVideoEvidenceSchema.optional(),
+        audio: z.literal(true),
+        video: z.literal(true),
+        screen: z.literal(true),
+        presentation: z.literal(true),
+        control: z.literal(false),
+        audioOutput: z
+          .object({
+            evidence: z.literal("sdk_acceptance_not_audibility"),
+            preparedSilentFrames: z.number().int().nonnegative().max(1_000_000),
+            speechFrames: z.number().int().nonnegative().max(1_000_000),
+          })
+          .strict()
+          .optional(),
+      })
+      .parse(raw);
+    if (
+      JSON.stringify(result.presentationBinding) !==
+        JSON.stringify(
+          taskWalkthroughPresentationBindingSchema.parse(
+            plan.presentationBinding,
+          ),
+        ) ||
+      (result.state === "closed") !== result.closed ||
+      (result.closed && result.sharingActive) ||
+      (result.videoEvidence &&
+        (result.videoEvidence.presentationId !==
+          plan.presentationBinding.presentationId ||
+          result.videoEvidence.manifestFingerprint !==
+            plan.presentationBinding.manifestFingerprint))
+    )
+      throw new DomainError(
+        409,
+        "Walkthrough media observation conflicts with its immutable export binding.",
+      );
+    return result;
+  }
+  async prepare(plan: TaskHandsetPlan, effectId: string) {
+    if (!isTaskWalkthroughPlan(plan)) return this.audio.prepare(plan, effectId);
+    const parsed = taskWalkthroughPlanSchema.parse(plan);
+    const raw = await this.api("/prepare", taskHandsetMediaBinding(parsed));
+    const observation = this.observation(parsed, raw);
+    if (
+      observation.state !== "prepared" ||
+      raw.silentPublisherReady !== true ||
+      raw.videoPublisherReady !== true ||
+      !observation.videoEvidence ||
+      !observation.sharingActive
+    )
+      throw new DomainError(
+        409,
+        "Prepared walkthrough audio and video evidence is unavailable.",
+      );
+    const credentials = validateTaskAudioCredentials(
+      raw.credentials as TaskAudioCredentials,
+    );
+    if (credentials.remote_participant_identity !== plan.agentIdentity)
+      throw new DomainError(409, "Prepared outgoing participant differs.");
+    return {
+      ...observation,
+      credentials,
+      silentPublisherReady: true as const,
+      videoPublisherReady: true as const,
+    };
+  }
+  async activate(
+    plan: TaskHandsetPlan,
+    providerCallId: string,
+    effectId: string,
+  ) {
+    if (!isTaskWalkthroughPlan(plan))
+      return this.audio.activate(plan, providerCallId, effectId);
+    const observation = this.observation(
+      plan,
+      await this.api("/activate", {
+        callAttemptId: plan.id,
+        providerCallId,
+        connected: true,
+      }),
+    );
+    if (
+      observation.state !== "active" ||
+      observation.providerCallId !== providerCallId
+    )
+      throw new DomainError(
+        409,
+        "Exact connected walkthrough media is unavailable.",
+      );
+    return observation;
+  }
+  async inspect(plan: TaskHandsetPlan) {
+    return isTaskWalkthroughPlan(plan)
+      ? this.observation(plan, await this.api("/status"))
+      : this.audio.inspect(plan);
+  }
+  async close(plan: TaskHandsetPlan, effectId: string) {
+    if (!isTaskWalkthroughPlan(plan)) return this.audio.close(plan, effectId);
+    const observation = this.observation(
+      plan,
+      await this.api("/close", { callAttemptId: plan.id }),
+    );
+    if (observation.state !== "closed")
+      throw new DomainError(
+        409,
+        "Walkthrough local cleanup remains unconfirmed.",
+      );
+    return observation;
+  }
+}
+
 /** Narrow Calls HTTP adapter. It does not supply ownership/readiness or enable dispatch. */
 export class NativeTaskAudioCalls implements TaskAudioCallsPort {
   constructor(
@@ -370,8 +691,8 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
         "Protected task audio Calls configuration is invalid.",
       );
   }
-  private bound(plan: TaskAudioPlan) {
-    taskAudioPlanSchema.parse(plan);
+  private bound(plan: TaskHandsetPlan) {
+    parseTaskHandsetPlan(plan);
     if (
       plan.lineId !== this.config.lineId ||
       plan.recipientHash !== hash(this.config.recipient)
@@ -398,7 +719,7 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
     );
   }
   async create(
-    plan: TaskAudioPlan,
+    plan: TaskHandsetPlan,
     credentials: TaskAudioCredentials,
     effectId: string,
   ) {
@@ -415,7 +736,7 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
         direction: "outbound",
         mode: "customer_managed",
         line_id: plan.lineId,
-        media: { audio: true, video: false },
+        media: { audio: true, video: isTaskWalkthroughPlan(plan) },
         destination: this.config.recipient,
         destination_type: "phone",
         ...media,
@@ -428,7 +749,7 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
     return { providerCallId: call.id, lineId: call.line_id };
   }
   async inspect(
-    plan: TaskAudioPlan,
+    plan: TaskHandsetPlan,
     providerCallId: string,
   ): Promise<TaskAudioNativeObservation> {
     this.bound(plan);
@@ -471,9 +792,12 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
           ? "connected"
           : "allocated",
       cleanupComplete,
+      ...(isTaskWalkthroughPlan(plan)
+        ? { remoteVideoReady: events.has("remote_video_ready") }
+        : {}),
     };
   }
-  async end(plan: TaskAudioPlan, providerCallId: string, effectId: string) {
+  async end(plan: TaskHandsetPlan, providerCallId: string, effectId: string) {
     this.bound(plan);
     z.string().uuid().parse(providerCallId);
     await this.api(

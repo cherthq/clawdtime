@@ -2,13 +2,23 @@ import type {
   CodingTask,
   IndependentTaskSession,
   TaskVoiceInstruction,
+  TaskVoiceAcceptance,
   TaskVoiceSession,
 } from "../contracts.js";
 import { DomainError, hash, id, Vault } from "../storage/security.js";
 import { Store } from "../storage/store.js";
 import { ProtectedTaskStore } from "../storage/task-store.js";
 import { buildTaskBrief, TaskLedger } from "./task-ledger.js";
-import { unresolvedTaskAudioCalls } from "./task-audio-call.js";
+import {
+  assertConnectedTaskWalkthroughVoice,
+  assertConnectedTaskWalkthroughReview,
+  unresolvedTaskAudioCalls,
+} from "./task-audio-call.js";
+
+import {
+  taskWalkthroughVoiceBindingSchema,
+  type TaskWalkthroughVoiceBinding,
+} from "../task-walkthrough-contracts.js";
 
 interface VoiceEvent {
   id: string;
@@ -31,6 +41,16 @@ export interface FinalizedTaskInstruction {
   /** Internal trusted-source reconciliation; never a provider/model input field. */
   currentRevision?: number;
   instruction: string;
+}
+interface AcceptanceRecord {
+  id: string;
+  fingerprint: string;
+  receipt: TaskVoiceAcceptance;
+}
+export interface VoiceAcceptanceMutation {
+  receipt: TaskVoiceAcceptance;
+  task: CodingTask;
+  replayed: boolean;
 }
 export interface VoiceInstructionMutation {
   receipt: TaskVoiceInstruction;
@@ -56,6 +76,7 @@ export class TaskVoiceLedger {
   private readonly voices: ProtectedTaskStore<TaskVoiceSession>;
   private readonly instructions: ProtectedTaskStore<InstructionRecord>;
   private readonly events: ProtectedTaskStore<VoiceEvent>;
+  private readonly acceptances: ProtectedTaskStore<AcceptanceRecord>;
 
   constructor(
     private readonly store: Store,
@@ -63,6 +84,11 @@ export class TaskVoiceLedger {
     private readonly tasks: TaskLedger,
     private readonly clock: () => number = Date.now,
   ) {
+    this.acceptances = new ProtectedTaskStore(
+      store,
+      vault,
+      "coding-task-voice-acceptance-v1",
+    );
     this.voices = new ProtectedTaskStore(store, vault, "coding-task-voice-v1");
     this.instructions = new ProtectedTaskStore(
       store,
@@ -85,9 +111,13 @@ export class TaskVoiceLedger {
       runId: string;
       expectedRevision: number;
     },
-    handset?: { callAttemptId: string },
+    handset?: { callAttemptId: string } | TaskWalkthroughVoiceBinding,
   ): { voice: TaskVoiceSession; replayed: boolean } {
     text(input.eventId, "voice admission event");
+    const walkthrough =
+      handset && "mode" in handset
+        ? taskWalkthroughVoiceBindingSchema.parse(handset)
+        : undefined;
     if (
       handset &&
       !/^[A-Za-z0-9_-]{1,200}$/.test(
@@ -111,7 +141,7 @@ export class TaskVoiceLedger {
           input.expectedRevision,
           ...(handset
             ? [
-                {
+                walkthrough ?? {
                   mode: "handset_audio_smoke",
                   callAttemptId: handset.callAttemptId,
                 },
@@ -158,10 +188,28 @@ export class TaskVoiceLedger {
         opening: buildTaskBrief(task).opening,
         createdAt: this.clock(),
         expiresAt: Math.min(session.expiresAt, this.clock() + 30 * 60_000),
-        mode: handset ? "handset_audio_smoke" : "local_audio",
-        instructionsAllowed: !handset,
-        ...(handset ? { callAttemptId: handset.callAttemptId } : {}),
-        permissions: { presentation: false, control: false, screen: false },
+        ...(walkthrough
+          ? {
+              ...walkthrough,
+              instructionsAllowed: true as const,
+              permissions: {
+                presentation: true as const,
+                control: false as const,
+                screen: true as const,
+              },
+            }
+          : {
+              mode: handset
+                ? ("handset_audio_smoke" as const)
+                : ("local_audio" as const),
+              instructionsAllowed: !handset,
+              ...(handset ? { callAttemptId: handset.callAttemptId } : {}),
+              permissions: {
+                presentation: false as const,
+                control: false as const,
+                screen: false as const,
+              },
+            }),
       };
       this.voices.put(voice);
       this.events.put({ id: eventId, fingerprint, voiceId: voice.id });
@@ -270,6 +318,11 @@ export class TaskVoiceLedger {
         (event.fingerprint !== fingerprint || event.receiptId !== receiptId)
       )
         throw new DomainError(409, "Instruction event conflicts.");
+      if (this.acceptances.get(receiptId))
+        throw new DomainError(
+          409,
+          "Finalized utterance was already used for review acceptance.",
+        );
       const prior = this.instructions.get(receiptId);
       if (prior) {
         if (prior.fingerprint !== fingerprint)
@@ -286,6 +339,12 @@ export class TaskVoiceLedger {
         };
       }
       this.active(voice);
+      assertConnectedTaskWalkthroughVoice(
+        this.store,
+        this.vault,
+        voice,
+        this.clock(),
+      );
       const task = this.tasks.get(voice.sessionId, voice.taskId);
       const run = task.runs.at(-1)!;
       if (
@@ -329,6 +388,128 @@ export class TaskVoiceLedger {
           "Task outcome cannot admit a spoken revision.",
         );
       this.instructions.put({ id: receiptId, fingerprint, receipt });
+      this.events.put({ id: eventId, fingerprint, voiceId, receiptId });
+      return { receipt, task: current, replayed: false };
+    });
+  }
+
+  /** Trusted registered utterance only. A review acceptance never queues a new run. */
+  acceptFinalized(
+    voiceId: string,
+    input: FinalizedTaskInstruction,
+  ): VoiceAcceptanceMutation {
+    text(input.eventId, "acceptance event");
+    text(input.providerConversationId, "provider conversation", 200);
+    text(input.utteranceId, "finalized utterance", 200);
+    text(input.instruction, "explicit acceptance", 8000);
+    if (
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 0 ||
+      (input.currentRevision !== undefined &&
+        (!Number.isSafeInteger(input.currentRevision) ||
+          input.currentRevision < input.expectedRevision))
+    )
+      throw new DomainError(400, "Invalid acceptance revision.");
+    return this.store.transaction(() => {
+      const voice = this.voice(voiceId);
+      if (
+        voice.mode !== "handset_walkthrough" ||
+        voice.instructionsAllowed !== true ||
+        voice.providerConversationId !== input.providerConversationId ||
+        voice.taskId !== input.taskId
+      )
+        throw new DomainError(
+          403,
+          "Acceptance requires its exact walkthrough conversation.",
+        );
+      const receiptId = hash(
+        `utterance\0${voiceId}\0${input.providerConversationId}\0${input.utteranceId}`,
+      );
+      const eventId = hash(`instruction\0${voiceId}\0${input.eventId}`);
+      const fingerprint = hash(
+        JSON.stringify([
+          "accept",
+          voiceId,
+          input.providerConversationId,
+          input.utteranceId,
+          input.taskId,
+          input.runId,
+          input.expectedRevision,
+          input.instruction,
+        ]),
+      );
+      const event = this.events.get(eventId);
+      if (
+        event &&
+        (event.fingerprint !== fingerprint || event.receiptId !== receiptId)
+      )
+        throw new DomainError(409, "Finalized acceptance event conflicts.");
+      if (this.instructions.get(receiptId))
+        throw new DomainError(
+          409,
+          "Finalized utterance was already used for a coding instruction.",
+        );
+      const prior = this.acceptances.get(receiptId);
+      if (prior) {
+        if (prior.fingerprint !== fingerprint)
+          throw new DomainError(409, "Finalized acceptance conflicts.");
+        if (!event)
+          this.events.put({ id: eventId, fingerprint, voiceId, receiptId });
+        return {
+          receipt: prior.receipt,
+          task: this.tasks.get(voice.sessionId, voice.taskId),
+          replayed: true,
+        };
+      }
+      this.active(voice);
+      assertConnectedTaskWalkthroughVoice(
+        this.store,
+        this.vault,
+        voice,
+        this.clock(),
+      );
+      const task = this.tasks.get(voice.sessionId, voice.taskId),
+        run = task.runs.at(-1)!;
+      if (
+        task.state !== "review_ready" ||
+        run.id !== input.runId ||
+        run.state !== "completed" ||
+        task.revision !== (input.currentRevision ?? input.expectedRevision) ||
+        input.expectedRevision !== task.revision ||
+        task.verification?.runId !== run.id ||
+        task.verification.state !== "passed" ||
+        this.heldForTask(task.id).length
+      )
+        throw new DomainError(
+          409,
+          "Only the independently verified current review can be accepted.",
+        );
+      assertConnectedTaskWalkthroughReview(
+        this.store,
+        this.vault,
+        voice,
+        task,
+        this.clock(),
+      );
+      const receipt: TaskVoiceAcceptance = {
+        id: receiptId,
+        voiceSessionId: voice.id,
+        taskId: task.id,
+        runId: run.id,
+        expectedRevision: input.expectedRevision,
+        providerConversationId: input.providerConversationId,
+        utteranceId: input.utteranceId,
+        action: "accept",
+        state: "accepted",
+        createdAt: this.clock(),
+      };
+      const current = this.tasks.transition(voice.sessionId, task.id, {
+        eventId: `voice-accept-${receiptId}`,
+        expectedRevision: task.revision,
+        action: "accept",
+        runId: run.id,
+      }).task;
+      this.acceptances.put({ id: receiptId, fingerprint, receipt });
       this.events.put({ id: eventId, fingerprint, voiceId, receiptId });
       return { receipt, task: current, replayed: false };
     });
