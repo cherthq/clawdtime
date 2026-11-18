@@ -306,6 +306,114 @@ describe("one authorized handset audio call coordinator", () => {
     expect(g.ports.media.activate).not.toHaveBeenCalled();
   });
 
+  it("retains bounded encrypted activation admission diagnostics without raw errors or retries", async () => {
+    const f = fixture();
+    f.reserve();
+    await f.coordinator.prepare(f.plan.id);
+    await f.coordinator.dial(f.plan.id);
+    f.connect();
+    let count = 0;
+    f.ports.authorize = vi.fn(async () => {
+      if (++count === 2) throw new Error("sensitive synthetic error detail");
+    });
+    await expect(f.coordinator.activate(f.plan.id)).rejects.toThrow();
+    const before = f.coordinator.status(f.plan.id);
+    expect(before.receipts.media_activate).toBeUndefined();
+    expect(before.diagnostics.at(-1)).toMatchObject({
+      phase: "activation_authority_2",
+      state: "unavailable",
+      elapsedMs: 0,
+    });
+    expect(f.ports.media.activate).not.toHaveBeenCalled();
+    await f.coordinator.inspect(f.plan.id);
+    expect(f.ports.authorize).toHaveBeenCalledTimes(2);
+    const stored = JSON.stringify(f.store.query("SELECT * FROM entities"));
+    expect(stored).not.toContain("activation_authority_2");
+    expect(JSON.stringify(before)).not.toContain("sensitive synthetic");
+    const restarted = new TaskAudioCallCoordinator(f.store, f.vault, f.ports, {
+      clock: f.clock,
+    });
+    expect(restarted.status(f.plan.id).diagnostics).toEqual(before.diagnostics);
+    expect(f.ports.media.activate).not.toHaveBeenCalled();
+  });
+
+  it("rejects slow authorization before activation claim even with a refreshed connected observation", async () => {
+    const f = fixture();
+    f.reserve();
+    await f.coordinator.prepare(f.plan.id);
+    await f.coordinator.dial(f.plan.id);
+    f.connect();
+    f.ports.authorize = vi.fn(async () => {
+      f.advance(2001);
+    });
+    await expect(f.coordinator.activate(f.plan.id)).rejects.toThrow(
+      /freshness budget/,
+    );
+    const status = f.coordinator.status(f.plan.id);
+    expect(status.receipts.media_activate).toBeUndefined();
+    expect(status.diagnostics.at(-1)).toMatchObject({
+      phase: "activation_budget",
+      state: "refused",
+    });
+    expect(f.ports.media.activate).not.toHaveBeenCalled();
+    expect(f.ports.calls.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks exact authorization expiry after the final native refresh", async () => {
+    const f = fixture();
+    f.reserve();
+    await f.coordinator.prepare(f.plan.id);
+    await f.coordinator.dial(f.plan.id);
+    f.connect();
+    f.advance(239000);
+    const inspect = f.ports.calls.inspect;
+    let reads = 0;
+    f.ports.calls.inspect = vi.fn(
+      async (plan: TaskAudioPlan, providerCallId: string) => {
+        if (++reads === 2) f.advance(1001);
+        return inspect(plan, providerCallId);
+      },
+    );
+    await expect(f.coordinator.activate(f.plan.id)).rejects.toThrow(
+      /authorization/,
+    );
+    const status = f.coordinator.status(f.plan.id);
+    expect(status.diagnostics.at(-1)).toMatchObject({
+      phase: "activation_budget",
+      state: "refused",
+    });
+    expect(status.receipts.media_activate).toBeUndefined();
+    expect(f.ports.media.activate).not.toHaveBeenCalled();
+  });
+
+  it("rejects a call that ended during authorization and bounds diagnostic history", async () => {
+    const f = fixture();
+    f.reserve();
+    await f.coordinator.prepare(f.plan.id);
+    await f.coordinator.dial(f.plan.id);
+    f.connect();
+    f.ports.authorize = vi.fn(async () => {
+      f.cleanupNative();
+    });
+    await expect(f.coordinator.activate(f.plan.id)).rejects.toThrow(
+      /connection/,
+    );
+    expect(f.coordinator.status(f.plan.id).diagnostics.at(-1)).toMatchObject({
+      phase: "activation_native_refresh",
+      state: "refused",
+    });
+    for (let i = 0; i < 20; i++)
+      await expect(f.coordinator.activate(f.plan.id)).rejects.toThrow(
+        /connection/,
+      );
+    expect(f.coordinator.status(f.plan.id).diagnostics).toHaveLength(32);
+    expect(
+      f.coordinator.status(f.plan.id).receipts.media_activate,
+    ).toBeUndefined();
+    expect(f.ports.media.activate).not.toHaveBeenCalled();
+    expect(f.ports.calls.create).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses stale or nonexclusive readiness and contradictory audio preparation", async () => {
     const f = fixture();
     f.reserve();

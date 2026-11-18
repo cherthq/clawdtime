@@ -39,6 +39,23 @@ export class TaskVoiceService {
     });
   }
   open(raw: string, taskId: string, input: unknown) {
+    return this.admit(raw, taskId, input);
+  }
+  /** Operator composition only; deliberately not exposed by the public task router. */
+  openHandset(
+    raw: string,
+    taskId: string,
+    input: unknown,
+    callAttemptId: string,
+  ) {
+    return this.admit(raw, taskId, input, { callAttemptId });
+  }
+  private admit(
+    raw: string,
+    taskId: string,
+    input: unknown,
+    handset?: { callAttemptId: string },
+  ) {
     const session = this.tasks.authenticate(raw);
     if (!session.permissions.voice)
       throw new DomainError(
@@ -54,7 +71,11 @@ export class TaskVoiceService {
       .strict()
       .parse(input);
     return this.tasks.store.transaction(() => {
-      const { voice } = this.ledger.open(session, { ...value, taskId });
+      const { voice } = this.ledger.open(
+        session,
+        { ...value, taskId },
+        handset,
+      );
       const key = `task-voice-token:${voice.id}`;
       const prior = this.tasks.store.state<{ sealed: string }>(key);
       if (prior)

@@ -47,12 +47,21 @@ buffers are bounded, and local browser Stop immediately stops mic tracks and
 scheduled audio before requesting backend cleanup. Browser scheduling or queue
 clearing is not proof of audibility or handset interruption latency.
 
-### Handset c.1 adapter prepared offline
+### Handset c.1 adapter and remaining qualification
 
 `media/task_voice_livekit.py` adds the task-owned LiveKit audio bridge; it does not
 import the legacy media server, captions, screen capture, device gateway or Mac
 helper. This is preparatory software, not handset acceptance or authorization to
 call. Presentation and desktop work remain gated on the separate c.1 result.
+
+The first separately authorized audio-only handset attempt was silent and failed
+qualification. Native `bridge_ready` occurred, but the local ledger contained no
+media activation receipt or provider binding. The native worker then reported
+`bridge_remote_audio_timeout`; local and native cleanup were confirmed. That
+native deadline requires non-silent speech after structural readiness, not merely
+silent PCM. The adapter already emits continuous prepared silence, so adding
+another silence producer would not resolve the missing activation. Activation
+latency/refusal must be resolved before another separately authorized attempt.
 
 The immutable binding contains `mediaSessionId`, `taskId`, `voiceSessionId`,
 `callAttemptId`, `roomName`, `workerIdentity`, `agentIdentity`, `expiresAt` (Unix
@@ -71,8 +80,11 @@ open an ElevenLabs conversation, consume incoming audio or publish video.
 `activate({callAttemptId,providerCallId,connected:true})` is reserved for the
 coordinator after exact native connection evidence. It waits for the expected
 worker audio track before starting the same task-owned ElevenLabs runtime.
-Provider startup rechecks configuration and prepared task state. Unexpected
-participants, conflicting audio tracks and reconnects close the local session.
+Provider startup rechecks configuration and prepared task state. LiveKit room RPCs
+use certifi with certificate and hostname verification, disable SDK failover retries
+and redirects, and permit only the configured host’s CreateRoom/DeleteRoom paths.
+The owned HTTP session is explicitly closed. Unexpected participants, conflicting
+audio tracks and reconnects close the local session.
 Video remains unsubscribed and no video stream is constructed.
 
 The c.1 scope is status and hangup. The standard three provider tool names remain,
@@ -81,7 +93,12 @@ smoke sessions. Task context polling checks the current authority. Incoming audi
 continues during outgoing speech; only provider interruption events clear output.
 Bounded input is PCM16 mono at 16 kHz. The pinned SDK resamples output to the known
 48 kHz room source; interruption discards both queued output and the old resampler
-tail. SDK acceptance and timing counters do not establish handset audibility.
+tail. Prepared silence runs every 20 ms and is canceled and joined before speech.
+Local status exposes bounded numeric `audioOutput.preparedSilentFrames` and
+`speechFrames`, incremented after SDK capture accepts each frame. These counters
+retain no audio, text or identity; they do not establish RTP delivery, remote
+rendering or handset audibility. They were added after the failed attempt and
+cannot retrospectively establish its PCM delivery.
 
 A private SQLite journal reserves the exact binding before room creation and keeps
 interrupted/unknown tombstones across restart. Its process lock prevents duplicate
@@ -130,8 +147,8 @@ The remaining external prerequisites are explicit authorization for the one call
 the exact paired tester and task/run, fresh exclusive line/worker identity and
 idle-state evidence, retained cursor/unknown-effect reconciliation, protected
 native Calls and LiveKit credentials, and native worker support for
-`audio:true,video:false`. No deployment, handset call or line handoff was performed
-by these offline changes. The gateway, Mac screen permissions and companion Enable
+`audio:true,video:false`. The software preparation itself did not authorize a deployment, handset call or
+line handoff; live attempts require separate authorization. The gateway, Mac screen permissions and companion Enable
 are not audio-only prerequisites. No ten-minute qualification can be inferred from
 a shorter attempt expiry; expiry still ends the media session.
 

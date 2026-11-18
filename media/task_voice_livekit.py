@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
+import ssl
 import time
 from urllib.parse import urlsplit
 
@@ -143,6 +144,23 @@ class GuardedProvider:
         await self.delegate.close()
 
 
+class FixedLiveKitHTTP:
+    """Only the two scoped room RPCs, one POST each, without redirect following."""
+    def __init__(self, session, origin):
+        self.session, self.origin = session, origin.rstrip('/')
+
+    @property
+    def timeout(self):
+        return self.session.timeout
+
+    def post(self, url, **kwargs):
+        allowed = {self.origin + '/twirp/livekit.RoomService/' + name
+                   for name in ('CreateRoom', 'DeleteRoom')}
+        if url not in allowed:
+            raise VoiceError('handset_livekit_destination_refused')
+        return self.session.post(url, **{**kwargs, 'allow_redirects': False})
+
+
 class LiveKitAudioPort:
     """One scoped SDK room/track; no room is opened until prepare is called."""
     def __init__(self, url, key, secret, *, allowed_hosts):
@@ -154,6 +172,7 @@ class LiveKitAudioPort:
             raise VoiceError('handset_livekit_configuration_invalid')
         self.url, self.key, self.secret = url.rstrip('/'), key, secret
         self.room = self.client = self.source = self.stream = self.track = None
+        self.sdk_http = None
         self.silence_task = self.input_task = None
         self.track_sid = None
         self.publication_sid = None
@@ -163,12 +182,22 @@ class LiveKitAudioPort:
         self.epoch = 0
         self.output_lock = asyncio.Lock()
         self.resampler = None
+        self.output_counts = {'preparedSilentFrames': 0, 'speechFrames': 0}
+
+    def _count_output(self, kind):
+        self.output_counts[kind] = min(1000000, self.output_counts[kind] + 1)
 
     async def prepare(self, binding, on_audio, on_failure):
         from datetime import timedelta
         from livekit import api, rtc
         self.binding = binding
-        self.client = api.LiveKitAPI(self.url, self.key, self.secret)
+        from aiohttp import ClientSession, ClientTimeout, TCPConnector
+        import certifi
+        tls = ssl.create_default_context(cafile=certifi.where())
+        self.sdk_http = ClientSession(timeout=ClientTimeout(total=4), connector=TCPConnector(ssl=tls))
+        fixed_http = FixedLiveKitHTTP(self.sdk_http, 'https://' + urlsplit(self.url).netloc)
+        # The pinned SDK otherwise enables regional mutation retries by default.
+        self.client = api.LiveKitAPI(self.url, self.key, self.secret, session=fixed_http, failover=False)
         self.room = rtc.Room()
         self.on_failure = on_failure
         expected = binding['workerIdentity']
@@ -258,6 +287,7 @@ class LiveKitAudioPort:
         await self.room.local_participant.publish_track(local, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
         # Confirm one silent frame before claiming publisher readiness.
         await self.source.capture_frame(rtc.AudioFrame(bytes(1920), 48000, 1, 960))
+        self._count_output('preparedSilentFrames')
         self.silence_task = asyncio.create_task(self._silence())
         return {'livekit_url': self.url, 'participant_token': token(expected), 'remote_participant_identity': identity}
 
@@ -266,6 +296,7 @@ class LiveKitAudioPort:
         try:
             while not self.closing:
                 await asyncio.wait_for(self.source.capture_frame(rtc.AudioFrame(bytes(1920), 48000, 1, 960)), .5)
+                self._count_output('preparedSilentFrames')
                 await asyncio.sleep(.02)
         except asyncio.CancelledError:
             raise
@@ -293,6 +324,7 @@ class LiveKitAudioPort:
                         return
                     chunk = raw[offset:offset + 1920]
                     await asyncio.wait_for(self.source.capture_frame(rtc.AudioFrame(chunk, 48000, 1, len(chunk) // 2)), .5)
+                    self._count_output('speechFrames')
 
     async def clear(self, epoch):
         # Set epoch before waiting; pending old output cannot enqueue after this clear.
@@ -359,6 +391,8 @@ class LiveKitAudioPort:
             await cleanup(delete)
         if self.client:
             await cleanup(self.client.aclose)
+        if self.sdk_http:
+            await cleanup(self.sdk_http.close)
         self.track = self.stream = self.resampler = None
         return ok
 
@@ -502,6 +536,8 @@ class TaskVoiceLiveKit:
             result['bindingFingerprint'] = self.digest
         if self.provider_call_id:
             result['providerCallId'] = self.provider_call_id
+        if hasattr(self.port, 'output_counts'):
+            result['audioOutput'] = {'evidence': 'sdk_acceptance_not_audibility', **self.port.output_counts}
         if self.runtime:
             result['diagnostics'] = self.runtime.diagnostics.snapshot()
         if self.failure:

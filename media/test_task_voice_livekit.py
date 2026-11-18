@@ -17,7 +17,7 @@ from livekit import rtc
 
 from task_voice import VoiceError
 from task_voice_livekit_local import control_app, configured_app
-from task_voice_livekit import LiveKitAudioPort, TaskAudioJournal, TaskVoiceLiveKit, validate_binding, fingerprint
+from task_voice_livekit import LiveKitAudioPort, TaskAudioJournal, TaskVoiceLiveKit, validate_binding, fingerprint, FixedLiveKitHTTP
 from test_task_voice import API, metadata, audio, transcript
 
 
@@ -119,7 +119,8 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
                         patch('livekit.rtc.Room', FakeRoom), patch('livekit.rtc.AudioSource', FakeSource),
                         patch('livekit.rtc.LocalAudioTrack.create_audio_track', return_value=SimpleNamespace(kind='audio')),
                         patch('livekit.rtc.AudioStream', FakeStream), patch('livekit.rtc.AudioResampler', FakeResampler)]
-        for item in self.patches:
+        self.sdk_constructor = self.patches[0].start()
+        for item in self.patches[1:]:
             item.start()
         FakeStream.instances = []
         self.received = []
@@ -178,6 +179,12 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_silent_prepare_exact_credentials_and_no_input_before_activation(self):
         result = await self.adapter.prepare(self.bound)
+        self.assertFalse(self.sdk_constructor.call_args.kwargs['failover'])
+        configured_http = self.sdk_constructor.call_args.kwargs['session']
+        self.assertIsInstance(configured_http, FixedLiveKitHTTP)
+        tls = configured_http.session.connector._ssl
+        self.assertTrue(tls.check_hostname)
+        self.assertEqual(tls.verify_mode, __import__('ssl').CERT_REQUIRED)
         self.assertTrue(result['silentPublisherReady'])
         self.assertFalse(result['videoPublisherReady'])
         self.assertEqual(result['credentials']['remote_participant_identity'], 'agent_fixture')
@@ -200,6 +207,49 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repeated, result)
         self.sdk_api.room.create_room.assert_awaited_once()
         self.assertNotIn('voiceToken', json.dumps(result))
+
+    async def test_prepared_silence_is_continuous_and_transition_joins_it(self):
+        await self.adapter.prepare(self.bound)
+        await until(lambda: len(self.port.source.frames) >= 12)
+        self.assertTrue(all(frame == bytes(1920) for frame in self.port.source.frames))
+        self.assertEqual(self.opens, 0)
+        self.assertEqual(FakeStream.instances, [])
+        await self.port.activate_output()
+        self.assertTrue(self.port.silence_task.done())
+        counts = self.adapter.status()['audioOutput']
+        prepared_count = counts['preparedSilentFrames']
+        self.assertGreaterEqual(prepared_count, 11)
+        self.assertLessEqual(prepared_count, len(self.port.source.frames))
+        self.assertEqual(counts['speechFrames'], 0)
+        self.assertEqual(counts['evidence'], 'sdk_acceptance_not_audibility')
+        self.assertEqual(self.port.source.queued, [])
+        count = len(self.port.source.frames)
+        await asyncio.sleep(.06)
+        self.assertEqual(len(self.port.source.frames), count)
+        await self.port.play(b'\x07\x00' * 1600, 0)
+        self.assertTrue(all(any(frame) for frame in self.port.source.frames[count:]))
+        counts = self.adapter.status()['audioOutput']
+        self.assertEqual(counts['preparedSilentFrames'], prepared_count)
+        self.assertEqual(counts['speechFrames'], len(self.port.source.frames) - count)
+        self.assertEqual(set(counts), {'evidence', 'preparedSilentFrames', 'speechFrames'})
+        self.port.output_counts['speechFrames'] = 1000000
+        self.port._count_output('speechFrames')
+        self.assertEqual(self.port.output_counts['speechFrames'], 1000000)
+
+    async def test_prepared_expiry_joins_silent_producer_and_ends_voice_once(self):
+        now = time.time()
+        self.adapter.clock = lambda: now
+        await self.adapter.prepare(self.bound)
+        await until(lambda: len(self.port.source.frames) >= 3)
+        now = self.bound['expiresAt'] / 1000 + 1
+        await until(lambda: self.adapter.state == 'closed')
+        self.assertTrue(self.port.silence_task.done())
+        count = len(self.port.source.frames)
+        await asyncio.sleep(.06)
+        self.assertEqual(len(self.port.source.frames), count)
+        self.assertEqual(self.opens, 0)
+        self.assertEqual(len([1 for path, body in self.api.calls if path == '/end']), 1)
+        self.assertFalse(self.adapter.status()['nativeCallClosed'])
 
     async def test_real_runtime_pcm_status_end_and_local_instruction_refusal(self):
         await self.adapter.prepare(self.bound)
@@ -230,6 +280,7 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.adapter.status()['nativeCallClosed'])
         self.assertTrue(stream.closed)
         self.sdk_api.room.delete_room.assert_awaited_once()
+        self.assertTrue(self.port.sdk_http.closed)
 
     async def test_activation_waits_for_worker_and_duplicate_activation_never_reopens_provider(self):
         await self.adapter.prepare(self.bound)
@@ -529,6 +580,38 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealSDKSmokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_actual_sdk_room_rpc_never_follows_redirect_or_retries_503(self):
+        from livekit import api
+        counts = {'create': 0, 'redirected': 0}
+        response_code = 307
+        app = web.Application()
+        async def create(request):
+            counts['create'] += 1
+            if response_code == 307:
+                return web.Response(status=307, headers={'Location': '/redirected'})
+            return web.json_response({'code': 'unavailable', 'msg': 'synthetic'}, status=503)
+        async def redirected(request):
+            counts['redirected'] += 1
+            return web.Response(status=200)
+        app.router.add_post('/twirp/livekit.RoomService/CreateRoom', create)
+        app.router.add_route('*', '/redirected', redirected)
+        server = TestServer(app)
+        await server.start_server()
+        async with ClientSession() as http:
+            port = FixedLiveKitHTTP(http, str(server.make_url('')).rstrip('/'))
+            client = api.LiveKitAPI(str(server.make_url('')), 'fixture', 'synthetic' * 8, session=port, failover=False)
+            try:
+                for code in (307, 503):
+                    response_code = code
+                    with self.assertRaises(api.TwirpError):
+                        await client.room.create_room(api.CreateRoomRequest(name='synthetic-room'))
+                self.assertEqual(counts, {'create': 2, 'redirected': 0})
+                with self.assertRaises(VoiceError):
+                    port.post('https://foreign.invalid/twirp/livekit.RoomService/CreateRoom')
+            finally:
+                await client.aclose()
+        await server.close()
+
     async def test_pinned_sdk_resamples_and_queues_audio_without_room_or_hardware(self):
         # An unconnected in-memory SDK source: no room, mic, speaker, key or network.
         resampler = rtc.AudioResampler(16000, 48000, num_channels=1)

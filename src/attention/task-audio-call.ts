@@ -28,6 +28,17 @@ interface PhaseReceipt {
   completedAt?: number;
   failure?: "effect_outcome_unresolved";
 }
+export interface TaskAudioActivationDiagnostic {
+  phase:
+    | "activation_native_read"
+    | "activation_authority_1"
+    | "activation_authority_2"
+    | "activation_native_refresh"
+    | "activation_budget";
+  state: "started" | "passed" | "refused" | "unavailable";
+  at: number;
+  elapsedMs?: number;
+}
 interface AudioCallRecord {
   id: string;
   plan: TaskAudioPlan;
@@ -45,6 +56,7 @@ interface AudioCallRecord {
     | "closed"
     | "unknown";
   receipts: Partial<Record<Phase, PhaseReceipt>>;
+  diagnostics?: TaskAudioActivationDiagnostic[];
   credentials?: TaskAudioCredentials;
   providerCallId?: string;
   stopRequested: boolean;
@@ -66,6 +78,7 @@ export interface TaskAudioCallStatus {
   nativeCleanupComplete: boolean;
   cleanupConfirmed: boolean;
   physicalAcceptance: false;
+  diagnostics: TaskAudioActivationDiagnostic[];
 }
 export function unresolvedTaskAudioCalls(store: Store, vault: Vault) {
   return new ProtectedTaskStore<AudioCallRecord>(store, vault, KIND)
@@ -266,17 +279,36 @@ export class TaskAudioCallCoordinator {
         409,
         "Only the exact allocated call can activate audio.",
       );
-    const native = await this.ports.calls.inspect(
-      record.plan,
-      record.providerCallId,
-    );
-    if (
-      native.providerCallId !== record.providerCallId ||
-      native.state !== "connected" ||
-      native.cleanupComplete
-    )
-      throw new DomainError(409, "Native connection is not confirmed.");
-    await this.admit(record, false);
+    const confirmConnected = async () => {
+      const native = await this.ports.calls.inspect(
+        record.plan,
+        record.providerCallId!,
+      );
+      if (
+        native.providerCallId !== record.providerCallId ||
+        native.state !== "connected" ||
+        native.cleanupComplete
+      )
+        throw new DomainError(409, "Native connection is not confirmed.");
+    };
+    await this.diagnose(id, "activation_native_read", confirmConnected);
+    const confirmedAt = this.clock();
+    await this.admit(record, false, true);
+    await this.diagnose(id, "activation_native_refresh", confirmConnected);
+    await this.diagnose(id, "activation_budget", () => {
+      this.validateAuthorization(
+        record.plan,
+        record.authorization,
+        record.fingerprint,
+      );
+      if (this.clock() - confirmedAt > 4000 || this.clock() < confirmedAt)
+        throw new DomainError(
+          409,
+          "Activation admission exceeded its freshness budget.",
+        );
+      if (this.get(id).stopRequested)
+        throw new DomainError(403, "Local Stop closed call admission.");
+    });
     return this.effect(
       id,
       "media_activate",
@@ -487,28 +519,75 @@ export class TaskAudioCallCoordinator {
         "Fresh exact idle and exclusive audio readiness is required.",
       );
   }
-  private async admit(record: AudioCallRecord, readiness: boolean) {
+  private async admit(
+    record: AudioCallRecord,
+    readiness: boolean,
+    activation = false,
+  ) {
     this.requireEnabled();
-    this.validateAuthorization(
-      record.plan,
-      record.authorization,
-      record.fingerprint,
-    );
-    await this.ports.authorize(record.plan, record.authorization);
+    const first = async () => {
+      this.validateAuthorization(
+        record.plan,
+        record.authorization,
+        record.fingerprint,
+      );
+      await this.ports.authorize(record.plan, record.authorization);
+    };
+    if (activation)
+      await this.diagnose(record.id, "activation_authority_1", first);
+    else await first();
     if (readiness)
       this.validateReadiness(
         record.plan,
         record.fingerprint,
         await this.ports.readiness(record.plan, record.authorization),
       );
-    await this.ports.authorize(record.plan, record.authorization);
-    this.validateAuthorization(
-      record.plan,
-      record.authorization,
-      record.fingerprint,
-    );
-    if (this.get(record.id).stopRequested)
-      throw new DomainError(403, "Local Stop closed call admission.");
+    const second = async () => {
+      await this.ports.authorize(record.plan, record.authorization);
+      this.validateAuthorization(
+        record.plan,
+        record.authorization,
+        record.fingerprint,
+      );
+      if (this.get(record.id).stopRequested)
+        throw new DomainError(403, "Local Stop closed call admission.");
+    };
+    if (activation)
+      await this.diagnose(record.id, "activation_authority_2", second);
+    else await second();
+  }
+  private async diagnose<T>(
+    id: string,
+    phase: TaskAudioActivationDiagnostic["phase"],
+    work: () => Promise<T> | T,
+  ): Promise<T> {
+    const started = this.clock();
+    const append = (state: TaskAudioActivationDiagnostic["state"]) =>
+      this.store.transaction(() => {
+        const record = this.get(id),
+          at = this.clock();
+        record.diagnostics = [
+          ...(record.diagnostics ?? []),
+          {
+            phase,
+            state,
+            at,
+            ...(state === "started"
+              ? {}
+              : { elapsedMs: Math.max(0, at - started) }),
+          },
+        ].slice(-32);
+        this.records.put(record);
+      });
+    append("started");
+    try {
+      const result = await work();
+      append("passed");
+      return result;
+    } catch (error) {
+      append(error instanceof DomainError ? "refused" : "unavailable");
+      throw error;
+    }
   }
   private validateMedia(
     plan: TaskAudioPlan,
@@ -614,6 +693,7 @@ export class TaskAudioCallCoordinator {
       state: record.state,
       fingerprint: record.fingerprint,
       receipts: structuredClone(record.receipts),
+      diagnostics: structuredClone(record.diagnostics ?? []),
       ...(record.providerCallId
         ? { providerCallId: record.providerCallId }
         : {}),

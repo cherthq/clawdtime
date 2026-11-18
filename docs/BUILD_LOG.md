@@ -45,7 +45,7 @@ Validation and checkpoint results will be recorded here before committing.
 - `npm run task:simulate`: passed; two distinct simulated runs, duplicate
   receipts, restart reload, independent synthetic reports, and explicit acceptance.
 - `npm run task:service -- --state PRIVATE_DIR --project DISPOSABLE_PROJECT
-  --port 13320`, then `npm run cli -- task register`, `task create`, and
+--port 13320`, then `npm run cli -- task register`, `task create`, and
   `task status`: observed working over local HTTP; graceful shutdown/restart
   preserved the task and session. Credential files remained outside the project.
 - Independent connector review: 20 ledger/CLI tests passed. Independent media
@@ -294,6 +294,7 @@ The first sentence now directly states the actual decision question, as requeste
 by independent review. Projection changes no existing task or verification receipt.
 
 Frozen-source validation for the local-audio diagnostic checkpoint:
+
 - `npm run check`: 45 files / 671 tests passed, typecheck and build passed.
 - `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
   all 217 tests passed in 52.107 seconds, including final Chromium preflight code.
@@ -335,6 +336,7 @@ status question during that run. The user confirmed the status response while th
 backend was running. The independently verified task is now `review_ready`.
 
 Evidence, with content/credentials kept in owner-only storage outside Git:
+
 - Initial known-terminal run: 21,889 ms, deliberately failed empty-state check.
 - First spoken instruction: exactly one applied receipt and new run, 23,688 ms.
   Independent verification caught the singular text “No task match”; the Clear
@@ -368,6 +370,7 @@ c.1 handset smoke test or full release/polish acceptance. Media documentation wa
 updated separately by its owner; no runtime code changed after `6766062`.
 
 Pre-commit validation:
+
 - `npm run check`: 45 files / 671 tests passed, typecheck and build passed.
 - `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
   all 217 tests passed in 54.943 seconds, no skips.
@@ -399,6 +402,7 @@ media. The local task used a fixture pairing, not a real handset identity. Its
 facts was bypassed or relabeled as handset readiness.
 
 Implemented preparation:
+
 - Read-only `task readiness` exposes sanitized ownership/expiry, task/run/revision,
   verification and unresolved cleanup state, even after expiry. It does not expose
   task prose or permit expired-session execution. Explicit operator reauthorization
@@ -436,6 +440,7 @@ with an exact assertion plus a new handset status-only/end authority regression;
 no runtime guard was removed to satisfy that test.
 
 Observed non-live runnable checks:
+
 - Actual loopback-controller CLI started from new owner-only synthetic files;
   outbound Python sockets were prohibited. Authenticated GET reported absent,
   the room journal had zero attempt rows, and SIGTERM exited cleanly with code 0.
@@ -451,6 +456,7 @@ Observed non-live runnable checks:
   still require separate proven cleanup; renewal deliberately cannot bypass it.
 
 Frozen-source pre-commit validation:
+
 - `npm run check`: all 49 files / 722 tests passed; typecheck and build passed.
 - `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
   all 244 tests passed in 53.754 seconds, no skips.
@@ -469,3 +475,118 @@ There is deliberately no enabled production entrypoint assembled from fixture or
 synthetic evidence. The live worker's audio-only capability, spoken hangup,
 handset acoustics/timing, quiet pause and interruption behavior remain unverified.
 Presentation and desktop implementation remain gated on the actual c.1 result.
+
+### c.1 live setup — November 18, 2026
+
+The user returned and explicitly authorized one voice-only call to the paired
+handset. A separate explicit approval permits temporarily redeploying only the
+existing ClawdTime backend in standby and restoring its prior live settings after
+confirmed cleanup. The prior hosted backend was live; `/internal/drain` is not a
+pause API. No Apple Teams or sibling service change is included.
+
+Added the composed operator entry `scripts/task-handset.ts`, a private immutable
+one-call task-to-handset grant, an in-place read-only native inspector, exact
+native audio-protocol/prerequisite checks, a temporary local Stop control, and a
+monitor that closes both local audio and the native call on spoken end, handset
+hangup, expiry, Stop or failure. The original fixture task/pairing/history stay
+unchanged. The destination is revalidated independently before every forward
+phase; it is not imported as a replacement task pairing. Private task state has
+one owner, and all external phases retain durable unknown-outcome fences.
+
+The native inspector executes bundled source against read-only SQLite in the
+existing backend container. It requires the exact verified standby deployment,
+current runtime mode, current pairing/allowlist, preserved native cursor, no
+unresolved legacy work and fresh worker audio readiness. It exports only bounded
+readiness evidence. The coordinator remains separate from the original-chat
+voice route; no old session is repurposed.
+
+LiveKit API calls now use verified certifi TLS, SDK failover disabled, exact
+CreateRoom/DeleteRoom URLs and redirects disabled. A real installed-SDK regression
+establishes one submission on HTTP 503 and no follow on HTTP 307. Review caught and
+fixed the local Stop browser-global collision, cookie parsing, startup admission
+race, duplicate-start rejection handling, cleanup confirmation/join ordering,
+standby transport-vs-runtime mode distinction and connected native-hangup handling.
+
+Validation so far: `media/.venv/bin/python -m unittest discover -s media -p
+ 'test_*.py'`: **245 passed in 55.525s**. `npx tsx
+tests/task-audio-stop.browser.ts`: a real headless installed-Chrome click reached
+authenticated Stop exactly once, with no call/media. Bundled Playwright Chromium
+was absent; the test explicitly uses installed Chrome. Native source review
+confirms microphone-source audio-only support; a fresh deployed inventory reports
+`outbound_audio_protocol:1` and complete prerequisites, with actual system capture
+explicitly deferred to call start. These are not physical handset acceptance.
+
+Protected scoped Calls/LiveKit configuration was obtained for this authorized
+setup without printing secrets or importing customer/runtime databases. The
+standby configuration mutation is journaled privately before submission. Actual
+call/cleanup results and the final full TypeScript check are recorded below when
+known. Step c.1 is not yet complete; d/e remain gated.
+
+#### First authorized handset attempt: failed, fully cleaned up
+
+Exactly one Calls API creation was submitted. Native events show dialing at
+15:35:33Z, active/bridge_ready at 15:35:46Z, ending at 15:35:56Z and
+failed/cleanup_complete at 15:36:00Z on November 18. The call was explicitly
+`audio:true, video:false`; native terminal detail was `bridge_remote_audio_timeout`.
+The user reported: it hung up without saying anything. No provider conversation
+bound, no media activation receipt was created, and c.1 did **not** pass.
+
+Local silent room preparation succeeded. The native end submission retained an
+unknown receipt, but exact read-only native cleanup evidence and local media
+closure subsequently established that the call was closed. No effect was retried
+and no second call was made. The local owner joined media shutdown and exited.
+
+The existing hosted backend was restored after cleanup. Its new deployment is
+successful, every preceding recent deployment is removed, the complete variable
+snapshot matches the original, and runtime reports live/traffic enabled with
+zero active calls and zero pending/unknown effects. Railway rebuilt the container
+image during configuration-only redeployment; the image digest differs, while
+source/manifest/volume metadata is preserved. No new source was uploaded.
+
+Prepared silence already existed. Native source requires non-silent speech within
+10 seconds after connection; starting fresh SSH processes for both authority checks
+before activation was too expensive a design for this path. Evidence is consistent
+with that latency, but the old uninstrumented failure cannot prove its exact cause.
+Replaced that transport with a persistent read-only inspector, strict IDs/framing,
+2-second request bound, no retries and joined owned-child cleanup. A real read-only
+probe against the restored live backend took 1.279s startup and 93/92/87ms for three
+correct authority refusals. It did not create a room, provider conversation or call.
+
+Added bounded encrypted activation-stage timings, a four-second admission budget
+and final exact native connection refresh; slow/refused/terminal admission cannot
+start provider audio. Added fixed Stop provenance and numeric prepared-silence/
+speech frame acceptance counters. No raw audio, screenshots, provider secrets or
+arbitrary errors are retained. Counters are not evidence of physical audibility.
+
+Before these post-test refinements, `npm run check` passed **796 tests / 53 files**,
+typecheck and build; full media passed **245 tests in 55.525s**. Final post-refinement
+checks and independent review are recorded next. A new call requires fresh explicit
+permission; the consumed operator configuration and unknown end receipt remain
+preserved. No c.1 tag, presentation work or desktop work is claimed.
+
+#### Reviewed checkpoint after the failed physical test
+
+- Final `npm run check`: **826 tests / 55 files passed**, typecheck and build
+  passed (12.26s test run).
+- `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
+  **247 tests passed in 54.222s**, no skips; this includes the final frame-counter
+  and continuous-silence/transition changes.
+- `npx tsx tests/task-audio-stop.browser.ts`: passed again with installed Chrome;
+  actual button click submitted exactly one authenticated Stop to a synthetic
+  callback, with no call or media.
+- Two actual Node/tsx subprocess bootstrap tests explicitly deny networking and
+  verify that setup failures end any admitted voice, leave the task unchanged,
+  submit no call/media effect and release the owner lock only after cleanup.
+- `git diff --check`: passed. Mac/Swift and gateway source did not change; no new
+  Swift or gateway validation is claimed. The original Argos checkout still has
+  exactly its four pre-existing untracked drafts.
+- Connector, transport and media specialists independently reviewed their adjacent
+  paths and the final integration. Findings were fixed before this checkpoint.
+  Final exact native refresh rechecks authorization expiry, and strict HTTP audio
+  counters match the actual Python evidence label and numeric bounds.
+
+The revision is ready for another specifically authorized handset test, not
+physically accepted. The local ports are closed, the original hosted backend is
+restored, and step c.1 remains untagged. The consumed call and all unknown phase
+receipts are retained. No further live call or standby window is authorized by
+this checkpoint.

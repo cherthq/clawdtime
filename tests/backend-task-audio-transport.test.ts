@@ -185,6 +185,60 @@ describe("offline task audio HTTP adapters", () => {
       expect(request).toHaveBeenCalledTimes(1);
     },
   );
+  it("retains bounded output counters without raw media content", async () => {
+    const audioOutput = {
+      evidence: "sdk_acceptance_not_audibility",
+      preparedSilentFrames: 240,
+      speechFrames: 12,
+    };
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(reply(mediaReply("closed", { audioOutput })));
+    const media = new HttpTaskAudioMediaPort(
+      { origin: "http://127.0.0.1:8765", token: "x".repeat(32) },
+      request,
+    );
+    expect((await media.inspect(plan)).audioOutput).toEqual(audioOutput);
+  });
+  it.each([
+    { preparedSilentFrames: -1, speechFrames: 0 },
+    { preparedSilentFrames: 0, speechFrames: 1.5 },
+    { preparedSilentFrames: 0, speechFrames: Number.MAX_SAFE_INTEGER + 1 },
+    { preparedSilentFrames: 0, speechFrames: 0, content: "forbidden" },
+  ])("rejects malformed audio output counters %j", async (audioOutput) => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(reply(mediaReply("closed", { audioOutput })));
+    const media = new HttpTaskAudioMediaPort(
+      { origin: "http://127.0.0.1:8765", token: "x".repeat(32) },
+      request,
+    );
+    await expect(media.inspect(plan)).rejects.toThrow();
+  });
+
+  it.each([
+    {},
+    { evidence: "audible" },
+    { evidence: "sdk_acceptance_not_audibility", speechFrames: 1_000_001 },
+  ])(
+    "rejects missing or misleading audio counter evidence %j",
+    async (fields) => {
+      const audioOutput = {
+        preparedSilentFrames: 0,
+        speechFrames: 0,
+        ...fields,
+      };
+      const request = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(reply(mediaReply("closed", { audioOutput })));
+      const media = new HttpTaskAudioMediaPort(
+        { origin: "http://127.0.0.1:8765", token: "x".repeat(32) },
+        request,
+      );
+      await expect(media.inspect(plan)).rejects.toThrow();
+    },
+  );
+
   it("requires the configured fingerprint even before preparation", async () => {
     const request = vi
       .fn<typeof fetch>()

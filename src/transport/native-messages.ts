@@ -145,10 +145,8 @@ export async function jsonRequest(
     throw new Error("Provider response is not an object.");
   return value as Record<string, unknown>;
 }
-export class NativeMessages {
-  private polling = false;
+class NativeMessageConnection {
   constructor(
-    readonly store: Store,
     readonly binding: MessageBinding,
     readonly request: typeof fetch = fetch,
     private readonly options: { readOnly?: boolean } = {},
@@ -202,9 +200,6 @@ export class NativeMessages {
       throw new DomainError(503, "Native line is unhealthy.");
     return result;
   }
-  cursor() {
-    return this.store.state<EventAnchor>(`messages:${this.binding.lineId}`);
-  }
   async verifyAnchor(anchor: EventAnchor): Promise<EventAnchor> {
     if (
       !Number.isSafeInteger(anchor.sequence) ||
@@ -223,6 +218,28 @@ export class NativeMessages {
         throw new DomainError(409, "Retained cursor evidence changed.");
     } else identity(row, this.binding);
     return { sequence: row.sequence, eventId: row.event_id, fingerprint };
+  }
+}
+
+/** Identity and retained-anchor GETs only; no storage or writable runtime capability. */
+export class NativeMessageReader extends NativeMessageConnection {
+  constructor(binding: MessageBinding, request: typeof fetch = fetch) {
+    super(binding, request, { readOnly: true });
+  }
+}
+
+export class NativeMessages extends NativeMessageConnection {
+  private polling = false;
+  constructor(
+    readonly store: Store,
+    binding: MessageBinding,
+    request: typeof fetch = fetch,
+    options: { readOnly?: boolean } = {},
+  ) {
+    super(binding, request, options);
+  }
+  cursor() {
+    return this.store.state<EventAnchor>(`messages:${this.binding.lineId}`);
   }
   async baseline(sequence: number, eventId: string) {
     await this.verify();

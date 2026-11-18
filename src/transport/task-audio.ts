@@ -55,6 +55,11 @@ export interface TaskAudioCredentials {
   remote_participant_identity: string;
 }
 export interface TaskAudioMediaObservation {
+  audioOutput?: {
+    evidence: "sdk_acceptance_not_audibility";
+    preparedSilentFrames: number;
+    speechFrames: number;
+  };
   callAttemptId: string;
   mediaSessionId: string;
   state: "absent" | "prepared" | "active" | "closed" | "unknown";
@@ -259,6 +264,14 @@ export class HttpTaskAudioMediaPort implements TaskAudioMediaPort {
         providerCallId: z.string().uuid().optional(),
         closed: z.boolean(),
         nativeCallClosed: z.literal(false),
+        audioOutput: z
+          .object({
+            evidence: z.literal("sdk_acceptance_not_audibility"),
+            preparedSilentFrames: z.number().int().nonnegative().max(1_000_000),
+            speechFrames: z.number().int().nonnegative().max(1_000_000),
+          })
+          .strict()
+          .optional(),
         audio: z.literal(true),
         video: z.literal(false),
         screen: z.literal(false),

@@ -671,3 +671,53 @@ one-call grant and a working local media process. Synthetic readiness is never
 production evidence. Neither these adapters nor the dry preflight claim physical
 acceptance. The regression suite uses only fake transports: no call, deployment,
 line handoff, video publisher, or desktop control occurs during this preparation.
+
+`NativeTaskAudioReadiness` now supplies the native read-only evidence port. It
+uses the existing signed native `/api/v1/whoami` and retained
+`/api/v1/events/:sequence` endpoints, plus bounded project-scoped Calls
+`/api/v1/lines` inventory. It requires the exact current pairing, a committed
+cursor no earlier than the handoff baseline, a fresh (at most five minutes)
+operator ownership attestation, an idle exact logical line and a recent confirmed
+worker heartbeat. Ownership and cursor are rechecked after the reads. Pending or
+unknown legacy effects and retained call/control ownership block admission.
+
+The c.1 readiness adapter requires FaceTime sign-in, accessibility and native call
+control readiness, but does not require video/screen publishing or the legacy
+media/gateway services. An explicit worker `system_audio_capture: at_call_start`
+readiness outcome is accepted as deferred audio evidence, as in the existing
+native transport; handset audibility remains a physical acceptance check. Current
+task/session/project and exact handset-voice authorization must still be composed
+by the coordinating service around this evidence port. This adapter never alters
+line ownership, cursors, receipts, or native configuration.
+
+The native evidence reader accepts only the read methods `get`, `all`, `state`
+and `effects`, so an inspector can query the hosted SQLite database in place with
+`DatabaseSync(..., {readOnly: true})`. `NativeMessageReader` needs no storage and
+exposes identity/anchor reads without a writable runtime. Do not copy the legacy
+runtime database to satisfy this interface.
+
+Audio admission additionally requires the worker's explicit
+`session_health.capabilities.outbound_audio_protocol === 1`. Every required audio
+prerequisite (`accessibility`, `facetime_signed_in`, `audio_devices`,
+`facetime_selections`, `playback_renderer`, `configuration`, `control_plane_poll`)
+must have one passed, fresh automatic check. Snapshot times must be ordered and
+checks must fall within the current runtime/snapshot and be younger than 90
+seconds. Duplicate check IDs, failed prerequisites or missing capability evidence
+block even if a summary flag says audio is ready. Deferred capture alone is never
+sufficient; its explicit `at_call_start` check has a null completion timestamp.
+
+Activation admission retains at most 32 encrypted diagnostic entries with fixed
+phase/state codes, timestamps and elapsed milliseconds. The phases cover the
+initial native connection read, both authority checks, the final exact native
+connection refresh and the admission budget. These entries contain no error
+messages, raw responses or speech. Sanitized status exposes only those fixed
+fields. A failed diagnostic does not claim an external effect or authorize a
+retry. Activation is refused before its effect receipt if the exact call ended
+during authorization or more than four seconds elapsed after the first confirmed
+connection. Cleanup and unknown-effect handling remain independent.
+
+The final activation gate also rechecks grant/plan expiry after the native refresh.
+Media status may expose only bounded integer output counters
+`audioOutput.preparedSilentFrames` and `audioOutput.speechFrames` (0 through
+1,000,000), with required evidence label `sdk_acceptance_not_audibility`. These counts can support a private shutdown summary;
+they contain no audio and do not establish that the handset heard speech.
