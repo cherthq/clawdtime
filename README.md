@@ -1,103 +1,73 @@
-<h1 align="center">ClawdTime</h1>
-<p align="center"><strong>Your coding agent can FaceTime you.</strong></p>
+ClawdTime: Your Agent for Long-Running Work
 
-<p align="center">
-  <img src="https://img.shields.io/badge/backend-0.2.0-blue" alt="Backend 0.2.0">
-  <img src="https://img.shields.io/badge/Mac_companion-0.2.1-blue" alt="Mac companion 0.2.1">
-  <a href="https://www.clawdtime.com"><img src="https://img.shields.io/badge/ClawdTime-Website-black" alt="ClawdTime website"></a>
-  <img src="https://img.shields.io/badge/agents-Claude_Code_%2B_Codex-8b5cf6" alt="Claude Code and Codex integrations">
-  <img src="https://img.shields.io/badge/status-internal_pilot-orange" alt="Internal pilot">
-</p>
+ClawdTime is your agent for long-running work. Give it a task and it runs it end to end, delegating to specialist agents and tools such as Codex, Claude Code, and other apps as needed. When it needs your judgment or has a result to review, it prepares a walkthrough and FaceTimes you. 
 
-You step away. Your agent needs a decision. Your phone rings.
+You don't babysit Codex. You hand the job to ClawdTime, and it calls you when it matters. 
 
-ClawdTime lets your existing coding session call you on FaceTime, show your Mac
-screen, hear your answer, and keep working. **The same Codex or Claude session
-owns the conversation and uses its own tools throughout the call.** ClawdTime
-provides the call, speech, screen sharing and control coordination.
+1. What is it
 
-## The flow
+ClawdTime has its own reasoning and task engine. It handles the planning, monitoring and decisions. Specialist agents and tools do the hands-on work behind the scenes. Long-running work should continue without depending on an existing Codex chat staying active. 
 
-**Work → reach a question → use the ClawdTime skill → FaceTime → answer → watch the agent continue.**
+You can still text ClawdTime to start a task. It owns the job from request to result, choosing the workers and tools needed to complete it. 
 
-“Use the blue heading.” “Change that sentence.” “Send the message.”
+2. How people would use it 
 
-The agent receives ordered voice or text turns and supplies the replies you hear.
-Screen sharing can continue while it reasons, edits files or uses a permitted
-computer tool. It remains in your original chat and follows its normal approvals.
+Setup: Install one desktop app → connect models and tools (essentially need to give Clawdtime context on the tools that it has access to via CUA, CLIs and APIs where available, computer use for the rest) → grant Mac permissions → pair your phone via OTP texting. 
 
-## Native computer use and optional fallback
+The goal is a simple, one-click installation followed by guided setup.
 
-**Native tools are the default.** The agent uses the computer/browser tools already
-available in that chat, on the visible shared surface. ClawdTime coordinates
-exclusive input ownership around those tool calls. Tool availability and app
-restrictions still apply; the tested native tool cannot control the Codex app itself.
 
-**ClawdTime fallback is optional and off by default.** When you enable it locally,
-the same agent can use ClawdTime's observe/click/type/scroll tools. Fallback changes
-the execution tool, not the conversational agent. It needs an image-capable MCP
-connection; the foreground JSONL bridge supports native tools but cannot carry
-fallback screenshots/input. Unknown actions are reconciled rather than replayed.
+1. Chat from the desktop or phone. A floating companion or command bar lives on your desktop. Click it to open chat, assign a task, and answer clarifying questions through selectable options. You can also text it a task.
+2. Let it work. ClawdTime plans the task, chooses tools or agents, and tracks progress. It drives workers through APIs and command-line tools by default, with computer use for apps that need it. You can request a call to watch it perform a task. 
+3. Resolve issues together. When it needs human input, it diagnoses the problem and prepares the walkthrough before calling. During FaceTime, it shares the live screen, zooms in on the relevant area, and explains the decision. You discuss the fix while it coordinates edits or computer actions and verifies the result. 
+4. Continue and review. Once the issue is resolved, it ends the call and continues working. When the task is finished, it prepares a final walkthrough and calls for your review and confirmation. Text remains available for questions, updates, and requesting another walkthrough. 
 
-## The Mac Control Panel
 
-The companion shows the paired connection and project/session, selected display,
-permission and sharing status, active call, listening/speaking state, and current
-executor or pending work. It provides **Enable locally**, **Stop sharing and
-control**, **Mute**, **End call**, and **Request pause**.
+During a call, the voice layer handles conversation while the task engine coordinates the work. Ending the call does not have to end the task.
 
-| Computer-control mode                   | Behavior                                                 |
-| --------------------------------------- | -------------------------------------------------------- |
-| **View only**                           | Share the screen; no delegated native or fallback input. |
-| **Agent tools only** — default          | Use the coding session's verified native tools.          |
-| **Agent tools with ClawdTime fallback** | Also allow the same agent to use ClawdTime input tools.  |
+3. Task Flows and Examples: 
 
-Calling, sharing and input are separate permissions. Saved preferences do not
-grant a call or macOS access. Local Stop ends ClawdTime capture/input immediately;
-cancellation of an already-running native tool depends on that tool. Historical
-unverified outcomes remain visible without being presented as successful actions.
+Chat or text → clarify → plan → execute → prepare walkthrough → call → discuss and act → resume → final review 
 
-## Get started
 
-1. **Say hey.** Use [Text it](https://www.clawdtime.com) to message ClawdTime from
-   your invited iMessage handset.
-2. **Paste the returned setup prompt into your coding chat.** Your agent prepares
-   the companion and project integration in that same chat.
-3. **Grant permissions and enable sharing locally.** Select the intended display
-   and control mode, then authorize one test call.
-4. **Keep working normally.** Invoke the project skill when a decision or visual
-   review would help. Speak naturally on the call; the original agent continues.
+1. Long-running coding. “Implement this feature and walk me through the result.” Delegate coding → monitor logs and tests → prepare a walkthrough when judgment is needed → call → resume → review the verified result.
+2. Video editing. “Turn this recording into a short demo.” Coordinate editing through supported tools → prepare a visual review → call → take spoken revisions → review the finished cut.
 
-The pilot uses a trusted local build and existing pairing. Public npm installation,
-notarized public downloads and general tasks initiated from Messages are planned.
-The skill does not automatically detect every blocked process or bypass approvals.
 
-## What has been verified
+The focus is long-running jobs that benefit from a visual check. Texting remains a way to start these jobs, ask for progress, or request a prepared walkthrough.
 
-The hosted backend/media and gateway run the agent-owned protocol; companion
-0.2.1 fixes the historical receipt migration. In a real Codex desktop chat, spoken
-instructions drove native typing and a send in Messages. The human confirmed
-seeing the result on the phone and intentionally hung up.
+4. Technical implementation 
 
-Both CLI clients passed synthetic multi-turn checks. Claude's physical flow,
-ClawdTime fallback, broader native control, reconnect and calls beyond five minutes
-remain unqualified. Voice is half-duplex. A screen-frame timeout was recorded near
-the latest hangup, so long-duration sharing reliability is still an open check.
-This is a deployed internal pilot, not a generally qualified public release.
 
-[Short filmed demo](docs/FILMED_DEMO.md) · [Setup & development](docs/GUIDE.md) ·
-[Current status](docs/STATUS.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Release record](docs/AGENT_OWNED_RELEASE.md)
 
-## Scope and provenance
 
-Built for decisions that interrupt work while you are away. Coding is the pilot;
-email, video, marketing, purchases and watcher-driven work are future use cases,
-not qualified integrations. General work started from Messages is planned Mode 2.
 
-ClawdTime is independent of Apple Teams, selectively derived from source baseline
-`be47b11fe1317c4747db4121bec37896998b5201`. See the
-[implementation plan](IMPLEMENTATION_PLAN.md) and [development guide](docs/GUIDE.md).
+ClawdTime owns the overall task and user experience. Specialist agents and tools execute the work; Agent-S provides fallback computer use; the presentation layer renders walkthrough zooms; the voice layer communicates with the user. Shared-screen actions retain explicit permissions, exclusive control, fresh-screen checks, and visible Stop controls.
 
-**Topics:** AI agents · FaceTime · iMessage · human-in-the-loop · computer use · CUA ·
-MCP · Claude Code · Codex · macOS · remote work.
+Model Choice: lets try Grok first. 
+
+Grok is a reasonable demo candidate, not an established winner. 
+
+[https://github.com/dylanelu/FaceTimeOS](https://github.com/dylanelu/FaceTimeOS) is a useful reference for combining a floating interface, Agent-S, and phone interaction. 
+
+Its launcher ([https://github.com/dylanelu/FaceTimeOS/blob/main/run.sh](https://github.com/dylanelu/FaceTimeOS/blob/main/run.sh) ) distinguishes the recommended Grok-only setup from the recorded demo configuration ([https://github.com/dylanelu/FaceTimeOS/blob/main/Agent-S/run_demo_fast.sh](https://github.com/dylanelu/FaceTimeOS/blob/main/Agent-S/run_demo_fast.sh) ), which uses Grok with UI-TARS to locate screen targets. Reproduce and test a pinned configuration on our Mac before selecting it. Keep the model replaceable. 
+
+The initial demo. 
+
+Tell ClawdTime a coding job → it delegates to Codex or Claude Code → the watcher catches a failing test or a decision point → it prepares a walkthrough → FaceTimes you and zooms in on the problem → you give one spoken instruction → it resumes → calls back for final review of the verified result. 
+
+Start with one coding-agent integration and a small demo project. Prepare the walkthrough before dialing, show the relevant code or failing test, apply the spoken instruction through the worker, and verify the result before the final review call. Add more worker integrations after this complete flow works reliably. 
+
+Comparisons. 
+
+ClawdTime sits between two crowded groups and owns one gap: the agent calls you and shows you what it needs. 
+
+
+1. General assistants (Grok Bot, OpenClaw, Sentient OSSentient OS, TurnstoneTurnstone, TaskletTasklet): They do everyday tasks themselves and check in by text or chat. ClawdTime doesn't compete on doing everything. It runs long jobs through specialist agents and calls you with a visual walkthrough. 
+2. Coding-agent managers (herdrherdr, Boxes.devBoxes.dev, Agent RelayAgent Relay): They keep coding agents running, coordinated and visible, then alert you through a dashboard or message. ClawdTime adds a prepared FaceTime walkthrough, and you can resolve the problem by voice. 
+3. FaceTime projects: 
+   1. FaceTimeOS: You call your Mac to control it. 
+   2. Argos: A single-purpose watcher for ML training.
+
+
+This will be something very new. 
