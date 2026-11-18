@@ -69,6 +69,7 @@ export class PresentationSceneController {
         commandId: string;
         op: CameraCommand["op"] | "live_present";
         httpStatus: number | null;
+        code: NonNullable<ApiError["code"]> | null;
       }
     | undefined;
   private binding:
@@ -303,7 +304,12 @@ export class PresentationSceneController {
         ].includes(error.status)
           ? error.status
           : null;
-      this.cameraFailure = { commandId, op: command.op, httpStatus };
+      this.cameraFailure = {
+        commandId,
+        op: command.op,
+        httpStatus,
+        code: error instanceof ApiError ? (error.code ?? null) : null,
+      };
       this.phase = "blocked";
       throw new Error(
         `Camera outcome is unknown (${command.op}${httpStatus === null ? "" : `, HTTP ${httpStatus}`}); inspect its original command without replaying it.`,
@@ -489,7 +495,12 @@ export class PresentationSceneController {
           ].includes(error.status)
             ? error.status
             : null;
-        this.cameraFailure = { commandId, op: "live_present", httpStatus };
+        this.cameraFailure = {
+          commandId,
+          op: "live_present",
+          httpStatus,
+          code: error instanceof ApiError ? (error.code ?? null) : null,
+        };
         this.phase = "blocked";
         throw new Error(
           "Live camera outcome is unknown; reconcile the original command without retrying.",

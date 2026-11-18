@@ -21,13 +21,21 @@ import type {
   SetupTest,
 } from "../../src/contracts.js";
 import { ConnectorTiming, type ConnectorOperation } from "./timing.js";
+import {
+  cameraErrorCodeSchema,
+  type CameraErrorCode,
+} from "../../src/camera-errors.js";
 
 export class ApiError extends Error {
+  readonly code: CameraErrorCode | undefined;
   constructor(
     public status: number,
     message: string,
+    code?: unknown,
   ) {
     super(message);
+    const parsed = cameraErrorCodeSchema.safeParse(code);
+    this.code = parsed.success ? parsed.data : undefined;
   }
 }
 export function validateOrigin(raw: string): string {
@@ -76,31 +84,33 @@ export class ClawdTimeClient {
     });
     if (!response.ok) {
       let reason: string | undefined;
-      if (response.status === 409) {
-        try {
-          const body = (await response.json()) as { errorCode?: unknown };
-          const messages: Record<string, string> = {
-            setup_reserved:
-              "This conversation has an unresolved setup reservation (409). Reconcile its call, media and input cleanup; no new call was requested.",
-            reply_context_stale:
-              "Newer input arrived (409). Poll and acknowledge all queued turns, reconsider the reply, then use the latest expectedCursor. No reply was submitted.",
-            reply_exists:
-              "This turn already has a reply (409). Reconcile the original receipt; do not replace its ID or repeat speech or messaging.",
-            interaction_stale:
-              "Newer input or an interruption holds computer control (409). Poll and acknowledge current turns, inspect execution status, and reconsider the action. Do not blindly replay input.",
-            input_context_stale:
-              "Newer input must be read and acknowledged before computer control (409). Poll current turns, inspect execution status, and reconsider the action. No automatic retry is permitted.",
-            input_held:
-              "Incoming speech temporarily holds new computer input (409). Keep polling for finalized instructions; an already-running native action may still finish.",
-          };
-          if (
-            typeof body.errorCode === "string" &&
-            Object.hasOwn(messages, body.errorCode)
-          )
-            reason = messages[body.errorCode];
-        } catch {
-          /* Unknown responses remain redacted. */
-        }
+      let code: ApiError["code"];
+      try {
+        const body = (await response.json()) as { errorCode?: unknown };
+        const cameraCode = cameraErrorCodeSchema.safeParse(body.errorCode);
+        if (cameraCode.success) code = cameraCode.data;
+        const messages: Record<string, string> = {
+          setup_reserved:
+            "This conversation has an unresolved setup reservation (409). Reconcile its call, media and input cleanup; no new call was requested.",
+          reply_context_stale:
+            "Newer input arrived (409). Poll and acknowledge all queued turns, reconsider the reply, then use the latest expectedCursor. No reply was submitted.",
+          reply_exists:
+            "This turn already has a reply (409). Reconcile the original receipt; do not replace its ID or repeat speech or messaging.",
+          interaction_stale:
+            "Newer input or an interruption holds computer control (409). Poll and acknowledge current turns, inspect execution status, and reconsider the action. Do not blindly replay input.",
+          input_context_stale:
+            "Newer input must be read and acknowledged before computer control (409). Poll current turns, inspect execution status, and reconsider the action. No automatic retry is permitted.",
+          input_held:
+            "Incoming speech temporarily holds new computer input (409). Keep polling for finalized instructions; an already-running native action may still finish.",
+        };
+        if (
+          response.status === 409 &&
+          typeof body.errorCode === "string" &&
+          Object.hasOwn(messages, body.errorCode)
+        )
+          reason = messages[body.errorCode];
+      } catch {
+        /* Unknown responses remain redacted. */
       }
       // Do not echo arbitrary provider response bodies or bearer credentials to an agent.
       throw new ApiError(
@@ -111,7 +121,10 @@ export class ClawdTimeClient {
             ? reason
             : response.status === 403
               ? "ClawdTime session or pairing is stopped or unauthorized (403). Inspect scoped status and reconcile pending work before reconnecting; native permissions are unchanged."
-              : `ClawdTime request rejected (${response.status}); inspect doctor or the exact request status before retrying effects.`,
+              : code
+                ? `ClawdTime camera request rejected (${response.status}, ${code}); preserve the original command and inspect scoped status without replaying effects.`
+                : `ClawdTime request rejected (${response.status}); inspect doctor or the exact request status before retrying effects.`,
+        code,
       );
     }
     return response.json() as Promise<T>;

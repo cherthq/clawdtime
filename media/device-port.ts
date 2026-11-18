@@ -8,6 +8,10 @@ import {
 } from "../src/camera-contracts.js";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
+import {
+  CameraOperationError,
+  cameraErrorCodeSchema,
+} from "../src/camera-errors.js";
 import type {
   ControlLease,
   DevicePort,
@@ -52,6 +56,7 @@ export class MediaDevicePort implements DevicePort {
     path: string,
     body?: Wire,
     timeoutMs = 4000,
+    camera = false,
   ): Promise<Wire> {
     const response = await this.request(this.origin + path, {
       method: body ? "POST" : "GET",
@@ -63,7 +68,7 @@ export class MediaDevicePort implements DevicePort {
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    if (!response.ok)
+    if (!response.ok && !camera)
       throw new Error(
         `Media operation refused (${response.status}); reconcile before retrying.`,
       );
@@ -75,7 +80,7 @@ export class MediaDevicePort implements DevicePort {
       const { done, value } = await reader.read();
       if (done) break;
       length += value.length;
-      if (length > 3 * 1024 * 1024) {
+      if (length > (camera && !response.ok ? 1024 : 3 * 1024 * 1024)) {
         await reader.cancel();
         throw new Error("Media response exceeds bound.");
       }
@@ -84,6 +89,12 @@ export class MediaDevicePort implements DevicePort {
     const result: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (!result || typeof result !== "object" || Array.isArray(result))
       throw new Error("Malformed media response.");
+    if (!response.ok) {
+      const code = cameraErrorCodeSchema.safeParse((result as Wire).errorCode);
+      throw new CameraOperationError(
+        code.success ? code.data : "camera_transport_failed",
+      );
+    }
     return result as Wire;
   }
   /** Registered-helper metadata only: this does not grant, arm or capture. */
@@ -144,17 +155,29 @@ export class MediaDevicePort implements DevicePort {
       throw new Error("Media lease binding mismatch.");
   }
   async cameraStatus(lease: ControlLease) {
-    return cameraStatusSchema.parse(
-      await this.api(this.path(lease, "/camera")),
-    );
+    try {
+      return cameraStatusSchema.parse(
+        await this.api(this.path(lease, "/camera"), undefined, 4000, true),
+      );
+    } catch (error) {
+      throw error instanceof CameraOperationError
+        ? error
+        : new CameraOperationError("camera_transport_failed");
+    }
   }
   async cameraCommand(lease: ControlLease, command: CameraCommand) {
-    return cameraReceiptSchema.parse(
-      await this.api(
-        this.path(lease, "/camera"),
-        cameraCommandSchema.parse(command),
-      ),
-    );
+    const parsed = cameraCommandSchema.safeParse(command);
+    if (!parsed.success)
+      throw new CameraOperationError("camera_invalid_command");
+    try {
+      return cameraReceiptSchema.parse(
+        await this.api(this.path(lease, "/camera"), parsed.data, 4000, true),
+      );
+    } catch (error) {
+      throw error instanceof CameraOperationError
+        ? error
+        : new CameraOperationError("camera_transport_failed");
+    }
   }
   async resolvePresentation(
     lease: ControlLease,

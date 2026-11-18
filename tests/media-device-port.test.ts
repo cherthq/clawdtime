@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { MediaDevicePort, mediaSessionId } from "../media/device-port.js";
 import type { ControlLease } from "../src/contracts.js";
+import {
+  CAMERA_ERROR_CODES,
+  CameraOperationError,
+} from "../src/camera-errors.js";
 
 const lease = (): ControlLease => ({
   id: "lease_a",
@@ -21,6 +25,96 @@ const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 
 describe("media device port", () => {
+  const cameraCommand = {
+    version: 1 as const,
+    commandId: "overview",
+    op: "overview" as const,
+    expectedRevision: 2,
+    sourceFrameId: "frame",
+    geometryGeneration: "geometry",
+  };
+
+  it.each(CAMERA_ERROR_CODES)(
+    "preserves only bounded camera rejection %s without retry",
+    async (code) => {
+      for (const method of ["status", "command"]) {
+        let calls = 0;
+        const port = new MediaDevicePort(
+          "http://127.0.0.1:4212",
+          "k".repeat(32),
+          (async () => {
+            calls++;
+            return json(
+              { errorCode: code, privateReason: "PRIVATE_TARGET_CONTENT" },
+              409,
+            );
+          }) as typeof fetch,
+        );
+        const error = await (
+          method === "status"
+            ? port.cameraStatus(lease())
+            : port.cameraCommand(lease(), cameraCommand)
+        ).catch((error) => error);
+        expect(error).toBeInstanceOf(CameraOperationError);
+        expect(error.code).toBe(code);
+        expect(String(error)).not.toContain("PRIVATE");
+        expect(Object.keys(error)).toEqual(["code"]);
+        expect(calls).toBe(1);
+      }
+    },
+  );
+
+  it.each(["plain", "unknown", "large", "malformed-success", "transport"])(
+    "sanitizes %s camera failure and preserves unknown outcome",
+    async (kind) => {
+      let calls = 0;
+      const port = new MediaDevicePort(
+        "http://127.0.0.1:4212",
+        "k".repeat(32),
+        (async () => {
+          calls++;
+          if (kind === "transport") throw new Error("PRIVATE_PROVIDER_BODY");
+          if (kind === "plain")
+            return new Response("PRIVATE_PROVIDER_BODY", { status: 409 });
+          if (kind === "large")
+            return json(
+              {
+                errorCode: "camera_frame_stale",
+                privateReason: "x".repeat(1024),
+              },
+              409,
+            );
+          if (kind === "malformed-success")
+            return json({ privateReason: "PRIVATE_PROVIDER_BODY" });
+          return json({ errorCode: "PRIVATE_PROVIDER_BODY" }, 409);
+        }) as typeof fetch,
+      );
+      const error = await port
+        .cameraCommand(lease(), cameraCommand)
+        .catch((error) => error);
+      expect(error).toBeInstanceOf(CameraOperationError);
+      expect(error.code).toBe("camera_transport_failed");
+      expect(String(error)).not.toContain("PRIVATE");
+      expect(calls).toBe(1);
+    },
+  );
+
+  it("refuses invalid camera command before any transport", async () => {
+    let calls = 0;
+    const port = new MediaDevicePort(
+      "http://127.0.0.1:4212",
+      "k".repeat(32),
+      (async () => {
+        calls++;
+        return json({});
+      }) as typeof fetch,
+    );
+    await expect(
+      port.cameraCommand(lease(), { ...cameraCommand, expectedRevision: -1 }),
+    ).rejects.toMatchObject({ code: "camera_invalid_command" });
+    expect(calls).toBe(0);
+  });
+
   it("uses stable attention identity and exact media lease/action wire shapes", async () => {
     const current = lease();
     const calls: { url: string; body: Record<string, unknown> }[] = [];

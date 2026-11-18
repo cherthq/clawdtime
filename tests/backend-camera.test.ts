@@ -23,7 +23,9 @@ import {
 import { HumanRouter } from "../src/control/human-router.js";
 import { Viewing } from "../src/control/viewing.js";
 import { createApp } from "../src/app.js";
-import { mediaSessionId } from "../media/device-port.js";
+import { MediaDevicePort, mediaSessionId } from "../media/device-port.js";
+import { CAMERA_ERROR_CODES } from "../src/camera-errors.js";
+import { cameraCommandSchema } from "../src/camera-contracts.js";
 
 const stores: Store[] = [];
 afterEach(() => {
@@ -449,6 +451,180 @@ const focus = {
   durationMs: 450,
   automatic: false,
 };
+
+describe("bounded camera failure diagnostics", () => {
+  const safeMessage =
+    "Camera operation was not confirmed; inspect the original operation without replaying it.";
+  async function failedCameraResponse(
+    stage: "status" | "command",
+    response: () => Response | Promise<Response>,
+  ) {
+    const f = await cameraFixture();
+    let calls = 0;
+    const port = new MediaDevicePort(
+      "http://127.0.0.1:49999",
+      "k".repeat(32),
+      async () => {
+        calls++;
+        return response();
+      },
+    );
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    if (stage === "status")
+      f.device.beforeStatus = async () => {
+        await port.cameraStatus(lease);
+      };
+    else
+      f.device.beforeCommand = async () => {
+        await port.cameraCommand(lease, cameraCommandSchema.parse(focus));
+      };
+    const result = await f.api(stage === "command" ? focus : undefined);
+    expect(calls).toBe(1);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+    return result;
+  }
+  it.each(CAMERA_ERROR_CODES)(
+    "preserves allowlisted %s across media and HTTP without exposing peer details or retrying",
+    async (code) => {
+      for (const stage of ["status", "command"] as const) {
+        const response = await failedCameraResponse(stage, () =>
+          Response.json(
+            {
+              errorCode: code,
+              error: "private peer details",
+              target: "private window title",
+            },
+            { status: 409 },
+          ),
+        );
+        expect(response.status).toBe(
+          code === "camera_transport_failed" ? 502 : 409,
+        );
+        expect(await response.json()).toEqual({
+          errorCode: code,
+          error: safeMessage,
+        });
+      }
+    },
+  );
+  it.each([
+    "unrecognized_code",
+    "malformed_json",
+    "oversized_error",
+    "invalid_success",
+    "network_failure",
+  ])(
+    "sanitizes %s as an unconfirmed transport outcome without replay",
+    async (failure) => {
+      for (const stage of ["status", "command"] as const) {
+        const response = await failedCameraResponse(stage, () => {
+          if (failure === "network_failure")
+            throw new Error("private connection details");
+          if (failure === "malformed_json")
+            return new Response("private upstream HTML", { status: 503 });
+          if (failure === "oversized_error")
+            return Response.json(
+              { errorCode: "camera_frame_stale", error: "private".repeat(500) },
+              { status: 409 },
+            );
+          if (failure === "invalid_success")
+            return Response.json({ error: "private malformed success" });
+          return Response.json(
+            {
+              errorCode: "private-unrecognized-code",
+              error: "private peer details",
+            },
+            { status: 409 },
+          );
+        });
+        expect(response.status).toBe(502);
+        expect(await response.json()).toEqual({
+          errorCode: "camera_transport_failed",
+          error: safeMessage,
+        });
+      }
+    },
+  );
+  it("keeps arbitrary non-camera exceptions sanitized and does not trust a lookalike error code", async () => {
+    const f = await cameraFixture();
+    let calls = 0;
+    f.device.beforeCommand = async () => {
+      calls++;
+      throw Object.assign(new Error("private peer details"), {
+        code: "camera_frame_stale",
+      });
+    };
+    const response = await f.api(focus);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      errorCode: "camera_transport_failed",
+      error: safeMessage,
+    });
+    expect(calls).toBe(1);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+  it.each(["network", "malformed_policy"])(
+    "labels readiness %s failures without polling or dispatching camera work",
+    async (failure) => {
+      const f = await cameraFixture();
+      let readinessCalls = 0;
+      f.device.beforeReadiness = () => {
+        readinessCalls++;
+        if (failure === "network")
+          throw new Error("private readiness connection detail");
+      };
+      if (failure === "malformed_policy")
+        f.device.readinessOverride = {
+          controlPolicy: "private unrecognized policy",
+        };
+      const response = await f.api(focus);
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        errorCode: "camera_transport_failed",
+        error: safeMessage,
+      });
+      expect(readinessCalls).toBe(1);
+      expect(f.device.statusCalls).toBe(0);
+      expect(f.device.commands).toHaveLength(0);
+      expect(f.device.inputs).toHaveLength(0);
+    },
+  );
+  it.each([
+    "camera_frame_stale",
+    "camera_source_mismatch",
+    "camera_authorization_required",
+    "camera_authority_changed",
+  ])(
+    "labels backend %s without weakening freshness or authority checks",
+    async (code) => {
+      const f = await cameraFixture();
+      if (code === "camera_frame_stale")
+        f.device.statusOverride = { capturedAt: f.clock() - 2001 };
+      if (code === "camera_source_mismatch")
+        f.device.statusOverride = { deviceId: "another-device" };
+      if (code === "camera_authorization_required")
+        f.device.readinessOverride = { armed: false };
+      if (code === "camera_authority_changed")
+        f.device.beforeStatus = () => {
+          const lease = f.store.all<ControlLease>("lease")[0]!;
+          f.store.put("lease", {
+            ...lease,
+            policyRevision: (lease.policyRevision ?? 0) + 1,
+          });
+        };
+      const response = await f.api();
+      expect(response.status).toBe(409);
+      expect((await response.json()).errorCode).toBe(code);
+      expect(f.device.statusCalls).toBe(
+        code === "camera_authorization_required" ? 0 : 1,
+      );
+      expect(f.device.inputs).toHaveLength(0);
+    },
+  );
+});
 
 describe("screen camera authenticated API and existing viewing lease", () => {
   it.each(["readiness", "status", "command"] as const)(
@@ -1494,7 +1670,9 @@ describe("Argos same-chat voice and prepared presentation", () => {
       throw new Error("lost acknowledgement");
     };
     const cmd = f.command("unknown_outcome", "focus", "review");
-    expect((await f.media("camera", cmd)).status).toBe(409);
+    const failed = await f.media("camera", cmd);
+    expect(failed.status).toBe(502);
+    expect((await failed.json()).errorCode).toBe("camera_transport_failed");
     f.device.beforeCommand = undefined;
     const repeated = await (await f.media("camera", cmd)).json();
     expect(repeated).toMatchObject({ accepted: false });

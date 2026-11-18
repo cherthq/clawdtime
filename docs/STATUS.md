@@ -1,3 +1,41 @@
+## November 17, 2026 — final authorized call; camera conflict remains unclassified
+
+The additional explicitly authorized call ran for approximately seven minutes
+(422 seconds from creation to ended). Three finalized spoken turns reached this
+same chat. It ended intentionally with `request_completed`; media failure was
+null. The former 180-second provider disconnect did not recur. This is evidence
+of sustained connection and incoming voice, not complete duplex or handset
+acceptance: the one outgoing report retains an unknown playback receipt.
+
+The prepared walkthrough stopped during its initial camera overview, before
+native ownership or app input. The preceding clear returned, but the overview
+returned HTTP 409; its original command remains unknown and was not replayed.
+A later camera status was live and at overview, which cannot establish the
+original write's outcome. Consequently this call did not exercise the corrected
+exact-window raise sequence or complete the Finder/TextEdit walkthrough.
+
+The investigation found an observability defect: media camera reasons were
+replaced by a generic transport exception, and the backend mapped that exception
+to HTTP 409. The original rejection cannot now be attributed to freshness,
+revision, authority or transport. The repair carries only allowlisted camera
+reason codes from media through the backend to the connector's retained failure.
+Unknown bodies remain redacted; failed writes remain blocked without replay.
+No freshness, authorization, expiry or native execution checks are relaxed.
+
+The controller was joined, its temporary trigger closed, and local Stop visibly
+confirmed. The exact lease is released, executor is none/idle at epoch zero,
+there are no input actions, and the original foreground bridge is closed.
+Both presentation and native-activation admission gates are false. Gate-off
+backend deployment `060afd06-fdaf-4183-acfe-3443886a726f` and media deployment
+`7006906c-8107-4216-a65d-3456bb6c02e6` succeeded; readiness reports zero active
+calls, pending or unknown transport effects, and media reports zero sessions
+with its gateway connected. No further call was placed under this approval.
+
+Validation: `npm run check` passes 1,281 tests in 72 files, typecheck and build.
+The affected Python camera suite passes 43 tests. Independent review of the
+media-to-connector diagnostic path found no blocker; this is not physical
+acceptance of the previously blocked walkthrough.
+
 ## November 17, 2026 — second production call; exact-window follow-up verified locally
 
 Release `1361a2a8cd0c8b0d926ff856fcdedaaf5ea3f511` was pushed and deployed to

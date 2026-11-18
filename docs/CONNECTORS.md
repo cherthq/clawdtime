@@ -1576,8 +1576,15 @@ Scene camera commands include the sampled `contentRevision` so the camera may
 validate a bounded recent same-content frame when capture advances before the
 write arrives. This does not relax native/fallback input frame requirements and
 does not retry a failed write. Failure state exposes only the generated command
-ID, fixed operation name and an allowlisted HTTP status, never upstream exception
-text; a status alone does not prove that a rejected write had no effect.
+ID, fixed operation name, an allowlisted HTTP status and `cameraFailure.code` from
+the closed camera error vocabulary, never upstream exception text. Missing or
+unrecognized codes are `null`. Codes distinguish source/content/presentation
+changes, authorization, identity, rate limits and transport failure. They are
+diagnostics only: failed writes remain unknown and cannot be replayed. A later
+successful camera status does not establish whether the earlier write ran.
+An older failure retained only as HTTP 409 cannot be classified retrospectively;
+the code propagation improves future diagnosis without claiming to fix that
+historical camera conflict.
 
 Validation: `npx vitest run tests/connectors-presentation-scenes.test.ts` covers
 source/witness binding, content/geometry/lease changes, execution races, Stop,

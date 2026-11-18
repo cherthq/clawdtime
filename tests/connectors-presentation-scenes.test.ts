@@ -731,11 +731,61 @@ describe("agent-prepared presentation scenes", () => {
       commandId: f.controller.status().unknownCommandId,
       op: "focus_region",
       httpStatus: 409,
+      code: null,
     });
     expect(JSON.stringify(f.controller.status())).not.toContain(
       "private upstream details",
     );
     expect(f.ports.cameraCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains the bounded overview failure code without replaying an unknown reset", async () => {
+    const f = fixture();
+    const original = f.ports.cameraCommand.getMockImplementation()!;
+    f.ports.cameraCommand.mockImplementation(async (command) => {
+      if (command.op === "overview")
+        throw new ApiError(
+          409,
+          "private upstream details",
+          "camera_presentation_changed",
+        );
+      return original(command);
+    });
+    await expect(f.controller.begin("first")).rejects.toThrow(
+      "overview, HTTP 409",
+    );
+    expect(f.controller.status()).toMatchObject({
+      phase: "blocked",
+      cameraFailure: {
+        op: "overview",
+        httpStatus: 409,
+        code: "camera_presentation_changed",
+      },
+    });
+    expect(f.controller.status().cameraFailure?.commandId).toBe(
+      f.controller.status().unknownCommandId,
+    );
+    expect(JSON.stringify(f.controller.status())).not.toContain(
+      "private upstream details",
+    );
+    expect(() => f.controller.begin("second")).toThrow("unknown");
+    expect(f.ports.cameraCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a bounded live presentation transport code without treating it as a terminal rejection", async () => {
+    const f = fixture(true);
+    await f.controller.begin("first");
+    f.ports.presentLive.mockRejectedValueOnce(
+      new ApiError(503, "private upstream details", "camera_transport_failed"),
+    );
+    await expect(f.controller.presentLive()).rejects.toThrow("unknown");
+    expect(f.controller.status().cameraFailure).toMatchObject({
+      op: "live_present",
+      httpStatus: 503,
+      code: "camera_transport_failed",
+    });
+    expect(() => f.controller.presentLive()).toThrow("unknown");
+    expect(f.ports.presentLive).toHaveBeenCalledTimes(1);
   });
 
   it("stops on an uncertain write and never retries it through present, next or interrupt", async () => {

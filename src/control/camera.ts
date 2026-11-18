@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { CameraOperationError } from "../camera-errors.js";
 import {
   cameraCommandSchema,
   cameraReceiptSchema,
@@ -53,6 +54,7 @@ export class ScreenCamera {
       throw new DomainError(
         409,
         "Screen camera is not enabled for this session.",
+        "camera_not_negotiated",
       );
     const lease = this.service.store
       .all<ControlLease>("lease")
@@ -62,7 +64,11 @@ export class ScreenCamera {
       lease.cameraVersion !== 1 ||
       !isDeepStrictEqual(lease.surface, session.screenCamera.surface)
     )
-      throw new DomainError(409, "An authorized camera surface is required.");
+      throw new DomainError(
+        409,
+        "An authorized camera surface is required.",
+        "camera_authorization_required",
+      );
     if (lease.mode === "view") this.control.checkView(lease.id, lease.memberId);
     else this.control.check(lease.id, lease.memberId);
     return { session, lease };
@@ -72,12 +78,18 @@ export class ScreenCamera {
     const device = this.control.device as typeof this.control.device &
       Partial<PolicyDevice>;
     if (!device.cameraStatus || !device.cameraCommand || !device.readiness)
-      throw new DomainError(409, "Camera peer is unsupported.");
-    const local = localPolicySchema.parse(
-      await device.readiness(
-        before.lease.deviceId,
-        before.lease.memberId,
-        before.lease.displayId,
+      throw new DomainError(
+        409,
+        "Camera peer is unsupported.",
+        "camera_not_negotiated",
+      );
+    const local = await this.peer(async () =>
+      localPolicySchema.parse(
+        await device.readiness!(
+          before.lease.deviceId,
+          before.lease.memberId,
+          before.lease.displayId,
+        ),
       ),
     );
     const after = this.context(token, requestId);
@@ -93,7 +105,11 @@ export class ScreenCamera {
       local.activeLeaseId !== after.lease.id ||
       local.policyRevision !== after.lease.policyRevision
     )
-      throw new DomainError(409, "Fresh camera peer authorization required.");
+      throw new DomainError(
+        409,
+        "Fresh camera peer authorization required.",
+        "camera_authorization_required",
+      );
     return after;
   }
   private validate(status: unknown, lease: ControlLease): CameraStatus {
@@ -104,7 +120,11 @@ export class ScreenCamera {
       result.leaseId !== lease.id ||
       !isDeepStrictEqual(result.surface, lease.surface)
     )
-      throw new DomainError(409, "Camera source binding mismatch.");
+      throw new DomainError(
+        409,
+        "Camera source binding mismatch.",
+        "camera_source_mismatch",
+      );
     const now = this.service.clock();
     if (
       result.state === "live" &&
@@ -116,15 +136,41 @@ export class ScreenCamera {
         result.capturedAt > now + 250 ||
         now - result.capturedAt > 2000)
     )
-      throw new DomainError(409, "Camera frame is stale.");
+      throw new DomainError(
+        409,
+        "Camera frame is stale.",
+        "camera_frame_stale",
+      );
     return result;
+  }
+  private async peer<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof DomainError) throw error;
+      const code =
+        error instanceof CameraOperationError
+          ? error.code
+          : "camera_transport_failed";
+      throw new DomainError(
+        code === "camera_transport_failed" ? 502 : 409,
+        "Camera operation was not confirmed; inspect the original operation without replaying it.",
+        code,
+      );
+    }
   }
   async status(token: string | AgentSession, requestId: string) {
     const before = await this.ready(token, requestId);
-    const raw = await this.control.device.cameraStatus!(before.lease);
+    const raw = await this.peer(() =>
+      this.control.device.cameraStatus!(before.lease),
+    );
     const after = this.context(token, requestId);
     if (!sameCameraAuthority(before.lease, after.lease))
-      throw new DomainError(409, "Camera authority changed.");
+      throw new DomainError(
+        409,
+        "Camera authority changed.",
+        "camera_authority_changed",
+      );
     return this.validate(raw, after.lease);
   }
   async command(token: string | AgentSession, requestId: string, raw: unknown) {
@@ -132,7 +178,9 @@ export class ScreenCamera {
     const before = await this.ready(token, requestId);
     // Media serializes revision, frame, rate and dedupe checks with its frame lock.
     const receipt = cameraReceiptSchema.parse(
-      await this.control.device.cameraCommand!(before.lease, command),
+      await this.peer(() =>
+        this.control.device.cameraCommand!(before.lease, command),
+      ),
     );
     const after = this.context(token, requestId);
     if (
@@ -142,6 +190,7 @@ export class ScreenCamera {
       throw new DomainError(
         409,
         "Camera acknowledgement changed; read status before proceeding.",
+        "camera_authority_changed",
       );
     return receipt;
   }
