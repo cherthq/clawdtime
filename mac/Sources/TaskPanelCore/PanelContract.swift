@@ -97,6 +97,15 @@ public struct PanelTask: Codable, Equatable {
   public let updatedAt: Double
 }
 public struct PanelSnapshot: Codable, Equatable {
+  public struct CallFlow: Codable, Equatable {
+    public let state: String
+    public let message: String
+    public func validate() throws {
+      guard state.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil,
+        !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, message.count <= 2000,
+        !message.unicodeScalars.contains(where: { $0.value < 32 && $0 != "\n" && $0 != "\t" }) else { throw PanelFailure.response }
+    }
+  }
   public struct Controls: Codable, Equatable {
     public let controlId: String?
     public let sharingActive: Bool
@@ -119,6 +128,7 @@ public struct PanelSnapshot: Codable, Equatable {
   public let task: PanelTask?
   public let controls: Controls
   public let operations: [PanelOperation]
+  public let callFlow: CallFlow?
 
   public func validate(configuration: PanelConfiguration) throws {
     guard version == 1, desktopId == configuration.desktopId, PanelConfiguration.identity(instanceId),
@@ -135,6 +145,7 @@ public struct PanelSnapshot: Codable, Equatable {
         task.checks.allSatisfy({ $0.name.count <= 500 && $0.state.count <= 100 && $0.summary.count <= 8000 }),
         task.updatedAt.isFinite else { throw PanelFailure.response }
     }
+    try callFlow?.validate()
     try task?.decision?.validate()
     for operation in operations { try operation.validate() }
   }
@@ -207,6 +218,13 @@ public struct PanelState {
   public func decisionOption(at index: Int) -> String? {
     guard allows(.decide), let options = snapshot?.task?.decision?.options, options.indices.contains(index) else { return nil }
     return options[index]
+  }
+  public var callStatus: String {
+    if snapshot?.controls.callActive == true {
+      return snapshot?.controls.sharingActive == true ? "Call active · sharing" : "Call active"
+    }
+    if snapshot?.controls.sharingActive == true { return "Sharing active" }
+    return snapshot?.callFlow?.message ?? "No active call"
   }
   public var stage: String {
     guard let task = snapshot?.task else { return "Ready when you are" }

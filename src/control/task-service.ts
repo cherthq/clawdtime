@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import { z } from "zod";
+import { unresolvedDesktopCallAdmissions } from "../attention/task-desktop-call-ledger.js";
 import type {
   IndependentTaskSession,
   Pairing,
@@ -174,6 +175,12 @@ export class TaskService {
           tasks.some((task) => task.id === record.receipt.taskId),
       );
     const blockedReasons: string[] = [];
+    if (
+      unresolvedDesktopCallAdmissions(this.store, this.vault).some(
+        (r) => r.sessionId === sessionId && r.state === "unknown",
+      )
+    )
+      blockedReasons.push("desktop_call_reconciliation_required");
     if (voices.length) blockedReasons.push("voice_cleanup_required");
     if (
       tasks.some(

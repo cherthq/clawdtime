@@ -1099,6 +1099,25 @@ or omitting the flag does not silently rebind an existing desktop. This enables 
 explicit idle ownership handoff to the handset operator using the same session;
 it does not perform a handoff, stop a service, start a call, or authorize export.
 
+For the opt-in prepared-call integration, also supply `--calls-config
+/absolute/private/desktop-calls.json` with `--worker codex`, an explicit checks
+file, and `--session-file`. This static configuration follows
+`src/control/task-desktop-calls-config.ts`: provider/LiveKit file references,
+inspector and helper paths, a private attempt root, and exact native destination
+and line-readiness configuration. Its bounded owner-only bytes are hashed into
+the desktop binding; the file and its parent must be private and outside the
+worker project. Only its path is passed to the service. Configuring or reopening
+the launcher does not start a provider, capture, allocate a room, or request a call.
+
+Each prepared call separately requires an operator-authorized request to
+`POST /operator/desktop-calls`, bound to the current task/run/revision and fresh
+prepared presentation. The panel credential cannot authorize it. A new final
+review requires a new authorization; a static config is never a recurring call
+grant. Per-call requests do not change the desktop fingerprint, UI token, or
+service owner. Changing the static configuration refuses attachment to the old
+binding instead of silently upgrading its authority. No live readiness or handset
+acceptance is implied by this launcher option.
+
 `desktop-launch.lock` serializes launcher startup; the service retains its own
 `owner.lock`. An unreachable existing service, mismatched configuration, or stale
 lock is a refusal, not permission to start another worker or remove ownership.

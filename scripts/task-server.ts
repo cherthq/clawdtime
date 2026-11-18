@@ -31,6 +31,8 @@ import {
   taskPresentationGrantSchema,
 } from "../src/task-presentation-contracts.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
+import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
+import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
   prepareTaskDesktop,
   writeDesktopPrivateJSON,
@@ -53,6 +55,7 @@ for (let i = 2; i < process.argv.length; i += 2) {
       "--presentation-config",
       "--desktop",
       "--session-file",
+      "--calls-config",
     ].includes(key)
   )
     throw new Error(
@@ -66,6 +69,19 @@ if (flags.has("--desktop") && flags.get("--desktop") !== "true")
   );
 if (flags.has("--session-file") && !flags.has("--desktop"))
   throw Error("An attached session requires --desktop true.");
+if (
+  flags.has("--calls-config") &&
+  (!flags.has("--desktop") ||
+    !flags.has("--session-file") ||
+    flags.get("--worker") !== "codex")
+)
+  throw Error(
+    "Desktop calls require an explicit Codex desktop and existing paired session.",
+  );
+if (flags.has("--calls-config") && flags.has("--presentation-config"))
+  throw Error(
+    "Use either local presentation or the scoped desktop call runtime.",
+  );
 if (!flags.has("--state") || !flags.has("--project"))
   throw new Error(
     "An explicit private state directory and selected project are required.",
@@ -175,10 +191,13 @@ const engine = realWorker
       JSON.parse(checksBytes!.toString("utf8")) as VerificationPlan,
     )
   : undefined;
+let calls: TaskDesktopCalls | undefined;
+const voices = new TaskVoiceLedger(store, vault, ledger);
 const voice = new TaskVoiceService(
   service,
-  new TaskVoiceLedger(store, vault, ledger),
+  voices,
   engine,
+  () => calls?.presentationPort,
 );
 let presentation: TaskPresentationService | undefined;
 if (flags.has("--presentation-config")) {
@@ -219,12 +238,27 @@ if (flags.has("--presentation-config")) {
     prepared,
   );
 }
+const callsPath = flags.has("--calls-config")
+  ? resolve(flags.get("--calls-config")!)
+  : undefined;
+const callsBytes = callsPath ? readDesktopPrivateBytes(callsPath) : undefined;
+const callsConfig = callsBytes
+  ? desktopCallsConfigSchema.parse(JSON.parse(callsBytes.toString("utf8")))
+  : undefined;
+if (
+  callsConfig &&
+  Object.values(
+    callsConfig.ports ?? { task: 13323, media: 3322, stop: 13324 },
+  ).includes(port)
+)
+  throw Error("Desktop and call runtime ports must be distinct.");
 const desktopSetup = flags.has("--desktop")
   ? prepareTaskDesktop(service, {
       directory,
       projectRoot,
       worker: realWorker ? "codex" : "simulation",
       port,
+      ...(callsPath ? { callsPath, callsBytes } : {}),
       ...(flags.has("--session-file")
         ? { sessionPath: resolve(flags.get("--session-file")!) }
         : {}),
@@ -233,9 +267,31 @@ const desktopSetup = flags.has("--desktop")
         : {}),
     })
   : undefined;
+if (callsConfig && desktopSetup && engine) {
+  calls = new TaskDesktopCalls(service, engine, voices, voice, {
+    config: callsConfig,
+    configPath: callsPath!,
+    stateDirectory: directory,
+    projectRoot,
+    sessionPath: resolve(flags.get("--session-file")!),
+    sessionToken: desktopSetup.config.sessionToken,
+    checksPath: resolve(flags.get("--checks")!),
+    operatorToken: config.operatorToken,
+  });
+}
 const desktop = desktopSetup
-  ? new TaskDesktopService(service, engine, desktopSetup.config)
+  ? new TaskDesktopService(
+      service,
+      engine,
+      desktopSetup.config,
+      calls,
+      () =>
+        !calls?.ledger
+          .unresolved()
+          .some((r) => ["starting", "unknown"].includes(r.state)),
+    )
   : undefined;
+if (calls && desktop) calls.selectedTaskId = () => desktop.selectedTaskId();
 const app = createTaskApp(
   service,
   config.operatorToken,
@@ -244,6 +300,7 @@ const app = createTaskApp(
   presentation,
   undefined,
   desktop,
+  calls,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
@@ -257,7 +314,7 @@ const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
       desktopSetup.descriptor,
     );
   console.log(
-    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${calls ? "Desktop calls configured but dormant; each exact prepared result requires fresh operator authorization." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
   );
 });
 let shuttingDown = false;
@@ -267,6 +324,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     shuttingDown = true;
     if (presentationWatch) clearInterval(presentationWatch);
     void (async () => {
+      await calls?.close();
       await presentation?.close();
       await engine?.close();
       server.close(() => {

@@ -9,6 +9,7 @@ import type { TaskEngine } from "./task-engine.js";
 import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
+import type { TaskDesktopCalls } from "./task-desktop-calls.js";
 
 export function createTaskApp(
   service: TaskService,
@@ -18,6 +19,7 @@ export function createTaskApp(
   presentation?: TaskPresentationService,
   handset?: { taskId: string; voiceId: string; presentationId?: string },
   desktop?: TaskDesktopService,
+  calls?: TaskDesktopCalls,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -101,6 +103,17 @@ export function createTaskApp(
     );
     app.post("/desktop/operations", async (c) =>
       c.json(await desktop.submit(credential(c), await c.req.json())),
+    );
+  }
+  if (calls) {
+    app.use("/operator/desktop-calls", async (c, next) => {
+      if (!equal(bearer(c.req.header("authorization")), operatorToken))
+        return c.json({ error: "Operator authorization required." }, 401);
+      await next();
+    });
+    app.get("/operator/desktop-calls", (c) => c.json(calls.status()));
+    app.post("/operator/desktop-calls", async (c) =>
+      c.json(calls.request(await c.req.json()), 202),
     );
   }
   if (presentation) {

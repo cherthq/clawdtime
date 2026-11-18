@@ -22,6 +22,7 @@ export function desktopConfigurationFingerprint(value: {
   checksFingerprint: string | null;
   port: number;
   sessionFingerprint?: string;
+  callsFingerprint?: string;
 }) {
   return createHash("sha256")
     .update(
@@ -32,6 +33,9 @@ export function desktopConfigurationFingerprint(value: {
         port: value.port,
         ...(value.sessionFingerprint
           ? { sessionFingerprint: value.sessionFingerprint }
+          : {}),
+        ...(value.callsFingerprint
+          ? { callsFingerprint: value.callsFingerprint }
           : {}),
       }),
     )
@@ -89,12 +93,16 @@ export function prepareTaskDesktop(
     checksBytes?: Buffer;
     sessionPath?: string;
     sessionBytes?: Buffer;
+    callsPath?: string;
+    callsBytes?: Buffer;
   },
 ) {
   const { directory, projectRoot, worker, port } = input;
-  for (const path of [input.checksPath, input.sessionPath].filter(
-    (p): p is string => !!p,
-  )) {
+  for (const path of [
+    input.checksPath,
+    input.sessionPath,
+    input.callsPath,
+  ].filter((p): p is string => !!p)) {
     const part = relative(projectRoot, realpathSync(path));
     if (
       part === "" ||
@@ -128,6 +136,15 @@ export function prepareTaskDesktop(
     projectRoot,
     worker,
     port,
+    ...(input.callsPath
+      ? {
+          callsFingerprint: createHash("sha256")
+            .update(
+              input.callsBytes ?? readDesktopPrivateBytes(input.callsPath),
+            )
+            .digest("hex"),
+        }
+      : {}),
     ...(sessionBytes
       ? {
           sessionFingerprint: createHash("sha256")

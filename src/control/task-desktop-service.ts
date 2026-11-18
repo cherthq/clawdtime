@@ -84,6 +84,7 @@ export interface DesktopControlPort {
   snapshot(): DesktopControls;
   stopSharing(controlId: string, eventId: string): Promise<void>;
   stopCall(controlId: string, eventId: string): Promise<void>;
+  status?(): { state: string; message: string };
 }
 export interface DesktopServiceConfig {
   desktopId: string;
@@ -184,6 +185,9 @@ export class TaskDesktopService {
     return pointer
       ? this.service.ledger.get(this.sessionId, pointer.taskId)
       : this.service.ledger.list(this.sessionId).at(-1);
+  }
+  selectedTaskId() {
+    return this.current()?.id;
   }
   private unresolvedTaskOperation() {
     return this.owned().some(
@@ -315,6 +319,22 @@ export class TaskDesktopService {
             .blockedReasons.length),
       task: task ? this.projectTask(task) : null,
       controls: this.controlSnapshot(),
+      ...(this.controls?.status
+        ? {
+            callFlow: (() => {
+              try {
+                const { state, message } = this.controls!.status!();
+                return { state, message };
+              } catch {
+                return {
+                  state: "unavailable",
+                  message:
+                    "Call readiness is unavailable. Existing Stop controls remain available.",
+                };
+              }
+            })(),
+          }
+        : {}),
       operations: this.owned()
         .filter((r) => ["pending", "unknown"].includes(r.state))
         .slice(-32)

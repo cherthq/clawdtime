@@ -84,6 +84,16 @@ export class TaskPresentationService {
       sessionId = credential.sessionId;
     } else sessionId = this.tasks.authenticate(raw).id;
     const record = this.ledger.get(sessionId, presentationId);
+    if (
+      record.id !== this.authorized.manifest.id ||
+      taskPresentationFingerprint(record.manifest) !==
+        taskPresentationFingerprint(this.authorized.manifest) ||
+      record.grant.id !== this.authorized.grant.id
+    )
+      throw new DomainError(
+        403,
+        "Presentation is outside this exact host binding.",
+      );
     if (record.manifest.taskId !== taskId)
       throw new DomainError(403, "Presentation belongs to another task.");
     return record;
@@ -424,6 +434,7 @@ export class TaskPresentationService {
   /** Periodic task invalidation stops capture; it never starts another operation. */
   async reconcile() {
     for (const r of this.ledger.unresolved()) {
+      if (r.id !== this.authorized.manifest.id) continue;
       try {
         this.artifacts(r);
       } catch {
@@ -435,6 +446,7 @@ export class TaskPresentationService {
     await Promise.allSettled(
       this.ledger
         .unresolved()
+        .filter((r) => r.id === this.authorized.manifest.id)
         .map((r) => this.stopOwned(r, "shutdown_" + hash(r.id))),
     );
   }

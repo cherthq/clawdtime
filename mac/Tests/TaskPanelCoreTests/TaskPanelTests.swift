@@ -25,7 +25,7 @@ final class TaskPanelTests: XCTestCase {
         summary: "An authoritative summary", decision: nil,
         checks: [.init(name: "Fixture check", state: "failed", summary: "A real failure")],
         canDecide: true, canAccept: true, canCancel: true, updatedAt: 1),
-      controls: .init(controlId: "control_fixture", sharingActive: true, callActive: true, canStopSharing: true, canStopCall: true), operations: [])
+      controls: .init(controlId: "control_fixture", sharingActive: true, callActive: true, canStopSharing: true, canStopCall: true), operations: [], callFlow: nil)
   }
   func operation(_ id: String, action: PanelAction? = .submit, state: String) -> PanelOperation {
     PanelOperation(eventId: id, action: action, state: state, message: "Synthetic receipt", taskId: nil, resultRevision: nil)
@@ -52,6 +52,27 @@ final class TaskPanelTests: XCTestCase {
       XCTAssertThrowsError(try PanelTask.Decision(question: "Which?", options: invalid).validate())
     }
     try PanelTask.Decision(question: "Free text?", options: nil).validate()
+  }
+  func testCallFlowIsOptionalBoundedAndNeverGrantsAnAction() throws {
+    let original = snapshot()
+    var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
+    object.removeValue(forKey: "callFlow")
+    let old = try JSONDecoder().decode(PanelSnapshot.self, from: JSONSerialization.data(withJSONObject: object))
+    try old.validate(configuration: config()); XCTAssertNil(old.callFlow)
+    object["callFlow"] = ["state": "awaiting_call_authorization", "message": "A fresh call authorization is required."]
+    object["controls"] = ["controlId": NSNull(), "callActive": false, "sharingActive": false, "canStopSharing": false, "canStopCall": false]
+    let ready = try JSONDecoder().decode(PanelSnapshot.self, from: JSONSerialization.data(withJSONObject: object))
+    try ready.validate(configuration: config())
+    var state = PanelState(); state.connected = true; state.snapshot = ready
+    XCTAssertEqual(state.callStatus, "A fresh call authorization is required.")
+    XCTAssertFalse(state.allows(.stopCall)); XCTAssertFalse(state.allows(.stopSharing))
+    object["controls"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original.controls))
+    state.snapshot = try JSONDecoder().decode(PanelSnapshot.self, from: JSONSerialization.data(withJSONObject: object))
+    XCTAssertEqual(state.callStatus, "Call active · sharing")
+    XCTAssertTrue(state.allows(.stopCall))
+    XCTAssertThrowsError(try PanelSnapshot.CallFlow(state: String(repeating: "x", count: 101), message: "Waiting").validate())
+    XCTAssertThrowsError(try PanelSnapshot.CallFlow(state: "preparing", message: String(repeating: "x", count: 2001)).validate())
+    XCTAssertThrowsError(try PanelSnapshot.CallFlow(state: "unknown", message: " ").validate())
   }
   func testPendingTaskDoesNotDisableIndependentStopControls() throws {
     var state = PanelState(); state.snapshot = snapshot(); state.connected = true

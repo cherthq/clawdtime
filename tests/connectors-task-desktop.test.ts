@@ -154,6 +154,188 @@ function fixture() {
   };
 }
 
+function callsFixture() {
+  const f = fixture();
+  const sessionFile = join(f.state, "session.json"),
+    checksFile = join(f.state, "checks.json"),
+    callsFile = join(f.state, "calls.json");
+  f.write(sessionFile, { token: "synthetic_session_".repeat(4) });
+  f.write(checksFile, [
+    { name: "synthetic check", command: ["/usr/bin/true"] },
+  ]);
+  const uuid = "00000000-0000-4000-8000-000000000001";
+  const config = {
+    version: 1,
+    providerFile: join(f.state, "provider.json"),
+    livekitFile: join(f.state, "livekit.json"),
+    inspectorBundle: join(f.state, "inspector.mjs"),
+    python: "/synthetic/python",
+    helperBinary: "/synthetic/helper",
+    attemptRoot: join(f.state, "attempts"),
+    native: {
+      callsOrigin: "https://calls.example.invalid",
+      projectId: "synthetic_project",
+      projectKey: "synthetic_private_project_key",
+      recipient: "synthetic_recipient",
+      lineId: uuid,
+    },
+    destination: {
+      pairingId: "synthetic_pairing",
+      memberId: "synthetic_member",
+      deviceId: "synthetic_device",
+      lineId: uuid,
+      recipientHash: "a".repeat(64),
+    },
+    railway: {
+      binary: "/synthetic/railway",
+      projectId: uuid,
+      environmentId: uuid,
+      backendServiceId: uuid,
+      deploymentId: uuid,
+      restoreRecord: join(f.state, "restore.json"),
+    },
+  };
+  f.write(callsFile, config);
+  const digest = (path: string) =>
+    createHash("sha256").update(readFileSync(path)).digest("hex");
+  const expected = desktopConfigurationFingerprint({
+    projectRoot: f.project,
+    worker: "codex",
+    checksFingerprint: digest(checksFile),
+    port: 13326,
+    sessionFingerprint: digest(sessionFile),
+    callsFingerprint: digest(callsFile),
+  });
+  f.descriptor.worker = f.stateResponse.worker = "codex";
+  f.stateResponse.mode = "standby";
+  f.descriptor.configurationFingerprint =
+    f.panel.configurationFingerprint =
+    f.stateResponse.configurationFingerprint =
+      expected;
+  const baseArgs = [
+    "--worker",
+    "codex",
+    "--checks",
+    checksFile,
+    "--session-file",
+    sessionFile,
+  ];
+  return {
+    ...f,
+    config,
+    callsFile,
+    baseArgs,
+    runCalls: (path = callsFile) =>
+      f.run([...baseArgs, "--calls-config", path]),
+  };
+}
+
+describe("dormant desktop calls configuration", () => {
+  it("preserves the original no-calls fingerprint", () => {
+    const value = {
+      projectRoot: "/synthetic/project",
+      worker: "simulation" as const,
+      checksFingerprint: null,
+      port: 13326,
+    };
+    expect(desktopConfigurationFingerprint(value)).toBe(
+      createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+    );
+  });
+  it("passes only the protected path and reopens one unchanged owner using GET only", async () => {
+    const f = callsFixture();
+    await f.runCalls();
+    expect(f.spawnMock.mock.calls[0]![1].slice(-2)).toEqual([
+      "--calls-config",
+      f.callsFile,
+    ]);
+    expect(f.spawnMock.mock.calls.map(([command]) => command)).toEqual([
+      process.execPath,
+      f.binary,
+    ]);
+    await f.runCalls();
+    expect(f.spawnMock.mock.calls.map(([command]) => command)).toEqual([
+      process.execPath,
+      f.binary,
+      f.binary,
+    ]);
+    for (const call of f.request.mock.calls as unknown as Array<
+      [string, RequestInit]
+    >) {
+      expect(call[0]).toBe(`${f.origin}/desktop/state`);
+      expect(call[1].method ?? "GET").toBe("GET");
+    }
+    for (const privateValue of [
+      f.config.native.projectKey,
+      f.config.native.recipient,
+    ]) {
+      expect(JSON.stringify(f.spawnMock.mock.calls)).not.toContain(
+        privateValue,
+      );
+      expect(JSON.stringify(f.print.mock.calls)).not.toContain(privateValue);
+    }
+    expect(JSON.parse(readFileSync(f.panelPath, "utf8")).desktopId).toBe(
+      f.panel.desktopId,
+    );
+  });
+  it("refuses changed configuration without starting another owner or requesting a call", async () => {
+    const f = callsFixture();
+    await f.runCalls();
+    f.write(f.callsFile, {
+      ...f.config,
+      helperBinary: "/synthetic/other-helper",
+    });
+    await expect(f.runCalls()).rejects.toThrow("cannot be authenticated");
+    expect(f.spawnMock).toHaveBeenCalledTimes(2);
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+  it.each(["simulation", "missing-session"])(
+    "requires explicit runtime prerequisites: %s",
+    async (kind) => {
+      const f = callsFixture();
+      const args = kind === "simulation" ? [] : f.baseArgs.slice(0, 4);
+      await expect(
+        f.run([...args, "--calls-config", f.callsFile]),
+      ).rejects.toThrow("requires Codex");
+      expect(f.spawnMock).not.toHaveBeenCalled();
+      expect(f.request).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "mode",
+    "parent-mode",
+    "symlink",
+    "project",
+    "oversized",
+    "invalid",
+    "extra-field",
+  ])(
+    "refuses unsafe calls configuration %s before any child or request",
+    async (kind) => {
+      const f = callsFixture();
+      let path = f.callsFile;
+      if (kind === "mode") chmodSync(path, 0o644);
+      if (kind === "parent-mode") chmodSync(f.state, 0o755);
+      if (kind === "symlink") {
+        path = join(f.state, "calls-link.json");
+        symlinkSync(f.callsFile, path);
+      }
+      if (kind === "project") {
+        path = join(f.project, "calls.json");
+        f.write(path, f.config);
+      }
+      if (kind === "oversized")
+        writeFileSync(path, " ".repeat(65537), { mode: 0o600 });
+      if (kind === "invalid") f.write(path, { version: 2 });
+      if (kind === "extra-field")
+        f.write(path, { ...f.config, userAuthorizedOneCall: true });
+      await expect(f.runCalls(path)).rejects.toThrow();
+      expect(f.spawnMock).not.toHaveBeenCalled();
+      expect(f.request).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("independent desktop service launcher", () => {
   it("binds an explicit existing session by private file bytes without printing its token", async () => {
     const f = fixture();

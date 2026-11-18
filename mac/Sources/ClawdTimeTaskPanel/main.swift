@@ -546,7 +546,7 @@ final class Composer: NSTextView {
     acceptButton.isEnabled = state.allows(.accept); reviseButton.isEnabled = state.allows(.decide)
     cancelButton.isEnabled = state.allows(.cancel)
     stopSharingButton.isEnabled = state.allows(.stopSharing); stopCallButton.isEnabled = state.allows(.stopCall)
-    callLabel.stringValue = snapshot?.controls.callActive == true ? (snapshot?.controls.sharingActive == true ? "Call active · sharing" : "Call active · sharing stopped") : "No active call"
+    callLabel.stringValue = state.callStatus; callLabel.toolTip = state.callStatus
     checks.arrangedSubviews.forEach { checks.removeArrangedSubview($0); $0.removeFromSuperview() }
     for check in task?.checks ?? [] {
       let passed = check.state == "passed", failed = check.state == "failed"

@@ -1597,3 +1597,87 @@ secrets; Python/media are unchanged and were not rerun. The fixture service
 retained the same instance/task, accepted revision 8 and zero unresolved
 operations. No task, call, capture or deployment was initiated. No completed-step
 tag is claimed.
+
+## Desktop-to-call integration in one task owner
+
+The user authorized continuing desktop-created tasks into the prepared call
+flow after `c03d8c8`. Lead owns the reusable attempt runtime, desktop orchestration,
+operator routes, server composition and integration. Connector owns launcher
+configuration and synthetic end-to-end tests. Transport owns encrypted admission
+receipts and presentation-isolation tests. Mac specialist reviews media lifetime
+and adds the small native call-readiness projection. No live call, provider
+connection, credentials inspection or deployment is required for this checkpoint.
+
+The launcher accepts optional protected `--calls-config`, bound into the existing
+desktop fingerprint. It requires explicit Codex/checks and an existing task
+session. No call resources start on launch/reopen. A protected operator request
+supplies a fresh exact-task/run/revision one-call authorization and prepared
+manifest/local view grant. The selected desktop task, opening, verification,
+duration, destination and full normalized request digest are checked; the UI
+credential cannot call the operator route. Separate review calls need separate
+authorization. Preparation is reported in the panel without adding a call-grant
+button or native worker approval bridge.
+
+Extracted the existing handset script into a reusable attempt runtime. Shared
+mode injects the existing store/vault/task engine/voice service and retains the
+same owner lock, desktop identity and UI capability. Scoped voice HTTP, media,
+inspector, monitor and presentation resources retire per attempt. Ending a call
+does not close the parent engine; finalized held instructions still release
+through its single existing voice listener. Standalone script behavior reuses
+the runtime through a thin wrapper. Optional loopback ports remove the prior
+hardcoded-port coupling while preserving scoped route allowlists.
+
+Encrypted call admission precedes all attempt effects. Matching duplicate
+requests read receipts; changed content or reused authorization is rejected.
+Restarted admissions become unknown and fence calls/readiness without replay.
+There is no force-clear recovery endpoint. Uncertain native or presentation
+cleanup retains ownership and original receipts. Static configuration changes
+cannot silently upgrade an existing desktop binding.
+
+Review found and repaired three integration races: Stop during asynchronous
+preparation now latches cancellation before an attempt handle exists; finish
+cannot complete while start/preflight is still running; and presentation cleanup
+and direct access are restricted to the exact manifest/host instead of iterating
+or mutating other historical presentations. Exact unknown presentation cleanup
+prevents claiming finished. Call readiness uses the desktop's durable selected
+task pointer rather than list ordering.
+
+The scope remains prepared-view coding calls. Current exact windows, artifacts
+and export grants must still be prepared before each request; this does not add
+general automatic window setup or unattended dialing. The next live qualification
+needs an explicitly configured paired session, current prepared views, fresh
+per-call authorization and exclusive-line proof. Three complete two-call
+rehearsals and the measured handset targets remain required for d/e tags.
+Validation results follow below.
+
+Validation: final `npm run check` passed **1,237 tests in 73 files in 12.03s**,
+typecheck and build. New tests cover launcher static-config binding; encrypted
+admission/replay/restart; exact-host presentation isolation; and the complete
+HTTP desktop submit → decision → synthetic call → finalized spoken instruction →
+new run → independent verification → fresh review call → acceptance flow. That
+flow preserves desktop/service/session/task identity and keeps the worker alive
+after Stop. All call and worker effects in these new flow tests are explicitly
+synthetic. The actual extracted-runtime regression holds preflight, issues Stop,
+and proves no reserve/prepare/dial occurs after release while the shared
+engine/store/owner remain usable. It mocks external process/provider boundaries.
+
+The first extraction check caught four existing bootstrap tests expecting the
+sanitized pre-runtime failure event; restored that output without treating an
+unknown runtime cleanup as confirmed. Final review also tightened authorization
+ID length to the downstream schema before admission; a 121-character request
+now fails before creating any receipt or runtime effect.
+
+`swift test --package-path mac` passed **58 tests in 0.085s**, including optional
+bounded callFlow decoding and status priority without granting Stop authority.
+The native executable built and `bash mac/scripts/package-task-panel.sh` passed
+local ad-hoc signature verification. The rebuilt UI reconnected to the existing
+local service; its current task was left untouched. This did not restart or
+reconfigure the service or enable calls on its existing local-only binding.
+
+`media/.venv/bin/python -m unittest discover -s media -v` passed **351 tests in
+77.479s**, OK. No Python implementation or provider selection changed. Connector
+independently reviewed/tested launcher and runtime lifetimes; transport approved
+final orchestration, exact authority, recovery and documentation; Mac specialist
+reviewed shared service ownership and cleanup. `git diff --check` passed; lead
+reviewed scope and secrets. No live call, capture, standby deployment or line
+handoff was performed, and no d/e completion tag is claimed.

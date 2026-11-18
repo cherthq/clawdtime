@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { desktopConfigurationFingerprint } from "../src/control/task-desktop-config.js";
+import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import { validateVerificationPlan } from "../src/control/task-verification.js";
 
 const fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
@@ -162,7 +163,7 @@ export async function desktopCli(
   const print = dependencies.print ?? console.log;
   if (!args.length || args[0] === "--help") {
     print(
-      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE]\nSimulation is the default. Closing the panel leaves the service and task running. No calls, capture, or automatic session renewal.",
+      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE]\nSimulation is the default. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
     );
     return;
   }
@@ -179,6 +180,7 @@ export async function desktopCli(
         "--worker",
         "--checks",
         "--session-file",
+        "--calls-config",
         "--panel-binary",
       ].includes(key) ||
       !value ||
@@ -213,6 +215,13 @@ export async function desktopCli(
     throw Error(
       "Codex requires an explicit private verification plan; simulation does not accept checks.",
     );
+  if (
+    options["--calls-config"] &&
+    (worker !== "codex" || !options["--session-file"])
+  )
+    throw Error(
+      "Calls configuration requires Codex, checks, and an explicit existing session file.",
+    );
   const checksPath = options["--checks"]
     ? resolve(options["--checks"])
     : undefined;
@@ -241,6 +250,19 @@ export async function desktopCli(
     }
     sessionFingerprint = createHash("sha256").update(bytes).digest("hex");
   }
+  const callsPath = options["--calls-config"]
+    ? resolve(options["--calls-config"])
+    : undefined;
+  let callsFingerprint: string | undefined;
+  if (callsPath) {
+    const bytes = privateBytes(callsPath, projectRoot);
+    try {
+      desktopCallsConfigSchema.parse(JSON.parse(bytes.toString("utf8")));
+    } catch {
+      throw Error("The explicit desktop calls configuration is invalid.");
+    }
+    callsFingerprint = createHash("sha256").update(bytes).digest("hex");
+  }
   const root =
     dependencies.root ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const panelBinary =
@@ -257,6 +279,7 @@ export async function desktopCli(
     checksFingerprint,
     port,
     ...(sessionFingerprint ? { sessionFingerprint } : {}),
+    ...(callsFingerprint ? { callsFingerprint } : {}),
   });
   const origin = `http://127.0.0.1:${port}`;
   const panelPath = join(state, "desktop-panel.json");
@@ -295,6 +318,7 @@ export async function desktopCli(
       if (worker === "codex")
         serviceArgs.push("--worker", "codex", "--checks", checksPath!);
       if (sessionPath) serviceArgs.push("--session-file", sessionPath);
+      if (callsPath) serviceArgs.push("--calls-config", callsPath);
       serviceChild = spawnProcess(process.execPath, serviceArgs, {
         cwd: root,
         detached: true,

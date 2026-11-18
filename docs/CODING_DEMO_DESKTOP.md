@@ -159,14 +159,14 @@ an idle, confirmed ownership handoff, prepared current views, a fresh call grant
 and the usual exclusive-line checks. The launcher defaults to a local-only
 session; its explicit existing-session option can attach a previously authorized
 paired session, but cannot upgrade a local session to phone access.
-Automatic call dispatch from the standalone launcher is not implemented.
-
-The next integration step is to connect desktop-created tasks to prepared
-decision and final-review calls through the existing coordinator and an
-exclusive service owner. Each call still needs its own authorization and durable
-receipt. The existing explicit operator handoff can exercise the same task, but
-is not the finished desktop-to-call experience. Complete this integration before
-claiming the full step-e runnable result.
+The desktop service now supports prepared decision and final-review calls in the
+same process through opt-in `--calls-config PRIVATE_FILE`. It retains the same
+task engine, session, desktop capability and owner lock throughout both calls;
+no database handoff or panel replacement is needed. Startup is dormant. Each
+call needs a fresh protected operator request bound to the selected task's exact
+run/revision and prepared views. The panel displays readiness and owns Stop;
+its capability cannot authorize calls. See [desktop call integration](CODING_DEMO_DESKTOP_CALLS.md)
+for configuration, operator requests and the remaining physical gates.
 
 ## Validation boundaries
 
