@@ -36,6 +36,13 @@ The affected Python camera suite passes 43 tests. Independent review of the
 media-to-connector diagnostic path found no blocker; this is not physical
 acceptance of the previously blocked walkthrough.
 
+Diagnostic release `4268918b67efa1c437f756fb6539d67511f5c174` is pushed and
+deployed: backend `a97b3f6b-8ebb-456d-a881-66f7f289e6b2`, media
+`ed23c369-6b40-43ba-8ac7-429c119db217`. Both report healthy at that exact
+revision with the two test admission gates disabled. Media has no active sessions
+and its gateway is connected; backend has no active calls or pending/unknown
+transport effects. The Mac companion and gateway were not changed.
+
 ## November 17, 2026 — second production call; exact-window follow-up verified locally
 
 Release `1361a2a8cd0c8b0d926ff856fcdedaaf5ea3f511` was pushed and deployed to
