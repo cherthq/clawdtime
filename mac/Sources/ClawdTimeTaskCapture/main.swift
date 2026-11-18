@@ -41,6 +41,34 @@ private func rectangle(_ value: CGRect) -> [String: Double] {
   return state["screenPermission"] == true && state["onConsole"] == true && state["loginComplete"] == true && state["locked"] == false
 }
 
+/// Diagnostic only: compare the exact SCK ID with independent WindowServer
+/// metadata. Neither witness changes admission or starts capture/Accessibility.
+@MainActor private func windowWitness(_ window: SCWindow) -> [String: Any] {
+  let exact = (CGWindowListCopyWindowInfo(.optionIncludingWindow, window.windowID) as? [[String: Any]] ?? [])
+    .filter { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == window.windowID }
+  let onScreenIDs = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? [])
+    .compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }
+  var result: [String: Any] = ["bounds": rectangle(window.frame), "onScreen": window.isOnScreen,
+    "layerZero": window.windowLayer == 0, "windowServerExactCount": min(exact.count, 1000000),
+    "windowServerOnScreenListed": onScreenIDs.contains(window.windowID),
+    "minimizedStatus": "not_queried_use_local_ui"]
+  if let owner = window.owningApplication,
+    let app = NSRunningApplication(processIdentifier: owner.processID) {
+    result["appHidden"] = app.isHidden
+    result["appTerminated"] = app.isTerminated
+    result["appActive"] = app.isActive
+  }
+  if exact.count == 1, let item = exact.first {
+    result["windowServerOnScreenFlag"] = item[kCGWindowIsOnscreen as String] as? Bool ?? false
+    result["windowServerOwnerMatches"] = (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == window.owningApplication?.processID
+    result["windowServerLayerZero"] = (item[kCGWindowLayer as String] as? NSNumber)?.intValue == 0
+    result["windowServerTitleMatches"] = item[kCGWindowName as String] as? String == window.title
+    if let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+      let rect = CGRect(dictionaryRepresentation: bounds) { result["windowServerBounds"] = rectangle(rect) }
+  }
+  return result
+}
+
 @MainActor private func inspect(_ target: TaskCaptureTarget, _ grant: TaskCaptureGrant) async throws -> (SCWindow, CGRect, Int, Int) {
   guard available(), grant.permits(target, now: Date().timeIntervalSince1970 * 1000),
     CGDisplayIsActive(target.displayId) != 0,
@@ -98,8 +126,9 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
               "exactAppTitleCount": min(exactAppTitle.count, 1000000),
               "exactOnScreenCount": min(exactAppTitle.filter { $0.isOnScreen }.count, 1000000),
               "exactLayerZeroCount": min(exactAppTitle.filter { $0.windowLayer == 0 }.count, 1000000),
-              "exactMatchedGeometry": exactAppTitle.prefix(4).map { ["bounds": rectangle($0.frame), "onScreen": $0.isOnScreen,
-                "layerZero": $0.windowLayer == 0] as [String: Any] }])
+              "queryAppInstances": NSRunningApplication.runningApplications(withBundleIdentifier: appId).prefix(4).map {
+                ["hidden": $0.isHidden, "active": $0.isActive, "terminated": $0.isTerminated] },
+              "exactMatchedGeometry": exactAppTitle.prefix(4).map { windowWitness($0) }])
         }
         guard matches.count == 1, let window = matches.first, let owner = window.owningApplication,
           let app = NSRunningApplication(processIdentifier: owner.processID), let identity = lifetime(app) else { throw ResolutionRefused(reason: "process_identity_unavailable") }

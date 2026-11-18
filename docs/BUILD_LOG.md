@@ -811,3 +811,31 @@ and invalidate old presentation when a new run starts. Prepare a concrete one-ca
 plan before requesting specific visual-call authorization. Decision and review
 calls need distinct fresh authorization and physical evidence. No `step-d-done`
 tag is warranted at this checkpoint.
+
+### Step d — exact-window visibility diagnosis
+
+Local presentation implementation `9308013` is pushed to `demo/coding-flow`.
+After the user reported the prepared windows visible, the exact helper still
+refused them. Added a second metadata-only witness using the same exact window ID
+in WindowServer's CG metadata and onscreen-ID list. Both APIs agree the two
+TextEdit targets exist but are offscreen; exact owner/title/geometry match and the
+app is not hidden or terminated. The Chrome page remains accessible through its
+browser tab, but no exact native window with that title is available. This does
+not establish a permission failure or justify loosening capture admission.
+
+Normal UI inspection and a visible-tab preparation attempt did not resolve the
+native visibility discrepancy; browser control timed out, then recovered without
+creating a confirmed new fixture tab. The original fixture tab is retained. The
+user was asked for one focused observation: click inside the exact TextEdit result
+window on the Mac and leave it frontmost briefly. A bounded metadata-only sample
+still reported no capture-admissible target while awaiting that response. No
+capture, narration, provider connection, worker run or call started.
+
+Diagnostics emit only fixed flags/counts and exact-query window rectangles; no
+unrelated titles, screen pixels or Accessibility lookups are retained in the
+helper. The connector specialist independently approved the final source and
+privacy boundary. Capture admission is unchanged. `npm run check` passed **883
+tests in 60 files** (12.18s), typecheck and build. `cd mac && swift test` passed
+**31 tests**; `swift build --product ClawdTimeTaskCapture` passed (1.41s). Python
+source is unchanged since the **283-test** passing checkpoint. `git diff --check`
+passed. No completed-step tag is added.

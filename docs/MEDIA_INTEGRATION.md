@@ -95,7 +95,11 @@ only permission/console/login/lock booleans and never requests TCC access.
 `{"appId":"com.example.app","title":"Exact selected title"}` and returns
 one bound target or a fixed refusal reason. Query-specific refusal diagnostics
 include only bounded matching counts and exact app/title matching geometry,
-including visibility/layer flags. It never returns unrelated window titles,
+including visibility/layer flags. Exact-ID WindowServer metadata independently
+reports onscreen-list membership, owner/title agreement, bounds, and app hidden
+state. These diagnostics cannot override ScreenCaptureKit admission. Minimized
+state must be inspected through the local UI; this helper performs no Accessibility
+lookup or permission request. It never returns unrelated window titles,
 a window inventory, or pixels. Display-geometry refusal may include only the queried window's bounds
 and active display bounds/IDs; it does not select a replacement target.
 

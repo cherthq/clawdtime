@@ -1,7 +1,8 @@
 # Step d local presentation built; real-window qualification pending
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
-Latest completed step remains `59b8e24`, annotated `step-c1-done`. The Deepgram
+Local implementation checkpoint `9308013` is pushed. Latest completed step remains
+`59b8e24`, annotated `step-c1-done`. The Deepgram
 handset audio test passed and the hosted backend was fully restored. No further
 call or deployment has occurred. The original checkout and drafts are untouched.
 
@@ -18,8 +19,12 @@ TextEdit has actual `app.mjs` and `Verified result.txt`. The latter was reloaded
 from the current verification projection, avoiding obsolete historical worker
 wording. Exact-target native metadata finds the result window but marks it
 `onScreen:false`; permission and console preflight pass. Normal centering and
-Raise actions did not resolve this. The user has been asked to bring these three
-windows onto the current desktop without minimizing them.
+Raise actions did not resolve this. The user reported the windows visible, but an independent exact-ID WindowServer
+check agrees with ScreenCaptureKit that the two TextEdit targets are offscreen.
+App identity/title/bounds match and the app is not hidden or terminated. A focused
+question is pending: click inside the exact result window on the Mac and leave it
+frontmost briefly. Recheck that exact target after the reply; do not assume the
+prior broad visibility answer establishes native capture readiness.
 
 Do not relax the current-Space/exact-window guard or substitute generated pixels.
 Resolve each exact target using `ClawdTimeTaskCapture --resolve-target` with the
