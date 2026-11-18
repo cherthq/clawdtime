@@ -1487,3 +1487,54 @@ approved the UI lifecycle, Stop bindings, draft reuse, asset loading and final
 geometry. Python/media code and interfaces were unchanged and were not rerun;
 their previous 351-test result belongs to `ce72347`. Remaining handset gates are
 still deferred and no new step-completion tag is claimed.
+
+## Desktop motion and dragging
+
+The user requested dragging the notch and animated expansion/retraction between
+the circle and bar, with the text panel sliding down/up. This follows the pushed
+appearance checkpoint `042e12e`. The change is confined to native presentation,
+layout tests and documentation; task/operation contracts, media and backend
+authority remain unchanged. No live call or deployment is involved.
+
+Mac specialist owns the native implementation and motion/layout tests; connector
+independently reviews transition races, drag/control separation and lifecycle.
+Lead integrates, packages and performs the local UI check. The selected design
+uses a shared position for badge/bar/body, screen-bounded group placement, a
+short circle/pill morph, and a clipped body reveal that preserves text size and
+editor state. Rapid changes must settle the latest requested mode; Reduce Motion
+must avoid spatial movement. Validation and local observations follow below.
+
+The native implementation uses one cancellable 290ms eased transition with a
+generation fence. An inert glass shell morphs between circle and pill while the
+real controls crossfade; the body reveals through a top-aligned viewport without
+scaling text. Existing Stop selectors are also available in the application menu
+during motion. Activation preserves either visible compact mode.
+
+Local testing caught an actual drag lifecycle defect: AppKit's `performDrag`
+returns before the gesture ends, so the previous immediate distance check could
+mistake a drag for a click. Replaced this with owned mouse-down/drag/up handling,
+global pointer deltas, a sticky movement threshold, release-time bounds checking
+and continuous body following. No synthetic input or global input monitor was
+added. Independent review approved the corrected implementation.
+
+Validation: `npm run check` passed **1,187 tests in 69 files in 12.72s**, including
+typecheck and build. Final `swift test --package-path mac` passed **56 tests in
+0.092s** and compiled the executable; connector separately passed all **10 layout
+tests** and reviewed event coordinates, click thresholds, release handling,
+transition fencing and unchanged action bindings. The package script rebuilt
+and ad-hoc signed the final app successfully; `git diff --check` passed.
+
+In the rebuilt local app, a circle drag left it minimized, clicking restored the
+body, and a toolbar drag left its controls intact. Rapid body toggles settled in
+the requested expanded mode with the synthetic draft preserved; the draft was
+then cleared and the compact bar left running. Screenshot endpoints and native
+accessibility confirmed the final states. The automation exposes window-cropped
+images without absolute position metadata, so precise drag displacement, live
+body following, animation smoothness and cross-display gestures were not
+physically measured. Reduce Motion is implemented but the user's system setting
+was not changed to qualify it. These limits do not substitute for handset gates.
+
+The fixture service kept the same instance/task, accepted revision 8, and zero
+unresolved operations throughout; no task was submitted. No capture, call,
+provider, deployment or installation setting changed. Python/media were
+unchanged and were not rerun. No step-completion tag is claimed.

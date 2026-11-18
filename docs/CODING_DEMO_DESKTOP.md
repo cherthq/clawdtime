@@ -20,6 +20,13 @@ Use the chevron or **⌘⇧M** to expand/collapse the task body. The minus butto
 expanded view. Moving focus back to an already-visible compact notch preserves
 that compact state.
 
+Drag the notch background or mascot to reposition the companion. The expanded
+task body follows the notch, and circle/bar transitions share the same position
+instead of returning to the default corner. The group stays within the usable
+screen area; expanding near an edge can shift it enough to keep the task body
+readable. Circle/bar changes animate, and the task body slides down/up when
+opened/closed. macOS Reduce Motion removes the spatial animation.
+
 The notch keeps the existing **Stop sharing** and **Stop call** actions. The
 minimized badge exposes them in its context menu. They reflect the actual
 service permissions and stay disabled when unavailable. Minimizing does not

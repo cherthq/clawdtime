@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import TaskPanelCore
+import QuartzCore
 
 private let accent = NSColor(calibratedRed: 0.74, green: 0.82, blue: 1, alpha: 1)
 
@@ -60,6 +61,16 @@ final class Composer: NSTextView {
   private var badge: TaskWindow?
   private var badgeView: MascotBadge?
   private var displayMode: PanelDisplayMode = .expanded
+  private var anchor: CGPoint?
+  private var bodyClip: BodyClipView?
+  private var morph: TaskWindow?
+  private var animationTimer: Timer?
+  private var transition = PanelTransition()
+  private var placingWindows = false
+  private var draggingToolbar = false
+  private var draggingBadge = false
+  private var menuStopSharing: NSMenuItem?
+  private var menuStopCall: NSMenuItem?
   private var expandButton: NSButton!
   private let compactState = label("Ready", size: 12, weight: .medium)
   private var badgeStopSharing: NSMenuItem?
@@ -160,6 +171,12 @@ final class Composer: NSTextView {
     expandMenu.target = self; expandMenu.keyEquivalentModifierMask = [.command, .shift]
     submenu.addItem(withTitle: "Tuck into mascot", action: #selector(minimizeToBadge), keyEquivalent: "w").target = self
     submenu.addItem(.separator())
+    menuStopSharing = submenu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
+    menuStopSharing?.target = self
+    menuStopCall = submenu.addItem(withTitle: "Stop call", action: #selector(stopCall), keyEquivalent: "")
+    menuStopCall?.target = self
+    submenu.autoenablesItems = false
+    submenu.addItem(.separator())
     submenu.addItem(withTitle: "Quit panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = submenu
     let editItem = NSMenuItem(); let edit = NSMenu(title: "Edit")
@@ -231,10 +248,15 @@ final class Composer: NSTextView {
   }
   private func buildWindow() {
     let window = floatingWindow("ClawdTime task panel")
-    let content = GlassSurface(radius: 22); window.contentView = content
+    let content = GlassSurface(radius: 22)
+    let clip = BodyClipView(body: content); window.contentView = clip; bodyClip = clip
     let bar = floatingWindow("ClawdTime toolbar")
     let barContent = GlassSurface(radius: 28); bar.contentView = barContent
-    let image = NSImageView(); image.image = mascotImage(); image.imageScaling = .scaleProportionallyUpOrDown
+    let barDrag = NativeWindowDrag()
+    barDrag.onBegin = { [weak self] in self?.beginToolbarDrag() }
+    barDrag.onEnd = { [weak self] _ in self?.finishToolbarDrag() }
+    barContent.dragGesture = barDrag
+    let image = DragMascotImageView(); image.dragGesture = barDrag; image.image = mascotImage(); image.imageScaling = .scaleProportionallyUpOrDown
     image.widthAnchor.constraint(equalToConstant: 32).isActive = true
     image.heightAnchor.constraint(equalToConstant: 32).isActive = true
     image.setAccessibilityLabel("ClawdTime")
@@ -299,7 +321,8 @@ final class Composer: NSTextView {
     let badgeWindow = floatingWindow("ClawdTime mascot")
     let mascot = MascotBadge(image: mascotImage()); badgeWindow.contentView = mascot
     mascot.restore = { [weak self] in self?.showPanel(nil) }
-    mascot.clampAfterDrag = { [weak self] in self?.clampBadge() }
+    mascot.beginDrag = { [weak self] in self?.beginBadgeDrag() }
+    mascot.clampAfterDrag = { [weak self] in self?.finishBadgeDrag() }
     let menu = NSMenu()
     menu.addItem(withTitle: "Open ClawdTime", action: #selector(showPanel), keyEquivalent: "").target = self
     badgeStopSharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
@@ -310,45 +333,145 @@ final class Composer: NSTextView {
     menu.addItem(withTitle: "Quit panel — keep work running", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
     menu.autoenablesItems = false; mascot.menu = menu
     badge = badgeWindow; badgeView = mascot
+    let shell = floatingWindow("ClawdTime transition")
+    shell.ignoresMouseEvents = true; shell.contentView = GlassSurface(radius: 28)
+    shell.setAccessibilityElement(false); morph = shell
     NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
     placeWindows()
   }
-  private func placeWindows() {
-    guard let screen = toolbar?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
-    toolbar?.setFrame(PanelLayout.toolbar(in: screen.visibleFrame), display: true)
-    panel?.setFrame(PanelLayout.body(in: screen.visibleFrame), display: true)
-    let previous = badge?.frame.width == 0 ? nil : badge?.frame
-    badge?.setFrame(PanelLayout.badge(in: badge?.screen?.visibleFrame ?? screen.visibleFrame, previous: previous), display: true)
+  private func currentScreen() -> NSScreen? {
+    (displayMode == .badge ? badge?.screen : toolbar?.screen) ?? NSScreen.main ?? NSScreen.screens.first
   }
-  private func clampBadge() {
-    guard let badge, let screen = badge.screen ?? NSScreen.main else { return }
-    badge.setFrame(PanelLayout.badge(in: screen.visibleFrame, previous: badge.frame), display: true)
+  private func placeWindows(on sourceScreen: NSScreen? = nil) {
+    guard let screen = sourceScreen ?? currentScreen() else { return }
+    let layout = PanelLayout.placement(in: screen.visibleFrame, anchor: anchor, mode: displayMode)
+    anchor = layout.anchor; placingWindows = true
+    bodyClip?.fullSize = layout.body.size
+    toolbar?.setFrame(layout.toolbar, display: true); panel?.setFrame(layout.body, display: true)
+    badge?.setFrame(layout.badge, display: true)
+    placingWindows = false
   }
-  @objc private func screenChanged(_ notification: Notification) { placeWindows() }
+  private func settleAnimation() {
+    animationTimer?.invalidate(); animationTimer = nil
+    transition.request(displayMode)
+    morph?.orderOut(nil)
+    placeWindows(); applyDisplayMode()
+  }
+  @objc private func screenChanged(_ notification: Notification) { settleAnimation() }
   private func applyDisplayMode() {
     expandButton?.image = NSImage(systemSymbolName: displayMode == .expanded ? "chevron.up" : "chevron.down", accessibilityDescription: nil)
     let expandLabel = displayMode == .expanded ? "Collapse task panel" : "Expand task panel"
     expandButton?.toolTip = expandLabel; expandButton?.setAccessibilityLabel(expandLabel)
-    if displayMode == .badge { panel?.orderOut(nil); toolbar?.orderOut(nil); badge?.orderFrontRegardless() }
+    for window in [toolbar, panel, badge] { window?.alphaValue = 1; window?.ignoresMouseEvents = false }
+    if displayMode == .badge {
+      panel?.orderOut(nil); toolbar?.orderOut(nil); badge?.orderFrontRegardless()
+      // Maintain our own key/main target without activating over another application.
+      if NSApp.isActive { badge?.makeKeyAndOrderFront(nil); badge?.makeMain() }
+    }
     else {
       badge?.orderOut(nil); toolbar?.orderFrontRegardless()
       if displayMode == .expanded { panel?.makeKeyAndOrderFront(nil); panel?.makeMain() }
       else { panel?.orderOut(nil); toolbar?.makeKeyAndOrderFront(nil); toolbar?.makeMain() }
     }
   }
-  @objc private func toggleExpanded(_ sender: Any?) { displayMode = displayMode.toggled; applyDisplayMode() }
-  @objc private func minimizeToBadge(_ sender: Any?) { displayMode = .badge; applyDisplayMode() }
+  private func requestDisplay(_ target: PanelDisplayMode, animated: Bool = true) {
+    // Only one cancellable timer owns geometry. Old callbacks cannot hide newer UI.
+    settleAnimation()
+    let previous = displayMode
+    let sourceScreen = currentScreen() // Choose the visible source, never a hidden wider target.
+    let oldBar = toolbar?.frame ?? .zero, oldBadge = badge?.frame ?? .zero
+    let oldBody = panel?.frame ?? .zero
+    displayMode = target
+    let generation = transition.request(target)
+    placeWindows(on: sourceScreen)
+    guard animated, previous != target, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+      let toolbar, let panel, let badge, let morph else { applyDisplayMode(); return }
+    let finalBar = toolbar.frame, finalBadge = badge.frame, finalBody = panel.frame
+    let changingShape = previous == .badge || target == .badge
+    let fromShell = previous == .badge ? oldBadge : oldBar
+    let toShell = target == .badge ? finalBadge : finalBar
+    let closedBody = NSRect(x: finalBody.minX, y: finalBody.maxY - 1, width: finalBody.width, height: 1)
+    let fromBody = previous == .expanded ? oldBody : closedBody
+    let toBody = target == .expanded ? finalBody : NSRect(x: oldBody.minX, y: oldBody.maxY - 1, width: oldBody.width, height: 1)
+    toolbar.ignoresMouseEvents = changingShape; badge.ignoresMouseEvents = true
+    panel.ignoresMouseEvents = true
+    if changingShape {
+      morph.setFrame(fromShell, display: true); morph.alphaValue = 1; morph.orderFrontRegardless()
+      toolbar.alphaValue = previous == .badge ? 0 : 1
+      badge.alphaValue = previous == .badge ? 1 : 0
+      toolbar.orderFrontRegardless(); badge.orderFrontRegardless()
+    } else { toolbar.orderFrontRegardless(); badge.orderOut(nil) }
+    if previous == .expanded || target == .expanded {
+      placingWindows = true; panel.setFrame(fromBody, display: true); placingWindows = false
+      panel.alphaValue = previous == .expanded ? 1 : 0; panel.orderFrontRegardless()
+    } else { panel.orderOut(nil) }
+    let started = CACurrentMediaTime()
+    let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+      MainActor.assumeIsolated {
+        guard let self, self.transition.accepts(generation) else { timer.invalidate(); return }
+        let progress = min(1, (CACurrentMediaTime() - started) / 0.29)
+        let eased = progress * progress * (3 - 2 * progress)
+        self.placingWindows = true
+        if changingShape {
+          morph.setFrame(PanelLayout.interpolate(fromShell, toShell, progress: progress), display: true)
+          morph.contentView?.layer?.cornerRadius = morph.frame.height / 2
+          // Geometry belongs to the empty shell; text and mascot only crossfade.
+          toolbar.alphaValue = target == .badge ? 1 - eased : eased
+          badge.alphaValue = target == .badge ? eased : 1 - eased
+          morph.alphaValue = 1 - abs(2 * eased - 1)
+        }
+        if previous == .expanded || target == .expanded {
+          panel.setFrame(PanelLayout.interpolate(fromBody, toBody, progress: progress), display: true)
+          panel.alphaValue = target == .expanded ? eased : 1 - eased
+        }
+        self.placingWindows = false
+        if progress >= 1 {
+          timer.invalidate(); self.animationTimer = nil
+          guard self.transition.accepts(generation) else { return }
+          morph.orderOut(nil); self.placeWindows(); self.applyDisplayMode()
+        }
+      }
+    }
+    animationTimer = timer; RunLoop.main.add(timer, forMode: .common)
+  }
+  private func beginToolbarDrag() {
+    settleAnimation(); draggingToolbar = true
+  }
+  private func finishToolbarDrag() {
+    draggingToolbar = false
+    if let toolbar { anchor = CGPoint(x: toolbar.frame.midX, y: toolbar.frame.maxY) }
+    placeWindows()
+  }
+  private func beginBadgeDrag() { settleAnimation(); draggingBadge = true }
+  private func finishBadgeDrag() {
+    draggingBadge = false
+    if let badge { anchor = CGPoint(x: badge.frame.midX, y: badge.frame.maxY) }
+    placeWindows()
+  }
+  func windowDidMove(_ notification: Notification) {
+    guard !placingWindows, animationTimer == nil, let moved = notification.object as? NSWindow else { return }
+    if moved === toolbar && draggingToolbar {
+      anchor = CGPoint(x: moved.frame.midX, y: moved.frame.maxY)
+      if displayMode == .expanded, let panel {
+        placingWindows = true
+        panel.setFrameOrigin(NSPoint(x: moved.frame.midX - panel.frame.width / 2, y: moved.frame.minY - 10 - panel.frame.height))
+        placingWindows = false
+      }
+    } else if moved === badge && draggingBadge { anchor = CGPoint(x: moved.frame.midX, y: moved.frame.maxY) }
+  }
+  @objc private func toggleExpanded(_ sender: Any?) { requestDisplay(displayMode.toggled) }
+  @objc private func minimizeToBadge(_ sender: Any?) { requestDisplay(.badge) }
   @objc func showPanel(_ sender: Any?) {
-    displayMode = .expanded; placeWindows(); applyDisplayMode(); NSApp.activate(ignoringOtherApps: true)
+    requestDisplay(.expanded); NSApp.activate(ignoringOtherApps: true)
   }
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-    displayMode = displayMode.reopened(hasVisibleWindows: flag)
-    placeWindows(); applyDisplayMode(); return true
+    requestDisplay(displayMode.reopened(hasVisibleWindows: flag)); return true
   }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
   func windowShouldClose(_ sender: NSWindow) -> Bool { minimizeToBadge(nil); return false }
   func applicationWillTerminate(_ notification: Notification) {
     DistributedNotificationCenter.default().removeObserver(self); NotificationCenter.default.removeObserver(self)
+    animationTimer?.invalidate(); transition.request(displayMode)
     pollTask?.cancel(); client?.close()
   }
 
@@ -404,6 +527,7 @@ final class Composer: NSTextView {
     stopCallButton.toolTip = state.allows(.stopCall) ? "Stop the existing call without canceling coding work." : "No call is available to stop."
     badgeView?.sharing = sharing
     badgeStopSharing?.isEnabled = state.allows(.stopSharing); badgeStopCall?.isEnabled = state.allows(.stopCall)
+    menuStopSharing?.isEnabled = state.allows(.stopSharing); menuStopCall?.isEnabled = state.allows(.stopCall)
     goal.stringValue = task?.goal ?? "Describe the work. Progress and decisions will appear here."
     goal.toolTip = task?.goal
     summary.stringValue = task?.summary ?? ""
