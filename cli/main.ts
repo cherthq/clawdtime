@@ -38,6 +38,7 @@ import { summarizeReadiness } from "../connectors/shared/readiness.js";
 import { prepareSetup } from "./setup.js";
 import { startSetupSession } from "../connectors/shared/setup-session.js";
 import { retryExistingSetup } from "./setup-retry.js";
+import { taskCli } from "./tasks.js";
 
 function options(args: string[]) {
   const values: Record<string, string> = {};
@@ -51,6 +52,7 @@ function options(args: string[]) {
 }
 export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
+  if (command === "task") return taskCli(args.slice(1));
   if (command === "help" || command === "--help") {
     console.log(
       "ClawdTime internal build (no npm publication implied)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nKeep pairing files private; never pass a credential in command arguments.",

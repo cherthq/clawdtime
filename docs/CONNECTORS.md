@@ -798,3 +798,45 @@ qualify CUA, the other feedback channel, all client surfaces, or inbound FaceTim
 Voice currently uses half-duplex replies: listening pauses while the service
 speaks. Local Stop and supported phone Stop remain available; voice barge-in while
 speech is playing is not claimed.
+# Independent coding task CLI (coding demo, step a)
+
+`npm run cli -- task help` exposes the dedicated local task service. It does not
+attach to the original Codex chat or reuse the original-chat connector credential.
+The service defaults to `http://127.0.0.1:3320`; select another loopback origin with
+`CLAWDTIME_TASK_URL`. Keep service credentials in the environment or an owner-only
+session file, never command arguments.
+
+With an explicitly selected pairing, host, project and operator credential in
+`CLAWDTIME_TASK_TOKEN`, register an independent session:
+
+```sh
+npm run cli -- task register --pairing-id PAIRING_ID --host-id HOST_ID \
+  --project /absolute/selected/project --event-id register-1 \
+  --save /absolute/private/task-session.json
+npm run cli -- task create --session-file /absolute/private/task-session.json \
+  --goal 'Implement the agreed fixture' --event-id submit-1
+npm run cli -- task status --session-file /absolute/private/task-session.json --id TASK_ID
+```
+
+The local simulation launcher creates a protected `operator.json` in its selected
+state directory. Pass `--operator-file /absolute/state/operator.json` on registration
+instead of setting the environment variable. Its `local-demo-pairing` is explicitly
+a local fixture, not a physical phone pairing or live-call authorization.
+
+Registration writes the returned session credential to a mode-600 file and prints
+only the session metadata and file location. All other commands use that file or
+an exact session token in `CLAWDTIME_TASK_TOKEN`. The CLI refuses remote origins,
+credential-bearing URLs and cross-origin session-file reuse.
+
+`task command --id TASK_ID --json JSON --session-file PRIVATE_FILE` submits an
+explicit versioned lifecycle command. Every mutation carries its original event ID
+and commands carry `expectedRevision`; read status before choosing the revision.
+Simulation is explicitly labeled and direct worker results are a simulation-only
+surface. Registration requests no voice, presentation or screen-control authority.
+This CLI never retries a write after a missing response. Preserve the original
+event ID and task/run receipts for reconciliation; a timeout does not mean that
+the service rejected the operation.
+
+The step-a simulation establishes local task lifecycle and restart behavior only.
+It does not establish real Codex execution, microphone dialogue, call delivery or
+handset behavior. Native worker approval requests are never voice approvals.

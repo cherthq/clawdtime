@@ -1,5 +1,144 @@
 /** Versioned boundary; omitted protocolVersion retains v1 behavior. IDs are opaque, credentials never enter response/log objects. */
 export type Adapter = "claude-code" | "codex";
+/** Independent-task v1 is separate from legacy original-chat AgentSession authority. */
+export interface IndependentTaskSession {
+  id: string;
+  version: 1;
+  pairingId: string;
+  memberId: string;
+  deviceId: string;
+  hostId: string;
+  projectRoot: string;
+  createdAt: number;
+  expiresAt: number;
+  revokedAt?: number;
+  permissions: {
+    execute: true;
+    voice: boolean;
+    presentation: false;
+    control: false;
+  };
+}
+export type CodingTaskState =
+  | "queued"
+  | "running"
+  | "verifying"
+  | "needs_decision"
+  | "walkthrough_ready"
+  | "in_call"
+  | "review_ready"
+  | "review_call"
+  | "accepted"
+  | "blocked"
+  | "canceled"
+  | "failed"
+  | "unknown";
+export interface CodingRun {
+  id: string;
+  instruction: string;
+  dispatchId: string;
+  state:
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "blocked"
+    | "canceled"
+    | "unknown";
+  summary?: string;
+  decision?: string;
+  startedAt?: number;
+  endedAt?: number;
+  cancelRequested?: boolean;
+}
+export interface TaskDecision {
+  id: string;
+  question: string;
+  runId: string;
+  answer?: string;
+  eventId?: string;
+}
+export interface TaskVerification {
+  id: string;
+  runId: string;
+  state: "passed" | "failed" | "blocked" | "unknown";
+  checks: Array<{
+    name: string;
+    command: string[];
+    state: "passed" | "failed" | "blocked" | "unknown";
+    exitCode: number | null;
+    summary: string;
+  }>;
+  completedAt: number;
+}
+export interface TaskCall {
+  id: string;
+  runId: string;
+  kind: "decision" | "review";
+  state: "prepared" | "connected" | "ended" | "unanswered" | "unknown";
+  opening: string;
+  simulated: boolean;
+}
+export interface CodingTask {
+  id: string;
+  sessionId: string;
+  revision: number;
+  goal: string;
+  projectRoot: string;
+  state: CodingTaskState;
+  runs: CodingRun[];
+  decision?: TaskDecision;
+  verification?: TaskVerification;
+  call?: TaskCall;
+  verifications: TaskVerification[];
+  calls: TaskCall[];
+  createdAt: number;
+  updatedAt: number;
+}
+export type TaskCommand = { eventId: string; expectedRevision: number } & (
+  | { action: "claim_run"; runId: string }
+  | {
+      action: "run_result";
+      runId: string;
+      dispatchId: string;
+      outcome: "completed" | "failed" | "blocked" | "canceled" | "unknown";
+      summary: string;
+      decision?: string;
+    }
+  | { action: "verify_result"; verification: TaskVerification }
+  | {
+      action: "prepare_call";
+      callId: string;
+      opening: string;
+      simulated: boolean;
+    }
+  | {
+      action: "call_state";
+      callId: string;
+      state: "connected" | "ended" | "unanswered" | "unknown";
+    }
+  | { action: "decide"; runId: string; instruction: string }
+  | { action: "accept"; runId: string }
+  | { action: "cancel" }
+);
+export interface TaskWorkerResult {
+  outcome: "completed" | "failed" | "blocked" | "canceled" | "unknown";
+  summary: string;
+  decision?: string;
+}
+export interface TaskWorker {
+  run(
+    input: {
+      taskId: string;
+      runId: string;
+      revision: number;
+      projectRoot: string;
+      context: string;
+    },
+    emit: (event: { phase: string }) => void,
+    signal: AbortSignal,
+  ): Promise<TaskWorkerResult>;
+}
 export interface Pairing {
   id: string;
   memberId: string;
