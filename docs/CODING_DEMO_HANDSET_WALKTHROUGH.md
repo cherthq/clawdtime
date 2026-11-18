@@ -113,5 +113,6 @@ final-review call requires a fresh prepared result and separate authorization.
 SDK receipts do not prove remote visibility, audibility or clearance. Record the
 human observations separately. Full step d still requires the plan's three
 two-call rehearsals, twenty interruption/zoom trials and measured timing targets.
-Do not tag step d complete or start the desktop step until its acceptance gate
-passes.
+Do not tag step d complete until its acceptance gate passes. The user explicitly
+authorized step-e desktop implementation while deferring these physical gates;
+that implementation does not replace the remaining handset qualification.

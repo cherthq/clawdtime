@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Presentation-only state. None of these transitions sends a service operation.
-public enum PanelDisplayMode: Equatable {
+public enum PanelDisplayMode: Equatable, Sendable {
   case expanded, collapsed, badge
   public var toggled: Self { self == .expanded ? .collapsed : .expanded }
   public func reopened(hasVisibleWindows: Bool) -> Self {
@@ -40,18 +40,24 @@ public enum PanelLayout {
     let groupWidth = mode == .expanded ? bodyWidth : mode == .badge ? badgeSize : barWidth
     let groupHeight = mode == .expanded ? barHeight + 10 + minimumBody : mode == .badge ? badgeSize : barHeight
     let initial = proposed ?? CGPoint(x: safe.midX, y: safe.maxY)
-    let anchor = CGPoint(x: max(safe.minX + groupWidth / 2, min(initial.x, safe.maxX - groupWidth / 2)),
+    let minimumX = mode == .badge ? safe.minX - barWidth / 2 + badgeSize : safe.minX + groupWidth / 2
+    let maximumX = mode == .badge ? safe.maxX - barWidth / 2 : safe.maxX - groupWidth / 2
+    let anchor = CGPoint(x: max(minimumX, min(initial.x, maximumX)),
       y: min(safe.maxY, max(initial.y, safe.minY + groupHeight)))
     let bar = CGRect(x: anchor.x - barWidth / 2, y: anchor.y - barHeight, width: barWidth, height: barHeight)
     let bodyHeight = min(610, max(0, bar.minY - 10 - safe.minY))
     let body = CGRect(x: anchor.x - bodyWidth / 2, y: bar.minY - 10 - bodyHeight, width: bodyWidth, height: bodyHeight)
-    let badge = CGRect(x: anchor.x - badgeSize / 2, y: anchor.y - badgeSize, width: badgeSize, height: badgeSize)
+    let badge = CGRect(x: bar.maxX - badgeSize, y: anchor.y - badgeSize, width: badgeSize, height: badgeSize)
     return PanelPlacement(anchor: anchor, toolbar: bar, body: body, badge: badge)
   }
   public static func toolbar(in visible: CGRect) -> CGRect { placement(in: visible, mode: .expanded).toolbar }
   public static func body(in visible: CGRect) -> CGRect { placement(in: visible, mode: .expanded).body }
   public static func badge(in visible: CGRect, previous: CGRect? = nil) -> CGRect {
-    placement(in: visible, anchor: previous.map { CGPoint(x: $0.midX, y: $0.maxY) }, mode: .badge).badge
+    placement(in: visible, anchor: previous.map { anchor(fromBadge: $0, in: visible) }, mode: .badge).badge
+  }
+  public static func anchor(fromBadge frame: CGRect, in visible: CGRect) -> CGPoint {
+    let toolbarWidth = min(430, max(0, visible.width - 20))
+    return CGPoint(x: frame.maxX - toolbarWidth / 2, y: frame.maxY)
   }
   public static func interpolate(_ from: CGRect, _ to: CGRect, progress: Double) -> CGRect {
     let t = max(0, min(1, progress)), eased = t * t * (3 - 2 * t)

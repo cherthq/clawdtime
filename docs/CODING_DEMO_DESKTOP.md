@@ -8,9 +8,10 @@ is still required. Closing or quitting the panel leaves the service running.
 
 ## Desktop appearance
 
-The companion has a compact dark notch toolbar and an expandable translucent
-task panel. Hide collapses the task details into the toolbar. Minimize leaves a
-draggable circular desktop badge using the supplied monochrome mascot; clicking
+The companion has a compact light notch toolbar, blue rounded action buttons,
+and an expandable task panel. Hide collapses the task details into the toolbar.
+Minimize retracts the bar into a draggable circle at its right edge using the
+supplied red mascot; clicking
 the badge restores the panel. The badge and notch stay floating while the app
 runs. Explicit Quit remains available and leaves the task service running.
 This does not install a login item or a background UI daemon.
@@ -21,10 +22,10 @@ expanded view. Moving focus back to an already-visible compact notch preserves
 that compact state.
 
 Drag the notch background or mascot to reposition the companion. The expanded
-task body follows the notch, and circle/bar transitions share the same position
-instead of returning to the default corner. The group stays within the usable
+task body follows the notch, and circle/bar transitions retain the bar's right
+edge instead of returning to the default corner. The group stays within the usable
 screen area; expanding near an edge can shift it enough to keep the task body
-readable. Circle/bar changes animate, and the task body slides down/up when
+readable. Circle/bar changes retract/expand without a fade, and the task body slides down/up when
 opened/closed. macOS Reduce Motion removes the spatial animation.
 
 The notch keeps the existing **Stop sharing** and **Stop call** actions. The
@@ -159,6 +160,13 @@ and the usual exclusive-line checks. The launcher defaults to a local-only
 session; its explicit existing-session option can attach a previously authorized
 paired session, but cannot upgrade a local session to phone access.
 Automatic call dispatch from the standalone launcher is not implemented.
+
+The next integration step is to connect desktop-created tasks to prepared
+decision and final-review calls through the existing coordinator and an
+exclusive service owner. Each call still needs its own authorization and durable
+receipt. The existing explicit operator handoff can exercise the same task, but
+is not the finished desktop-to-call experience. Complete this integration before
+claiming the full step-e runnable result.
 
 ## Validation boundaries
 

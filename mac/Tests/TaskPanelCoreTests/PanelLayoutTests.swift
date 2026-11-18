@@ -35,14 +35,14 @@ final class PanelLayoutTests: XCTestCase {
     XCTAssertEqual(PanelDisplayMode.badge.reopened(hasVisibleWindows: false), .expanded)
     XCTAssertEqual(PanelDisplayMode.expanded.reopened(hasVisibleWindows: true), .expanded)
   }
-  func testCircleAndBarKeepTheSameDraggedAnchor() {
+  func testCircleAtRightEdgeRestoresTheSameDraggedBarAnchor() {
     let visible = CGRect(x: -1440, y: 40, width: 1440, height: 860)
     let dragged = CGPoint(x: -700, y: 730)
     let expanded = PanelLayout.placement(in: visible, anchor: dragged, mode: .expanded)
     let minimized = PanelLayout.placement(in: visible, anchor: expanded.anchor, mode: .badge)
     let restored = PanelLayout.placement(in: visible, anchor: minimized.anchor, mode: .expanded)
     XCTAssertEqual(expanded.anchor, dragged)
-    XCTAssertEqual(minimized.badge.midX, expanded.toolbar.midX)
+    XCTAssertEqual(minimized.badge.maxX, expanded.toolbar.maxX)
     XCTAssertEqual(minimized.badge.maxY, expanded.toolbar.maxY)
     XCTAssertEqual(restored.toolbar, expanded.toolbar)
     XCTAssertEqual(restored.body, expanded.body)
@@ -68,6 +68,23 @@ final class PanelLayoutTests: XCTestCase {
     XCTAssertTrue(sourceDisplay.contains(restored.body))
     XCTAssertEqual(restored.anchor.y, badge.anchor.y)
   }
+  func testDraggedRightEdgeBadgeRestoresBarAndClampsAtScreenEdge() {
+    let visible = CGRect(x: 0, y: 40, width: 1440, height: 860)
+    let original = PanelLayout.placement(in: visible, anchor: CGPoint(x: 650, y: 740), mode: .expanded)
+    let draggedBadge = original.badge.offsetBy(dx: 90, dy: -50)
+    let movedAnchor = PanelLayout.anchor(fromBadge: draggedBadge, in: visible)
+    let restored = PanelLayout.placement(in: visible, anchor: movedAnchor, mode: .expanded)
+    XCTAssertEqual(restored.toolbar.maxX, draggedBadge.maxX)
+    XCTAssertEqual(restored.toolbar.maxY, draggedBadge.maxY)
+    XCTAssertEqual(restored.toolbar.origin.x, original.toolbar.origin.x + 90)
+    let minimizedAgain = PanelLayout.placement(in: visible, anchor: restored.anchor, mode: .badge)
+    XCTAssertEqual(minimizedAgain.badge, draggedBadge)
+    let rightmostBadge = PanelLayout.badge(in: visible, previous: CGRect(x: 1400, y: 100, width: 62, height: 62))
+    let nearEdge = PanelLayout.placement(in: visible, anchor: PanelLayout.anchor(fromBadge: rightmostBadge, in: visible), mode: .expanded)
+    XCTAssertTrue(visible.contains(nearEdge.toolbar)); XCTAssertTrue(visible.contains(nearEdge.body))
+    XCTAssertGreaterThanOrEqual(nearEdge.body.height, 300)
+    XCTAssertLessThanOrEqual(nearEdge.toolbar.maxX, rightmostBadge.maxX)
+  }
   func testRapidTransitionsOnlyAcceptLastGenerationAndDragInvalidatesCallbacks() {
     var transition = PanelTransition()
     let first = transition.request(.badge)
@@ -78,7 +95,7 @@ final class PanelLayoutTests: XCTestCase {
     let dragSettled = transition.request(.collapsed)
     XCTAssertFalse(transition.accepts(last)); XCTAssertTrue(transition.accepts(dragSettled))
   }
-  func testMorphKeepsAnchorAndRevealTopFixedWithoutOvershoot() {
+  func testRetractionKeepsRightEdgeAndRevealTopFixedWithoutOvershoot() {
     let visible = CGRect(x: 0, y: 40, width: 1512, height: 860)
     let layout = PanelLayout.placement(in: visible, mode: .expanded)
     let closed = CGRect(x: layout.body.minX, y: layout.body.maxY - 1, width: layout.body.width, height: 1)
@@ -86,7 +103,7 @@ final class PanelLayoutTests: XCTestCase {
     for tick in 0...30 {
       let progress = Double(tick) / 30
       let shell = PanelLayout.interpolate(layout.badge, layout.toolbar, progress: progress)
-      XCTAssertEqual(shell.midX, layout.anchor.x, accuracy: 0.01)
+      XCTAssertEqual(shell.maxX, layout.toolbar.maxX, accuracy: 0.01)
       XCTAssertEqual(shell.maxY, layout.anchor.y, accuracy: 0.01)
       XCTAssertGreaterThanOrEqual(shell.width, priorWidth); priorWidth = shell.width
       let reveal = PanelLayout.interpolate(closed, layout.body, progress: progress)

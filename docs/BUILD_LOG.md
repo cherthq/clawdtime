@@ -1538,3 +1538,62 @@ The fixture service kept the same instance/task, accepted revision 8, and zero
 unresolved operations throughout; no task was submitted. No capture, call,
 provider, deployment or installation setting changed. Python/media were
 unchanged and were not rerun. No step-completion tag is claimed.
+
+## Desktop finishing — light style and right-edge minimize
+
+Following `2625eb7`, the user requested a lighter panel and rounded blue buttons
+matching their supplied reference, the supplied red mascot, and spatial
+minimization into a circle at the right of the bar rather than a fade. Mac
+specialist owns native styling, bundled asset, transition geometry and tests;
+connector independently reviews behavior and remaining demo integration. Lead
+handles packaging, local observations, documentation and branch checkpoint.
+This is a presentation-only change; no new call, capture, deployment, login item
+or provider operation is authorized or needed. Validation follows below.
+
+Plan review found a remaining integration boundary rather than only physical
+testing: `scripts/task-server.ts` constructs the standalone desktop service
+without the handset coordinator. The separate handset operator can attach to
+the same task under an exclusive idle handoff, but the standalone launcher does
+not yet orchestrate the approved desktop-to-prepared-call flow. The next step
+is to connect known terminal decision/review states to preparation and the
+existing coordinator under one owner, retaining per-call authorization and
+durable receipts. Then qualify the complete two-call story and the plan's three
+rehearsals and measured handset trials. There is no approved step f to begin.
+Corrected an older walkthrough-document sentence that still prohibited step-e
+implementation despite the user's explicit override; deferred physical gates
+remain required. Connector independently reviewed these documentation changes.
+
+`npm run check` passed **1,187 tests in 69 files in 12.11s**, with typecheck and
+build. Native validation and local observations are recorded below after the
+specialist's final implementation review.
+
+The final UI uses light surfaces, dark text, blue enabled primary/Stop actions,
+and gray disabled controls. The supplied red PNG replaces the bundled monochrome
+resource unchanged (source/destination hashes matched). The actual toolbar now
+retracts through a rounded viewport toward its right edge; its red mascot aligns
+with the final circle. Controls remain full-size and alpha remains opaque. Badge
+dragging maps back to the bar anchor; restore clamps to the usable screen when
+needed. Background hit testing is explicit, buttons keep native semantics, and
+Reduce Motion and generation fencing remain intact.
+
+Local visual QA caught reversed gradient lighting on flipped button coordinates
+and slightly truncated compact status text. Corrected top lighting/highlight and
+bottom depth using `isFlipped`, and reduced padding only on small buttons. The
+final running build shows the corrected blue action, full “Result accepted”
+label, light toolbar and red mascot. Circle dragging kept the compact mode;
+clicking restored the body with its synthetic draft intact. Test drafts were
+cleared without submission and the final compact bar was left running. A toolbar
+coordinate-drag attempt was rejected by the UI automation before dispatch with
+`noWindowsAvailable`; no product result is inferred from that attempt. Cropped
+window snapshots verify endpoints, not precise absolute displacement or measured
+animation smoothness. No handset or live Stop check was performed.
+
+Final `swift test --package-path mac` passed **57 tests in 0.080s**, compiling the
+executable. Connector independently passed **11 layout tests** and approved the
+final source, hit testing, redraw behavior, shading correction and documentation.
+`bash mac/scripts/package-task-panel.sh` passed build and ad-hoc signature
+verification. `git diff --check` passed. Lead reviewed scope, retained guards and
+secrets; Python/media are unchanged and were not rerun. The fixture service
+retained the same instance/task, accepted revision 8 and zero unresolved
+operations. No task, call, capture or deployment was initiated. No completed-step
+tag is claimed.

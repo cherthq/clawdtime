@@ -4,7 +4,6 @@ import Foundation
 import TaskPanelCore
 import QuartzCore
 
-private let accent = NSColor(calibratedRed: 0.74, green: 0.82, blue: 1, alpha: 1)
 
 final class TaskWindow: NSPanel {
   override var canBecomeKey: Bool { true }
@@ -19,7 +18,7 @@ final class Card: NSView {
   override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshColors() }
   private func refreshColors() {
     layer?.backgroundColor = NSColor.clear.cgColor
-    layer?.borderColor = NSColor.white.withAlphaComponent(0.07).cgColor
+    layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
   }
 }
 final class ChoiceButton: NSButton {
@@ -41,7 +40,7 @@ final class Composer: NSTextView {
     super.draw(dirtyRect)
     if string.isEmpty {
       (placeholder as NSString).draw(at: NSPoint(x: textContainerInset.width + 5, y: textContainerInset.height),
-        withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.white.withAlphaComponent(0.52)])
+        withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor(white: 0.43, alpha: 1)])
     }
   }
   override var string: String { didSet { needsDisplay = true } }
@@ -63,7 +62,7 @@ final class Composer: NSTextView {
   private var displayMode: PanelDisplayMode = .expanded
   private var anchor: CGPoint?
   private var bodyClip: BodyClipView?
-  private var morph: TaskWindow?
+  private var toolbarClip: ToolbarClipView?
   private var animationTimer: Timer?
   private var transition = PanelTransition()
   private var placingWindows = false
@@ -82,7 +81,7 @@ final class Composer: NSTextView {
   private let stage = label("Ready when you are", size: 19, weight: .semibold)
   private let goal = label("Describe the work. ClawdTime will keep its progress here.", size: 13, color: .secondaryLabelColor)
   private let summary = label("", size: 13)
-  private let notice = label("", size: 12, color: .systemOrange)
+  private let notice = label("", size: 12, color: NSColor(calibratedRed: 0.57, green: 0.29, blue: 0.02, alpha: 1))
   private let checks = NSStackView()
   private let choices = NSStackView()
   private let question = label("", size: 14, weight: .medium)
@@ -110,9 +109,9 @@ final class Composer: NSTextView {
     return field
   }
   private func button(_ title: String, _ action: Selector, primary: Bool = false) -> NSButton {
-    let result = NSButton(title: title, target: self, action: action)
-    result.bezelStyle = .rounded; result.font = .systemFont(ofSize: 13, weight: .medium)
-    if primary { result.bezelColor = accent; result.contentTintColor = NSColor(white: 0.08, alpha: 1) }
+    let result = GlossyButton(title: title, target: self, action: action)
+    result.isBordered = false; result.font = .systemFont(ofSize: 13, weight: .medium)
+    result.blue = primary
     result.controlSize = .large
     return result
   }
@@ -142,7 +141,7 @@ final class Composer: NSTextView {
     text.isRichText = false; text.importsGraphics = false; text.isAutomaticQuoteSubstitutionEnabled = false
     text.isAutomaticDashSubstitutionEnabled = false; text.isAutomaticTextReplacementEnabled = false
     text.textContainerInset = NSSize(width: 8, height: 10)
-    text.backgroundColor = NSColor(white: 0.10, alpha: 0.65); text.textColor = .white; text.insertionPointColor = .white
+    text.backgroundColor = NSColor(white: 1, alpha: 0.80); text.textColor = NSColor(white: 0.13, alpha: 1); text.insertionPointColor = .systemBlue
     text.isVerticallyResizable = true; text.isHorizontallyResizable = false
     text.textContainer?.widthTracksTextView = true; text.autoresizingMask = [.width]
     text.minSize = NSSize(width: 0, height: 90); text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -229,7 +228,7 @@ final class Composer: NSTextView {
     window.hidesOnDeactivate = false; window.isReleasedWhenClosed = false
     window.isMovableByWindowBackground = false
     window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
-    window.appearance = NSAppearance(named: .darkAqua)
+    window.appearance = NSAppearance(named: .aqua)
     window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     window.delegate = self
     return window
@@ -240,7 +239,7 @@ final class Composer: NSTextView {
   }
   private func iconButton(_ symbol: String, label: String, action: Selector) -> NSButton {
     let control = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
-    control.bezelStyle = .inline; control.isBordered = false; control.contentTintColor = .white
+    control.bezelStyle = .inline; control.isBordered = false; control.contentTintColor = NSColor(white: 0.20, alpha: 1)
     control.toolTip = label; control.setAccessibilityLabel(label)
     control.widthAnchor.constraint(equalToConstant: 28).isActive = true
     control.heightAnchor.constraint(equalToConstant: 30).isActive = true
@@ -251,11 +250,12 @@ final class Composer: NSTextView {
     let content = GlassSurface(radius: 22)
     let clip = BodyClipView(body: content); window.contentView = clip; bodyClip = clip
     let bar = floatingWindow("ClawdTime toolbar")
-    let barContent = GlassSurface(radius: 28); bar.contentView = barContent
+    let viewport = ToolbarClipView(); toolbarClip = viewport; bar.contentView = viewport
+    let barContent = viewport.controls
     let barDrag = NativeWindowDrag()
     barDrag.onBegin = { [weak self] in self?.beginToolbarDrag() }
     barDrag.onEnd = { [weak self] _ in self?.finishToolbarDrag() }
-    barContent.dragGesture = barDrag
+    viewport.surface.dragGesture = barDrag
     let image = DragMascotImageView(); image.dragGesture = barDrag; image.image = mascotImage(); image.imageScaling = .scaleProportionallyUpOrDown
     image.widthAnchor.constraint(equalToConstant: 32).isActive = true
     image.heightAnchor.constraint(equalToConstant: 32).isActive = true
@@ -264,16 +264,18 @@ final class Composer: NSTextView {
     compactState.isSelectable = false
     compactState.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     expandButton = iconButton("chevron.up", label: "Collapse task panel", action: #selector(toggleExpanded))
-    stopSharingButton = button("Stop sharing", #selector(stopSharing))
+    stopSharingButton = button("Stop sharing", #selector(stopSharing), primary: true)
     stopSharingButton.controlSize = .small; stopSharingButton.font = .systemFont(ofSize: 11, weight: .medium)
     stopSharingButton.toolTip = "Stop existing sharing. Starting sharing requires a separate grant."
-    stopCallButton = button("Stop call", #selector(stopCall)); stopCallButton.controlSize = .small
+    stopCallButton = button("Stop call", #selector(stopCall), primary: true); stopCallButton.controlSize = .small
     stopCallButton.font = .systemFont(ofSize: 11, weight: .medium)
     let minimize = iconButton("minus", label: "Minimize to mascot", action: #selector(minimizeToBadge))
-    let barRow = stack([image, compactState, expandButton, stopSharingButton, stopCallButton, minimize], vertical: false, spacing: 9)
+    let barRow = stack([compactState, expandButton, stopSharingButton, stopCallButton, minimize, image], vertical: false, spacing: 9)
+    viewport.controls.backgroundOnlyViews = [barRow, compactState]
+    barRow.setCustomSpacing(16, after: minimize)
     barContent.addSubview(barRow); barRow.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([barRow.leadingAnchor.constraint(equalTo: barContent.leadingAnchor, constant: 14),
-      barRow.trailingAnchor.constraint(equalTo: barContent.trailingAnchor, constant: -14),
+    NSLayoutConstraint.activate([barRow.leadingAnchor.constraint(equalTo: barContent.leadingAnchor, constant: 15),
+      barRow.trailingAnchor.constraint(equalTo: barContent.trailingAnchor, constant: -15),
       barRow.centerYAnchor.constraint(equalTo: barContent.centerYAnchor)])
 
     cancelButton = button("Cancel task…", #selector(cancelTask)); cancelButton.contentTintColor = .systemRed
@@ -333,9 +335,6 @@ final class Composer: NSTextView {
     menu.addItem(withTitle: "Quit panel — keep work running", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
     menu.autoenablesItems = false; mascot.menu = menu
     badge = badgeWindow; badgeView = mascot
-    let shell = floatingWindow("ClawdTime transition")
-    shell.ignoresMouseEvents = true; shell.contentView = GlassSurface(radius: 28)
-    shell.setAccessibilityElement(false); morph = shell
     NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
     placeWindows()
   }
@@ -346,7 +345,7 @@ final class Composer: NSTextView {
     guard let screen = sourceScreen ?? currentScreen() else { return }
     let layout = PanelLayout.placement(in: screen.visibleFrame, anchor: anchor, mode: displayMode)
     anchor = layout.anchor; placingWindows = true
-    bodyClip?.fullSize = layout.body.size
+    bodyClip?.fullSize = layout.body.size; toolbarClip?.fullSize = layout.toolbar.size
     toolbar?.setFrame(layout.toolbar, display: true); panel?.setFrame(layout.body, display: true)
     badge?.setFrame(layout.badge, display: true)
     placingWindows = false
@@ -354,7 +353,6 @@ final class Composer: NSTextView {
   private func settleAnimation() {
     animationTimer?.invalidate(); animationTimer = nil
     transition.request(displayMode)
-    morph?.orderOut(nil)
     placeWindows(); applyDisplayMode()
   }
   @objc private func screenChanged(_ notification: Notification) { settleAnimation() }
@@ -385,50 +383,44 @@ final class Composer: NSTextView {
     let generation = transition.request(target)
     placeWindows(on: sourceScreen)
     guard animated, previous != target, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-      let toolbar, let panel, let badge, let morph else { applyDisplayMode(); return }
+      let toolbar, let panel, let badge else { applyDisplayMode(); return }
     let finalBar = toolbar.frame, finalBadge = badge.frame, finalBody = panel.frame
     let changingShape = previous == .badge || target == .badge
-    let fromShell = previous == .badge ? oldBadge : oldBar
-    let toShell = target == .badge ? finalBadge : finalBar
+    let fromToolbar = previous == .badge ? oldBadge : oldBar
+    let toToolbar = target == .badge ? finalBadge : finalBar
     let closedBody = NSRect(x: finalBody.minX, y: finalBody.maxY - 1, width: finalBody.width, height: 1)
     let fromBody = previous == .expanded ? oldBody : closedBody
     let toBody = target == .expanded ? finalBody : NSRect(x: oldBody.minX, y: oldBody.maxY - 1, width: oldBody.width, height: 1)
     toolbar.ignoresMouseEvents = changingShape; badge.ignoresMouseEvents = true
     panel.ignoresMouseEvents = true
     if changingShape {
-      morph.setFrame(fromShell, display: true); morph.alphaValue = 1; morph.orderFrontRegardless()
-      toolbar.alphaValue = previous == .badge ? 0 : 1
-      badge.alphaValue = previous == .badge ? 1 : 0
-      toolbar.orderFrontRegardless(); badge.orderFrontRegardless()
+      // Retract the actual fixed-size toolbar behind a rounded right-edge viewport.
+      // No duplicate shell or alpha transition: the red mascot remains at the edge.
+      badge.orderOut(nil)
+      placingWindows = true; toolbar.setFrame(fromToolbar, display: true); placingWindows = false
+      toolbar.alphaValue = 1; toolbar.orderFrontRegardless()
     } else { toolbar.orderFrontRegardless(); badge.orderOut(nil) }
     if previous == .expanded || target == .expanded {
       placingWindows = true; panel.setFrame(fromBody, display: true); placingWindows = false
-      panel.alphaValue = previous == .expanded ? 1 : 0; panel.orderFrontRegardless()
+      panel.alphaValue = 1; panel.orderFrontRegardless()
     } else { panel.orderOut(nil) }
     let started = CACurrentMediaTime()
     let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
       MainActor.assumeIsolated {
         guard let self, self.transition.accepts(generation) else { timer.invalidate(); return }
         let progress = min(1, (CACurrentMediaTime() - started) / 0.29)
-        let eased = progress * progress * (3 - 2 * progress)
         self.placingWindows = true
         if changingShape {
-          morph.setFrame(PanelLayout.interpolate(fromShell, toShell, progress: progress), display: true)
-          morph.contentView?.layer?.cornerRadius = morph.frame.height / 2
-          // Geometry belongs to the empty shell; text and mascot only crossfade.
-          toolbar.alphaValue = target == .badge ? 1 - eased : eased
-          badge.alphaValue = target == .badge ? eased : 1 - eased
-          morph.alphaValue = 1 - abs(2 * eased - 1)
+          toolbar.setFrame(PanelLayout.interpolate(fromToolbar, toToolbar, progress: progress), display: true)
         }
         if previous == .expanded || target == .expanded {
           panel.setFrame(PanelLayout.interpolate(fromBody, toBody, progress: progress), display: true)
-          panel.alphaValue = target == .expanded ? eased : 1 - eased
         }
         self.placingWindows = false
         if progress >= 1 {
           timer.invalidate(); self.animationTimer = nil
           guard self.transition.accepts(generation) else { return }
-          morph.orderOut(nil); self.placeWindows(); self.applyDisplayMode()
+          self.placeWindows(); self.applyDisplayMode()
         }
       }
     }
@@ -445,7 +437,7 @@ final class Composer: NSTextView {
   private func beginBadgeDrag() { settleAnimation(); draggingBadge = true }
   private func finishBadgeDrag() {
     draggingBadge = false
-    if let badge { anchor = CGPoint(x: badge.frame.midX, y: badge.frame.maxY) }
+    if let badge, let screen = badge.screen ?? currentScreen() { anchor = PanelLayout.anchor(fromBadge: badge.frame, in: screen.visibleFrame) }
     placeWindows()
   }
   func windowDidMove(_ notification: Notification) {
@@ -457,7 +449,7 @@ final class Composer: NSTextView {
         panel.setFrameOrigin(NSPoint(x: moved.frame.midX - panel.frame.width / 2, y: moved.frame.minY - 10 - panel.frame.height))
         placingWindows = false
       }
-    } else if moved === badge && draggingBadge { anchor = CGPoint(x: moved.frame.midX, y: moved.frame.maxY) }
+    } else if moved === badge && draggingBadge, let screen = moved.screen ?? currentScreen() { anchor = PanelLayout.anchor(fromBadge: moved.frame, in: screen.visibleFrame) }
   }
   @objc private func toggleExpanded(_ sender: Any?) { requestDisplay(displayMode.toggled) }
   @objc private func minimizeToBadge(_ sender: Any?) { requestDisplay(.badge) }
