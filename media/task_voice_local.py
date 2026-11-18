@@ -74,7 +74,7 @@ class BrowserSink:
             future.set_result(None)
 
 
-def local_app(voice_config, provider_config, port):
+def local_app(voice_config, provider_config, port, diagnostic_callback=None):
     from aiohttp import ClientSession, WSMsgType, web
     capability = secrets.token_urlsafe(32)
     expected_origin = f'http://127.0.0.1:{port}'
@@ -133,15 +133,24 @@ def local_app(voice_config, provider_config, port):
                 try:
                     async for message in socket:
                         if message.type == WSMsgType.BINARY:
+                            runtime.diagnostics.record('browser_binary')
                             if runtime.ready.is_set() and runtime.conversation_id and not runtime.closed:
                                 await runtime.input_audio(bytes(message.data))
+                            else:
+                                runtime.diagnostics.record('input_not_ready')
                         elif message.type == WSMsgType.TEXT:
                             value = json.loads(message.data)
                             if value.get('kind') == 'played':
                                 sink.acknowledge(value.get('id'))
                             elif value.get('kind') == 'stop':
+                                runtime.diagnostics.record('browser_stop')
                                 await runtime.end()
                                 break
+                            elif value.get('kind') == 'diagnostic':
+                                if (set(value) - {'kind', 'event', 'durationMs'} or value.get('event') not in
+                                        ('browser_scheduled', 'browser_clear', 'browser_onset', 'browser_stop', 'browser_pcm')):
+                                    raise VoiceError('browser_diagnostic_invalid')
+                                runtime.diagnostics.record(value['event'], duration_ms=value.get('durationMs'))
                             else:
                                 raise VoiceError('browser_message_invalid')
                         else:
@@ -161,6 +170,8 @@ def local_app(voice_config, provider_config, port):
         finally:
             if runtime:
                 await runtime.close()
+                if diagnostic_callback:
+                    diagnostic_callback(runtime.diagnostics.snapshot())
             active = None
             await socket.close()
         return socket
@@ -187,6 +198,7 @@ def main():
     run.add_argument('--voice-file', required=True)
     run.add_argument('--provider-file', required=True)
     run.add_argument('--port', type=int, default=3321)
+    run.add_argument('--diagnostics-file', help='New owner-only JSON file for timing metadata; no audio or transcript.')
     args = parser.parse_args()
     try:
         if args.command == 'provider-template':
@@ -201,7 +213,20 @@ def main():
         if set(provider) != {'elevenlabsAgentId', 'elevenlabsApiKey'}:
             raise VoiceError('provider_file_invalid')
         from aiohttp import web
-        app, url = local_app(voice, provider, args.port)
+        diagnostic_output = None
+        if args.diagnostics_file:
+            path = Path(args.diagnostics_file).absolute()
+            parent = path.parent.lstat()
+            if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid() or parent.st_mode & 0o077:
+                raise VoiceError('private_diagnostic_directory_required')
+            diagnostic_output = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        def save_diagnostics(value):
+            if diagnostic_output is not None:
+                os.lseek(diagnostic_output, 0, os.SEEK_SET)
+                os.ftruncate(diagnostic_output, 0)
+                os.write(diagnostic_output, json.dumps(value, separators=(',', ':')).encode())
+                os.fsync(diagnostic_output)
+        app, url = local_app(voice, provider, args.port, save_diagnostics)
         # The local capability is sensitive too: never print it or put it in an access log.
         with tempfile.TemporaryDirectory(prefix='clawdtime-local-voice-') as directory:
             launcher = Path(directory) / 'open-local-voice.html'
@@ -209,7 +234,11 @@ def main():
             with os.fdopen(descriptor, 'w') as output:
                 output.write('<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Local ClawdTime voice</title><a rel="noreferrer" href="' + html.escape(url, quote=True) + '">Open local voice</a>')
             print('Local voice only. No phone, screen capture or control. Open the private launcher file: ' + str(launcher), flush=True)
-            web.run_app(app, host='127.0.0.1', port=args.port, access_log=None, print=None)
+            try:
+                web.run_app(app, host='127.0.0.1', port=args.port, access_log=None, print=None)
+            finally:
+                if diagnostic_output is not None:
+                    os.close(diagnostic_output)
     except (VoiceError, KeyError, ValueError, OSError):
         parser.exit(2, 'Local voice configuration unavailable. Use owner-only configuration files; no operation retried.\n')
 

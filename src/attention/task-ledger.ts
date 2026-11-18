@@ -48,6 +48,79 @@ export interface TaskMutation {
   replayed: boolean;
 }
 
+/** Pure wording projection of the current independently verified run; no effects or receipt changes. */
+export function buildTaskBrief(
+  task: CodingTask,
+): NonNullable<CodingTask["brief"]> {
+  const run = task.runs.at(-1),
+    verification = task.verification;
+  if (
+    !run ||
+    !verification ||
+    verification.runId !== run.id ||
+    verification.state === "unknown" ||
+    !["completed", "failed", "blocked"].includes(run.state) ||
+    !decisionStates.has(task.state)
+  )
+    throw new DomainError(
+      409,
+      "A prepared brief requires the current known verified run.",
+    );
+  if (
+    verification.state === "passed" &&
+    run.state === "completed" &&
+    !run.decision
+  )
+    return {
+      runId: run.id,
+      verificationId: verification.id,
+      kind: "review",
+      opening: `${(run.summary ?? "The requested change is implemented.").replace(/\s+/g, " ").slice(0, 300)} The configured checks passed. Please review the result.`,
+    };
+  const question = (
+    run.decision ??
+    (task.decision?.runId === run.id ? task.decision.question : undefined) ??
+    (run.state !== "completed"
+      ? "The coding run did not complete successfully. What should change?"
+      : "Independent verification did not pass. What should change?")
+  )
+    .replace(/\s+/g, " ")
+    .slice(0, 1000);
+  if (run.decision) {
+    const status =
+      verification.state !== "passed"
+        ? " The result still needs to pass its checks."
+        : run.state !== "completed"
+          ? " The coding run did not complete successfully."
+          : "";
+    return {
+      runId: run.id,
+      verificationId: verification.id,
+      kind: "decision",
+      question,
+      opening: `${question}${status}`,
+    };
+  }
+  const checks = verification.checks
+    .filter((check) => check.state !== "passed")
+    .slice(0, 3)
+    .map((check) => check.name.replace(/\s+/g, " ").slice(0, 100))
+    .join(", ");
+  const status =
+    verification.state === "failed"
+      ? `Independent verification failed: ${checks}.`
+      : verification.state === "blocked"
+        ? `Independent verification could not finish: ${checks}.`
+        : `The coding run was ${run.state}.`;
+  return {
+    runId: run.id,
+    verificationId: verification.id,
+    kind: "decision",
+    question,
+    opening: `${status} ${question}`,
+  };
+}
+
 /** Single-owner local task ledger. No transport or worker invocation occurs here. */
 export class TaskLedger {
   private readonly tasks: ProtectedTaskStore<CodingTask>;
@@ -285,12 +358,6 @@ export class TaskLedger {
         ) {
           task.state = "review_ready";
           delete task.decision;
-          task.brief = {
-            runId: run.id,
-            verificationId: verification.id,
-            kind: "review",
-            opening: `${(run.summary ?? "The requested change is implemented.").replace(/\s+/g, " ").slice(0, 300)} The configured checks passed. Please review the result.`,
-          };
         } else {
           task.state = "needs_decision";
           task.decision = {
@@ -302,30 +369,8 @@ export class TaskLedger {
                 ? "The coding run did not complete successfully. What should change?"
                 : "Independent verification did not pass. What should change?"),
           };
-          const question = task.decision.question
-            .replace(/\s+/g, " ")
-            .slice(0, 1000);
-          const checks = verification.checks
-            .filter((check) => check.state !== "passed")
-            .slice(0, 3)
-            .map((check) => check.name.replace(/\s+/g, " ").slice(0, 100))
-            .join(", ");
-          const status =
-            verification.state === "failed"
-              ? `Independent verification failed: ${checks}.`
-              : verification.state === "blocked"
-                ? `Independent verification could not finish: ${checks}.`
-                : run.state !== "completed"
-                  ? `The coding run was ${run.state}.`
-                  : "The configured checks passed; I need your choice.";
-          task.brief = {
-            runId: run.id,
-            verificationId: verification.id,
-            kind: "decision",
-            question,
-            opening: `${status} ${question}`,
-          };
         }
+        if (task.state !== "unknown") task.brief = buildTaskBrief(task);
         break;
       }
       case "prepare_call": {

@@ -13,49 +13,130 @@
 </style>
 <h1>Talk with ClawdTime</h1>
 <p>Discuss your coding task through your Mac’s microphone and speakers.</p>
-<p id="state" role="status" aria-live="polite">Ready to start. Microphone access begins when you choose Start.</p>
-<button id="start">Start voice</button><button id="stop" disabled>Stop voice</button>
+<p id="state" role="status" aria-live="polite">Choose Check microphone to enable local audio and confirm your input before starting voice.</p>
+<label for="microphone-choice">Microphone</label>
+<select id="microphone-choice"><option value="">System default</option></select>
+<button id="check">Check microphone</button>
+<p id="microphone" class="small">Microphone not active</p>
+<p id="audio-state" class="small">Audio engine: not started</p>
+<p id="track-state" class="small">Input track: not started</p>
+<meter id="input-level" min="0" max="0.2" value="0" aria-label="Microphone input level"></meter>
+<p id="mic-signal" class="small" role="status">No microphone signal yet</p>
+<button id="resume" hidden>Resume audio</button>
+<button id="start" disabled>Start voice</button><button id="stop" disabled>Stop microphone</button>
 <p class="small">No phone call, screen sharing or computer control. Stopping voice leaves your coding task running. Use headphones for the first local audio check.</p>
 <script>
 'use strict';
-let context, stream, socket, processor, source, mute, nextTime=0, epoch=0, started=false;
+let context, stream, socket, processor, source, mute, nextTime=0, epoch=0;
+let generation=0, checkAttempt=0;
+let started=false, checking=false, providerReady=false, lastOnset=null, lastMicActivity=null, lastFrame=null, closing=false;
 const scheduled=new Set(), pendingAcks=new Set();
 const state=document.getElementById('state'), start=document.getElementById('start'), stop=document.getElementById('stop');
+const microphone=document.getElementById('microphone'), inputLevel=document.getElementById('input-level'), micSignal=document.getElementById('mic-signal');
+const check=document.getElementById('check'), choice=document.getElementById('microphone-choice'), resume=document.getElementById('resume');
+const audioState=document.getElementById('audio-state'), trackState=document.getElementById('track-state');
+// Metadata only: an already-granted browser can choose a built-in input before a stalled default opens.
+navigator.mediaDevices.enumerateDevices().then(devices=>{
+  if(started||checking)return;
+  for(const device of devices.filter(item=>item.kind==='audioinput'))choice.add(new Option(device.label||'Microphone',device.deviceId));
+}).catch(()=>{});
 function ack(id) { if(socket?.readyState===WebSocket.OPEN) socket.send(JSON.stringify({kind:'played',id})); }
+function diagnostic(event,durationMs) { if(socket?.readyState===WebSocket.OPEN) socket.send(JSON.stringify({kind:'diagnostic',event,...(Number.isFinite(durationMs)?{durationMs:Math.max(0,durationMs)}:{})})); }
 function clearAudio() { for(const item of scheduled) { try{item.stop();}catch{} } scheduled.clear(); for(const id of pendingAcks) ack(id); pendingAcks.clear(); nextTime=context?.currentTime||0; }
-async function closeLocal(message) {
-  clearAudio(); processor?.disconnect(); source?.disconnect(); mute?.disconnect();
-  stream?.getTracks().forEach(track=>track.stop());
-  if(context && context.state!=='closed') await context.close();
-  stop.disabled=true; state.textContent=message;
+function canStart() {
+  const track=stream?.getAudioTracks()[0], now=performance.now();
+  return !started&&!checking&&!closing&&context?.state==='running'&&track?.readyState==='live'&&!track.muted&&lastFrame!==null&&now-lastFrame<1000&&lastMicActivity!==null&&now-lastMicActivity<10000;
 }
-stop.onclick=async()=>{
-  if(socket?.readyState===WebSocket.OPEN) socket.send(JSON.stringify({kind:'stop'}));
-  socket?.close(); await closeLocal('Voice stopped. Your coding task is preserved.');
-};
-start.onclick=async()=>{
-  if(started) return; started=true; start.disabled=true;
+function refresh() {
+  const track=stream?.getAudioTracks()[0];
+  audioState.textContent='Audio engine: '+(context?.state||'not started');
+  trackState.textContent='Input track: '+(track?(track.readyState+(track.muted?' · muted':' · unmuted')):'not started');
+  resume.hidden=!context||context.state==='running'||context.state==='closed'||started;
+  start.disabled=!canStart(); check.disabled=started||checking; choice.disabled=started||checking;
+  stop.disabled=!stream&&!socket&&!checking;
+  if(!started&&!checking&&stream&&context?.state==='running')state.textContent=canStart()?'Microphone ready. Choose Start voice.':'Speak to check your microphone before starting.';
+}
+const refreshTimer=setInterval(refresh,250);
+async function closeAudio() {
+  closing=true;const closedGeneration=++generation;clearAudio();
+  if(processor){processor.port.onmessage=null;processor.port.close();processor.onprocessorerror=null;processor.disconnect();}
+  source?.disconnect();mute?.disconnect();
+  stream?.getTracks().forEach(track=>{track.onmute=null;track.onunmute=null;track.onended=null;track.stop();});
+  if(context)context.onstatechange=null;
+  const old=context;context=null;stream=null;processor=null;source=null;mute=null;
+  if(old&&old.state!=='closed')await old.close();
+  if(generation===closedGeneration){lastFrame=null;lastMicActivity=null;inputLevel.value=0;micSignal.textContent='Microphone stopped';closing=false;refresh();}
+}
+async function stopVoice(message) {
+  providerReady=false;checkAttempt++;checking=false;
+  if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({kind:'stop'}));
+  socket?.close();socket=null;
+  await closeAudio();state.textContent=message;
+}
+stop.onclick=()=>stopVoice(started?'Voice stopped. Your coding task is preserved. This session cannot restart.':'Microphone stopped. No voice session was started.');
+choice.onchange=async()=>{if(started)return;checkAttempt++;checking=false;await closeAudio();state.textContent='Choose Check microphone for the selected input.';};
+resume.onclick=async()=>{if(started||!context)return;try{await context.resume();refresh();state.textContent='Speak a short sentence and check the input meter.';}catch{state.textContent='Audio is still paused. Check browser or Mac audio permissions.';}};
+check.onclick=async()=>{
+  if(started||checking)return;const attempt=++checkAttempt;checking=true;refresh();
   try {
-    context=new AudioContext({sampleRate:16000}); await context.resume();
+    await closeAudio();
+    if(attempt!==checkAttempt)return;
+    const graph=generation;
+    const ctx=new AudioContext({sampleRate:16000});context=ctx; await ctx.resume();
+    if(graph!==generation)return;
     if(context.sampleRate!==16000) throw Error('audio format');
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},video:false});
+    context.onstatechange=()=>{if(graph!==generation)return;refresh();if(started&&!closing&&context&&context.state!=='running')stopVoice('Audio engine paused. Voice stopped safely; check microphone audio before a fresh session.');};
+    const acquired=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1,...(choice.value?{deviceId:{exact:choice.value}}:{})},video:false});
+    if(graph!==generation){acquired.getTracks().forEach(track=>track.stop());return;}stream=acquired;
+    microphone.textContent='Microphone: '+(stream.getAudioTracks()[0]?.label||'Selected default');
+    const selected=choice.value, devices=await navigator.mediaDevices.enumerateDevices();
+    if(graph!==generation)return;
+    choice.replaceChildren(new Option('System default',''));
+    for(const device of devices.filter(item=>item.kind==='audioinput'))choice.add(new Option(device.label||'Microphone',device.deviceId));
+    choice.value=selected;
+    const track=stream.getAudioTracks()[0];
+    track.onmute=()=>{refresh();micSignal.textContent='Microphone muted. Choose a working input before starting voice.';};
+    track.onunmute=refresh;track.onended=()=>{refresh();if(started&&!closing)stopVoice('Microphone stopped. Voice ended; your coding task is preserved.');};
     const code=`class Capture extends AudioWorkletProcessor {
-      constructor(){super();this.buffer=new Int16Array(1600);this.used=0;}
-      process(inputs){const samples=inputs[0]?.[0];if(samples)for(const s of samples){this.buffer[this.used++]=Math.max(-32768,Math.min(32767,Math.round(s*32768)));if(this.used===1600){this.port.postMessage(this.buffer.buffer,[this.buffer.buffer]);this.buffer=new Int16Array(1600);this.used=0;}}return true;}
+      constructor(){super();this.buffer=new Int16Array(1600);this.used=0;this.active=0;this.quiet=0;this.triggered=false;}
+      process(inputs){const samples=inputs[0]?.[0];if(samples){let energy=0;for(const s of samples){energy+=s*s;this.buffer[this.used++]=Math.max(-32768,Math.min(32767,Math.round(s*32768)));if(this.used===1600){this.port.postMessage(this.buffer.buffer,[this.buffer.buffer]);this.buffer=new Int16Array(1600);this.used=0;}}const ms=samples.length*1000/sampleRate;if(Math.sqrt(energy/samples.length)>=.012){this.active+=ms;this.quiet=0;if(!this.triggered&&this.active>=120){this.triggered=true;this.port.postMessage({kind:'onset'});}}else{this.active=0;this.quiet+=ms;if(this.quiet>=200)this.triggered=false;}}return true;}
     } registerProcessor('capture',Capture);`;
     const blob=URL.createObjectURL(new Blob([code],{type:'text/javascript'}));
-    try{await context.audioWorklet.addModule(blob);}finally{URL.revokeObjectURL(blob);}
+    try{await ctx.audioWorklet.addModule(blob);}finally{URL.revokeObjectURL(blob);}
+    if(graph!==generation)return;
     processor=new AudioWorkletNode(context,'capture'); source=context.createMediaStreamSource(stream); mute=context.createGain(); mute.gain.value=0;
     source.connect(processor); processor.connect(mute); mute.connect(context.destination);
+    processor.onprocessorerror=()=>stopVoice('Microphone audio processing stopped. No automatic voice retry was made.');
+    processor.port.onmessage=event=>{
+      if(graph!==generation)return;
+      if(event.data?.kind==='onset'){if(providerReady&&socket?.readyState===WebSocket.OPEN){lastOnset=performance.now();diagnostic('browser_onset');}return;}
+      if(!(event.data instanceof ArrayBuffer)||event.data.byteLength!==3200){stop.click();return;}
+      const samples=new DataView(event.data);let sum=0;for(let i=0;i<samples.byteLength;i+=2){const value=samples.getInt16(i,true)/32768;sum+=value*value;}
+      const rms=Math.sqrt(sum/(samples.byteLength/2));inputLevel.value=rms;lastFrame=performance.now();
+      if(rms>=.008){lastMicActivity=performance.now();micSignal.textContent='Microphone signal detected';}
+      else if(lastMicActivity===null){micSignal.textContent='No microphone signal yet';}
+      else if(performance.now()-lastMicActivity>1500){micSignal.textContent='No microphone signal right now';}
+      if(providerReady&&socket?.readyState===WebSocket.OPEN){if(socket.bufferedAmount>32000){stop.click();return;}diagnostic('browser_pcm');socket.send(event.data);}
+      refresh();
+    };
+    state.textContent='Speak a short sentence. Confirm the microphone name and moving input meter before starting voice.';
+    stop.textContent='Stop microphone';
+  } catch {if(attempt===checkAttempt){await closeAudio();state.textContent='Microphone check could not start. Select a working microphone and check browser permission.';}}
+  finally{if(attempt===checkAttempt){checking=false;refresh();}}
+};
+start.onclick=async()=>{
+  if(!canStart())return;
+  try {
+    // This second explicit user gesture resumes the already-qualified local graph.
+    await context.resume();if(!canStart()){refresh();return;}
+    started=true;refresh();stop.textContent='Stop voice';
     socket=new WebSocket(`ws://${location.host}/audio${location.search}`); socket.binaryType='arraybuffer';
-    let ready=false;
-    processor.port.onmessage=event=>{if(ready&&socket.readyState===WebSocket.OPEN){if(socket.bufferedAmount>32000){stop.click();return;}socket.send(event.data);}};
     socket.onopen=()=>{stop.disabled=false;state.textContent='Preparing your task conversation…';};
     socket.onmessage=event=>{
       let value;try{value=JSON.parse(event.data);}catch{stop.click();return;}
-      if(value.kind==='ready'){ready=true;state.textContent='Listening. You can interrupt naturally or choose Stop voice.';return;}
+      if(value.kind==='ready'){providerReady=true;state.textContent='Listening. You can interrupt naturally or choose Stop voice.';return;}
       if(value.kind==='error'){state.textContent=value.message;return;}
-      if(value.kind==='clear'){epoch=value.epoch;clearAudio();return;}
+      if(value.kind==='clear'){epoch=value.epoch;clearAudio();diagnostic('browser_clear',lastOnset===null?undefined:performance.now()-lastOnset);lastOnset=null;return;}
       if(value.kind!=='audio')return;
       if(value.epoch<epoch){ack(value.id);return;}epoch=value.epoch;
       const raw=atob(value.pcm), bytes=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
@@ -64,16 +145,17 @@ start.onclick=async()=>{
       for(let i=0;i<channel.length;i++)channel[i]=data.getInt16(i*2,true)/32768;
       const node=context.createBufferSource();node.buffer=buffer;node.connect(context.destination);
       const at=Math.max(context.currentTime,nextTime);nextTime=at+buffer.duration;
+      diagnostic('browser_scheduled',(at-context.currentTime)*1000);
       if(nextTime-context.currentTime>.5){stop.click();return;}
       scheduled.add(node);pendingAcks.add(value.id);
       node.onended=()=>{scheduled.delete(node);if(pendingAcks.delete(value.id))ack(value.id);};node.start(at);
       // Keep up to 200 ms buffered; this ACK proves scheduling only, not audible output.
       if(nextTime-context.currentTime<=.2){pendingAcks.delete(value.id);ack(value.id);}
     };
-    socket.onclose=()=>closeLocal('Voice ended. Your coding task is preserved. This session cannot restart.');
-    socket.onerror=()=>closeLocal('Voice connection unavailable. No retry was made. Your task is preserved.');
-  } catch { socket?.close(); await closeLocal('Local audio could not start. Check microphone permission and the private provider configuration.'); }
+    socket.onclose=()=>{socket=null;providerReady=false;closeAudio().then(()=>{state.textContent='Voice ended. Your coding task is preserved. This session cannot restart.';});};
+    socket.onerror=()=>stopVoice('Voice connection unavailable. No retry was made. Your task is preserved.');
+  } catch {await stopVoice('Local audio could not start. No provider retry was made.');}
 };
-window.addEventListener('pagehide',()=>{socket?.close();stream?.getTracks().forEach(track=>track.stop());});
+window.addEventListener('pagehide',()=>{clearInterval(refreshTimer);socket?.close();stream?.getTracks().forEach(track=>track.stop());});
 </script>
 </html>

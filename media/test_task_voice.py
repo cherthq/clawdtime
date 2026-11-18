@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 from aiohttp import ClientSession, WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
-from task_voice import (ElevenLabsProvider, PlaybackCoordinator, TaskVoiceAPI,
+from task_voice import (ElevenLabsProvider, PlaybackCoordinator, TaskVoiceAPI, VoiceDiagnostics,
                         TaskVoiceRuntime, VoiceError, bounded_context,
                         provider_configuration, validate_provider)
 from task_voice_local import BrowserSink, local_app, private_json
@@ -39,6 +39,26 @@ def transcript(text='Show an empty state with Clear filters', identity=1):
 
 def audio(identity=1, pcm=bytes(3200)):
     return {'type': 'audio', 'audio_event': {'event_id': identity, 'audio_base_64': base64.b64encode(pcm).decode()}}
+
+
+def normalized_provider():
+    value = provider_configuration('voice_fixture')
+    value['agent_id'] = 'agent_fixture'
+    value['workflow'] = {'edges': {}, 'nodes': {'start_node': {'type': 'start',
+        'position': {'x': 0, 'y': 0}, 'edge_order': [], 'parent_subgraph_id': None,
+        'parent_frame_id': None}}, 'subgraphs': {}, 'frames': {}, 'prevent_subagent_loops': True, 'version': 1}
+    value['procedures'] = []
+    value['platform_settings']['workspace_overrides'] = {
+        'conversation_initiation_client_data_webhook': None,
+        'webhooks': {'post_call_webhook_id': None, 'events': ['transcript'],
+                     'transcript_format': 'json', 'exclude_transcript': False, 'send_audio': False},
+        'cloud_storage_export': {'destination_id': None, 'events': ['transcript'], 'transcript_format': 'json'}}
+    for tool in value['conversation_config']['agent']['prompt']['tools']:
+        tool.update(disable_interruptions=False, force_pre_tool_speech=False, assignments=[],
+            tool_call_sound_behavior='auto', tool_error_handling_mode='auto',
+            dynamic_variables={'dynamic_variable_placeholders': {}}, execution_mode='immediate')
+        tool['parameters'].update(description='', dynamic_variable='', is_omitted=False)
+    return value
 
 
 class API:
@@ -231,21 +251,63 @@ class ConfigTests(unittest.TestCase):
     def test_template_is_offline_and_rejects_original_chat_or_unsafe_provider_config(self):
         original = provider_configuration('voice_fixture')
         self.assertEqual(validate_provider(original), 1200)
+        self.assertTrue(all('additionalProperties' not in tool['parameters']
+                            for tool in original['conversation_config']['agent']['prompt']['tools']))
         mutations = [
+            lambda value: value['conversation_config']['conversation'].update(text_only=True),
+            lambda value: value['conversation_config']['conversation'].pop('text_only'),
             lambda value: value['conversation_config']['agent']['prompt']['tools'][0].update(name='send_to_agent'),
             lambda value: value['platform_settings']['privacy'].update(record_voice=True),
             lambda value: value['platform_settings']['privacy'].update(retention_days=7),
             lambda value: value['conversation_config']['turn'].update(silence_end_call_timeout=20),
             lambda value: value['conversation_config']['turn'].update(turn_timeout=10),
             lambda value: value['conversation_config']['turn'].update(soft_timeout_config={'timeout_seconds': 2}),
+            lambda value: value['conversation_config']['agent'].update(disable_first_message_interruptions=True),
+            lambda value: value['conversation_config']['agent']['prompt']['tools'][0].update(interruption_mode='disable_during_tool'),
+            lambda value: value['conversation_config']['agent']['prompt']['tools'][0].update(pre_tool_speech='force'),
+            lambda value: value['conversation_config']['agent']['prompt']['tools'][0].update(tool_call_sound='typing'),
+            lambda value: value['conversation_config']['conversation']['client_events'].remove('client_tool_call'),
             lambda value: value['conversation_config']['agent']['prompt'].update(mcp_server_ids=['remote']),
             lambda value: value['platform_settings']['overrides']['conversation_config_override']['agent'].update(first_message=False),
+            lambda value: value['conversation_config']['agent'].update(subagent_config={'agents': [{'agent_id': 'other'}]}),
+            lambda value: value['platform_settings'].update(workspace_overrides={'webhooks': {'post_call_webhook_id': 'hook'}}),
+            lambda value: value['platform_settings'].update(workspace_overrides={'conversation_initiation_client_data_webhook': {'url': 'https://example.invalid'}}),
+            lambda value: value['platform_settings'].update(data_collection={'field': {'type': 'string'}}),
         ]
         for mutate in mutations:
             value = copy.deepcopy(original)
             mutate(value)
             with self.assertRaises(VoiceError):
                 validate_provider(value)
+
+    def test_inert_provider_defaults_are_not_external_hooks(self):
+        value = provider_configuration('voice_fixture')
+        value['conversation_config']['agent']['subagent_config'] = {'agents': [], 'self_subagent': None}
+        value['platform_settings'].update(workspace_overrides={
+            'conversation_initiation_client_data_webhook': None,
+            'webhooks': {'post_call_webhook_id': None, 'events': [], 'send_audio': False,
+                         'transcript_format': 'json', 'exclude_transcript': False}},
+            evaluation={'criteria': []}, analysis_items={'evaluation_criteria': [], 'data_collection': []})
+        self.assertEqual(validate_provider(value), 1200)
+
+    def test_diagnostics_only_accept_bounded_content_free_metadata(self):
+        telemetry = VoiceDiagnostics(clock=lambda: 1.)
+        for _ in range(600):
+            telemetry.record('provider_audio')
+        self.assertEqual(len(telemetry.snapshot()['events']), 512)
+        self.assertEqual(telemetry.snapshot()['counts']['provider_audio'], 600)
+        with self.assertRaises(VoiceError):
+            telemetry.record('synthetic transcript content')
+        with self.assertRaises(VoiceError):
+            telemetry.record('browser_scheduled', duration_ms=float('nan'))
+        with self.assertRaises(VoiceError):
+            telemetry.record('browser_scheduled', duration_ms=-1)
+
+    def test_provider_tls_uses_certifi_without_disabling_verification(self):
+        import ssl
+        provider = ElevenLabsProvider(None, 'synthetic', 'agent_fixture')
+        self.assertEqual(provider.ssl_context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(provider.ssl_context.check_hostname)
 
     def test_context_refuses_identity_or_screen_authority(self):
         for update in [{'taskId': 'other'}, {'active': False}, {'permissions': {'screen': True, 'presentation': False, 'control': False}}]:
@@ -272,6 +334,44 @@ class ConfigTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_referenced_tools_resolved_and_normalized_defaults_checked(self):
+        config = normalized_provider()
+        prompt = config['conversation_config']['agent']['prompt']
+        prompt['tool_ids'] = ['tool_fixture_' + str(number) for number in range(3)]
+        tool_lookup = {identity: {'id': identity, 'tool_config': copy.deepcopy(tool), 'response_mocks': []}
+                       for identity, tool in zip(prompt['tool_ids'], prompt['tools'])}
+        provider = ElevenLabsProvider(None, 'synthetic', 'agent_fixture')
+        async def get(path):
+            return copy.deepcopy(config if path.startswith('/agents/') else tool_lookup[path.split('/')[-1]])
+        provider.get = AsyncMock(side_effect=get)
+        self.assertEqual(await provider.readiness(), 1200)
+        self.assertEqual(provider.get.await_count, 4)
+        tool_lookup['tool_fixture_0']['tool_config']['execution_mode'] = 'async'
+        with self.assertRaises(VoiceError):
+            await provider.readiness()
+        tool_lookup['tool_fixture_0']['tool_config']['execution_mode'] = 'immediate'
+        tool_lookup['tool_fixture_0']['response_mocks'] = [{'synthetic': True}]
+        with self.assertRaises(VoiceError):
+            await provider.readiness()
+        tool_lookup['tool_fixture_0']['response_mocks'] = []
+        tool_lookup['tool_fixture_0']['id'] = 'wrong_identity'
+        with self.assertRaises(VoiceError):
+            await provider.readiness()
+
+    async def test_normalized_workflow_cannot_hide_actions_or_external_destinations(self):
+        config = normalized_provider()
+        self.assertEqual(validate_provider(config), 1200)
+        for mutate in [
+            lambda value: value['workflow']['edges'].update(edge={'source': 'start_node'}),
+            lambda value: value['workflow']['nodes']['start_node'].update(type='tool'),
+            lambda value: value['platform_settings']['workspace_overrides']['cloud_storage_export'].update(destination_id='destination'),
+            lambda value: value['platform_settings']['workspace_overrides']['webhooks'].update(post_call_webhook_id='webhook'),
+        ]:
+            changed = copy.deepcopy(config)
+            mutate(changed)
+            with self.assertRaises(VoiceError):
+                validate_provider(changed)
+
     async def test_local_websocket_uses_prepared_first_message_pcm_and_task_api(self):
         api_calls, provider_messages = [], []
         peer_socket = None

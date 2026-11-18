@@ -8,6 +8,7 @@ import { Store } from "../src/storage/store.js";
 import { Vault } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
 import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
+import { ProtectedTaskStore } from "../src/storage/task-store.js";
 
 const stores: Store[] = [];
 afterEach(() => {
@@ -124,6 +125,21 @@ function fixture() {
 }
 
 describe("task-bound voice ledger", () => {
+  it("projects polished wording for an existing bound brief without rewriting task evidence", () => {
+    const f = fixture();
+    const task = f.ready();
+    task.brief!.opening = "Old developer diagnostic wording.";
+    new ProtectedTaskStore<CodingTask>(f.store, f.vault, "coding-task-v1").put(
+      task,
+    );
+    const before = f.tasks.get(f.session.id, task.id);
+    const voice = f.open(task).voice;
+    expect(voice.opening).toBe("Choose empty state.");
+    expect(f.tasks.get(f.session.id, task.id)).toEqual(before);
+    expect(voice.openedRunId).toBe(task.runs.at(-1)!.id);
+    expect(voice.openedRevision).toBe(task.revision);
+  });
+
   it("opens only the prepared current brief with explicit task voice permission", () => {
     const f = fixture();
     const queued = f.create();

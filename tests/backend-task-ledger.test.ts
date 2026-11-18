@@ -8,7 +8,7 @@ import type {
   TaskCommand,
   TaskVerification,
 } from "../src/contracts.js";
-import { TaskLedger } from "../src/attention/task-ledger.js";
+import { buildTaskBrief, TaskLedger } from "../src/attention/task-ledger.js";
 import { Store } from "../src/storage/store.js";
 import { Vault } from "../src/storage/security.js";
 
@@ -393,6 +393,30 @@ describe("independent task ledger", () => {
       "The configured checks passed. Please review the result.",
     );
   });
+
+  it.each(["failed", "blocked"] as const)(
+    "leads with the actual product choice when checks are %s",
+    (state) => {
+      const f = fixture();
+      const task = f.verify(
+        f.result(f.claim(f.create()), {
+          decision: "What should appear when no tasks match?",
+        }),
+        state,
+      );
+      const original = structuredClone(task);
+      const brief = buildTaskBrief(task);
+      expect(brief.opening).toBe(
+        "What should appear when no tasks match? The result still needs to pass its checks.",
+      );
+      expect(brief.opening).not.toContain("fixture test");
+      expect(brief.opening).not.toContain("checks passed");
+      expect(task.verification!.checks[0]!.name).toBe("fixture test");
+      expect(task).toEqual(original);
+      expect(brief.runId).toBe(task.runs.at(-1)!.id);
+      expect(brief.verificationId).toBe(task.verification!.id);
+    },
+  );
 
   it("does not claim running cancellation succeeded before terminal evidence", () => {
     const f = fixture();

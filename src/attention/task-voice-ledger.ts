@@ -7,7 +7,7 @@ import type {
 import { DomainError, hash, id, Vault } from "../storage/security.js";
 import { Store } from "../storage/store.js";
 import { ProtectedTaskStore } from "../storage/task-store.js";
-import { TaskLedger } from "./task-ledger.js";
+import { buildTaskBrief, TaskLedger } from "./task-ledger.js";
 
 interface VoiceEvent {
   id: string;
@@ -133,7 +133,7 @@ export class TaskVoiceLedger {
         sessionId: session.id,
         openedRunId: run.id,
         openedRevision: task.revision,
-        opening: task.brief.opening,
+        opening: buildTaskBrief(task).opening,
         createdAt: this.clock(),
         expiresAt: Math.min(session.expiresAt, this.clock() + 30 * 60_000),
         mode: "local_audio",

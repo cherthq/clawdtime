@@ -54,12 +54,15 @@ media/.venv/bin/python media/task_voice_local.py provider-template \
   --voice-id REPLACE_WITH_EXPLICIT_VOICE_ID
 ```
 
-The precise external prerequisite is authorization to create/configure a
-**dedicated independent-task ElevenLabs agent** using that body and to use its
-scoped API key for one local microphone/speaker qualification. The historical
-original-chat agent exposes incompatible tools and must not be silently changed
-or reused. Creation/configuration, credential access, provider audio sessions,
-phone calls and deployment have not occurred under this implementation.
+The user authorized protected credential access, creation of a **dedicated
+independent-task ElevenLabs agent**, and local microphone/speaker qualification.
+The coordinating lead created that agent and verified its read-only configuration
+and exact tool definitions. Two local provider sessions completed, but microphone
+qualification failed: the person heard the opening and the provider received no
+finalized human transcript. Both sessions are confirmed ended. See
+[BUILD_LOG.md](../BUILD_LOG.md) for the acceptance evidence. No handset call or
+deployment occurred; step c remains incomplete. The historical original-chat
+agent exposes incompatible tools and must not be silently changed or reused.
 
 The template requires authenticated access, the exact three client tools, no
 server tools/MCP/workflows, PCM16 at 16 kHz, prompt/first-message overrides,
@@ -75,7 +78,7 @@ required 20-second pause at configuration level; it does not prove conversationa
 quiet or absence of presence checks beyond 30 seconds. Those remain observed
 acceptance checks. See [ElevenLabs conversation flow](https://elevenlabs.io/docs/eleven-agents/customization/conversation-flow).
 
-After that separate authorization and configuration, the lead can supply an
+For the authorized local qualification, the lead supplies an
 owner-only provider JSON file with `elevenlabsAgentId` and `elevenlabsApiKey`, then:
 
 ```sh
@@ -84,13 +87,45 @@ media/.venv/bin/python media/task_voice_local.py run \
   --provider-file /absolute/private/provider.json --port 3321
 ```
 
+For an authorized local qualification, append
+`--diagnostics-file /absolute/private/new-voice-timing.json`. The file must not
+already exist and its parent must be owner-only. It contains bounded event counts,
+monotonic first/last timestamps and recent timing events after shutdown, without
+transcripts, raw audio, provider identities, URLs or credentials. Browser audio
+onset detection is diagnostic only: only provider interruption events clear
+playback. Browser scheduling, clearing and input-energy measurements remain
+application observations; the person must confirm actual hearing and interruption.
+
+Provider preflight uses the pinned certifi CA bundle with certificate and hostname
+verification enabled. It resolves the exact referenced tool IDs read-only and
+compares every definition against the inline and local tool contract, allowing
+only observed inert provider defaults. Empty start-node workflow and unconfigured
+webhook/export defaults do not grant any provider-side action. Real destinations,
+subagents, data collection, unexpected tools or mocks remain refused. The provider
+rejected `parameters.additionalProperties` in the creation body; it is omitted
+from that provider schema while local tool requests still require exact empty
+parameters.
+
 The launcher prints a private local HTML file path, never its capability URL or
-provider credentials. Open that file, follow its local link, then choose **Start
-voice** to grant microphone access. The local page requests `audio` with echo
-cancellation and `video:false`; it has no screen-capture API. The server binds
-127.0.0.1, checks Host/Origin and its fresh capability, disables access logging,
-and admits one local WebSocket only. Closing the page or choosing Stop ends
-voice. A fresh explicitly admitted voice session is needed after disconnect.
+provider credentials. Open that file and follow its local link. Choose **Check
+microphone** to grant local audio access, confirm the displayed microphone name,
+and speak a short sentence. The input meter must move, the audio engine must be
+running, and the current input track must be live and unmuted before **Start
+voice** becomes available. Microphone checks do not open a provider connection.
+If the browser selected a Continuity or other unwanted input, choose the built-in
+microphone from the selector, then check again. Selection changes stop the previous
+tracks and audio graph; device names and IDs are not written to diagnostics.
+**Resume audio** explicitly resumes a paused local engine; speak again to qualify
+its input. **Stop microphone** releases capture without consuming the one-shot
+voice session. Closing the page releases the local microphone too.
+
+Choose **Start voice** only after the microphone passes. This resumes the qualified
+local graph under a user gesture and opens the provider session once. The page
+requests `audio` with echo cancellation and `video:false`; it has no screen-capture
+API. The server binds 127.0.0.1, checks Host/Origin and its fresh capability, disables
+access logging, and admits one local WebSocket only. Closing the page, losing the
+active audio engine, or choosing **Stop voice** ends voice. A fresh explicitly
+admitted voice session is needed after disconnect; there is no automatic restart.
 
 Audio, transcripts and provider context are transient in the media process.
 The backend retains bounded finalized utterances and instruction receipts in
@@ -117,6 +152,19 @@ interval check advances a synthetic clock; it does not establish the actual
 20-second listening pause, useful speech latency, a ten-minute conversation, or
 physical audibility. Those must be measured with the authorized local provider
 session and then the separate c.1 voice-only handset call.
+
+The synthetic browser regression additionally requires the repository's npm
+dependencies (`@playwright/test`) and an installed Google Chrome executable:
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_task_voice_browser.py'
+```
+
+It runs the actual HTML and AudioWorklet with Chromium's fake microphone against
+a localhost fake provider. It checks suspended-input refusal, local check/stop/retry,
+no provider opening before explicit Start, PCM delivery, playback and cleanup.
+It does not access the hardware microphone or qualify physical audibility,
+Continuity device selection, provider ASR, or conversational responsiveness.
 
 Protocol references: [ElevenLabs Agent WebSocket API](https://elevenlabs.io/docs/eleven-agents/api-reference/eleven-agents/websocket)
 and [client WebSocket integration](https://elevenlabs.io/docs/eleven-agents/libraries/web-sockets),

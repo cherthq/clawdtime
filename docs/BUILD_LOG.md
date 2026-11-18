@@ -208,3 +208,104 @@ Final frozen-source validation before the partial c commit: `npm run check` pass
 45 files / 668 tests, typecheck and build; full media unittest passed 211 tests
 with no skips. Original Argos checkout still has the same four untracked drafts;
 no changes were made there. The partial-c commit is intentionally untagged.
+
+## November 18, 2026 — authorized local voice qualification
+
+The user explicitly authorized protected ElevenLabs credential use, a dedicated
+independent-task agent, and local microphone/speaker qualification. This does not
+authorize a handset call, line operation or deployment. Only the lead accessed the
+owner-only provider configuration; existing provider agents remain unchanged.
+
+Read-only schema and account preflight found concrete integration gaps: local Python
+needed an explicit certifi trust store; provider tool schemas reject JSON Schema
+`additionalProperties`; normalized agent reads use referenced tools plus inline
+definitions and an inert start-only workflow. The first create returned a definite
+422 and its rejected receipt was preserved. The corrected create returned 200;
+its receipt and credentials are stored outside Git. No uncertain create was retried.
+GET validation now fetches each of the three exact referenced tools, rejects mocks
+or non-client behavior, compares complete normalized definitions and permits only
+observed inert provider defaults. Privacy, overrides, TLS verification, absence of
+active hooks/export destinations and explicit interruption settings remain checked.
+
+A fresh real Codex run finished in 21,889 ms and independent checks found the
+intentional unresolved empty state. The local opening projects the same verified
+evidence as a concise question without developer fixture/check names. No worker,
+report or task revision was replayed to update that wording. The task service was
+restarted only while that run was known terminal and awaiting its decision.
+
+Local qualification uses the existing Mac microphone/speaker only, explicit browser
+Start, a separate voice capability and no screen capture. Application timing export
+contains bounded counts and monotonic times, no transcripts/audio/credentials.
+Browser onset/queue-clearing timing is not physical audibility or handset evidence.
+
+First local audio attempt: the user heard the prepared introduction but reported
+no response to speech. Application/provider metadata showed one agent turn and no
+finalized human turn; no instruction or follow-up run was dispatched. The provider
+reported a clean client disconnect and the local voice receipt ended. This is a
+failed conversational qualification, not a completed step c. Input signal/transport
+was not measured in that build, so the cause remains unproven.
+
+Added content-free per-hop PCM counts and aggregate peak/RMS values, plus a
+browser-only microphone label and live level meter. Neither microphone labels nor
+raw PCM are retained. A real Chromium fake-microphone test exercised the actual
+HTML/AudioWorklet, binary browser socket and local fake-provider base64 path with
+matching nonzero chunks/bytes. It also exposed concurrent close callers observing
+stopped admission before completed cleanup. Close now joins one shielded cleanup
+task; the browser regression verifies the completed close event.
+
+The second local attempt uses a fresh voice admission for the same terminal task
+and new private diagnostic file. The previous voice is ended; its receipts remain
+preserved. No uncertain external effect, coding instruction or run was replayed.
+
+Second local attempt: closed after approximately 2.9 seconds, with zero PCM input
+chunks and three scheduled output chunks. The subsequent playback acknowledgement
+timed out. Both local end/close and provider done/client-disconnect receipts were
+confirmed; no human transcript or new run exists. The user observed no microphone
+meter movement and suspected a phone/Continuity microphone. This establishes a
+local audio-path failure; provider ASR failure is not established. Read-only agent
+inspection confirmed audio mode (`text_only:false`) and PCM 16 kHz input.
+
+Rather than connect another provider conversation without microphone evidence,
+the local page is being changed to check the selected microphone first, display
+its signal/context state, and allow an explicit device choice before Start voice.
+No system microphone preference or phone-line setting is changed automatically.
+
+Validation before the microphone-preflight edits: `npm run check` passed 671 tests
+in 45 files, typecheck and build. `media/.venv/bin/python -m unittest discover -s
+media -p 'test_*.py'` passed all 217 tests in 51.981 seconds. Independent connector
+review passed 26 task-voice tests including Chromium fake-mic transport, plus 42
+backend authority tests and a concurrent-close cancellation probe. Review found
+no permission/privacy weakening; it requested child-process cleanup on harness
+timeout and opening with the actual question. Both are assigned for correction;
+full frozen-source checks will be rerun before any commit.
+
+The revised local page separates microphone qualification from provider startup:
+Check microphone captures locally, offers explicit input selection, shows live
+signal and audio state, and enables Start voice only with recent nonzero PCM,
+a running context, and a live unmuted track. Suspended audio has an explicit
+Resume control. Local Stop and device changes dispose old graphs; generation and
+attempt tokens reject late device acquisition and old worklet samples. No preflight
+samples leave the browser. Provider audio-only mode is now explicitly validated.
+The synthetic browser regression also exercises suspended refusal, delayed device
+acquisition/Stop/recheck, no provider opening before Start, and cleanup. Its owned
+child process group is terminated/joined on timeout. No user Chrome process is killed.
+
+The first sentence now directly states the actual decision question, as requested
+by independent review. Projection changes no existing task or verification receipt.
+
+Frozen-source validation for the local-audio diagnostic checkpoint:
+- `npm run check`: 45 files / 671 tests passed, typecheck and build passed.
+- `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
+  all 217 tests passed in 52.107 seconds, including final Chromium preflight code.
+- Independent connector final review: no remaining actionable blocker in preflight,
+  capture-generation/attempt fencing, Stop/recheck or permission/privacy boundaries;
+  separately reran 25 runtime tests successfully. Media final targeted suite passed
+  26 including actual Chromium with synthetic microphone and fake provider.
+- No Swift/gateway source changed; Swift validation is not applicable.
+- `git diff --check` passed; changed source reviewed for unrelated edits and literal
+  credentials/provider identities/capability URLs. None were added.
+
+A third local voice capability is admitted for the unchanged known-terminal task,
+but the user is first checking microphone signal locally. This checkpoint remains
+partial step c: no successful spoken instruction/follow-up-run acceptance yet,
+no step-c tag, and no handset authorization or presentation work.
