@@ -1071,3 +1071,51 @@ Swift source is unchanged. `git diff --check` passed. The final diff was reviewe
 for unrelated changes and credentials; the only credential-pattern scan match
 was the explicitly synthetic project key in a bootstrap test fixture. No secrets,
 real screens/audio or runtime records are included.
+
+### Step d — first visual call: native reports `outbound_not_answered`
+
+Handset integration checkpoint `d7bacf8` is pushed. The user explicitly authorized
+one visual call up to fifteen minutes, prepared-view export and spoken revisions,
+with the proposed ClawdTime-backend-only standby/restore procedure. Fresh checks
+confirmed the exact paired recipient/device, view permission, idle native line,
+automatic audio/video prerequisites, no hosted pending/unknown effects, and
+unchanged prepared artifacts. Both independent fixture checks passed again. The
+user brought all three exact source windows onto the current desktop; metadata
+resolution then passed without weakening the offscreen guard.
+
+Two local setup failures occurred before any call: the existing verification-plan
+file was mode 0644, so it was tightened to 0600; the initial inspector bundled
+dependencies into a roughly 790 KB SSH argument, so it was rebuilt with installed
+packages external and minification (21,590 bytes). The compact inspector's real
+read-only backend handshake passed. Each failed setup confirmed cleanup and
+released ownership; no media/call effect was replayed. The operator guide now
+documents these concrete preparation requirements.
+
+Exactly one new visual call was submitted. Media preparation completed in 3.573s
+and the native dial submission in 854ms. The exact preview scene had a fresh SDK
+frame acceptance receipt; this is not handset visibility evidence. The native
+provider recorded dialing, ending, failed and cleanup_complete, with
+`terminal_detail: outbound_not_answered`, no started timestamp and no bridge-ready
+event. No media activation receipt or provider conversation was created; speech
+frames were zero. The handset observation is requested separately and remains
+pending at this checkpoint. Do not infer that the human saw a ring or rejected it.
+
+Native end and media close both completed; capture, narration, output and child
+cleanup are all confirmed. Ports 13323, 13324 and 3322 are closed and the task
+owner lock is released. Task revision 11 remains review-ready with its same
+verified run; no spoken revision or new coding run occurred. All metadata receipts
+are preserved privately under `visual-1/`; no raw screen/audio was saved.
+
+Restoration was submitted once after confirmed cleanup. Backend deployment
+`a0b95d02-b545-4c7b-8c2f-4c150578d31a` is successful; the temporary standby instance
+is removed. Every variable equals the pre-test snapshot. Fresh runtime evidence
+reports live mode, traffic enabled, zero active calls, zero pending effects and
+zero unknown effects. Apple Teams and sibling chert-facetime remain untouched.
+The one-call authorization is consumed; no redial occurred. Step d remains open
+and untagged, with a fresh specific call authorization needed for another attempt.
+
+For this evidence/operator-documentation checkpoint, `npm run check` passed
+**1,027 tests in 65 files** (12.13s), typecheck and build. Python and Swift source
+are unchanged from `d7bacf8` (327 media tests and 31 Swift tests/helper build
+passed there). `git diff --check` passed. Connector independently reviewed and
+approved the evidence distinctions, cleanup/restore report and operator guidance.

@@ -37,6 +37,19 @@ one-call authorization identifier. See the strict schema in
 [`scripts/task-handset.ts`](../scripts/task-handset.ts). Only the coordinating
 lead handles these files, credentials or line operations.
 
+Build the read-only inspector as a compact ESM bundle, with the deployed backend's
+installed dependencies external. A dependency-inlined bundle can exceed the SSH
+command transport's practical size even though it runs locally:
+
+```sh
+node_modules/.bin/esbuild scripts/task-native-inspect.ts --bundle --platform=node --format=esm --packages=external --minify --outfile=/absolute/private/native-inspector.mjs
+chmod 600 /absolute/private/native-inspector.mjs /absolute/private/checks.json
+```
+
+Verify the inspector's exact `{ready:true,version:1}` read-only handshake before
+starting the operator. The verification plan is also owner-only, even though it
+contains no provider credential. These preparation checks do not dial.
+
 `presentationFile` contains exactly `{manifest, grant}` using the current task
 presentation schemas. The immutable manifest includes the task/run/revision,
 verification, exact window/process/display identities, bounded camera regions,

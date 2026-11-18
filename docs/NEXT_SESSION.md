@@ -1,10 +1,14 @@
 # Step d: local accepted; handset integration awaiting physical qualification
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
-Local acceptance checkpoint `74d1abf` is pushed. Latest completed step remains
+Handset integration checkpoint `d7bacf8` is pushed. Latest completed step remains
 `59b8e24`, annotated `step-c1-done`. The Deepgram audio-only handset test passed
-and the hosted backend was restored. No subsequent live call or deployment has
-occurred. Original checkout and drafts remain untouched.
+and the hosted backend was restored. The subsequent first visual call was
+submitted once, but the native provider reports `outbound_not_answered` with no
+connected/bridge-ready event or speech output. The human's handset observation
+is pending. All cleanup is confirmed and the backend is restored to live with
+traffic enabled, zero pending/unknown effects and no active calls. Original
+checkout and drafts remain untouched.
 
 The user confirmed the annotated three-scene local walkthrough:
 **“Audio clear; visuals good.”** All six show/narration effects completed. Visible
@@ -37,7 +41,10 @@ visibility, audibility or remote clearance.
 
 ## Resume
 
-1. Verify the current checkpoint is committed/pushed and its checks passed.
+1. Reconcile the human's observation of the first visual call. Inspect the preserved
+   `visual-1/` metadata if necessary; never replay it. Verify the current checkpoint
+   is committed/pushed and its checks passed. Use the compact external-dependency
+   inspector bundle and an owner-only verification-plan file as documented.
 2. Obtain fresh specific authorization for one visual handset call and, if
    required, a temporary ClawdTime-backend-only standby/restore window. Prior
    audio-only permissions are spent and do not authorize visual export.
