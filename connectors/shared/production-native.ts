@@ -161,6 +161,14 @@ const ownershipSchema = z
         owner.epoch === 0),
     "Claimed ownership requires its concrete policy revision.",
   );
+const ownershipReceiptSchema = z.object({
+  requestId: z.string(),
+  sessionId: z.string(),
+  executor: z.enum(["native", "none"]),
+  state: z.enum(["working", "idle"]),
+  epoch: z.number().int().positive(),
+  policyRevision: z.number().int().positive(),
+});
 
 /** Original-chat choreography. Bounded edits/moves still use that chat's native CUA. */
 export class ProductionWalkthroughController {
@@ -198,12 +206,23 @@ export class ProductionWalkthroughController {
     );
   }
   status() {
+    const preparedExpiresAt =
+      this.pending &&
+      this.last?.phase === "prepared" &&
+      this.last.id === this.pending.operation.operationId &&
+      this.last.envelope.fingerprint === this.pending.fingerprint
+        ? this.last.envelope.binding.expiresAt
+        : null;
     return {
       stopped: this.stopped,
       dispatchAttempted: this.dispatchAttempted,
       busy: this.busy,
       scene: this.scenes.status(),
       prepared: this.pending ? structuredClone(this.pending) : null,
+      preparedExpiresAt,
+      preparedExpired:
+        preparedExpiresAt !== null &&
+        preparedExpiresAt <= (this.options.clock ?? Date.now)(),
       receipt: this.last ? structuredClone(this.last) : null,
     };
   }
@@ -244,6 +263,7 @@ export class ProductionWalkthroughController {
   private async transfer(
     executor: "native" | "none",
     previousOutcome: "idle" | "completed",
+    expected?: NativePresentationOperation["expected"],
   ) {
     if (!this.options.backgroundActorsStopped())
       throw new Error(
@@ -253,23 +273,43 @@ export class ProductionWalkthroughController {
     const expectedOwner = executor === "native" ? "none" : "native";
     if (
       owner.executor !== expectedOwner ||
-      owner.state !== (executor === "native" ? "idle" : "working")
+      owner.state !== (executor === "native" ? "idle" : "working") ||
+      (executor === "none" &&
+        (!expected ||
+          expected.requestId !== owner.requestId ||
+          expected.sessionId !== owner.sessionId ||
+          expected.epoch !== owner.epoch ||
+          expected.policyRevision !== owner.policyRevision ||
+          expected.cursor !== owner.cursor))
     )
       throw new Error(
         "Walkthrough ownership changed; do not transfer it automatically.",
       );
-    await this.options.client.conversationOperation(
-      this.options.requestId,
-      "execution",
-      {
-        expectedEpoch: owner.epoch,
-        executor,
-        previousOutcome,
-        backgroundActorsStopped: true,
-        expectedCursor: owner.cursor,
-      },
+    const receipt = ownershipReceiptSchema.parse(
+      await this.options.client.conversationOperation(
+        this.options.requestId,
+        "execution",
+        {
+          expectedEpoch: owner.epoch,
+          executor,
+          previousOutcome,
+          backgroundActorsStopped: true,
+          expectedCursor: owner.cursor,
+        },
+      ),
     );
     this.valid();
+    if (
+      receipt.requestId !== owner.requestId ||
+      receipt.sessionId !== owner.sessionId ||
+      receipt.executor !== executor ||
+      receipt.epoch !== owner.epoch + 1 ||
+      receipt.state !== (executor === "native" ? "working" : "idle")
+    )
+      throw new Error(
+        "Ownership acknowledgement changed; inspect the original transfer without retry.",
+      );
+    return receipt;
   }
   /** No native effect: reset scene, claim native, resolve and reserve exactly one operation. */
   prepare(
@@ -284,8 +324,15 @@ export class ProductionWalkthroughController {
         );
       await this.scenes.begin(sceneId);
       this.valid();
-      await this.transfer("native", "idle");
+      const claim = await this.transfer("native", "idle");
       const owner = await this.owner();
+      if (
+        owner.executor !== "native" ||
+        owner.state !== "working" ||
+        owner.epoch !== claim.epoch ||
+        owner.policyRevision !== claim.policyRevision
+      )
+        throw new Error("Claimed native ownership changed before preparation.");
       const camera = cameraStatusSchema.parse(
         await this.options.client.screenCamera(this.options.requestId),
       );
@@ -372,7 +419,7 @@ export class ProductionWalkthroughController {
         throw new Error(
           "Exact native window was not verified; retain ownership and inspect the receipt.",
         );
-      await this.transfer("none", "completed");
+      await this.transfer("none", "completed", pending.operation.expected);
       this.pending = undefined;
       await this.scenes.presentLive();
       this.valid();
@@ -408,7 +455,11 @@ export class ProductionWalkthroughController {
           throw new Error(
             "Prepared cancellation is unconfirmed; preserve ownership.",
           );
-        await this.transfer("none", "completed");
+        await this.transfer(
+          "none",
+          "completed",
+          this.pending.operation.expected,
+        );
         this.pending = undefined;
       }
       if (this.scenes.status().generation !== expectedGeneration)

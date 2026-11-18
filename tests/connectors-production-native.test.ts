@@ -367,12 +367,13 @@ function fixture() {
     return structuredClone(saved) as never;
   });
   let actorsStopped = true;
+  let now = 10000;
   const controller = new ProductionWalkthroughController({
     client,
     requestId: "request",
     sessionId: "session",
     plan,
-    clock: () => 10000,
+    clock: () => now,
     backgroundActorsStopped: () => actorsStopped,
   });
   const reference = () => ({
@@ -386,6 +387,9 @@ function fixture() {
     owner,
     plan,
     reference,
+    setTime: (value: number) => {
+      now = value;
+    },
     setState: (v: string) => {
       dispatchState = v;
     },
@@ -399,6 +403,65 @@ function fixture() {
 }
 
 describe("production walkthrough lifecycle", () => {
+  it("reports the original preparation expiry without renewing or redispatching it", async () => {
+    const f = fixture();
+    await f.controller.prepare("finder", "operation");
+    expect(f.controller.status()).toMatchObject({
+      preparedExpiresAt: 20000,
+      preparedExpired: false,
+    });
+    f.setTime(19999);
+    expect(f.controller.status()).toMatchObject({
+      preparedExpiresAt: 20000,
+      preparedExpired: false,
+    });
+    f.setTime(20000);
+    expect(f.controller.status()).toMatchObject({
+      preparedExpiresAt: 20000,
+      preparedExpired: true,
+    });
+    expect(f.events).not.toContain("dispatch");
+    expect(f.events.filter((v) => v === "prepare")).toHaveLength(1);
+  });
+
+  it("does not prepare under a replacement native claim after its own claim acknowledgement", async () => {
+    const f = fixture();
+    const transfer = vi.mocked(f.client.conversationOperation);
+    const original = transfer.getMockImplementation()!;
+    transfer.mockImplementation(async (...args) => {
+      const receipt = await original(...args);
+      f.owner.epoch += 2;
+      return receipt;
+    });
+    await expect(f.controller.prepare("finder", "operation")).rejects.toThrow(
+      "Claimed native ownership changed",
+    );
+    expect(f.events).not.toContain("prepare");
+  });
+
+  it.each(["epoch", "policyRevision", "cursor"])(
+    "does not release a different native %s after its operation finishes",
+    async (field) => {
+      const f = fixture();
+      await f.controller.prepare("finder", "operation");
+      f.setHook(() => {
+        if (field === "epoch") f.owner.epoch += 2;
+        if (field === "policyRevision") f.owner.policyRevision = 2;
+        if (field === "cursor") {
+          f.owner.cursor++;
+          f.owner.acknowledgedCursor++;
+        }
+      });
+      await expect(f.controller.executePrepared(f.reference())).rejects.toThrow(
+        "ownership changed",
+      );
+      expect(f.events.filter((v) => v === "dispatch")).toHaveLength(1);
+      expect(f.events).not.toContain("owner:none");
+      expect(f.events).not.toContain("present");
+      expect(f.owner.executor).toBe("native");
+    },
+  );
+
   it("claims an initial idle epoch-zero owner without a policy revision", async () => {
     const f = fixture();
     expect(f.owner).toMatchObject({

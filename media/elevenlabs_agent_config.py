@@ -7,7 +7,7 @@ import argparse
 import json
 import re
 
-from elevenlabs_frontend import PROMPT, client_tool_definitions, validate_agent
+from elevenlabs_frontend import MIN_CONVERSATION_SECONDS, PROMPT, client_tool_definitions, validate_agent
 
 
 def configuration(voice_id):
@@ -18,8 +18,8 @@ def configuration(voice_id):
         'conversation_config': {
             'asr': {'user_input_audio_format': 'pcm_16000'},
             'tts': {'model_id': 'eleven_flash_v2', 'voice_id': voice_id, 'agent_output_audio_format': 'pcm_16000'},
-            'turn': {'turn_timeout': 10, 'turn_eagerness': 'normal'},
-            'conversation': {'max_duration_seconds': 180, 'client_events': [
+            'turn': {'turn_timeout': 10, 'turn_eagerness': 'normal', 'silence_end_call_timeout': -1},
+            'conversation': {'max_duration_seconds': MIN_CONVERSATION_SECONDS, 'client_events': [
                 'audio', 'interruption', 'user_transcript', 'agent_response', 'agent_response_correction']},
             'agent': {'language': 'en', 'first_message': '',
                 'prompt': {'prompt': PROMPT, 'llm': 'gemini-2.5-flash', 'temperature': .3,

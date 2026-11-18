@@ -30,6 +30,8 @@ AUDIO_QUEUE_EVENTS = 1024
 AUDIO_EVENT_BYTES = 10 * 16000 * 2
 AUDIO_EVENT_ENCODED = 4 * ((AUDIO_EVENT_BYTES + 2) // 3)
 WS_MESSAGE_BYTES = 512 * 1024
+MIN_CONVERSATION_SECONDS = 600
+MAX_CONVERSATION_SECONDS = 7200
 PLAYBACK_QUEUE_STALL_SECONDS = 3.0
 FAULT_CODES = frozenset(('audio_invalid', 'audio_byte_capacity', 'audio_event_capacity',
                         'audio_event_size', 'playback_queue_stalled',
@@ -176,6 +178,13 @@ def validate_agent(config, tools):
     prompt = conversation.get('agent', {}).get('prompt', {})
     privacy = platform.get('privacy', {})
     override = platform.get('overrides', {}).get('conversation_config_override', {}).get('agent', {})
+    duration = conversation.get('conversation', {}).get('max_duration_seconds')
+    silence = conversation.get('turn', {}).get('silence_end_call_timeout')
+    # The provider enforces this independently of our active-call lifetime.
+    # Require explicit bounds: an omitted field silently uses provider defaults.
+    if (type(duration) is not int or not MIN_CONVERSATION_SECONDS <= duration <= MAX_CONVERSATION_SECONDS
+            or type(silence) not in (int, float) or silence != -1):
+        raise ValueError('ElevenLabs conversation lifetime is not qualified')
     if (conversation.get('asr', {}).get('user_input_audio_format') != 'pcm_16000'
             or conversation.get('tts', {}).get('agent_output_audio_format') != 'pcm_16000'
             or conversation.get('tts', {}).get('model_id') != 'eleven_flash_v2'
@@ -287,6 +296,7 @@ async def validate_configured_agent(owner, getter=None):
                     raise ValueError('ElevenLabs inline and referenced tools differ')
             tools = resolved
         validate_agent(config, tools)
+        return config['conversation_config']['conversation']['max_duration_seconds']
 
 
 async def readiness(owner):
@@ -306,6 +316,8 @@ class ElevenLabsFrontend:
         self.parent = parent
         self.ws = None
         self.socket_http = None
+        self.socket_started_at = None
+        self.provider_duration_seconds = 0
         self.ready = asyncio.Event()
         self.closed = False
         self.tasks = set()
@@ -360,9 +372,16 @@ class ElevenLabsFrontend:
             if not result.cancelled() and result.exception() and not self.closed and not self.ending:
                 # No exception text/traceback: provider bodies and transcripts
                 # may appear in arbitrary upstream exceptions.
-                logging.error('voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d publicationQueueDepth=%d',
+                close_code = getattr(self.ws, 'close_code', None)
+                close_code = int(close_code) if isinstance(close_code, int) and 1000 <= close_code <= 4999 else 0
+                close_class = {0: 'unavailable', 1000: 'normal', 1001: 'going_away',
+                               1006: 'abnormal'}.get(close_code, 'other')
+                elapsed = (max(0, int((time.monotonic() - self.socket_started_at) * 1000))
+                           if self.socket_started_at is not None else 0)
+                logging.error('voice_frontend_failed stage=%s code=%s queuedBytes=%d queuedEvents=%d publicationQueueDepth=%d providerCloseCode=%d providerCloseClass=%s providerSessionMs=%d providerLimitSeconds=%d',
                               stage, failure_code(result.exception()),
-                              self.audio_bytes, self.audio_events.qsize(), self.parent.audio.qsize())
+                              self.audio_bytes, self.audio_events.qsize(), self.parent.audio.qsize(),
+                              close_code, close_class, elapsed, self.provider_duration_seconds)
                 self.parent.request_failure('task_failed', 'capture_loop')
         task.add_done_callback(done)
         return task
@@ -390,7 +409,7 @@ class ElevenLabsFrontend:
 
     async def start(self):
         agent = self.parent.owner.env['ELEVENLABS_AGENT_ID']
-        await validate_configured_agent(self.parent.owner, self.provider_get)
+        self.provider_duration_seconds = await validate_configured_agent(self.parent.owner, self.provider_get)
         initial = await self.parent.owner.backend(f'/media/{self.parent.id}/voice/context?after=0')
         bounded_context(initial)
         signed = await self.provider_get('/conversation/get-signed-url?agent_id=' + agent)
@@ -401,6 +420,7 @@ class ElevenLabsFrontend:
                 or parsed.path != '/v1/convai/conversation' or not parsed.query):
             raise ValueError('ElevenLabs signed URL invalid')
         self.ws = await self.open_socket(url)
+        self.socket_started_at = time.monotonic()
         await self.send({'type': 'conversation_initiation_client_data',
                          'conversation_config_override': {'agent': {'prompt': {'prompt': PROMPT}, 'first_message': ''}}}, force=True)
         self.spawn(self.read(), 'read')

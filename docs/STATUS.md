@@ -1,3 +1,101 @@
+## November 17, 2026 — voice lifetime and activation recovery repair
+
+The dedicated voice provider agent had a 180-second conversation limit. Its exact
+prior conversation lasted 181 seconds and ended at the media failure timestamp.
+The provider setting is now 600 seconds, with silence termination disabled.
+The agent template and readiness validation enforce an explicit 600–7200-second
+limit and disabled silence termination. WebSocket failure diagnostics retain only
+bounded close metadata, elapsed time and configured limit; no reconnect or replay
+was added.
+
+The historical activation cancellation happened with 7.7 seconds of preparation
+authority remaining, ruling out ordinary planning expiry. Its generic receipt
+did not retain the failed precondition, so its exact cause cannot be reconstructed.
+New undispatched rejections preserve an allowlisted cause (including incoming
+speech, stale frame, changed ownership or local policy). The trigger displays the
+original expiry; claim/release acknowledgements now bind the exact owner epoch.
+Neither freshness nor permission checks were relaxed.
+
+Fixed a separate confirmed recovery bug: the original active session can now
+explicitly release native ownership after its call ends and every lease is
+released, with completed actors acknowledged and no unresolved input. Restart
+uncertainty and stopped sessions remain fenced. The prior restarted owner was
+reconciled separately through a guarded operator transaction after inspecting
+the exact rejected-before-dispatch operation, released lease, absent action
+records, joined controller, closed trigger and visibly stopped local helper.
+The immutable audit preserves the original owner record/hash and evidence;
+unknown speech playback remains unchanged. No effect was replayed.
+
+Validation: `npm run check` passes 1,213 tests in 72 files, typecheck and build.
+The full media suite passes 482 tests with 13 skips. Independent specialist review
+found no blocker in the new rejection and release paths. These are automated
+results, not a passing production walkthrough. One new call is authorized by the
+user, pending deployment and fresh readiness checks.
+
+## November 17, 2026 — receipt reconciled; production call connected
+
+The connector credential repair remains valid. The earlier setup notice's exact
+provider outbox row and terminal failure event establish a failed submission:
+five provider attempts ended with error 4001, “no iMessage account/service found,”
+without a message GUID or sent-key acknowledgement. A guarded reconciliation
+preserved the original unknown receipt in an immutable audit record and marked
+the effect failed with replay prohibited. No notice was resent. The upstream
+Messages account issue itself is not repaired; the established session's normal
+call path does not require a new setup notice, and message updates were disabled.
+
+One authorized production call connected through a fresh original-chat v2
+session. The human's spoken confirmation that the folders were visible arrived
+in this same coding chat and was acknowledged. This verifies initial handset
+screen visibility and one spoken turn, not the complete walkthrough.
+
+The first prepared Finder activation was rejected as `preparation_canceled`
+before native dispatch. No input, edit, move or scene transition was submitted.
+The generic rejection does not identify which dispatch precondition failed.
+The media service subsequently ended the call after
+`voice_frontend_failed stage=read code=provider_disconnected`; its outer
+`task_failed/capture_loop` classification does not establish a screen capture
+fault. The single spoken report retains an unknown playback receipt and was not
+replayed. No automatic redial occurred.
+
+Cleanup verified: local Stop visibly disabled sharing/control; the viewing lease
+is released, with no action receipts outstanding. Historical executor metadata
+still records native/working after the call ended; normal release requires an
+active lease, so that record was preserved rather than forcing a false release.
+The foreground bridge, walkthrough controller and trigger tab are closed.
+Backend readiness reports zero active calls, pending effects and unknown effects;
+the media service reports zero active sessions. Both services are healthy on
+implementation `89f78397c63b2e9362e764a0ab6b34ad42aa6623`, with presentation and
+native activation explicitly disabled. Gate-off deployments are backend
+`5327b17a-a451-4230-b947-d528fe7a98f6` and media
+`ea8e6129-1f6d-4d70-939a-cac41a49cfbd`. The full production walkthrough remains
+unaccepted pending diagnosis of the activation rejection and voice disconnect.
+
+## November 17, 2026 — earlier authorized attempt blocked before dialing
+
+The connector now uses the existing valid current-line pairing; the prior
+connection files and run receipts remain intact. Authentication and fresh
+same-chat v2 registration passed with native desktop, display camera, live
+presentation, native activation and ElevenLabs capabilities.
+
+The user authorized one production test call. Presentation/activation admission
+was enabled on backend and media using the same staged source image. The backend
+restart stopped the idle prepared session; it had no test or external effect.
+After reconciling that state, a new original-chat session registered and all live
+readiness checks passed. The installed companion was explicitly enabled locally.
+
+The setup notice was submitted once and retained an **unknown delivery outcome**.
+The call-start readiness guard refused before creating an attention request or
+call. The provider's exact operation lookup returned generic HTTP 404, which is
+not evidence that the message was absent or delivered. No resend, duplicate
+registration to evade the fence, manual receipt rewrite or FaceTime call occurred.
+The underlying provider submission failure remains undiagnosed; the standard-once
+transport cannot automatically reconcile this outcome.
+
+The approved setup test was canceled, the foreground bridge closed and local Stop
+was visibly confirmed. Both admission gates were set explicitly false again.
+The unknown notice receipt remains preserved and blocks subsequent live readiness.
+The credential repair remains valid. Handset acceptance was not exercised.
+
 ## November 17, 2026 — native walkthrough staged with admission off
 
 Implementation source `89f78397c63b2e9362e764a0ab6b34ad42aa6623` is committed and

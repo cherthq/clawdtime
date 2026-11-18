@@ -877,6 +877,20 @@ result additionally carries the exact independently observed window. Lost receip
 persistence leaves the original reservation in place. Reconciliation reads the
 same helper receipt and never submits the native effect again.
 
+Preflight rejection stores only an allowlisted cause; arbitrary peer exception
+text is never retained. Cancellation defaults to `preparation_canceled`, and a
+later cancellation cannot replace an existing terminal reason.
+
+After a call ends, its original active session may explicitly release execution
+with the current epoch, `executor:"none"`, `previousOutcome:"completed"` and
+`backgroundActorsStopped:true`. Every exact request lease must already be released,
+and all device input must be resolved. This acknowledgement grants no lease and
+does not require the helper to remain armed. Terminal native receipts remain
+unchanged. Call termination or a rejected preparation alone does not prove that
+external native actors have stopped. Restarted uncertain ownership, stopped
+sessions and uncertain actions or reservations remain fenced; this path is not
+operator recovery and does not erase an unknown result.
+
 Admission, audio qualification and doctor inspect these device-wide reservations.
 Preserve the ledger, original deadlines and unknown results during deployment and
 rollback. Older binaries do not enforce this new ledger: keep a compatible binary

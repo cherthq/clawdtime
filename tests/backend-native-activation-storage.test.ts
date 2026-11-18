@@ -8,7 +8,11 @@ import { hash } from "../src/storage/security.js";
 import { ClawdTime } from "../src/attention/service.js";
 import { SimulationTransport } from "../src/transport/simulation.js";
 import { assertAudioQualificationIdle } from "../src/attention/audio-qualification.js";
-import type { ProductionNativeEnvelope } from "../src/production-native-contracts.js";
+import {
+  productionNativeRejectionReasonSchema,
+  type ProductionNativeEnvelope,
+  type ProductionNativeRejectionReason,
+} from "../src/production-native-contracts.js";
 import {
   nativePresentationOperationSchema,
   type NativePresentationHostResult,
@@ -104,6 +108,34 @@ function returned(e = envelope()): NativePresentationHostResult {
 }
 
 describe("durable native device reservation", () => {
+  it("retains only allowlisted preflight rejection causes and preserves the original receipt", () => {
+    const j = new NativeReservationStore(store(), () => now);
+    j.reserve(envelope());
+    expect(() =>
+      j.cancelPrepared(
+        "native-operation",
+        "private peer exception" as ProductionNativeRejectionReason,
+      ),
+    ).toThrow();
+    expect(j.get("native-operation")?.phase).toBe("prepared");
+    expect(j.cancelPrepared("native-operation").result?.reason).toBe(
+      "preparation_canceled",
+    );
+    for (const [
+      index,
+      reason,
+    ] of productionNativeRejectionReasonSchema.options.entries()) {
+      const id = `rejection-${index}`;
+      j.reserve(envelope(id));
+      const rejected = j.cancelPrepared(id, reason);
+      expect(rejected.result?.reason).toBe(reason);
+      expect(rejected.envelope.nativeExpiresAt).toBeUndefined();
+      expect(() => j.cancelPrepared(id, "preflight_unavailable")).toThrow(
+        "undispatched",
+      );
+      expect(j.get(id)).toEqual(rejected);
+    }
+  });
   it("preserves an interrupted dispatch across database restart and never expires its fence", () => {
     const dir = mkdtempSync(join(tmpdir(), "clawdtime-native-"));
     directories.push(dir);

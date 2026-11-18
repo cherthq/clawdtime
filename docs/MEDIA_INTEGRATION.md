@@ -1008,6 +1008,24 @@ procedures and built-in actions are refused; the provider's inert single start
 node is allowed only with no edges, parents, subgraphs or frames. Provider queueing
 is explicitly disabled in the builder and checked at readiness.
 
+The builder sets the provider's independent conversation limit to 600 seconds
+and disables ending on silence (`silence_end_call_timeout: -1`). Readiness and
+activation require an explicit integer limit from 600 through 7,200 seconds and
+disabled silence termination. Changing the source template does not update an
+existing provider agent; the operator must update that dedicated agent before
+readiness will pass. This limit remains a provider-side ceiling, separate from
+backend request deadlines and active-call lifetime. There is no automatic
+reconnection or replay when it expires. See ElevenLabs' [conversation flow
+documentation](https://elevenlabs.io/docs/eleven-agents/customization/conversation-flow).
+
+Provider failures log only a numeric WebSocket close code, a fixed close category,
+monotonic socket lifetime and the validated provider limit alongside the existing
+queue counters. Close reasons, provider bodies, transcripts and conversation IDs
+are excluded. A normal provider close still stops the active frontend; it does
+not prove that pending speech or tool effects completed. JSON ping events receive
+an immediate matching pong, independently of queued audio and pending tools, as
+specified by the [client events protocol](https://elevenlabs.io/docs/eleven-agents/customization/events/client-events).
+
 The tools are `send_to_agent({text})`, `show_target({target_id})`,
 `show_overview({})`, `annotate_target({target_id})`, `clear_annotations({})`,
 `stop_sharing({})` and `end_call({})`. A coding handoff must quote the latest actual

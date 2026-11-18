@@ -2,8 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import {
   productionNativeEnvelopeSchema,
   productionNativeRecordSchema,
+  productionNativeRejectionReasonSchema,
   type ProductionNativeEnvelope,
   type ProductionNativeRecord,
+  type ProductionNativeRejectionReason,
 } from "../production-native-contracts.js";
 import {
   nativePresentationHostResultSchema,
@@ -260,7 +262,11 @@ export class NativeReservationStore {
       });
     });
   }
-  cancelPrepared(operationId: string) {
+  cancelPrepared(
+    operationId: string,
+    reason: ProductionNativeRejectionReason = "preparation_canceled",
+  ) {
+    const safeReason = productionNativeRejectionReasonSchema.parse(reason);
     return this.store.transaction(() => {
       const record = this.require(operationId);
       if (record.phase !== "prepared")
@@ -274,7 +280,7 @@ export class NativeReservationStore {
         result: {
           operationId,
           state: "rejected",
-          reason: "preparation_canceled",
+          reason: safeReason,
         },
         updatedAt: this.clock(),
       });

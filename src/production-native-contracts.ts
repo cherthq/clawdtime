@@ -6,6 +6,25 @@ import {
 } from "./native-presentation-contracts.js";
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
+/** Closed vocabulary: never persist arbitrary peer errors or target content. */
+export const productionNativeRejectionReasonSchema = z.enum([
+  "preparation_canceled",
+  "activation_not_negotiated",
+  "ownership_changed",
+  "incoming_speech",
+  "conflicting_input",
+  "peer_unavailable",
+  "local_policy_changed",
+  "camera_frame_stale",
+  "camera_unavailable",
+  "camera_authority_changed",
+  "target_changed",
+  "authority_expired",
+  "preflight_unavailable",
+]);
+export type ProductionNativeRejectionReason = z.infer<
+  typeof productionNativeRejectionReasonSchema
+>;
 /** Planning expiry and the single dispatch deadline are distinct, never renewed. */
 export const productionNativeEnvelopeSchema = z
   .object({

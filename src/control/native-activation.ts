@@ -22,6 +22,7 @@ import {
   productionNativeReferenceSchema,
   type ProductionNativeEnvelope,
   type ProductionNativeRecord,
+  type ProductionNativeRejectionReason,
 } from "../production-native-contracts.js";
 import { localPolicySchema, type PolicyDevice } from "./execution.js";
 import type { ScreenCamera } from "./camera.js";
@@ -42,6 +43,38 @@ export class NativeActivationCoordinator {
       assertClear(requestId: string): void;
     },
   ) {}
+  private rejectPreparation(operationId: string, error: unknown) {
+    // This is before beginDispatch: it proves no native input was submitted.
+    // Preserve a bounded cause without storing arbitrary peer error text.
+    const reasons: Record<string, ProductionNativeRejectionReason> = {
+      "Native activation was not negotiated or enabled.":
+        "activation_not_negotiated",
+      "Exact current native ownership is required.": "ownership_changed",
+      "Incoming speech temporarily holds new input.": "incoming_speech",
+      "Another device input actor is unresolved.": "conflicting_input",
+      "Native activation peer unavailable.": "peer_unavailable",
+      "Helper-local native activation policy unavailable.":
+        "local_policy_changed",
+      "Camera frame is stale.": "camera_frame_stale",
+      "Fresh stable native display required.": "camera_unavailable",
+      "An authorized camera surface is required.": "camera_unavailable",
+      "Fresh camera peer authorization required.": "camera_authority_changed",
+      "Camera authority changed.": "camera_authority_changed",
+      "Camera source binding mismatch.": "camera_authority_changed",
+      "Original native authority changed or expired.": "authority_expired",
+      "Native target changed.": "target_changed",
+      "Target not prepared.": "target_changed",
+    };
+    const reason =
+      error instanceof DomainError ||
+      (error instanceof Error &&
+        ["Native target changed.", "Target not prepared."].includes(
+          error.message,
+        ))
+        ? (reasons[error.message] ?? "preflight_unavailable")
+        : "preflight_unavailable";
+    return this.service.nativeReservations.cancelPrepared(operationId, reason);
+  }
   private identity(token: string | AgentSession, requestId: string) {
     const session =
       typeof token === "string"
@@ -286,10 +319,8 @@ export class NativeActivationCoordinator {
         operation.operationId,
         observation,
       );
-    } catch {
-      return this.service.nativeReservations.cancelPrepared(
-        operation.operationId,
-      );
+    } catch (error) {
+      return this.rejectPreparation(operation.operationId, error);
     }
   }
   authority(session: AgentSession, requestId: string, raw: unknown) {
@@ -372,8 +403,8 @@ export class NativeActivationCoordinator {
         this.authority(c.session, requestId, r.envelope);
         if (!r.envelope.preparedObservation)
           throw new Error("Target not prepared.");
-      } catch {
-        return this.service.nativeReservations.cancelPrepared(r.id);
+      } catch (error) {
+        return this.rejectPreparation(r.id, error);
       }
       r = this.service.nativeReservations.beginDispatch(
         r.id,

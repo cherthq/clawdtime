@@ -187,7 +187,11 @@ export class ExecutionCoordinator {
   }
   async transition(token: string, requestId: string, raw: unknown) {
     const input = executionTransition.parse(raw);
-    const { s, r, p } = this.context(token, requestId);
+    const { s, r, p } = this.context(
+      token,
+      requestId,
+      input.executor !== "none",
+    );
     if (this.busy.has(p.deviceId))
       throw new DomainError(409, "An ownership operation is in progress.");
     this.busy.add(p.deviceId);
@@ -227,6 +231,39 @@ export class ExecutionCoordinator {
           409,
           "Acknowledge completion and stop conflicting actors before handoff.",
         );
+      const call = this.service.store.get<CallSession>("call", r.callId ?? "");
+      if (input.executor === "none" && call?.state === "ended") {
+        const leases = this.service.store
+          .all<ControlLease>("lease")
+          .filter((lease) => lease.requestId === requestId);
+        if (
+          !leases.length ||
+          leases.some(
+            (lease) => lease.state !== "released" || lease.sessionId !== s.id,
+          )
+        )
+          throw new DomainError(
+            409,
+            "Exact sharing cleanup must finish before release.",
+          );
+        // Explicit original-owner acknowledgement after terminal cleanup. This
+        // never grants a lease, clears an uncertain actor, or revives a session.
+        const next: ExecutionOwnership = {
+          ...before,
+          executor: "none",
+          epoch: before.epoch + 1,
+          state: "idle",
+          updatedAt: this.service.clock(),
+        };
+        this.service.store.put("execution", next);
+        this.control.timing.record(
+          requestId,
+          "ownership_completed",
+          correlation,
+        );
+        return next;
+      }
+      this.context(token, requestId);
       const policy = await readLocalPolicy(this.control, r);
       this.context(token, requestId);
       if (input.executor !== "none")

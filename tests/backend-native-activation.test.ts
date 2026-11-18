@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Store } from "../src/storage/store.js";
+import { hash } from "../src/storage/security.js";
 import { ClawdTime } from "../src/attention/service.js";
 import { SimulationTransport } from "../src/transport/simulation.js";
 import { ScreenCamera } from "../src/control/camera.js";
@@ -244,6 +245,7 @@ async function fixture(enabled = true) {
     agent,
     device,
     control,
+    viewing,
     request,
     lease,
     owner,
@@ -261,6 +263,9 @@ async function fixture(enabled = true) {
     },
     advance: (ms: number) => {
       now += ms;
+    },
+    useLease: (next: ControlLease) => {
+      lease = next;
     },
     stop: () => store.saveState(`view-stopped:${request.id}`, true),
   };
@@ -675,5 +680,292 @@ describe("production native activation coordinator", () => {
     expect(dispatched.status).toBe(200);
     expect((await dispatched.json()).phase).toBe("verified");
     expect((await send(`${base}/receipts/operation`)).status).toBe(200);
+  });
+});
+
+describe("terminal call execution release", () => {
+  const completed = {
+    executor: "none",
+    expectedEpoch: 1,
+    previousOutcome: "completed",
+    backgroundActorsStopped: true,
+  };
+  async function closedFixture() {
+    const f = await fixture();
+    const execution = new ExecutionCoordinator(f.service, f.control);
+    f.store.put("execution", f.owner);
+    f.device.nativePrepare.mockRejectedValueOnce(
+      new Error("synthetic preflight refusal"),
+    );
+    const receipt = await f.prepare();
+    expect(receipt.phase).toBe("rejected");
+    expect(receipt.envelope.nativeExpiresAt).toBeUndefined();
+    f.service.failCall(f.request.id, "media_failure");
+    await f.service.drain();
+    f.store.put("lease", { ...f.lease, state: "released" });
+    return { ...f, execution, receipt };
+  }
+  it("releases known ownership after terminal cleanup only on the original actor's explicit completion", async () => {
+    const f = await closedFixture();
+    const createLease = vi.spyOn(f.device, "createLease");
+    f.device.readiness.mockClear();
+    const released = await f.execution.transition(
+      f.agent.token,
+      f.request.id,
+      completed,
+    );
+    expect(released).toMatchObject({
+      executor: "none",
+      state: "idle",
+      epoch: 2,
+    });
+    expect(f.service.nativeReservations.get(f.receipt.id)).toEqual(f.receipt);
+    expect(f.store.get<ControlLease>("lease", f.lease.id)?.state).toBe(
+      "released",
+    );
+    expect(f.device.nativeDispatch).not.toHaveBeenCalled();
+    expect(createLease).not.toHaveBeenCalled();
+    expect(f.device.readiness).not.toHaveBeenCalled();
+    await expect(
+      f.execution.transition(f.agent.token, f.request.id, completed),
+    ).rejects.toThrow();
+  });
+  it.each(["returned", "verified"] as const)(
+    "preserves %s host evidence when the original actor releases after call cleanup",
+    async (state) => {
+      const f = await fixture();
+      const execution = new ExecutionCoordinator(f.service, f.control);
+      f.store.put("execution", f.owner);
+      await f.prepare();
+      const host = f.result(
+        f.service.nativeReservations.get("operation")!.envelope,
+      );
+      f.device.nativeDispatch.mockResolvedValueOnce({
+        ...host,
+        state,
+      } as typeof host);
+      const receipt = await f.dispatch();
+      expect(receipt.phase).toBe(state);
+      f.service.failCall(f.request.id, "media_failure");
+      await f.service.drain();
+      f.store.put("lease", { ...f.lease, state: "released" });
+      expect(
+        (await execution.transition(f.agent.token, f.request.id, completed))
+          .executor,
+      ).toBe("none");
+      expect(f.service.nativeReservations.get(receipt.id)).toEqual(receipt);
+      expect(f.device.nativeDispatch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([
+    "uncertain",
+    "restart_uncertain",
+    "stopped",
+    "no_actor_ack",
+    "idle_outcome",
+    "live_lease",
+    "unknown_lease",
+    "wrong_epoch",
+    "native_executor",
+    "pending_action",
+    "submitted_action",
+    "unknown_action",
+    "prepared_native",
+    "uncertain_native",
+    "wrong_scope",
+  ])(
+    "preserves terminal ownership and receipts when cleanup has %s",
+    async (condition) => {
+      const f = await closedFixture();
+      let token = f.agent.token;
+      const input = { ...completed };
+      if (condition === "uncertain")
+        f.store.put("execution", { ...f.owner, state: "uncertain" });
+      if (condition === "restart_uncertain")
+        f.execution = new ExecutionCoordinator(f.service, f.control);
+      if (condition === "stopped")
+        f.store.put("session", { ...f.agent.session, state: "stopped" });
+      if (condition === "no_actor_ack") input.backgroundActorsStopped = false;
+      if (condition === "idle_outcome") input.previousOutcome = "idle";
+      if (condition === "live_lease" || condition === "unknown_lease")
+        f.store.put("lease", {
+          ...f.lease,
+          state: condition === "live_lease" ? "active" : "unknown",
+        });
+      if (condition === "wrong_epoch") input.expectedEpoch = 0;
+      if (condition === "native_executor") input.executor = "native";
+      if (condition.endsWith("_action"))
+        f.store.put("action", {
+          id: "retained-input",
+          leaseId: f.lease.id,
+          frameId: "retained-frame",
+          state: condition.replace("_action", ""),
+          createdAt: 1,
+        });
+      if (condition === "prepared_native" || condition === "uncertain_native") {
+        const operation = {
+          ...f.receipt.envelope.operation,
+          operationId: "unfinished-native",
+        };
+        f.store.put("native-activation", {
+          ...f.receipt,
+          id: operation.operationId,
+          envelope: {
+            ...f.receipt.envelope,
+            operation,
+            fingerprint: hash(JSON.stringify(operation)),
+          },
+          phase: condition === "prepared_native" ? "prepared" : "uncertain",
+          result: undefined,
+        });
+      }
+      if (condition === "wrong_scope")
+        token = f.service.registerSession(f.pair.token, {
+          adapter: "codex",
+          adapterVersion: "synthetic",
+          projectRoot: "/disposable",
+          externalSessionId: "other-session",
+          hostId: "other-host",
+          protocolVersion: 2,
+          capabilities: { cooperativePause: true, polling: true },
+        }).token;
+      const owner = f.store.get("execution", f.request.id);
+      const retained = f.store.all("native-activation");
+      await expect(
+        f.execution.transition(token, f.request.id, input),
+      ).rejects.toThrow();
+      expect(f.store.get("execution", f.request.id)).toEqual(owner);
+      expect(f.store.all("native-activation")).toEqual(retained);
+      expect(f.device.nativeDispatch).not.toHaveBeenCalled();
+    },
+  );
+  it("allows a fresh session's native preflight only after the old exact actor acknowledges terminal release", async () => {
+    const f = await closedFixture();
+    const next = f.service.registerSession(f.pair.token, {
+      adapter: "codex",
+      adapterVersion: "synthetic",
+      projectRoot: "/disposable",
+      externalSessionId: "next-session",
+      hostId: "next-host",
+      protocolVersion: 2,
+      screenCamera: f.agent.session.screenCamera,
+      capabilities: f.agent.session.capabilities,
+    });
+    const request = f.service.requestAttention(next.token, {
+      taskId: "next-task",
+      idempotencyKey: "next-task",
+      reason: "review",
+      question: "Review synthetic successor",
+    });
+    await f.service.drain();
+    f.service.observeCall(request.id, "connected", true);
+    await f.viewing.tick();
+    const current = f.store
+      .all<ControlLease>("lease")
+      .find((lease) => lease.requestId === request.id)!;
+    f.useLease(current);
+    const claim = {
+      executor: "native",
+      expectedEpoch: 0,
+      previousOutcome: "idle",
+      backgroundActorsStopped: true,
+    };
+    await expect(
+      f.execution.transition(next.token, request.id, claim),
+    ).rejects.toThrow("Unresolved input");
+    // Release cannot dispatch a device effect even when a successor exists.
+    await f.execution.transition(f.agent.token, f.request.id, completed);
+    await f.execution.transition(next.token, request.id, claim);
+    const lease = f.store.get<ControlLease>("lease", current.id)!;
+    f.useLease(lease);
+    const operation = {
+      ...f.operation,
+      operationId: "next-operation",
+      expected: {
+        ...f.operation.expected,
+        requestId: request.id,
+        sessionId: next.session.id,
+        leaseId: lease.id,
+      },
+    };
+    expect(
+      (await f.coordinator.prepare(next.token, request.id, operation)).phase,
+    ).toBe("prepared");
+    expect(f.service.nativeReservations.get(f.receipt.id)).toEqual(f.receipt);
+    expect(f.device.nativeDispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("bounded native preflight rejection evidence", () => {
+  it("retains the camera stale cause without dispatching or replaying after freshness returns", async () => {
+    const f = await fixture();
+    await f.prepare();
+    const original = f.device.cameraStatus.getMockImplementation()!;
+    f.device.cameraStatus.mockImplementationOnce(async (lease) => ({
+      ...(await original(lease)),
+      capturedAt: f.service.clock() - 2001,
+    }));
+    const rejected = await f.dispatch();
+    expect(rejected).toMatchObject({
+      phase: "rejected",
+      result: { state: "rejected", reason: "camera_frame_stale" },
+    });
+    expect(rejected.envelope.nativeExpiresAt).toBeUndefined();
+    const reads = f.device.cameraStatus.mock.calls.length;
+    expect(await f.dispatch()).toEqual(rejected);
+    expect(f.device.cameraStatus).toHaveBeenCalledTimes(reads);
+    expect(f.device.nativeDispatch).not.toHaveBeenCalled();
+    expect(
+      f.coordinator.receipt(
+        f.agent.token,
+        f.request.id,
+        f.operation.operationId,
+      ),
+    ).toEqual(rejected);
+  });
+
+  it("retains incoming speech as a nondispatch refusal even after the hold clears", async () => {
+    const f = await fixture();
+    await f.prepare();
+    const { Interruptions } = await import("../src/control/interruptions.js");
+    const interruptions = new Interruptions(f.service);
+    f.coordinator.options.assertClear = (requestId) =>
+      interruptions.assertClear(requestId);
+    interruptions.accept(f.request.id, {
+      callId: f.lease.callId,
+      participantIdentity: "synthetic-human",
+      interruptionId: "synthetic-interruption",
+      playbackGeneration: 0,
+      at: new Date(f.service.clock()).toISOString(),
+    });
+    const rejected = await f.dispatch();
+    expect(rejected).toMatchObject({
+      phase: "rejected",
+      result: { state: "rejected", reason: "incoming_speech" },
+    });
+    expect(rejected.envelope.nativeExpiresAt).toBeUndefined();
+    f.advance(2001);
+    expect(interruptions.status(f.request.id).active).toBe(false);
+    expect(await f.dispatch()).toEqual(rejected);
+    expect(f.device.nativeDispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not persist arbitrary peer exception text and does not retry the canceled operation", async () => {
+    const f = await fixture();
+    await f.prepare();
+    const privateMarker = "synthetic-secret-peer-response-do-not-persist";
+    f.device.readiness.mockRejectedValueOnce(new Error(privateMarker));
+    const rejected = await f.dispatch();
+    expect(rejected).toMatchObject({
+      phase: "rejected",
+      result: { state: "rejected", reason: "preflight_unavailable" },
+    });
+    expect(rejected.envelope.nativeExpiresAt).toBeUndefined();
+    expect(JSON.stringify(f.store.all("native-activation"))).not.toContain(
+      privateMarker,
+    );
+    expect(await f.dispatch()).toEqual(rejected);
+    expect(f.device.nativeDispatch).not.toHaveBeenCalled();
+    expect(f.device.nativePrepare).toHaveBeenCalledTimes(1);
   });
 });

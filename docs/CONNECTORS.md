@@ -1753,6 +1753,11 @@ chat's permitted native CUA, and do not copy it into logs or tracked artifacts.
 The page removes the fragment from browser history and authenticates each request.
 It displays only the current fixed operation and refuses arbitrary action bodies
 and foreign Origins.
+The trigger displays the original preparation expiry and disables the button
+when that deadline passes; viewing status never renews the reservation. The
+controller validates the acknowledged native claim before preparing and releases
+only the exact epoch, policy revision and cursor of its completed operation.
+A replacement native claim is never released on an earlier operation's behalf.
 
 Send one JSONL command per line to the bridge:
 

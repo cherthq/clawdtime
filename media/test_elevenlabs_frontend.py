@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from aiohttp import ClientSession, web
+from aiohttp import ClientSession, WSCloseCode, web
 from aiohttp.test_utils import TestClient, TestServer
 from livekit import rtc
 
@@ -37,8 +37,9 @@ def agent_config():
     return {'agent_id': 'agent_fixture', 'conversation_config': {
         'asr': {'user_input_audio_format': 'pcm_16000'},
         'tts': {'agent_output_audio_format': 'pcm_16000', 'model_id': 'eleven_flash_v2'},
+        'turn': {'silence_end_call_timeout': -1},
         'agent': {'prompt': {'llm': 'gemini-2.5-flash', 'tools': client_tool_definitions()}},
-        'conversation': {'client_events': ['audio', 'interruption', 'user_transcript', 'agent_response']}},
+        'conversation': {'max_duration_seconds': 600, 'client_events': ['audio', 'interruption', 'user_transcript', 'agent_response']}},
         'platform_settings': {'auth': {'enable_auth': True}, 'queueing_config': {'enabled': False},
             'privacy': {'record_voice': False, 'retention_days': 0, 'delete_audio': True, 'delete_transcript_and_pii': True},
             'overrides': {'conversation_config_override': {'agent': {'prompt': {'prompt': True}, 'first_message': True}}}}}
@@ -529,8 +530,85 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE', logs.output[0])
         self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
 
+    async def test_short_provider_lifetime_refused_before_socket_or_context(self):
+        config = agent_config()
+        config['conversation_config']['conversation']['max_duration_seconds'] = 180
+        self.frontend.provider_get = AsyncMock(return_value=config)
+        self.frontend.open_socket = AsyncMock()
+        with self.assertRaisesRegex(ValueError, 'conversation lifetime'):
+            await self.frontend.start()
+        self.frontend.provider_get.assert_awaited_once_with('/agents/agent_fixture')
+        self.frontend.open_socket.assert_not_awaited()
+        self.owner.backend.assert_not_awaited()
+
+    async def test_abnormal_close_enum_is_logged_without_exception_details(self):
+        self.frontend.ws.close_code = WSCloseCode.ABNORMAL_CLOSURE
+        async def broken():
+            raise FrontendFault('provider_disconnected')
+        with self.assertLogs(level='ERROR') as logs:
+            task = self.frontend.spawn(broken(), 'read')
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+        self.assertIn('providerCloseCode=1006 providerCloseClass=abnormal', logs.output[0])
+        self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
+
+    async def test_provider_close_records_only_safe_metadata_and_never_reconnects(self):
+        connections = []
+        pong = []
+        async def socket(request):
+            connections.append(1)
+            ws = web.WebSocketResponse(); await ws.prepare(request)
+            await ws.send_json({'type': 'ping', 'ping_event': {'event_id': 12, 'ping_ms': 50}})
+            pong.append(await ws.receive_json())
+            await ws.close(code=1000, message=b'PRIVATE_PROVIDER_REASON_AND_TRANSCRIPT')
+            return ws
+        app = web.Application(); app.router.add_get('/socket', socket)
+        server = TestServer(app); await server.start_server()
+        try:
+            self.frontend.ws = await self.frontend.open_socket(server.make_url('/socket'))
+            self.frontend.socket_started_at = time.monotonic() - 181
+            self.frontend.provider_duration_seconds = 600
+            self.frontend.tool_receipts['already_submitted'] = {'state': 'unknown'}
+            self.frontend.open_socket = AsyncMock(side_effect=AssertionError('No reconnect'))
+            with self.assertLogs(level='ERROR') as logs:
+                task = self.frontend.spawn(self.frontend.read(), 'read')
+                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.sleep(0)
+            self.assertEqual(pong, [{'type': 'pong', 'event_id': 12}])
+            self.assertEqual(connections, [1])
+            self.frontend.open_socket.assert_not_awaited()
+            self.owner.backend.assert_not_awaited()
+            self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
+            self.assertEqual(self.frontend.tool_receipts['already_submitted'], {'state': 'unknown'})
+            self.assertEqual(len(logs.output), 1)
+            self.assertIn('stage=read code=provider_disconnected', logs.output[0])
+            self.assertIn('providerCloseCode=1000 providerCloseClass=normal providerSessionMs=181', logs.output[0])
+            self.assertIn('providerLimitSeconds=600', logs.output[0])
+            self.assertNotIn('PRIVATE', logs.output[0])
+        finally:
+            await self.frontend.close()
+            await server.close()
+
 
 class ProviderContractTests(unittest.TestCase):
+    def test_provider_lifetime_is_explicit_and_supports_ten_minute_calls(self):
+        for duration in (600, 900, 7200):
+            config = agent_config()
+            config['conversation_config']['conversation']['max_duration_seconds'] = duration
+            validate_agent(config, client_tool_definitions())
+        for duration in (None, True, 180, 599, 600.0, '600', 7201):
+            with self.subTest(duration=duration):
+                config = agent_config()
+                config['conversation_config']['conversation']['max_duration_seconds'] = duration
+                with self.assertRaisesRegex(ValueError, 'conversation lifetime'):
+                    validate_agent(config, client_tool_definitions())
+        for silence in (None, False, 0, 180, '-1'):
+            with self.subTest(silence=silence):
+                config = agent_config()
+                config['conversation_config']['turn']['silence_end_call_timeout'] = silence
+                with self.assertRaisesRegex(ValueError, 'conversation lifetime'):
+                    validate_agent(config, client_tool_definitions())
+
     def test_empty_provider_workflow_is_allowed_but_execution_surfaces_are_not(self):
         config = agent_config()
         inert = {'nodes': {'synthetic_start': {'type': 'start', 'edge_order': [], 'position': {'x': 0, 'y': 0},
@@ -561,6 +639,8 @@ class ProviderContractTests(unittest.TestCase):
         config = configuration('fixture_voice')
         validate_agent(config, config['conversation_config']['agent']['prompt']['tools'])
         self.assertEqual(len(config['conversation_config']['agent']['prompt']['tools']), 7)
+        self.assertEqual(config['conversation_config']['conversation']['max_duration_seconds'], 600)
+        self.assertEqual(config['conversation_config']['turn']['silence_end_call_timeout'], -1)
         properties = [prop for tool in config['conversation_config']['agent']['prompt']['tools']
                       for prop in tool['parameters']['properties'].values()]
         self.assertEqual(len(properties), 3)
@@ -670,6 +750,16 @@ class ServiceSpeechTests(unittest.IsolatedAsyncioTestCase):
             get.side_effect = ValueError('sensitive provider payload must not escape')
             response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
             self.assertNotIn('sensitive', await response.text())
+            self.session.say.assert_not_awaited()
+
+    async def test_readiness_rejects_three_minute_provider_limit_without_starting_session(self):
+        config = agent_config()
+        config['conversation_config']['conversation']['max_duration_seconds'] = 180
+        with patch('elevenlabs_frontend.provider_get', new=AsyncMock(return_value=config)) as get:
+            response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
+            self.assertEqual(await response.json(), {'configured': True, 'agentValidated': False, 'ready': False})
+            get.assert_awaited_once_with(self.service, '/agents/agent_fixture')
+            self.service.backend.assert_not_awaited()
             self.session.say.assert_not_awaited()
 
     async def test_tool_ids_are_resolved_by_read_only_get_and_checked(self):
