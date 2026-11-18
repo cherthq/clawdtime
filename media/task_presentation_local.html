@@ -1,9 +1,18 @@
 <!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ClawdTime · Prepared walkthrough</title>
-<style>body{margin:0;background:#101722;color:#e5edf8;font:17px/1.5 system-ui}main{max-width:1280px;margin:auto;padding:20px}h1{font-size:24px}button{font:inherit;padding:10px 18px;border-radius:8px;cursor:pointer}#stop{background:#a62626;color:white}img{width:100%;aspect-ratio:16/9;object-fit:contain;background:#0b111a}#state{min-height:2em}</style>
+<style>
+body{margin:0;background:#101722;color:#e5edf8;font:17px/1.5 system-ui}
+main{box-sizing:border-box;max-width:1280px;height:100dvh;margin:auto;padding:20px;display:flex;flex-direction:column;gap:10px}
+h1{flex:none;font-size:24px;line-height:1.25;margin:0}p{flex:none;margin:0}
+.controls{flex:none;display:flex;flex-wrap:wrap;gap:10px;background:#101722}
+button{box-sizing:border-box;max-width:100%;font:inherit;padding:10px 18px;border-radius:8px;cursor:pointer}
+#stop{background:#a62626;color:white}#state{min-height:1.5em}
+#view{flex:1 1 0;min-height:0;height:0;width:100%;object-fit:contain;background:#0b111a}
+@media(max-height:480px){main{height:auto;min-height:100dvh}.controls{position:sticky;top:0;z-index:2;padding-block:8px}#view{flex:none;height:auto;aspect-ratio:16/9}}
+</style>
 <main><h1>Prepared walkthrough</h1><p>Only the prepared app windows are shared locally. No computer control or phone call.</p>
-<button id="start" disabled>Start local preview</button> <button id="stop">Stop sharing and narration</button>
+<div class="controls"><button id="start" disabled>Start local preview</button> <button id="stop">Stop sharing and narration</button></div>
 <p id="state" role="status">Checking local access…</p><img id="view" alt="Prepared app scene" hidden></main>
 <script>
 'use strict';

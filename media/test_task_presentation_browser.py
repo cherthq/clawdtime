@@ -13,6 +13,39 @@ from PIL import Image
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_complete_canvas_and_stop_fit_viewport_with_small_screen_scroll(self):
+        # Layout-only fixture: no scripts, server, media, capture, or provider.
+        html = Path(__file__).with_name('task_presentation_local.html').read_text().split('<script>')[0]
+        script = r'''import {chromium} from '@playwright/test';
+let body='';for await(const chunk of process.stdin)body+=chunk;
+const browser=await chromium.launch({channel:'chrome',headless:true});
+try{const page=await browser.newPage();
+for(const viewport of [{width:1021,height:753},{width:1280,height:720},{width:390,height:844},{width:360,height:320}]){
+ await page.setViewportSize(viewport);await page.setContent(body);
+ await page.evaluate(async()=>{const view=document.getElementById('view');view.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="1280" height="720" fill="#284d61"/><rect y="680" width="1280" height="40" fill="#ffd166"/></svg>');view.hidden=false;await view.decode();});
+ if(viewport.height<=480)await page.locator('#view').scrollIntoViewIfNeeded();
+ const result=await page.evaluate(()=>{const view=document.getElementById('view'),image=view.getBoundingClientRect(),stop=document.getElementById('stop').getBoundingClientRect();return{image:{top:image.top,bottom:image.bottom,left:image.left,right:image.right,height:image.height},stop:{top:stop.top,bottom:stop.bottom},fit:getComputedStyle(view).objectFit,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,natural:view.naturalWidth/view.naturalHeight};});
+ if(result.fit!=='contain'||result.natural!==16/9||result.image.height<100||result.image.left<0||result.image.right>viewport.width+.5)throw Error('Canvas clipped or distorted');
+ if(result.stop.top<-.5||result.stop.bottom>viewport.height+.5)throw Error('Stop unavailable');
+ if(result.scrollWidth>viewport.width)throw Error('Horizontal overflow');
+ if(viewport.height>480&&(result.image.bottom>viewport.height+.5||result.image.top<result.stop.bottom||result.scrollHeight>viewport.height+1))throw Error('Caption falls below viewport');
+ if(viewport.height<=480&&result.image.bottom>viewport.height+.5)throw Error('Small screen cannot scroll to caption');
+}await page.close();}finally{await browser.close();}'''
+        process = await asyncio.create_subprocess_exec('node', '--input-type=module', '-e', script,
+            cwd=Path(__file__).resolve().parents[1], stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        try:
+            _, stderr = await asyncio.wait_for(process.communicate(html.encode()), 20)
+            self.assertEqual(process.returncode, 0, stderr.decode()[-2500:])
+        finally:
+            if process.returncode is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(process.wait(), 2)
+                except TimeoutError:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    await process.wait()
+
     async def test_pcm_timeline_is_contiguous_bounded_and_stop_fences_late_receipts(self):
         async def route(request):
             if request.path == '/':

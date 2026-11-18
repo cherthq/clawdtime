@@ -6,10 +6,13 @@
 `ClawdTimeTaskCapture` Swift executable implement an independent task presentation.
 They do not use the original-chat gateway or widen the handset voice capability.
 The supervised three-scene local walkthrough completed all six show/narration
-effects with fresh native frames and playback receipts. The user confirmed zoom
-and screen sharing worked, but reported crackly/distorted audio; audio quality
-and the newly added annotations still need a fresh human check. This observation
-does not mark step d complete or authorize another phone call.
+effects with fresh native frames and playback receipts. After the first successful
+visual walkthrough, the user reported crackly audio. A fresh annotated walkthrough
+with scheduled playback again completed all six effects; the user confirmed
+“Audio clear; visuals good.” Visible Stop blanked the preview, all four cleanup
+flags were true, and the host/server were stopped. This is local human acceptance,
+separate from machine receipts. It does not establish handset presentation
+acceptance, complete step d, or authorize another phone call.
 
 A prepared manifest binds the task/run/revision, verified artifacts, exact scene
 text, and exact app/window/PID/process-lifetime/display/title hash. A separate
@@ -57,14 +60,14 @@ Playback admits ordered chunks of at most 30 ms with at most 140 ms of PCM and
 eight outstanding receipts. The browser schedules consecutive buffers on one
 audio timeline with a 60 ms initial cushion and a 200 ms total lead cap. Authority
 is checked before every enqueue. This removes the former per-chunk onended →
-HTTP check → send → immediate-start gap; it does not prove the user’s distortion
-is fully resolved. Signed PCM16 little-endian mono at 16 kHz is decoded without
+HTTP check → send → immediate-start gap. The user’s subsequent clear-audio report
+is recorded separately above; code and receipts alone do not prove audibility. Signed PCM16 little-endian mono at 16 kHz is decoded without
 sample replacement. Stop clears scheduled sources and fences old epoch receipts.
 Completion requires the exact full cue, provider audio EOF, and every actual
 browser `onended` acknowledgement; enqueue alone never completes narration. This is playback
 completion, not audibility. Stop closes the provider and clears queued audio;
-no reconnect or substitute speech is attempted. This new narration path still
-requires real local provider and speaker qualification.
+no reconnect or substitute speech is attempted. The local narration path has
+been qualified in the supervised walkthrough; handset presentation remains separate.
 
 The fixed loopback host defaults to `127.0.0.1:3323`. Operator routes require a
 separate bearer and reject browser Origins: `/prepare`, `/show`, `/narrate`,
@@ -74,7 +77,10 @@ No frame endpoint is available to the operator token. The page blanks stale imag
 independently of HTTP responses; Stop immediately clears local pixels/audio and
 closes its socket before attempting bounded server cleanup. A bounded status poll
 also detects an internal host Stop, blanks the preview, closes local playback,
-and replaces the Ready label with a stopped/failure message.
+and replaces the Ready label with a stopped/failure message. The responsive preview
+uses the available viewport height, containing the complete 16:9 canvas and bottom
+annotation gutter while keeping Stop visible. Very short viewports scroll, with
+the controls held at the top; this layout change does not alter media or capture.
 
 Host status includes content-free runtime and narrator diagnostics: an allowlisted
 phase, the first fixed failure reason, bounded elapsed milliseconds, and saturated
@@ -146,8 +152,9 @@ media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'
 The browser test requires installed Chrome and the repository's `@playwright/test`.
 It uses an isolated headless browser and tests stalled fetches, stale pixels,
 delayed decode/Start, paint acknowledgement, and Stop during a hung cleanup POST.
-These checks do not qualify macOS capture, actual provider narration, speaker
-output, or a physical screen walkthrough. Those remain the step d local gate.
+These checks alone do not qualify macOS capture, actual provider narration,
+speaker output, or a physical screen walkthrough. The separate local human result
+is recorded above; handset presentation acceptance remains outstanding.
 
 ## Independent coding-task voice: locally qualified step c — November 18, 2026
 

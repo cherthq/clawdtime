@@ -8,39 +8,25 @@ occurred. Original checkout and drafts remain untouched.
 
 ## Resume here
 
-Checkpoint `042e0cc` repaired audio-before-text ordering and is pushed. The fresh
-real local three-scene walkthrough completed all six show/narration effects. The
-user confirms zoom and screen sharing worked, but audio sounded rough and useful
-annotations were missing. This is not complete polish acceptance. Visible Stop
-blanked the browser and all four joined cleanup flags passed; both presentation
+Local annotated walkthrough checkpoint `6d786c0` is pushed and human accepted:
+**“Audio clear; visuals good.”** All six scene/narration effects completed; visible
+Stop blanked the preview and all four joined cleanup flags passed. Presentation
 host and task server are stopped. Task revision 11 remains review-ready. No new
-worker run, call or deployment occurred.
+worker run, phone call, deployment or line operation occurred.
 
-Media improved local narration continuity: the previous 30 ms audio chunks
-waited for playback completion and an authority HTTP round trip before each next
-chunk. A bounded lookahead and shared audio timeline are implemented while
-retaining per-enqueue authority, actual completion acknowledgements, Stop epochs
-and exact-cue gating. Existing conversational BrowserSink remains unchanged.
+The lead noticed the bottom caption below the initial 1021×753 viewport. A small
+CSS layout correction now fits the whole canvas with visible Stop, and uses
+sticky controls with scrolling on short screens. Three browser tests passed;
+independent layout review/check passed. Runtime/audio source is unchanged.
+The prior full checkpoint passed 900 TypeScript tests/typecheck/build and 299
+media tests; Swift is unchanged since 31 tests/helper build passed.
 
-Lead added an optional prepared scene.annotation {rect, label} contract, bounded
-to the focus region; media mirrors validation and projects a restrained highlight
-through the exact crop/scale/letterbox transform. The short label is drawn in a
-fixed gutter, not over code. Transport added contract regressions; connector independently approved both
-contracts and media. The full media suite passed 299 tests and focused tests
-passed 34. No new local attempt has started capture or narration.
-
-The prior complete check at `042e0cc` passed 888 TypeScript tests/typecheck/build
-and 294 media tests. Swift is unchanged since 31 tests and capture helper build
-passed. Current polish changes passed the new automated checks; human qualification remains pending.
-
-For the next local test, resolve exact targets, create a new protected manifest /
-grant, run the configured task server and host, and prepare the CLI once. The old
-attempts are stopped historical receipts; never replay them. Browser automation
-rejected local-file access, so the user must open the fresh launcher manually;
-do not work around that tool policy. The actual HTTP preview can then be observed
-and controlled normally after the user opens it. Keep the captured fixture in a
-separate window. No screen or audio is retained. See BUILD_LOG for timings and
-metadata-only evidence. Full step d and handset polish acceptance remain pending.
+Proceed with offline handset walkthrough integration below. Do not rerun the used
+local attempt or reinterpret its grant as phone/export consent. Browser automation
+cannot open the private local-file launcher; the user opened it manually. Exact
+source windows can report offscreen after returning to the chat, so any later
+capture must freshly revalidate visibility. No guard was loosened. Keep all frames
+and audio transient. Full handset polish and step d acceptance remain pending.
 
 ## Remaining step d work
 

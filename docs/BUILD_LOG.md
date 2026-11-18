@@ -956,3 +956,33 @@ replayed external effects. Current source windows still resolve by exact identit
 but become offscreen after returning to the chat; local Start must revalidate
 visibility after the user opens the preview. Permission, console and unlock
 preflight pass. No current-Space guard has been relaxed. No step-d tag is added.
+
+### Step d — annotated local walkthrough accepted
+
+Polish checkpoint `6d786c0` is pushed. The user started the fresh prepared local
+preview and it completed all six show/narration effects. Show durations were
+1,107 / 1,244 / 924 ms; narration durations were 8,015 / 7,987 / 8,959 ms. All
+797 chunks (764,160 transient PCM bytes) received playback completion receipts;
+three cues used one provider connection, with no runtime/provider failure.
+The host captured 117 source frames and rendered 592 output frames. The lead
+visibly checked the code and verification highlights and the bottom-gutter label.
+The user explicitly confirmed: **“Audio clear; visuals good.”** This qualifies
+this local three-scene exercise, not handset presentation or the full demo.
+
+Visible Stop removed the image; durable Stop confirmed capture, narration, output
+and child cleanup. The host and task server were stopped. No call, line operation,
+deployment or new coding run occurred. Screens/audio remained transient.
+
+The initial 1021×753 viewport placed the label below the fold. A small preview-only
+layout correction now fits the entire 16:9 canvas in available height while keeping
+Stop visible. Short screens retain scrolling with sticky controls. Playback,
+capture and authorization code are unchanged. Actual Chrome synthetic layout
+checks cover 1021×753, 1280×720, 390×844 and 360×320. Media's three browser tests
+passed in 8.043s; independent layout validation passed in 1.196s and review approved.
+The broader media baseline remains 299 tests passed at `6d786c0`; unchanged Swift
+remains 31 tests/helper build passed. Step d remains open for handset composition
+and specifically authorized decision/final-review calls.
+For this viewport/acceptance checkpoint, `npm run check` passed **900 tests in
+60 files** (12.12s), typecheck/build, and `git diff --check` passed. No step tag
+was added because the required handset presentation calls are not yet implemented
+or physically qualified.
