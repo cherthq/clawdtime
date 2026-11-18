@@ -1,12 +1,37 @@
-# Handset audio test: first call failed; fresh authorization required
+# Handset retest blocked by provider readiness before dialing
 
-The user authorized exactly one audio-only handset call on November 18, 2026,
-and separately approved temporarily putting only ClawdTime's hosted backend in
-standby and restoring it after cleanup. That call has been consumed. **Do not
-redial or reuse its authorization.** Steps d/e remain blocked by the c.1 physical
-audio gate.
+The first authorized audio-only handset call failed silently and was cleaned up.
+The user then explicitly authorized one additional retest and another temporary
+ClawdTime-only standby/restoration window. That retest stopped at provider readiness
+**before any native dial submission**. No second handset call was placed.
 
-## Current result
+ElevenLabs agent-readiness GETs timed out, including independent Python and Node
+read-only checks with 12-second limits. The official status page also reported API
+latency/errors. Preserve the undialed attempt and its receipts; do not revive its
+expired operator plan. Resume only with the provider ready and the human currently
+available under the same one-call scope. Do not call unattended after this window.
+Steps d/e remain blocked by the c.1 physical audio gate.
+
+## Latest retest attempt (no handset call)
+
+- Fresh native identity, idle line, exclusive standby deployment and preserved
+  settings were verified. Persistent inspector authority checks took 91–129ms;
+  full native readiness checks took 640–681ms.
+- The provider preflight failed after approximately four seconds, before native
+  dialing or provider conversation startup. The media-prepare phase retained an
+  unknown receipt, followed by confirmed local closure. There is no native-dial
+  receipt or provider call ID. Do not rewrite the historical phase receipt.
+- Independent read-only checks connected with verified TLS but received no agent
+  response within 12 seconds. No retry of a mutation or handset call occurred.
+- Protected receipts are in `retest-2/` within the qualification directory. Its
+  `operator.json` and attempt directory are used records, not a reusable launcher.
+- Latest restoration is confirmed: the live deployment is successful, the standby
+  instance is removed, and every original configuration value is restored. Fresh
+  runtime checks report live mode, traffic enabled, zero active calls and zero
+  pending/unknown effects. All local test ports are closed and the owner lock is
+  released. Recheck these facts before any later standby window.
+
+## First handset attempt (historical result)
 
 - The handset connected but heard no opening; the user reported that it hung up
   without saying anything.
@@ -49,8 +74,9 @@ not handset audibility.
 
 ## Next live test
 
-1. Obtain fresh permission for one additional voice-only call and the same temporary
-   ClawdTime-only standby/restoration window. Do not change Apple Teams or sibling
+1. Confirm the provider has recovered and the human is currently available. The
+   authorized additional call was not placed; preserve that one-call scope and
+   the approved temporary ClawdTime-only standby/restoration procedure. Do not change Apple Teams or sibling
    chert-facetime, deploy demo source, enable screen capture, presentation or control.
 2. Read current protected task readiness and exact paired destination; preserve all
    original task IDs/run IDs, receipts and the prior unsuccessful attempt.

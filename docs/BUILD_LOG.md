@@ -590,3 +590,51 @@ physically accepted. The local ports are closed, the original hosted backend is
 restored, and step c.1 remains untagged. The consumed call and all unknown phase
 receipts are retained. No further live call or standby window is authorized by
 this checkpoint.
+
+### Authorized retest: blocked before dialing by provider readiness
+
+The user explicitly authorized one additional voice-only retest with the same
+ClawdTime-only standby/restoration procedure. Fresh checks confirmed the exact
+paired identity, idle line, outbound audio protocol 1, no backend pending/unknown
+effects and no active calls. The existing backend entered a new verified standby
+deployment, with its preceding instance removed and exactly the two approved mode/
+traffic settings changed. Existing source/manifest/volume metadata was preserved.
+
+A new immutable operator configuration, grant and attempt were created; no old
+attempt was replayed. Persistent read-only authority checks passed in 91–129ms and
+full native readiness checks in 640–681ms. Provider preflight then failed in about
+four seconds. The attempt closed with **no native-dial receipt, no provider call
+ID and no provider conversation**. No second handset call was submitted. The
+media-prepare receipt remains unknown historically, while local closure is proven;
+these are deliberately separate facts.
+
+Read-only diagnosis: the runtime returned `provider_preflight_unavailable` after
+4.197s. Independent Python and Node authenticated agent GETs timed out after
+12.110s and 12.005s; Python established verified TLS in 51ms. Provider settings, credentials and policy guards were not changed to bypass
+readiness.
+The official [ElevenLabs global status page](https://status.elevenlabs.io/united-states)
+also reported increased API latency/errors. That public report supports a provider
+availability concern; it does not establish the exact cause of the earlier silent
+handset call.
+
+Restoration was submitted once after proving this attempt was undialed and locally
+closed. Protected intent, result and readiness records remain in `retest-2/` under
+the existing owner-only qualification directory. The additional call remains
+unplaced; no unattended delayed call is scheduled. Final restoration evidence and
+this documentation checkpoint's required check are recorded below.
+
+#### Retest restoration and documentation checkpoint
+
+The restoration deployment succeeded and the standby instance was removed. Full
+configuration snapshots match exactly before/after the temporary window. A fresh
+runtime check confirms live mode and enabled traffic with zero active calls,
+pending effects and unknown effects. Local ports 13323/13324/3322 are closed and
+the task owner lock is released. The original one-call retest scope remains
+unplaced; no unattended call or automatic redial is scheduled.
+
+Required documentation-checkpoint validation: `npm run check` passed **826 tests
+in 55 files**, typecheck and build (12.01s test run); `git diff --check` passed.
+Only BUILD_LOG.md and NEXT_SESSION.md changed, so no Python/Swift implementation
+checks are newly applicable. The transport specialist reviewed the checkpoint;
+the first-attempt evidence is now labeled historical so it cannot be mistaken for
+the fresh retest restoration proof. No c.1 tag was created and d/e remain gated.
