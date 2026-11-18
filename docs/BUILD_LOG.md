@@ -680,3 +680,39 @@ and confirmed close. `git diff --check` passed. The protected standby proof conf
 exactly the two approved variables changed, the preceding dispatcher was removed,
 and current runtime is idle standby. The one handset call is still pending at
 this code checkpoint; no c.1 tag is warranted yet.
+
+### Step c.1 — physically accepted Deepgram handset retest
+
+The user confirmed all five requested handset checks passed: clear prepared
+opening, task-status answer, stopping speech when interrupted, 20 seconds of quiet,
+and hangup after the explicit end-conversation request. This is the human's physical
+acceptance report, not an inference from counters. Exactly one new audio-only call
+was placed, with screen, video, presentation and control disabled throughout.
+
+Machine evidence independently confirms all five effect phases completed:
+media preparation 1.643s, native dial submission 622ms, media activation 576ms,
+media closure 4ms and native end submission 289ms. Activation admission checks
+completed before the provider opened; the live provider produced first sink output
+in approximately 560ms from runtime startup. The status tool executed successfully.
+Stop provenance is `voice_end`; native cleanup and local media closure are confirmed.
+The SDK accepted 1,134 speech frames and 793 prepared silence frames; these counts
+are not audibility claims. The operator closed all local services, joined the
+inspector/media children, released its owner lock and exited. Ports 13323, 13324
+and 3322 are closed. Machine `physicalAcceptance:false` markers remain untouched;
+the human report is recorded separately.
+
+After confirmed call cleanup, restoration was submitted exactly once. The restored
+backend deployment `9345ff09-542b-4c10-b8c4-a8aac20ec5d0` is successful and the test
+standby instance is removed. Every configuration value equals the pre-test snapshot;
+source/manifest/volume metadata is preserved. Fresh runtime checks show live mode,
+traffic enabled, zero active calls, zero pending effects and zero unknown effects.
+Apple Teams and sibling chert-facetime were not modified. Protected immutable
+receipts and the separate human report remain under `retest-3-deepgram/`.
+
+Required acceptance-documentation check: `npm run check` passed **826 tests in
+55 files** (12.04s), plus typecheck and build. No Python/Swift code changed after
+the validated `a1707f5` checkpoint (265 media tests passed there). `git diff --check`
+passed. The transport specialist independently reviewed the acceptance record.
+The annotated `step-c1-done` tag belongs to this acceptance checkpoint. This opens
+step d's offline implementation gate; no further live call or screen/control
+session is authorized by this successful voice-only test.
