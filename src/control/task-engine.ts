@@ -200,10 +200,14 @@ export class TaskEngine {
         ? {
             id: task.decision.id,
             question: task.decision.question.slice(0, 500),
+            answered: task.decision.answer === run.instruction,
+            ...(task.decision.answer === run.instruction
+              ? { answerSource: "instruction" }
+              : {}),
           }
         : undefined,
       constraints:
-        "Work only in this selected project. This is a new scoped run. Do not place calls or change credentials. Report unresolved product decisions; native permissions cannot be approved through ClawdTime.",
+        "Work only in this selected project. This is a new scoped run. Do not place calls or change credentials. A decision marked answered is historical; its exact answer is the instruction. Report only genuinely remaining product decisions, not an already answered question. Native permissions cannot be approved through ClawdTime.",
     });
   }
 }

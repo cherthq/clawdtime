@@ -1,20 +1,31 @@
 # Step d: local accepted; handset integration awaiting physical qualification
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
-Handset integration checkpoint `d7bacf8` is pushed. Latest completed step remains
-`59b8e24`, annotated `step-c1-done`. The Deepgram audio-only handset test passed
-and the hosted backend was restored. The subsequent first visual call was
-submitted once, but the native provider reports `outbound_not_answered` with no
-connected/bridge-ready event or speech output. The human's handset observation
-is pending. All cleanup is confirmed and the backend is restored to live with
-traffic enabled, zero pending/unknown effects and no active calls. Original
-checkout and drafts remain untouched.
+Handset integration checkpoint `d7bacf8` and the first-call evidence checkpoint
+`8a254f3` are pushed. Latest completed step remains `59b8e24`, annotated
+`step-c1-done`. The Deepgram audio-only handset test passed. The first visual
+call was not answered, as the user later confirmed. A separately authorized
+second visual call connected: the user liked the walkthrough, but voice stopped
+responding after a revision retired sharing. This is partial visual acceptance,
+not a passed conversation-continuity or full step-d gate.
 
-The user confirmed the annotated three-scene local walkthrough:
-**“Audio clear; visuals good.”** All six show/narration effects completed. Visible
-Stop blanked the preview and all four cleanup flags passed. The presentation host
-and task server are stopped; task revision 11 remains review-ready. The viewport
-fix keeps the caption and Stop visible. Keep frames and audio transient.
+Both calls are closed. The backend is restored to its exact previous settings:
+live mode, traffic enabled, zero active calls and no pending/unknown effects.
+The final restoration deployment is `3e361f03-e4a2-4a9a-ad1a-90f2abc2e09d`.
+Original checkout, drafts, Apple Teams and sibling chert-facetime remain untouched.
+
+The user could not recall requesting different empty-state wording. The lead
+stated the assumption to retain the last explicit requirement, **“No tasks
+match,”** and removed the provisional wording through separate operator-scoped
+runs. The last run completed; independent behavior and syntax checks passed.
+Task revision **27** is **review-ready**, with no unresolved decision. The task
+server is stopped cleanly after settlement. Do not reuse the old revision-11
+presentation: refresh the app/code/result views and prepare a new exact manifest.
+
+The local annotated three-scene walkthrough was accepted: **“Audio clear;
+visuals good.”** Visible Stop blanked that local preview. Handset Stop timing,
+conversation continuity after the repair, and the remaining measured polish
+checks still need physical qualification. Keep frames and audio transient.
 
 ## Current implementation
 
@@ -35,19 +46,26 @@ coding. The scoped operator API cannot launch other tasks. Unknown outcomes keep
 their receipts and ownership fence.
 
 Read [the operator guide](CODING_DEMO_HANDSET_WALKTHROUGH.md) and the latest
-[build log](BUILD_LOG.md) for the exact checkpoint validation. The handset media
-path has offline automated evidence only: SDK acceptance does not prove human
+[build log](BUILD_LOG.md) for the exact checkpoint validation. The handset now
+has partial human visual evidence, but the repaired dialogue path remains
+unqualified physically. SDK acceptance does not prove human
 visibility, audibility or remote clearance.
+
+The repair allows an admitted fresh finalized human turn to receive an ordinary
+reply after sharing retirement, with bounded transient audio and stale-response
+fencing. Its prompt now directs the voice agent to ask for missing replacement
+text before submitting a vague confirmation; physical behavior needs retesting. The worker context now identifies an
+exact answered decision as historical without duplicating the instruction.
 
 ## Resume
 
-1. Reconcile the human's observation of the first visual call. Inspect the preserved
-   `visual-1/` metadata if necessary; never replay it. Verify the current checkpoint
-   is committed/pushed and its checks passed. Use the compact external-dependency
-   inspector bundle and an owner-only verification-plan file as documented.
+1. Read the latest build-log repair and validation results. Preserve `visual-1/`
+   and `visual-2/` receipts; never replay either attempt. Verify the repair
+   checkpoint is committed/pushed and checks passed. Use the compact
+   external-dependency inspector and owner-only verification-plan file.
 2. Obtain fresh specific authorization for one visual handset call and, if
-   required, a temporary ClawdTime-backend-only standby/restore window. Prior
-   audio-only permissions are spent and do not authorize visual export.
+   required, a temporary ClawdTime-backend-only standby/restore window. Previous
+   one-call authorizations are consumed and cannot authorize another call.
 3. Prepare fresh exact preview/code/verification windows and grants, resolve the
    paired destination privately, and check exclusive idle line ownership.
 4. Run the specifically authorized call, collect physical observations, confirm

@@ -76,11 +76,12 @@ class API:
         if suffix == '/instructions':
             if self.instruction_gate:
                 await self.instruction_gate.wait()
-            return {'state': 'held', 'utteranceId': body['utteranceId']}
+            return {'state': 'held', 'taskId': self.task_id, 'replayed': False}
         if suffix == '/presentation/stop':
             self.value['exportActive'] = self.value['sharingActive'] = False
             if self.owner:
                 await self.owner.stop_sharing()
+            return {'sharingStopped': True, 'voiceEnded': False, 'taskCanceled': False}
         return {'received': True}
 
 
@@ -459,6 +460,339 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(p == '/presentation/show' for p, _ in self.delegate.calls), 1)
         self.assertFalse(self.runtime.response_authorized)
         self.assertTrue(json.loads(self.ws.sent[-1]['content'])['is_error'])
+
+    async def wait_reply(self):
+        async with asyncio.timeout(.5):
+            while self.runtime.reply_candidate and not self.runtime.reply_candidate['admitted']:
+                await asyncio.sleep(0)
+
+    async def test_post_retirement_natural_followup_plays_without_any_tool(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        before = len(self.sink.frames)
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Old source narration'})
+        await self.runtime.handle_audio(b'\x01\x00' * 160)
+        self.assertFalse(self.runtime.output_allowed)
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.transcript('Are you still there?')
+        await self.wait_reply()
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Yes. What replacement text would you like?'})
+        await self.runtime.handle_audio(b'\x02\x00' * 160)
+        async with asyncio.timeout(.5):
+            while len(self.sink.frames) == before:
+                await asyncio.sleep(0)
+        self.assertTrue(self.runtime.output_allowed)
+        self.assertFalse(any(p in ('/instructions', '/presentation/show') for p, _ in self.delegate.calls))
+        self.provider.open.assert_awaited_once()
+        # Every subsequent ordinary turn can resume too, not just the first one.
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.transcript('Can we talk before another change?')
+        await self.wait_reply()
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Yes, we can clarify it first.'})
+        self.assertTrue(self.runtime.output_allowed)
+
+    async def test_pending_final_receipt_quarantines_then_releases_current_reply(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        gate = asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/utterances':
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'What text do you need?'})
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Please give me the replacement text.'})
+        await self.runtime.handle_audio(b'\x02\x00' * 160)
+        self.assertFalse(self.runtime.output_allowed)
+        self.assertEqual(self.runtime.reply_candidate['bytes'], 320)
+        gate.set()
+        await self.wait_reply()
+        self.assertTrue(self.runtime.output_allowed)
+        self.assertEqual(self.runtime.reply_candidate['bytes'], 0)
+
+    async def test_stop_before_prior_receipt_finishes_cannot_reopen_speech(self):
+        await self.start()
+        gate = asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/utterances':
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'Change the text'})
+        prior = self.runtime.latest
+        await self.runtime.suppress_scene_speech()
+        gate.set()
+        await prior['receipt']
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Old scene response'})
+        await self.runtime.handle_audio(b'\x01\x00' * 160)
+        self.assertFalse(self.runtime.output_allowed)
+        self.assertIsNone(self.runtime.reply_candidate)
+
+    async def test_new_onset_discards_quarantine_without_canceling_human_receipt(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        gate = asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/utterances':
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'What should we change?'})
+        prior = self.runtime.latest
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'An old clarification'})
+        await self.runtime.handle_audio(b'\x01\x00' * 160)
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        self.assertIsNone(self.runtime.reply_candidate)
+        gate.set()
+        self.assertEqual((await prior['receipt'])['utteranceId'], prior['id'])
+        self.assertFalse(self.runtime.output_allowed)
+
+    async def test_quarantine_overflow_drops_without_ending_dialogue(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        gate = asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/utterances':
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'Please clarify'})
+        prior = self.runtime.latest
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Clarification'})
+        await self.runtime.handle_audio(bytes(64002))
+        self.assertIsNone(self.runtime.reply_candidate)
+        self.assertFalse(self.runtime.closed)
+        gate.set()
+        await prior['receipt']
+
+    async def test_instruction_response_then_automatic_retirement_allows_next_clarification(self):
+        await self.start()
+        await self.transcript('Change the active state text.')
+        await self.call('submit_instruction')
+        self.assertTrue(self.runtime.response_authorized)
+        # Root retires the old presentation after the instruction creates a run.
+        await self.runtime.suppress_scene_speech()
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Stale prior scene'})
+        self.assertFalse(self.runtime.output_allowed)
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.transcript('Yes. Please change that.')
+        await self.wait_reply()
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'What exact replacement text should I use?'})
+        self.assertTrue(self.runtime.output_allowed)
+        self.assertEqual(sum(p == '/instructions' for p, _ in self.delegate.calls), 1)
+        prompt = self.runtime.provider_settings(self.runtime.context)['agent']['think']['prompt']
+        self.assertIn('ask one concrete', prompt)
+        self.assertIn('server-bound pending decision', prompt)
+
+    async def test_first_final_after_retirement_uses_fresh_run_once(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        self.delegate.value.update(runId='run_after_instruction', revision=5, sequence=5, exportActive=False, sharingActive=False)
+        self.assertNotEqual(self.runtime.context['runId'], self.delegate.value['runId'])
+        await self.transcript('What exact replacement do you need?')
+        await self.wait_reply()
+        posts = [body for path, body in self.delegate.calls if path == '/utterances']
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0]['runId'], 'run_after_instruction')
+        self.assertEqual(posts[0]['expectedRevision'], 5)
+        self.assertEqual(posts[0]['text'], 'What exact replacement do you need?')
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'What should the active label say?'})
+        self.assertTrue(self.runtime.output_allowed)
+
+    async def test_refused_final_is_not_rebound_or_retried_and_next_turn_can_recover(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        self.delegate.failure = '/utterances'
+        await self.transcript('A refused turn')
+        await self.wait_reply()
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Do not play this'})
+        self.assertFalse(self.runtime.output_allowed)
+        self.assertEqual(sum(path == '/utterances' for path, _ in self.delegate.calls), 1)
+        self.delegate.failure = None
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.transcript('A fresh clarification')
+        await self.wait_reply()
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Please give the replacement text.'})
+        self.assertTrue(self.runtime.output_allowed)
+        self.assertEqual(sum(path == '/utterances' for path, _ in self.delegate.calls), 2)
+
+    async def test_stop_during_fresh_context_lookup_preserves_receipt_without_speech(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        gate, entered = asyncio.Event(), asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/context':
+                entered.set()
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'A bounded final turn'})
+        prior = self.runtime.latest
+        await entered.wait()
+        await self.runtime.suppress_scene_speech()
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        gate.set()
+        receipt = await prior['receipt']
+        self.assertEqual(receipt['utteranceId'], prior['id'])
+        posts = [body for path, body in self.delegate.calls if path == '/utterances']
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0]['text'], 'A bounded final turn')
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Old reply'})
+        self.assertFalse(self.runtime.output_allowed)
+
+    async def test_quarantine_deadline_discards_before_late_receipt_without_voice_end(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        gate = asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/utterances':
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'A delayed final turn'})
+        prior = self.runtime.latest
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'A bounded delayed reply'})
+        await self.runtime.handle_audio(b'\x01\x00' * 160)
+        async with asyncio.timeout(2.5):
+            while self.runtime.reply_candidate is not None:
+                await asyncio.sleep(.02)
+        self.assertFalse(self.runtime.closed)
+        gate.set()
+        await prior['receipt']
+        self.assertFalse(self.runtime.output_allowed)
+        self.assertIsNone(self.runtime.reply_candidate)
+
+    async def test_old_status_send_cannot_reopen_speech_after_retirement_without_onset(self):
+        await self.start()
+        gate, entered = asyncio.Event(), asyncio.Event()
+        original = self.ws.send_json
+        async def delayed(value):
+            if value['type'] == 'FunctionCallResponse':
+                entered.set()
+                await gate.wait()
+            await original(value)
+        self.ws.send_json = delayed
+        task = asyncio.create_task(self.call('task_status'))
+        await entered.wait()
+        await self.runtime.suppress_scene_speech()
+        gate.set()
+        await task
+        self.assertFalse(self.runtime.response_authorized)
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Old visible scene status'})
+        self.assertFalse(self.runtime.output_allowed)
+
+    async def test_scene_show_can_establish_epoch_only_after_its_fresh_frame(self):
+        await self.start()
+        await self.transcript('Show the source')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/presentation/show':
+                await self.runtime.suppress_scene_speech()
+                return {'sceneId': 'scene_code', 'generation': 1, 'evidence': 'sdk_frame_accepted_not_remote_seen'}
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('show_scene', {'sceneId': 'scene_code'})
+        self.presentation.fresh_video.assert_awaited_with('scene_code', 1)
+        self.assertTrue(self.runtime.response_authorized)
+
+    async def test_new_confirmed_instruction_ack_survives_its_own_retirement(self):
+        await self.start()
+        await self.transcript('Set the active state text to Ready')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/instructions':
+                await self.runtime.suppress_scene_speech()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('submit_instruction')
+        self.assertTrue(self.runtime.response_authorized)
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'The instruction is queued.'})
+        self.assertTrue(self.runtime.output_allowed)
+        # A subsequent suppression cannot be renewed by the cached old receipt.
+        await self.runtime.suppress_scene_speech()
+        await self.call('submit_instruction', identity='old_cached')
+        self.assertFalse(self.runtime.response_authorized)
+        self.assertEqual(sum(path == '/instructions' for path, _ in self.delegate.calls), 1)
+
+    async def test_unknown_instruction_result_cannot_adopt_retirement_epoch(self):
+        await self.start()
+        await self.transcript('Set the active state text to Ready')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/instructions':
+                await self.runtime.suppress_scene_speech()
+                return {'state': 'unknown', 'taskId': self.api.task_id}
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('submit_instruction')
+        self.assertFalse(self.runtime.response_authorized)
+        self.assertFalse(self.runtime.output_allowed)
+
+    async def test_confirmed_stop_ack_can_follow_its_own_suppression(self):
+        await self.start()
+        await self.transcript('Stop sharing')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/presentation/stop':
+                await self.runtime.suppress_scene_speech()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('stop_sharing')
+        self.assertTrue(self.runtime.response_authorized)
+        self.assertFalse(self.runtime.closed)
+
+    async def test_cancelled_tool_waiter_does_not_cancel_shared_transcript_receipt(self):
+        await self.start()
+        await self.runtime.suppress_scene_speech()
+        gate, entered = asyncio.Event(), asyncio.Event()
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/utterances':
+                entered.set()
+                await gate.wait()
+            return await original(path, body)
+        self.delegate.request = request
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'user', 'content': 'A pending final instruction'})
+        final = self.runtime.latest
+        await entered.wait()
+        waiter = asyncio.create_task(self.call('submit_instruction'))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        self.assertFalse(final['receipt'].cancelled())
+        gate.set()
+        self.assertEqual((await final['receipt'])['utteranceId'], final['id'])
+        await self.wait_reply()
+        self.assertTrue(self.runtime.reply_candidate['admitted'])
+        self.assertFalse(any(path == '/instructions' for path, _ in self.delegate.calls))
+
+    async def test_malformed_confirmations_cannot_adopt_retirement_epoch(self):
+        await self.start()
+        original = self.delegate.request
+        cases = [
+            ('stop_sharing', '/presentation/stop', {'sharingStopped': 1, 'voiceEnded': False, 'taskCanceled': False}),
+            ('submit_instruction', '/instructions', {'state': 'held', 'taskId': 'wrong_task'}),
+            ('submit_instruction', '/instructions', {'state': 'applied', 'taskId': self.api.task_id, 'runId': None}),
+        ]
+        for index, (name, route, result) in enumerate(cases):
+            async def request(path, body=None):
+                if path == route:
+                    await self.runtime.suppress_scene_speech()
+                    return result
+                return await original(path, body)
+            self.delegate.request = request
+            await self.runtime.handle({'type': 'UserStartedSpeaking'})
+            await self.transcript('An explicit fixture instruction ' + str(index))
+            await self.call(name, identity='shape_' + str(index))
+            self.assertFalse(self.runtime.response_authorized)
+            self.assertFalse(self.runtime.output_allowed)
 
 
 class ConfigurationTests(unittest.IsolatedAsyncioTestCase):

@@ -2,8 +2,10 @@
 
 The local three-scene walkthrough is human accepted: clear audio, useful labels
 and highlights, and working visible Stop. The handset adapter is a separate,
-offline-tested integration. No handset video or remote Stop timing is qualified
-yet. The audio-only `step-c1-done` test remains a separate completed gate.
+offline-tested integration. One connected handset attempt received positive
+visual feedback, but voice became unresponsive after a revision retired sharing.
+Full handset polish and remote Stop timing remain unqualified. The audio-only
+`step-c1-done` test remains a separate completed gate.
 
 ## Scope and entry point
 

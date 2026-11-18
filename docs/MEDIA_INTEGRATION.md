@@ -1,12 +1,16 @@
 # Attention media integration
 
-## Independent task walkthrough: offline handset adapter
+## Independent task walkthrough: handset adapter
 
 `task_walkthrough_livekit.py`, `task_walkthrough_voice.py`, and
 `task_walkthrough_livekit_local.py` add an explicit `handset_walkthrough` branch.
 The audio-only c1 validator remains separate and rejects its video/capture flags.
-This implementation is under offline verification; it has not established handset
-video, remote blanking, scene narration, spoken corrections, or acceptance.
+The first connected supervised visual call showed prepared scenes and the user reported that
+the walkthrough looked good. A spoken change started a new run, correctly retired
+the old presentation, and left the screen dark. Voice then stopped responding.
+That attempt does not qualify the integrated walkthrough; the recovery repair
+below has only offline regression evidence and needs a separately authorized
+physical retest. No additional call is implied by this checkpoint.
 
 A separate export grant binds the immutable call plan, private room, exact worker
 and agent identities, prepared manifest, capture grant and verified task revision.
@@ -48,6 +52,30 @@ a root-requested Stop never calls back recursively. Blank SDK acceptance is not
 physical clearance proof. The eventual handset trial must confirm the visible
 result. Full call cleanup additionally joins dialogue, tracks and room cleanup;
 it never infers native call completion.
+
+Retiring a scene fences its speech turn, rather than permanently muting the
+conversation. A subsequent finalized human turn can admit a natural reply without
+a status-tool call. The first transcript POST uses current task authority read
+before that POST, preserving its original text and ID; refusals and unknown
+outcomes are never retried or rebound. A late receipt from before Stop cannot
+reopen speech. If current assistant text arrives while admission is pending, the
+runtime retains only an opener marker and at most 64 KB/256 chunks of audio for
+two seconds. Admission, current turn identity and suppression epoch must all
+match before that buffer reaches the existing playback owner. Stop, a new onset,
+expiry or overflow discards it without canceling the human receipt or an already
+submitted instruction. Deepgram supplies no per-chunk turn ID: these checks use
+ordered finalized-turn and assistant-text events, not a claim of independently
+verified causal attribution for every PCM chunk.
+
+Late status replies retain their original suppression epoch. A new confirmed
+instruction or sharing-Stop receipt can acknowledge its own effect after retirement,
+but must still match the current finalized turn and epoch after its response is
+sent. Cached, refused and unknown results cannot establish a new speech epoch.
+
+Dialogue guidance asks for missing replacement text, values or targets before
+submitting an instruction. Bare confirmation does not authorize inventing the
+assistant's proposed wording as human source text. This is prompt guidance in
+addition to exact-transcript routing, not a new backend semantic classifier.
 
 The new controller uses the same private binding, voice, provider, LiveKit,
 control and journal flags as the audio controller, plus `--presentation-file`:

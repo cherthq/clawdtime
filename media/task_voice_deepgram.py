@@ -185,12 +185,7 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
         from aiohttp import WSMsgType
         async for message in self.ws:
             if message.type == WSMsgType.BINARY:
-                if not self.ready.is_set() or self.closed:
-                    raise VoiceError('provider_not_bound')
-                if self.output_allowed:
-                    self.audio_sequence += 1
-                    self.playback.offer(self.audio_sequence, message.data)
-                    self.diagnostics.record('provider_audio')
+                await self.handle_audio(message.data)
             elif message.type == WSMsgType.TEXT:
                 try:
                     value = json.loads(message.data)
@@ -201,6 +196,14 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
                 raise VoiceError('provider_disconnected')
         if not self.closed:
             raise VoiceError('provider_disconnected')
+
+    async def handle_audio(self, pcm):
+        if not self.ready.is_set() or self.closed:
+            raise VoiceError('provider_not_bound')
+        if self.output_allowed:
+            self.audio_sequence += 1
+            self.playback.offer(self.audio_sequence, pcm)
+            self.diagnostics.record('provider_audio')
 
     async def handle(self, value):
         if self.closed:
@@ -255,9 +258,7 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
             current = dict(self.context)
             async def register():
                 try:
-                    return await self.api.request('/utterances', {
-                        'providerConversationId': self.conversation_id, 'utteranceId': utterance_id,
-                        'runId': current['runId'], 'expectedRevision': current['revision'], 'text': text})
+                    return await self.register_utterance(utterance_id, text, current)
                 except Exception:
                     return None
             self.latest = {'id': utterance_id, 'at': self.clock(), 'text': text,
@@ -291,6 +292,11 @@ class DeepgramTaskVoiceRuntime(TaskVoiceRuntime):
                 if not isinstance(identity, str) or identity not in self.function_fingerprints:
                     raise VoiceError('tool_identity_invalid')
                 self.cancelled_functions.add(identity)
+
+    async def register_utterance(self, utterance_id, text, context):
+        return await self.api.request('/utterances', {
+            'providerConversationId': self.conversation_id, 'utteranceId': utterance_id,
+            'runId': context['runId'], 'expectedRevision': context['revision'], 'text': text})
 
     def function_coroutine(self, call, utterance):
         return self.function(call, utterance)

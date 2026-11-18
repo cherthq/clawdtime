@@ -284,14 +284,20 @@ describe("service-owned task engine and independent watcher", () => {
   });
 
   it("starts exactly one scoped follow-up with retained task context after a typed decision", async () => {
+    const question = "What should the empty state show?";
+    const instruction = "Show an empty state with a Clear filters button.";
     const worker = {
-      run: vi
-        .fn<TaskWorker["run"]>()
-        .mockResolvedValueOnce({
-          ...completed,
-          decision: "What should the empty state show?",
-        })
-        .mockResolvedValueOnce(completed),
+      run: vi.fn<TaskWorker["run"]>(async (input) => {
+        const context = JSON.parse(input.context);
+        // A passing worker/check result alone cannot resolve the old question:
+        // the follow-up must explicitly identify where its human answer lives.
+        const answered =
+          context.decision?.question === question &&
+          context.decision.answered === true &&
+          context.decision.answerSource === "instruction" &&
+          context.instruction === instruction;
+        return answered ? completed : { ...completed, decision: question };
+      }),
     };
     const verify = vi.fn(async (_root: string, runId: string) => report(runId));
     const f = fixture(worker, verify);
@@ -300,12 +306,17 @@ describe("service-owned task engine and independent watcher", () => {
     await f.engine.wait(original.id);
     let task = f.get(original);
     expect(task.state).toBe("needs_decision");
+    expect(task.decision?.question).toBe(question);
+    expect(task.decision?.answer).toBeUndefined();
+    expect(
+      JSON.parse(worker.run.mock.calls[0]![0].context).decision,
+    ).toBeUndefined();
     const decision: TaskCommand = {
       action: "decide",
       eventId: "typed-revision",
       expectedRevision: task.revision,
       runId: task.runs[0]!.id,
-      instruction: "Show an empty state with a Clear filters button.",
+      instruction,
     };
     const first = f.service.command(f.registered.token, task.id, decision);
     expect(first.replayed).toBe(false);
@@ -321,6 +332,18 @@ describe("service-owned task engine and independent watcher", () => {
     expect(task.state).toBe("review_ready");
     expect(task.runs).toHaveLength(2);
     expect(task.verifications).toHaveLength(2);
+    expect(
+      task.verifications.every(
+        (verification) =>
+          verification.state === "passed" &&
+          verification.checks.every((check) => check.state === "passed"),
+      ),
+    ).toBe(true);
+    expect(task.runs[1]!.decision).toBeUndefined();
+    expect(
+      f.service.command(f.registered.token, task.id, decision).replayed,
+    ).toBe(true);
+    expect(f.get(task).runs).toHaveLength(2);
     expect(worker.run).toHaveBeenCalledTimes(2);
     expect(verify).toHaveBeenCalledTimes(2);
     const firstInput = worker.run.mock.calls[0]![0],
@@ -332,7 +355,18 @@ describe("service-owned task engine and independent watcher", () => {
     expect(context.goal).toBe(original.goal);
     expect(context.instruction).toBe(decision.instruction);
     expect(context.priorResults[0].runId).toBe(firstInput.runId);
-    expect(context.decision.question).toBe("What should the empty state show?");
+    expect(context.decision).toMatchObject({
+      question,
+      answered: true,
+      answerSource: "instruction",
+    });
+    expect(context.decision).not.toHaveProperty("answer");
+    expect(context.constraints).toContain(
+      "A decision marked answered is historical",
+    );
+    expect(context.constraints).toContain(
+      "its exact answer is the instruction",
+    );
   });
 
   it("serializes another task until both worker and verifier are settled", async () => {

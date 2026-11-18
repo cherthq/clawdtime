@@ -1119,3 +1119,105 @@ For this evidence/operator-documentation checkpoint, `npm run check` passed
 are unchanged from `d7bacf8` (327 media tests and 31 Swift tests/helper build
 passed there). `git diff --check` passed. Connector independently reviewed and
 approved the evidence distinctions, cleanup/restore report and operator guidance.
+
+### Step d — connected visual retest and post-sharing voice failure
+
+The user clarified that the first visual call rang while they were on another
+call and they did not answer. They then explicitly authorized one additional
+visual call under the same fifteen-minute scope. Fresh window, artifact, pairing,
+idle-line, automatic video-readiness and exclusive standby checks passed. Two
+independent fixture checks passed before dialing. The compact inspector and
+private verification-plan preparation worked without another setup failure.
+
+Exactly one new call connected. All five phase receipts completed: media prepare
+2.904s, native dial submission 793ms, media activation 250ms, media close 241ms,
+native end submission 389ms. Preview and code scene effects completed with fresh
+SDK frame evidence. The user reported the walkthrough “looked really nice,” then
+said the screen went dark after speaking and voice stopped responding. This is
+partial physical visual evidence and a failed conversation-continuity check,
+not full handset polish acceptance.
+
+Two distinct finalized utterances each produced one new scoped run. Both workers
+completed; independent verification rejected their provisional empty-state text
+against the retained expected wording, while syntax passed. These are separate
+instruction receipts, not duplicate replay. The task reached needs-decision at
+revision 19. A revision correctly retired the old presentation; however, source
+review reproduced a voice bug: `scene_muted` could permanently discard ordinary
+assistant replies until a successful tool response. Clarification and ordinary
+follow-up speech could therefore remain silent. The media specialist is repairing
+this with independent connector review; no capture guard is being relaxed.
+
+The lead stopped the unresponsive call once. Native and local cleanup completed,
+including capture, narration, output and child joins; the owner lock was released.
+The backend was restored once afterward. Deployment
+`3e361f03-e4a2-4a9a-ad1a-90f2abc2e09d` is successful, its temporary standby instance
+is removed, every variable matches the pre-test snapshot, and runtime is live
+with traffic enabled, zero active calls and no pending/unknown effects. Protected
+metadata remains under `visual-2/`; screens/audio were transient. No further call
+is authorized.
+
+When asked for the replacement wording, the user could not recall a specific
+change and thought they had only said to go ahead. The lead stated the assumption
+to retain the last explicit requirement, “No tasks match,” and submitted one
+separate operator-scoped continuation to remove the provisional wording. It is
+not recorded as a new voice utterance or as fresh explicit replacement wording.
+The existing verification expectation and all earlier receipts remain unchanged.
+
+The restoration run completed and both independent checks passed, but it reported
+the historical empty-state question again, keeping revision 23 needs-decision.
+Inspection found that `TaskEngine.context` dropped the saved decision answer and
+presented only its question to the next worker. The exact instruction was still
+present, so this omission alone does not prove why that model repeated the
+question. The minimal correction marks a decision answered only when its saved
+answer exactly matches the current run instruction, references that existing
+instruction instead of duplicating up to 8 KB, and identifies the question as
+historical. A fake-worker regression requires this exact linkage to reach
+review-ready, with two runs, two verifications and preserved duplicate receipts.
+Transport independently reviewed the root change; all 14 engine tests passed.
+The lead submitted one further scoped continuation to validate the resolved
+decision using the corrected context, without changing the verification criteria.
+
+
+The final real continuation completed with no remaining decision. Its independent
+filter/empty-state assertion and JavaScript syntax checks both passed; task
+revision 27 is review-ready. The private result receipt is preserved and the task
+server was stopped cleanly only after the worker and watcher settled. This
+validates the corrected context in one real run, without claiming deterministic
+model behavior. Future presentation must use this fresh verified result, not the
+retired revision-11 manifest or old displayed verification text.
+
+
+The media repair admits ordinary replies after retirement only for a fresh,
+finalized human turn with a successful transcript receipt and current authority.
+It keeps one playback owner and a transient reply quarantine bounded to 64 KB,
+256 chunks and two seconds; new speech, Stop, expiry, refusal or stale identity
+cannot release that buffer. The first transcript POST uses fresh task context;
+failed or unknown submissions are not retried or rebound. Cancellation of a
+reply/tool waiter does not cancel its shared finalized-transcript registration.
+Delayed status and historical receipts cannot reopen retired scene speech. A new
+confirmed instruction or Stop result may acknowledge its own effect, with exact
+result-shape, current-turn and suppression-epoch checks through response send.
+Prepared-scene speech still requires its exact fresh frame. No sharing restart
+or capture guard relaxation was introduced.
+
+The prompt now directs the voice agent to clarify missing replacement text,
+values or targets instead of submitting bare confirmation. This is dialogue
+guidance plus unchanged exact-transcript routing, not a semantic backend guard
+or physically established behavior. Deepgram has no per-chunk turn identity;
+ordered provider boundaries and bounded admission are not independent proof of
+each audio chunk's causal attribution. A newly authorized handset test remains
+necessary. Transport approved the updated root handoff/evidence documentation;
+connector and transport approved the answered-decision context regression.
+
+
+Final repair checkpoint validation: `npm run check` passed **1,027 tests in
+65 files** (12.05s), typecheck and build. Full
+`media/.venv/bin/python -m unittest discover -s media -v` passed **344 tests in
+76.426s**. The media specialist's focused walkthrough suite passed 44 tests in
+9.775s; connector independently ran 29 dialogue plus 15 base Deepgram tests
+(**44 passed in 2.570s**) and approved the final frozen source. Swift source and
+interfaces are unchanged from `d7bacf8`, where 31 Swift tests and the helper build
+passed; no new Swift execution is claimed. `git diff --check` passed; lead review
+found no unrelated changes, literal credentials or relaxed capture/permission
+checks. Native/media/task ports 3322, 13324 and 13323 are closed. This is a passing
+repair checkpoint, not step-d completion; no step-d tag or step-e work follows.
