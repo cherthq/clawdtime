@@ -12,9 +12,11 @@ import type {
 import { Store } from "../src/storage/store.js";
 import { Vault } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
+import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
 import { TaskService } from "../src/control/task-service.js";
 import { TaskEngine } from "../src/control/task-engine.js";
 import { createTaskApp } from "../src/control/task-app.js";
+import { TaskVoiceService } from "../src/control/task-voice-service.js";
 import { runTaskVerification } from "../src/control/task-verification.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -61,6 +63,7 @@ function fixture(worker: TaskWorker, verify?: typeof runTaskVerification) {
     pairingId: "pair",
     hostId: "host",
     projectRoot: directory,
+    voice: true,
   });
   const engine = new TaskEngine(
     service,
@@ -135,6 +138,59 @@ const completed: TaskWorkerResult = {
 };
 
 describe("service-owned task engine and independent watcher", () => {
+  it("releases one held spoken instruction after the real engine settles, even after voice end", async () => {
+    const secondRun = deferred<TaskWorkerResult>();
+    const worker = {
+      run: vi
+        .fn<TaskWorker["run"]>()
+        .mockResolvedValueOnce(completed)
+        .mockImplementationOnce(() => secondRun.promise)
+        .mockResolvedValueOnce(completed),
+    };
+    const f = fixture(worker, async (_root, runId) => report(runId));
+    const voiceLedger = new TaskVoiceLedger(f.store, f.vault, f.ledger);
+    const voice = new TaskVoiceService(f.service, voiceLedger, f.engine);
+    const initial = f.create();
+    f.engine.start(initial.sessionId, initial.id);
+    await f.engine.wait(initial.id);
+    let task = f.get(initial);
+    const opened = voice.open(f.registered.token, task.id, {
+      eventId: "voice-open",
+      runId: task.runs.at(-1)!.id,
+      expectedRevision: task.revision,
+    });
+    voice.bind(opened.token, task.id, opened.voice.id, {
+      providerConversationId: "provider-fixture",
+    });
+    const speak = (utteranceId: string) => {
+      task = f.get(task);
+      voice.utterance(opened.token, task.id, opened.voice.id, {
+        providerConversationId: "provider-fixture",
+        utteranceId,
+        runId: task.runs.at(-1)!.id,
+        expectedRevision: task.revision,
+        text: "Make this scoped change.",
+      });
+      return voice.instruction(opened.token, task.id, opened.voice.id, {
+        eventId: `tool-${utteranceId}`,
+        utteranceId,
+      });
+    };
+    expect(speak("first").state).toBe("applied");
+    await Promise.resolve();
+    expect(speak("second").state).toBe("held");
+    voice.end(opened.token, task.id, opened.voice.id, { eventId: "hangup" });
+    expect(worker.run).toHaveBeenCalledTimes(2);
+    secondRun.resolve(completed);
+    await f.engine.wait(task.id);
+    await f.engine.wait(task.id);
+    task = f.get(task);
+    expect(task.runs).toHaveLength(3);
+    expect(worker.run).toHaveBeenCalledTimes(3);
+    expect(task.state).toBe("review_ready");
+    expect(voiceLedger.heldForTask(task.id)).toEqual([]);
+  });
+
   it("runs through HTTP and auto-starts one follow-up for a repeated decision receipt", async () => {
     const followup = deferred<TaskWorkerResult>();
     const worker = {

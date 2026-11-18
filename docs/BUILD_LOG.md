@@ -128,3 +128,83 @@ fixture used a locally authorized synthetic pairing, not a phone-paired session.
 
 Final pre-commit rerun: `npm run check` passed **42 files / 643 tests** including
 prepared-brief regression, typecheck and build. Independent diff review passed.
+
+## Step c — local voice implementation, acceptance pending
+
+Step-b checkpoint: `33526f9`, annotated `step-b-done`, branch and tag pushed.
+The independent-task voice contract is separate from legacy AgentSession and uses
+an additional voice-only credential. Explicit voice permission is immutable at task
+session registration. Opening requires the exact current prepared brief; provider
+conversation identity binds once and cannot reconnect/rebind. No phone call,
+presentation, screen capture or shared-screen control capability is exposed.
+
+The backend stores finalized utterances encrypted before a model tool can reference
+them. Tools cannot substitute text, forge verification, or approve native permissions.
+A finalized instruction is deduplicated by provider conversation and utterance,
+independent of tool-call IDs. One instruction can wait during a run; it releases
+only after the same run has a known terminal outcome and independent verification.
+Hangup/voice Stop does not cancel already authorized coding. Restart never scans or
+replays held instructions. Typed revisions cannot overtake an admitted held revision.
+
+Review found a same-run timing race between transcription and worker completion.
+Transcript storage now admits only monotonic source revisions for the same run;
+finalization retains that original receipt and rechecks the current run/revision
+inside the service. Newer-run rebinding and future/pre-opening revisions reject.
+Unknown/canceled tasks can still hear status or hangup, but cannot start new work.
+
+Media work uses a new local runtime and microphone/speaker page with one streaming
+provider socket and one playback owner. Provider interruption owns normal speech
+cancellation; local energy does not compete with it. Prepared first_message uses
+the same provider/playback path as dialogue. Audio remains transient, and sink
+scheduling is explicitly not handset audibility. Tool/status work is asynchronous.
+No presentation code or step-d dependency was added.
+
+External prerequisite: the existing original-chat ElevenLabs agent is not presumed
+compatible with the independent task tool schema. A dedicated authenticated agent
+with the reviewed task-only configuration and privately supplied credentials is
+needed to run actual local speech. No ElevenLabs credential was read, provider changed, real
+microphone started or handset called in this implementation. The user's prompt
+requires authorization before credential/configuration work. Synthetic PCM and
+protocol tests cannot complete step c, and `step-c-done` must not be created until
+actual local spoken-session acceptance. Step c.1 and all later work remain gated.
+
+### Step c candidate checks and observed local boundaries
+
+- `npm run check`: passed **45 files / 668 tests**, typecheck and build.
+- `media/.venv/bin/python -m unittest discover -s media -p 'test_task_voice.py'`:
+  **20 passed**, including an actual localhost WebSocket with synthetic PCM and
+  task HTTP callbacks. This is not a real ElevenLabs or human-speech session.
+- Full media validation initially failed because existing `test_screen_wire`
+  imports the gateway's `certifi` dependency. Installed the unchanged
+  `gateway/requirements.txt` into the isolated venv. Rerun:
+  `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
+  **211 passed**, no skips. Expected failure-fixture logs and an existing SQLite
+  ResourceWarning were emitted; the suite ended `OK`.
+- Local service + real CLI `task register --voice true`, synthetic worker lifecycle,
+  `task voice-start`, `voice-status`, `voice-stop`: observed exact task/voice identity,
+  prepared opening, false screen/presentation/control permissions and
+  `{ended:true,taskCanceled:false}`. Temporary local service stopped cleanly.
+- Independent connector review: eight voice-authority tests, voice CLI checks and
+  20 Python runtime tests passed. Transport's integrated real TaskEngine/fake worker
+  regression proves one held spoken revision releases after verification, including
+  voice end, without replay. Unknown outcomes keep the held receipt blocked.
+- No Swift source changed; Swift checks are not applicable. No gateway source
+  changed; its existing dependency manifest was installed for media wire coverage.
+- Reviewed source diff for credential handling, unrelated scope and weakened guards.
+  `git diff --check` passed. No real secrets, audio, screenshots or personal messages
+  were added to tracked files.
+
+A final frozen-source full check will precede the partial step-c checkpoint.
+The reviewable provider configuration is `media/task_voice_provider.example.json`;
+local entry point and precise authorization prerequisite are in
+`docs/MEDIA_INTEGRATION.md`. Recommended next action is authorization to create a
+separate task-only ElevenLabs agent using the existing approved voice and to access
+its protected credential for one local mic/speaker qualification. An already
+configured compatible agent is an alternative that avoids provider changes.
+Remaining synthetic-only preserves current safety but cannot complete c.
+No c, c.1, d or e tag has been created.
+
+Final frozen-source validation before the partial c commit: `npm run check` passed
+45 files / 668 tests, typecheck and build; full media unittest passed 211 tests
+with no skips. Original Argos checkout still has the same four untracked drafts;
+no changes were made there. The partial-c commit is intentionally untagged.

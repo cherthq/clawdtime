@@ -14,6 +14,15 @@ const sessionFileSchema = z
     token: z.string().min(32),
   })
   .strict();
+const voiceFileSchema = z
+  .object({
+    version: z.literal(1),
+    taskOrigin: z.string(),
+    taskId: z.string().min(1),
+    voiceSessionId: z.string().min(1),
+    voiceToken: z.string().min(32),
+  })
+  .strict();
 
 /** Independent tasks never inherit the original-chat connection or its permissions. */
 export function taskOrigin(raw: string): string {
@@ -63,11 +72,14 @@ export async function taskCli(
   if (command === "help" || command === "--help") {
     print(
       "Independent local tasks (simulation by default)\n" +
-        "task register --pairing-id ID --host-id ID --project PATH --event-id ID [--operator-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
+        "task register --pairing-id ID --host-id ID --project PATH --event-id ID [--voice true|false] [--operator-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
         "task create --goal TEXT --event-id ID [--session-file PRIVATE_PATH]\n" +
         "task status --id ID [--session-file PRIVATE_PATH]\n" +
         "task run --id ID [--session-file PRIVATE_PATH]\n" +
         "task command --id ID --json JSON [--session-file PRIVATE_PATH]\n" +
+        "task voice-start --id TASK_ID --run-id RUN_ID --revision NUMBER --event-id ID [--session-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
+        "task voice-status --voice-file PRIVATE_PATH\n" +
+        "task voice-stop --voice-file PRIVATE_PATH --event-id ID\n" +
         "Use CLAWDTIME_TASK_URL (default http://127.0.0.1:3320). Registration uses CLAWDTIME_TASK_TOKEN as operator credential; other commands use a session file or session token. Never put credentials in arguments. Preserve event IDs when reconciling a lost response; this CLI never retries writes.",
     );
     return;
@@ -81,11 +93,22 @@ export async function taskCli(
       "event-id",
       "save",
       "operator-file",
+      "voice",
     ],
     create: ["goal", "event-id", "session-file"],
     status: ["id", "session-file"],
     run: ["id", "session-file"],
     command: ["id", "json", "session-file"],
+    "voice-start": [
+      "id",
+      "run-id",
+      "revision",
+      "event-id",
+      "session-file",
+      "save",
+    ],
+    "voice-status": ["voice-file"],
+    "voice-stop": ["voice-file", "event-id"],
   };
   if (
     !allowed[command] ||
@@ -101,18 +124,31 @@ export async function taskCli(
   const saved = options["session-file"]
     ? sessionFileSchema.parse(secureRead(options["session-file"]))
     : undefined;
+  const voice =
+    command === "voice-status" || command === "voice-stop"
+      ? voiceFileSchema.parse(secureRead(required("voice-file")))
+      : undefined;
   const origin = taskOrigin(
-    env.CLAWDTIME_TASK_URL ?? saved?.origin ?? "http://127.0.0.1:3320",
+    env.CLAWDTIME_TASK_URL ??
+      saved?.origin ??
+      voice?.taskOrigin ??
+      "http://127.0.0.1:3320",
   );
   if (saved && saved.origin !== origin)
     throw new Error("Session file belongs to another task service.");
+  if (voice && voice.taskOrigin !== origin)
+    throw new Error("Voice file belongs to another task service.");
   const operator = options["operator-file"]
     ? z
         .object({ token: z.string().min(32) })
         .strict()
         .parse(secureRead(options["operator-file"]))
     : undefined;
-  const token = saved?.token ?? operator?.token ?? env.CLAWDTIME_TASK_TOKEN;
+  const token =
+    voice?.voiceToken ??
+    saved?.token ??
+    operator?.token ??
+    env.CLAWDTIME_TASK_TOKEN;
   if (!token || token.length < 32)
     throw new Error(
       "A protected task session file or CLAWDTIME_TASK_TOKEN is required.",
@@ -120,12 +156,17 @@ export async function taskCli(
   let path: string, body: unknown;
   switch (command) {
     case "register":
+      if (
+        options.voice !== undefined &&
+        !["true", "false"].includes(options.voice)
+      )
+        throw new Error("--voice must be true or false.");
       path = "/sessions";
       body = {
         pairingId: required("pairing-id"),
         hostId: required("host-id"),
         projectRoot: required("project"),
-        voice: false,
+        voice: options.voice === "true",
         eventId: required("event-id"),
       };
       break;
@@ -139,6 +180,23 @@ export async function taskCli(
     case "run":
       path = `/tasks/${encodeURIComponent(required("id"))}/run`;
       body = {};
+      break;
+    case "voice-start": {
+      const revision = Number(required("revision"));
+      if (!Number.isSafeInteger(revision) || revision < 0)
+        throw new Error("--revision must be a nonnegative integer.");
+      path = `/tasks/${encodeURIComponent(required("id"))}/voice-sessions`;
+      body = {
+        eventId: required("event-id"),
+        runId: required("run-id"),
+        expectedRevision: revision,
+      };
+      break;
+    }
+    case "voice-status":
+    case "voice-stop":
+      path = `/tasks/${encodeURIComponent(voice!.taskId)}/voice/${encodeURIComponent(voice!.voiceSessionId)}/${command === "voice-status" ? "context" : "end"}`;
+      if (command === "voice-stop") body = { eventId: required("event-id") };
       break;
     default:
       path = `/tasks/${encodeURIComponent(required("id"))}/commands`;
@@ -212,9 +270,32 @@ export async function taskCli(
       );
     secureWrite(file, session);
     print(JSON.stringify({ session: value.session, sessionFile: file }));
+  } else if (command === "voice-start") {
+    if (value.voice?.taskId !== required("id"))
+      throw new Error("Voice response belongs to another task.");
+    const credentials = voiceFileSchema.parse({
+      version: 1,
+      taskOrigin: origin,
+      taskId: required("id"),
+      voiceSessionId: value.voice?.id,
+      voiceToken: value.token,
+    });
+    const file =
+      options.save ??
+      join(
+        stateDirectory(),
+        "task-voice",
+        `${credentials.voiceSessionId.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`,
+      );
+    secureWrite(file, credentials);
+    print(JSON.stringify({ voice: value.voice, voiceFile: file }));
   } else {
     // Task endpoints never return credentials; reject unexpected credential responses.
-    if (value && typeof value === "object" && "token" in value)
+    if (
+      value &&
+      typeof value === "object" &&
+      ("token" in value || "voiceToken" in value)
+    )
       throw new Error("Unexpected credential in task response.");
     print(JSON.stringify(value, null, 2));
   }

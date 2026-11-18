@@ -22,6 +22,7 @@ const registration = z
 
 /** App-owned authority. No legacy AgentSession, polling chat, screen or control grant. */
 export class TaskService {
+  beforeDecision?: (taskId: string) => void;
   constructor(
     readonly store: Store,
     readonly vault: Vault,
@@ -144,6 +145,7 @@ export class TaskService {
   }
   command(raw: string, taskId: string, command: TaskCommand) {
     const session = this.authenticate(raw);
+    if (command.action === "decide") this.beforeDecision?.(taskId);
     if (
       !this.options.simulation &&
       !["decide", "accept", "cancel"].includes(command.action)

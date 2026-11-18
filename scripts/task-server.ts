@@ -20,6 +20,8 @@ import { createTaskApp } from "../src/control/task-app.js";
 import { TaskEngine } from "../src/control/task-engine.js";
 import type { VerificationPlan } from "../src/control/task-verification.js";
 import { CodexTaskWorker } from "../connectors/codex/task-worker.js";
+import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
+import { TaskVoiceService } from "../src/control/task-voice-service.js";
 
 const flags = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -138,7 +140,12 @@ const engine = realWorker
       ) as VerificationPlan,
     )
   : undefined;
-const app = createTaskApp(service, config.operatorToken, engine);
+const voice = new TaskVoiceService(
+  service,
+  new TaskVoiceLedger(store, vault, ledger),
+  engine,
+);
+const app = createTaskApp(service, config.operatorToken, engine, voice);
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () =>
   console.log(
     `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. Local fixture pairing only; no phone, capture or control. Operator credential file: ${operatorPath}`,

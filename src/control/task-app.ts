@@ -5,11 +5,13 @@ import { ZodError } from "zod";
 import type { TaskCommand } from "../contracts.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
+import type { TaskVoiceService } from "./task-voice-service.js";
 
 export function createTaskApp(
   service: TaskService,
   operatorToken: string,
   engine?: TaskEngine,
+  voice?: TaskVoiceService,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -50,6 +52,58 @@ export function createTaskApp(
       control: false,
     }),
   );
+  if (voice) {
+    const credential = (c: any) => bearer(c.req.header("authorization"));
+    const voicePath = "/tasks/:id/voice/:voiceId";
+    app.post("/tasks/:id/voice-sessions", async (c) =>
+      c.json(voice.open(credential(c), c.req.param("id"), await c.req.json())),
+    );
+    app.get(`${voicePath}/context`, (c) =>
+      c.json(
+        voice.context(credential(c), c.req.param("id"), c.req.param("voiceId")),
+      ),
+    );
+    app.post(`${voicePath}/bind`, async (c) =>
+      c.json(
+        voice.bind(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/utterances`, async (c) =>
+      c.json(
+        voice.utterance(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/instructions`, async (c) =>
+      c.json(
+        voice.instruction(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${voicePath}/end`, async (c) =>
+      c.json(
+        voice.end(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("voiceId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+  }
   app.post("/sessions", async (c) => {
     if (!equal(bearer(c.req.header("authorization")), operatorToken))
       throw new DomainError(401, "Operator authorization required.");

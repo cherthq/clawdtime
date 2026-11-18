@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClawdTime · Local voice</title>
+<style>
+  :root { color-scheme: light dark; font: 17px/1.5 system-ui,sans-serif; }
+  body { max-width: 34rem; margin: 12vh auto; padding: 1.5rem; }
+  h1 { font-size: 2rem; font-weight: 550; letter-spacing: -.04em; }
+  p { opacity: .8; } button { font: inherit; padding: .65rem 1.1rem; border-radius: .6rem; margin-right: .5rem; cursor: pointer; }
+  #stop { background: #a62626; color: white; border: 1px solid #a62626; }
+  #state { min-height: 3em; } .small { font-size: .85rem; }
+</style>
+<h1>Talk with ClawdTime</h1>
+<p>Discuss your coding task through your Mac’s microphone and speakers.</p>
+<p id="state" role="status" aria-live="polite">Ready to start. Microphone access begins when you choose Start.</p>
+<button id="start">Start voice</button><button id="stop" disabled>Stop voice</button>
+<p class="small">No phone call, screen sharing or computer control. Stopping voice leaves your coding task running. Use headphones for the first local audio check.</p>
+<script>
+'use strict';
+let context, stream, socket, processor, source, mute, nextTime=0, epoch=0, started=false;
+const scheduled=new Set(), pendingAcks=new Set();
+const state=document.getElementById('state'), start=document.getElementById('start'), stop=document.getElementById('stop');
+function ack(id) { if(socket?.readyState===WebSocket.OPEN) socket.send(JSON.stringify({kind:'played',id})); }
+function clearAudio() { for(const item of scheduled) { try{item.stop();}catch{} } scheduled.clear(); for(const id of pendingAcks) ack(id); pendingAcks.clear(); nextTime=context?.currentTime||0; }
+async function closeLocal(message) {
+  clearAudio(); processor?.disconnect(); source?.disconnect(); mute?.disconnect();
+  stream?.getTracks().forEach(track=>track.stop());
+  if(context && context.state!=='closed') await context.close();
+  stop.disabled=true; state.textContent=message;
+}
+stop.onclick=async()=>{
+  if(socket?.readyState===WebSocket.OPEN) socket.send(JSON.stringify({kind:'stop'}));
+  socket?.close(); await closeLocal('Voice stopped. Your coding task is preserved.');
+};
+start.onclick=async()=>{
+  if(started) return; started=true; start.disabled=true;
+  try {
+    context=new AudioContext({sampleRate:16000}); await context.resume();
+    if(context.sampleRate!==16000) throw Error('audio format');
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},video:false});
+    const code=`class Capture extends AudioWorkletProcessor {
+      constructor(){super();this.buffer=new Int16Array(1600);this.used=0;}
+      process(inputs){const samples=inputs[0]?.[0];if(samples)for(const s of samples){this.buffer[this.used++]=Math.max(-32768,Math.min(32767,Math.round(s*32768)));if(this.used===1600){this.port.postMessage(this.buffer.buffer,[this.buffer.buffer]);this.buffer=new Int16Array(1600);this.used=0;}}return true;}
+    } registerProcessor('capture',Capture);`;
+    const blob=URL.createObjectURL(new Blob([code],{type:'text/javascript'}));
+    try{await context.audioWorklet.addModule(blob);}finally{URL.revokeObjectURL(blob);}
+    processor=new AudioWorkletNode(context,'capture'); source=context.createMediaStreamSource(stream); mute=context.createGain(); mute.gain.value=0;
+    source.connect(processor); processor.connect(mute); mute.connect(context.destination);
+    socket=new WebSocket(`ws://${location.host}/audio${location.search}`); socket.binaryType='arraybuffer';
+    let ready=false;
+    processor.port.onmessage=event=>{if(ready&&socket.readyState===WebSocket.OPEN){if(socket.bufferedAmount>32000){stop.click();return;}socket.send(event.data);}};
+    socket.onopen=()=>{stop.disabled=false;state.textContent='Preparing your task conversation…';};
+    socket.onmessage=event=>{
+      let value;try{value=JSON.parse(event.data);}catch{stop.click();return;}
+      if(value.kind==='ready'){ready=true;state.textContent='Listening. You can interrupt naturally or choose Stop voice.';return;}
+      if(value.kind==='error'){state.textContent=value.message;return;}
+      if(value.kind==='clear'){epoch=value.epoch;clearAudio();return;}
+      if(value.kind!=='audio')return;
+      if(value.epoch<epoch){ack(value.id);return;}epoch=value.epoch;
+      const raw=atob(value.pcm), bytes=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+      if(bytes.length%2||bytes.length>3200){stop.click();return;}
+      const data=new DataView(bytes.buffer), buffer=context.createBuffer(1,bytes.length/2,16000), channel=buffer.getChannelData(0);
+      for(let i=0;i<channel.length;i++)channel[i]=data.getInt16(i*2,true)/32768;
+      const node=context.createBufferSource();node.buffer=buffer;node.connect(context.destination);
+      const at=Math.max(context.currentTime,nextTime);nextTime=at+buffer.duration;
+      if(nextTime-context.currentTime>.5){stop.click();return;}
+      scheduled.add(node);pendingAcks.add(value.id);
+      node.onended=()=>{scheduled.delete(node);if(pendingAcks.delete(value.id))ack(value.id);};node.start(at);
+      // Keep up to 200 ms buffered; this ACK proves scheduling only, not audible output.
+      if(nextTime-context.currentTime<=.2){pendingAcks.delete(value.id);ack(value.id);}
+    };
+    socket.onclose=()=>closeLocal('Voice ended. Your coding task is preserved. This session cannot restart.');
+    socket.onerror=()=>closeLocal('Voice connection unavailable. No retry was made. Your task is preserved.');
+  } catch { socket?.close(); await closeLocal('Local audio could not start. Check microphone permission and the private provider configuration.'); }
+};
+window.addEventListener('pagehide',()=>{socket?.close();stream?.getTracks().forEach(track=>track.stop());});
+</script>
+</html>

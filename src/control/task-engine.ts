@@ -19,6 +19,11 @@ export class TaskEngine {
     { controller: AbortController; promise: Promise<void> }
   >();
   private closing = false;
+  private settled = new Set<(taskId: string) => void>();
+  onSettled(listener: (taskId: string) => void) {
+    this.settled.add(listener);
+    return () => this.settled.delete(listener);
+  }
   constructor(
     readonly service: TaskService,
     private worker: TaskWorker,
@@ -44,7 +49,17 @@ export class TaskEngine {
     const controller = new AbortController();
     const promise = Promise.resolve()
       .then(() => this.execute(claim.task, controller))
-      .finally(() => this.active.delete(taskId));
+      .finally(() => {
+        this.active.delete(taskId);
+        if (!this.closing)
+          for (const listener of this.settled) {
+            try {
+              listener(taskId);
+            } catch {
+              /* Durable held receipt remains available; no automatic retry. */
+            }
+          }
+      });
     this.active.set(taskId, { controller, promise });
     // Requests remain responsive; failure conservatively retains the durable unresolved claim.
     void promise.catch(() => {});

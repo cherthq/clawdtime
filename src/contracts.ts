@@ -94,7 +94,13 @@ export interface CodingTask {
   call?: TaskCall;
   verifications: TaskVerification[];
   calls: TaskCall[];
-  brief?: { runId: string; verificationId: string; kind: "decision" | "review"; opening: string; question?: string };
+  brief?: {
+    runId: string;
+    verificationId: string;
+    kind: "decision" | "review";
+    opening: string;
+    question?: string;
+  };
   createdAt: number;
   updatedAt: number;
 }
@@ -146,6 +152,34 @@ export interface TaskWorker {
     emit: (event: { phase: string }) => void,
     signal: AbortSignal,
   ): Promise<TaskWorkerResult>;
+}
+/** Voice is a transient local conversation capability, never execution or screen authority. */
+export interface TaskVoiceSession {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  openedRunId: string;
+  openedRevision: number;
+  opening: string;
+  providerConversationId?: string;
+  createdAt: number;
+  expiresAt: number;
+  endedAt?: number;
+  mode: "local_audio";
+  permissions: { presentation: false; control: false; screen: false };
+}
+export interface TaskVoiceInstruction {
+  id: string;
+  voiceSessionId: string;
+  taskId: string;
+  runId: string;
+  expectedRevision: number;
+  providerConversationId: string;
+  utteranceId: string;
+  instruction: string;
+  state: "held" | "applied";
+  createdAt: number;
+  appliedRunId?: string;
 }
 export interface Pairing {
   id: string;

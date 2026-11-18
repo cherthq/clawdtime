@@ -888,3 +888,34 @@ inherited MCP entries disabled. It submitted **zero model turns** and closed the
 isolated App Server. Real end-to-end worker/watcher evidence is recorded separately
 in `docs/BUILD_LOG.md`; initialization tests do not establish coding or handset
 acceptance.
+
+## Task-bound local voice (coding demo, step c)
+
+Opt in to voice when creating a fresh independent task session with
+`task register ... --voice true`. An existing session cannot be upgraded silently.
+When a task has a prepared brief, bind a local audio conversation to its exact
+current task, run and revision:
+
+```sh
+npm run cli -- task voice-start --id TASK_ID --run-id RUN_ID --revision REVISION \
+  --event-id opening-1 --session-file /absolute/private/task-session.json \
+  --save /absolute/private/task-voice.json
+npm run cli -- task voice-status --voice-file /absolute/private/task-voice.json
+npm run cli -- task voice-stop --voice-file /absolute/private/task-voice.json \
+  --event-id end-1
+```
+
+`voice-start` writes a separate mode-600 capability file containing
+`version`, `taskOrigin`, `taskId`, `voiceSessionId` and `voiceToken`. Its output
+contains session metadata and the saved file path, never the token. The runtime
+uses this narrower voice credential; it does not receive the operator token or
+original task session token. Provider credentials are a separate protected
+runtime prerequisite, not fields collected or printed by this CLI.
+
+`voice-stop` ends the conversation only. It does not cancel a coding task. Use the
+separate task cancellation command when that is the intended action. Voice routes
+offer no capture, presentation, shared-screen input, native worker approval or
+original-chat forwarding capability. The local microphone/speaker runtime and its
+component qualification are documented in MEDIA_INTEGRATION.md. Software checks
+are not spoken-dialogue or handset acceptance; the c.1 phone call still requires
+specific authorization after step c passes.

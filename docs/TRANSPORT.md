@@ -53,6 +53,34 @@ next run. Preparing this brief neither dials nor grants presentation authority.
 `tests/backend-task-engine.test.ts` additionally covers actual local verifier
 processes and the HTTP run/decision path, including identical decision replay.
 
+Step c adds `src/attention/task-voice-ledger.ts`. A local audio session opens only
+against the current prepared task brief and explicit task-session voice permission.
+Its provider conversation is write-once and cannot be reused by another session.
+No screen, presentation, control or live phone authority is granted. An expired
+record still requires an explicit end before another voice runtime is admitted;
+expiry alone does not prove the previous provider connection ended.
+
+Finalized human instructions bind the exact voice/provider conversation, utterance,
+task, run and source revision. The trusted runtime first registers finalized text;
+the model's instruction tool only references that registered identity. Identical
+utterances cannot create another run even under a different model-tool event ID.
+All retained text and provider identities are encrypted. The service can explicitly
+reconcile finalized speech after same-run progress; it retains the original source
+revision and cannot retarget the instruction to a later run.
+
+One instruction may be held while execution or verification runs. The task and
+utterance receipts commit atomically when the original run has a known terminal
+outcome and completed verification. Unknown/canceled outcomes remain fenced. A
+held instruction survives voice end because ending audio does not cancel authorized
+task work, but current task-session authority is still required before release.
+Restart never releases it automatically. New typed decisions are refused while a
+held spoken instruction is waiting, preserving the order of admitted instructions.
+
+`tests/backend-task-voice-ledger.test.ts` covers admission, provider binding,
+cross-session isolation, encrypted context, utterance replay/conflicts, transactional
+failure, same-run reconciliation, held work, cancellation and restart. These tests
+do not establish microphone quality, provider audio or handset acceptance.
+
 ClawdTime is a single-node SQLite pilot. Its database is independent from Apple
 Teams, owner-only, WAL-mode and uses synchronous commits. No source runtime state
 is imported. Node 24+ provides the SQLite runtime.

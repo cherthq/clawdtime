@@ -1,5 +1,129 @@
 # Attention media integration
 
+## Independent coding-task voice candidate — November 18, 2026
+
+`task_voice.py` and `task_voice_local.py` implement a separate, task-owned local
+audio path. They do not import the legacy original-chat conversation, capture,
+camera, device control or calling runtimes. This is a software candidate for step
+c, not completed local spoken acceptance or handset acceptance. Presentation and
+desktop work remain gated on the specifically authorized c.1 handset test.
+
+One immutable voice capability binds one task and one non-reconnectable provider
+conversation. The backend prepares the opening from the verified task state. The
+runtime rejects stale opening run/revision bindings before provider startup and
+again after preflight. ElevenLabs receives that opening as `first_message`; it
+uses the same provider audio and playback coordinator as subsequent dialogue.
+There is no separate generic greeting or Deepgram TTS path in this candidate.
+
+The only model tools are `task_status`, `submit_instruction`, and `end_call`.
+Final provider transcripts are registered with the backend before instruction
+submission. The model cannot supply replacement text, execution permissions or a
+screen action. Duplicate tool calls and utterances retain one instruction receipt;
+uncertain HTTP mutations are not retried. A status request runs independently of
+instruction dispatch. A stale/refused transcript cannot execute but does not end
+the status conversation. Ending voice does not cancel the task.
+
+The current provider transcript sample lacks a stable event ID. When the provider
+does supply an integer ID it is retained; otherwise the runtime assigns a local
+sequence within the immutable provider conversation. Consecutive identical finals
+without provider IDs are conservatively suppressed. A crash or socket loss never
+reconnects or resets that sequence into the same voice session. This may require a
+clarification for separately repeated identical speech; it does not permit replay.
+
+Provider interruption events exclusively own speech cancellation. Local audio
+energy never cancels playback. One coordinator fences queued audio by epoch and
+provider event ID; finalized instruction receipts survive interruption. Playback
+buffers are bounded, and local browser Stop immediately stops mic tracks and
+scheduled audio before requesting backend cleanup. Browser scheduling or queue
+clearing is not proof of audibility or handset interruption latency.
+
+### Local entry point and external prerequisite
+
+The connector CLI `task voice-start` creates a mode-0600 voice-only capability
+file. It is distinct from the full task session credential and contains
+`version`, `taskOrigin`, `taskId`, `voiceSessionId`, and `voiceToken`. The task
+session must already explicitly permit voice. No phone call occurs.
+
+The reviewed offline provider body is
+[`media/task_voice_provider.example.json`](../media/task_voice_provider.example.json).
+It contains only a voice-ID placeholder, no credentials. The template can also
+be printed without network access:
+
+```sh
+media/.venv/bin/python media/task_voice_local.py provider-template \
+  --voice-id REPLACE_WITH_EXPLICIT_VOICE_ID
+```
+
+The precise external prerequisite is authorization to create/configure a
+**dedicated independent-task ElevenLabs agent** using that body and to use its
+scoped API key for one local microphone/speaker qualification. The historical
+original-chat agent exposes incompatible tools and must not be silently changed
+or reused. Creation/configuration, credential access, provider audio sessions,
+phone calls and deployment have not occurred under this implementation.
+
+The template requires authenticated access, the exact three client tools, no
+server tools/MCP/workflows, PCM16 at 16 kHz, prompt/first-message overrides,
+disabled silence termination and provider retention/recording disabled. Runtime
+preflight reads and validates these settings; it never changes them. A differing
+configuration fails closed. The selected first provider/model follows the audited
+Argos adapter; no provider migration was added.
+
+The provider's separate `turn_timeout` prompts another turn after silence. The
+candidate sets its documented maximum of 30 seconds and disables soft-timeout
+fillers, rather than retaining Argos's 10-second setting. This accommodates the
+required 20-second pause at configuration level; it does not prove conversational
+quiet or absence of presence checks beyond 30 seconds. Those remain observed
+acceptance checks. See [ElevenLabs conversation flow](https://elevenlabs.io/docs/eleven-agents/customization/conversation-flow).
+
+After that separate authorization and configuration, the lead can supply an
+owner-only provider JSON file with `elevenlabsAgentId` and `elevenlabsApiKey`, then:
+
+```sh
+media/.venv/bin/python media/task_voice_local.py run \
+  --voice-file /absolute/private/voice.json \
+  --provider-file /absolute/private/provider.json --port 3321
+```
+
+The launcher prints a private local HTML file path, never its capability URL or
+provider credentials. Open that file, follow its local link, then choose **Start
+voice** to grant microphone access. The local page requests `audio` with echo
+cancellation and `video:false`; it has no screen-capture API. The server binds
+127.0.0.1, checks Host/Origin and its fresh capability, disables access logging,
+and admits one local WebSocket only. Closing the page or choosing Stop ends
+voice. A fresh explicitly admitted voice session is needed after disconnect.
+
+Audio, transcripts and provider context are transient in the media process.
+The backend retains bounded finalized utterances and instruction receipts in
+its encrypted ledger for identity, interpretation and deduplication. Use headphones for initial local qualification; actual
+speakerphone echo/interruption remains a separate handset acceptance requirement.
+
+### Candidate validation limits
+
+The complete media suite also imports the gateway relay. Install both existing
+dependency manifests into the isolated environment:
+
+```sh
+python3 -m venv media/.venv
+media/.venv/bin/python -m pip install -r media/requirements.txt -r gateway/requirements.txt
+media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'
+```
+
+`media/.venv/bin/python -m unittest discover -s media -p 'test_task_voice.py'`
+exercises an actual localhost provider WebSocket, synthetic PCM, task HTTP
+callbacks, prepared first-message delivery, status during slow instruction
+dispatch, duplicate/stale/unknown instruction handling, interruption fencing,
+privacy/configuration refusals, local origin boundaries and teardown. The quiet
+interval check advances a synthetic clock; it does not establish the actual
+20-second listening pause, useful speech latency, a ten-minute conversation, or
+physical audibility. Those must be measured with the authorized local provider
+session and then the separate c.1 voice-only handset call.
+
+Protocol references: [ElevenLabs Agent WebSocket API](https://elevenlabs.io/docs/eleven-agents/api-reference/eleven-agents/websocket)
+and [client WebSocket integration](https://elevenlabs.io/docs/eleven-agents/libraries/web-sockets),
+checked November 18, 2026. Existing Argos `815d51b` socket, configuration, bounded
+buffer and no-retry patterns informed this narrow implementation; none of its
+original-chat routing or presentation tools are used.
+
 The Python media service is a separately runnable selective migration with no
 workspace engine. It retains LiveKit room lifecycle, qualified worker audio,
 Deepgram STT/TTS, a stable screen video track, bounded device inputs, speech/action
