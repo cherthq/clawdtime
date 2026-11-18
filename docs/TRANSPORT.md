@@ -721,3 +721,46 @@ Media status may expose only bounded integer output counters
 `audioOutput.preparedSilentFrames` and `audioOutput.speechFrames` (0 through
 1,000,000), with required evidence label `sdk_acceptance_not_audibility`. These counts can support a private shutdown summary;
 they contain no audio and do not establish that the handset heard speech.
+
+### Independent task presentation ledger (step d, local only)
+
+`TaskPresentationLedger` stores encrypted manifests, grants and bounded effect
+receipts without dispatching capture, narration or task execution. A manifest
+binds the exact task/session/run/revision, independent verification and prepared
+opening. Up to twelve code/preview/verification scenes bind their window, process
+launch identity, display, title hash, focus and narration. A separate expiring
+local presentation grant authorizes view/capture only; existing task and handset
+voice permissions remain unchanged. No native activation, input or call grant is
+implied. Artifact hashes are binding metadata, not proof that rendered content
+matches the verified result.
+
+Scene selection increments a presentation generation and records its effect
+before dispatch. Narration requires the original completed selection receipt and
+a fresh frame from its exact scene/window/process/generation, captured after the
+transition completed. Geometry must remain the same; current dynamic preview
+pixels may have a newer content digest. Captured/rendered frame metadata must be
+no more than two seconds old. Host-render evidence does not prove human visibility
+or content correctness, and playback completion does not prove audibility.
+
+Stop immediately invalidates forward admission and increments the generation.
+A separate single cleanup receipt must confirm capture stopped, narration stopped,
+output cleared and children joined. A running original effect prevents releasing
+the global capture reservation. Late original results cannot restore a visible
+scene after Stop. Restart marks in-flight effects and previously live output
+unknown; no effect is replayed. Unknown cleanup is retained and cannot be retried
+under a new operation ID. Historical unknown work can remain recorded after
+independent joined cleanup establishes that the presentation is stopped.
+
+Task execution remains independent: a spoken revision may create and run its next
+scoped coding task. Any run/revision change immediately makes old presentation
+admission invalid, and the coordinating presentation service stops the old output.
+No mid-run approval bridge or old AgentSession guard is introduced.
+
+`HTTPTaskPresentationHost` uses only a fixed bearer-protected loopback origin.
+Its fixed POST endpoints are `/prepare`, `/show`, `/narrate`, `/stop`; GET
+`/observe?presentationId=...` reads a current frame without replaying a scene.
+Preparation is read-only metadata validation. The local host independently arms
+capture and checks authority; the adapter neither starts capture on construction
+nor follows redirects or retries uncertain submissions. Only exact prepared
+narration is accepted. Responses retain strict identity and evidence schemas.
+Tests use synthetic ports only and do not establish real-pixel or handset quality.

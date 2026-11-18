@@ -11,6 +11,7 @@ import { Store } from "../storage/store.js";
 import { Vault, hash, id, token, DomainError } from "../storage/security.js";
 import { TaskLedger } from "../attention/task-ledger.js";
 import { ProtectedTaskStore } from "../storage/task-store.js";
+import { unresolvedTaskPresentations } from "../attention/task-presentation-ledger.js";
 import { unresolvedTaskAudioCalls } from "../attention/task-audio-call.js";
 
 const text = z.string().trim().min(1).max(200);
@@ -195,6 +196,12 @@ export class TaskService {
     if (held) blockedReasons.push("held_instruction_unresolved");
     if (unresolvedTaskAudioCalls(this.store, this.vault).length)
       blockedReasons.push("handset_cleanup_required");
+    if (
+      unresolvedTaskPresentations(this.store, this.vault).some(
+        (r) => r.sessionId === sessionId,
+      )
+    )
+      blockedReasons.push("presentation_cleanup_required");
     return { tasks, voices, blockedReasons };
   }
   /** Expiry-only exception for read-only diagnostics, never task prose or execution. */

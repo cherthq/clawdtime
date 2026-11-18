@@ -10,7 +10,7 @@ import {
   realpathSync,
   existsSync,
 } from "node:fs";
-import { resolve, join, relative, isAbsolute } from "node:path";
+import { resolve, join, relative, isAbsolute, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 import { Store } from "../src/storage/store.js";
 import { Vault, token } from "../src/storage/security.js";
@@ -22,6 +22,14 @@ import type { VerificationPlan } from "../src/control/task-verification.js";
 import { CodexTaskWorker } from "../connectors/codex/task-worker.js";
 import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
 import { TaskVoiceService } from "../src/control/task-voice-service.js";
+import { z } from "zod";
+import { TaskPresentationService } from "../src/control/task-presentation-service.js";
+import { TaskPresentationLedger } from "../src/attention/task-presentation-ledger.js";
+import { HTTPTaskPresentationHost } from "../src/transport/task-presentation.js";
+import {
+  taskPresentationManifestSchema,
+  taskPresentationGrantSchema,
+} from "../src/task-presentation-contracts.js";
 
 const flags = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -30,7 +38,14 @@ for (let i = 2; i < process.argv.length; i += 2) {
   if (
     !key?.startsWith("--") ||
     !value ||
-    !["--state", "--project", "--port", "--worker", "--checks"].includes(key)
+    ![
+      "--state",
+      "--project",
+      "--port",
+      "--worker",
+      "--checks",
+      "--presentation-config",
+    ].includes(key)
   )
     throw new Error(
       "Use --state PRIVATE_DIR --project SELECTED_PROJECT [--port 3320].",
@@ -48,7 +63,10 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535)
   throw new Error("Invalid port.");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 const inside = relative(projectRoot, realpathSync(directory));
-if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside)))
+if (
+  inside === "" ||
+  (inside !== ".." && !inside.startsWith(".." + sep) && !isAbsolute(inside))
+)
   throw new Error("Private task state must be outside the worker project.");
 const stat = lstatSync(directory);
 if (
@@ -145,17 +163,76 @@ const voice = new TaskVoiceService(
   new TaskVoiceLedger(store, vault, ledger),
   engine,
 );
-const app = createTaskApp(service, config.operatorToken, engine, voice);
+let presentation: TaskPresentationService | undefined;
+if (flags.has("--presentation-config")) {
+  const path = resolve(flags.get("--presentation-config")!);
+  const ps = lstatSync(path),
+    parent = lstatSync(resolve(path, ".."));
+  const inside = relative(projectRoot, realpathSync(path));
+  if (
+    !ps.isFile() ||
+    ps.isSymbolicLink() ||
+    ps.mode & 0o077 ||
+    ps.uid !== process.getuid?.() ||
+    !parent.isDirectory() ||
+    parent.isSymbolicLink() ||
+    parent.mode & 0o077 ||
+    (inside !== ".." &&
+      !inside.startsWith(".." + sep) &&
+      !isAbsolute(inside)) ||
+    ps.size > 65536
+  )
+    throw Error(
+      "Presentation configuration must be owner-only and outside the worker project.",
+    );
+  const prepared = z
+    .object({
+      manifest: taskPresentationManifestSchema,
+      grant: taskPresentationGrantSchema,
+      host: z
+        .object({ origin: z.string(), token: z.string().min(32).max(200) })
+        .strict(),
+    })
+    .strict()
+    .parse(JSON.parse(readFileSync(path, "utf8")));
+  presentation = new TaskPresentationService(
+    service,
+    new TaskPresentationLedger(store, vault, ledger),
+    new HTTPTaskPresentationHost(prepared.host),
+    prepared,
+  );
+}
+const app = createTaskApp(
+  service,
+  config.operatorToken,
+  engine,
+  voice,
+  presentation,
+);
+const presentationWatch = presentation
+  ? setInterval(() => {
+      void presentation!.reconcile().catch(() => {});
+    }, 100)
+  : undefined;
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () =>
   console.log(
-    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. Local fixture pairing only; no phone, capture or control. Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
   ),
 );
+let shuttingDown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const)
-  process.on(signal, () =>
-    server.close(async () => {
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (presentationWatch) clearInterval(presentationWatch);
+    void (async () => {
+      await presentation?.close();
       await engine?.close();
-      cleanup();
-      process.exit(0);
-    }),
-  );
+      server.close(() => {
+        cleanup();
+        process.exit(0);
+      });
+    })().catch(() => {
+      process.exitCode = 1;
+    });
+  });

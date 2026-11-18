@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
+import { taskWalkthroughCli } from "./task-walkthrough.js";
 import {
   secureRead,
   secureWrite,
@@ -82,10 +83,14 @@ export async function taskCli(
         "task voice-start --id TASK_ID --run-id RUN_ID --revision NUMBER --event-id ID [--session-file PRIVATE_PATH] [--save PRIVATE_PATH]\n" +
         "task voice-status --voice-file PRIVATE_PATH\n" +
         "task voice-stop --voice-file PRIVATE_PATH --event-id ID\n" +
+        "task walkthrough-prepare --id TASK_ID --plan-file PRIVATE_PATH --grant-file PRIVATE_PATH --project PATH --session-file PRIVATE_PATH --event-id ID --save PRIVATE_PATH\n" +
+        "task walkthrough-start|walkthrough-status|walkthrough-stop --walkthrough-file PRIVATE_PATH --session-file PRIVATE_PATH\n" +
         "Use CLAWDTIME_TASK_URL (default http://127.0.0.1:3320). Registration uses an operator credential; reauthorization requires both protected files. Other commands use task or voice credentials. Readiness never renews authority. Never put credentials in arguments. Preserve event IDs when reconciling a lost response; this CLI never retries writes.",
     );
     return;
   }
+  if (command.startsWith("walkthrough-"))
+    return taskWalkthroughCli(args, dependencies);
   const options = flags(args.slice(1));
   const allowed: Record<string, string[]> = {
     register: [

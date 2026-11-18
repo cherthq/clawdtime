@@ -1,62 +1,61 @@
-# Handset audio passed; continue with presentation choreography
-
-The authorized Deepgram fallback handset retest passed on November 18, 2026.
-The user confirmed all requested checks: clear task-specific opening, accurate
-status dialogue, interruption, 20 seconds of quiet and explicit spoken hangup.
-One audio-only call was placed. No screen capture, presentation or control was
-used, and no automatic redial occurred.
-
-The c.1 physical gate is satisfied by the human's report, separately from machine
-evidence. Machine receipts show preparation, native dial, media activation, native
-end and media closure all completed. Native cleanup and local media closure are
-confirmed. All local ports closed and the task owner lock was released. Automated
-status correctly retains `physicalAcceptance:false`; a machine status is not a
-human attestation and was not rewritten to manufacture one.
-
-The backend has been restored: every original configuration value matches, the
-standby instance is removed, and fresh runtime checks show live mode with traffic
-enabled, zero active calls and zero pending/unknown effects. Deployment restoration
-evidence is retained privately; no demo source was deployed.
-
-## Next work
-
-Continue step d of `docs/CODING_DEMO_IMPLEMENTATION_PLAN.md`: prepare real code and
-preview scenes, verify exact windows, synchronize narration with visible scenes,
-and build the local walkthrough from verified task results. Start at 15 fps.
-The original implementation authorization covers this offline work. Later live
-presentation calls require their own specific authorization; the successful
-voice-only retest does not authorize another call, screen capture or control.
-Step e follows the completed presentation step.
-
-Keep the existing authoritative task and original fixture pairing. The task remains
-`review_ready` with its independently verified run history; handset destination
-identity was admitted through a separate immutable grant, not by relabeling the
-original task. Deepgram currently supports only handset status and hangup. The
-ElevenLabs local path remains the separately qualified coding-instruction path;
-do not assume the new fallback supports spoken coding runs or presentation tools.
-
-## Checkpoints and evidence
-
-- Steps a, b and c retain their existing tags; step c is `46a64fb`.
-- `6db733a` added guarded handset testing and activation checks.
-- `067c513` records the earlier provider-blocked, undialed retest and restoration.
-- `a1707f5` adds the explicit Deepgram fallback, independently reviewed and checked
-  with 826 TypeScript tests plus typecheck/build and 265 media tests.
-- The current acceptance checkpoint records c.1 and its restoration. See
-  `docs/BUILD_LOG.md` and the annotated `step-c1-done` tag after release.
-
-Protected evidence is in `retest-3-deepgram/` beneath
-`/Users/garygao/.local/share/clawdtime-coding-demo-qualification`. It includes the
-one-time mutation intents/results, exact deployment comparison, immutable operator
-attempt, cleanup summary and separate human acceptance record. The provider key
-lives only in the owner-only provider file. Do not print or commit it.
-
-All operator configurations, plans and authorizations from earlier attempts are
-used historical records. Never reuse them or replay unknown receipts. The first
-handset call failed silently; the next attempt stopped at ElevenLabs readiness
-before dialing. Preserve both histories. ElevenLabs was still unavailable during
-this retest; the user expressly authorized the Deepgram fallback.
+# Step d local presentation built; real-window qualification pending
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
-The original checkout and its untracked drafts remain untouched. Never modify
-Apple Teams or sibling chert-facetime. Default new work to simulation/standby.
+Latest completed step remains `59b8e24`, annotated `step-c1-done`. The Deepgram
+handset audio test passed and the hosted backend was fully restored. No further
+call or deployment has occurred. The original checkout and drafts are untouched.
+
+## Resume here
+
+The local walkthrough implementation is integrated and independently reviewed.
+Required checks pass: 883 TypeScript tests plus typecheck/build, 283 media tests,
+31 Swift tests and the capture-helper build. See `docs/BUILD_LOG.md` for commands
+and the implementation checkpoint. This is not completion of step d.
+
+The real disposable task remains review-ready with its verified run unchanged.
+Chrome's `ClawdTime task fixture` visibly has the empty state and Clear filters.
+TextEdit has actual `app.mjs` and `Verified result.txt`. The latter was reloaded
+from the current verification projection, avoiding obsolete historical worker
+wording. Exact-target native metadata finds the result window but marks it
+`onScreen:false`; permission and console preflight pass. Normal centering and
+Raise actions did not resolve this. The user has been asked to bring these three
+windows onto the current desktop without minimizing them.
+
+Do not relax the current-Space/exact-window guard or substitute generated pixels.
+Resolve each exact target using `ClawdTimeTaskCapture --resolve-target` with the
+owner-only query files under the protected `local-walkthrough/` directory. Then
+create a fresh short-lived local manifest/grant and protected host configuration.
+Configure `scripts/task-server.ts --presentation-config`, start the Python local
+host and use the private browser launcher with visible Start and Stop. Complete
+CLI prepare/start/status/stop with real app pixels and exact prepared narration.
+Keep the preview display in a separate window so it does not replace the captured
+fixture tab. Screens/audio remain transient. Never reuse an uncertain effect ID
+as a new attempt; reconcile and retain cleanup evidence.
+
+Runnable CLI and configuration formats are in `docs/CONNECTORS.md`,
+`docs/MEDIA_INTEGRATION.md` and `mac/README.md`. The grant authorizes local viewing
+only; it never permits a call, OS input or native window activation. A task bearer
+cannot mint this grant. First narration equals the prepared current task opening.
+
+## Remaining work in step d
+
+After local qualification, implement a separately scoped `handset_walkthrough`
+mode over the existing coordinator and receipt store. Keep existing audio-smoke
+schemas/fingerprints intact. Bind exact call, task, voice, immutable presentation,
+real destination/line identity and expiry. Use one dialogue/playback owner for
+both opening and conversation; do not run the local narrator concurrently.
+Scene tools select only prepared scene IDs; finalized human instructions use the
+existing deduplicated task path. Sharing Stop, voice end and task cancellation
+remain separate. A new run invalidates the old presentation immediately.
+
+Finish offline integration and failure checks, prepare an exact one-call plan,
+then request specific visual-call authorization. No further call is currently
+authorized. Decision and final-review calls require fresh bindings and separate
+physical verification. Do not tag step d complete or start step e yet.
+
+Protected task/provider/session files remain beneath
+`/Users/garygao/.local/share/clawdtime-coding-demo-qualification` (owner-only).
+Never print credentials or include them in commands, logs or Git. All earlier
+handset grants are used historical records, not reusable authorization. Preserve
+receipts, unknown outcomes and the original task pairing. Apple Teams and sibling
+chert-facetime remain untouched; default all new work to simulation/standby.

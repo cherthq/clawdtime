@@ -1,10 +1,12 @@
 import { Hono } from "hono";
+import { buildTaskBrief } from "../attention/task-ledger.js";
 import { bodyLimit } from "hono/body-limit";
 import { equal, DomainError } from "../storage/security.js";
 import { ZodError } from "zod";
 import type { TaskCommand } from "../contracts.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
+import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
 
 export function createTaskApp(
@@ -12,6 +14,7 @@ export function createTaskApp(
   operatorToken: string,
   engine?: TaskEngine,
   voice?: TaskVoiceService,
+  presentation?: TaskPresentationService,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -48,10 +51,71 @@ export function createTaskApp(
     c.json({
       mode: service.options.simulation ? "simulation" : "standby",
       liveDispatch: false,
-      presentation: false,
+      presentation: !!presentation,
       control: false,
     }),
   );
+  if (presentation) {
+    const credential = (c: any) => bearer(c.req.header("authorization"));
+    const path = "/tasks/:id/presentations/:presentationId";
+    app.post("/tasks/:id/presentations", async (c) =>
+      c.json(
+        await presentation.prepare(
+          credential(c),
+          c.req.param("id"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.get(path, (c) =>
+      c.json(
+        presentation.status(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("presentationId"),
+        ),
+      ),
+    );
+    app.get(`${path}/authority`, (c) =>
+      c.json(
+        presentation.authority(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("presentationId"),
+        ),
+      ),
+    );
+    app.post(`${path}/scenes`, async (c) =>
+      c.json(
+        await presentation.show(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("presentationId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${path}/narrate`, async (c) =>
+      c.json(
+        await presentation.narrate(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("presentationId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+    app.post(`${path}/stop`, async (c) =>
+      c.json(
+        await presentation.stop(
+          credential(c),
+          c.req.param("id"),
+          c.req.param("presentationId"),
+          await c.req.json(),
+        ),
+      ),
+    );
+  }
   if (voice) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
     const voicePath = "/tasks/:id/voice/:voiceId";
@@ -131,6 +195,12 @@ export function createTaskApp(
     const session = service.authenticate(bearer(c.req.header("authorization")));
     if (!engine) throw new DomainError(409, "No real worker is configured.");
     return c.json(engine.start(session.id, c.req.param("id")));
+  });
+  app.get("/tasks/:id/brief", (c) => {
+    const session = service.authenticate(bearer(c.req.header("authorization")));
+    return c.json(
+      buildTaskBrief(service.ledger.get(session.id, c.req.param("id"))),
+    );
   });
   app.get("/tasks/:id", (c) => {
     const session = service.authenticate(bearer(c.req.header("authorization")));

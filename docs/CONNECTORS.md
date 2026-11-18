@@ -798,6 +798,7 @@ qualify CUA, the other feedback channel, all client surfaces, or inbound FaceTim
 Voice currently uses half-duplex replies: listening pauses while the service
 speaks. Local Stop and supported phone Stop remain available; voice barge-in while
 speech is playing is not claimed.
+
 # Independent coding task CLI (coding demo, step a)
 
 `npm run cli -- task help` exposes the dedicated local task service. It does not
@@ -962,3 +963,65 @@ original-chat forwarding capability. The local microphone/speaker runtime and it
 component qualification are documented in MEDIA_INTEGRATION.md. Software checks
 are not spoken-dialogue or handset acceptance; the c.1 phone call still requires
 specific authorization after step c passes.
+
+## Prepared local walkthrough CLI (step d)
+
+The independent task CLI accepts a separate, operator-installed local presentation
+grant. Existing task and voice permissions are unchanged. The grant fixes one
+manifest, task/run/revision, host and expiry, with local capture/presentation enabled
+and native activation, input control and calling disabled. Creating a manifest or
+running `walkthrough-prepare` does not authorize window enumeration or start capture.
+The service binds the exact manifest through its metadata-only host preparation
+port. Local setup must select the real editor/preview windows first; the local
+Start action checks those native targets before scene capture begins.
+
+```sh
+npm run cli -- task walkthrough-prepare --id TASK_ID \
+  --plan-file /absolute/private/manifest.json \
+  --grant-file /absolute/private/presentation-grant.json \
+  --project /absolute/selected/project \
+  --session-file /absolute/private/task-session.json \
+  --event-id prepare-walkthrough-1 --save /absolute/private/walkthrough.json
+npm run cli -- task walkthrough-start \
+  --walkthrough-file /absolute/private/walkthrough.json \
+  --session-file /absolute/private/task-session.json
+npm run cli -- task walkthrough-status \
+  --walkthrough-file /absolute/private/walkthrough.json \
+  --session-file /absolute/private/task-session.json
+npm run cli -- task walkthrough-stop \
+  --walkthrough-file /absolute/private/walkthrough.json \
+  --session-file /absolute/private/task-session.json
+```
+
+Use the schemas in `src/task-presentation-contracts.ts`. A manifest contains the
+authoritative prepared opening, 15 fps output, ordered scenes with exact app/window,
+PID/process identity, display and title hash, window-relative focus, 450–650 ms
+transition, bounded narration and expected visible result. Any artifact names an
+explicit project-relative regular file and its SHA-256 hash. The CLI checks these
+files before preparation and again before starting; it rejects traversal, symbolic
+links and files larger than 4 MiB. The project must match the current task exactly.
+The service independently rechecks current task authority and artifacts.
+
+The saved walkthrough file is owner-only and contains no credential. It records
+the deterministic presentation ID, manifest fingerprint and all scene/narration/Stop
+event IDs before requests. Start reserves a durable single-use claim before the first
+scene effect. For each scene it requests display, reads the original render proof,
+then requests narration; the service obtains a fresh host observation before speech.
+The final scene remains visible until Stop or authority invalidation. A duplicate
+start, uncertain response or partial walkthrough is never automatically resumed or
+replayed. Preserve the file and receipts; use status to inspect the original ID.
+If preparation's response is lost, that same ID remains available for reconciliation.
+
+Status is read-only and requires an active task credential because the full record
+contains protected task prose. Stop does not require a preceding status read and
+accepts the original credential after expiry for cleanup only; its response contains
+just identity/state/generation and cleanup evidence. Stop also uses one preallocated
+event ID and is not retried automatically. The local host's Stop remains the direct
+way to end capture and narration when network or service cleanup is uncertain.
+
+Render receipts establish host frame output, not human visibility or correctness.
+Narration receipts establish local playback completion, not audibility. A local
+walkthrough still needs transient inspection of actual editor/preview pixels and
+observed transition/Stop behavior. No raw frames or audio belong in the CLI journal.
+This path imports no original-chat runtime and makes no external call; local tests
+do not qualify handset video, narration timing or a complete decision/review call.

@@ -716,3 +716,98 @@ passed. The transport specialist independently reviewed the acceptance record.
 The annotated `step-c1-done` tag belongs to this acceptance checkpoint. This opens
 step d's offline implementation gate; no further live call or screen/control
 session is authorized by this successful voice-only test.
+
+### Step d — local presentation implementation checkpoint (not step complete)
+
+Continued after accepted c.1 checkpoint `59b8e24` (`step-c1-done`) with the same
+lead/transport/media/connector ownership. The fetched approved plan remains
+`origin/main` at `8c8cf76`. No new call, line handoff, deployment or production
+configuration change occurred. Step e has not started.
+
+Implemented a separate local-only presentation grant bound to the exact task,
+session, terminal run, revision, verification, immutable scene manifest and host.
+The original independent-task session and handset smoke permissions remain
+unchanged. The first scene must narrate the current prepared opening verbatim.
+The operator installs the protected manifest/grant; a task bearer cannot create
+its own capture authority. Durable show/narrate/Stop receipts reject conflicting
+replays and preserve unknown outcomes. Task changes and artifact changes stop
+presentation without canceling an authorized coding run. Unresolved capture fences
+session reauthorization until joined cleanup is confirmed.
+
+The CLI now prepares, starts, inspects and stops a local walkthrough. It saves
+fixed operation IDs before effects, checks bounded project artifact hashes, and
+never retries uncertain narration or capture with a fresh ID. The HTTP host
+boundary is fixed loopback, rejects browser-origin operator requests and validates
+exact response bindings. The task server accepts an owner-only presentation
+configuration outside the worker project. A containment bug affecting descendants
+named `..private` was corrected and covered by actual bootstrap subprocess tests.
+Artifact checks open bounded regular files with O_NOFOLLOW and hash the descriptor.
+
+The Mac helper captures only a specified app/window/PID/process lifetime/title
+hash/display, checking exact identity and geometry before and after capture. It
+has no OS input, activation, whole-display fallback or automatic permission prompt.
+`ProcessLifetimeIdentity.swift` was selectively retained from ArgosClawd baseline
+`815d51b`; the new independent-task boundary reuses the established scene focus /
+easing approach without importing the incompatible original-chat runtime. Existing
+Deepgram protocol and browser playback plumbing are reused. No sibling repository
+or production data was copied.
+
+The local renderer uses real window pixels in memory, normalized focus regions,
+450–650 ms transitions and deadline-paced 15 fps output. Capture sampling is
+approximately 5 fps before processing overhead, distinct from camera output.
+Browser acknowledgements follow image decode and two animation frames; narration
+requires a fresh matching paint acknowledgement and continues checking freshness.
+A single local narration connection speaks the exact prepared text, with no
+microphone or task tools; completion requires provider audio completion and actual
+browser playback completion acknowledgements. Neither acknowledgement proves human
+audibility. Local Stop blanks output and closes audio immediately, then joins child
+capture, provider and loop cleanup. Stalled fetch/decode and late startup callbacks
+cannot restore stopped output. Screens and audio stay transient.
+
+Independent review caught and corrected stale-frame metadata, paint-before-speech,
+late startup/Stop races, cleanup after partial failure, narration timeout mismatch,
+expired status disclosure and effective frame cadence. The transport specialist
+reviewed the task/receipt/security integration; the connector reviewed the local
+media, Swift capture and CLI end-to-end boundaries. Tests include an actual CLI
+through the task HTTP service and ledger with a synthetic host, plus actual Chrome
+with synthetic frames/audio. These are integration tests, not real-pixel or handset
+acceptance.
+
+Local observations: the disposable task preview visibly shows “No tasks match.”
+and Clear filters. Its actual `app.mjs` source and a concise verification-result
+file were opened in TextEdit. The persisted historical worker summary contained
+obsolete “verification pending” text; presentation now derives its opening from
+the current verification projection via `/tasks/:id/brief`, without rewriting task
+history. The visible result file was reloaded and confirms both independent checks
+passed. No new worker run was started.
+
+The capture helper preflight confirms Screen Recording permission and an unlocked,
+logged-in console. Exact-window metadata finds the selected TextEdit result, but
+macOS reports it offscreen. Initial bounds refusal, normal window centering and
+normal Raise actions did not produce a capture-admissible visible target. Bounded
+metadata diagnostics now distinguish permission, exact identity, visibility and
+display geometry failures without revealing unrelated window titles. The user was
+asked to bring the three prepared windows onto the current desktop. Actual helper
+capture, complete real-pixel CLI narration and local speaker/Stop qualification
+remain pending. No capture guard was weakened and no capture was falsely claimed.
+
+Validation for this checkpoint:
+
+- `npm run check`: **883 tests in 60 files**, 12.16s; typecheck and build passed.
+- `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`:
+  **283 tests passed**, 62.702s.
+- Focused presentation suite: **18 tests passed**, 9.918s. The final real-Chrome
+  synthetic cadence/stale-frame/Stop regression also passed independently, 2.112s.
+- `cd mac && swift test`: **31 tests passed**.
+- `cd mac && swift build --product ClawdTimeTaskCapture`: passed, 1.58s.
+- `git diff --check`: passed. No secrets, raw screens or audio in tracked changes.
+
+Remaining step d work: qualify the real local walkthrough, then compose a distinct
+handset-walkthrough capability over the existing call coordinator and receipt
+store. The current audio-smoke adapter explicitly refuses video and coding
+instructions; the local narrator is not a handset conversation runtime. Preserve
+one dialogue/playback owner, add scoped scene requests and finalized instructions,
+and invalidate old presentation when a new run starts. Prepare a concrete one-call
+plan before requesting specific visual-call authorization. Decision and review
+calls need distinct fresh authorization and physical evidence. No `step-d-done`
+tag is warranted at this checkpoint.

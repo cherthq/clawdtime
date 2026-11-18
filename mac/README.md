@@ -359,3 +359,28 @@ no control characters) and project/chat label; they are not written to the polic
 or receipt stores. Media supplies actual speaking/listening state for the exact
 call. Ended and muted status remain authoritative and are never replaced by a
 status from another media session.
+
+
+## Independent task exact-window child
+
+`ClawdTimeTaskCapture` is a separate local presentation child, not the menu-bar
+helper or legacy display gateway. Build with `swift build --product
+ClawdTimeTaskCapture`; validate pure identity/geometry policy with `swift test`.
+It performs no app activation, input, audio capture, network listening, or TCC
+permission request. The presentation host starts it only after local Start.
+
+`--preflight` reports Screen Recording permission and unlocked console state.
+`--resolve-target /absolute/private/query.json` resolves exactly one prepared
+app bundle and exact window title from an owner-only query; it returns bound
+window/PID/process-lifetime/display/title-hash metadata, never pixels or a window
+inventory. Missing/ambiguous windows and windows not contained by exactly one
+display are refused. A bounded geometry diagnostic may describe only that selected
+window and active display bounds. Mirrored displays are not silently selected.
+
+The `--config` child accepts bounded inspect/capture/stop requests on private
+stdin. Each capture brackets one `SCScreenshotManager` exact-window snapshot with
+identity, geometry, expiry, permission, and console checks. JPEG pixels are transient
+stdout bytes consumed by the local host; there is no screen recording file or
+full-display fallback. See [the task presentation setup](../docs/MEDIA_INTEGRATION.md#independent-task-walkthrough-local-candidate-step-d)
+for configuration and qualification boundaries. Building and tests do not grant
+permissions or establish real-pixel capture acceptance.

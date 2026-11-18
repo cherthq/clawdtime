@@ -1,13 +1,123 @@
 # Attention media integration
 
+## Independent task walkthrough: local candidate, step d
+
+`task_presentation.py`, `task_presentation_local.py`, and the separate
+`ClawdTimeTaskCapture` Swift executable implement an independent task presentation.
+They do not use the original-chat gateway or widen the handset voice capability.
+A prepared manifest binds the task/run/revision, verified artifacts, exact scene
+text, and exact app/window/PID/process-lifetime/display/title hash. A separate
+local-only grant expires within 15 minutes. It cannot place calls, activate apps,
+or authorize computer input. The first scene's narration must equal the prepared
+opening exactly.
+
+`POST /prepare` validates metadata and current task authority only. The visible
+**Start local preview** gesture opens local playback and starts the owned capture
+child; it first inspects every selected target without acquiring pixels. A later
+journaled `/show` captures only its exact window. There is no desktop overview or
+fallback to another window/display. Geometry, process lifetime, console state,
+expiry, and task authority are checked around capture. A target change, stale
+source, failed authority, or Stop clears output and joins the child. Unknown
+operations remain unknown across restart and are never replayed.
+
+The renderer samples source windows at up to five frames per second and renders
+camera motion on a 15 fps deadline. Render and browser pacing account for work
+(including decode and paint acknowledgement), and overruns do not accumulate
+catch-up frames. A 450–650 ms smooth zoom runs entirely
+inside the selected window's pixels. A scene receipt requires a new source frame
+after the transition completes; original capture timestamps are never refreshed
+on cached pixels. Browser image decoding and two animation frames produce a
+separate bounded paint acknowledgement. Narration requires that current-scene
+acknowledgement before startup, and fresh scene/paint evidence throughout playback.
+Neither signal claims the human actually saw the frame.
+
+`task_presentation_narrator.py` uses a separate Deepgram conversation and the
+[documented InjectAgentMessage protocol](https://developers.deepgram.com/docs/voice-agent-inject-agent-message).
+It has no microphone stream, greeting, or model tools. Only prepared scene text
+is injected; confirmed assistant text must match its exact normalized prefix
+before associated audio enters playback. Completion requires the exact full cue,
+provider audio EOF, and every browser `onended` acknowledgement. This is playback
+completion, not audibility. Stop closes the provider and clears queued audio;
+no reconnect or substitute speech is attempted. This new narration path still
+requires real local provider and speaker qualification.
+
+The fixed loopback host defaults to `127.0.0.1:3323`. Operator routes require a
+separate bearer and reject browser Origins: `/prepare`, `/show`, `/narrate`,
+`/stop`, `/observe?presentationId=…`, and `/status`. The preview uses its own
+HttpOnly SameSite cookie, exact Origin checks, and a private fragment capability.
+No frame endpoint is available to the operator token. The page blanks stale images
+independently of HTTP responses; Stop immediately clears local pixels/audio and
+closes its socket before attempting bounded server cleanup.
+
+The coordinating lead supplies owner-only files (0600; directory0700):
+
+```json
+{
+  "prepare": {"presentationId": "prepared-id", "manifest": "EXACT_PREPARED_MANIFEST_OBJECT", "grant": "EXACT_LOCAL_GRANT_OBJECT", "fingerprint": "ROOT_CANONICAL_SHA256"},
+  "taskOrigin": "http://127.0.0.1:13323",
+  "taskToken": "PROTECTED_TASK_CAPABILITY",
+  "helperBinary": "/absolute/worktree/mac/.build/debug/ClawdTimeTaskCapture",
+  "controlToken": "SEPARATE_RANDOM_OPERATOR_CAPABILITY",
+  "browserToken": "SEPARATE_RANDOM_PREVIEW_CAPABILITY"
+}
+```
+
+The manifest/grant strings above are placeholders for full contract objects,
+not runnable configuration. The provider file is exactly
+`{"provider":"deepgram","deepgramApiKey":"PROTECTED_KEY"}`. Neither file,
+the private preview link, nor the journal belongs in Git. The Python host compares
+its full prepared configuration field by field and asks the authenticated task API
+to confirm the canonical fingerprint; it does not invent a second JSON hash.
+
+```sh
+cd mac
+swift build --product ClawdTimeTaskCapture
+swift test
+cd ..
+media/.venv/bin/python media/task_presentation_local.py \
+  --config-file /absolute/private/presentation.json \
+  --provider-file /absolute/private/deepgram.json \
+  --journal /absolute/private/presentation.sqlite --port 3323
+```
+
+Open `http://127.0.0.1:3323/#PRIVATE_PREVIEW_CAPABILITY` from a protected local
+launcher. Do not print this link to logs. Starting the host creates no provider
+conversation or capture child. The operator must prepare the exact authorized
+manifest before local Start; app windows must already be arranged by ordinary
+local interaction. The runtime never activates or moves them.
+
+Concrete native prerequisites are an unlocked active console, Screen Recording
+permission for the helper's actual execution identity, exact visible app windows
+contained within one unambiguous active display, and a reachable local task API.
+No Accessibility permission is needed. `ClawdTimeTaskCapture --preflight` reports
+only permission/console/login/lock booleans and never requests TCC access.
+`--resolve-target /absolute/private/query.json` accepts exactly
+`{"appId":"com.example.app","title":"Exact selected title"}` and returns
+one bound target or a fixed refusal reason. Query-specific refusal diagnostics
+include only bounded matching counts and exact app/title matching geometry,
+including visibility/layer flags. It never returns unrelated window titles,
+a window inventory, or pixels. Display-geometry refusal may include only the queried window's bounds
+and active display bounds/IDs; it does not select a replacement target.
+
+Validation uses synthetic pixels, fake provider messages, and fake browser audio:
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_task_presentation*.py' -v
+media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'
+```
+
+The browser test requires installed Chrome and the repository's `@playwright/test`.
+It uses an isolated headless browser and tests stalled fetches, stale pixels,
+delayed decode/Start, paint acknowledgement, and Stop during a hung cleanup POST.
+These checks do not qualify macOS capture, actual provider narration, speaker
+output, or a physical screen walkthrough. Those remain the step d local gate.
+
 ## Independent coding-task voice: locally qualified step c — November 18, 2026
 
 `task_voice.py` and `task_voice_local.py` implement a separate, task-owned local
 audio path. They do not import the legacy original-chat conversation, capture,
 camera, device control or calling runtimes. Step c's local spoken task handoff has
-been observed with the dedicated provider agent. Handset acceptance remains
-pending; presentation and desktop work remain gated on the specifically
-authorized c.1 voice-only handset test.
+been observed with the dedicated provider agent. The subsequent Deepgram c.1 handset retest was physically accepted by the user: prepared opening, task status, interruption, 20 seconds of quiet, and explicit hangup. See `BUILD_LOG.md` for the separate human report and confirmed cleanup. Step d is now in local qualification; step e remains gated.
 
 In the successful local session, a spoken empty-state instruction started run 2
 of the same task, and status remained available while that run was working. The
@@ -47,12 +157,11 @@ buffers are bounded, and local browser Stop immediately stops mic tracks and
 scheduled audio before requesting backend cleanup. Browser scheduling or queue
 clearing is not proof of audibility or handset interruption latency.
 
-### Handset c.1 adapter and remaining qualification
+### Handset c.1 adapter and accepted supervised retest
 
 `media/task_voice_livekit.py` adds the task-owned LiveKit audio bridge; it does not
 import the legacy media server, captions, screen capture, device gateway or Mac
-helper. This is preparatory software, not handset acceptance or authorization to
-call. Presentation and desktop work remain gated on the separate c.1 result.
+helper. The user accepted the separately authorized Deepgram voice-only retest described in `BUILD_LOG.md`. Software tests and counters remain distinct from that human report; another call still requires authorization.
 
 The first separately authorized audio-only handset attempt was silent and failed
 qualification. Native `bridge_ready` occurred, but the local ledger contained no
@@ -60,8 +169,7 @@ media activation receipt or provider binding. The native worker then reported
 `bridge_remote_audio_timeout`; local and native cleanup were confirmed. That
 native deadline requires non-silent speech after structural readiness, not merely
 silent PCM. The adapter already emits continuous prepared silence, so adding
-another silence producer would not resolve the missing activation. Activation
-latency/refusal must be resolved before another separately authorized attempt.
+another silence producer would not resolve the missing activation. That failed attempt remains recorded separately from the subsequently accepted Deepgram retest.
 
 The immutable binding contains `mediaSessionId`, `taskId`, `voiceSessionId`,
 `callAttemptId`, `roomName`, `workerIdentity`, `agentIdentity`, `expiresAt` (Unix
