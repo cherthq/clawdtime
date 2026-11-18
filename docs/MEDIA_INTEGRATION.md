@@ -23,7 +23,7 @@ conversation. The backend prepares the opening from the verified task state. The
 runtime rejects stale opening run/revision bindings before provider startup and
 again after preflight. ElevenLabs receives that opening as `first_message`; it
 uses the same provider audio and playback coordinator as subsequent dialogue.
-There is no separate generic greeting or Deepgram TTS path in this candidate.
+There is no separate generic greeting in this local ElevenLabs path.
 
 The only model tools are `task_status`, `submit_instruction`, and `end_call`.
 Final provider transcripts are registered with the backend before instruction
@@ -73,21 +73,21 @@ Both tokens allow microphone publication only and disable data publication.
 
 `TaskVoiceLiveKit.prepare(binding)` first verifies authoritative task/voice binding,
 `mode:handset_audio_smoke`, the exact call attempt, and `permissions.instructions:false`.
-It also checks the dedicated provider configuration read-only. It then prepares one
+It also checks the selected provider's readiness read-only. It then prepares one
 scoped room and a silent audio publisher. It returns the binding fingerprint,
 status and worker LiveKit credentials; it does not return task/provider secrets,
-open an ElevenLabs conversation, consume incoming audio or publish video.
+open a provider conversation, consume incoming audio or publish video.
 `activate({callAttemptId,providerCallId,connected:true})` is reserved for the
 coordinator after exact native connection evidence. It waits for the expected
-worker audio track before starting the same task-owned ElevenLabs runtime.
-Provider startup rechecks configuration and prepared task state. LiveKit room RPCs
+worker audio track before starting the selected task-owned voice runtime.
+Provider startup checks readiness and prepared task state. LiveKit room RPCs
 use certifi with certificate and hostname verification, disable SDK failover retries
 and redirects, and permit only the configured host’s CreateRoom/DeleteRoom paths.
 The owned HTTP session is explicitly closed. Unexpected participants, conflicting
 audio tracks and reconnects close the local session.
 Video remains unsubscribed and no video stream is constructed.
 
-The c.1 scope is status and hangup. The standard three provider tool names remain,
+The c.1 scope is status and hangup. In the ElevenLabs path the standard three provider tool names remain,
 but both this adapter and the backend refuse instruction execution for handset
 smoke sessions. Task context polling checks the current authority. Incoming audio
 continues during outgoing speech; only provider interruption events clear output.
@@ -162,6 +162,64 @@ activation, exact identities and tokens, no video/capture before activation,
 status/end-only authority, input during output, interruption fencing, revocation,
 delayed preparation/activation cleanup, unknown outcomes, restart tombstones and
 controller startup/refusal boundaries. They make no physical call or audio claim.
+
+### Explicit Deepgram fallback for the handset qualification
+
+`media/task_voice_deepgram.py` implements Deepgram's native Voice Agent protocol.
+The operator must explicitly select the owner-only provider file
+`{"provider":"deepgram","deepgramApiKey":"<protected test key>"}`. The existing
+ElevenLabs file shape remains supported; there is no automatic provider switch or
+reconnection. The backend task/voice capability, immutable native attempt, LiveKit
+identities, local Stop and cleanup receipts remain unchanged. This fallback is
+restricted to `handset_audio_smoke` with instructions disabled; it is not a
+replacement for the locally qualified coding-instruction path.
+
+Preparation performs bounded authenticated GETs to Deepgram's fixed auth/token and
+think-model endpoints, requiring the selected managed model to be available.
+Startup requires that check to be no older than five minutes. The websocket opens
+only after native activation at `wss://agent.deepgram.com/v1/agent/converse`; TLS
+and hostname verification remain enabled, redirects and repeat connection attempts
+are refused. The actual `Welcome.request_id` is bound with a `deepgram_` prefix.
+After Welcome, the runtime sends Settings with the exact backend opening as
+`agent.greeting`, then waits for SettingsApplied before sending input PCM.
+An eight-second outer activation deadline covers the expected worker track, task
+recheck, provider startup and first sink-accepted output. Failure joins cleanup;
+sink acceptance is not physical audibility. The runtime also bounds its own
+context/socket setup through first output to seven seconds. These bounds do not
+extend the native ten-second non-silent-audio deadline.
+[Deepgram documents this message order and binary audio protocol](https://developers.deepgram.com/docs/voice-agent-message-flow).
+
+The fixed configuration uses Nova-3 recognition, managed OpenAI `gpt-4o-mini`,
+Aura-2 Thalia speech, and raw PCM16 at 16 kHz in both directions. It has only
+client-side `task_status` and `end_call`, each with `defer_until_eot:true`; no remote
+function endpoint, Think Live presence checks, provider arrays or history replay
+are configured. `mip_opt_out:true` requests no retained audio/text/transcript
+content; provider usage metadata remains subject to Deepgram's published policy.
+[Configuration](https://developers.deepgram.com/docs/configure-voice-agent),
+[data handling](https://developers.deepgram.com/trust-security/your-data).
+
+Confirmed user ConversationText is admitted to the existing utterance ledger with
+a conversation-local sequence. Tool arguments cannot supply a substitute transcript.
+Hangup requires the current admitted explicit human request; new speech clears that
+candidate, and cancelled function IDs cannot execute or receive a late response.
+Status remains available when transcript admission fails. UserStartedSpeaking clears
+the one playback queue; old binary tail is discarded until subsequent assistant
+ConversationText. The runtime does not depend on experimental AgentStartedSpeaking.
+When input PCM is absent, protocol KeepAlive is sent every eight seconds without
+spoken presence prompts. [Turn confirmation](https://developers.deepgram.com/docs/voice-agent-speculative-replies),
+[cancellation](https://developers.deepgram.com/docs/voice-agent-function-call-request),
+[KeepAlive](https://developers.deepgram.com/docs/agent-keep-alive).
+
+The lead's provider-only synthetic qualification observed authenticated readiness,
+Welcome/binding, SettingsApplied, and first nonzero PCM in 494 ms including readiness,
+then confirmed local close. Output was discarded; there was no microphone or handset
+in that qualification. This does not establish c.1 audibility, interruption latency,
+quiet-pause behavior or sustained call acceptance. Offline validation:
+
+```sh
+media/.venv/bin/python -m unittest discover -s media -p 'test_task_voice_deepgram.py'
+media/.venv/bin/python -m unittest discover -s media -p 'test_task_voice_livekit.py'
+```
 
 ### Local entry point and external prerequisite
 

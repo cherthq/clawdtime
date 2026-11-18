@@ -345,6 +345,35 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
         await self.adapter.close()
         self.assertEqual(self.opens, 0)
 
+    async def test_outer_activation_deadline_includes_worker_wait_and_joins_cleanup(self):
+        self.adapter.activation_timeout = .02
+        await self.adapter.prepare(self.bound)
+        with self.assertRaises(TimeoutError):
+            await self.activate()
+        await self.adapter.close()
+        self.assertEqual(self.opens, 0)
+        self.assertEqual(self.adapter.state, 'closed')
+        self.assertTrue(self.adapter.activation_task.done())
+        self.sdk_api.room.delete_room.assert_awaited_once()
+        self.assertFalse(self.adapter.status()['nativeCallClosed'])
+
+    async def test_outer_activation_deadline_waits_for_first_output_and_joins_runtime(self):
+        from task_voice import VoiceDiagnostics
+        fake = SimpleNamespace(start=AsyncMock(), close=AsyncMock(), input_audio=AsyncMock(),
+            ended=asyncio.Event(), failed=None, diagnostics=VoiceDiagnostics(),
+            playback=SimpleNamespace(first_output=asyncio.Event()))
+        self.adapter.activation_timeout = .03
+        self.adapter.runtime_factory = lambda *args: fake
+        await self.adapter.prepare(self.bound)
+        self.track()
+        with self.assertRaises(TimeoutError):
+            await self.activate()
+        await self.adapter.close()
+        fake.close.assert_awaited_once()
+        self.assertTrue(self.adapter.activation_task.done())
+        self.assertEqual(self.adapter.state, 'closed')
+        self.assertTrue(all(stream.closed for stream in FakeStream.instances))
+
     async def test_instructions_enabled_voice_refused_before_room_effect(self):
         self.api.value['permissions']['instructions'] = True
         with self.assertRaises(VoiceError):
@@ -560,6 +589,32 @@ class LiveKitAdapterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await runner.cleanup()
         self.sdk_api.room.delete_room.assert_not_awaited()
+
+    async def test_deepgram_controller_selects_only_explicit_fallback_with_no_startup_effect(self):
+        from task_voice_deepgram import DeepgramProvider, DeepgramTaskVoiceRuntime
+        values = {
+            'binding': self.bound,
+            'voice': {'version': 1, 'taskOrigin': 'http://127.0.0.1:1234', 'taskId': 'task_fixture', 'voiceSessionId': 'voice_fixture', 'voiceToken': 'v' * 40},
+            'provider': {'provider': 'deepgram', 'deepgramApiKey': 'synthetic_test_key_only'},
+            'livekit': {'url': 'wss://fixture.invalid', 'key': 'fixture', 'secret': 'synthetic' * 8, 'allowedHosts': ['fixture.invalid']},
+            'control': {'token': 't' * 40}}
+        args = SimpleNamespace(journal=str(Path(self.temp.name) / 'deepgram-controller.sqlite'), port=3322)
+        for name, value in values.items():
+            path = Path(self.temp.name) / ('deepgram-' + name + '.json')
+            path.write_text(json.dumps(value))
+            path.chmod(0o600)
+            setattr(args, name + '_file', str(path))
+        with patch('task_voice_livekit_local.TaskVoiceLiveKit', wraps=TaskVoiceLiveKit) as constructor:
+            app = await configured_app(args)
+            self.assertIsInstance(constructor.call_args.args[1], DeepgramProvider)
+            self.assertIs(constructor.call_args.kwargs['runtime_factory'], DeepgramTaskVoiceRuntime)
+            self.assertEqual(constructor.call_args.kwargs['activation_timeout'], 8)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            await runner.cleanup()
+        self.sdk_api.room.create_room.assert_not_awaited()
+        self.sdk_api.room.delete_room.assert_not_awaited()
+        self.assertEqual(self.opens, 0)
 
     async def test_binding_mutation_wrong_task_and_unconfirmed_activation_have_no_effect(self):
         for field in ('audio', 'video', 'screen', 'presentation', 'control'):

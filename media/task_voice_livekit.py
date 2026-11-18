@@ -399,12 +399,14 @@ class LiveKitAudioPort:
 
 class TaskVoiceLiveKit:
     def __init__(self, task_api, provider, port, journal, *, clock=time.time,
-                 runtime_factory=TaskVoiceRuntime, worker_timeout=8, prepare_timeout=10, cleanup_join_timeout=12):
+                 runtime_factory=TaskVoiceRuntime, worker_timeout=8, prepare_timeout=10, cleanup_join_timeout=12,
+                 activation_timeout=None):
         self.api = StatusOnlyTaskAPI(task_api)
         self.provider, self.port, self.journal = GuardedProvider(provider, lambda: self.stopping), port, journal
         self.api.stopping = lambda: self.stopping
         self.clock, self.runtime_factory, self.worker_timeout = clock, runtime_factory, worker_timeout
         self.prepare_timeout, self.cleanup_join_timeout = prepare_timeout, cleanup_join_timeout
+        self.activation_timeout = activation_timeout
         self.prepare_uncertain = False
         self.prepare_effect_inflight = False
         self.end_submitted = False
@@ -505,20 +507,24 @@ class TaskVoiceLiveKit:
 
     async def _activate(self):
         try:
-            await asyncio.wait_for(self.audio_ready.wait(), self.worker_timeout)
-            self._check()
-            await self.api.context()
-            self._check()
-            await self.port.activate_output()
-            self._check()
-            self.runtime = self.runtime_factory(self.api, self.provider, self.port)
-            await self.runtime.start()
-            self._check()
-            await self.port.start_input(self.runtime.input_audio)
-            self.state = 'active'
-            self.journal.record(self.binding, self.digest, 'active')
-            task = asyncio.create_task(self._watch_runtime())
-            self.watch_tasks.add(task)
+            async with asyncio.timeout(self.activation_timeout):
+                await asyncio.wait_for(self.audio_ready.wait(), self.worker_timeout)
+                self._check()
+                await self.api.context()
+                self._check()
+                await self.port.activate_output()
+                self._check()
+                self.runtime = self.runtime_factory(self.api, self.provider, self.port)
+                await self.runtime.start()
+                self._check()
+                await self.port.start_input(self.runtime.input_audio)
+                if self.activation_timeout is not None:
+                    await self.runtime.playback.first_output.wait()
+                    self._check()
+                self.state = 'active'
+                self.journal.record(self.binding, self.digest, 'active')
+                task = asyncio.create_task(self._watch_runtime())
+                self.watch_tasks.add(task)
         except BaseException:
             self._fail('activation_failed')
             raise

@@ -638,3 +638,45 @@ Only BUILD_LOG.md and NEXT_SESSION.md changed, so no Python/Swift implementation
 checks are newly applicable. The transport specialist reviewed the checkpoint;
 the first-attempt evidence is now labeled historical so it cannot be mistaken for
 the fresh retest restoration proof. No c.1 tag was created and d/e remain gated.
+
+### Authorized Deepgram fallback preparation
+
+The user asked for another ElevenLabs readiness check and explicitly authorized
+Deepgram as the fallback for the still-unplaced one-call voice retest. ElevenLabs
+readiness remained unavailable (bounded GET failed at 4.002s); its official status
+page continued reporting API/agent issues. The backend stayed live while the
+fallback was implemented and qualified; no handset call was used for development.
+
+The fallback uses a separate native Deepgram protocol adapter, selected only by
+an explicit owner-only provider file. Existing ElevenLabs behavior is preserved.
+It exposes only task status and explicit hangup, with stored final-human-turn
+provenance, deferred end-of-turn functions, cancellation and freshness fences.
+It uses verified TLS, fixed service endpoints, a single connection attempt, no
+redirect/reconnect, no history replay and no Think Live presence prompts. Audio
+remains transient. Deepgram MIP opt-out is explicit; usage metadata and managed
+LLM processing are distinct from that content-retention setting.
+
+Protected read-only provider checks succeeded: auth/token HTTP 200 in 255ms,
+model listing HTTP 200 in 372ms, selected managed model available. A synthetic
+provider-only session using fixture task data and a discard sink completed the
+real Welcome/SettingsApplied handshake and produced nonzero PCM in 494ms including
+readiness. It closed cleanly; no microphone, handset or actual task receipt was
+used. This is provider-startup evidence, not physical acceptance.
+
+The connector specialist independently reviewed protocol/authority/cleanup guards
+and ran 46 focused Deepgram/LiveKit tests successfully. Review caught and corrected
+a playback dependency on an experimental-only event: standard assistant transcript
+boundaries now reopen playback after interruption. Required `npm run check` passed
+826 tests in 55 files (12.38s), plus typecheck and build. Final affected-media checks,
+activation-deadline review and the live outcome are recorded below when available.
+
+Final fallback checks: `media/.venv/bin/python -m unittest discover -s media -p
+ 'test_*.py'` passed **265 tests in 54.720s**. The connector independently approved
+the final eight-second activation deadline (expected worker track through first
+sink output, with joined cleanup), and all 48 focused tests passed in 2.350s.
+No Swift source changed. A second synthetic provider session produced first audio
+in 1.161s, then remained quiet for 23.47s after its opening, with no runtime failure
+and confirmed close. `git diff --check` passed. The protected standby proof confirms
+exactly the two approved variables changed, the preceding dispatcher was removed,
+and current runtime is idle standby. The one handset call is still pending at
+this code checkpoint; no c.1 tag is warranted yet.

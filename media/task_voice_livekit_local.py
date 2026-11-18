@@ -11,7 +11,8 @@ import time
 
 from aiohttp import ClientSession, ClientTimeout, web
 
-from task_voice import ElevenLabsProvider, TaskVoiceAPI, VoiceError
+from task_voice import ElevenLabsProvider, TaskVoiceAPI, TaskVoiceRuntime, VoiceError
+from task_voice_deepgram import DeepgramProvider, DeepgramTaskVoiceRuntime
 from task_voice_local import private_json
 from task_voice_livekit import LiveKitAudioPort, TaskAudioJournal, TaskVoiceLiveKit, validate_binding, fingerprint
 
@@ -98,7 +99,8 @@ async def configured_app(args):
     control = private_json(args.control_file)
     if (set(voice) != {'version', 'taskOrigin', 'taskId', 'voiceSessionId', 'voiceToken'} or voice['version'] != 1
             or voice['taskId'] != binding['taskId'] or voice['voiceSessionId'] != binding['voiceSessionId']
-            or set(provider) != {'elevenlabsAgentId', 'elevenlabsApiKey'}
+            or not (set(provider) == {'elevenlabsAgentId', 'elevenlabsApiKey'}
+                    or (set(provider) == {'provider', 'deepgramApiKey'} and provider['provider'] == 'deepgram'))
             or set(livekit) != {'url', 'key', 'secret', 'allowedHosts'}
             or not isinstance(livekit['allowedHosts'], list) or len(livekit['allowedHosts']) != 1
             or any(not isinstance(host, str) or not re.fullmatch(r'[A-Za-z0-9.-]{1,253}', host) for host in livekit['allowedHosts'])
@@ -108,10 +110,14 @@ async def configured_app(args):
     journal = None
     try:
         api = TaskVoiceAPI(http, voice['taskOrigin'], voice['taskId'], voice['voiceSessionId'], voice['voiceToken'])
-        eleven = ElevenLabsProvider(http, provider['elevenlabsApiKey'], provider['elevenlabsAgentId'])
+        deepgram = provider.get('provider') == 'deepgram'
+        voice_provider = (DeepgramProvider(http, provider['deepgramApiKey']) if deepgram else
+                          ElevenLabsProvider(http, provider['elevenlabsApiKey'], provider['elevenlabsAgentId']))
         port = LiveKitAudioPort(livekit['url'], livekit['key'], livekit['secret'], allowed_hosts=set(livekit['allowedHosts']))
         journal = TaskAudioJournal(args.journal)
-        adapter = TaskVoiceLiveKit(api, eleven, port, journal)
+        adapter = TaskVoiceLiveKit(api, voice_provider, port, journal,
+            runtime_factory=DeepgramTaskVoiceRuntime if deepgram else TaskVoiceRuntime,
+            activation_timeout=8 if deepgram else None)
         app = control_app(adapter, binding, control['token'], args.port)
         async def release(app):
             journal.close()
