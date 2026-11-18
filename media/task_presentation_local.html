@@ -13,8 +13,8 @@ const playing=new Set();
 async function post(path,body={}){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store',signal:AbortSignal.timeout(2000)});if(!response.ok)throw Error('Local operation refused');return response.json();}
 function blank(){generation++;view.hidden=true;view.removeAttribute('src');if(imageURL){URL.revokeObjectURL(imageURL);imageURL=null;}}
 function clear(){for(const item of playing){item.onended=null;try{item.stop();}catch{}}playing.clear();}
-async function halt(){if(ended)return;ended=true;start.disabled=true;blank();clear();state.textContent='Sharing and narration stopped.';ws?.close();const closing=audio?.close();try{await post('/local/stop');}catch{state.textContent='Stopped locally. Cleanup requires inspection.';}await closing;}
-stop.onclick=halt;
+async function halt(message='Sharing and narration stopped.'){if(ended)return;ended=true;start.disabled=true;blank();clear();state.textContent=message;ws?.close();const closing=audio?.close();try{await post('/local/stop');}catch{state.textContent='Stopped locally. Cleanup requires inspection.';}await closing;}
+stop.onclick=()=>halt();
 start.onclick=async()=>{if(started||ended)return;started=true;start.disabled=true;const startGeneration=generation;
 const current=()=>!ended&&generation===startGeneration;
 try{audio=new AudioContext({sampleRate:16000});await audio.resume();if(!current()){await audio.close();return;}if(audio.state!=='running')throw Error('Audio unavailable');
@@ -41,6 +41,7 @@ if(previous)URL.revokeObjectURL(previous);await new Promise(r=>requestAnimationF
 }catch{if(next)URL.revokeObjectURL(next);blank();}finally{deadline=Math.max(deadline+1000/15,performance.now());await new Promise(r=>setTimeout(r,Math.max(0,deadline-performance.now())));}}}
 
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
-post('/bootstrap',{token}).then(()=>{if(ended)return;start.disabled=false;state.textContent='Choose Start local preview to enable the prepared windows and speakers.';}).catch(()=>{state.textContent='Open the private local preview link.';});
+async function monitor(){while(!ended){try{const response=await fetch('/preview/status',{cache:'no-store',signal:AbortSignal.timeout(800)});if(!response.ok)throw Error('Status unavailable');const value=await response.json();if(ended)return;if(value.state==='stopped'||value.state==='unknown'){const failed=value.diagnostics?.runtime?.failure||value.diagnostics?.narrator?.failure;await halt(failed?'Walkthrough stopped. Narration could not complete.':'Sharing and narration stopped.');return;}}catch{if(!ended)await halt('Local preview unavailable. Sharing stopped.');return;}await new Promise(r=>setTimeout(r,500));}}
+post('/bootstrap',{token}).then(()=>{if(ended)return;start.disabled=false;state.textContent='Choose Start local preview to enable the prepared windows and speakers.';void monitor();}).catch(()=>{state.textContent='Open the private local preview link.';});
 window.addEventListener('pagehide',()=>{ended=true;clearInterval(watchdog);blank();clear();ws?.close();});
 </script></html>

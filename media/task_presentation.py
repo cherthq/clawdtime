@@ -18,6 +18,7 @@ import uuid
 
 from PIL import Image, ImageDraw, ImageFont
 from task_voice import VoiceError, bounded_body
+from task_presentation_diagnostics import PresentationDiagnostics
 
 ID = re.compile(r'[A-Za-z0-9_-]{1,200}')
 HASH = re.compile(r'[a-f0-9]{64}')
@@ -80,19 +81,28 @@ def validate_prepare(value):
     prose(manifest['opening'], 2000)
     seen = set()
     for scene in manifest['scenes']:
-        exact(scene, {'id', 'kind', 'title', 'narration', 'expectedOutcome', 'target', 'focus', 'transitionMs'} | ({'artifact'} if 'artifact' in scene else set()))
+        exact(scene, {'id', 'kind', 'title', 'narration', 'expectedOutcome', 'target', 'focus', 'transitionMs'}
+              | ({'artifact'} if 'artifact' in scene else set()) | ({'overview'} if 'overview' in scene else set()))
         if not identity(scene['id']) or scene['id'] in seen or scene['kind'] not in ('code', 'preview', 'verification'):
             fail()
         seen.add(scene['id'])
         target(scene['target'])
         for key, bound in (('title', 160), ('narration', 1600), ('expectedOutcome', 500)):
             prose(scene[key], bound)
-        rect = scene['focus']
-        exact(rect, ('x', 'y', 'width', 'height'))
-        if (not all(number(v) for v in rect.values()) or not 0 <= rect['x'] <= 1 or not 0 <= rect['y'] <= 1
-                or not 0 < rect['width'] <= 1 or not 0 < rect['height'] <= 1
-                or rect['x'] + rect['width'] > 1 or rect['y'] + rect['height'] > 1
-                or type(scene['transitionMs']) is not int or not 450 <= scene['transitionMs'] <= 650):
+        for key in ('focus', 'overview') if 'overview' in scene else ('focus',):
+            rect = scene[key]
+            exact(rect, ('x', 'y', 'width', 'height'))
+            if (not all(number(v) for v in rect.values()) or not 0 <= rect['x'] <= 1 or not 0 <= rect['y'] <= 1
+                    or not 0 < rect['width'] <= 1 or not 0 < rect['height'] <= 1
+                    or rect['x'] + rect['width'] > 1 or rect['y'] + rect['height'] > 1):
+                fail()
+        if 'overview' in scene:
+            focus, overview = scene['focus'], scene['overview']
+            if (focus['x'] < overview['x'] or focus['y'] < overview['y']
+                    or focus['x'] + focus['width'] > overview['x'] + overview['width']
+                    or focus['y'] + focus['height'] > overview['y'] + overview['height']):
+                fail()
+        if type(scene['transitionMs']) is not int or not 450 <= scene['transitionMs'] <= 650:
             fail()
         if 'artifact' in scene:
             exact(scene['artifact'], ('relativePath', 'sha256'))
@@ -291,6 +301,7 @@ class TaskPresentationRuntime:
         self.paint_tokens = {}
         self.painted = None
         self.paint_changed = asyncio.Event()
+        self.diagnostics = PresentationDiagnostics()
         self.font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', 24)
 
     async def check(self, generation=None):
@@ -306,6 +317,7 @@ class TaskPresentationRuntime:
     async def prepare(self, value):
         if value != self.binding or self.stopping:
             fail()
+        self.diagnostics.phase('prepare_authority')
         await self.check()
         if not self.prepared:
             self.journal.prepare(self.binding)
@@ -321,24 +333,29 @@ class TaskPresentationRuntime:
 
     async def _start(self):
         try:
+            self.diagnostics.phase('local_start')
             await self.check()
             await self.source.start()
             for scene in self.binding['manifest']['scenes']:
+                self.diagnostics.phase('native_inspect')
                 await self.source.request('inspect', scene['target'])
                 await self.check()
             self.armed = True
-            self.spawn(self.capture_loop())
-            self.spawn(self.render_loop())
-        except BaseException:
+            self.spawn(self.capture_loop(), 'source_capture')
+            self.spawn(self.render_loop(), 'frame_render')
+            self.diagnostics.phase('ready')
+        except BaseException as error:
+            self.diagnostics.fail(error)
             asyncio.create_task(self.stop())
             raise
 
-    def spawn(self, coro):
+    def spawn(self, coro, phase):
         task = asyncio.create_task(coro)
         self.tasks.add(task)
         def done(item):
             self.tasks.discard(item)
             if not item.cancelled() and item.exception() and not self.stopping:
+                self.diagnostics.fail(item.exception(), phase)
                 self.state = 'unknown'
                 asyncio.create_task(self.stop())
         task.add_done_callback(done)
@@ -358,6 +375,7 @@ class TaskPresentationRuntime:
             if previous is not None:
                 return previous
             try:
+                self.diagnostics.phase('show_authority')
                 await self.check(value['generation'])
                 if self.narrator:
                     await self.narrator.interrupt()
@@ -370,16 +388,19 @@ class TaskPresentationRuntime:
                 self.paint_tokens.clear()
                 self.transition_at = self.transition_completed = None
                 self.state = 'presenting'
+                self.diagnostics.phase('await_source')
                 async with asyncio.timeout(6):
                     while not self.frame:
                         self.frames_changed.clear()
                         await self.frames_changed.wait()
                         await self.check(self.generation)
                 self.state = 'visible'
+                self.diagnostics.phase('ready')
                 result = copy.deepcopy(self.frame)
                 self.journal.finish(value['operationId'], result)
                 return result
-            except BaseException:
+            except BaseException as error:
+                self.diagnostics.fail(error)
                 self.journal.unknown(value['operationId'])
                 self.state = 'unknown'
                 asyncio.create_task(self.stop())
@@ -410,7 +431,7 @@ class TaskPresentationRuntime:
                 if self.source_frame and value['geometryGeneration'] != self.source_frame['geometryGeneration']:
                     fail()
                 self.source_frame = value
-                self.counts['sourceFrames'] += 1
+                self.counts['sourceFrames'] = min(1000000, self.counts['sourceFrames'] + 1)
                 if self.transition_at is None:
                     self.transition_at = self.clock()
                 self.frames_changed.set()
@@ -427,11 +448,19 @@ class TaskPresentationRuntime:
         t = min(1, max(0, elapsed / (scene['transitionMs'] / 1000)))
         eased = t * t * (3 - 2 * t)
         focus = scene['focus']
-        crop = {k: base + (focus[k] - base) * eased for k, base in {'x': 0, 'y': 0, 'width': 1, 'height': 1}.items()}
+        overview = scene.get('overview', {'x': 0, 'y': 0, 'width': 1, 'height': 1})
+        crop = {k: base + (focus[k] - base) * eased for k, base in overview.items()}
         image = source['image']
-        x, y = int(crop['x'] * image.width), int(crop['y'] * image.height)
-        right = min(image.width, max(x + 1, math.ceil((crop['x'] + crop['width']) * image.width)))
-        bottom = min(image.height, max(y + 1, math.ceil((crop['y'] + crop['height']) * image.height)))
+        # Round the permitted overview inward so fractional edge pixels never
+        # expose UI outside the prepared crop, including the first transition.
+        left_bound, top_bound = math.ceil(overview['x'] * image.width), math.ceil(overview['y'] * image.height)
+        right_bound = math.floor((overview['x'] + overview['width']) * image.width)
+        bottom_bound = math.floor((overview['y'] + overview['height']) * image.height)
+        x, y = max(left_bound, int(crop['x'] * image.width)), max(top_bound, int(crop['y'] * image.height))
+        right = min(right_bound, max(x + 1, math.ceil((crop['x'] + crop['width']) * image.width)))
+        bottom = min(bottom_bound, max(y + 1, math.ceil((crop['y'] + crop['height']) * image.height)))
+        if right <= x or bottom <= y:
+            fail()
         tile = image.crop((x, y, right, bottom))
         scale = min(WIDTH / tile.width, 640 / tile.height)
         tile = tile.resize((max(1, int(tile.width * scale)), max(1, int(tile.height * scale))), Image.Resampling.LANCZOS)
@@ -446,7 +475,7 @@ class TaskPresentationRuntime:
         self.output_metadata = {'sourceFrameId': source['sourceFrameId'], 'capturedAt': source['capturedAt'],
             'geometryGeneration': source['geometryGeneration'], 'sceneId': scene['id'], 'generation': self.generation}
         self.output_token = uuid.uuid4().hex
-        self.counts['renderedFrames'] += 1
+        self.counts['renderedFrames'] = min(1000000, self.counts['renderedFrames'] + 1)
         if t == 1 and self.transition_completed is None:
             self.transition_completed = self.wall() * 1000
         if self.transition_completed is not None and source['capturedAt'] >= self.transition_completed:
@@ -471,7 +500,10 @@ class TaskPresentationRuntime:
         if (not self.stopping and value and self.scene and value['sceneId'] == self.scene['id']
                 and value['generation'] == self.generation and 0 <= self.wall() * 1000 - value['capturedAt'] < 2000):
             self.painted = value
+            self.diagnostics.increment('paintAccepted')
             self.paint_changed.set()
+        else:
+            self.diagnostics.increment('paintRefused')
 
     async def render_loop(self):
         deadline = self.clock()
@@ -501,6 +533,7 @@ class TaskPresentationRuntime:
             if previous is not None:
                 return previous
             try:
+                self.diagnostics.phase('narrate_frame')
                 frame = await self.observe(value['presentationId'])
                 supplied = value['frame']
                 if (not isinstance(supplied, dict) or json.dumps(supplied, sort_keys=True, separators=(',', ':')) not in self.emitted
@@ -509,6 +542,7 @@ class TaskPresentationRuntime:
                         or not number(supplied.get('capturedAt')) or not 0 <= self.wall() * 1000 - supplied['capturedAt'] < 2000):
                     fail()
                 self.state = 'narrating'
+                self.diagnostics.phase('await_paint')
                 async with asyncio.timeout(2):
                     while (not self.painted or self.painted['sceneId'] != value['sceneId']
                             or self.painted['generation'] != value['generation']
@@ -525,24 +559,30 @@ class TaskPresentationRuntime:
                             or not 0 <= self.wall() * 1000 - self.painted['capturedAt'] < 2000
                             or not 0 <= self.wall() * 1000 - self.frame['capturedAt'] < 2000):
                         fail()
+                self.diagnostics.phase('narration')
                 result = await self.narrator.speak(value['text'], authorize_narration)
                 await self.check(value['generation'])
                 if result != {'completed': True, 'evidence': 'playback_completed_not_audibility'}:
                     fail()
                 self.journal.finish(value['operationId'], result)
                 self.state = 'visible'
+                self.diagnostics.phase('ready')
                 return result
-            except BaseException:
+            except BaseException as error:
+                self.diagnostics.fail(error)
                 self.journal.unknown(value['operationId'])
                 self.state = 'unknown'
                 asyncio.create_task(self.stop())
                 raise
 
     def status(self):
+        narrator_diagnostics = getattr(self.narrator, 'diagnostics', None)
         return {'presentationId': self.binding['presentationId'], 'state': self.state,
             'localStarted': self.armed, 'generation': self.generation,
             'sceneId': self.scene['id'] if self.scene else None, 'fps': FPS,
-            'evidence': 'local_rendering_not_physical_acceptance', 'counts': dict(self.counts)}
+            'evidence': 'local_rendering_not_physical_acceptance', 'counts': dict(self.counts),
+            'diagnostics': {'runtime': self.diagnostics.snapshot(),
+                'narrator': narrator_diagnostics.snapshot() if narrator_diagnostics else None}}
 
     async def stop(self):
         self.stopping = True
@@ -558,6 +598,7 @@ class TaskPresentationRuntime:
         return await asyncio.shield(self.close_task)
 
     async def _stop(self):
+        self.diagnostics.phase('stop')
         if self.start_task and not self.start_task.done():
             self.start_task.cancel()
             await asyncio.gather(self.start_task, return_exceptions=True)
@@ -566,8 +607,10 @@ class TaskPresentationRuntime:
         await asyncio.gather(*list(self.tasks), return_exceptions=True)
         results = await asyncio.gather(self.source.close(), *([self.narrator.close()] if self.narrator else []), return_exceptions=True)
         if any(isinstance(value, BaseException) for value in results):
+            self.diagnostics.fail(VoiceError('presentation_cleanup_unconfirmed'))
             self.state = 'unknown'
             raise VoiceError('presentation_cleanup_unconfirmed')
         self.scene = None
         self.state = 'stopped'
+        self.diagnostics.phase('closed')
         return {'captureStopped': True, 'narrationStopped': True, 'outputCleared': True, 'childrenJoined': True}

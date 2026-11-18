@@ -24,7 +24,11 @@ The renderer samples source windows at up to five frames per second and renders
 camera motion on a 15 fps deadline. Render and browser pacing account for work
 (including decode and paint acknowledgement), and overruns do not accumulate
 catch-up frames. A 450–650 ms smooth zoom runs entirely
-inside the selected window's pixels. A scene receipt requires a new source frame
+inside the selected window's pixels. An optional prepared `overview` rectangle
+sets the initial content crop; `focus` must lie inside it. Every transition frame
+stays within that overview, including inward rounding at fractional pixel edges.
+Omitting it preserves the full selected-window starting frame. This is presentation
+framing; it does not hide or change macOS/browser capture indicators. A scene receipt requires a new source frame
 after the transition completes; original capture timestamps are never refreshed
 on cached pixels. Browser image decoding and two animation frames produce a
 separate bounded paint acknowledgement. Narration requires that current-scene
@@ -34,8 +38,11 @@ Neither signal claims the human actually saw the frame.
 `task_presentation_narrator.py` uses a separate Deepgram conversation and the
 [documented InjectAgentMessage protocol](https://developers.deepgram.com/docs/voice-agent-inject-agent-message).
 It has no microphone stream, greeting, or model tools. Only prepared scene text
-is injected; confirmed assistant text must match its exact normalized prefix
-before associated audio enters playback. Completion requires the exact full cue,
+is injected. The provider can deliver audio before its text event; at most 64,000
+bytes are quarantined for at most two seconds, with no playback. The complete
+normalized assistant text must equal the entire prepared cue before any audio
+is released. Divergence, missing text, capacity, or Stop discards the quarantine.
+Completion requires the exact full cue,
 provider audio EOF, and every browser `onended` acknowledgement. This is playback
 completion, not audibility. Stop closes the provider and clears queued audio;
 no reconnect or substitute speech is attempted. This new narration path still
@@ -47,7 +54,15 @@ separate bearer and reject browser Origins: `/prepare`, `/show`, `/narrate`,
 HttpOnly SameSite cookie, exact Origin checks, and a private fragment capability.
 No frame endpoint is available to the operator token. The page blanks stale images
 independently of HTTP responses; Stop immediately clears local pixels/audio and
-closes its socket before attempting bounded server cleanup.
+closes its socket before attempting bounded server cleanup. A bounded status poll
+also detects an internal host Stop, blanks the preview, closes local playback,
+and replaces the Ready label with a stopped/failure message.
+
+Host status includes content-free runtime and narrator diagnostics: an allowlisted
+phase, the first fixed failure reason, bounded elapsed milliseconds, and saturated
+protocol/playback counters. They contain no exception string, provider body, cue
+text, credential, or audio. First failure survives cleanup; an unknown operation
+receipt is never reset by these diagnostics.
 
 The coordinating lead supplies owner-only files (0600; directory0700):
 

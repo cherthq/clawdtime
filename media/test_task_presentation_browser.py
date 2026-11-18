@@ -14,7 +14,7 @@ from PIL import Image
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_stalled_frame_clears_and_stop_fences_delayed_start_and_decode(self):
-        events = {'audio': 0, 'closed': 0, 'start': 0, 'stop': 0, 'frames': 0, 'paint': 0}
+        events = {'audio': 0, 'closed': 0, 'start': 0, 'stop': 0, 'frames': 0, 'paint': 0, 'terminal': False}
         gate = asyncio.Event()
         stop_gate = asyncio.Event()
         frame_times = []
@@ -36,6 +36,12 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             return web.json_response({'received': True})
         async def release(request):
             gate.set()
+            return web.json_response({})
+        async def status(request):
+            return web.json_response({'state': 'stopped' if events['terminal'] else 'visible',
+                'diagnostics': {'runtime': {'failure': {'reason': 'operation_failed'} if events['terminal'] else None}}})
+        async def terminal(request):
+            events['terminal'] = True
             return web.json_response({})
         async def frame(request):
             events['frames'] += 1
@@ -61,6 +67,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         app.router.add_post('/local/stop', stop)
         app.router.add_post('/preview/paint', paint)
         app.router.add_post('/release', release)
+        app.router.add_get('/preview/status', status)
+        app.router.add_post('/terminal', terminal)
         app.router.add_get('/frame', frame)
         app.router.add_get('/audio', audio)
         app.router.add_get('/counts', counts)
@@ -90,6 +98,13 @@ try{
  if(counts.closed!==1)throw Error('Stop waited for stalled POST before closing audio socket');
  if(counts.paint<1)throw Error('Decoded frame never acknowledged');
  await page.close();
+ const terminalPage=await browser.newPage();await terminalPage.addInitScript(fake);await terminalPage.goto(process.argv[1]);
+ await terminalPage.locator('#start:enabled').waitFor();await terminalPage.locator('#start').click();
+ await terminalPage.locator('#view:visible').waitFor();await terminalPage.request.post(new URL('/terminal',process.argv[1]).href);
+ await terminalPage.waitForFunction(()=>document.getElementById('state').textContent==='Walkthrough stopped. Narration could not complete.');
+ if(await terminalPage.locator('#view').isVisible())throw Error('Host terminal state retained pixels');
+ counts=await(await terminalPage.request.get(new URL('/counts',process.argv[1]).href)).json();
+ if(counts.closed!==2)throw Error('Host terminal state retained audio socket');await terminalPage.close();
 }finally{await browser.close();}'''
         process = None
         try:
@@ -97,8 +112,8 @@ try{
                 cwd=Path(__file__).resolve().parents[1], stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
             stdout, stderr = await asyncio.wait_for(process.communicate(), 20)
             self.assertEqual(process.returncode, 0, stderr.decode()[-3000:])
-            self.assertEqual(events['audio'], 1)
-            self.assertEqual(events['start'], 1)
+            self.assertEqual(events['audio'], 2)
+            self.assertEqual(events['start'], 2)
         finally:
             gate.set()
             stop_gate.set()

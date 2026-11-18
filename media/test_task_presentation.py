@@ -2,6 +2,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 import tempfile
 import time
@@ -16,6 +17,7 @@ from task_voice import VoiceError
 from task_presentation import TaskPresentationRuntime, PresentationJournal, validate_prepare
 from task_presentation_local import AttachedSink, control_app
 from task_presentation_narrator import PresentationNarrator
+from task_presentation_diagnostics import PresentationDiagnostics
 
 
 def fixture():
@@ -119,6 +121,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(VoiceError):
             await self.runtime.narrate(self.narration(forged))
         self.narrator.speak.assert_not_awaited()
+        self.assertEqual(self.runtime.status()['diagnostics']['runtime']['failure']['phase'], 'narrate_frame')
+        self.assertEqual(self.runtime.status()['diagnostics']['runtime']['failure']['reason'], 'presentation_refused')
 
     async def test_browser_paint_ack_required_and_stale_scene_ack_ignored(self):
         await self.start()
@@ -164,6 +168,42 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(sleeps[0], 1 / 15 - .020)
         self.assertEqual(sleeps[1], 0)
         self.assertAlmostEqual(sleeps[2], 1 / 15 - .020)
+
+    async def test_every_transition_crop_stays_inside_prepared_overview(self):
+        scene = self.binding['manifest']['scenes'][0]
+        scene['overview'] = {'x': .101, 'y': .151, 'width': .798, 'height': .748}
+        validate_prepare(self.binding)
+        image = Image.new('RGB', (800, 600), '#568cab')
+        tick = [0.0]
+        self.runtime.clock = lambda: tick[0]
+        self.runtime.scene = scene
+        self.runtime.source_frame = {'image': image, 'capturedAt': time.time() * 1000,
+            'sourceFrameId': 'synthetic', 'geometryGeneration': 'geometry', 'contentRevision': 'a' * 64}
+        self.runtime.authority_at = self.runtime.transition_at = 0
+        self.runtime.authority_generation = self.runtime.generation
+        bounds = (math.ceil(.101 * 800), math.ceil(.151 * 600), math.floor(.899 * 800), math.floor(.899 * 600))
+        with patch.object(image, 'crop', wraps=image.crop) as crop:
+            for frame_index in range(16):
+                tick[0] = frame_index / 15 * .450
+                self.runtime.render()
+                left, top, right, bottom = crop.call_args.args[0]
+                self.assertGreaterEqual(left, bounds[0])
+                self.assertGreaterEqual(top, bounds[1])
+                self.assertLessEqual(right, bounds[2])
+                self.assertLessEqual(bottom, bounds[3])
+                self.assertIsNotNone(self.runtime.output)
+            self.assertEqual(crop.call_args_list[0].args[0], bounds)
+            self.assertNotEqual(crop.call_args_list[-1].args[0], bounds)
+
+    async def test_overview_rejects_invalid_rect_and_focus_outside_it(self):
+        for overview in ({'x': 0, 'y': 0, 'width': float('nan'), 'height': 1},
+                         {'x': 0, 'y': 0, 'width': .5, 'height': 1},
+                         {'x': .3, 'y': .2, 'width': .6, 'height': .6},
+                         {'x': 0, 'y': .4, 'width': 1, 'height': .8}):
+            binding = copy.deepcopy(self.binding)
+            binding['manifest']['scenes'][0]['overview'] = overview
+            with self.assertRaises(VoiceError):
+                validate_prepare(binding)
 
     async def test_journal_rejects_symlink_lock_without_modifying_target(self):
         path = Path(self.temp.name) / 'other.sqlite'
@@ -256,6 +296,8 @@ class Socket:
         self.closed = False
         self.sent = []
         self.reply = 'Prepared sentence.'
+        self.audio_first = self.omit_text = self.omit_done = False
+        self.pcm = b'\x01\x00' * 160
     def event(self, value):
         self.events.put_nowait(SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(value)))
     async def send_json(self, value):
@@ -263,9 +305,14 @@ class Socket:
         if value['type'] == 'Settings':
             self.event({'type': 'SettingsApplied'})
         if value['type'] == 'InjectAgentMessage':
-            self.event({'type': 'ConversationText', 'role': 'assistant', 'content': self.reply})
-            self.events.put_nowait(SimpleNamespace(type=WSMsgType.BINARY, data=b'\x01\x00' * 160))
-            self.event({'type': 'AgentAudioDone'})
+            if self.audio_first:
+                self.events.put_nowait(SimpleNamespace(type=WSMsgType.BINARY, data=self.pcm))
+            if not self.omit_text:
+                self.event({'type': 'ConversationText', 'role': 'assistant', 'content': self.reply})
+            if not self.audio_first:
+                self.events.put_nowait(SimpleNamespace(type=WSMsgType.BINARY, data=self.pcm))
+            if not self.omit_done:
+                self.event({'type': 'AgentAudioDone'})
     def __aiter__(self):
         return self
     async def __anext__(self):
@@ -308,6 +355,102 @@ class NarrationTests(unittest.IsolatedAsyncioTestCase):
             await self.narrator.speak('Prepared sentence.', self.authorize)
         self.sink.play.assert_not_awaited()
         self.assertTrue(self.ws.closed)
+        self.assertEqual(self.narrator.diagnostics.snapshot()['failure']['reason'], 'narration_prefix_mismatch')
+        self.assertEqual(self.narrator.diagnostics.snapshot()['counts']['assistantText'], 1)
+
+    async def test_audio_before_exact_text_quarantined_then_played_for_two_cues(self):
+        self.ws.audio_first = True
+        for _ in range(2):
+            result = await self.narrator.speak('Prepared sentence.', self.authorize)
+            self.assertTrue(result['completed'])
+        self.assertEqual(self.sink.play.await_count, 2)
+        counts = self.narrator.diagnostics.snapshot()['counts']
+        self.assertEqual(counts['quarantinedChunks'], 2)
+        self.assertEqual(counts['quarantineReleasedChunks'], 2)
+        self.assertEqual(self.narrator.quarantined_bytes, 0)
+
+    async def test_audio_before_diverging_text_never_reaches_sink(self):
+        self.ws.audio_first = True
+        self.ws.reply = 'Unapproved substituted sentence.'
+        with self.assertRaises(VoiceError):
+            await self.narrator.speak('Prepared sentence.', self.authorize)
+        self.sink.play.assert_not_awaited()
+        self.assertEqual(self.narrator.quarantined, [])
+        self.assertEqual(self.narrator.diagnostics.snapshot()['failure']['reason'], 'narration_prefix_mismatch')
+
+    async def test_partial_matching_text_does_not_release_until_complete_cue(self):
+        self.ws.audio_first = self.ws.omit_done = True
+        self.ws.reply = 'Prepared'
+        speaking = asyncio.create_task(self.narrator.speak('Prepared sentence.', self.authorize))
+        while not self.narrator.transcript:
+            await asyncio.sleep(0)
+        self.sink.play.assert_not_awaited()
+        self.ws.event({'type': 'ConversationText', 'role': 'assistant', 'content': 'sentence.'})
+        self.ws.event({'type': 'AgentAudioDone'})
+        self.assertTrue((await speaking)['completed'])
+        self.sink.play.assert_awaited_once()
+
+    async def test_missing_text_times_out_without_playback(self):
+        self.ws.audio_first = self.ws.omit_text = self.ws.omit_done = True
+        with patch('task_presentation_narrator.QUARANTINE_SECONDS', .02):
+            with self.assertRaises(VoiceError):
+                await self.narrator.speak('Prepared sentence.', self.authorize)
+        self.sink.play.assert_not_awaited()
+        self.assertEqual(self.narrator.diagnostics.snapshot()['failure']['reason'], 'narration_text_quarantine_timeout')
+        self.assertEqual(self.narrator.quarantined_bytes, 0)
+
+    async def test_pretext_capacity_refused_without_playback(self):
+        self.ws.audio_first = True
+        self.ws.pcm = b'\x01\x00' * 32001
+        with self.assertRaises(VoiceError):
+            await self.narrator.speak('Prepared sentence.', self.authorize)
+        self.sink.play.assert_not_awaited()
+        self.assertEqual(self.narrator.diagnostics.snapshot()['failure']['reason'], 'narration_text_quarantine_capacity')
+
+    async def test_stop_drops_quarantine_and_late_text_cannot_restore_audio(self):
+        self.ws.audio_first = self.ws.omit_text = self.ws.omit_done = True
+        speaking = asyncio.create_task(self.narrator.speak('Prepared sentence.', self.authorize))
+        while not self.narrator.quarantined:
+            await asyncio.sleep(0)
+        await self.narrator.close()
+        self.ws.event({'type': 'ConversationText', 'role': 'assistant', 'content': 'Prepared sentence.'})
+        with self.assertRaises(VoiceError):
+            await speaking
+        self.sink.play.assert_not_awaited()
+        self.assertEqual(self.narrator.quarantined_bytes, 0)
+        self.assertTrue(self.narrator.quarantine_task.done())
+    async def test_readiness_failure_has_fixed_phase_and_no_raw_error(self):
+        self.provider.readiness.side_effect = RuntimeError('secret-key raw-provider-body private-cue')
+        with self.assertRaises(RuntimeError):
+            await self.narrator.speak('Prepared sentence.', self.authorize)
+        result = self.narrator.diagnostics.snapshot()
+        self.assertEqual(result['failure']['phase'], 'provider_readiness')
+        self.assertEqual(result['failure']['reason'], 'operation_failed')
+        self.assertNotIn('secret-key', json.dumps(result))
+        self.assertNotIn('private-cue', json.dumps(result))
+        self.provider.open.assert_not_awaited()
+
+    async def test_sink_error_diagnostic_preserves_first_failure_after_cleanup(self):
+        self.sink.play.side_effect = RuntimeError('private audio or provider body')
+        with self.assertRaises(VoiceError):
+            await self.narrator.speak('Prepared sentence.', self.authorize)
+        snapshot = self.narrator.diagnostics.snapshot()
+        self.assertEqual(snapshot['failure']['reason'], 'operation_failed')
+        self.assertEqual(snapshot['counts']['sinkChunks'], 1)
+        self.assertNotIn('private audio', json.dumps(snapshot))
+        self.assertEqual(snapshot['phase'], 'closed')
+
+    async def test_diagnostics_counters_saturate_and_unknown_names_refused(self):
+        diagnostic = PresentationDiagnostics()
+        diagnostic.increment('audioBytes', 2000000)
+        self.assertEqual(diagnostic.snapshot()['counts']['audioBytes'], 1000000)
+        with self.assertRaises(ValueError):
+            diagnostic.increment('private-cue')
+        with self.assertRaises(ValueError):
+            diagnostic.phase('https://secret.invalid')
+        diagnostic.fail(VoiceError('private-cue'))
+        diagnostic.fail(VoiceError('narration_prefix_mismatch'))
+        self.assertEqual(diagnostic.snapshot()['failure']['reason'], 'operation_failed')
     async def test_clear_failure_still_closes_provider_and_reader(self):
         await self.narrator.speak('Prepared sentence.', self.authorize)
         self.sink.clear.side_effect = RuntimeError('synthetic')

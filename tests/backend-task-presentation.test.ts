@@ -210,6 +210,40 @@ describe("independent task presentation ledger", () => {
     expect(stored).not.toContain(f.manifest.opening);
     expect(stored).not.toContain("com.example.editor");
   });
+  it("binds a bounded overview crop into the immutable presentation grant", () => {
+    const f = fixture(),
+      scene = f.manifest.scenes[0]!;
+    const original = taskPresentationFingerprint(f.manifest);
+    scene.overview = { x: 0.125, y: 0.25, width: 0.75, height: 0.5 };
+    scene.focus = { x: 0.25, y: 0.375, width: 0.5, height: 0.25 };
+    const cropped = taskPresentationFingerprint(f.manifest);
+    expect(cropped).not.toBe(original);
+    expect(() => f.prepare()).toThrow(/grant/);
+    f.grant.manifestFingerprint = cropped;
+    expect(f.prepare().presentation.manifest.scenes[0]!.overview).toEqual(
+      scene.overview,
+    );
+    scene.overview = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    expect(() => f.prepare()).toThrow(/conflicts/);
+  });
+  it.each([
+    { x: 0, y: 0.25, width: 0.5, height: 0.5 },
+    { x: 0.25, y: 0, width: 0.5, height: 0.5 },
+    { x: 0.25, y: 0.25, width: 0.75, height: 0.5 },
+    { x: 0.25, y: 0.25, width: 0.5, height: 0.75 },
+  ])("rejects a focus region escaping its prepared overview %j", (focus) => {
+    const f = fixture();
+    f.manifest.scenes[0]!.overview = {
+      x: 0.25,
+      y: 0.25,
+      width: 0.5,
+      height: 0.5,
+    };
+    f.manifest.scenes[0]!.focus = focus;
+    expect(() => f.prepare()).toThrow(/inside its prepared overview/);
+    expect(f.ledger.unresolved()).toHaveLength(0);
+  });
+
   it("refuses setup chatter before the exact prepared task opening", () => {
     const f = fixture();
     f.manifest.scenes[0]!.narration = "Let me set up the windows.";

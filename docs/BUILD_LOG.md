@@ -839,3 +839,52 @@ tests in 60 files** (12.18s), typecheck and build. `cd mac && swift test` passed
 **31 tests**; `swift build --product ClawdTimeTaskCapture` passed (1.41s). Python
 source is unchanged since the **283-test** passing checkpoint. `git diff --check`
 passed. No completed-step tag is added.
+
+
+### Step d — prepared framing and provider audio ordering
+
+Exact-window checkpoint `dcbbaf3` is pushed. The user's focused local window
+interaction subsequently made both TextEdit targets capture-admissible. A separate
+native Chrome fixture window also resolved successfully. The user confirmed the
+chat was not fullscreen; fullscreen was not established as the cause. No admission
+guard was loosened.
+
+The first real local attempt completed its preview show receipt, capturing six
+source frames and rendering 28 output frames. Narration then failed closed in
+about 1.14 seconds; its uncertain receipt remains preserved. All capture,
+narration, output and child cleanup flags were confirmed. A browser paint receipt
+is not evidence that the human saw the scene. The user requested a fresh attempt,
+not a replay of that historical effect.
+
+A synthetic provider-only probe (no microphone, speaker playback or screen
+capture) isolated the failure: Deepgram delivered its first audio chunk before
+ConversationText. The narrator previously rejected that ordering. Early PCM now
+stays in a transient quarantine, bounded to 64 KB, 256 chunks and two seconds.
+Playback admission requires the entire normalized assistant text to equal the
+prepared cue. Prefix matches do not release audio. Missing/mismatched text,
+capacity, timeout and Stop discard the buffer. Provider EOF and all browser
+playback acknowledgements remain necessary for completion. A fresh synthetic
+probe completed with 76 chunks / 72,960 bytes sent to a discard sink; one initial
+chunk was quarantined and released after exact text confirmation, with no failure.
+This establishes protocol compatibility, not human audibility.
+
+Allowlisted phase/reason/counter diagnostics contain no provider bodies, exception
+strings, narration, credentials or audio. The preview now observes terminal host
+status, blanks its image, closes audio and shows a stopped message instead of
+remaining misleadingly ready after a failure. The connector specialist approved
+these changes independently, including exact-cue gating and joined Stop cleanup.
+
+Prepared scenes may specify an optional overview enclosing the focus rectangle.
+Transitions and inward-rounded pixel crops remain inside that overview, so browser
+chrome outside the selected content never flashes during an opening zoom.
+Existing omitted-overview manifests retain their prior schema/fingerprint behavior.
+The transport specialist added five contract regressions; the connector reviewed
+bounds and crop behavior independently.
+
+Validation for the checkpoint: the complete media suite passed
+**294 tests** in 63.989s using `media/.venv/bin/python -m unittest discover -s media
+-p 'test_*.py'`. The focused presentation/browser suite passed **29 tests** in
+8.797s; independent core presentation validation passed **28 tests** in 6.307s.
+Swift source is unchanged since its 31-test passing checkpoint. `npm run check` passed **888 tests in 60 files** in 12.07s, plus typecheck
+and build. `git diff --check` passed. Real three-scene local qualification remains pending;
+no new call, line handoff, deployment or coding run has occurred.

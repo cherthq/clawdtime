@@ -65,6 +65,8 @@ export const taskSceneSchema = z
     expectedOutcome: prose(500),
     target: taskSceneTargetSchema,
     focus: taskSceneFocusSchema,
+    /** Prepared initial framing; transitions never reveal pixels outside it. */
+    overview: taskSceneFocusSchema.optional(),
     transitionMs: z.number().int().min(450).max(650).default(550),
     artifact: z
       .object({
@@ -79,7 +81,17 @@ export const taskSceneSchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((scene) => {
+    const bounds = scene.overview;
+    return (
+      !bounds ||
+      (scene.focus.x >= bounds.x &&
+        scene.focus.y >= bounds.y &&
+        scene.focus.x + scene.focus.width <= bounds.x + bounds.width &&
+        scene.focus.y + scene.focus.height <= bounds.y + bounds.height)
+    );
+  }, "Scene focus must stay inside its prepared overview.");
 export const taskPresentationManifestSchema = z
   .object({
     version: z.literal(1),
