@@ -109,6 +109,14 @@ the existing effect and domain call binding without issuing another dial. If the
 allocation response itself was lost and no provider ID was retained, the outcome
 remains unknown. No undocumented provider lookup or new call is substituted.
 
+A dial that never left the backend is a different case. When media preparation,
+the pairing recheck or the attention recheck fails before the call allocation
+request is sent, `NativeTransport.call()` closes the prepared media session and
+raises `NotDispatched`. The effect is recorded as `failed`, the attention request
+as `failed` and the local call as `ended`, so the line is free for the next
+request. Nothing is retried: the agent must make a new request with a new
+idempotency key. Any failure at or after the allocation request stays unknown.
+
 Unknown text-operation receipts retain their original operation origin. The
 source adapter does not establish a read-only lookup contract for that API, so
 ClawdTime cannot automatically clear them. Operator recovery must obtain exact

@@ -6,6 +6,12 @@ export class PreflightBlocked extends DomainError {
     super(503, message);
   }
 }
+/** The effect was refused before any external dispatch, so no outcome is uncertain. */
+export class NotDispatched extends DomainError {
+  constructor(message: string) {
+    super(503, message);
+  }
+}
 export type CheckStatus = "pass" | "fail" | "unknown" | "not_applicable";
 export interface ReadinessCheck {
   id: string;
