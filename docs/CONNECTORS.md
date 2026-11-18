@@ -1776,6 +1776,31 @@ original production receipt. Prepared planning expiry is separate from the
 single short execution deadline minted by dispatch, and neither is renewed by
 connector retry.
 
+When activation returns terminal evidence but another window of the same app is
+visible, explicitly prepare one separate raise of the original scene's window:
+
+```json
+{
+  "id": "prepare-finder-raise-1",
+  "command": "prepare",
+  "sceneId": "finder",
+  "operationId": "finder-raise-1",
+  "action": "raise_window"
+}
+```
+
+This requires the unchanged exact `returned` activation receipt with terminal
+evidence, the same scene/window/generation and the original native epoch, policy,
+cursor and lease. It reads the receipt again, checks fresh camera and ownership
+state, and asks the host to qualify the target anew. An active app alone does not
+prove that its target window is visible or that a raise will succeed. The original
+receipt remains available through read-only lookup and `activationReceipt` in
+controller status; the separate command and operation IDs remain in the journal.
+Preparation performs no native input. Click the fixed CUA button again to dispatch
+the new raise once. Unknown or uncertain activation cannot use this path; a
+returned raise cannot chain another raise. Stop, changed ownership and incoming
+speech still block it. A verified raise releases ownership and presents the scene.
+
 For another planned scene, send a new `prepare` command with its scene and unique
 operation ID. After the final scene, `{"id":"complete-1","command":"complete"}`
 marks the walkthrough complete. A follow-up uses

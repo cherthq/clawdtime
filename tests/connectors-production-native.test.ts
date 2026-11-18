@@ -276,6 +276,8 @@ function fixture() {
     ],
   };
   let saved = record();
+  const receipts = new Map<string, ProductionNativeRecord>();
+  let observed = observation;
   let dispatchState = "verified";
   let dispatchHook: (() => void) | undefined;
   const client = new ClawdTimeClient("https://fixture.invalid", "synthetic");
@@ -333,10 +335,13 @@ function fixture() {
   );
   vi.spyOn(client, "api").mockImplementation(async (path, body) => {
     if (path.endsWith("native-activation"))
-      return { enabled: true, operations: [] } as never;
+      return { enabled: true, operations: [...receipts.values()] } as never;
+    if (path.includes("/receipts/"))
+      return structuredClone(receipts.get(path.split("/").at(-1)!)) as never;
     if (path.endsWith("prepare")) {
       events.push("prepare");
       saved = record(body as NativePresentationOperation);
+      saved.envelope.binding.expiresAt = Math.min(lease.expiresAt, now + 10000);
     }
     if (path.endsWith("dispatch")) {
       events.push("dispatch");
@@ -346,7 +351,10 @@ function fixture() {
       saved.result = {
         operationId: saved.id,
         state: dispatchState as "verified",
-        reason: "exact_window_observed",
+        reason:
+          dispatchState === "returned"
+            ? "host_returned_target_unverified"
+            : "exact_window_observed",
         terminalEvidence: {
           receiptId: "native-receipt",
           operationId: saved.id,
@@ -355,7 +363,7 @@ function fixture() {
           completedAt: 10000,
         },
         observation: {
-          ...observation,
+          ...observed,
           window: saved.envelope.operation.window,
         },
       };
@@ -364,6 +372,7 @@ function fixture() {
       events.push("cancel");
       saved.phase = "rejected";
     }
+    receipts.set(saved.id, structuredClone(saved));
     return structuredClone(saved) as never;
   });
   let actorsStopped = true;
@@ -385,6 +394,8 @@ function fixture() {
     events,
     client,
     owner,
+    camera,
+    receipts,
     plan,
     reference,
     setTime: (value: number) => {
@@ -392,6 +403,9 @@ function fixture() {
     },
     setState: (v: string) => {
       dispatchState = v;
+    },
+    setObservation: (v: Partial<typeof observation>) => {
+      observed = { ...observation, ...v };
     },
     setHook: (v: () => void) => {
       dispatchHook = v;
@@ -403,6 +417,198 @@ function fixture() {
 }
 
 describe("production walkthrough lifecycle", () => {
+  async function returnedActivation(leaseExpiresAt = 20000) {
+    const f = fixture();
+    f.owner.leases[0]!.expiresAt = leaseExpiresAt;
+    await f.controller.prepare("finder", "operation");
+    f.setState("returned");
+    f.setObservation({
+      appActive: true,
+      windowFocused: false,
+      windowOnScreen: false,
+    });
+    await expect(f.controller.executePrepared(f.reference())).rejects.toThrow(
+      "not verified",
+    );
+    return f;
+  }
+
+  it("separately prepares a fresh raise when activation selected another window, preserving the original receipt and owner", async () => {
+    const f = await returnedActivation();
+    const originalReference = f.reference();
+    const originalReceipt = structuredClone(f.receipts.get("operation"));
+    const before = f.controller.status();
+    const result = await f.controller.prepare(
+      "finder",
+      "raise",
+      "raise_window",
+    );
+    expect(result.prepared?.operation).toEqual({
+      ...before.prepared!.operation,
+      operationId: "raise",
+      action: "raise_window",
+    });
+    expect(result.scene).toEqual(before.scene);
+    expect(result.activationReceipt).toEqual(originalReceipt);
+    expect(
+      await f.controller.native.receipt(
+        "operation",
+        originalReference.fingerprint,
+      ),
+    ).toEqual(originalReceipt);
+    expect(f.events).toEqual([
+      "clear",
+      "overview",
+      "owner:native",
+      "prepare",
+      "dispatch",
+      "prepare",
+    ]);
+    expect(result.dispatchAttempted).toBe(false);
+    await expect(
+      f.controller.executePrepared(originalReference),
+    ).rejects.toThrow("current fixed");
+    expect(f.events.filter((event) => event === "dispatch")).toHaveLength(1);
+    f.setState("verified");
+    f.setObservation({});
+    await f.controller.executePrepared(f.reference());
+    expect(f.events.slice(-3)).toEqual(["dispatch", "owner:none", "present"]);
+    expect(f.events.filter((event) => event === "dispatch")).toHaveLength(2);
+    expect(f.controller.status().activationReceipt).toEqual(originalReceipt);
+  });
+
+  it.each([
+    "scene",
+    "operation",
+    "action",
+    "generation",
+    "window",
+    "receipt",
+    "terminal",
+    "uncertain",
+    "submitted",
+  ])("refuses follow-up raise with changed %s", async (change) => {
+    const f = await returnedActivation();
+    let sceneId = "finder",
+      operationId = "raise";
+    let action: NativePresentationOperation["action"] = "raise_window";
+    if (change === "scene") sceneId = "other";
+    if (change === "operation") operationId = "operation";
+    if (change === "action") action = "activate_app";
+    if (change === "generation" || change === "window") {
+      const status = f.controller.scenes.status.bind(f.controller.scenes);
+      vi.spyOn(f.controller.scenes, "status").mockImplementation(() => {
+        const value = status();
+        if (change === "generation") value.generation++;
+        else value.scene!.window.windowId = "different-window";
+        return value;
+      });
+    }
+    const receipt = f.receipts.get("operation")!;
+    if (change === "receipt")
+      receipt.envelope.binding.deviceId = "other-device";
+    if (change === "terminal") delete receipt.result!.terminalEvidence;
+    if (change === "uncertain" || change === "submitted")
+      receipt.phase = change;
+    await expect(
+      f.controller.prepare(sceneId, operationId, action),
+    ).rejects.toThrow();
+    expect(f.events.filter((event) => event === "prepare")).toHaveLength(1);
+    expect(f.events.filter((event) => event === "dispatch")).toHaveLength(1);
+    expect(f.events).not.toContain("owner:none");
+    expect(f.controller.status().prepared?.operation.operationId).toBe(
+      "operation",
+    );
+  });
+
+  it.each(["epoch", "cursor", "hold", "camera", "lease", "actors", "stop"])(
+    "requires fresh original authority for raise after %s changes",
+    async (change) => {
+      const f = await returnedActivation();
+      if (change === "epoch") f.owner.epoch++;
+      if (change === "cursor") {
+        f.owner.cursor++;
+        f.owner.acknowledgedCursor++;
+      }
+      if (change === "hold") f.owner.hold.active = true;
+      if (change === "camera") f.camera.capturedAt = 1;
+      if (change === "lease") f.camera.leaseId = "replacement";
+      if (change === "actors") f.actorsRunning();
+      if (change === "stop") {
+        const receipt = f.controller.native.receipt.bind(f.controller.native);
+        vi.spyOn(f.controller.native, "receipt").mockImplementation(
+          async (...args) => {
+            const result = await receipt(...args);
+            f.controller.stop();
+            return result;
+          },
+        );
+      }
+      await expect(
+        f.controller.prepare("finder", "raise", "raise_window"),
+      ).rejects.toThrow();
+      expect(f.events.filter((event) => event === "prepare")).toHaveLength(1);
+      expect(f.events.filter((event) => event === "dispatch")).toHaveLength(1);
+      expect(f.events).not.toContain("owner:none");
+    },
+  );
+
+  it("never chains another raise after an unverified raise returns", async () => {
+    const f = await returnedActivation();
+    await f.controller.prepare("finder", "raise", "raise_window");
+    await expect(f.controller.executePrepared(f.reference())).rejects.toThrow(
+      "not verified",
+    );
+    await expect(
+      f.controller.prepare("finder", "raise-again", "raise_window"),
+    ).rejects.toThrow("terminal returned activation");
+    expect(f.events.filter((event) => event === "prepare")).toHaveLength(2);
+    expect(f.events.filter((event) => event === "dispatch")).toHaveLength(2);
+  });
+
+  it("retains both operation identities after an unknown raise reservation and refuses dispatch or replacement", async () => {
+    const f = await returnedActivation();
+    const originalReceipt = structuredClone(f.receipts.get("operation"));
+    const api = vi.mocked(f.client.api);
+    const original = api.getMockImplementation()!;
+    api.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (args[0].endsWith("prepare"))
+        throw new Error("synthetic lost prepare response");
+      return result;
+    });
+    await expect(
+      f.controller.prepare("finder", "raise", "raise_window"),
+    ).rejects.toThrow("unknown");
+    expect(f.controller.status().prepared?.operation.operationId).toBe("raise");
+    expect(f.controller.status().activationReceipt).toEqual(originalReceipt);
+    await expect(f.controller.executePrepared(f.reference())).rejects.toThrow(
+      "current fixed",
+    );
+    await expect(
+      f.controller.prepare("finder", "replacement", "raise_window"),
+    ).rejects.toThrow("terminal returned activation");
+    expect(f.events.filter((event) => event === "prepare")).toHaveLength(2);
+    expect(f.events.filter((event) => event === "dispatch")).toHaveLength(1);
+  });
+
+  it("allows a distinct fresh raise after the activation's planning expiry without extending its original receipt", async () => {
+    const f = await returnedActivation(40000);
+    const originalReceipt = structuredClone(f.receipts.get("operation"));
+    f.camera.capturedAt = 21000;
+    f.setTime(21000);
+    const status = await f.controller.prepare(
+      "finder",
+      "raise",
+      "raise_window",
+    );
+    expect(status.preparedExpiresAt).toBe(31000);
+    expect(status.activationReceipt).toEqual(originalReceipt);
+    expect(status.activationReceipt?.envelope.binding.expiresAt).toBe(20000);
+    expect(f.receipts.get("operation")).toEqual(originalReceipt);
+    expect(f.events.filter((event) => event === "dispatch")).toHaveLength(1);
+  });
+
   it("reports the original preparation expiry without renewing or redispatching it", async () => {
     const f = fixture();
     await f.controller.prepare("finder", "operation");

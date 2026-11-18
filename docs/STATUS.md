@@ -1,3 +1,46 @@
+## November 17, 2026 — second production call; exact-window follow-up verified locally
+
+Release `1361a2a8cd0c8b0d926ff856fcdedaaf5ea3f511` was pushed and deployed to
+backend and media. The original-chat CLI used that build; installed companion
+build 8 and frozen gateway remain at `89f78397c63b2e9362e764a0ab6b34ad42aa6623`.
+Their complete source directories are unchanged between those revisions.
+
+The one newly authorized call connected and delivered one spoken instruction to
+this chat. The provider was still `in-progress` at 207 seconds, beyond its former
+180-second limit. The call was then ended intentionally; the media failure field
+remained null. Screen capture ran for approximately 258 seconds. This establishes
+survival past the former cutoff, not ten-minute or complete handset acceptance.
+
+Activation passed preflight this time and reached the host once. It returned
+terminal evidence without verifying the intended Finder window; a different
+Finder window was foreground. No activation was replayed. This exposed a missing
+connector sequence for multi-window apps: one app activation may require a
+separately qualified `raise_window` of the original target. The connector now
+supports that explicit follow-up only after an unchanged exact terminal returned
+activation, retaining the same scene/window/generation, lease, native epoch,
+policy and cursor. It preserves the first receipt and creates a distinct
+reservation; another fixed CUA click is required. Unknown outcomes never use it.
+
+The isolated no-call production-code harness reproduced the returned activation.
+A separately prepared and CUA-triggered raise then returned `verified`, and native
+UI observation showed the exact disposable Finder window in front. Ownership
+released to none/idle; the presentation command was accepted. A later preview
+showed the desktop overview, so this run does not establish visible zoom/label
+acceptance. Local Stop cleared sharing; harness cleanup joined actors with zero
+unresolved leases/native operations. The candidate helper exited. No screens or
+audio were saved.
+
+Final connector validation: `npm run check` passes 1,233 tests in 72 files,
+typecheck and build. The production call itself did **not** complete the
+walkthrough; the exact-window follow-up was verified locally afterward. Its one
+spoken report still has an unknown playback receipt and was not repeated.
+Before ending, the original controller was joined and native ownership explicitly
+released; terminal state is none/paused with its lease released and no actions.
+The foreground bridge and temporary trigger tabs are closed. Production helper
+Stop is visibly confirmed, both presentation/activation gates are false, and
+backend/media report zero active calls/sessions and no pending effects. No second
+redial was made under this authorization.
+
 ## November 17, 2026 — voice lifetime and activation recovery repair
 
 The dedicated voice provider agent had a 180-second conversation limit. Its exact

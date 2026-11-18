@@ -179,6 +179,7 @@ export class ProductionWalkthroughController {
     fingerprint: string;
   };
   private last?: ProductionNativeRecord;
+  private activationReceipt?: ProductionNativeRecord;
   private busy = false;
   private stopped = false;
   private dispatchAttempted = false;
@@ -224,6 +225,9 @@ export class ProductionWalkthroughController {
         preparedExpiresAt !== null &&
         preparedExpiresAt <= (this.options.clock ?? Date.now)(),
       receipt: this.last ? structuredClone(this.last) : null,
+      activationReceipt: this.activationReceipt
+        ? structuredClone(this.activationReceipt)
+        : null,
     };
   }
   private valid() {
@@ -311,6 +315,82 @@ export class ProductionWalkthroughController {
       );
     return receipt;
   }
+  /** A returned activation may precede one separately prepared raise, never a replay. */
+  private async prepareRaise(
+    sceneId: string,
+    operationId: string,
+    action: NativePresentationOperation["action"],
+  ) {
+    const previous = this.pending!;
+    const last = this.last;
+    const scene = this.scenes.status();
+    if (
+      action !== "raise_window" ||
+      previous.operation.action !== "activate_app" ||
+      operationId === previous.operation.operationId ||
+      sceneId !== previous.operation.sceneId ||
+      scene.generation !== previous.operation.generation ||
+      scene.scene?.id !== sceneId ||
+      !isDeepStrictEqual(scene.scene.window, previous.operation.window) ||
+      scene.phase !== "awaiting_verification" ||
+      !this.dispatchAttempted ||
+      last?.phase !== "returned" ||
+      last.result?.state !== "returned" ||
+      !last.result.terminalEvidence
+    )
+      throw new Error(
+        "Only an exact terminal returned activation permits a separately prepared raise for the same scene.",
+      );
+    if (!this.options.backgroundActorsStopped())
+      throw new Error(
+        "Stop and join conflicting input actors before preparing a raise.",
+      );
+    const receipt = await this.native.receipt(
+      previous.operation.operationId,
+      previous.fingerprint,
+    );
+    this.valid();
+    if (!isDeepStrictEqual(receipt, last))
+      throw new Error(
+        "Original activation receipt changed; preserve ownership and inspect it without replay.",
+      );
+    // Preserve the original binding, including epoch, cursor and lease. A newer
+    // owner or acknowledged turn cannot silently authorize this scene's raise.
+    const operation = nativePresentationOperationSchema.parse({
+      ...previous.operation,
+      operationId,
+      action,
+    });
+    await this.owner();
+    const camera = cameraStatusSchema.parse(
+      await this.options.client.screenCamera(this.options.requestId),
+    );
+    this.valid();
+    const owner = await this.options.client.conversationExecution(
+      this.options.requestId,
+    );
+    this.valid();
+    validateNativePresentationAuthority(
+      operation,
+      owner,
+      camera,
+      (this.options.clock ?? Date.now)(),
+    );
+    this.activationReceipt = receipt;
+    return this.reserve(operation);
+  }
+  private async reserve(operation: NativePresentationOperation) {
+    this.pending = { operation, fingerprint: fingerprint(operation) };
+    this.last = undefined;
+    this.dispatchAttempted = false;
+    this.last = await this.native.prepare(operation);
+    this.valid();
+    if (this.last.phase !== "prepared")
+      throw new Error(
+        "Native operation did not prepare; inspect its original receipt.",
+      );
+    return this.status();
+  }
   /** No native effect: reset scene, claim native, resolve and reserve exactly one operation. */
   prepare(
     sceneId: string,
@@ -318,10 +398,7 @@ export class ProductionWalkthroughController {
     action: NativePresentationOperation["action"] = "activate_app",
   ) {
     return this.exclusive(async () => {
-      if (this.pending)
-        throw new Error(
-          "Resolve or cancel the existing prepared operation first.",
-        );
+      if (this.pending) return this.prepareRaise(sceneId, operationId, action);
       await this.scenes.begin(sceneId);
       this.valid();
       const claim = await this.transfer("native", "idle");
@@ -365,16 +442,8 @@ export class ProductionWalkthroughController {
         camera,
         (this.options.clock ?? Date.now)(),
       );
-      this.pending = { operation, fingerprint: fingerprint(operation) };
-      this.last = undefined;
-      this.dispatchAttempted = false;
-      this.last = await this.native.prepare(operation);
-      this.valid();
-      if (this.last.phase !== "prepared")
-        throw new Error(
-          "Native operation did not prepare; inspect its original receipt.",
-        );
-      return this.status();
+      this.activationReceipt = undefined;
+      return this.reserve(operation);
     });
   }
   /** Fixed browser button invocation only, with immutable reference to the current scene. */
@@ -389,6 +458,9 @@ export class ProductionWalkthroughController {
       const scene = this.scenes.status();
       if (
         !pending ||
+        this.last?.phase !== "prepared" ||
+        this.last.id !== pending.operation.operationId ||
+        this.last.envelope.fingerprint !== pending.fingerprint ||
         reference.operationId !== pending.operation.operationId ||
         reference.fingerprint !== pending.fingerprint ||
         scene.generation !== pending.operation.generation ||
