@@ -1958,3 +1958,74 @@ desktop identity, configuration fingerprint and exact closed admissions. It is
 awaiting fresh call authorization; no session renewal, worker replay, capture,
 provider connection or call occurred. No production code update or d/e completion
 tag is claimed. Lead scope/secret review and `git diff --check` passed.
+
+## 2026-11-19 — Successful separately authorized desktop review retest
+
+The user authorized one additional visual review call and a temporary
+ClawdTime-backend-only standby/restore window. The team independently checked
+unchanged checkpoint `1eadca5`, exact review acceptance guards and non-live media
+readiness. The helper reported an unlocked logged-in console with screen
+permission; protected Python and six pinned dependencies remained valid. No
+runtime source changed and no provider/capture activity began during preflight.
+
+Authenticated desktop status confirmed the intended task at review_ready revision
+11 with passing verification, a sufficiently long-lived session and all prior
+admissions closed with cleanup confirmed. The paired line was available; hosted
+runtime had zero pending/unknown effects or active calls. Reloaded the actual
+browser preview, restored its no-matches view, and confirmed TextEdit displayed
+the current source and revision-11 verification. After the user returned all
+three views to the current desktop, exact target resolution passed. No further
+UI input or feedback prompt was issued while the call was ringing/connected.
+
+Standby deployment `3f84ca74-c9f7-4d8f-81f7-37342af04bba` was verified against exact
+variables and actual runtime. Submitted one new review request with fresh
+manifest/grants/authorization, then observed native connection and media voice
+activation with preview sharing still active. HTTP admission alone was not
+counted as connection or physical visibility.
+
+The task transitioned **review_ready revision 11 → accepted revision 12**.
+Read-only protected receipt inspection found exactly one acceptance bound to this
+review's voice session, task, latest run and expected revision 11; zero instruction
+receipts belong to that voice. Ordered run IDs and total count (three historical
+runs) remained unchanged. Latest run and passing verification were unchanged.
+No worker was started and acceptance did not deploy code.
+
+The user reported the picture becoming dark after submitting the request, with
+“everything else” working perfectly. This request was recorded as acceptance;
+the task revision invalidated the old shared presentation while voice continued.
+Explained that transition and retained clearer end-of-sharing presentation as
+remaining polish. Do not count individual source/code/result scenes or measurable
+interruption/zoom/Stop thresholds as physically confirmed from that broad report.
+
+Native end/cleanup, media closure and presentation clearance are confirmed.
+Final bounded sharing diagnostics preserve first reason `remote_stop`, active
+media phase, 56,765 ms elapsed and 345 ms frame age, with no presentation failure.
+This reason does not identify the initiating actor; independent task/receipt
+metadata establishes acceptance. SDK counts (155 source frames, 777 rendered
+frames and 1,202 speech frames) do not establish physical timing or audibility.
+No screens or audio were persisted.
+
+Restoration deployment `256f40da-4b07-4112-8130-994c3507831b` succeeded. Exact
+original variables matched, actual runtime/environment were live with traffic
+true, and pending/unknown effects and active calls were all zero. The standby
+deployment was removed. The single call authorization is consumed; no redial,
+additional call, session renewal or local service restart occurred. All receipts,
+including the earlier review's unknown activation outcome, remain preserved.
+The unrelated desktop task, Apple Teams and sibling chert-facetime were untouched.
+
+This completes the existing desktop-created task lifecycle across a resumed
+decision call and successful review retest. It does not count as a clean complete
+two-call rehearsal or close the plan's three-rehearsal/measured-acceptance gates.
+The historical failed review's exact retirement cause remains unknown; success
+with the diagnostics active does not establish a permanent repair. Private bounded
+proofs are retained in `review-retest-20261119/`. No d/e completion tag is claimed.
+
+Validation and final independent evidence review follow before this documentation
+checkpoint is committed.
+
+`npm run check` passed typecheck, **1,268 tests in 73 files in 12.14s**, and build.
+No Python/Swift source changed; the prior full 358-test media result remains the
+applicable regression baseline, rather than a newly claimed rerun. Connector
+independently approved the exact acceptance/no-new-run conclusion; transport
+reviewed the final documentation and restoration boundaries. Lead scope/secret
+review and `git diff --check` passed.
