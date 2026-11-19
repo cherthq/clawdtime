@@ -58,7 +58,10 @@ def validate_prepare(value):
     exact(value, ('presentationId', 'manifest', 'grant', 'fingerprint'))
     manifest, grant = value['manifest'], value['grant']
     exact(manifest, ('version', 'id', 'sessionId', 'taskId', 'runId', 'taskRevision', 'verificationId', 'kind', 'opening', 'fps', 'scenes'))
-    exact(grant, ('version', 'id', 'manifestFingerprint', 'sessionId', 'taskId', 'runId', 'taskRevision', 'hostId', 'authorizedAt', 'expiresAt', 'localOnly', 'capture', 'presentation', 'control', 'nativeActivation', 'calls'))
+    exact(grant, {'version', 'id', 'manifestFingerprint', 'sessionId', 'taskId', 'runId', 'taskRevision', 'hostId', 'authorizedAt', 'expiresAt', 'localOnly', 'capture', 'presentation', 'control', 'nativeActivation', 'calls'}
+          | ({'continuity'} if 'continuity' in grant else set()))
+    if 'continuity' in grant and grant['continuity'] != 'call':
+        fail()
     if (not identity(value['presentationId']) or manifest['id'] != value['presentationId']
             or manifest['version'] != 1 or type(manifest['version']) is not int or manifest['fps'] != 15
             or type(grant['version']) is not int or grant['version'] != 1
@@ -154,6 +157,7 @@ class PresentationAuthority:
             expected.update(presentationId=binding['presentationId'], manifestFingerprint=binding['fingerprint'], active=True)
             if (any(type(value.get(k)) is not type(v) or value[k] != v for k, v in expected.items())
                     or not time.time() * 1000 < value['expiresAt']
+                    or (grant.get('continuity') == 'call' and type(value.get('sceneEvidenceCurrent')) is not bool)
                     or (generation is not None and value.get('generation') != generation)):
                 fail()
             return value
@@ -316,6 +320,12 @@ class TaskPresentationRuntime:
         self.painted = None
         self.paint_changed = asyncio.Event()
         self.diagnostics = PresentationDiagnostics()
+        self.call_continuity = self.binding['grant'].get('continuity') == 'call'
+        if self.call_continuity and narrator is not None:
+            fail()
+        self.scene_evidence_current = not self.call_continuity
+        self.scene_evidence_invalidated = False
+        self.pending_scene = None
         self.font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', 24)
 
     async def check(self, generation=None):
@@ -326,7 +336,23 @@ class TaskPresentationRuntime:
             fail()
         self.authority_at = self.clock()
         self.authority_generation = value.get('generation')
+        if self.call_continuity:
+            if type(value.get('sceneEvidenceCurrent')) is not bool:
+                fail()
+            self.set_scene_evidence(value['sceneEvidenceCurrent'])
         return value
+
+    def set_scene_evidence(self, current):
+        if type(current) is not bool:
+            fail()
+        if self.call_continuity:
+            self.scene_evidence_invalidated |= not current
+            current = current and not self.scene_evidence_invalidated
+        if self.call_continuity and current != self.scene_evidence_current:
+            self.scene_evidence_current = current
+            # Do not export a cached prepared overlay after authority changes.
+            # The existing SDK view remains only until the next fresh render.
+            self.output = self.output_metadata = self.output_token = self.frame = None
 
     async def prepare(self, value):
         if value != self.binding or self.stopping:
@@ -394,20 +420,23 @@ class TaskPresentationRuntime:
                 if self.narrator:
                     await self.narrator.interrupt()
                     await self.check(value['generation'])
-                self.generation = value['generation']
-                self.operation_id = value['operationId']
-                self.scene = scene
-                self.frame = self.source_frame = self.output = None
-                self.output_metadata = self.output_token = self.painted = None
-                self.paint_tokens.clear()
-                self.transition_at = self.transition_completed = None
+                if self.call_continuity and self.scene and self.source_frame and self.output:
+                    self.pending_scene = {'scene': scene, 'generation': value['generation'], 'operationId': value['operationId']}
+                else:
+                    self.generation = value['generation']
+                    self.operation_id = value['operationId']
+                    self.scene = scene
+                    self.frame = self.source_frame = self.output = None
+                    self.output_metadata = self.output_token = self.painted = None
+                    self.paint_tokens.clear()
+                    self.transition_at = self.transition_completed = None
                 self.state = 'presenting'
                 self.diagnostics.phase('await_source')
                 async with asyncio.timeout(6):
-                    while not self.frame:
+                    while not self.frame or self.frame['generation'] != value['generation'] or self.frame['sceneId'] != scene['id']:
                         self.frames_changed.clear()
                         await self.frames_changed.wait()
-                        await self.check(self.generation)
+                        await self.check(value['generation'])
                 self.state = 'visible'
                 self.diagnostics.phase('ready')
                 result = copy.deepcopy(self.frame)
@@ -423,17 +452,21 @@ class TaskPresentationRuntime:
     async def capture_loop(self):
         while not self.stopping:
             policy = await self.check()
-            scene, generation = self.scene, self.generation
-            if scene and policy.get('generation') != generation:
+            pending = self.pending_scene
+            scene, generation = (pending['scene'], pending['generation']) if pending else (self.scene, self.generation)
+            if scene and policy.get('generation') != generation and not (
+                    self.call_continuity and not pending and type(policy.get('generation')) is int and policy['generation'] > generation):
                 self.frame = self.output = None
                 await asyncio.sleep(.05)
                 continue
             if scene:
                 value = await self.source.request('capture', scene['target'])
                 policy = await self.check()
-                if generation != self.generation or scene is not self.scene:
+                if ((pending is not None and pending is not self.pending_scene)
+                        or (pending is None and (generation != self.generation or scene is not self.scene))):
                     continue
-                if policy.get('generation') != generation:
+                if policy.get('generation') != generation and not (
+                        self.call_continuity and not pending and type(policy.get('generation')) is int and policy['generation'] > generation):
                     self.frame = self.output = None
                     continue
                 if (value.get('target') != scene['target'] or not identity(value.get('sourceFrameId'))
@@ -442,8 +475,14 @@ class TaskPresentationRuntime:
                         or not 0 <= self.wall() * 1000 - value['capturedAt'] < 1500
                         or not isinstance(value.get('image'), Image.Image)):
                     fail()
-                if self.source_frame and value['geometryGeneration'] != self.source_frame['geometryGeneration']:
+                if self.source_frame and not pending and value['geometryGeneration'] != self.source_frame['geometryGeneration']:
                     fail()
+                if pending:
+                    self.scene, self.generation, self.operation_id = scene, generation, pending['operationId']
+                    self.pending_scene = None
+                    self.frame = self.painted = None
+                    self.paint_tokens.clear()
+                    self.transition_at = self.transition_completed = None
                 self.source_frame = value
                 self.counts['sourceFrames'] = min(1000000, self.counts['sourceFrames'] + 1)
                 if self.transition_at is None:
@@ -454,7 +493,9 @@ class TaskPresentationRuntime:
     def render(self):
         source, scene = self.source_frame, self.scene
         if (self.stopping or not source or not scene or self.authority_at is None
-                or self.clock() - self.authority_at >= 1.5 or self.authority_generation != self.generation
+                or self.clock() - self.authority_at >= 1.5
+                or (self.authority_generation != self.generation and not
+                    (self.call_continuity and type(self.authority_generation) is int and self.authority_generation > self.generation))
                 or not 0 <= self.wall() * 1000 - source['capturedAt'] < 2000):
             self.frame = self.output = None
             return
@@ -479,7 +520,7 @@ class TaskPresentationRuntime:
         scale = min(WIDTH / tile.width, 640 / tile.height)
         tile = tile.resize((max(1, int(tile.width * scale)), max(1, int(tile.height * scale))), Image.Resampling.LANCZOS)
         canvas = Image.new('RGB', (WIDTH, HEIGHT), '#101722')
-        if 'annotation' in scene:
+        if 'annotation' in scene and self.scene_evidence_current:
             rect = scene['annotation']['rect']
             # Project from source pixels through the actual integer crop and
             # resized tile dimensions, never through idealized floating sizes.
@@ -495,7 +536,8 @@ class TaskPresentationRuntime:
                 caption_font = ImageFont.truetype(self.font.path, caption_font.size - 1)
             draw.text((24, 686), label, fill='#ffd166', font=caption_font)
         canvas.paste(tile, ((WIDTH - tile.width) // 2, 40 + (640 - tile.height) // 2))
-        ImageDraw.Draw(canvas).text((24, 8), scene['title'], fill='#e5edf8', font=self.font)
+        title = scene['title'] if self.scene_evidence_current else 'Live view · prepared result evidence is no longer current'
+        ImageDraw.Draw(canvas).text((24, 8), title, fill='#e5edf8', font=self.font)
         output = io.BytesIO(); canvas.save(output, 'JPEG', quality=85)
         if self.stopping or not 0 <= self.wall() * 1000 - source['capturedAt'] < 2000:
             self.frame = self.output = None
@@ -554,6 +596,8 @@ class TaskPresentationRuntime:
         return copy.deepcopy(self.frame)
 
     async def narrate(self, value):
+        if self.call_continuity:
+            fail()
         exact(value, ('presentationId', 'operationId', 'sceneId', 'generation', 'frame', 'text'))
         if (not self.narrator or not self.scene or value['sceneId'] != self.scene['id']
                 or value['generation'] != self.generation or value['text'] != self.scene['narration']
@@ -617,6 +661,7 @@ class TaskPresentationRuntime:
 
     async def stop(self):
         self.stopping = True
+        self.pending_scene = None
         self.armed = False
         self.frame = self.output = self.source_frame = None
         self.emitted.clear()

@@ -1043,9 +1043,20 @@ authority and a trusted exact connected, unstopped call-receipt callback. The
 callback defaults to refusal; fresh native destination proof remains the operator
 composition's responsibility. A later authorized run, held correction, or expiry
 of the original local presentation grant does not end this conversation. Old
-frames still require their own exact current presentation authority and must stop
-when it expires or the task advances. Cancellation, unknown outcomes, revoked
-ownership, Stop and the separately authorized conversation expiry deny continuation.
+frames still require their own unexpired presentation authority. Legacy grants
+stop sharing when the task advances. An explicit `continuity: "call"` local grant,
+installed with the exact internal call/voice/export binding, permits the same
+immutable prepared windows and scene IDs to remain visible during a revision or
+after acceptance. It does not authorize a new target, extend expiry or restart
+sharing after Stop. When the task or prepared artifact changes,
+`sceneEvidenceCurrent: false` separates the visible window from verified-result
+claims; stale prepared narration and annotations must not describe it as a
+completed current result. A later run still requires its own exact verified
+review call for acceptance. Cancellation, unknown outcomes, revoked ownership,
+Stop and the separately authorized conversation expiry deny continuation.
+New desktop call requests require this explicit continuity grant. An exact replay
+of an older request only returns its historical receipt; adding continuity under
+the same event conflicts and cannot upgrade that call.
 
 The helper does not dispatch calls, release held instructions, mutate task state,
 or turn voice permission into native worker approval. Source pairing remains

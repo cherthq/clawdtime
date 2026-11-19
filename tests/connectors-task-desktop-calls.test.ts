@@ -25,9 +25,10 @@ import {
   type DesktopHandsetAttempt,
 } from "../src/control/task-desktop-calls.js";
 import { createTaskApp } from "../src/control/task-app.js";
-import type {
-  DesktopCallsConfig,
-  DesktopCallRequest,
+import {
+  desktopCallRequestSchema,
+  type DesktopCallsConfig,
+  type DesktopCallRequest,
 } from "../src/control/task-desktop-calls-config.js";
 import type { TaskWorkerResult, TaskWorker } from "../src/contracts.js";
 import {
@@ -469,6 +470,7 @@ function fixture() {
           control: false,
           nativeActivation: false,
           calls: false,
+          continuity: "call",
         },
       },
     };
@@ -540,6 +542,57 @@ function fixture() {
 }
 
 describe("same-owner desktop task and prepared call integration", () => {
+  it("reads an exact historical non-continuity receipt without upgrading it or creating another attempt", async () => {
+    const f = fixture();
+    await f.ready();
+    const historical = f.request("historical_call");
+    delete historical.prepared.grant.continuity;
+    const request = desktopCallRequestSchema.parse(historical);
+    const { record } = f.calls.ledger.claim(f.session.session.id, {
+      eventId: request.eventId,
+      taskId: request.taskId,
+      runId: request.runId,
+      expectedRevision: request.expectedRevision,
+      manifestFingerprint: taskPresentationFingerprint(
+        request.prepared.manifest,
+      ),
+      requestFingerprint: hash(JSON.stringify(request)),
+      authorizationId: request.authorizationId,
+      authorizedAt: request.authorizedAt,
+      expiresAt: request.expiresAt,
+    });
+    f.calls.ledger.complete(record.id, {
+      cleanupConfirmed: true,
+      outcome: "closed",
+    });
+    const before = f.get();
+    const existing = f.calls.ledger.list(f.session.session.id);
+    const replay = await f.api(
+      "/operator/desktop-calls",
+      f.operator,
+      historical,
+    );
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toMatchObject({
+      replayed: true,
+      attempt: { id: record.id, state: "closed" },
+    });
+    const changed = structuredClone(historical);
+    changed.prepared.grant.continuity = "call";
+    expect(
+      (await f.api("/operator/desktop-calls", f.operator, changed)).status,
+    ).toBe(409);
+    const fresh = f.request("new_omitted_continuity");
+    delete fresh.prepared.grant.continuity;
+    expect(
+      (await f.api("/operator/desktop-calls", f.operator, fresh)).status,
+    ).toBe(403);
+    expect(f.calls.ledger.list(f.session.session.id)).toEqual(existing);
+    expect(f.get()).toEqual(before);
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(f.attempts).toHaveLength(0);
+    expect(f.run).toHaveBeenCalledTimes(1);
+  });
   it("clarifies bare assent and preserves recorded options for a later ordinal choice in the next worker context", async () => {
     const f = fixture();
     await f.ready();
@@ -807,6 +860,7 @@ describe("same-owner desktop task and prepared call integration", () => {
     "wrong-grant",
     "authorization-id-too-long",
     "missing-standby",
+    "missing-continuity",
     "invalid-standby",
     "no-export",
     "private-mode",
@@ -823,6 +877,8 @@ describe("same-owner desktop task and prepared call integration", () => {
     }
     if (kind === "wrong-task") envelope.taskId = "foreign_task";
     if (kind === "missing-standby") delete (envelope as any).standby;
+    if (kind === "missing-continuity")
+      delete (envelope.prepared.grant as any).continuity;
     if (kind === "invalid-standby")
       envelope.standby.deploymentId = "not-a-deployment-id";
     if (kind === "wrong-grant") envelope.prepared.grant.hostId = "foreign_host";

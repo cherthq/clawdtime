@@ -145,6 +145,7 @@ export const taskPresentationGrantSchema = z
     control: z.literal(false),
     nativeActivation: z.literal(false),
     calls: z.literal(false),
+    continuity: z.literal("call").optional(),
   })
   .strict()
   .refine(
@@ -198,11 +199,20 @@ export type TaskPresentationEffect = {
   completedAt?: number;
   frame?: TaskSceneFrame;
 };
+/** Trusted runtime binding; never supplied by the presentation client. */
+export type TaskPresentationCaptureBinding = {
+  callAttemptId: string;
+  voiceSessionId: string;
+  exportGrantId: string;
+  planFingerprint: string;
+  expiresAt: number;
+};
 export type TaskPresentationRecord = {
   id: string;
   manifest: TaskPresentationManifest;
   fingerprint: string;
   grant: TaskPresentationGrant;
+  captureBinding?: TaskPresentationCaptureBinding;
   generation: number;
   state:
     "prepared" | "presenting" | "visible" | "narrating" | "stopped" | "unknown";

@@ -140,6 +140,110 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         self.owner = TaskWalkthroughLiveKit(self.api, self.provider, self.port, self.journal, self.b, self.renderer)
         self.owner.remote_generation = 0
         self.api.owner = self.owner
+    def enable_continuity(self):
+        self.p['grant']['continuity'] = 'call'
+        self.api.value['sceneEvidenceCurrent'] = True
+        authority = SimpleNamespace(check=AsyncMock(side_effect=lambda generation=None: {
+            'generation': generation if generation is not None else self.owner.remote_generation,
+            'sceneEvidenceCurrent': self.api.value['sceneEvidenceCurrent']}))
+        self.renderer = TaskPresentationRuntime(self.p, authority, self.source, self.pjournal)
+        self.owner = TaskWalkthroughLiveKit(self.api, self.provider, self.port, self.journal, self.b, self.renderer)
+        self.owner.remote_generation = 0
+        self.api.owner = self.owner
+
+    async def test_call_continuity_keeps_pixels_on_revision_artifact_and_acceptance(self):
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        initial = len(self.port.frames)
+        self.api.value.update(runId='run_next', revision=5, sequence=5, state='running', sceneEvidenceCurrent=False)
+        await self.owner.authorize_export()
+        async with asyncio.timeout(2):
+            while len(self.port.frames) <= initial + 2:
+                await asyncio.sleep(.01)
+        self.assertTrue(self.owner.status()['sharingActive'])
+        self.assertFalse(self.renderer.scene_evidence_current)
+        self.assertFalse(self.port.stopped)
+        self.api.value.update(state='accepted', revision=6, sequence=6)
+        await self.owner.fresh_video()
+        self.assertFalse(self.owner.sharing_stopped)
+        self.assertIsNone(self.owner.status()['sharingDiagnostics']['firstStop'])
+        # Delayed true authority cannot restore prepared overlays.
+        self.renderer.set_scene_evidence(True)
+        self.assertFalse(self.renderer.scene_evidence_current)
+        self.api.value['exportActive'] = False
+        with self.assertRaises(VoiceError):
+            await self.owner.fresh_video()
+        await self.owner.stop_sharing()
+        self.assertTrue(self.port.stopped)
+
+    async def test_continuity_scene_switch_retains_old_fresh_view_until_replacement(self):
+        scene = copy.deepcopy(self.p['manifest']['scenes'][0])
+        scene.update(id='scene_preview', kind='preview', title='Preview')
+        scene['target']['windowId'] = '102'
+        self.p['manifest']['scenes'].append(scene)
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        old_id = self.renderer.frame['sceneId']
+        self.owner.remote_generation = 2
+        # Root can reserve generation before its show request reaches media.
+        await asyncio.sleep(.1)
+        self.assertIsNotNone(self.renderer.output)
+        self.source.capture_gate = asyncio.Event()
+        showing = asyncio.create_task(self.owner.show_scene({'callAttemptId': self.b['callAttemptId'],
+            'presentationId': self.p['presentationId'], 'manifestFingerprint': self.p['fingerprint'],
+            'operationId': 'show_next', 'sceneId': 'scene_preview', 'generation': 2}))
+        try:
+            async with asyncio.timeout(1):
+                while self.renderer.pending_scene is None:
+                    await asyncio.sleep(.001)
+            await asyncio.sleep(.05)
+            self.assertEqual(self.renderer.scene['id'], old_id)
+            self.assertIsNotNone(self.renderer.output)
+            self.assertFalse(self.port.stopped)
+            self.source.capture_gate.set()
+            result = await showing
+            self.assertEqual(result['frame']['sceneId'], 'scene_preview')
+            self.assertEqual(result['frame']['generation'], 2)
+            self.assertFalse(self.owner.sharing_stopped)
+            self.assertEqual(self.renderer.scene['target']['windowId'], '102')
+        finally:
+            self.source.capture_gate.set()
+            if not showing.done():
+                showing.cancel()
+            await asyncio.gather(showing, return_exceptions=True)
+
+    async def test_continuity_stop_during_pending_scene_cannot_export_late_source(self):
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        self.source.capture_gate = asyncio.Event()
+        self.owner.remote_generation = 2
+        showing = asyncio.create_task(self.owner.show_scene({'callAttemptId': self.b['callAttemptId'],
+            'presentationId': self.p['presentationId'], 'manifestFingerprint': self.p['fingerprint'],
+            'operationId': 'show_again', 'sceneId': 'scene_code', 'generation': 2}))
+        async with asyncio.timeout(1):
+            while self.renderer.pending_scene is None:
+                await asyncio.sleep(.001)
+        await self.owner.stop_sharing()
+        count = len(self.port.frames)
+        self.source.capture_gate.set()
+        await asyncio.gather(showing, return_exceptions=True)
+        await asyncio.sleep(.03)
+        self.assertEqual(len(self.port.frames), count)
+        self.assertIsNone(self.renderer.pending_scene)
+        self.assertTrue(self.port.stopped)
+
+    async def test_continuity_does_not_hold_stale_pixels_through_capture_stall(self):
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        self.source.capture_gate = asyncio.Event()
+        async with asyncio.timeout(2):
+            while not self.port.stopped:
+                await asyncio.sleep(.01)
+        await self.owner.retirement_task
+        self.assertTrue(self.owner.sharing_stopped)
+        self.assertTrue(self.source.closed)
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop']['reason'], 'frame_stale')
+        self.provider.open.assert_not_awaited()
     async def asyncTearDown(self):
         await self.owner.close()
         self.journal.close()
@@ -393,6 +497,56 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     async def call(self, name, params=None, identity='function_fixture'):
         self.runtime.pending_tools += 1
         await self.runtime.function({'id': identity, 'name': name, 'arguments': json.dumps(params or {})}, self.runtime.latest)
+
+    def enable_continuity(self):
+        self.p['grant']['continuity'] = 'call'
+        self.api.call_continuity = True
+        self.delegate.value['sceneEvidenceCurrent'] = True
+        self.runtime = DeepgramWalkthroughRuntime(self.api, self.provider, self.sink, presentation=self.presentation,
+            poll_seconds=60, startup_seconds=.5)
+
+    async def test_continuity_revision_suppresses_old_speech_without_stopping_video(self):
+        self.enable_continuity()
+        await self.start()
+        self.delegate.value.update(runId='new_run', revision=5, sequence=5, sceneEvidenceCurrent=False)
+        await self.runtime.observe_scene_context(self.delegate.value)
+        epoch = self.runtime.suppression_epoch
+        self.assertTrue(self.runtime.scene_muted)
+        self.assertFalse(self.runtime.output_allowed)
+        self.presentation.stop_sharing.assert_not_awaited()
+        await self.runtime.observe_scene_context(self.delegate.value)
+        self.assertEqual(self.runtime.suppression_epoch, epoch)
+        old = dict(self.delegate.value, runId='run_fixture', revision=4, sequence=4, sceneEvidenceCurrent=True)
+        await self.runtime.observe_scene_context(old)
+        self.assertEqual(self.runtime.suppression_epoch, epoch)
+        self.assertTrue(self.runtime.scene_evidence_invalidated)
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant', 'content': 'Old verification was successful.'})
+        self.assertFalse(self.runtime.output_allowed)
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.transcript('What is happening now?')
+        await self.call('task_status')
+        self.assertTrue(self.runtime.response_authorized)
+
+    async def test_continuity_cached_verified_scene_cannot_speak_after_revision(self):
+        self.enable_continuity()
+        await self.start()
+        await self.transcript('Show the source')
+        original = self.delegate.request
+        async def request(path, body=None):
+            if path == '/presentation/show':
+                self.delegate.calls.append((path, copy.deepcopy(body)))
+                return {'sceneId': 'scene_code', 'generation': 1, 'sceneEvidenceCurrent': True,
+                    'evidence': 'sdk_frame_accepted_not_remote_seen', 'narration': 'Prepared verified result.'}
+            return await original(path, body)
+        self.delegate.request = request
+        await self.call('show_scene', {'sceneId': 'scene_code'})
+        self.assertTrue(self.runtime.response_authorized)
+        self.delegate.value.update(revision=5, sequence=5, sceneEvidenceCurrent=False)
+        await self.runtime.observe_scene_context(self.delegate.value)
+        await self.call('show_scene', {'sceneId': 'scene_code'}, identity='cached_scene')
+        self.assertFalse(self.runtime.response_authorized)
+        self.assertEqual(sum(path == '/presentation/show' for path, _ in self.delegate.calls), 1)
+        self.assertTrue(json.loads(self.ws.sent[-1]['content'])['is_error'])
     async def test_first_greeting_waits_for_fresh_video_twice_and_one_provider(self):
         await self.start()
         self.assertEqual(self.presentation.fresh_video.await_count, 2)

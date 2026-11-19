@@ -2029,3 +2029,51 @@ applicable regression baseline, rather than a newly claimed rerun. Connector
 independently approved the exact acceptance/no-new-run conclusion; transport
 reviewed the final documentation and restoration boundaries. Lead scope/secret
 review and `git diff --check` passed.
+
+
+## November 19, 2026 — keep prepared windows shared throughout a call
+
+The user requested that sharing remain active after spoken requests and
+acceptance, replacing the current view mid-call only when another view is
+needed. Updated README, both implementation plans and the walkthrough/desktop
+handoff guides. New desktop call admissions require an explicit call-continuity
+capture grant. Historical grants and exact admission replays retain their
+original semantics and receipts; the policy is enforced only for new effects.
+
+Lead added trusted call/voice/export capture bindings and separated current
+capture authority from the evidence used for prepared result claims. Transport
+implemented durable binding validation and ongoing capture checks. Connector
+added real TypeScript-to-Python wire cases, task/acceptance/Stop coverage and
+legacy replay regressions. Media keeps the previous fresh prepared window until
+the replacement's first exact frame, preserves freshness watchdogs, and cancels
+stale scene speech without stopping video. An immutable manifest's outdated
+labels/highlights/narration stay suppressed. The active voice conversation owns
+call narration; the separate local narration path cannot compete with it.
+
+Initial preparation and opening still require current task/artifact verification.
+Continuous capture cannot change the prepared target catalog, mint another call,
+extend permission, revive Stop, or accept a later result under an old review.
+Task revisions and acceptance keep live pixels; explicit Stop/call end, capture
+failure, stale frames, expiry and revoked authority still clear promptly.
+
+Independent review found that requiring the new grant in the public input schema
+would reject historical receipt lookups. Moved the requirement after exact prior
+receipt replay/conflict handling and before any new claim/effect. Review also
+added an opening-time artifact-change refusal so neutral live-view framing cannot
+stand in for a verified opening.
+
+No live call, deployment, credential change, daemon restart or state migration
+was performed. The prior restored live backend and consumed call authorizations
+remain unchanged. Physical handset continuity and measured view replacement/Stop
+remain pending a newly authorized call; automated tests do not qualify them.
+Validation results follow below.
+
+Final validation: `npm run check` passed typecheck, **1,287 tests in 73 files
+(12.58s)**, and build. Full media discovery passed **365 tests in 84.569s**.
+A subsequent neutral narration wording adjustment avoids implying that an
+acceptance-only revision erased valid task verification; all 39 presenter/wire
+tests and build passed again. Transport independently reviewed root capture
+lifecycle/Stop/initial proof; connector independently reviewed media and ledger.
+All owners reported no remaining blocker. Lead scope/secret review and
+`git diff --check` passed. No Swift source changed and no physical qualification
+or d/e completion tag is claimed.

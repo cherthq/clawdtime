@@ -16,6 +16,10 @@ Call task_status before answering questions about progress. Worker completion is
 not verification or acceptance. Show only a prepared scene through show_scene;
 then explain its authoritative returned narration and expectedOutcome. SDK frame
 acceptance does not prove the human saw it. Never invent screen contents.
+When sceneEvidenceCurrent is false, the authorized live view may continue, but
+its prepared title, annotation and narration are not current result evidence.
+Use current task_status and neutral show_scene guidance; do not claim the screen
+has refreshed or that changing pixels prove tests passed or acceptance.
 Use submit_instruction for a human's requested coding change; the service applies
 only their exact finalized words, or holds the correction while a run is active.
 If a requested replacement text, value or target is missing, ask one concrete
@@ -67,6 +71,11 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
     def __init__(self, *args, presentation, **kwargs):
         super().__init__(*args, **kwargs)
         self.presentation = presentation
+        self.call_continuity = presentation.presentation.binding['grant'].get('continuity') == 'call'
+        manifest = presentation.presentation.binding['manifest']
+        self.scene_context_key = (manifest['runId'], manifest['taskRevision'], True)
+        self.scene_context_sequence = -1
+        self.scene_evidence_invalidated = False
         self.scene_ids = tuple(scene['id'] for scene in presentation.presentation.binding['manifest']['scenes'])
         self.scene_muted = False
         self.response_authorized = False
@@ -81,12 +90,29 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
 
     def check_context(self, value):
         self.api.validate_context(value)
+        if self.call_continuity and type(value.get('sceneEvidenceCurrent')) is not bool:
+            raise VoiceError('walkthrough_scene_evidence_refused')
         scenes = value.get('scenes')
         if (not isinstance(scenes, list) or [scene.get('id') for scene in scenes if isinstance(scene, dict)] != list(self.scene_ids)):
             raise VoiceError('walkthrough_scenes_refused')
 
     def provider_settings(self, context):
         return walkthrough_settings(context, self.scene_ids)
+
+    async def observe_scene_context(self, value):
+        if not self.call_continuity:
+            return
+        self.check_context(value)
+        if value['sequence'] < self.scene_context_sequence:
+            return
+        self.scene_context_sequence = value['sequence']
+        self.scene_evidence_invalidated |= not value['sceneEvidenceCurrent']
+        key = (value['runId'], value['revision'], value['sceneEvidenceCurrent'] and not self.scene_evidence_invalidated)
+        if key != self.scene_context_key:
+            # Set before awaiting playback cleanup so simultaneous export/poll
+            # observations suppress each old scene epoch only once.
+            self.scene_context_key = key
+            await self.suppress_scene_speech()
 
     async def before_provider_open(self):
         await self.presentation.fresh_video()
@@ -357,6 +383,13 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
                             # A cached receipt prevents replay; it does not renew
                             # the scene or permit speech after source retirement.
                             await self.presentation.fresh_video(params['sceneId'], value['generation'])
+                            if self.call_continuity:
+                                current = await self.api.context()
+                                self.check_context(current)
+                                await self.observe_scene_context(current)
+                                if (type(value.get('sceneEvidenceCurrent')) is not bool
+                                        or value['sceneEvidenceCurrent'] != (current['sceneEvidenceCurrent'] and not self.scene_evidence_invalidated)):
+                                    raise VoiceError('walkthrough_scene_evidence_stale')
                             response_epoch = self.suppression_epoch
             if identity not in self.cancelled_functions and not self.closed:
                 # An authoritative tool reply has its own checked turn/epoch
@@ -383,7 +416,9 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
             if value['sequence'] < self.context['sequence'] or value['revision'] < self.context['revision']:
                 continue
             changed = (value['runId'], value['revision']) != (self.context['runId'], self.context['revision'])
-            if changed or not value['exportActive']:
+            if not value['exportActive'] or (changed and not self.call_continuity):
                 if not self.presentation.sharing_stopped:
                     await self.presentation.stop_sharing(reason='task_changed' if changed else 'authority_retired')
+            elif self.call_continuity:
+                await self.observe_scene_context(value)
             self.context = value

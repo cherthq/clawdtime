@@ -78,6 +78,38 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     def show_body(self, generation=1):
         return {'presentationId': self.binding['presentationId'], 'manifestFingerprint': self.binding['fingerprint'],
                 'operationId': 'show_' + str(generation), 'sceneId': 'scene_code', 'generation': generation}
+
+    async def test_continuity_invalidates_prepared_labels_but_keeps_live_pixels(self):
+        self.binding['grant']['continuity'] = 'call'
+        self.binding['manifest']['scenes'][0]['annotation'] = {
+            'rect': {'x': .3, 'y': .3, 'width': .2, 'height': .2}, 'label': 'Prepared verification label'}
+        self.authority.check.side_effect = lambda generation=None: {
+            'generation': generation if generation is not None else self.remote_generation,
+            'sceneEvidenceCurrent': True}
+        self.runtime = TaskPresentationRuntime(self.binding, self.authority, self.source, self.journal)
+        await self.runtime.prepare(self.binding)
+        await self.runtime.local_start()
+        self.remote_generation = 1
+        await self.runtime.show(self.show_body())
+        self.runtime.set_scene_evidence(False)
+        with patch('task_presentation.ImageDraw.ImageDraw.text', autospec=True) as text:
+            self.runtime.render()
+        labels = [call.args[2] for call in text.call_args_list]
+        self.assertEqual(labels, ['Live view · prepared result evidence is no longer current'])
+        self.assertIsNotNone(self.runtime.output)
+        self.assertFalse(self.source.closed)
+        self.runtime.set_scene_evidence(True)
+        self.assertFalse(self.runtime.scene_evidence_current)
+        wrong = copy.deepcopy(self.binding)
+        wrong['grant']['continuity'] = 'unbounded'
+        with self.assertRaises(VoiceError):
+            validate_prepare(wrong)
+        with self.assertRaises(VoiceError):
+            TaskPresentationRuntime(self.binding, self.authority, self.source, self.journal, narrator=self.narrator)
+        with self.assertRaises(VoiceError):
+            await self.runtime.narrate({})
+        self.narrator.speak.assert_not_awaited()
+        self.assertEqual(self.journal.db.execute('SELECT COUNT(*) FROM effects').fetchone()[0], 1)
     async def start(self):
         await self.runtime.prepare(self.binding)
         await self.runtime.local_start()

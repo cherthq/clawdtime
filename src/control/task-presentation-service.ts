@@ -20,6 +20,7 @@ import {
   taskSceneFrameSchema,
   taskPresentationCleanupSchema,
   type TaskPresentationGrant,
+  type TaskPresentationCaptureBinding,
   type TaskPresentationHost,
   type TaskPresentationManifest,
   type TaskPresentationRecord,
@@ -38,6 +39,7 @@ const command = z
 /** Separate operator-installed view-only capability; a task token cannot mint capture authority. */
 export class TaskPresentationService {
   private busy = new Set<string>();
+  private staleEvidence = new Set<string>();
   private stopping = new Map<string, Promise<TaskPresentationRecord>>();
   constructor(
     readonly tasks: TaskService,
@@ -48,6 +50,7 @@ export class TaskPresentationService {
       grant: TaskPresentationGrant;
     },
     private clock = Date.now,
+    private readonly captureBinding?: TaskPresentationCaptureBinding,
   ) {
     this.authorized = structuredClone({
       manifest: taskPresentationManifestSchema.parse(authorized.manifest),
@@ -124,9 +127,32 @@ export class TaskPresentationService {
       );
     return { session, task };
   }
-  private artifacts(record: TaskPresentationRecord) {
-    const { task } = this.current(record),
+  private capture(record: TaskPresentationRecord) {
+    if (record.grant.continuity !== "call") return this.current(record);
+    const session = this.tasks.session(record.manifest.sessionId);
+    if (
+      record.stoppedAt !== undefined ||
+      record.state === "unknown" ||
+      record.grant.expiresAt > session.expiresAt
+    )
+      throw new DomainError(409, "Capture authority is unavailable.");
+    this.ledger.assertCapture(record);
+    return {
+      session,
+      task: this.tasks.ledger.get(session.id, record.manifest.taskId),
+    };
+  }
+  private artifacts(record: TaskPresentationRecord, strict = false) {
+    const { task } = strict ? this.current(record) : this.capture(record),
       root = realpathSync(task.projectRoot);
+    let sceneEvidenceCurrent = !this.staleEvidence.has(record.id);
+    if (!strict && record.grant.continuity === "call") {
+      try {
+        this.current(record);
+      } catch {
+        sceneEvidenceCurrent = false;
+      }
+    }
     for (const scene of record.manifest.scenes)
       if (scene.artifact) {
         const path = scene.artifact.relativePath;
@@ -154,15 +180,20 @@ export class TaskPresentationService {
           if (
             createHash("sha256").update(readFileSync(fd)).digest("hex") !==
             scene.artifact.sha256
-          )
-            throw new DomainError(
-              409,
-              "Presentation artifact changed; prepare a new scene.",
-            );
+          ) {
+            if (strict || record.grant.continuity !== "call")
+              throw new DomainError(
+                409,
+                "Presentation artifact changed; prepare a new scene.",
+              );
+            sceneEvidenceCurrent = false;
+          }
         } finally {
           closeSync(fd);
         }
       }
+    if (!sceneEvidenceCurrent) this.staleEvidence.add(record.id);
+    return sceneEvidenceCurrent;
   }
   async prepare(raw: string, taskId: string, input: unknown) {
     const session = this.tasks.authenticate(raw);
@@ -183,16 +214,16 @@ export class TaskPresentationService {
         403,
         "An exact operator-installed presentation grant is required.",
       );
-    const result = this.ledger.prepare(session, value),
+    const result = this.ledger.prepare(session, value, this.captureBinding),
       record = result.presentation;
-    this.artifacts(record);
+    this.artifacts(record, true);
     await this.host.prepare({
       presentationId: record.id,
       manifest: record.manifest,
       grant: record.grant,
       fingerprint: record.fingerprint,
     });
-    this.current(this.ledger.get(session.id, record.id));
+    this.artifacts(this.ledger.get(session.id, record.id), true);
     return record;
   }
   status(raw: string, taskId: string, presentationId: string) {
@@ -200,8 +231,10 @@ export class TaskPresentationService {
   }
   authority(raw: string, taskId: string, presentationId: string) {
     const r = this.record(raw, taskId, presentationId);
-    this.artifacts(r);
+    const sceneEvidenceCurrent = this.artifacts(r);
     return {
+      sceneEvidenceCurrent,
+      ...(r.grant.continuity ? { continuity: r.grant.continuity } : {}),
       presentationId: r.id,
       manifestFingerprint: r.fingerprint,
       sessionId: r.manifest.sessionId,
@@ -300,7 +333,7 @@ export class TaskPresentationService {
         generation: claimed.receipt.generation,
       });
       const fresh = this.ledger.get(r.manifest.sessionId, r.id);
-      this.current(fresh);
+      this.artifacts(fresh);
       const frame = this.frame(fresh, result, value.sceneId);
       if (frame.operationId !== claimed.receipt.id)
         throw new DomainError(409, "Scene receipt does not match dispatch.");
@@ -325,7 +358,12 @@ export class TaskPresentationService {
   ) {
     const value = command.parse(input);
     const r = this.record(raw, taskId, presentationId);
-    this.artifacts(r);
+    if (r.grant.continuity === "call")
+      throw new DomainError(
+        403,
+        "Call-scoped narration belongs to the active voice conversation.",
+      );
+    this.artifacts(r, true);
     const prior = r.effects.find((e) => e.id === value.eventId);
     if (prior) {
       if (
@@ -431,7 +469,7 @@ export class TaskPresentationService {
       this.stopping.delete(r.id);
     }
   }
-  /** Periodic task invalidation stops capture; it never starts another operation. */
+  /** Reconcile capture authority; task revisions alone do not stop call-scoped sharing. */
   async reconcile() {
     for (const r of this.ledger.unresolved()) {
       if (r.id !== this.authorized.manifest.id) continue;

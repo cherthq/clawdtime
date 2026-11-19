@@ -48,8 +48,9 @@ def validate_walkthrough_binding(value, now):
 
 class WalkthroughTaskAPI:
     """Voice capability validates independent export identity on every context read."""
-    def __init__(self, delegate, binding):
+    def __init__(self, delegate, binding, *, call_continuity=False):
         self.delegate, self.binding = delegate, binding
+        self.call_continuity = call_continuity
         self.task_id, self.voice_id = delegate.task_id, delegate.voice_id
         self.stopping = lambda: False
 
@@ -60,6 +61,7 @@ class WalkthroughTaskAPI:
             'presentationId': p['presentationId'], 'manifestFingerprint': p['manifestFingerprint'], 'active': True}
         if (not isinstance(value, dict) or any(type(value.get(k)) is not type(v) or value[k] != v for k, v in expected.items())
                 or type(value.get('sharingActive')) is not bool or type(value.get('exportActive')) is not bool
+                or (self.call_continuity and type(value.get('sceneEvidenceCurrent')) is not bool)
                 or not isinstance(value.get('permissions'), dict)
                 or any(value['permissions'].get(k) is not True for k in ('screen', 'presentation', 'instructions'))
                 or value['permissions'].get('control') is not False
@@ -228,6 +230,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
                  clock=time.time, runtime_factory=None, **kwargs):
         self.configured = validate_walkthrough_binding(configured_binding, clock())
         self.presentation = presentation
+        self.call_continuity = presentation.binding['grant'].get('continuity') == 'call'
         self.sharing_stopped = False
         self.sharing_close_task = None
         self.video_task = None
@@ -247,7 +250,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
                          activation_timeout=8, prepare_timeout=15, **kwargs)
         if task_api.task_id != self.configured['taskId'] or task_api.voice_id != self.configured['voiceSessionId']:
             raise VoiceError('walkthrough_voice_binding_refused')
-        self.api = WalkthroughTaskAPI(task_api, self.configured)
+        self.api = WalkthroughTaskAPI(task_api, self.configured, call_continuity=self.call_continuity)
         self.api.stopping = lambda: self.stopping
         binding, prepared = self.configured['presentationBinding'], presentation.binding
         if (prepared['presentationId'] != binding['presentationId'] or prepared['fingerprint'] != binding['manifestFingerprint']
@@ -273,9 +276,13 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         value = await self.api.context()
         manifest = self.presentation.binding['manifest']
         changed = value['runId'] != manifest['runId'] or value['revision'] != manifest['taskRevision']
-        if not value['exportActive'] or changed:
+        if not value['exportActive'] or (changed and not self.call_continuity):
             self._record_sharing_stop('task_changed' if changed else 'authority_retired')
             raise VoiceError('walkthrough_export_stale')
+        if self.call_continuity:
+            self.presentation.set_scene_evidence(value['sceneEvidenceCurrent'])
+            if self.runtime and hasattr(self.runtime, 'observe_scene_context'):
+                await self.runtime.observe_scene_context(value)
         self._check()
         return value
 

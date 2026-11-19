@@ -96,12 +96,14 @@ export class TaskWalkthroughPresentation implements TaskVoicePresentationPort {
     let sharingActive = false;
     let exportActive = false;
     let activeSceneId: string | undefined;
+    let sceneEvidenceCurrent = false;
     try {
-      this.presentation.authority(
+      const authority = this.presentation.authority(
         this.taskCredential,
         this.plan.taskId,
         this.manifest.id,
       );
+      sceneEvidenceCurrent = authority.sceneEvidenceCurrent;
       const record = this.record();
       exportActive =
         record.stoppedAt === undefined &&
@@ -118,6 +120,7 @@ export class TaskWalkthroughPresentation implements TaskVoicePresentationPort {
       planFingerprint: taskWalkthroughFingerprint(this.plan),
       exportActive,
       sharingActive,
+      sceneEvidenceCurrent,
       ...(activeSceneId ? { activeSceneId } : {}),
       scenes: this.manifest.scenes.map((s) => ({ id: s.id, title: s.title })),
     };
@@ -196,11 +199,16 @@ export class TaskWalkthroughPresentation implements TaskVoicePresentationPort {
         403,
         "Only immutable prepared scenes are available.",
       );
-    this.presentation.authority(
+    const before = this.presentation.authority(
       this.taskCredential,
       this.plan.taskId,
       this.manifest.id,
     );
+    if (action === "opening" && !before.sceneEvidenceCurrent)
+      throw new DomainError(
+        409,
+        "Opening requires the current verified prepared scene.",
+      );
     const request = this.request(voice, action, input);
     const record = await this.presentation.show(
       this.taskCredential,
@@ -249,12 +257,17 @@ export class TaskWalkthroughPresentation implements TaskVoicePresentationPort {
         409,
         "Fresh exact SDK frame acceptance is required.",
       );
-    this.presentation.authority(
+    const { sceneEvidenceCurrent } = this.presentation.authority(
       this.taskCredential,
       this.plan.taskId,
       this.manifest.id,
     );
     if (action === "opening") {
+      if (!sceneEvidenceCurrent)
+        throw new DomainError(
+          409,
+          "Opening evidence changed during publication.",
+        );
       this.authority.initial();
       if (!this.authority.preparing())
         throw new DomainError(
@@ -264,9 +277,14 @@ export class TaskWalkthroughPresentation implements TaskVoicePresentationPort {
     } else this.authority.ongoing();
     return {
       sceneId: scene.id,
-      title: scene.title,
-      narration: scene.narration,
-      expectedOutcome: scene.expectedOutcome,
+      sceneEvidenceCurrent,
+      title: sceneEvidenceCurrent ? scene.title : "Live prepared window",
+      narration: sceneEvidenceCurrent
+        ? scene.narration
+        : "Here is the live window. Current task status has the result and verification details.",
+      expectedOutcome: sceneEvidenceCurrent
+        ? scene.expectedOutcome
+        : "Live window shown; use current task status for verification.",
       generation: frame.generation,
       evidence: "sdk_frame_accepted_not_remote_seen" as const,
       videoEvidence,

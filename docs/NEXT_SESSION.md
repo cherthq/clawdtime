@@ -1,5 +1,24 @@
 # Desktop task accepted; full measured rehearsal qualification remains
 
+## Current implementation update — persistent call sharing
+
+The user requested continuous sharing through instructions and acceptance.
+The implementation now separates call-scoped capture from prepared result
+proof: new desktop requests require `grant.continuity: "call"`, keep the current
+exact window live, and replace it with a fresh prepared view mid-call. Old result
+narration/highlights are suppressed after evidence changes. Explicit Stop,
+call end and capture/authority failures still clear sharing. Existing grants
+and historical receipts retain their old meaning.
+
+Next physical check requires fresh authorization: verify the picture remains
+live after a spoken revision and acceptance, app/source/result switches have no
+blank interval, and Stop sharing/hangup still clear promptly. This change has
+not yet been handset-qualified; do not reuse the consumed retest permission.
+Automated validation passed 1,287 TypeScript tests, 365 media tests, typecheck
+and build. Local daemons were not restarted; start the next authorized test from
+this updated checkpoint with a fresh call-continuity grant.
+
+
 ## Latest checkpoint — November 19, 2026
 
 The user separately authorized one visual review retest with temporary
@@ -33,8 +52,9 @@ shared through connection and voice activation. Acceptance changed the task to
 revision 12, retiring the old presentation while voice continued. The user
 reported the picture becoming dark after submitting the request, with everything
 else working perfectly. This request was acceptance, not a new coding instruction.
-The dark-picture transition needs clearer explanation; no stale picture should
-be retained to conceal sharing Stop. Individual source/verification scene views
+At that checkpoint, the dark-picture transition required clearer explanation.
+The subsequent persistent-sharing update above changes this behavior; it still
+must not retain stale pixels to conceal capture loss or explicit Stop. Individual source/verification scene views
 and full timing targets were not separately confirmed.
 
 The call is closed with native cleanup complete and media closed. The final

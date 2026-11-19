@@ -16,9 +16,19 @@ import {
   type TaskPresentationEffect,
   type TaskSceneFrame,
   type TaskPresentationCleanup,
+  type TaskPresentationCaptureBinding,
 } from "../task-presentation-contracts.js";
 
 const identity = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
+const captureBindingSchema = z
+  .object({
+    callAttemptId: identity,
+    voiceSessionId: identity,
+    exportGrantId: identity,
+    planFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    expiresAt: z.number().finite().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
 const KIND = "coding-task-presentation-v1";
 const ready = new Set([
   "needs_decision",
@@ -94,6 +104,10 @@ export class TaskPresentationLedger {
     vault: Vault,
     private readonly tasks: TaskLedger,
     private readonly clock: () => number = Date.now,
+    private readonly authorizeCapture?: (
+      record: TaskPresentationRecord,
+      binding: TaskPresentationCaptureBinding,
+    ) => void,
   ) {
     this.records = new ProtectedTaskStore(store, vault, KIND);
     this.events = new ProtectedTaskStore(
@@ -128,13 +142,18 @@ export class TaskPresentationLedger {
       manifest: TaskPresentationManifest;
       grant: TaskPresentationGrant;
     },
+    captureBinding?: TaskPresentationCaptureBinding,
   ): { presentation: TaskPresentationRecord; replayed: boolean } {
     identity.parse(input.eventId);
     const manifest = taskPresentationManifestSchema.parse(input.manifest),
       grant = taskPresentationGrantSchema.parse(input.grant);
+    captureBinding =
+      captureBinding === undefined
+        ? undefined
+        : captureBindingSchema.parse(captureBinding);
     const fingerprint = taskPresentationFingerprint(manifest),
       eventFingerprint = hash(
-        canonical({ sessionId: session.id, manifest, grant }),
+        canonical({ sessionId: session.id, manifest, grant, captureBinding }),
       );
     return this.store.transaction(() => {
       const key = hash(`prepare\0${session.id}\0${input.eventId}`),
@@ -146,6 +165,23 @@ export class TaskPresentationLedger {
         };
       if (this.records.get(manifest.id))
         throw new DomainError(409, "Presentation identity already exists.");
+      if (
+        (grant.continuity === "call") !== (captureBinding !== undefined) ||
+        (captureBinding && !this.authorizeCapture)
+      )
+        throw new DomainError(
+          403,
+          "Explicit call-scoped capture authority is required.",
+        );
+      if (
+        captureBinding &&
+        (captureBinding.expiresAt <= this.clock() ||
+          captureBinding.expiresAt > session.expiresAt)
+      )
+        throw new DomainError(
+          403,
+          "Call-scoped capture lifetime is unavailable.",
+        );
       if (this.unresolved().length)
         throw new DomainError(
           409,
@@ -168,6 +204,9 @@ export class TaskPresentationLedger {
         manifest,
         fingerprint,
         grant,
+        ...(captureBinding
+          ? { captureBinding: structuredClone(captureBinding) }
+          : {}),
         generation: 0,
         state: "prepared",
         effects: [],
@@ -257,7 +296,8 @@ export class TaskPresentationLedger {
             "Inspect the original cleanup receipt; cleanup cannot be retried.",
           );
       } else {
-        this.current(record);
+        if (input.action === "show_scene") this.captureCurrent(record);
+        else this.current(record);
         if (
           record.stoppedAt !== undefined ||
           record.state === "unknown" ||
@@ -352,7 +392,7 @@ export class TaskPresentationLedger {
           this.frame(record, result.frame, effect);
           effect.frame = result.frame;
           if (record.stoppedAt === undefined) {
-            this.current(record);
+            this.captureCurrent(record);
             record.frame = result.frame;
             record.activeSceneId = effect.sceneId;
             record.state = "visible";
@@ -435,7 +475,7 @@ export class TaskPresentationLedger {
       throw new DomainError(404, "Presentation is unavailable.");
     return record;
   }
-  private current(record: TaskPresentationRecord) {
+  private grantCurrent(record: TaskPresentationRecord) {
     const now = this.clock(),
       m = record.manifest,
       g = record.grant;
@@ -452,6 +492,62 @@ export class TaskPresentationLedger {
         403,
         "Exact current local presentation grant is required.",
       );
+  }
+  private captureCurrent(record: TaskPresentationRecord) {
+    if (record.grant.continuity !== "call") {
+      if (record.captureBinding)
+        throw new DomainError(
+          403,
+          "Capture binding cannot upgrade a legacy grant.",
+        );
+      this.current(record);
+      return;
+    }
+    this.grantCurrent(record);
+    const binding = record.captureBinding;
+    if (!binding || !this.authorizeCapture)
+      throw new DomainError(
+        403,
+        "Current call-scoped capture authority is unavailable.",
+      );
+    captureBindingSchema.parse(binding);
+    if (binding.expiresAt <= this.clock())
+      throw new DomainError(403, "Call-scoped capture authority expired.");
+    const task = this.tasks.get(
+      record.manifest.sessionId,
+      record.manifest.taskId,
+    );
+    if (
+      task.revision < record.manifest.taskRevision ||
+      !task.runs.some((run) => run.id === record.manifest.runId) ||
+      !task.verifications.some(
+        (verification) =>
+          verification.id === record.manifest.verificationId &&
+          verification.runId === record.manifest.runId,
+      )
+    )
+      throw new DomainError(
+        403,
+        "Original presentation provenance is unavailable.",
+      );
+    this.authorizeCapture(record, binding);
+  }
+  /** Recheck the persisted record, never caller-nominated capture scope. */
+  assertCapture(record: TaskPresentationRecord): void {
+    const current = this.record(record.id);
+    if (
+      current.stoppedAt !== undefined ||
+      ["stopped", "unknown"].includes(current.state)
+    )
+      throw new DomainError(
+        409,
+        "Presentation capture is stopped or unresolved.",
+      );
+    this.captureCurrent(current);
+  }
+  private current(record: TaskPresentationRecord) {
+    this.grantCurrent(record);
+    const m = record.manifest;
     const task = this.tasks.get(m.sessionId, m.taskId),
       run = task.runs.at(-1);
     if (

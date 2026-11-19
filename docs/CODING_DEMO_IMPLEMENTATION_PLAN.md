@@ -1,5 +1,34 @@
 # ClawdTime: fastest coding demo
 
+## Persistent sharing requirement — November 19, 2026
+
+User-directed update: screen sharing stays active for the authorized call. A
+spoken task instruction, new run, verification update or acceptance must not
+clear the picture. Keep capturing the current exact prepared window; switching
+to another authorized prepared view replaces it only after a fresh replacement
+frame is ready. Do not replay a frozen frame to hide capture loss.
+
+Capture permission is bound to the call and its immutable prepared window
+catalog, separately from the task revision used to prepare narration and result
+claims. New desktop call requests require `grant.continuity: "call"`. Initial
+preparation/opening still requires the exact verified task, files and result.
+Once that evidence becomes outdated, continue the live view with neutral framing
+and suppress old narration/highlights. A new task result still needs independent
+verification and the existing exact-result review/acceptance checks. Existing
+legacy grants remain revision-bound; used grants/receipts are never upgraded.
+
+Explicit Stop sharing, call end, expiry/revocation and unavailable or stale exact
+capture sources still stop and clear sharing. Stop remains sticky. No extra
+window, broader desktop capture, automatic redial or permission renewal is
+implied. This checkpoint supports replacement among the already prepared views;
+adding a previously unauthorized window requires fresh preparation/authority.
+
+Qualification must cover continuous fresh pixels after both an instruction and
+acceptance, seamless app/source/result replacement, neutral stale-evidence
+framing, responsive voice, and explicit Stop/call-end clearance. Automated checks
+are required but do not establish physical handset visibility or timing.
+
+
 Prepared November 18, 2026. Product direction: [README](../README.md).
 
 Updated after the approved branch audit: decisions happen between completed Codex runs; build the shared task contract first; start motion qualification at 15 fps on the handset.

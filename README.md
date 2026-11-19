@@ -4,6 +4,17 @@ Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DE
 documents the runnable local task workflow, explicit Codex setup and current
 handset acceptance limits. The broader product vision below includes later work.
 
+During an authorized visual call, keep the current prepared window shared through
+spoken requests, coding, verification and acceptance. If another prepared view is
+requested, replace it mid-call when its first fresh frame is ready; do not blank
+or end sharing between views. Sharing ends on explicit **Stop sharing**, call
+end, or loss of capture permission, source freshness or call authority. Changed
+work stays visible, but outdated result narration and verification labels are
+suppressed. New desktop calls use call-scoped sharing; historical grants keep
+their original limits. See the [implementation plan](docs/CODING_DEMO_IMPLEMENTATION_PLAN.md)
+for scope and the remaining handset continuity test.
+
+
 ClawdTime is your agent for long-running work. Give it a task and it runs it end to end, delegating to specialist agents and tools such as Codex, Claude Code, and other apps as needed. When it needs your judgment or has a result to review, it prepares a walkthrough and FaceTimes you. 
 
 You don't babysit Codex. You hand the job to ClawdTime, and it calls you when it matters. 

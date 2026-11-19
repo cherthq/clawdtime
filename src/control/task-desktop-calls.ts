@@ -173,6 +173,11 @@ export class TaskDesktopCalls implements DesktopControlPort {
         throw new DomainError(409, "Call request conflicts with its receipt.");
       return { attempt: this.publicRecord(prior), replayed: true };
     }
+    if (request.prepared.grant.continuity !== "call")
+      throw new DomainError(
+        403,
+        "New desktop calls require persistent call-scoped sharing.",
+      );
     if (this.pending || this.active || this.ledger.unresolved().length)
       throw new DomainError(
         409,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IndependentTaskSession, TaskCommand } from "../src/contracts.js";
 import { Store } from "../src/storage/store.js";
 import { Vault, hash } from "../src/storage/security.js";
@@ -12,6 +12,7 @@ import type {
   TaskPresentationManifest,
   TaskSceneFrame,
   TaskPresentationRecord,
+  TaskPresentationCaptureBinding,
 } from "../src/task-presentation-contracts.js";
 const stores: Store[] = [];
 afterEach(() => {
@@ -187,6 +188,278 @@ function fixture() {
   };
 }
 describe("independent task presentation ledger", () => {
+  function continuousFixture() {
+    const f = fixture();
+    f.manifest.scenes.push({
+      ...structuredClone(f.manifest.scenes[0]!),
+      id: "preview",
+      kind: "preview",
+      target: { ...f.manifest.scenes[0]!.target, windowId: "43" },
+    });
+    const grant = {
+      ...f.grant,
+      continuity: "call" as const,
+      manifestFingerprint: taskPresentationFingerprint(f.manifest),
+    };
+    const binding: TaskPresentationCaptureBinding = {
+      callAttemptId: "call_attempt",
+      voiceSessionId: "voice",
+      exportGrantId: "export",
+      planFingerprint: hash("exact_call_plan"),
+      expiresAt: grant.expiresAt,
+    };
+    let allowed = true;
+    const authorize = vi.fn(
+      (
+        record: TaskPresentationRecord,
+        current: TaskPresentationCaptureBinding,
+      ) => {
+        expect(record.id).toBe(f.manifest.id);
+        expect(current).toEqual(binding);
+        if (!allowed) throw Error("Exact ongoing capture authority revoked");
+      },
+    );
+    const ledger = new TaskPresentationLedger(
+      f.store,
+      f.vault,
+      f.tasks,
+      f.clock,
+      authorize,
+    );
+    const input = { eventId: "prepare", manifest: f.manifest, grant };
+    const prepare = () => ledger.prepare(f.session, input, binding);
+    const show = (
+      record: TaskPresentationRecord,
+      eventId: string,
+      sceneId = "code",
+    ) => {
+      const claimed = ledger.claim(record.id, {
+        eventId,
+        action: "show_scene",
+        sceneId,
+        expectedGeneration: record.generation,
+      }).presentation;
+      return ledger.settle(record.id, eventId, {
+        state: "done",
+        frame: {
+          ...f.frame(claimed, eventId),
+          sceneId,
+          target: f.manifest.scenes.find((scene) => scene.id === sceneId)!
+            .target,
+        },
+      });
+    };
+    return {
+      ...f,
+      ledger,
+      grant,
+      binding,
+      input,
+      prepare,
+      show,
+      authorize,
+      revoke: () => {
+        allowed = false;
+      },
+    };
+  }
+
+  it("retains explicit same-call live capture across new runs and switches only prepared targets", () => {
+    const f = continuousFixture();
+    const originalTask = f.task();
+    let record = f.show(f.prepare().presentation, "initial");
+    const originalFingerprint = record.fingerprint;
+    f.change({
+      action: "decide",
+      runId: originalTask.runs[0]!.id,
+      instruction: "Update the filter copy",
+    });
+    f.change({ action: "claim_run", runId: f.task().runs.at(-1)!.id });
+    record = f.show(record, "live_preview", "preview");
+    expect(record.state).toBe("visible");
+    expect(record.generation).toBe(2);
+    expect(record.activeSceneId).toBe("preview");
+    expect(record.fingerprint).toBe(originalFingerprint);
+    expect(record.manifest.taskRevision).toBe(originalTask.revision);
+    expect(record.captureBinding).toEqual(f.binding);
+    expect(f.task().state).toBe("running");
+    expect(() =>
+      f.ledger.claim(record.id, {
+        eventId: "unknown_scene",
+        expectedGeneration: record.generation,
+        action: "show_scene",
+        sceneId: "unprepared_window",
+      }),
+    ).toThrow(/Unknown exact/);
+    expect(() =>
+      f.ledger.claim(record.id, {
+        eventId: "old_narration",
+        expectedGeneration: record.generation,
+        action: "narrate",
+        sceneId: "preview",
+        frame: record.frame,
+      }),
+    ).toThrow(/current verified/);
+  });
+
+  it("settles and keeps live capture after acceptance without treating historical narration as current", () => {
+    const f = continuousFixture();
+    const prepared = f.prepare().presentation;
+    const claimed = f.ledger.claim(prepared.id, {
+      eventId: "show",
+      action: "show_scene",
+      sceneId: "code",
+      expectedGeneration: 0,
+    }).presentation;
+    f.change({ action: "accept", runId: f.task().runs[0]!.id });
+    const visible = f.ledger.settle(prepared.id, "show", {
+      state: "done",
+      frame: f.frame(claimed),
+    });
+    expect(visible.state).toBe("visible");
+    expect(f.show(visible, "accepted_preview", "preview").state).toBe(
+      "visible",
+    );
+    expect(f.task().state).toBe("accepted");
+    expect(f.task().runs).toHaveLength(1);
+    expect(() =>
+      f.ledger.claim(visible.id, {
+        eventId: "old_narration",
+        expectedGeneration: 2,
+        action: "narrate",
+        sceneId: "preview",
+        frame: visible.frame,
+      }),
+    ).toThrow(/current verified/);
+  });
+
+  it("requires explicit continuity and trusted binding and still prepares only the exact current result", () => {
+    const f = continuousFixture();
+    expect(() => f.ledger.prepare(f.session, f.input)).toThrow(/call-scoped/);
+    expect(() =>
+      f.ledger.prepare(
+        f.session,
+        { ...f.input, grant: f.grant },
+        { ...f.binding, planFingerprint: "invalid" },
+      ),
+    ).toThrow();
+    expect(() =>
+      f.ledger.prepare(
+        f.session,
+        { ...f.input, grant: { ...f.grant, continuity: undefined } },
+        f.binding,
+      ),
+    ).toThrow(/call-scoped/);
+    const originalRun = f.task().runs[0]!.id;
+    f.change({ action: "accept", runId: originalRun });
+    expect(() => f.prepare()).toThrow(/current verified/);
+  });
+
+  it("binds continuity to the original prepare receipt and refuses replay upgrades", () => {
+    const f = continuousFixture(),
+      record = f.prepare().presentation;
+    expect(f.prepare().replayed).toBe(true);
+    expect(() =>
+      f.ledger.prepare(f.session, f.input, {
+        ...f.binding,
+        callAttemptId: "another_call",
+      }),
+    ).toThrow(/conflicts/);
+    expect(f.ledger.get(f.session.id, record.id).captureBinding).toEqual(
+      f.binding,
+    );
+  });
+
+  it("uses persisted capture authority and expires it without caller override", () => {
+    const f = continuousFixture();
+    f.binding.expiresAt = f.clock() + 10;
+    const record = f.prepare().presentation;
+    expect(() => f.ledger.assertCapture(record)).not.toThrow();
+    f.advance(11);
+    expect(() =>
+      f.ledger.assertCapture({
+        ...record,
+        captureBinding: { ...f.binding, expiresAt: f.grant.expiresAt },
+      }),
+    ).toThrow(/expired/);
+    expect(() => f.show(record, "expired_show")).toThrow(/expired/);
+    expect(f.ledger.get(f.session.id, record.id).effects).toHaveLength(0);
+  });
+
+  it("cannot continue persisted call capture without the same runtime's trusted authorizer", () => {
+    const f = continuousFixture(),
+      record = f.prepare().presentation;
+    const unconfigured = new TaskPresentationLedger(
+      f.store,
+      f.vault,
+      f.tasks,
+      f.clock,
+    );
+    expect(() => unconfigured.assertCapture(record)).toThrow(
+      /authority is unavailable/,
+    );
+    expect(() =>
+      unconfigured.claim(record.id, {
+        eventId: "unconfigured_show",
+        expectedGeneration: 0,
+        sceneId: "code",
+        action: "show_scene",
+      }),
+    ).toThrow(/authority is unavailable/);
+  });
+
+  it("revalidates ongoing authority on show settlement and retains explicit Stop and restart fences", () => {
+    const f = continuousFixture(),
+      prepared = f.prepare().presentation;
+    const claimed = f.ledger.claim(prepared.id, {
+      eventId: "show",
+      action: "show_scene",
+      sceneId: "code",
+      expectedGeneration: 0,
+    }).presentation;
+    f.revoke();
+    expect(() =>
+      f.ledger.settle(prepared.id, "show", {
+        state: "done",
+        frame: f.frame(claimed),
+      }),
+    ).toThrow(/revoked/);
+    expect(f.ledger.get(f.session.id, prepared.id).effects[0]!.state).toBe(
+      "running",
+    );
+    const restarted = new TaskPresentationLedger(
+      f.store,
+      f.vault,
+      f.tasks,
+      f.clock,
+      () => {},
+    );
+    expect(restarted.get(f.session.id, prepared.id).state).toBe("unknown");
+    expect(() =>
+      restarted.claim(prepared.id, {
+        eventId: "retry",
+        action: "show_scene",
+        sceneId: "code",
+        expectedGeneration: 1,
+      }),
+    ).toThrow(/unresolved/);
+    restarted.stop(prepared.id, "explicit_stop");
+    const stop = restarted.claim(prepared.id, {
+      eventId: "cleanup",
+      action: "stop",
+      expectedGeneration: 2,
+    });
+    restarted.settle(prepared.id, stop.receipt.id, { state: "done", cleanup });
+    expect(() =>
+      restarted.claim(prepared.id, {
+        eventId: "after_stop",
+        action: "show_scene",
+        sceneId: "code",
+        expectedGeneration: 2,
+      }),
+    ).toThrow(/stopped/);
+  });
+
   it("binds immutable verified task manifests and encrypts narration/targets", () => {
     const f = fixture(),
       p = f.prepare();

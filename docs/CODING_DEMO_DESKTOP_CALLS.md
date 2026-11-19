@@ -62,7 +62,12 @@ them from the protected operator file inside the requesting process.
 `callDurationMs` (30 seconds–15 minutes), explicit one-call/prepared-window-export/
 task-instruction authorization, and `prepared: {manifest, grant}` using the
 existing presentation contracts. The manifest must exactly match the current
-brief/opening and verification. The local view grant must cover the call lifetime.
+brief/opening and verification. The local view grant must cover the call lifetime and new desktop requests must
+include `continuity: "call"`. Sharing continues through task revisions and
+acceptance; another prepared view replaces the current one after its first fresh
+frame. Stale prepared result labels/narration are suppressed without clearing
+live pixels. Explicit Stop, expiry, revoked authority or capture failure still
+clears the picture and cannot silently restart.
 The runtime derives one immutable attempt and separately scoped export grant.
 
 Prepare current app, source and verification views using the existing exact-window

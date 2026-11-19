@@ -264,6 +264,7 @@ async function verifyStoppedRuntime(withDiagnostics: boolean) {
         control: false,
         nativeActivation: false,
         calls: false,
+        continuity: "call",
       },
     },
     bindPresenter: (value) => {

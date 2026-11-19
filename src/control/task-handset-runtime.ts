@@ -52,6 +52,7 @@ import {
   taskPresentationManifestSchema,
   taskPresentationGrantSchema,
   taskPresentationFingerprint,
+  type TaskPresentationCaptureBinding,
 } from "../task-presentation-contracts.js";
 import {
   taskWalkthroughPlanSchema,
@@ -594,11 +595,64 @@ export async function runHandsetAttempt(
         token: controlToken,
         plan,
       });
+      const captureBinding: TaskPresentationCaptureBinding | undefined =
+        prepared!.grant.continuity === "call"
+          ? {
+              callAttemptId: plan.id,
+              voiceSessionId: plan.voiceSessionId,
+              exportGrantId: plan.exportGrantId,
+              planFingerprint: authorization.planFingerprint,
+              expiresAt: Math.min(plan.expiresAt, prepared!.grant.expiresAt),
+            }
+          : undefined;
+      const authorizeCapture = (
+        _record: unknown,
+        binding: TaskPresentationCaptureBinding,
+      ) => {
+        if (
+          !captureBinding ||
+          Object.keys(captureBinding).some(
+            (key) =>
+              binding[key as keyof TaskPresentationCaptureBinding] !==
+              captureBinding[key as keyof TaskPresentationCaptureBinding],
+          )
+        )
+          throw Error("Exact call capture binding required.");
+        if (!reserved) {
+          if (stopRequested || ended)
+            throw Error("Call capture authority ended.");
+          assertInitial();
+          return;
+        }
+        const state = coordinator.status(plan.id);
+        if (
+          state.stopRequested ||
+          ["closed", "unknown", "stopping"].includes(state.state)
+        )
+          throw Error("Call capture authority ended.");
+        if (state.state === "connected") {
+          walkthroughAuthority!.assertOngoing(
+            plan,
+            taskWalkthroughAuthorizationSchema.parse(authorization),
+          );
+        } else {
+          // Before connection only the exact initial verified preparation is valid.
+          assertInitial();
+        }
+      };
       presentation = new TaskPresentationService(
         tasks,
-        new TaskPresentationLedger(store, vault, ledger),
+        new TaskPresentationLedger(
+          store,
+          vault,
+          ledger,
+          Date.now,
+          authorizeCapture,
+        ),
         videoHost,
         prepared!,
+        Date.now,
+        captureBinding,
       );
       presenter = new TaskWalkthroughPresentation(
         presentation,
@@ -890,7 +944,8 @@ export async function runHandsetAttempt(
           ...(observation.audioOutput
             ? { audioOutput: observation.audioOutput }
             : {}),
-          ...("sharingDiagnostics" in observation && observation.sharingDiagnostics
+          ...("sharingDiagnostics" in observation &&
+          observation.sharingDiagnostics
             ? { sharingDiagnostics: observation.sharingDiagnostics }
             : {}),
           physicalAcceptance: false,

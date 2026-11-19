@@ -194,7 +194,8 @@ export class TaskWalkthroughAuthority {
       );
   }
 
-  /** A newer run revokes old frames, not this exact already connected conversation.
+  /** A newer run invalidates prepared-result proof, not this connected conversation.
+   * Continued capture separately requires an explicit call-scoped presentation grant.
    * connected is a trusted internal receipt check, never provider/model input.
    */
   assertOngoing(

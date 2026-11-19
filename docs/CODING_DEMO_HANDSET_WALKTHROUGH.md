@@ -55,7 +55,8 @@ starting the operator. The verification plan is also owner-only, even though it
 contains no provider credential. These preparation checks do not dial.
 
 `presentationFile` contains exactly `{manifest, grant}` using the current task
-presentation schemas. The immutable manifest includes the task/run/revision,
+presentation schemas. New call preparations include `grant.continuity: "call"`
+for persistent call-scoped capture. The immutable manifest includes the task/run/revision,
 verification, exact window/process/display identities, bounded camera regions,
 and optional highlights/labels. Its first narration equals the task-specific
 opening. The capture grant is still local-only; a separate explicit export grant
@@ -88,8 +89,12 @@ a fresh review call bound to the current verified result.
 
 The local page at `http://127.0.0.1:13324` has separate **Stop sharing** and
 **Stop call** controls. Sharing Stop joins capture and switches to blank-only
-video, while conversation and coding continue. A new task run also retires the
-old presentation. The source cannot restart within that attempt. Call cleanup
+video, while conversation and coding continue. With call-scoped capture, a new
+run or acceptance keeps the current exact window live. Switching prepared scenes
+retains that view until a fresh replacement frame is ready. Outdated narration,
+highlights and result claims are suppressed; no new window authority is minted.
+Legacy grants retain revision-bound invalidation. After explicit Stop or loss of
+capture authority, the source cannot restart within that attempt. Call cleanup
 ends voice and joins media/native cleanup, but keeps the task service alive until
 admitted coding and verification settle. Task cancellation is a separate action.
 Unknown outcomes retain their receipts and ownership fence; never delete state

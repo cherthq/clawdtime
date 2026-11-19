@@ -22,6 +22,30 @@ the separately authorized conversation lasts at most thirty minutes. The origina
 capture grant retains its shorter expiry. `exportActive` authorizes prepared
 capture; `sharingActive` describes an actually shown scene. Neither extends a grant.
 
+An explicitly installed `grant.continuity:"call"` keeps the original authorized
+window catalog available through coding, verification and task acceptance for
+that one call. Omitted continuity retains the legacy revision-bound behavior.
+Initial preparation still requires the exact current result; no historical grant
+is silently upgraded. Ongoing root authority returns `sceneEvidenceCurrent`:
+false keeps live pixels authorized while invalidating prepared result claims.
+The renderer removes prepared annotations and replaces the title with a neutral
+live-view label. Once invalidated, those claims stay disabled for this immutable
+manifest, including after a delayed older authority response. Task/context changes
+fence old scene speech without stopping video; current status and neutral scene
+responses supply the conversation's new context. This does not guarantee a preview
+app or editor has refreshed its own contents, and changing pixels do not prove
+verification or acceptance.
+
+The same call may switch among its immutable prepared scene IDs. During a
+successful switch the renderer retains the previous fresh authorized view until
+the replacement target supplies its first fresh exact-window frame. The existing
+one-second export watchdog still applies; this is not permission to hold stale
+pixels through failed capture. New windows, identities or arbitrary replacement
+targets require separate authorization and are outside this implementation.
+Explicit Stop, call end, expiry, revoked authority and capture/export failure
+still retire sharing. Continuity is covered offline; physical behavior needs a
+separately authorized trial.
+
 The loopback controller starts without capture, room creation, or a provider
 conversation. Authenticated `/prepare` inspects every exact prepared window,
 checks provider readiness using read-only requests, creates one audio/video room

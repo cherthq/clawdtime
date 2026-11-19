@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -37,7 +37,9 @@ import {
 import { taskWalkthroughExportGrantSchema } from "../src/task-walkthrough-contracts.js";
 const cleanups: Array<() => void> = [];
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
-async function fixture() {
+async function fixture(
+  options: { continuity?: boolean; artifact?: boolean } = {},
+) {
   const project = realpathSync(
     mkdtempSync(join(tmpdir(), "clawdtime-voice-authority-")),
   );
@@ -122,6 +124,8 @@ async function fixture() {
     displayId: 1,
     titleHash: hash("window"),
   };
+  const artifactPath = join(project, "source.txt");
+  if (options.artifact) writeFileSync(artifactPath, "prepared source");
   const manifest: TaskPresentationManifest = {
     version: 1,
     id: "presentation",
@@ -140,6 +144,14 @@ async function fixture() {
         title: "Code",
         narration: get().brief!.opening,
         expectedOutcome: "Code visible",
+        ...(options.artifact
+          ? {
+              artifact: {
+                relativePath: "source.txt",
+                sha256: hash("prepared source"),
+              },
+            }
+          : {}),
         target,
         focus: { x: 0, y: 0, width: 1, height: 1 },
         transitionMs: 550,
@@ -174,6 +186,7 @@ async function fixture() {
     control: false,
     nativeActivation: false,
     calls: false,
+    ...(options.continuity ? { continuity: "call" as const } : {}),
   };
   let frame: TaskSceneFrame;
   let observationPatch: Partial<TaskSceneFrame> = {};
@@ -215,18 +228,6 @@ async function fixture() {
       childrenJoined: true as const,
     })),
   };
-  const presentationLedger = new TaskPresentationLedger(store, vault, ledger);
-  const presentation = new TaskPresentationService(
-    tasks,
-    presentationLedger,
-    host,
-    { manifest, grant },
-  );
-  await presentation.prepare(session.token, taskId, {
-    eventId: "prepare",
-    manifest,
-    grant,
-  });
   const voiceLedger = new TaskVoiceLedger(store, vault, ledger);
   const engine = { onSettled: vi.fn(), start: vi.fn(), cancel: vi.fn() };
   let presenter: TaskWalkthroughPresentation;
@@ -297,6 +298,43 @@ async function fixture() {
   const ongoing = vi.fn(() =>
     assertConnectedTaskWalkthroughVoice(store, vault, opened.voice),
   );
+  const captureBinding = options.continuity
+    ? {
+        callAttemptId: plan.id,
+        voiceSessionId: opened.voice.id,
+        exportGrantId: plan.exportGrantId,
+        planFingerprint: taskWalkthroughFingerprint(plan),
+        expiresAt: plan.expiresAt,
+      }
+    : undefined;
+  const authorizeCapture = options.continuity
+    ? vi.fn((record, binding) => {
+        expect(binding).toEqual(captureBinding);
+        expect(record.manifest.id).toBe(manifest.id);
+        if (preparing) initial();
+        else ongoing();
+      })
+    : undefined;
+  const presentationLedger = new TaskPresentationLedger(
+    store,
+    vault,
+    ledger,
+    Date.now,
+    authorizeCapture,
+  );
+  const presentation = new TaskPresentationService(
+    tasks,
+    presentationLedger,
+    host,
+    { manifest, grant },
+    Date.now,
+    captureBinding,
+  );
+  await presentation.prepare(session.token, taskId, {
+    eventId: "prepare",
+    manifest,
+    grant,
+  });
   const evidenceFor = vi.fn(
     (f: TaskSceneFrame): TaskWalkthroughVideoEvidence => ({
       evidence: "sdk_frame_accepted_not_remote_seen",
@@ -389,6 +427,7 @@ async function fixture() {
   ) => api("/presentation/show", { eventId, utteranceId, sceneId });
   return {
     app,
+    artifactPath,
     store,
     vault,
     session,
@@ -430,35 +469,37 @@ async function fixture() {
 }
 
 describe("task-bound walkthrough HTTP presentation and acceptance", () => {
-  it("round-trips real TS binding/context/export JSON through Python validators and opening request", async () => {
-    const f = await fixture();
-    const context = await (await f.api("/context")).json();
-    const opening = await (await f.opening()).json();
-    const binding = taskHandsetMediaBinding(f.plan);
-    const prepared = {
-      presentationId: f.manifest.id,
-      manifest: f.manifest,
-      grant: f.grant,
-      fingerprint: taskPresentationFingerprint(f.manifest),
-    };
-    const exportGrant = taskWalkthroughExportGrantSchema.parse({
-      version: 1,
-      mode: "handset_walkthrough",
-      id: f.plan.exportGrantId,
-      planFingerprint: taskWalkthroughFingerprint(f.plan),
-      authorizationId: "wire-authorization",
-      sourcePairingId: f.session.session.pairingId,
-      projectRoot: f.session.session.projectRoot,
-      authorizedAt: f.plan.dispatchExpiresAt - 240000,
-      dispatchExpiresAt: f.plan.dispatchExpiresAt,
-      expiresAt: f.plan.expiresAt,
-      exportPreparedWindows: true,
-      instructions: true,
-      control: false,
-      nativeActivation: false,
-      maxCalls: 1,
-    });
-    const program = String.raw`
+  it.each([false, true])(
+    "round-trips real TS binding/context/export JSON through Python (continuity=%s)",
+    async (continuity) => {
+      const f = await fixture({ continuity });
+      const context = await (await f.api("/context")).json();
+      const opening = await (await f.opening()).json();
+      const binding = taskHandsetMediaBinding(f.plan);
+      const prepared = {
+        presentationId: f.manifest.id,
+        manifest: f.manifest,
+        grant: f.grant,
+        fingerprint: taskPresentationFingerprint(f.manifest),
+      };
+      const exportGrant = taskWalkthroughExportGrantSchema.parse({
+        version: 1,
+        mode: "handset_walkthrough",
+        id: f.plan.exportGrantId,
+        planFingerprint: taskWalkthroughFingerprint(f.plan),
+        authorizationId: "wire-authorization",
+        sourcePairingId: f.session.session.pairingId,
+        projectRoot: f.session.session.projectRoot,
+        authorizedAt: f.plan.dispatchExpiresAt - 240000,
+        dispatchExpiresAt: f.plan.dispatchExpiresAt,
+        expiresAt: f.plan.expiresAt,
+        exportPreparedWindows: true,
+        instructions: true,
+        control: false,
+        nativeActivation: false,
+        maxCalls: 1,
+      });
+      const program = String.raw`
 import asyncio, copy, json, socket, sys, time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -498,8 +539,8 @@ api=SimpleNamespace(task_id=b['taskId'],voice_id=b['voiceSessionId'],request=req
 WalkthroughTaskAPI(api,b).validate_context(wire['context'])
 async def exercise():
     cleanup={'captureStopped':True,'narrationStopped':True,'outputCleared':True,'childrenJoined':True}
-    presentation=SimpleNamespace(binding=p,narrator=None,armed=True,stopping=False,authority=SimpleNamespace(check=AsyncMock()),
-        diagnostics=PresentationDiagnostics(),counts={'sourceFrames':0,'renderedFrames':0},
+    presentation=SimpleNamespace(binding=p,narrator=None,armed=True,stopping=False,authority=SimpleNamespace(check=AsyncMock(return_value={'sceneEvidenceCurrent':True})),
+        diagnostics=PresentationDiagnostics(),counts={'sourceFrames':0,'renderedFrames':0},set_scene_evidence=Mock(),
         prepare=AsyncMock(return_value={'ready':True}),local_start=AsyncMock(),stop=AsyncMock(return_value=cleanup))
     provider=SimpleNamespace(readiness=AsyncMock(),open=AsyncMock(),close=AsyncMock())
     port=SimpleNamespace(prepare=AsyncMock(return_value={'livekit_url':'wss://example.invalid','participant_token':'synthetic',
@@ -521,59 +562,61 @@ async def exercise():
 diagnostics=asyncio.run(exercise())
 print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId':wire['openingEventId'],'rejections':4,'providerOpened':False,'diagnostics':diagnostics}))
 `;
-    const result = spawnSync(
-      resolve("media/.venv/bin/python"),
-      ["-c", program],
-      {
-        cwd: resolve("media"),
-        encoding: "utf8",
-        timeout: 15000,
-        maxBuffer: 1024 * 1024,
-        env: { PATH: process.env.PATH, PYTHONPATH: resolve("media") },
-        input: JSON.stringify({
-          binding,
-          prepared,
-          exportGrant,
-          context,
-          opening,
-          mediaFingerprint: taskHandsetMediaFingerprint(f.plan),
-          openingEventId: `opening_${f.plan.id}`,
-        }),
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const { diagnostics, ...wireResult } = JSON.parse(result.stdout);
-    expect(wireResult).toEqual({
-      valid: true,
-      mediaFingerprint: taskHandsetMediaFingerprint(f.plan),
-      openingEventId: `opening_${f.plan.id}`,
-      rejections: 4,
-      providerOpened: false,
-    });
-    expect(
-      taskWalkthroughSharingDiagnosticsSchema.parse(diagnostics.prepared),
-    ).toEqual({
-      firstStop: null,
-      sourceFrames: 0,
-      renderedFrames: 0,
-      presentationFailure: null,
-    });
-    const closedDiagnostics = taskWalkthroughSharingDiagnosticsSchema.parse(
-      diagnostics.closed,
-    );
-    expect(closedDiagnostics).toEqual({
-      firstStop: {
-        reason: "call_closed",
-        mediaState: "prepared",
-        elapsedMs: expect.any(Number),
-        lastFrameAgeMs: null,
-      },
-      sourceFrames: 0,
-      renderedFrames: 0,
-      presentationFailure: null,
-    });
-  }, 20000);
+      const result = spawnSync(
+        resolve("media/.venv/bin/python"),
+        ["-c", program],
+        {
+          cwd: resolve("media"),
+          encoding: "utf8",
+          timeout: 15000,
+          maxBuffer: 1024 * 1024,
+          env: { PATH: process.env.PATH, PYTHONPATH: resolve("media") },
+          input: JSON.stringify({
+            binding,
+            prepared,
+            exportGrant,
+            context,
+            opening,
+            mediaFingerprint: taskHandsetMediaFingerprint(f.plan),
+            openingEventId: `opening_${f.plan.id}`,
+          }),
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const { diagnostics, ...wireResult } = JSON.parse(result.stdout);
+      expect(wireResult).toEqual({
+        valid: true,
+        mediaFingerprint: taskHandsetMediaFingerprint(f.plan),
+        openingEventId: `opening_${f.plan.id}`,
+        rejections: 4,
+        providerOpened: false,
+      });
+      expect(
+        taskWalkthroughSharingDiagnosticsSchema.parse(diagnostics.prepared),
+      ).toEqual({
+        firstStop: null,
+        sourceFrames: 0,
+        renderedFrames: 0,
+        presentationFailure: null,
+      });
+      const closedDiagnostics = taskWalkthroughSharingDiagnosticsSchema.parse(
+        diagnostics.closed,
+      );
+      expect(closedDiagnostics).toEqual({
+        firstStop: {
+          reason: "call_closed",
+          mediaState: "prepared",
+          elapsedMs: expect.any(Number),
+          lastFrameAgeMs: null,
+        },
+        sourceFrames: 0,
+        renderedFrames: 0,
+        presentationFailure: null,
+      });
+    },
+    20000,
+  );
   it("scopes the operator router to one voice and read-only presentation authority", async () => {
     const f = await fixture(),
       before = f.get();
@@ -751,6 +794,238 @@ print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId
     expect(
       (await f.show("stale-show", "change")).status,
     ).toBeGreaterThanOrEqual(400);
+  });
+  it("call continuity never substitutes a stale artifact for the strictly prepared initial opening", async () => {
+    const f = await fixture({ continuity: true, artifact: true });
+    writeFileSync(f.artifactPath, "changed after prepare before opening");
+    expect((await f.opening()).status).toBeGreaterThanOrEqual(400);
+    expect(f.host.show).not.toHaveBeenCalled();
+    expect(f.evidenceFor).not.toHaveBeenCalled();
+  });
+  it("call continuity never starts a second local narrator or stops sharing when narration is refused", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    f.connect();
+    const record = f.presentation.status(
+      f.session.token,
+      f.plan.taskId,
+      f.manifest.id,
+    );
+    await expect(
+      f.presentation.narrate(f.session.token, f.plan.taskId, f.manifest.id, {
+        eventId: "second-narrator",
+        expectedGeneration: record.generation,
+        sceneId: "code",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(f.host.narrate).not.toHaveBeenCalled();
+    expect(f.host.stop).not.toHaveBeenCalled();
+    expect(
+      f.presentation.status(f.session.token, f.plan.taskId, f.manifest.id),
+    ).toEqual(record);
+    expect((await (await f.api("/context")).json()).sharingActive).toBe(true);
+  });
+  it("call continuity keeps authorized scenes visible during a new run without replaying prepared-result narration", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    expect((await (await f.api("/context")).json()).sceneEvidenceCurrent).toBe(
+      true,
+    );
+    await f.utterance("revise", "Change the empty state.");
+    expect(
+      (
+        await f.api("/instructions", {
+          eventId: "revise",
+          utteranceId: "revise",
+        })
+      ).status,
+    ).toBe(200);
+    f.transition({ action: "claim_run", runId: f.get().runs.at(-1)!.id });
+    await f.presentation.reconcile();
+    const context = await (await f.api("/context")).json();
+    expect(context).toMatchObject({
+      state: "running",
+      active: true,
+      exportActive: true,
+      sharingActive: true,
+      sceneEvidenceCurrent: false,
+    });
+    expect(f.host.stop).not.toHaveBeenCalled();
+    await f.utterance("switch", "Show the preview.");
+    const shown = await f.show("switch", "switch", "preview");
+    expect(shown.status).toBe(200);
+    const result = await shown.json();
+    expect(result).toMatchObject({
+      sceneId: "preview",
+      sceneEvidenceCurrent: false,
+    });
+    expect(result.narration).not.toBe(f.manifest.scenes[1]!.narration);
+    expect(result.expectedOutcome).not.toBe(
+      f.manifest.scenes[1]!.expectedOutcome,
+    );
+    expect(f.host.show).toHaveBeenCalledTimes(2);
+    expect((await f.show("switch", "switch", "preview")).status).toBe(200);
+    expect(f.host.show).toHaveBeenCalledTimes(2);
+    expect(
+      (await f.show("switch", "switch", "code")).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(
+      (await f.show("foreign", "switch", "unprepared-window")).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(f.host.show).toHaveBeenCalledTimes(2);
+    expect(f.host.narrate).not.toHaveBeenCalled();
+    expect(f.engine.start).toHaveBeenCalledTimes(1);
+  });
+  it("acceptance preserves opted-in sharing and exact run history until explicit sharing Stop", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    const runs = f.get().runs;
+    await f.utterance("accept", "I accept the result.");
+    expect(
+      (await f.api("/accept", { eventId: "accept", utteranceId: "accept" }))
+        .status,
+    ).toBe(200);
+    await f.presentation.reconcile();
+    expect(f.get().state).toBe("accepted");
+    expect(f.get().runs).toEqual(runs);
+    expect(await (await f.api("/context")).json()).toMatchObject({
+      active: true,
+      exportActive: true,
+      sharingActive: true,
+    });
+    expect(f.host.stop).not.toHaveBeenCalled();
+    expect(f.engine.start).not.toHaveBeenCalled();
+    await f.utterance("switch", "Show the code.");
+    expect((await f.show("switch", "switch", "code")).status).toBe(200);
+    await f.utterance("stop", "Stop sharing.");
+    expect(
+      (
+        await f.api("/presentation/stop", {
+          eventId: "stop",
+          utteranceId: "stop",
+        })
+      ).status,
+    ).toBe(200);
+    expect(f.host.stop).toHaveBeenCalledTimes(1);
+    expect(await (await f.api("/context")).json()).toMatchObject({
+      active: true,
+      exportActive: false,
+      sharingActive: false,
+    });
+    expect(
+      (await f.show("after-stop", "stop", "preview")).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(f.get().state).toBe("accepted");
+  });
+  it("changed artifact invalidates claims but preserves only the original authorized target", async () => {
+    const f = await fixture({ continuity: true, artifact: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    writeFileSync(f.artifactPath, "changed source during coding");
+    await f.presentation.reconcile();
+    expect(await (await f.api("/context")).json()).toMatchObject({
+      exportActive: true,
+      sharingActive: true,
+      sceneEvidenceCurrent: false,
+    });
+    expect(f.host.stop).not.toHaveBeenCalled();
+    await f.utterance("switch", "Show the code.");
+    const shown = await f.show("switch", "switch", "code");
+    expect(shown.status).toBe(200);
+    expect((await shown.json()).sceneEvidenceCurrent).toBe(false);
+    expect(f.host.show.mock.calls.at(-1)![0].sceneId).toBe("code");
+    writeFileSync(f.artifactPath, "prepared source");
+    expect((await (await f.api("/context")).json()).sceneEvidenceCurrent).toBe(
+      false,
+    );
+  });
+  it("continuous sharing cannot accept a newer result under the original review call", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    await f.utterance("revise", "Change the empty state.");
+    await f.api("/instructions", { eventId: "revise", utteranceId: "revise" });
+    f.transition({ action: "claim_run", runId: f.get().runs.at(-1)!.id });
+    f.terminal();
+    await f.presentation.reconcile();
+    expect((await (await f.api("/context")).json()).sharingActive).toBe(true);
+    await f.utterance("switch", "Show the preview.");
+    expect((await f.show("switch", "switch", "preview")).status).toBe(200);
+    await f.utterance("accept", "I accept the result.");
+    expect(
+      (await f.api("/accept", { eventId: "accept", utteranceId: "accept" }))
+        .status,
+    ).toBe(403);
+    expect(f.get().state).toBe("review_ready");
+    expect(f.get().runs).toHaveLength(2);
+    expect(f.engine.start).toHaveBeenCalledTimes(1);
+  });
+  it("call continuity still refuses stale observed frames during revised-task scene switching", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    await f.utterance("revise", "Change the empty state.");
+    await f.api("/instructions", { eventId: "revise", utteranceId: "revise" });
+    await f.utterance("switch", "Show the preview.");
+    f.observation({ capturedAt: Date.now() - 5000 });
+    expect(
+      (await f.show("switch", "switch", "preview")).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(f.host.narrate).not.toHaveBeenCalled();
+  });
+  it("an explicit Stop during a continuous scene observation fences late frame publication", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    await f.utterance("switch", "Show the preview.");
+    const observe = f.host.observe.getMockImplementation()!;
+    f.host.observe.mockImplementationOnce(async () => {
+      const frame = await observe();
+      await f.presentation.stop(f.session.token, f.plan.taskId, f.manifest.id, {
+        eventId: "local-stop-during-frame",
+      });
+      return frame;
+    });
+    expect(
+      (await f.show("switch", "switch", "preview")).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(f.host.stop).toHaveBeenCalledTimes(1);
+    expect(f.evidenceFor).toHaveBeenCalledTimes(1); // Opening only; late frame never reaches SDK proof.
+    expect(await (await f.api("/context")).json()).toMatchObject({
+      active: true,
+      exportActive: false,
+      sharingActive: false,
+    });
+    expect(f.host.narrate).not.toHaveBeenCalled();
+  });
+  it("continuous capture retires when the exact call receipt requests Stop", async () => {
+    const f = await fixture({ continuity: true });
+    await f.opening();
+    await f.bind();
+    f.connect();
+    const record = f.records.get(f.plan.id)!;
+    record.stopRequested = true;
+    f.records.put(record);
+    await f.presentation.reconcile();
+    expect(f.host.stop).toHaveBeenCalledTimes(1);
+    expect(await (await f.api("/context")).json()).toMatchObject({
+      exportActive: false,
+      sharingActive: false,
+    });
+    await f.utterance("switch", "Show the preview.");
+    expect(
+      (await f.show("switch", "switch", "preview")).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(f.host.show).toHaveBeenCalledTimes(1);
+    expect(f.engine.start).not.toHaveBeenCalled();
   });
   it("local Stop sharing is separate from voice end and task cancellation", async () => {
     const f = await fixture();
