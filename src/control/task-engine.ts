@@ -200,6 +200,13 @@ export class TaskEngine {
         ? {
             id: task.decision.id,
             question: task.decision.question.slice(0, 500),
+            ...(task.decision.options
+              ? {
+                  options: task.decision.options
+                    .slice(0, 3)
+                    .map((v) => v.slice(0, 500)),
+                }
+              : {}),
             answered: task.decision.answer === run.instruction,
             ...(task.decision.answer === run.instruction
               ? { answerSource: "instruction" }

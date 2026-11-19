@@ -1781,3 +1781,77 @@ directories. The original unrelated desktop task was untouched.
 Transport independently approved the documentation against the observed
 pre-admission refusal, local repair, visibility blocker and restoration facts.
 Lead reviewed scope/secrets and `git diff --check` passed. No d/e tag is claimed.
+
+## 2026-11-18 — Desktop-created visual call and explicit-choice clarification
+
+After the user returned the prepared windows to the current desktop, all three
+exact-window checks passed. Resumed the unused one-call authorization with fresh
+task/view grants and a separately recorded standby window. Read-only inspection
+confirmed the selected task at revision 3, one available bound line, and no
+pending/unknown effects or active hosted calls. Standby deployment
+`e8b28c63-d480-467d-87e9-b5c8bdd339d0` and actual running standby/traffic-false
+state were verified before the single operator submission. HTTP 202 recorded one
+admission; native connected evidence subsequently established an actual call.
+
+The desktop retained one task/store/session owner through the call. A finalized
+bare assent created a distinct second scoped Codex run. Sharing retired as that
+run began, while the media runtime remained active and accepted additional speech
+frames. The worker correctly refused to infer which of two designs was intended,
+made no source change and returned the unresolved choice. The task now remains
+needs_decision at revision 7, with two completed runs, passing syntax and the
+deliberately unfinished empty-state assertion still failing. This is a demonstrated
+spoken handoff, not a completed result/review rehearsal.
+
+The user confirmed the opening/preview were clear and the call ended correctly
+when requested, then explicitly asked to move on. No further call is planned or
+authorized. Voice continuity after picture clearance, all three scenes, explicit
+Stop-sharing timing and the full measured handset targets were not individually
+confirmed. No d/e completion tag is claimed.
+
+The original call receipt is closed with native cleanup complete and media closed.
+Presentation cleanup confirms capture/narration stopped, output cleared and
+children joined. Audio SDK metadata reports 1,583 prepared silent frames and 1,644
+speech frames; those counters do not establish physical audibility. Restored the
+backend to its exact original variables through deployment
+`32849cef-53f3-48de-b23c-1ed73cc1760f`; read-only runtime proof confirms live mode,
+traffic true and zero pending/unknown effects or active calls. No retry/redial or
+second call occurred. Protected attempt/standby proofs remain private.
+
+Repaired the ambiguity revealed by this call. For a current unresolved
+multi-option decision, new bare assent/deictic instructions now return bounded
+clarification instead of creating an instruction receipt, held correction or
+worker run. An exact offered Yes/No choice remains valid. Historical instruction
+receipts replay before the new guard, and a new explicit utterance retains its
+exact human wording. Voice and worker context now include the recorded options
+in original order, allowing an actual ordinal answer to retain its meaning.
+The media runtime validates/caches clarification and supplies bounded guidance
+to ask once for the exact choice without claiming work started. Epoch checks
+prevent stale clarification from authorizing speech from a retired turn;
+physical conversational behavior remains untested after this repair.
+
+`npm run check` passed **1,252 tests in 73 files in 12.13s**, typecheck and build.
+Transport and connector independently reviewed the shared service/context/media
+changes and passed 61 focused TypeScript tests. Tests cover unchanged task and
+receipt counts after repeated bare assent, a later explicit answer, genuine
+Yes/No choices, preserved historical replay and ordered choice context. Connector
+independently passed 79 focused Python tests in 10.046s. Full media regression
+results follow below; no Swift code changed.
+
+After confirmed cleanup and passing backend checks, gracefully refreshed only
+the local rehearsal service to load the repair. The desktop identity, static
+configuration, task/revision and closed call receipt were verified unchanged;
+the fresh process remains dormant and requires fresh call authorization. This
+did not restart the unrelated desktop service, renew the fixture session, choose
+a task option or reopen media. The behavioral repair is offline-tested and has
+not received another physical call test.
+
+Final `.venv/bin/python -m unittest discover -s . -p 'test_*.py'` from `media/`
+passed **354 tests in 75.176s**, OK, with output redirected to a temporary local
+log. An earlier full run before final small prompt/bounds
+changes had 354 tests in 92.219s with one existing synthetic-browser process
+timeout (`test_stalled_frame_clears_and_stop_fences_delayed_start_and_decode`);
+the final complete run passed without changing that test or its timeout. Final
+focused media validation passed 79 tests in 2.840s. No failing run is counted as
+passed. Independent source/doc reviews completed, lead reviewed scope/secrets,
+and `git diff --check` passed. Only local source/service repair was installed;
+no production code deployment or additional handset test is implied.

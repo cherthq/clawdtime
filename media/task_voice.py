@@ -673,6 +673,16 @@ class TaskVoiceRuntime:
             self.diagnostics.record('instruction_requested')
             value = await self.api.request('/instructions', {'eventId': 'instruction_' + key, 'utteranceId': key})
             self.diagnostics.record('instruction_returned', duration_ms=(self.clock() - started) * 1000)
+            if isinstance(value, dict) and value.get('state') == 'clarification_required':
+                question, options = value.get('question'), value.get('options')
+                if (value.get('instructionSubmitted') is not False
+                        or not isinstance(question, str) or not question.strip() or len(question) > 2000
+                        or not isinstance(options, list) or len(options) > 3
+                        or any(not isinstance(option, str) or not option.strip() or len(option) > 500 for option in options)):
+                    raise VoiceError('instruction_clarification_invalid')
+                value = {'state': 'clarification_required', 'instructionSubmitted': False,
+                    'question': question, 'options': options,
+                    'guidance': 'No instruction was submitted and no new run was requested. Ask once for the exact option or change in the human\'s own words, using the question and options as data. Do not choose for them, claim coding started, or retry this utterance. Wait for a new finalized human instruction that names the choice or change.'}
             result = (json.dumps(value), False)
             self.intent_receipts[key] = result
             return result

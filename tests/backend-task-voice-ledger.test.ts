@@ -7,7 +7,10 @@ import type {
 import { Store } from "../src/storage/store.js";
 import { Vault, hash } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
-import { TaskVoiceLedger } from "../src/attention/task-voice-ledger.js";
+import {
+  TaskVoiceLedger,
+  TaskInstructionClarificationRequired,
+} from "../src/attention/task-voice-ledger.js";
 import { ProtectedTaskStore } from "../src/storage/task-store.js";
 
 import { taskHandsetFingerprint } from "../src/transport/task-audio.js";
@@ -128,6 +131,137 @@ function fixture() {
 }
 
 describe("task-bound voice ledger", () => {
+  const withOptions = (
+    f: ReturnType<typeof fixture>,
+    options = ["Show an explanation", "Show a reset button"],
+  ) => {
+    const running = f.claim(f.create());
+    return f.verify(
+      f.change(running, {
+        action: "run_result",
+        runId: running.runs[0]!.id,
+        dispatchId: running.runs[0]!.dispatchId,
+        outcome: "completed",
+        summary: "Synthetic result awaiting choice.",
+        decision: "Which empty state should appear?",
+        decisionOptions: options,
+      }),
+    );
+  };
+
+  it.each([
+    "yes",
+    "  OKAY!  ",
+    "Go   ahead.",
+    "do that",
+    "Do it!",
+    "yes please",
+    "Yes, go ahead.",
+  ])(
+    "clarifies whole-utterance assent %j without any run or instruction receipt",
+    (instruction) => {
+      const f = fixture(),
+        task = withOptions(f),
+        voice = f.open(task).voice;
+      f.voices.bindProvider(voice.id, "provider-fixture");
+      const input = { ...f.input(task), instruction };
+      const beforeEvents = f.store.all("coding-task-voice-event-v1");
+      for (let i = 0; i < 2; i++) {
+        try {
+          f.voices.finalize(voice.id, input);
+          throw Error("Expected clarification");
+        } catch (error) {
+          expect(error).toBeInstanceOf(TaskInstructionClarificationRequired);
+          expect(error).toMatchObject({
+            question: task.decision!.question,
+            options: task.decision!.options,
+          });
+        }
+      }
+      expect(f.tasks.get(f.session.id, task.id)).toEqual(task);
+      expect(f.store.all("coding-task-voice-instruction-v1")).toEqual([]);
+      expect(f.store.all("coding-task-voice-event-v1")).toEqual(beforeEvents);
+      expect(f.voices.heldForTask(task.id)).toEqual([]);
+      const explicit = f.voices.finalize(voice.id, {
+        ...f.input(task),
+        instruction: "Yes, use the reset button.",
+      });
+      expect(explicit.task.runs).toHaveLength(2);
+      expect(explicit.receipt.state).toBe("applied");
+      expect(explicit.task.runs[1]!.instruction).toBe(
+        "Yes, use the reset button.",
+      );
+    },
+  );
+
+  it.each([" Yes! ", "No."])(
+    "preserves a genuine exact Yes/No offered choice: %j",
+    (instruction) => {
+      const f = fixture(),
+        task = withOptions(f, ["Yes", "No"]),
+        voice = f.open(task).voice;
+      f.voices.bindProvider(voice.id, "provider-fixture");
+      const result = f.voices.finalize(voice.id, {
+        ...f.input(task),
+        instruction,
+      });
+      expect(result.task.runs).toHaveLength(2);
+      expect(result.receipt.instruction).toBe(instruction);
+    },
+  );
+
+  it("returns an exact historical instruction receipt before checking a newer ambiguous decision", () => {
+    const f = fixture();
+    const original = withOptions(f, ["Yes", "No"]),
+      voice = f.open(original).voice;
+    f.voices.bindProvider(voice.id, "provider-fixture");
+    const input = { ...f.input(original), instruction: "yes" };
+    const applied = f.voices.finalize(voice.id, input);
+    const running = f.claim(applied.task),
+      run = running.runs.at(-1)!;
+    const current = f.verify(
+      f.change(running, {
+        action: "run_result",
+        runId: run.id,
+        dispatchId: run.dispatchId,
+        outcome: "completed",
+        summary: "A second choice is needed.",
+        decision: "Which text should appear?",
+        decisionOptions: ["Short explanation", "Detailed explanation"],
+      }),
+    );
+    f.voices.end(voice.id, "end_after_second_choice");
+    const replay = f.voices.finalize(voice.id, input);
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt).toEqual(applied.receipt);
+    expect(replay.task).toEqual(current);
+    expect(replay.task.runs).toHaveLength(2);
+  });
+
+  it("checks voice authority and stale context before exposing clarification choices", () => {
+    const f = fixture(),
+      task = withOptions(f),
+      voice = f.open(task).voice;
+    f.voices.bindProvider(voice.id, "provider-fixture");
+    const input = { ...f.input(task), instruction: "yes" };
+    expect(() =>
+      f.voices.finalize(voice.id, {
+        ...input,
+        expectedRevision: task.revision - 1,
+      }),
+    ).toThrow(/stale/);
+    f.voices.end(voice.id, "closed");
+    expect(() => f.voices.finalize(voice.id, input)).toThrow(/ended or expired/);
+    try {
+      f.voices.finalize(voice.id, input);
+      throw Error("Expected closed voice refusal");
+    } catch (error) {
+      expect(error).not.toBeInstanceOf(TaskInstructionClarificationRequired);
+      expect(error).toBeInstanceOf(Error);
+    }
+    expect(f.tasks.get(f.session.id, task.id)).toEqual(task);
+  });
+
   it("binds an internal handset smoke session without coding authority or replay upgrades", () => {
     const f = fixture();
     const task = f.ready();

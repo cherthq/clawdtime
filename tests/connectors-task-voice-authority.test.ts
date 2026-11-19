@@ -17,7 +17,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
-function fixture() {
+function fixture(decisionOptions?: string[]) {
   const project = realpathSync(
     mkdtempSync(join(tmpdir(), "clawdtime-voice-authority-")),
   );
@@ -71,6 +71,9 @@ function fixture() {
       dispatchId: run.dispatchId,
       outcome,
       summary: "Synthetic worker terminal receipt.",
+      ...(decisionOptions
+        ? { decision: "Which empty state should appear?", decisionOptions }
+        : {}),
     });
     if (outcome !== "unknown")
       transition({
@@ -166,6 +169,49 @@ function fixture() {
 }
 
 describe("independent review: task voice authority", () => {
+  it("asks for a concrete choice on bare assent without starting or holding work, then admits an explicit answer", async () => {
+    const options = ["Show a Clear filters button", "Show only an empty list"];
+    const f = fixture(options);
+    await f.bind();
+    const before = f.get();
+    expect(before.state).toBe("needs_decision");
+    const context = await (await f.api(`${f.base}/context`)).json();
+    expect(context.decisionOptions).toEqual(options);
+    await f.utterance("bare_assent", { text: "Yes." });
+    for (const eventId of ["bare_one", "bare_two"]) {
+      const result = await f.api(`${f.base}/instructions`, f.opened.token, {
+        eventId,
+        utteranceId: "bare_assent",
+      });
+      expect(result.status).toBe(200);
+      expect(await result.json()).toEqual({
+        state: "clarification_required",
+        instructionSubmitted: false,
+        taskId: f.taskId,
+        question: "Which empty state should appear?",
+        options,
+      });
+    }
+    expect(f.get()).toEqual(before);
+    expect(f.engine.start).not.toHaveBeenCalled();
+    expect(f.tasks.store.all("coding-task-voice-instruction-v1")).toHaveLength(
+      0,
+    );
+    await f.utterance("explicit_choice", {
+      text: "Yes, show a Clear filters button.",
+    });
+    const applied = await f.api(`${f.base}/instructions`, f.opened.token, {
+      eventId: "choice",
+      utteranceId: "explicit_choice",
+    });
+    expect(applied.status).toBe(200);
+    expect((await applied.json()).state).toBe("applied");
+    expect(f.get().runs).toHaveLength(2);
+    expect(f.get().runs.at(-1)!.instruction).toBe(
+      "Yes, show a Clear filters button.",
+    );
+    expect(f.engine.start).toHaveBeenCalledOnce();
+  });
   it.each(["canceled", "unknown"])(
     "allows status/hangup speech registration after %s without granting new execution",
     async (state) => {

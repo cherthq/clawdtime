@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { TaskVoiceSession } from "../contracts.js";
-import { TaskVoiceLedger } from "../attention/task-voice-ledger.js";
+import {
+  TaskVoiceLedger,
+  TaskInstructionClarificationRequired,
+} from "../attention/task-voice-ledger.js";
 import { DomainError, hash, token } from "../storage/security.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
@@ -184,6 +187,13 @@ export class TaskVoiceService {
       state: task.state,
       summary: run.summary ?? "",
       decision: task.decision?.question,
+      ...(task.decision?.options
+        ? {
+            decisionOptions: task.decision.options
+              .slice(0, 3)
+              .map((v) => v.slice(0, 500)),
+          }
+        : {}),
       verification: task.verification
         ? { state: task.verification.state, runId: task.verification.runId }
         : undefined,
@@ -277,16 +287,28 @@ export class TaskVoiceService {
       );
     const utterance = this.tasks.vault.open<Utterance>(saved.sealed);
     const current = this.tasks.ledger.get(voice.sessionId, taskId);
-    const result = this.ledger.finalize(voiceId, {
-      eventId: value.eventId,
-      providerConversationId: utterance.providerConversationId,
-      utteranceId: utterance.utteranceId,
-      taskId,
-      runId: utterance.runId,
-      expectedRevision: utterance.expectedRevision,
-      currentRevision: current.revision,
-      instruction: utterance.text,
-    });
+    let result;
+    try {
+      result = this.ledger.finalize(voiceId, {
+        eventId: value.eventId,
+        providerConversationId: utterance.providerConversationId,
+        utteranceId: utterance.utteranceId,
+        taskId,
+        runId: utterance.runId,
+        expectedRevision: utterance.expectedRevision,
+        currentRevision: current.revision,
+        instruction: utterance.text,
+      });
+    } catch (error) {
+      if (!(error instanceof TaskInstructionClarificationRequired)) throw error;
+      return {
+        state: "clarification_required",
+        instructionSubmitted: false,
+        taskId,
+        question: error.question,
+        options: error.options,
+      };
+    }
     if (!result.replayed && result.receipt.state === "applied")
       this.engine?.start(voice.sessionId, taskId);
     return {

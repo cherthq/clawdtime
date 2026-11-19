@@ -58,6 +58,42 @@ export interface VoiceInstructionMutation {
   replayed: boolean;
 }
 
+/** A new finalized instruction needs a concrete choice; no instruction receipt was created. */
+export class TaskInstructionClarificationRequired extends DomainError {
+  readonly question: string;
+  readonly options: string[];
+  constructor(question: string, options: string[]) {
+    super(409, "Please specify which offered option you want.");
+    this.question = question.slice(0, 2000);
+    this.options = options.slice(0, 3).map((option) => option.slice(0, 500));
+  }
+}
+
+function normalizedChoice(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[.,!?;:]+\s*|\s*[.,!?;:]+$/g, "")
+    .trim();
+}
+const ambiguousChoices = new Set([
+  "yes",
+  "yeah",
+  "yep",
+  "ok",
+  "okay",
+  "sure",
+  "go ahead",
+  "do that",
+  "do it",
+  "proceed",
+  "yes please",
+  "yes go ahead",
+  "yes, please",
+  "yes, go ahead",
+]);
+
 const ready = new Set([
   "needs_decision",
   "review_ready",
@@ -353,6 +389,22 @@ export class TaskVoiceLedger {
         input.expectedRevision > task.revision
       )
         throw new DomainError(409, "Spoken instruction context is stale.");
+      const decision = task.decision;
+      if (
+        task.state === "needs_decision" &&
+        decision?.runId === run.id &&
+        decision.answer === undefined &&
+        (decision.options?.length ?? 0) >= 2 &&
+        ambiguousChoices.has(normalizedChoice(input.instruction)) &&
+        !decision.options!.some(
+          (option) =>
+            normalizedChoice(option) === normalizedChoice(input.instruction),
+        )
+      )
+        throw new TaskInstructionClarificationRequired(
+          decision.question,
+          decision.options!,
+        );
       if (this.heldForTask(task.id).length)
         throw new DomainError(
           409,

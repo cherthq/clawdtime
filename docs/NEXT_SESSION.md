@@ -31,29 +31,36 @@ A fresh desktop-created decision rehearsal is staged under
 Its service on loopback 13336 owns a disposable task-list project and a distinct
 fixture source session; its private `Open rehearsal.command` reconnects the panel.
 The actual panel submission completed one real Codex run and reached
-`needs_decision` revision 3. Filtering works; the deliberately unfinished
-no-matches requirement fails independent assertions, while syntax passes.
-The app preview on loopback 8767 and TextEdit's `Rehearsal source.txt` and
-`Rehearsal result.txt` were observed and resolved by exact metadata. Revalidate
-all views before a call and refresh source/result snapshots after a new run.
-The attempts directory is empty. The user authorized one visual decision call
-and temporary backend-only standby/restore. Standby was established, but the
-operator request returned HTTP 400 before admission because the venv interpreter
-resolved to a group-writable system binary. The Mac specialist installed a
-byte-identical owner-protected local interpreter at the same configured venv
-path and passed the four SDK smoke tests; global Python was not changed.
-Before resubmission, all prepared windows became offscreen. No second POST,
-capture, provider session or dial occurred. The backend was restored afterward;
-see the latest build log for verification. Preserve the rejected request and
-submission records. Rebuild short-lived grants and current standby evidence
-before a future submission; never replay the stale request. The one-call human
-authorization has not been consumed by a dial, but confirm the user is available
-and has returned the prepared views to the current desktop before proceeding.
-Keep the original desktop service and its unrelated task untouched.
-The fixture session is time-limited; check its expiry before resuming.
-The hosted backend was read-only verified live with a successful deployment.
-Dynamic deployment evidence belongs to each call request; prior standby evidence
-cannot establish a later deployment's authority.
+`needs_decision` revision 3. On the later resumption all three exact windows
+passed, and one specifically authorized visual decision call connected through
+the same desktop owner. A finalized bare assent started a second scoped run;
+that run correctly left the two-option design unresolved. The task is now
+`needs_decision` revision 7, both runs completed, syntax passed and the deliberately
+unfinished empty-state assertion failed. No choice has been invented for the user.
+
+The user confirmed clear opening/preview and correct end-on-request, and asked to
+move on without further calls. Native cleanup, media closure, capture/narration
+Stop and output clearance are confirmed. This call's authorization is consumed.
+Restoration deployment `32849cef-53f3-48de-b23c-1ed73cc1760f` is live with exact
+original variables, zero pending/unknown effects and zero active calls. Preserve
+`standby-2/` proofs and the single closed attempt; do not replay the old envelopes.
+
+The bare-assent gap is now repaired and loaded in the local rehearsal service: for an unresolved multi-option
+choice, a bare yes/go-ahead asks for clarification without creating a run or
+instruction receipt, unless that utterance itself exactly names an offered option.
+A subsequent explicit answer keeps its original words; voice/worker context also
+carries the recorded options. Exact historical receipt replay remains unchanged.
+Offline tests cover the repair; it has not received another physical voice test.
+
+The preview is on loopback 8767. TextEdit's `Rehearsal source.txt` and
+`Rehearsal result.txt` were the authorized prepared views. The result snapshot
+still describes revision 3; refresh/reopen snapshots and revalidate exact window
+identity before any later presentation. The local interpreter at the configured
+venv path is now an owner-protected copy; global Python was not modified.
+Keep the unrelated original desktop service/task untouched. The fixture session
+is time-limited and must be checked before reuse. No second/review call or new
+deployment is authorized. The remaining two-call rehearsals and measured d/e
+acceptance targets are deferred, not claimed complete.
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
 Latest completed step remains `59b8e24`, annotated `step-c1-done`. Repair

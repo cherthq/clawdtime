@@ -90,6 +90,18 @@ remains unknown. The response keeps the acceptance error distinct from status
 facts and uses the read's original speech epoch. Prompt/tool guidance prohibits
 repeated confirmation-error loops or inventing human acceptance wording.
 
+An instruction response with `state:clarification_required` and
+`instructionSubmitted:false` is a known request for clarification, not a new run
+or an unknown coding effect. The runtime validates its bounded question/options,
+caches it for that finalized utterance and supplies guidance to ask once for the
+exact option or change. Only a new finalized human answer can make another
+instruction request; the guidance does not guarantee the provider's spoken wording.
+Bare “yes” or “go ahead” does not select an option unless it is itself an offered
+option, such as an exact Yes/No choice. Assistant wording is never
+substituted for the human's words. Clarification speech retains its original
+turn/retirement epoch; a late or cached response cannot revive retired speech.
+This response handling is covered offline; no further call is implied.
+
 The new controller uses the same private binding, voice, provider, LiveKit,
 control and journal flags as the audio controller, plus `--presentation-file`:
 

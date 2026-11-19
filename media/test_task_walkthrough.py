@@ -369,6 +369,60 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         await task
         self.assertIn('deepgram_final_1', self.runtime.intent_receipts)
         self.assertFalse(self.runtime.response_authorized)
+
+    async def test_clarification_is_cached_then_explicit_fresh_choice_submits_once(self):
+        await self.start()
+        original = self.delegate.request
+        async def request(path, body=None):
+            result = await original(path, body)
+            if path == '/instructions' and body['utteranceId'] == 'deepgram_final_1':
+                return {'state': 'clarification_required', 'instructionSubmitted': False,
+                    'taskId': self.api.task_id, 'question': 'Which empty state should be shown?',
+                    'options': ['Show a clear filters button', 'Show a message only']}
+            return result
+        self.delegate.request = request
+        await self.transcript('Yes, go ahead.')
+        await self.call('submit_instruction')
+        response = json.loads(self.ws.sent[-1]['content'])
+        value = json.loads(response['result'])
+        self.assertFalse(response['is_error'])
+        self.assertFalse(value['instructionSubmitted'])
+        self.assertEqual(value['state'], 'clarification_required')
+        self.assertIn('no new run', value['guidance'])
+        self.assertTrue(self.runtime.response_authorized)
+        await self.runtime.handle({'type': 'ConversationText', 'role': 'assistant',
+            'content': 'Which empty state should be shown: a clear filters button or a message only?'})
+        self.assertTrue(self.runtime.output_allowed)
+        await self.call('submit_instruction', identity='duplicate_clarification')
+        self.assertEqual(sum(path == '/instructions' for path, _ in self.delegate.calls), 1)
+        await self.runtime.handle({'type': 'UserStartedSpeaking'})
+        await self.transcript('Show a clear filters button')
+        await self.call('submit_instruction', identity='explicit_choice')
+        posts = [body for path, body in self.delegate.calls if path == '/instructions']
+        self.assertEqual([body['utteranceId'] for body in posts], ['deepgram_final_1', 'deepgram_final_2'])
+        self.assertTrue(all(set(body) == {'eventId', 'utteranceId'} for body in posts))
+        self.assertEqual(json.loads(json.loads(self.ws.sent[-1]['content'])['result'])['state'], 'held')
+        await self.call('submit_instruction', identity='duplicate_choice')
+        self.assertEqual(sum(path == '/instructions' for path, _ in self.delegate.calls), 2)
+        self.assertNotIn('server-bound pending decision', self.ws.sent[0]['agent']['think']['prompt'])
+
+    async def test_late_clarification_cannot_reopen_retired_scene_speech(self):
+        await self.start()
+        await self.transcript('Yes.')
+        original = self.delegate.request
+        async def request(path, body=None):
+            result = await original(path, body)
+            if path == '/instructions':
+                await self.runtime.suppress_scene_speech()
+                return {'state': 'clarification_required', 'instructionSubmitted': False,
+                    'question': 'State the exact change.', 'options': []}
+            return result
+        self.delegate.request = request
+        await self.call('submit_instruction')
+        self.assertFalse(self.runtime.response_authorized)
+        await self.call('submit_instruction', identity='cached_late_clarification')
+        self.assertFalse(self.runtime.response_authorized)
+        self.assertEqual(sum(path == '/instructions' for path, _ in self.delegate.calls), 1)
     async def test_cancelled_function_and_stale_final_cannot_mutate(self):
         await self.start()
         await self.transcript('Looks good')
@@ -589,7 +643,9 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(p == '/instructions' for p, _ in self.delegate.calls), 1)
         prompt = self.runtime.provider_settings(self.runtime.context)['agent']['think']['prompt']
         self.assertIn('ask one concrete', prompt)
-        self.assertIn('server-bound pending decision', prompt)
+        self.assertIn("utterance itself names it", prompt)
+        self.assertIn('itself an offered option (for example Yes/No)', prompt)
+        self.assertNotIn('server-bound pending decision', prompt)
 
     async def test_first_final_after_retirement_uses_fresh_run_once(self):
         await self.start()

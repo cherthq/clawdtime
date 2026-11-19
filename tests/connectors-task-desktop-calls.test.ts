@@ -540,6 +540,83 @@ function fixture() {
 }
 
 describe("same-owner desktop task and prepared call integration", () => {
+  it("clarifies bare assent and preserves recorded options for a later ordinal choice in the next worker context", async () => {
+    const f = fixture();
+    await f.ready();
+    const options = ["Show Clear filters", "Show an empty list"];
+    const before = f.get();
+    expect(
+      (await f.api("/operator/desktop-calls", f.operator, f.request())).status,
+    ).toBe(202);
+    await vi.waitFor(() => expect(f.attempts[0]?.start).toHaveBeenCalledOnce());
+    const a = f.attempts[0]!;
+    const unavailable = async () => {
+      throw Error(
+        "Synthetic presentation mutation is not part of this context test.",
+      );
+    };
+    f.calls.presentationPort = {
+      context: (voice) => {
+        expect(voice.id).toBe(a.opened.voice.id);
+        return { scenes: [], exportActive: true };
+      },
+      opening: unavailable,
+      show: unavailable,
+      stop: unavailable,
+      retire: unavailable,
+    };
+    const contextResponse = await f.api(
+      `/tasks/${before.id}/voice/${a.opened.voice.id}/context`,
+      a.opened.token,
+    );
+    expect(contextResponse.status).toBe(200);
+    const context = await contextResponse.json();
+    expect(context.decisionOptions).toEqual(options);
+    const clarification = await f.speak(
+      0,
+      "Yes.",
+      "bare_assent",
+      "instructions",
+    );
+    expect(clarification.status).toBe(200);
+    expect(await clarification.json()).toEqual({
+      state: "clarification_required",
+      instructionSubmitted: false,
+      taskId: before.id,
+      question: "What should appear with no matches?",
+      options,
+    });
+    expect(f.get()).toEqual(before);
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(f.tasks.store.all("coding-task-voice-instruction-v1")).toHaveLength(
+      0,
+    );
+    const explicit = await f.speak(
+      0,
+      "Use option two.",
+      "explicit_ordinal",
+      "instructions",
+    );
+    expect(explicit.status).toBe(200);
+    expect((await explicit.json()).state).toBe("applied");
+    await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(2));
+    const workerContext = JSON.parse(f.run.mock.calls[1]![0].context);
+    expect(workerContext.decision).toMatchObject({
+      question: "What should appear with no matches?",
+      options,
+      answered: true,
+      answerSource: "instruction",
+    });
+    expect(workerContext.instruction).toBe("Use option two.");
+    expect(f.get().runs.at(-1)!.instruction).toBe("Use option two.");
+    expect(f.get().runs).toHaveLength(2);
+    f.second.resolve({
+      outcome: "completed",
+      summary: "Synthetic explicit choice completed.",
+    });
+    await f.engine.wait(before.id);
+    expect(f.get().state).toBe("review_ready");
+  });
   it("keeps one service/task/session through decision, spoken run, call Stop, fresh review and acceptance", async () => {
     const f = fixture(),
       initial = await f.snapshot();

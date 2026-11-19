@@ -150,6 +150,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(path == '/utterances' for path, _ in self.api.calls), 1)
         self.assertEqual(sum(path == '/instructions' for path, _ in self.api.calls), 1)
 
+    async def test_malformed_clarification_stays_unconfirmed_and_never_reposts(self):
+        original = self.api.request
+        invalid = {}
+        async def request(path, body=None):
+            result = await original(path, body)
+            if path == '/instructions':
+                return {'state': 'clarification_required', 'instructionSubmitted': False,
+                    'question': 'Which choice?', 'options': ['A', 'B'], **invalid}
+            return result
+        self.api.request = request
+        for index, invalid in enumerate(({'instructionSubmitted': True}, {'question': ' ' * 2000 + '?'},
+                                        {'options': [' ' * 500 + 'A']}, {'options': ['A'] * 4})):
+            with self.subTest(invalid=index):
+                await self.runtime.handle(transcript('Yes. ' + str(index), identity=index + 1))
+                result = await self.tool('submit_instruction', 'tool_' + str(index))
+                self.assertTrue(result['is_error'])
+                repeated = await self.tool('submit_instruction', 'repeat_' + str(index))
+                self.assertTrue(repeated['is_error'])
+                self.assertEqual(sum(path == '/instructions' for path, _ in self.api.calls), index + 1)
+
     async def test_no_id_transcripts_use_non_reconnectable_sequence_and_conservative_duplicate_suppression(self):
         await self.runtime.handle(transcript(identity=None))
         await self.runtime.handle(transcript(identity=None))

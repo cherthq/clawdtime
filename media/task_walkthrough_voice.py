@@ -19,8 +19,12 @@ acceptance does not prove the human saw it. Never invent screen contents.
 Use submit_instruction for a human's requested coding change; the service applies
 only their exact finalized words, or holds the correction while a run is active.
 If a requested replacement text, value or target is missing, ask one concrete
-clarification before submitting. Do not submit bare confirmations such as
-'Yes, please change that' without an explicit server-bound pending decision.
+clarification before submitting. Bare confirmations such as 'Yes', 'Go ahead',
+or 'Yes, please change that' do not identify an option unless that phrase is
+itself an offered option (for example Yes/No). Ask for the exact choice unless
+the human's utterance itself names it. If submit_instruction returns
+clarification_required, no instruction was submitted: use its guidance, ask once,
+and wait for a new finalized answer; never retry the same utterance.
 The worker receives the exact human words, not your proposed wording; never
 expand your proposal into the instruction. Do not substitute your own instruction.
 Use accept_result only for explicit acceptance. If it returns acceptance_recovery,
@@ -298,6 +302,10 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
                         result, error = await TaskVoiceRuntime.execute_tool(self, name, params, utterance)
                         if name == 'submit_instruction' and not error and not existing_instruction:
                             confirmed = json.loads(result)
+                            if isinstance(confirmed, dict) and confirmed.get('state') == 'clarification_required':
+                                # A refusal to submit can speak on its admitted
+                                # turn only; it cannot renew a retired scene epoch.
+                                self.receipt_epochs[receipt_key] = response_epoch
                             if (isinstance(confirmed, dict) and confirmed.get('state') in ('applied', 'held')
                                     and confirmed.get('taskId') == self.api.task_id
                                     and (confirmed['state'] != 'applied' or
