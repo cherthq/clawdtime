@@ -151,6 +151,28 @@ instead of generic `export_unavailable`; binding and closure failures remain
 distinct. This repairs a reproduced timing defect, not an established explanation
 of the historical ringing failures.
 
+An optional `pipelineAtStop` freezes the first-stop observation before cleanup:
+the trigger distinguishes watchdog, SDK stale rejection and other export paths;
+capture phases distinguish the capture coroutine's local-authority request,
+voice-authority request and native-source wait. Export phases belong only to the
+export loop, so concurrent show/status requests cannot overwrite them. SDK phases
+distinguish lock wait, pre-submit validation, JPEG decode, submission and post-submit
+freshness validation. All phase durations use monotonic time; source/render ages
+use original wall-clock frame timestamps. `candidateAgeMs` describes the most
+recently selected export candidate, which may precede a currently blocked context
+request. Last render/decode/submission durations and frame ages are bounded numeric
+metadata, not proof that the observed stage caused the failure. Snapshot failure
+returns null and never prevents Stop; no raw exception or media data is included.
+
+Offline qualification injects bounded source/API jitter and separate source,
+local-authority, voice-authority, exporter-context, publication and render stalls.
+It verifies stage distinctions, first-snapshot retention, fresh-source versus
+stale-output observations, joined cleanup and no late output. Real SDK adapter
+tests distinguish pre/post-submit stale checks and lock wait without connecting a
+room. These tests are diagnostic qualification only: the latest physical retest
+still failed before speech, and its exact trigger remains unproven. No additional
+phone call or native capture is implied by this checkpoint.
+
 The new controller uses the same private binding, voice, provider, LiveKit,
 control and journal flags as the audio controller, plus `--presentation-file`:
 

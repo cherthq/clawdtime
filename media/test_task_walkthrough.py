@@ -294,9 +294,154 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         value = self.owner.status()['sharingDiagnostics']
         self.assertEqual(value['firstStop']['reason'], 'frame_stale')
         self.assertEqual(value['firstStop']['mediaState'], 'prepared')
+        self.assertEqual(value['pipelineAtStop']['trigger'], 'publish_stale')
+        self.assertEqual(value['pipelineAtStop']['exportPhase'], 'publish')
         self.assertIsNone(value['presentationFailure'])
         await self.owner.close()
         self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop'], value['firstStop'])
+
+    async def pipeline_fault(self, stage):
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        gate = asyncio.Event()
+        if stage == 'source_capture':
+            self.source.capture_gate = gate
+        elif stage == 'local_authority':
+            original = self.renderer.authority.local.check
+            async def local(generation=None):
+                if asyncio.current_task() is self.renderer.capture_task:
+                    await gate.wait()
+                return await original(generation)
+            self.renderer.authority.local.check = local
+        elif stage in ('voice_authority', 'export_context'):
+            original = self.api.request
+            async def context(path, body=None):
+                task = self.renderer.capture_task if stage == 'voice_authority' else self.owner.video_task
+                if path == '/context' and asyncio.current_task() is task:
+                    await gate.wait()
+                return await original(path, body)
+            self.api.request = context
+        elif stage == 'publish':
+            original = self.port.publish_video
+            async def publish(jpeg, frame):
+                await gate.wait()
+                return await original(jpeg, frame)
+            self.port.publish_video = publish
+        elif stage == 'render':
+            self.renderer.render = lambda: None
+        else:
+            self.fail('unknown fixture stage')
+        if stage == 'source_capture':
+            async with asyncio.timeout(1):
+                while self.renderer.capture_phase != 'source_capture':
+                    await asyncio.sleep(.001)
+            await self.renderer.authority.check()
+            self.assertEqual(self.renderer.capture_phase, 'source_capture')
+        if stage == 'export_context':
+            async with asyncio.timeout(1):
+                while self.owner.export_phase != 'context':
+                    await asyncio.sleep(.001)
+            await self.owner.authorize_export()
+            self.assertEqual(self.owner.export_phase, 'context')
+        async with asyncio.timeout(2):
+            while not self.owner.retirement_task:
+                await asyncio.sleep(.01)
+        await self.owner.retirement_task
+        snapshot = self.owner.status()['sharingDiagnostics']['pipelineAtStop']
+        self.assertTrue(self.source.closed)
+        self.assertTrue(self.port.stopped)
+        self.assertFalse(self.owner.stopping)
+        self.provider.open.assert_not_awaited()
+        await self.owner.close()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['pipelineAtStop'], snapshot)
+        count = len(self.port.frames)
+        gate.set()
+        await asyncio.sleep(.01)
+        self.assertEqual(len(self.port.frames), count)
+        return snapshot
+
+    async def test_pipeline_identifies_pending_source_acquisition(self):
+        value = await self.pipeline_fault('source_capture')
+        self.assertEqual(value['capturePhase'], 'source_capture')
+        self.assertGreater(value['capturePhaseMs'], 500)
+        self.assertGreaterEqual(value['sourceAgeMs'], 1000)
+
+    async def test_pipeline_identifies_pending_local_authority(self):
+        value = await self.pipeline_fault('local_authority')
+        self.assertEqual(value['capturePhase'], 'local_authority')
+        self.assertGreater(value['capturePhaseMs'], 500)
+
+    async def test_pipeline_identifies_pending_voice_authority_in_capture(self):
+        value = await self.pipeline_fault('voice_authority')
+        self.assertEqual(value['capturePhase'], 'voice_authority')
+        self.assertGreater(value['capturePhaseMs'], 500)
+
+    async def test_pipeline_distinguishes_export_context_wait_from_fresh_source(self):
+        value = await self.pipeline_fault('export_context')
+        self.assertEqual(value['trigger'], 'watchdog')
+        self.assertEqual(value['exportPhase'], 'context')
+        self.assertGreater(value['exportPhaseMs'], 700)
+        self.assertLess(value['sourceAgeMs'], 500)
+        self.assertLess(value['renderAgeMs'], 200)
+
+    async def test_pipeline_distinguishes_publish_wait_from_fresh_source(self):
+        value = await self.pipeline_fault('publish')
+        self.assertEqual(value['trigger'], 'watchdog')
+        self.assertEqual(value['exportPhase'], 'publish')
+        self.assertGreater(value['exportPhaseMs'], 700)
+        self.assertLess(value['sourceAgeMs'], 500)
+        self.assertLess(value['renderAgeMs'], 200)
+
+    async def test_pipeline_distinguishes_render_stall_from_fresh_source(self):
+        value = await self.pipeline_fault('render')
+        self.assertEqual(value['trigger'], 'watchdog')
+        self.assertGreaterEqual(value['renderAgeMs'], 900)
+        self.assertLess(value['sourceAgeMs'], 500)
+
+    async def test_bounded_authority_and_source_jitter_survives_offline_prepared_interval(self):
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        local, request, source = self.renderer.authority.local.check, self.api.request, self.source.request
+        counter = 0
+        async def local_jitter(generation=None):
+            await asyncio.sleep(.02)
+            return await local(generation)
+        async def voice_jitter(path, body=None):
+            if path == '/context':
+                await asyncio.sleep(.02)
+            return await request(path, body)
+        async def source_jitter(op, target):
+            nonlocal counter
+            captured_at = time.time() * 1000
+            if op == 'capture':
+                await asyncio.sleep((.10, .16, .20)[counter % 3])
+                counter += 1
+            value = await source(op, target)
+            if op == 'capture':
+                value['capturedAt'] = captured_at
+            return value
+        self.renderer.authority.local.check, self.api.request, self.source.request = local_jitter, voice_jitter, source_jitter
+        await asyncio.sleep(3)
+        self.assertGreaterEqual(counter, 8)
+        self.assertFalse(self.owner.sharing_stopped, self.owner.status()['sharingDiagnostics'])
+        self.assertIsNone(self.owner.status()['sharingDiagnostics']['pipelineAtStop'])
+        _, frame = await self.owner.fresh_video()
+        self.assertLess(time.time() * 1000 - frame['capturedAt'], 1000)
+        self.provider.open.assert_not_awaited()
+
+    async def test_pipeline_diagnostic_failure_cannot_prevent_stop_or_leak_text(self):
+        await self.owner.prepare(self.b)
+        def broken():
+            raise RuntimeError('PRIVATE_EXCEPTION_PROVIDER_BODY')
+        self.port.sdk_diagnostics = broken
+        result = await self.owner.stop_sharing()
+        self.assertTrue(all(result.values()))
+        value = self.owner.status()['sharingDiagnostics']
+        self.assertEqual(value['firstStop']['reason'], 'remote_stop')
+        self.assertIsNone(value['pipelineAtStop'])
+        self.assertNotIn('PRIVATE', json.dumps(value))
+        self.assertTrue(self.source.closed)
+        self.assertTrue(self.port.stopped)
     async def asyncTearDown(self):
         await self.owner.close()
         self.journal.close()
@@ -1298,6 +1443,31 @@ class SDKTests(unittest.IsolatedAsyncioTestCase):
                 with patch('task_walkthrough_livekit.time.time', side_effect=[10, 11.01 if cause == 'slow_sdk' else 10]):
                     with self.assertRaisesRegex(VoiceError, '^' + expected + '$'):
                         await port.publish_video(image.getvalue(), frame)
+                diagnostic = port.sdk_diagnostics()
+                self.assertEqual(diagnostic['sdkPhase'], 'validate' if cause in ('binding', 'old_source') else 'postcheck')
+                for key in ('sdkPhaseMs', 'lastSdkCaptureMs', 'lastDecodeMs'):
+                    if diagnostic[key] is not None:
+                        self.assertIs(type(diagnostic[key]), int)
+                        self.assertTrue(0 <= diagnostic[key] <= 1800000)
+                if cause in ('slow_sdk', 'closed'):
+                    self.assertIsNotNone(diagnostic['lastSdkCaptureMs'])
+                    self.assertIsNotNone(diagnostic['lastDecodeMs'])
+                else:
+                    self.assertIsNone(diagnostic['lastSdkCaptureMs'])
+
+    async def test_sdk_lock_wait_is_observed_without_submission(self):
+        port = LiveKitWalkthroughPort('wss://example.invalid', 'key', 'secret', allowed_hosts={'example.invalid'})
+        await port.video_lock.acquire()
+        pending = asyncio.create_task(port.publish_video(b'', {}))
+        try:
+            await asyncio.sleep(.02)
+            self.assertEqual(port.sdk_diagnostics()['sdkPhase'], 'lock_wait')
+            self.assertGreaterEqual(port.sdk_diagnostics()['sdkPhaseMs'], 10)
+            self.assertIsNone(port.sdk_diagnostics()['lastSdkCaptureMs'])
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            port.video_lock.release()
 
     async def test_actual_sdk_rgba_frame_and_blank_only_after_stop(self):
         port = LiveKitWalkthroughPort('wss://example.invalid', 'key', 'secret', allowed_hosts={'example.invalid'})

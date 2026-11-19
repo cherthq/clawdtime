@@ -326,6 +326,10 @@ class TaskPresentationRuntime:
         self.scene_evidence_current = not self.call_continuity
         self.scene_evidence_invalidated = False
         self.pending_scene = None
+        self.capture_task = None
+        self.capture_phase = 'idle'
+        self.capture_phase_at = time.monotonic()
+        self.last_source_at = self.last_render_at = self.last_render_ms = None
         self.font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', 24)
 
     async def check(self, generation=None):
@@ -452,17 +456,22 @@ class TaskPresentationRuntime:
     async def capture_loop(self):
         loop = asyncio.get_running_loop()
         deadline = loop.time()
+        self.capture_task = asyncio.current_task()
         while not self.stopping:
+            self.set_capture_phase('local_authority')
             policy = await self.check()
             pending = self.pending_scene
             scene, generation = (pending['scene'], pending['generation']) if pending else (self.scene, self.generation)
             if scene and policy.get('generation') != generation and not (
                     self.call_continuity and not pending and type(policy.get('generation')) is int and policy['generation'] > generation):
                 self.frame = self.output = None
+                self.set_capture_phase('idle')
                 await asyncio.sleep(.05)
                 continue
             if scene:
+                self.set_capture_phase('source_capture')
                 value = await self.source.request('capture', scene['target'])
+                self.set_capture_phase('local_authority')
                 policy = await self.check()
                 if ((pending is not None and pending is not self.pending_scene)
                         or (pending is None and (generation != self.generation or scene is not self.scene))):
@@ -486,6 +495,7 @@ class TaskPresentationRuntime:
                     self.paint_tokens.clear()
                     self.transition_at = self.transition_completed = None
                 self.source_frame = value
+                self.last_source_at = value['capturedAt']
                 self.counts['sourceFrames'] = min(1000000, self.counts['sourceFrames'] + 1)
                 if self.transition_at is None:
                     self.transition_at = self.clock()
@@ -494,7 +504,13 @@ class TaskPresentationRuntime:
             # period after slow work needlessly ages the last exported source.
             # Reset overruns to now, never issue a catch-up burst.
             deadline = max(deadline + .2, loop.time())
+            self.set_capture_phase('idle')
             await asyncio.sleep(max(0, deadline - loop.time()))
+
+    def set_capture_phase(self, phase):
+        if phase not in ('idle', 'local_authority', 'voice_authority', 'source_capture', 'stopped'):
+            fail()
+        self.capture_phase, self.capture_phase_at = phase, time.monotonic()
 
     def render(self):
         source, scene = self.source_frame, self.scene
@@ -550,6 +566,7 @@ class TaskPresentationRuntime:
             return
         self.output = output.getvalue()
         rendered_at = self.wall() * 1000
+        self.last_render_at = rendered_at
         self.output_metadata = {'sourceFrameId': source['sourceFrameId'], 'capturedAt': source['capturedAt'],
             'geometryGeneration': source['geometryGeneration'], 'sceneId': scene['id'], 'generation': self.generation,
             'renderedAt': rendered_at}
@@ -587,7 +604,11 @@ class TaskPresentationRuntime:
     async def render_loop(self):
         deadline = self.clock()
         while not self.stopping:
-            self.render()
+            started = time.monotonic()
+            try:
+                self.render()
+            finally:
+                self.last_render_ms = min(1800000, max(0, round((time.monotonic() - started) * 1000)))
             # Account for render work; never add a second frame period after it.
             # An overrun skips idle time, without accumulating catch-up frames.
             deadline = max(deadline + 1 / FPS, self.clock())
@@ -667,6 +688,7 @@ class TaskPresentationRuntime:
 
     async def stop(self):
         self.stopping = True
+        self.set_capture_phase('stopped')
         self.pending_scene = None
         self.armed = False
         self.frame = self.output = self.source_frame = None

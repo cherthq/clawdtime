@@ -23,6 +23,12 @@ FIELDS = {'mediaSessionId', 'taskId', 'voiceSessionId', 'callAttemptId', 'roomNa
 SHARING_STOP_REASONS = frozenset(('source_unavailable', 'frame_stale', 'export_unavailable',
     'task_changed', 'authority_retired', 'remote_stop', 'call_closed'))
 MEDIA_STATES = frozenset(('absent', 'preparing', 'prepared', 'activating', 'active', 'closing', 'closed', 'unknown'))
+STOP_TRIGGERS = frozenset(('watchdog', 'publish_stale', 'export_error', 'source_stopped',
+    'authority', 'remote_stop', 'call_closed'))
+
+
+def bounded_ms(value):
+    return min(1800000, max(0, round(value)))
 
 
 def validate_walkthrough_binding(value, now):
@@ -106,6 +112,17 @@ class LiveKitWalkthroughPort(LiveKitAudioPort):
         self.video_publish_task = None
         self.video_close_task = None
         self.blank_task = None
+        self.sdk_phase, self.sdk_phase_at = 'idle', time.monotonic()
+        self.last_sdk_capture_ms = self.last_decode_ms = None
+
+    def set_sdk_phase(self, phase):
+        if phase not in ('idle', 'lock_wait', 'validate', 'decode', 'capture', 'postcheck'):
+            raise VoiceError('walkthrough_diagnostic_phase_refused')
+        self.sdk_phase, self.sdk_phase_at = phase, time.monotonic()
+
+    def sdk_diagnostics(self):
+        return {'sdkPhase': self.sdk_phase, 'sdkPhaseMs': bounded_ms((time.monotonic() - self.sdk_phase_at) * 1000),
+            'lastSdkCaptureMs': self.last_sdk_capture_ms, 'lastDecodeMs': self.last_decode_ms}
 
     def _token_sources(self, identity):
         return ['microphone', 'screen_share'] if identity == self.binding['agentIdentity'] else ['microphone']
@@ -132,7 +149,9 @@ class LiveKitWalkthroughPort(LiveKitAudioPort):
 
     async def publish_video(self, jpeg, frame):
         from livekit import rtc
+        self.set_sdk_phase('lock_wait')
         async with self.video_lock:
+            self.set_sdk_phase('validate')
             if self.closing or self.video_stopped or not self.video_source or not self.video_publication:
                 raise VoiceError('walkthrough_video_unavailable')
             expected = self.binding['presentationBinding']
@@ -141,11 +160,18 @@ class LiveKitWalkthroughPort(LiveKitAudioPort):
                 raise VoiceError('walkthrough_frame_binding_refused')
             if not 0 <= now - frame['capturedAt'] < 1000 or not frame['capturedAt'] <= frame['renderedAt'] <= now:
                 raise VoiceError('walkthrough_frame_stale')
+            self.set_sdk_phase('decode')
+            started = time.monotonic()
             with Image.open(io.BytesIO(jpeg)) as image:
                 if image.format != 'JPEG' or image.size != (1280, 720):
                     raise VoiceError('walkthrough_frame_invalid')
                 raw = image.convert('RGBA').tobytes()
+            self.last_decode_ms = bounded_ms((time.monotonic() - started) * 1000)
+            self.set_sdk_phase('capture')
+            started = time.monotonic()
             self.video_source.capture_frame(rtc.VideoFrame(1280, 720, rtc.VideoBufferType.RGBA, raw))
+            self.last_sdk_capture_ms = bounded_ms((time.monotonic() - started) * 1000)
+            self.set_sdk_phase('postcheck')
             accepted = time.time() * 1000
             if self.video_stopped or self.closing:
                 raise VoiceError('walkthrough_video_unavailable')
@@ -155,6 +181,7 @@ class LiveKitWalkthroughPort(LiveKitAudioPort):
             self.video_evidence = {key: frame[key] for key in ('presentationId', 'manifestFingerprint', 'sceneId', 'generation',
                 'sourceFrameId', 'geometryGeneration', 'capturedAt', 'renderedAt')}
             self.video_evidence.update(acceptedAt=accepted, evidence='sdk_frame_accepted_not_remote_seen')
+            self.set_sdk_phase('idle')
             return copy.deepcopy(self.video_evidence)
 
     async def stop_video(self):
@@ -223,7 +250,12 @@ class ExportAuthority:
         self.local, self.owner = local, owner
 
     async def check(self, generation=None):
+        capture = asyncio.current_task() is self.owner.presentation.capture_task
+        if capture:
+            self.owner.presentation.set_capture_phase('local_authority')
         result = await self.local.check(generation)
+        if capture:
+            self.owner.presentation.set_capture_phase('voice_authority')
         await self.owner.authorize_export()
         return result
 
@@ -246,6 +278,9 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         self.retirement_unknown = False
         self.sharing_diagnostics_started = time.monotonic()
         self.first_sharing_stop = None
+        self.pipeline_at_stop = None
+        self.export_phase, self.export_phase_at = 'idle', time.monotonic()
+        self.export_candidate_at = None
         if runtime_factory is None:
             from task_walkthrough_voice import DeepgramWalkthroughRuntime
             runtime_factory = lambda api, provider, sink: DeepgramWalkthroughRuntime(api, provider, sink, presentation=self)
@@ -280,7 +315,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         manifest = self.presentation.binding['manifest']
         changed = value['runId'] != manifest['runId'] or value['revision'] != manifest['taskRevision']
         if not value['exportActive'] or (changed and not self.call_continuity):
-            self._record_sharing_stop('task_changed' if changed else 'authority_retired')
+            self._record_sharing_stop('task_changed' if changed else 'authority_retired', trigger='authority')
             raise VoiceError('walkthrough_export_stale')
         if self.call_continuity:
             self.presentation.set_scene_evidence(value['sceneEvidenceCurrent'])
@@ -350,8 +385,9 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         try:
             while not self.stopping and not self.sharing_stopped:
                 if self.presentation.stopping:
-                    self._record_sharing_stop('source_unavailable')
+                    self._record_sharing_stop('source_unavailable', trigger='source_stopped')
                     raise VoiceError('walkthrough_source_stopped')
+                self.export_phase, self.export_phase_at = 'context', time.monotonic()
                 await self.authorize_export()
                 source = self.presentation.output_metadata
                 token = self.presentation.output_token
@@ -360,6 +396,8 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
                         'manifestFingerprint': self.presentation.binding['fingerprint']}
                     full = copy.deepcopy(self.presentation.frame)
                     jpeg = self.presentation.output
+                    self.export_candidate_at = frame['capturedAt']
+                    self.export_phase, self.export_phase_at = 'publish', time.monotonic()
                     evidence = await self.port.publish_video(jpeg, frame)
                     self.last_export_capture = frame['capturedAt']
                     last_token = token
@@ -368,6 +406,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
                         self.accepted_frame, self.accepted_video = full, evidence
                         self.video_changed.set()
                 deadline = max(deadline + 1 / 15, asyncio.get_running_loop().time())
+                self.export_phase, self.export_phase_at = 'idle', time.monotonic()
                 await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
         except asyncio.CancelledError:
             raise
@@ -375,7 +414,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
             if not self.stopping:
                 reason = ('frame_stale' if type(error) is VoiceError and error.args == ('walkthrough_frame_stale',)
                           else 'export_unavailable')
-                self._record_sharing_stop(reason)
+                self._record_sharing_stop(reason, trigger='publish_stale' if reason == 'frame_stale' else 'export_error')
                 if not self.retirement_submitted:
                     self.retirement_submitted = True
                     self.retirement_task = asyncio.create_task(self._retire_sharing())
@@ -384,7 +423,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         while not self.stopping and not self.sharing_stopped:
             await asyncio.sleep(.05)
             if self.last_export_capture is not None and self.clock() * 1000 - self.last_export_capture >= 1000:
-                self._record_sharing_stop('frame_stale')
+                self._record_sharing_stop('frame_stale', trigger='watchdog')
                 if not self.retirement_submitted:
                     self.retirement_submitted = True
                     self.retirement_task = asyncio.create_task(self._retire_sharing())
@@ -455,8 +494,9 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
             self._fail('activation_failed')
             raise
 
-    def _record_sharing_stop(self, reason):
-        if reason not in SHARING_STOP_REASONS:
+    def _record_sharing_stop(self, reason, *, trigger=None):
+        trigger = trigger or {'remote_stop': 'remote_stop', 'call_closed': 'call_closed'}.get(reason, 'authority')
+        if reason not in SHARING_STOP_REASONS or trigger not in STOP_TRIGGERS:
             raise VoiceError('walkthrough_diagnostic_reason_refused')
         if self.first_sharing_stop is None:
             age = None if self.last_export_capture is None else min(1800000,
@@ -465,6 +505,33 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
                 'mediaState': self.state if self.state in MEDIA_STATES else 'unknown',
                 'elapsedMs': min(1800000, max(0, round((time.monotonic() - self.sharing_diagnostics_started) * 1000))),
                 'lastFrameAgeMs': age}
+            self.pipeline_at_stop = self._pipeline_snapshot(trigger)
+
+    def _pipeline_snapshot(self, trigger):
+        try:
+            now, monotonic = self.clock() * 1000, time.monotonic()
+            age_of = lambda timestamp: None if timestamp is None else bounded_ms(now - timestamp)
+            sdk = self.port.sdk_diagnostics() if hasattr(self.port, 'sdk_diagnostics') else {
+                'sdkPhase': None, 'sdkPhaseMs': None, 'lastSdkCaptureMs': None, 'lastDecodeMs': None}
+            if (not isinstance(sdk, dict) or set(sdk) != {'sdkPhase', 'sdkPhaseMs', 'lastSdkCaptureMs', 'lastDecodeMs'}
+                    or sdk['sdkPhase'] not in (None, 'idle', 'lock_wait', 'validate', 'decode', 'capture', 'postcheck')):
+                return None
+            value = {'trigger': trigger,
+                'capturePhase': self.presentation.capture_phase,
+                'capturePhaseMs': bounded_ms((monotonic - self.presentation.capture_phase_at) * 1000),
+                'sourceAgeMs': age_of(self.presentation.last_source_at),
+                'renderAgeMs': age_of(self.presentation.last_render_at), 'lastRenderMs': self.presentation.last_render_ms,
+                'exportPhase': self.export_phase, 'exportPhaseMs': bounded_ms((monotonic - self.export_phase_at) * 1000),
+                'candidateAgeMs': age_of(self.export_candidate_at), **sdk}
+            if (value['capturePhase'] not in ('idle', 'local_authority', 'voice_authority', 'source_capture', 'stopped')
+                    or value['exportPhase'] not in ('idle', 'context', 'publish')
+                    or any(v is not None and (type(v) is not int or not 0 <= v <= 1800000)
+                           for k, v in value.items() if k.endswith('Ms'))):
+                return None
+            return value
+        except Exception:
+            # Diagnostic failure must never block Stop or serialize its error.
+            return None
 
     def sharing_diagnostics(self):
         failure = self.presentation.diagnostics.snapshot()['failure']
@@ -479,7 +546,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         return {'firstStop': copy.deepcopy(self.first_sharing_stop),
             'sourceFrames': min(1000000, max(0, self.presentation.counts['sourceFrames'])),
             'renderedFrames': min(1000000, max(0, self.presentation.counts['renderedFrames'])),
-            'presentationFailure': summary}
+            'presentationFailure': summary, 'pipelineAtStop': copy.deepcopy(self.pipeline_at_stop)}
 
     async def stop_sharing(self, *, reason='remote_stop'):
         self._record_sharing_stop(reason)

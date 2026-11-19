@@ -357,6 +357,151 @@ function mediaFixture() {
   return { ...f, request, raw, port };
 }
 describe("walkthrough media and native adapters", () => {
+  const pipeline = {
+    trigger: "watchdog",
+    capturePhase: "source_capture",
+    capturePhaseMs: 450,
+    sourceAgeMs: 1100,
+    renderAgeMs: 24,
+    lastRenderMs: 12,
+    exportPhase: "context",
+    exportPhaseMs: 31,
+    candidateAgeMs: null,
+    sdkPhase: "idle",
+    sdkPhaseMs: 3,
+    lastSdkCaptureMs: 4,
+    lastDecodeMs: 5,
+  };
+  async function pipelineObservation(pipelineAtStop: unknown) {
+    const f = mediaFixture();
+    const sharingDiagnostics = {
+      firstStop: {
+        reason: "frame_stale",
+        mediaState: "prepared",
+        elapsedMs: 2500,
+        lastFrameAgeMs: 1100,
+      },
+      sourceFrames: 10,
+      renderedFrames: 20,
+      presentationFailure: null,
+      pipelineAtStop,
+    };
+    f.request.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ...f.raw,
+          state: "closed",
+          closed: true,
+          sharingActive: false,
+          sharingDiagnostics,
+        }),
+      ),
+    );
+    return { f, sharingDiagnostics };
+  }
+  it.each([
+    null,
+    pipeline,
+    {
+      ...pipeline,
+      trigger: "publish_stale",
+      exportPhase: "publish",
+      sdkPhase: "validate",
+    },
+    {
+      ...pipeline,
+      trigger: "publish_stale",
+      exportPhase: "publish",
+      sdkPhase: "postcheck",
+    },
+    {
+      ...pipeline,
+      capturePhase: "local_authority",
+      sdkPhase: null,
+      sdkPhaseMs: null,
+      sourceAgeMs: null,
+      renderAgeMs: null,
+      lastRenderMs: null,
+      lastSdkCaptureMs: null,
+      lastDecodeMs: null,
+      exportPhaseMs: 1_800_000,
+    },
+    { ...pipeline, capturePhase: "voice_authority", trigger: "authority" },
+  ])(
+    "retains bounded first-stop pipeline metadata without changing cleanup: %j",
+    async (value) => {
+      const { f, sharingDiagnostics } = await pipelineObservation(value);
+      const observation = await f.port.inspect(f.plan);
+      expect(
+        "sharingDiagnostics" in observation && observation.sharingDiagnostics,
+      ).toEqual(sharingDiagnostics);
+      expect(observation.state).toBe("closed");
+      expect(f.request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { trigger: "raw_exception" },
+    { capturePhase: "raw_path" },
+    { exportPhase: "provider" },
+    { sdkPhase: "raw_error" },
+    { capturePhaseMs: -1 },
+    { sourceAgeMs: 1_800_001 },
+    { renderAgeMs: 1.5 },
+    { lastRenderMs: "1" },
+    { exportPhaseMs: null },
+    { candidateAgeMs: -1 },
+    { sdkPhaseMs: 1_800_001 },
+    { lastSdkCaptureMs: false },
+    { lastDecodeMs: -1 },
+    { error: "unapproved text" },
+  ])(
+    "refuses malformed pipeline metadata without retry: %j",
+    async (override) => {
+      const { f } = await pipelineObservation({ ...pipeline, ...override });
+      await expect(f.port.inspect(f.plan)).rejects.toThrow();
+      expect(f.request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves audio-only stripping of sharing diagnostics", async () => {
+    const f = mediaFixture();
+    const {
+      version,
+      mode,
+      exportGrantId,
+      callKind,
+      presentationBinding,
+      dispatchExpiresAt,
+      instructions,
+      nativeActivation,
+      ...base
+    } = f.plan;
+    const old: TaskAudioPlan = {
+      ...base,
+      video: false,
+      screen: false,
+      presentation: false,
+      expiresAt: f.auth.expiresAt,
+    };
+    f.request.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ...f.raw,
+          video: false,
+          screen: false,
+          presentation: false,
+          bindingFingerprint: taskHandsetMediaFingerprint(old),
+          sharingDiagnostics: { pipelineAtStop: pipeline },
+        }),
+      ),
+    );
+    const observation = await f.port.inspect(old);
+    expect(observation.video).toBe(false);
+    expect(observation).not.toHaveProperty("sharingDiagnostics");
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+
   it("retains bounded first-retirement diagnostics through closed status without treating them as success evidence", async () => {
     const f = mediaFixture();
     const sharingDiagnostics = {

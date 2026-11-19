@@ -505,8 +505,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from task_voice import VoiceError
 from task_voice_livekit import fingerprint, validate_binding
-from task_presentation import validate_prepare
-from task_presentation_diagnostics import PresentationDiagnostics
+from task_presentation import validate_prepare, TaskPresentationRuntime
 from task_walkthrough_livekit import validate_walkthrough_binding, WalkthroughTaskAPI, TaskWalkthroughLiveKit
 from task_walkthrough_livekit_local import validate_export
 wire=json.load(sys.stdin)
@@ -539,9 +538,11 @@ api=SimpleNamespace(task_id=b['taskId'],voice_id=b['voiceSessionId'],request=req
 WalkthroughTaskAPI(api,b).validate_context(wire['context'])
 async def exercise():
     cleanup={'captureStopped':True,'narrationStopped':True,'outputCleared':True,'childrenJoined':True}
-    presentation=SimpleNamespace(binding=p,narrator=None,armed=True,stopping=False,authority=SimpleNamespace(check=AsyncMock(return_value={'sceneEvidenceCurrent':True})),
-        diagnostics=PresentationDiagnostics(),counts={'sourceFrames':0,'renderedFrames':0},set_scene_evidence=Mock(),
-        prepare=AsyncMock(return_value={'ready':True}),local_start=AsyncMock(),stop=AsyncMock(return_value=cleanup))
+    source=SimpleNamespace(close=AsyncMock())
+    presentation=TaskPresentationRuntime(p,SimpleNamespace(check=AsyncMock(return_value={'sceneEvidenceCurrent':True})),
+        source,SimpleNamespace(prepare=Mock()))
+    presentation.armed=True
+    presentation.local_start=AsyncMock()  # Wire/metadata only: never start a source or capture pixels.
     provider=SimpleNamespace(readiness=AsyncMock(),open=AsyncMock(),close=AsyncMock())
     port=SimpleNamespace(prepare=AsyncMock(return_value={'livekit_url':'wss://example.invalid','participant_token':'synthetic',
         'remote_participant_identity':b['agentIdentity']}),stop_video=AsyncMock(return_value=True),close=AsyncMock(return_value=True))
@@ -558,7 +559,11 @@ async def exercise():
         assert events==[{'suffix':'/presentation/opening','body':{'eventId':wire['openingEventId']}}]
     finally:
         await owner.close()
-    return {'prepared':result['sharingDiagnostics'],'closed':owner.status()['sharingDiagnostics']}
+    source.close.assert_awaited_once()
+    snapshot=owner.status()['sharingDiagnostics']
+    presentation.last_source_at=time.time()*1000
+    assert owner.status()['sharingDiagnostics']['pipelineAtStop']==snapshot['pipelineAtStop']
+    return {'prepared':result['sharingDiagnostics'],'closed':snapshot}
 diagnostics=asyncio.run(exercise())
 print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId':wire['openingEventId'],'rejections':4,'providerOpened':False,'diagnostics':diagnostics}))
 `;
@@ -599,6 +604,7 @@ print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId
         sourceFrames: 0,
         renderedFrames: 0,
         presentationFailure: null,
+        pipelineAtStop: null,
       });
       const closedDiagnostics = taskWalkthroughSharingDiagnosticsSchema.parse(
         diagnostics.closed,
@@ -613,6 +619,21 @@ print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId
         sourceFrames: 0,
         renderedFrames: 0,
         presentationFailure: null,
+        pipelineAtStop: {
+          trigger: "call_closed",
+          capturePhase: "idle",
+          capturePhaseMs: expect.any(Number),
+          sourceAgeMs: null,
+          renderAgeMs: null,
+          lastRenderMs: null,
+          exportPhase: "idle",
+          exportPhaseMs: expect.any(Number),
+          candidateAgeMs: null,
+          sdkPhase: null,
+          sdkPhaseMs: null,
+          lastSdkCaptureMs: null,
+          lastDecodeMs: null,
+        },
       });
     },
     20000,

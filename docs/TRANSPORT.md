@@ -801,6 +801,15 @@ the media runtime starts its single dialogue provider. SDK frame acceptance,
 establish physical handset visibility or audibility. Native video handoff evidence
 is retained separately in sanitized call status.
 
+Optional walkthrough `sharingDiagnostics.pipelineAtStop` preserves a bounded
+snapshot taken with the first sharing-stop reason. Allowlisted trigger and
+capture/export/SDK phases distinguish watchdog expiry from SDK validation or
+postcheck rejection; bounded durations and frame ages locate delayed stages.
+Absent older snapshots and null unavailable measurements remain valid. These
+observations contain no source data or exception text and establish neither the
+cause of an earlier uninstrumented failure nor handset visibility. Audio-only
+observations retain their existing behavior and do not expose sharing metadata.
+
 `HTTPTaskWalkthroughPresentationHost` uses fixed loopback routes
 `/presentation/prepare`, `/presentation/show`, `/presentation/observe` and
 `/stop-sharing`. Preparation validates metadata without capture or room/provider

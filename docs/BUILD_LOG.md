@@ -2146,3 +2146,73 @@ Lead scope/secret review and `git diff --check` passed. Connector independently
 reviewed the source and five targeted regressions; transport reviewed evidence
 and handoff boundaries. No Swift source changed. This checkpoint has no new
 handset acceptance or step-d/e qualification tag.
+
+
+## November 19, 2026 — second continuity retest confirms freshness retirement
+
+The user authorized one additional visual retest and the previously described
+backend-only standby/restoration. Lead reused the legitimately review-ready task
+at revision 3, preserving both historical task records and all receipts. No new
+worker/run or acceptance occurred. Current preview, source and revision-3 result
+were checked; all exact window targets resolved. Fresh one-call/export/capture
+identities with continuity enabled, standby proof, native identity and exclusive
+idle-line checks preceded one submission. Each attempt spawns fresh Python, so
+this call loaded the `2809bb0` pacing/classification changes without restarting
+the unchanged TypeScript parent.
+
+Attempt `call_attempt_b0bfed97-240b-4fe2-9fc8-3137ccf87d84` completed media prepare
+and native dial, then retired sharing while prepared: first reason frame_stale,
+elapsed 16,458 ms, last successful source-frame age 1,017 ms, 54 source / 174
+rendered frames, no presentationFailure and zero speechFrames. Later activation
+remains unknown as recorded. Native end/media close/final cleanup are confirmed;
+lead also submitted one exact local Stop during cleanup. All six admissions are
+closed. User reported “just hung up again.” No physical continuity, view-switching,
+acceptance or sharing-Stop qualification resulted.
+
+Restored deployment `2197b683-d03e-4381-9c37-d8cda54d9a12` matched exact original
+variables and actual live runtime/environment with traffic true and zero pending,
+unknown hosted effects and active calls. Standby
+`9ef7a104-6e6f-4aea-9780-6b7aea93a2b2` was removed. Private bounded proofs are in
+`continuity-retest-2-20261119/`. No screens/audio were persisted. Call and standby
+permissions are consumed; no automatic redial or broader capture was attempted.
+
+The timing repair fixed its reproduced offline case but did not resolve the live
+failure. The new reason establishes freshness retirement, not its upstream cause.
+The last-successful-frame age alone cannot distinguish watchdog versus SDK
+rejection or acquisition, render, context and event-loop delay. Team is adding
+bounded first-stop pipeline timing metadata and independent synthetic fault cases,
+without changing the one-second limit, capture authority, Stop or call admission.
+Local capture qualification must precede another proposed handset test; synthetic
+success alone is not a basis to repeat calls with the human.
+
+
+Diagnostic-only follow-up: media now freezes an optional `pipelineAtStop` with
+its first sharing-stop reason. It distinguishes watchdog/publication triggers
+and capture-local-authority/voice-context/source, export-context/publication and
+SDK validation/decode/capture/postcheck phases. Elapsed/age fields are bounded
+milliseconds or null; no identifiers, window names, arbitrary errors, transcript,
+pixels or audio are added. Candidate age means the most recent selected candidate,
+not necessarily one currently in SDK publication. A snapshot reports observations
+at retirement, not causal attribution by itself. Diagnostic collection failure
+returns null and cannot prevent Stop.
+
+Transport validates the optional strict shape, preserving old snapshots and the
+existing audio-only stripping behavior. Connector exercised actual Python closed
+status through the TypeScript parser and shutdown-summary retention. Fault tests
+independently stall source capture, each authority path, rendering and publication,
+assert guarded clearance/cleanup and frozen first evidence after close, and check
+bounded normal jitter. Connector's independent eight-case matrix passed in
+15.147s; its 89 focused integration checks passed. These synthetic cases isolate
+the diagnostic behavior but do not qualify real Mac capture or repair this live
+failure. No freshness, capture authority, call admission or retry guard changed.
+
+The current parent process remains the previous build; the new strict TypeScript
+parser must be loaded by an idle, state-preserving refresh before any future new
+media process uses this wire shape. No extra call, local capture session, daemon
+restart or deployment occurred during this diagnostic work.
+
+Final validation: `npm run check` passed typecheck, 1,308 tests across 73 files
+(12.09s), and build. The complete media suite passed 378 tests in 104.937s.
+Independent transport/connector/media reviews and `git diff --check` passed.
+This checkpoint preserves diagnostic evidence; it does not claim a live repair
+or physical acceptance of continuous sharing.

@@ -50,6 +50,41 @@ export const taskWalkthroughVideoEvidenceSchema = z
 export type TaskWalkthroughVideoEvidence = z.infer<
   typeof taskWalkthroughVideoEvidenceSchema
 >;
+const pipelineDuration = z.number().int().min(0).max(1_800_000);
+/** Frozen with firstStop; timings diagnose the pipeline, not handset visibility. */
+export const taskWalkthroughPipelineAtStopSchema = z
+  .object({
+    trigger: z.enum([
+      "watchdog",
+      "publish_stale",
+      "export_error",
+      "source_stopped",
+      "authority",
+      "remote_stop",
+      "call_closed",
+    ]),
+    capturePhase: z.enum([
+      "idle",
+      "local_authority",
+      "voice_authority",
+      "source_capture",
+      "stopped",
+    ]),
+    capturePhaseMs: pipelineDuration,
+    sourceAgeMs: pipelineDuration.nullable(),
+    renderAgeMs: pipelineDuration.nullable(),
+    lastRenderMs: pipelineDuration.nullable(),
+    exportPhase: z.enum(["idle", "context", "publish"]),
+    exportPhaseMs: pipelineDuration,
+    candidateAgeMs: pipelineDuration.nullable(),
+    sdkPhase: z
+      .enum(["idle", "lock_wait", "validate", "decode", "capture", "postcheck"])
+      .nullable(),
+    sdkPhaseMs: pipelineDuration.nullable(),
+    lastSdkCaptureMs: pipelineDuration.nullable(),
+    lastDecodeMs: pipelineDuration.nullable(),
+  })
+  .strict();
 /** Bounded diagnostic metadata only; never source pixels, exception text or authority. */
 export const taskWalkthroughSharingDiagnosticsSchema = z
   .object({
@@ -81,6 +116,7 @@ export const taskWalkthroughSharingDiagnosticsSchema = z
       .nullable(),
     sourceFrames: z.number().int().min(0).max(1_000_000),
     renderedFrames: z.number().int().min(0).max(1_000_000),
+    pipelineAtStop: taskWalkthroughPipelineAtStopSchema.nullable().optional(),
     presentationFailure: z
       .object({
         phase: z.enum([
