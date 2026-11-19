@@ -385,5 +385,5 @@ class DeepgramWalkthroughRuntime(DeepgramTaskVoiceRuntime):
             changed = (value['runId'], value['revision']) != (self.context['runId'], self.context['revision'])
             if changed or not value['exportActive']:
                 if not self.presentation.sharing_stopped:
-                    await self.presentation.stop_sharing()
+                    await self.presentation.stop_sharing(reason='task_changed' if changed else 'authority_retired')
             self.context = value

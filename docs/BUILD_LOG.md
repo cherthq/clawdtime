@@ -1855,3 +1855,106 @@ focused media validation passed 79 tests in 2.840s. No failing run is counted as
 passed. Independent source/doc reviews completed, lead reviewed scope/secrets,
 and `git diff --check` passed. Only local source/service repair was installed;
 no production code deployment or additional handset test is implied.
+
+## 2026-11-19 — Resumed desktop decision flow; review activation failure
+
+The user specifically authorized both calls in one desktop-to-two-call rehearsal,
+prepared views and spoken task instructions, plus temporary ClawdTime-backend-only
+standby/restoration. Resumed the existing desktop-created task instead of resetting
+its history: it already contained two completed runs and an unresolved choice at
+revision 7. Same service, project, task and source session remained authoritative.
+Source session lifetime and idle receipts were checked; the paired native line
+was available and the hosted owner had zero pending/unknown effects or active calls.
+The media specialist passed the helper build, three capture-policy tests, four
+pinned SDK smoke tests and three clarification regressions without live effects.
+
+Refreshed the current source/result documents, verified displayed revision 7,
+and waited for the user to place the exact windows on the current desktop. All
+three metadata target checks passed. Standby deployment
+`742fd92f-ef9f-43dd-9cdb-98200ee8935b` matched current variables and actual runtime
+standby/traffic-false state. A new decision request was submitted exactly once;
+HTTP 202 was followed by actual native connection and media activation evidence.
+
+The specific spoken empty-state choice created exactly one additional scoped
+Codex run. It completed in **32,121 ms**; independent filter/empty-state assertions
+and JavaScript syntax passed, yielding **review_ready revision 11**. The user
+reported that the first call seemed to work, with a dark picture after the
+instruction. That retirement is expected when a new run invalidates old shared
+views; voice continuity after clearance was not individually confirmed. The
+picture transition needs clearer explanation in the product experience. Native
+cleanup, media closure and presentation Stop completed without canceling coding.
+
+The old preview server was no longer listening when the lead reloaded the page
+after the first call. Restarted only that loopback fixture server and verified
+the actual new browser result: “No tasks match,” Clear filters restoring both
+rows, and uppercase RELEASE selecting only the release-notes row. The first
+call had shown the existing unchanged pre-revision page. Rebuilt the source and
+verification snapshots for revision 11. TextEdit initially retained older file
+contents and one close operation timed out; metadata confirmed that window had
+closed, and reopening through its native recent-files menu displayed the updated
+source. The user restored the prepared windows to the current desktop before
+fresh exact-window resolution and the review request.
+
+The same authorized standby window covered the separately bound review call;
+transport independently confirmed each runtime performs fresh native/deployment/
+authority checks. New request, manifest, grants, authorization and attempt IDs
+were used. A real prepared preview frame reached the SDK. Sharing retired while
+media was still prepared/ringing, before conversation activation. Native
+connection, authority checks and activation-budget checks subsequently passed;
+media activation remained an unknown effect receipt and cleanup ended the call.
+The human reported automatic hangup. **Zero speech frames** were accepted for
+this review attempt. The exact first retirement trigger was not recorded; no
+provider-outage, source-window, or underlying-repair claim is justified.
+
+Both new admissions are closed with native cleanup complete and media closed.
+The task remains **review_ready revision 11**, three completed runs in its total
+history, with no acceptance and no additional run from the review attempt. This
+was a resumed flow, and its failed review does **not** count as a completed
+planned two-call acceptance rehearsal. Both call authorizations are consumed;
+there was no redial or third call. Private request, receipt and bounded metadata
+proofs remain under the rehearsal root's `rehearsal-20261119/` directory. Screens
+and audio were not persisted.
+
+Restoration deployment `326891e4-d1cd-476f-ad7a-5806dd2ba36c` succeeded. Read-only
+checks established exact original variable equality, actual runtime/environment
+live, traffic true and zero pending/unknown effects or active calls. The standby
+deployment was removed. The historical unknown activation receipt is preserved
+alongside confirmed cleanup; it was not rewritten as successful. Apple Teams,
+sibling chert-facetime and the unrelated original desktop service/task were not
+changed.
+
+### Diagnostic checkpoint and verification
+
+Added optional walkthrough-only sharing diagnostics. They retain the first
+observed retirement reason, lifecycle phase, bounded elapsed time/frame age,
+source/render counters, and allowlisted presentation failure categories through
+cleanup. The strict TypeScript parser rejects arbitrary nested fields/reasons;
+shutdown summaries retain only typed metadata. No pixels, audio, transcripts,
+raw exception text or provider bodies are added. The first cause survives later
+Stop/close calls. Activation, capture, freshness and authority guards are unchanged.
+This improves the next diagnosis; it does not establish or fix this call's trigger.
+
+Independent transport and connector reviews approved the change. Tests cover
+source loss, stale frames, authority/task retirement, SDK export failure,
+first-cause preservation after close, bounded metadata/no raw-text disclosure,
+optional old responses, real Python-to-TypeScript wire validation and actual
+runtime shutdown-summary retention while preserving the shared owner.
+
+- Final `npm run check`: **1,268 tests in 73 files, 12.20s**, typecheck and build passed.
+- Final full media discovery: **358 tests in 77.079s**, OK, exit 0.
+- Focused media regression: **90 tests in 13.635s**; transport focused tests: **46 passed**.
+- The first full TypeScript run exposed a cross-language test fake missing the
+  newly used diagnostics/counters. Updated that fake to use real presentation
+  diagnostics and validated both prepared/closed snapshots against the actual
+  TypeScript schema. The final complete run passed; the earlier failure is not
+  counted as a pass. No production fallback was added to conceal missing state.
+- No Swift implementation changed. The non-live helper build and policy checks
+  above remain the applicable Mac validation.
+
+After all checks and confirmed cleanup, gracefully refreshed only the idle local
+rehearsal service to load the diagnostics. The old process released its owner
+lock naturally. Authenticated readiness confirmed unchanged task/revision,
+desktop identity, configuration fingerprint and exact closed admissions. It is
+awaiting fresh call authorization; no session renewal, worker replay, capture,
+provider connection or call occurred. No production code update or d/e completion
+tag is claimed. Lead scope/secret review and `git diff --check` passed.

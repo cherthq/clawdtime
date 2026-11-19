@@ -163,6 +163,7 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         await self.owner.close()
         self.assertFalse(any(path == '/end' for path, body in self.api.calls))
         self.provider.readiness.assert_not_awaited()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop']['reason'], 'call_closed')
     async def test_audio_smoke_validator_still_rejects_new_mode(self):
         with self.assertRaises(VoiceError):
             validate_binding(self.b, time.time())
@@ -213,6 +214,61 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         await self.owner.retirement_task
         self.assertEqual(sum(path == '/presentation/retire' for path, body in self.api.calls), 1)
         self.assertFalse(self.owner.stopping)
+        before = self.owner.status()['sharingDiagnostics']
+        self.assertEqual(before['firstStop']['reason'], 'source_unavailable')
+        self.assertEqual(before['firstStop']['mediaState'], 'prepared')
+        await self.owner.close()
+        self.assertEqual(self.owner.status()['sharingDiagnostics'], before)
+
+    async def test_diagnostics_distinguish_task_change_and_authority_retirement(self):
+        self.api.value['exportActive'] = False
+        with self.assertRaises(VoiceError):
+            await self.owner.authorize_export()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop']['reason'], 'authority_retired')
+        # A later task change must not overwrite the first observed cause.
+        self.api.value['revision'] += 1
+        with self.assertRaises(VoiceError):
+            await self.owner.authorize_export()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop']['reason'], 'authority_retired')
+
+    async def test_diagnostics_bound_metadata_and_never_serialize_exception_text(self):
+        self.renderer.diagnostics.fail(VoiceError('SECRET_PROVIDER_BODY_AND_TRANSCRIPT'), 'source_capture')
+        self.renderer.counts.update(sourceFrames=1000001, renderedFrames=1000002)
+        self.owner.last_export_capture = 0
+        self.owner.sharing_diagnostics_started -= 1900
+        await self.owner.stop_sharing()
+        value = self.owner.status()['sharingDiagnostics']
+        self.assertEqual(value['firstStop']['reason'], 'remote_stop')
+        self.assertEqual(value['firstStop']['elapsedMs'], 1800000)
+        self.assertEqual(value['firstStop']['lastFrameAgeMs'], 1800000)
+        self.assertEqual((value['sourceFrames'], value['renderedFrames']), (1000000, 1000000))
+        self.assertEqual(value['presentationFailure'], {'phase': 'source_capture', 'reason': 'other'})
+        self.assertNotIn('SECRET', json.dumps(value))
+        with self.assertRaises(VoiceError):
+            self.owner._record_sharing_stop('arbitrary_secret_reason')
+        await self.owner.close()
+        self.assertEqual(self.owner.status()['sharingDiagnostics'], value)
+
+    async def test_changed_task_is_diagnostic_only_and_does_not_enable_activation(self):
+        await self.owner.prepare(self.b)
+        self.api.value['revision'] += 1
+        with self.assertRaises(VoiceError):
+            await self.owner.fresh_video()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop']['reason'], 'task_changed')
+        self.provider.open.assert_not_awaited()
+
+    async def test_export_failure_records_generic_reason_without_error_payload(self):
+        await self.owner.prepare(self.b)
+        self.port.publish_video = AsyncMock(side_effect=RuntimeError('PRIVATE_URL_TOKEN_TEXT'))
+        async with asyncio.timeout(2):
+            while not self.owner.retirement_task:
+                await asyncio.sleep(.01)
+        await self.owner.retirement_task
+        value = self.owner.status()['sharingDiagnostics']
+        self.assertEqual(value['firstStop']['reason'], 'export_unavailable')
+        self.assertNotIn('PRIVATE', json.dumps(value))
+        await self.owner.close()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop'], value['firstStop'])
     async def test_controller_routes_require_exact_binding_and_no_browser(self):
         server = TestServer(web_app := control_app(self.owner, self.b, 'x' * 40, 3322))
         client = TestClient(server)
@@ -280,6 +336,11 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         gate.set()
         if self.owner.retirement_task:
             await self.owner.retirement_task
+        value = self.owner.status()['sharingDiagnostics']
+        self.assertEqual(value['firstStop']['reason'], 'frame_stale')
+        self.assertEqual(value['firstStop']['mediaState'], 'prepared')
+        self.assertGreaterEqual(value['firstStop']['lastFrameAgeMs'], 1000)
+        self.provider.open.assert_not_awaited()
 
     async def test_stop_after_failed_speech_clear_still_stops_source_and_video(self):
         await self.owner.prepare(self.b)

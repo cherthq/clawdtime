@@ -357,6 +357,159 @@ function mediaFixture() {
   return { ...f, request, raw, port };
 }
 describe("walkthrough media and native adapters", () => {
+  it("retains bounded first-retirement diagnostics through closed status without treating them as success evidence", async () => {
+    const f = mediaFixture();
+    const sharingDiagnostics = {
+      firstStop: {
+        reason: "source_unavailable",
+        mediaState: "active",
+        elapsedMs: 1200,
+        lastFrameAgeMs: 400,
+      },
+      sourceFrames: 18,
+      renderedFrames: 17,
+      presentationFailure: {
+        phase: "source_capture",
+        reason: "source_refused",
+      },
+    };
+    f.request.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ...f.raw,
+          state: "closed",
+          closed: true,
+          sharingActive: false,
+          sharingDiagnostics,
+        }),
+      ),
+    );
+    const observation = await f.port.inspect(f.plan);
+    expect(
+      "sharingDiagnostics" in observation && observation.sharingDiagnostics,
+    ).toEqual(sharingDiagnostics);
+    expect(observation.state).toBe("closed");
+    expect(f.request).toHaveBeenCalledTimes(1);
+    expect(f.request.mock.calls[0]![1]!.method).toBe("GET");
+  });
+
+  it("accepts a diagnostic snapshot before retirement without fabricating a cause", async () => {
+    const f = mediaFixture(),
+      sharingDiagnostics = {
+        firstStop: null,
+        sourceFrames: 0,
+        renderedFrames: 0,
+        presentationFailure: null,
+      };
+    f.request.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ...f.raw, sharingDiagnostics })),
+    );
+    const observation = await f.port.inspect(f.plan);
+    expect(
+      "sharingDiagnostics" in observation && observation.sharingDiagnostics,
+    ).toEqual(sharingDiagnostics);
+  });
+
+  it("retains authority retirement separately from task change and accepts saturated bounded counters", async () => {
+    const f = mediaFixture();
+    const sharingDiagnostics = {
+      firstStop: {
+        reason: "authority_retired",
+        mediaState: "closing",
+        elapsedMs: 1_800_000,
+        lastFrameAgeMs: 1_800_000,
+      },
+      sourceFrames: 1_000_000,
+      renderedFrames: 1_000_000,
+      presentationFailure: null,
+    };
+    f.request.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ...f.raw, sharingDiagnostics })),
+    );
+    const observation = await f.port.inspect(f.plan);
+    expect(
+      "sharingDiagnostics" in observation && observation.sharingDiagnostics,
+    ).toEqual(sharingDiagnostics);
+  });
+
+  it.each([
+    { sourceFrames: -1 },
+    { sourceFrames: 1_000_001 },
+    { renderedFrames: 0.5 },
+    { extra: "unapproved text" },
+    {
+      firstStop: {
+        reason: "raw_error",
+        mediaState: "active",
+        elapsedMs: 1,
+        lastFrameAgeMs: null,
+      },
+    },
+    {
+      firstStop: {
+        reason: "frame_stale",
+        mediaState: "active",
+        elapsedMs: 1_800_001,
+        lastFrameAgeMs: null,
+      },
+    },
+    {
+      firstStop: {
+        reason: "frame_stale",
+        mediaState: "active",
+        elapsedMs: 1,
+        lastFrameAgeMs: -1,
+      },
+    },
+    {
+      firstStop: {
+        reason: "frame_stale",
+        mediaState: "arbitrary",
+        elapsedMs: 1,
+        lastFrameAgeMs: null,
+      },
+    },
+    {
+      firstStop: {
+        reason: "frame_stale",
+        mediaState: "active",
+        elapsedMs: 1,
+        lastFrameAgeMs: null,
+        error: "private text",
+      },
+    },
+    { presentationFailure: { phase: "raw_phase", reason: "other" } },
+    { presentationFailure: { phase: "other", reason: "raw_error" } },
+    {
+      presentationFailure: {
+        phase: "other",
+        reason: "other",
+        stack: "private text",
+      },
+    },
+  ])(
+    "refuses malformed or unallowlisted sharing diagnostics without retry: %j",
+    async (override) => {
+      const f = mediaFixture();
+      f.request.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...f.raw,
+            sharingDiagnostics: {
+              firstStop: null,
+              sourceFrames: 1,
+              renderedFrames: 1,
+              presentationFailure: null,
+              ...override,
+            },
+          }),
+        ),
+      );
+      await expect(f.port.inspect(f.plan)).rejects.toThrow();
+      expect(f.request).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("requires explicit new binding and retains real fractional SDK evidence", async () => {
     const f = mediaFixture();
     expect(f.request).not.toHaveBeenCalled();

@@ -890,6 +890,9 @@ export async function runHandsetAttempt(
           ...(observation.audioOutput
             ? { audioOutput: observation.audioOutput }
             : {}),
+          ...("sharingDiagnostics" in observation && observation.sharingDiagnostics
+            ? { sharingDiagnostics: observation.sharingDiagnostics }
+            : {}),
           physicalAcceptance: false,
         });
       } catch {

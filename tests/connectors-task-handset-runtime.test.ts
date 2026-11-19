@@ -94,8 +94,36 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("joins a stopped pending preflight before finishing and never reserves/dials or closes the shared task owner", async () => {
+async function verifyStoppedRuntime(withDiagnostics: boolean) {
+  vi.clearAllMocks();
   vi.useFakeTimers();
+  const sharingDiagnostics = {
+    firstStop: {
+      reason: "frame_stale",
+      mediaState: "prepared",
+      elapsedMs: 2100,
+      lastFrameAgeMs: 1050,
+    },
+    sourceFrames: 8,
+    renderedFrames: 24,
+    presentationFailure: {
+      phase: "source_capture",
+      reason: "source_refused",
+    },
+  };
+  const audioOutput = {
+    evidence: "sdk_acceptance_not_audibility",
+    preparedSilentFrames: 12,
+    speechFrames: 0,
+  };
+  boundary.mediaInspect.mockImplementation(async () => ({
+    state: "closed",
+    closed: true,
+    sharingActive: false,
+    audioOutput,
+    ...(withDiagnostics ? { sharingDiagnostics } : {}),
+    unrelatedRawText: "UNTRUSTED_PROVIDER_OR_SOURCE_TEXT",
+  }));
   const directory = realpathSync(
       mkdtempSync(join(tmpdir(), "clawdtime-runtime-race-")),
     ),
@@ -108,7 +136,10 @@ it("joins a stopped pending preflight before finishing and never reserves/dials 
     writeFileSync(path, JSON.stringify(value), { mode: 0o600 });
     return path;
   };
-  const ownerPath = put("owner.lock", { pid: process.pid, fixtureOwner: true }),
+  const ownerPath = put("owner.lock", {
+      pid: process.pid,
+      fixtureOwner: true,
+    }),
     ownerBefore = readFileSync(ownerPath, "utf8");
   const store = new Store(join(state, "tasks.sqlite")),
     vault = new Vault("ce".repeat(32));
@@ -344,6 +375,20 @@ it("joins a stopped pending preflight before finishing and never reserves/dials 
   expect(boundary.reserve).not.toHaveBeenCalled();
   expect(boundary.prepare).not.toHaveBeenCalled();
   expect(boundary.dial).not.toHaveBeenCalled();
+  const summaryText = readFileSync(
+    join(c.attemptDirectory, "shutdown-summary.json"),
+    "utf8",
+  );
+  const summary = JSON.parse(summaryText);
+  expect(summary).toEqual({
+    at: expect.any(Number),
+    undialed: true,
+    audioOutput,
+    ...(withDiagnostics ? { sharingDiagnostics } : {}),
+    physicalAcceptance: false,
+  });
+  expect(summaryText).not.toContain("UNTRUSTED_PROVIDER_OR_SOURCE_TEXT");
+  expect(summaryText).not.toContain("unrelatedRawText");
   expect(boundary.inspectorClose).toHaveBeenCalledOnce();
   expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   expect(closes).toHaveLength(2);
@@ -367,4 +412,9 @@ it("joins a stopped pending preflight before finishing and never reserves/dials 
   expect(tasks.ledger.get(session.session.id, task.id).state).toBe(
     "review_ready",
   );
-});
+}
+
+it.each([false, true])(
+  "joins stopped preflight and preserves bounded shutdown diagnostics when present (%s)",
+  verifyStoppedRuntime,
+);

@@ -20,6 +20,9 @@ PRESENTATION_FIELDS = {'presentationId', 'manifestFingerprint', 'presentationGra
 FIELDS = {'mediaSessionId', 'taskId', 'voiceSessionId', 'callAttemptId', 'roomName', 'workerIdentity', 'agentIdentity',
     'mode', 'dispatchExpiresAt', 'expiresAt', 'exportGrantId', 'presentationBinding', 'planFingerprint',
     'audio', 'video', 'screen', 'presentation', 'instructions', 'control', 'nativeActivation'}
+SHARING_STOP_REASONS = frozenset(('source_unavailable', 'frame_stale', 'export_unavailable',
+    'task_changed', 'authority_retired', 'remote_stop', 'call_closed'))
+MEDIA_STATES = frozenset(('absent', 'preparing', 'prepared', 'activating', 'active', 'closing', 'closed', 'unknown'))
 
 
 def validate_walkthrough_binding(value, now):
@@ -235,6 +238,8 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         self.retirement_submitted = False
         self.retirement_task = None
         self.retirement_unknown = False
+        self.sharing_diagnostics_started = time.monotonic()
+        self.first_sharing_stop = None
         if runtime_factory is None:
             from task_walkthrough_voice import DeepgramWalkthroughRuntime
             runtime_factory = lambda api, provider, sink: DeepgramWalkthroughRuntime(api, provider, sink, presentation=self)
@@ -267,7 +272,9 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
             raise VoiceError('walkthrough_sharing_stopped')
         value = await self.api.context()
         manifest = self.presentation.binding['manifest']
-        if (not value['exportActive'] or value['runId'] != manifest['runId'] or value['revision'] != manifest['taskRevision']):
+        changed = value['runId'] != manifest['runId'] or value['revision'] != manifest['taskRevision']
+        if not value['exportActive'] or changed:
+            self._record_sharing_stop('task_changed' if changed else 'authority_retired')
             raise VoiceError('walkthrough_export_stale')
         self._check()
         return value
@@ -333,6 +340,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         try:
             while not self.stopping and not self.sharing_stopped:
                 if self.presentation.stopping:
+                    self._record_sharing_stop('source_unavailable')
                     raise VoiceError('walkthrough_source_stopped')
                 await self.authorize_export()
                 source = self.presentation.output_metadata
@@ -355,6 +363,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
             raise
         except Exception:
             if not self.stopping:
+                self._record_sharing_stop('export_unavailable')
                 if not self.retirement_submitted:
                     self.retirement_submitted = True
                     self.retirement_task = asyncio.create_task(self._retire_sharing())
@@ -363,6 +372,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         while not self.stopping and not self.sharing_stopped:
             await asyncio.sleep(.05)
             if self.last_export_capture is not None and self.clock() * 1000 - self.last_export_capture >= 1000:
+                self._record_sharing_stop('frame_stale')
                 if not self.retirement_submitted:
                     self.retirement_submitted = True
                     self.retirement_task = asyncio.create_task(self._retire_sharing())
@@ -371,7 +381,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
     async def _retire_sharing(self):
         # This is separate from the export loop so Stop can join that loop
         # without cancelling an already submitted durable retirement request.
-        await self.stop_sharing()
+        await self.stop_sharing(reason='export_unavailable')
         try:
             await self.api.request('/presentation/retire',
                 {'eventId': 'retire_' + self.configured['callAttemptId'], 'reason': 'export_unavailable'})
@@ -433,7 +443,34 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
             self._fail('activation_failed')
             raise
 
-    async def stop_sharing(self):
+    def _record_sharing_stop(self, reason):
+        if reason not in SHARING_STOP_REASONS:
+            raise VoiceError('walkthrough_diagnostic_reason_refused')
+        if self.first_sharing_stop is None:
+            age = None if self.last_export_capture is None else min(1800000,
+                max(0, round(self.clock() * 1000 - self.last_export_capture)))
+            self.first_sharing_stop = {'reason': reason,
+                'mediaState': self.state if self.state in MEDIA_STATES else 'unknown',
+                'elapsedMs': min(1800000, max(0, round((time.monotonic() - self.sharing_diagnostics_started) * 1000))),
+                'lastFrameAgeMs': age}
+
+    def sharing_diagnostics(self):
+        failure = self.presentation.diagnostics.snapshot()['failure']
+        summary = None
+        if failure:
+            phase = failure['phase'] if failure['phase'] in ('native_inspect', 'source_capture', 'frame_render') else 'other'
+            reason = {'presentation_authority_unavailable': 'authority_unavailable',
+                'deadline_exceeded': 'deadline_exceeded'}.get(failure['reason'], 'other')
+            if failure['reason'] == 'presentation_refused' and phase in ('native_inspect', 'source_capture'):
+                reason = 'source_refused'
+            summary = {'phase': phase, 'reason': reason}
+        return {'firstStop': copy.deepcopy(self.first_sharing_stop),
+            'sourceFrames': min(1000000, max(0, self.presentation.counts['sourceFrames'])),
+            'renderedFrames': min(1000000, max(0, self.presentation.counts['renderedFrames'])),
+            'presentationFailure': summary}
+
+    async def stop_sharing(self, *, reason='remote_stop'):
+        self._record_sharing_stop(reason)
         self.sharing_stopped = True
         self.video_changed.set()
         if self.sharing_close_task is None:
@@ -463,7 +500,8 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         result.update(mode='handset_walkthrough', video=True, screen=True, presentation=True, instructions=True,
             nativeActivation=False, planFingerprint=self.configured['planFingerprint'], exportGrantId=self.configured['exportGrantId'],
             presentationBinding=copy.deepcopy(self.configured['presentationBinding']),
-            sharingActive=not self.sharing_stopped and self.presentation.armed)
+            sharingActive=not self.sharing_stopped and self.presentation.armed,
+            sharingDiagnostics=self.sharing_diagnostics())
         if self.accepted_video:
             result['videoEvidence'] = copy.deepcopy(self.accepted_video)
         return result
@@ -472,7 +510,7 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
         # Revoke pixels immediately; provider/end receipts may take seconds.
         sharing_ok = True
         try:
-            await self.stop_sharing()
+            await self.stop_sharing(reason='call_closed')
         except Exception:
             sharing_ok = False
         await super()._close()

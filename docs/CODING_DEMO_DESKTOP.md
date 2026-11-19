@@ -154,9 +154,9 @@ receipt rather than mistaking the continuing worker for a connected call.
 
 The persistent local desktop service and handset operator use the same exclusive
 database owner lock. **Never run them concurrently against one state directory.**
-A future desktop-to-phone rehearsal needs an explicitly paired task session and
-an idle, confirmed ownership handoff, prepared current views, a fresh call grant,
-and the usual exclusive-line checks. The launcher defaults to a local-only
+A desktop-to-phone rehearsal needs an explicitly authorized task session,
+prepared current views, a fresh call grant, and the usual exclusive-line checks.
+The launcher defaults to a local-only
 session; its explicit existing-session option can attach a previously authorized
 paired session, but cannot upgrade a local session to phone access.
 The desktop service now supports prepared decision and final-review calls in the

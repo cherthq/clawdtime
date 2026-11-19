@@ -32,6 +32,7 @@ import type { TaskWalkthroughVideoEvidence } from "../src/transport/task-audio.j
 import {
   taskHandsetMediaBinding,
   taskHandsetMediaFingerprint,
+  taskWalkthroughSharingDiagnosticsSchema,
 } from "../src/transport/task-audio.js";
 import { taskWalkthroughExportGrantSchema } from "../src/task-walkthrough-contracts.js";
 const cleanups: Array<() => void> = [];
@@ -464,6 +465,7 @@ from unittest.mock import AsyncMock, Mock
 from task_voice import VoiceError
 from task_voice_livekit import fingerprint, validate_binding
 from task_presentation import validate_prepare
+from task_presentation_diagnostics import PresentationDiagnostics
 from task_walkthrough_livekit import validate_walkthrough_binding, WalkthroughTaskAPI, TaskWalkthroughLiveKit
 from task_walkthrough_livekit_local import validate_export
 wire=json.load(sys.stdin)
@@ -497,6 +499,7 @@ WalkthroughTaskAPI(api,b).validate_context(wire['context'])
 async def exercise():
     cleanup={'captureStopped':True,'narrationStopped':True,'outputCleared':True,'childrenJoined':True}
     presentation=SimpleNamespace(binding=p,narrator=None,armed=True,stopping=False,authority=SimpleNamespace(check=AsyncMock()),
+        diagnostics=PresentationDiagnostics(),counts={'sourceFrames':0,'renderedFrames':0},
         prepare=AsyncMock(return_value={'ready':True}),local_start=AsyncMock(),stop=AsyncMock(return_value=cleanup))
     provider=SimpleNamespace(readiness=AsyncMock(),open=AsyncMock(),close=AsyncMock())
     port=SimpleNamespace(prepare=AsyncMock(return_value={'livekit_url':'wss://example.invalid','participant_token':'synthetic',
@@ -514,8 +517,9 @@ async def exercise():
         assert events==[{'suffix':'/presentation/opening','body':{'eventId':wire['openingEventId']}}]
     finally:
         await owner.close()
-asyncio.run(exercise())
-print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId':wire['openingEventId'],'rejections':4,'providerOpened':False}))
+    return {'prepared':result['sharingDiagnostics'],'closed':owner.status()['sharingDiagnostics']}
+diagnostics=asyncio.run(exercise())
+print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId':wire['openingEventId'],'rejections':4,'providerOpened':False,'diagnostics':diagnostics}))
 `;
     const result = spawnSync(
       resolve("media/.venv/bin/python"),
@@ -539,12 +543,35 @@ print(json.dumps({'valid':True,'mediaFingerprint':fingerprint(b),'openingEventId
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
+    const { diagnostics, ...wireResult } = JSON.parse(result.stdout);
+    expect(wireResult).toEqual({
       valid: true,
       mediaFingerprint: taskHandsetMediaFingerprint(f.plan),
       openingEventId: `opening_${f.plan.id}`,
       rejections: 4,
       providerOpened: false,
+    });
+    expect(
+      taskWalkthroughSharingDiagnosticsSchema.parse(diagnostics.prepared),
+    ).toEqual({
+      firstStop: null,
+      sourceFrames: 0,
+      renderedFrames: 0,
+      presentationFailure: null,
+    });
+    const closedDiagnostics = taskWalkthroughSharingDiagnosticsSchema.parse(
+      diagnostics.closed,
+    );
+    expect(closedDiagnostics).toEqual({
+      firstStop: {
+        reason: "call_closed",
+        mediaState: "prepared",
+        elapsedMs: expect.any(Number),
+        lastFrameAgeMs: null,
+      },
+      sourceFrames: 0,
+      renderedFrames: 0,
+      presentationFailure: null,
     });
   }, 20000);
   it("scopes the operator router to one voice and read-only presentation authority", async () => {

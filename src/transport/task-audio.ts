@@ -50,6 +50,59 @@ export const taskWalkthroughVideoEvidenceSchema = z
 export type TaskWalkthroughVideoEvidence = z.infer<
   typeof taskWalkthroughVideoEvidenceSchema
 >;
+/** Bounded diagnostic metadata only; never source pixels, exception text or authority. */
+export const taskWalkthroughSharingDiagnosticsSchema = z
+  .object({
+    firstStop: z
+      .object({
+        reason: z.enum([
+          "source_unavailable",
+          "frame_stale",
+          "export_unavailable",
+          "task_changed",
+          "authority_retired",
+          "remote_stop",
+          "call_closed",
+        ]),
+        mediaState: z.enum([
+          "absent",
+          "preparing",
+          "prepared",
+          "activating",
+          "active",
+          "closing",
+          "closed",
+          "unknown",
+        ]),
+        elapsedMs: z.number().int().min(0).max(1_800_000),
+        lastFrameAgeMs: z.number().int().min(0).max(1_800_000).nullable(),
+      })
+      .strict()
+      .nullable(),
+    sourceFrames: z.number().int().min(0).max(1_000_000),
+    renderedFrames: z.number().int().min(0).max(1_000_000),
+    presentationFailure: z
+      .object({
+        phase: z.enum([
+          "native_inspect",
+          "source_capture",
+          "frame_render",
+          "other",
+        ]),
+        reason: z.enum([
+          "authority_unavailable",
+          "source_refused",
+          "deadline_exceeded",
+          "other",
+        ]),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type TaskWalkthroughSharingDiagnostics = z.infer<
+  typeof taskWalkthroughSharingDiagnosticsSchema
+>;
 export interface TaskWalkthroughMediaObservation extends Omit<
   TaskAudioMediaObservation,
   "video" | "screen" | "presentation"
@@ -60,6 +113,7 @@ export interface TaskWalkthroughMediaObservation extends Omit<
   nativeActivation: false;
   planFingerprint: string;
   videoEvidence?: TaskWalkthroughVideoEvidence;
+  sharingDiagnostics?: TaskWalkthroughSharingDiagnostics;
   video: true;
   screen: true;
   presentation: true;
@@ -554,6 +608,7 @@ export class HttpTaskHandsetMediaPort implements TaskHandsetMediaPort {
         nativeCallClosed: z.literal(false),
         sharingActive: z.boolean(),
         videoEvidence: taskWalkthroughVideoEvidenceSchema.optional(),
+        sharingDiagnostics: taskWalkthroughSharingDiagnosticsSchema.optional(),
         audio: z.literal(true),
         video: z.literal(true),
         screen: z.literal(true),

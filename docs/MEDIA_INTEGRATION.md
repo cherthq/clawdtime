@@ -102,6 +102,20 @@ substituted for the human's words. Clarification speech retains its original
 turn/retirement epoch; a late or cached response cannot revive retired speech.
 This response handling is covered offline; no further call is implied.
 
+Walkthrough status includes bounded `sharingDiagnostics`: the first observed
+sharing-stop reason and media lifecycle state, elapsed time, last exported source
+frame age, source/render counts, and an allowlisted presentation failure summary.
+The first observation survives later cleanup. Reasons distinguish observed task
+revision change, retired export authority, remote Stop, local call closure,
+stale-frame watchdog, stopped source, and otherwise unclassified export failure.
+A remote Stop cannot by itself distinguish an operator request from root-service
+reconciliation. No exception text, window titles, transcript, image or provider
+body is included. The root saves this typed metadata before the media process
+exits; the SQLite journals alone do not retain a retirement cause or timeline.
+These diagnostics do not relax fresh-frame activation or authorize a voice-only
+fallback. Earlier attempts without these fields cannot be diagnosed retroactively
+from a generic export failure or a single completed show receipt.
+
 The new controller uses the same private binding, voice, provider, LiveKit,
 control and journal flags as the audio controller, plus `--presentation-file`:
 

@@ -1,153 +1,103 @@
-# Step e: desktop implementation; remaining handset qualification deferred
+# Step e: resumed decision flow passed; review activation remains open
 
-The user explicitly authorized building the desktop panel and proceeding without
-routine input, while moving on from the latest visual test. This overrides the
-earlier step-e implementation gate, but does not declare step d physically passed.
-Read [the desktop guide](CODING_DEMO_DESKTOP.md). The local floating panel uses
-the independent task service with durable operation receipts, real scoped Codex
-runs when explicitly selected, independent verification, decisions, review and
-separate cancellation. Closing or quitting the UI leaves work running.
+## Latest checkpoint — November 19, 2026
 
-The standalone launcher defaults to a local-only task session; an explicit private
-session file can attach an already-authorized session without renewal or permission
-changes. Default launch does not dial, capture, deploy or upgrade pairing.
-The `d628f76` integration adds opt-in prepared calls inside the existing desktop
-service: no database handoff or second task owner is needed. Read
-[desktop calls](CODING_DEMO_DESKTOP_CALLS.md). Each call requires fresh exact
-task/run/revision authorization, prepared views and verified destination/line
-identity. A local fixture source remains explicitly distinct from the real
-handset destination; the existing delegated export grant and native inspector
-establish that boundary. The older standalone handset operator remains available
-but must never run alongside the desktop owner on one database.
-Live operations require specific authorization; the latest rehearsal's bounded
-authorization and remaining preparation are recorded below.
+The user authorized one decision call and one subsequent final-review call,
+prepared app/source/result views, spoken task instructions, and a temporary
+ClawdTime-backend-only standby/restore window. Both calls were submitted exactly
+once. Both authorizations are consumed; no further call or deployment is authorized.
 
-Local desktop qualification uses a separate disposable project/state under
-`/Users/garygao/.local/share/clawdtime-desktop-qualification`. It must not be
-confused with or copied over the accepted historical handset task below.
+The existing desktop-created task was resumed, not recreated. It already had two
+completed runs. Its current identity is:
 
-A fresh desktop-created decision rehearsal is staged under
-`/Users/garygao/.local/share/clawdtime-desktop-call-rehearsal-20261118`.
-Its service on loopback 13336 owns a disposable task-list project and a distinct
-fixture source session; its private `Open rehearsal.command` reconnects the panel.
-The actual panel submission completed one real Codex run and reached
-`needs_decision` revision 3. On the later resumption all three exact windows
-passed, and one specifically authorized visual decision call connected through
-the same desktop owner. A finalized bare assent started a second scoped run;
-that run correctly left the two-option design unresolved. The task is now
-`needs_decision` revision 7, both runs completed, syntax passed and the deliberately
-unfinished empty-state assertion failed. No choice has been invented for the user.
+- Task: `task_764461fc-cbc7-4829-8491-33b7947971ec`.
+- Latest run: `run_d99a8dae-4394-4ea5-be80-8f12c08142d1`, completed.
+- Current state: **review_ready, revision 11**; not accepted.
+- Verification: `verification_39839898-156c-45d5-8e49-f6abda18ad99`, passed.
 
-The user confirmed clear opening/preview and correct end-on-request, and asked to
-move on without further calls. Native cleanup, media closure, capture/narration
-Stop and output clearance are confirmed. This call's authorization is consumed.
-Restoration deployment `32849cef-53f3-48de-b23c-1ed73cc1760f` is live with exact
-original variables, zero pending/unknown effects and zero active calls. Preserve
-`standby-2/` proofs and the single closed attempt; do not replay the old envelopes.
+The decision call connected, showed the prepared preview and received a specific
+spoken choice. Exactly one new scoped Codex run completed in 32,121 ms. Independent
+filter/empty-state assertions and JavaScript syntax passed. The browser visibly
+showed “No tasks match”; Clear filters restored both tasks; uppercase RELEASE
+showed only the release-notes task. The user said the first call seemed to work,
+but noticed the picture becoming dark after submitting the request. Sharing
+retirement on a new run is intentional; explain it clearly before the next
+rehearsal. After-clear voice continuity was not individually confirmed.
 
-The bare-assent gap is now repaired and loaded in the local rehearsal service: for an unresolved multi-option
-choice, a bare yes/go-ahead asks for clarification without creating a run or
-instruction receipt, unless that utterance itself exactly names an offered option.
-A subsequent explicit answer keeps its original words; voice/worker context also
-carries the recorded options. Exact historical receipt replay remains unchanged.
-Offline tests cover the repair; it has not received another physical voice test.
+The separately authorized review call used fresh revision-11 views and grants.
+The preview initially rendered and reached the SDK, but sharing retired while the
+call was still preparing/ringing. Native connection/authority checks subsequently
+passed; media activation failed before speech. The human reported automatic
+hangup. The exact first retirement trigger was not recorded, so do not claim a
+provider outage, offscreen-window cause, or successful review acceptance.
 
-The preview is on loopback 8767. TextEdit's `Rehearsal source.txt` and
-`Rehearsal result.txt` were the authorized prepared views. The result snapshot
-still describes revision 3; refresh/reopen snapshots and revalidate exact window
-identity before any later presentation. The local interpreter at the configured
-venv path is now an owner-protected copy; global Python was not modified.
-Keep the unrelated original desktop service/task untouched. The fixture session
-is time-limited and must be checked before reuse. No second/review call or new
-deployment is authorized. The remaining two-call rehearsals and measured d/e
-acceptance targets are deferred, not claimed complete.
+Both attempts have confirmed native/media cleanup and presentation Stop. The
+backend was restored to exact original variables through deployment
+`326891e4-d1cd-476f-ad7a-5806dd2ba36c`; actual runtime/environment are live with
+traffic true, zero pending/unknown effects and zero active calls. Standby
+deployment `742fd92f-ef9f-43dd-9cdb-98200ee8935b` is removed. The unknown historical
+media-activation receipt remains preserved alongside confirmed cleanup.
+
+A narrow diagnostic improvement now retains bounded first-sharing-stop metadata,
+source/render counters and allowlisted presentation failure categories in the
+shutdown summary. It stores no screens, audio or raw exception text and does not
+change activation or capture guards. This is diagnostic coverage, not a physical
+repair claim. See the latest [build log](BUILD_LOG.md) for validation and installation.
+
+## Preserved local setup
 
 Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
-Latest completed step remains `59b8e24`, annotated `step-c1-done`. Repair
-checkpoint `98c7355` was pushed before the latest supervised visual test. The
-first visual call was unanswered; the second connected but failed voice
-continuity after a revision. The third separately authorized call showed the
-prepared preview and obtained final acceptance after an exact explicit phrase.
-The human confirmed acceptance acknowledgment and hangup. Its initial natural
-assent exposed an overly rigid phrase check, repaired in this checkpoint with
-conservative full-utterance matching and clear recovery guidance.
+The last fully qualified milestone remains `step-c1-done` at `59b8e24`.
+Steps d/e implementation exists; full physical acceptance remains open.
 
-The task is **accepted at revision 28**, with its independently verified result
-unchanged and no new coding run during the final review. The task server is
-stopped and all native/media/presentation cleanup is confirmed. The backend is
-restored to exactly its previous variables and live operation with no active
-calls or pending/unknown effects; restoration deployment is
-`d2b307f4-65fc-4bfd-9895-4ebef4914bb1`.
+Private rehearsal root:
+`/Users/garygao/.local/share/clawdtime-desktop-call-rehearsal-20261118`.
+Today's evidence is under `rehearsal-20261119/`; historical `standby-2/` and
+attempt receipts must remain intact. Never replay an old request/grant or remove
+an ownership lock to force progress.
 
-All three calls' permissions are consumed. Do not reuse their attempts, grants
-or manifests. Protected metadata is under `visual-1/`, `visual-2/`, `visual-3/`.
-Original checkout, drafts, Apple Teams and sibling chert-facetime are untouched.
+The desktop service on loopback 13336 owns the task, worker, verification and call
+admissions. Keep that same owner; do not launch a standalone handset operator on
+its database. Its source fixture session and actual handset destination are
+separate identities, connected only by the exact delegated export grant/native
+inspector. Check session lifetime before reuse; it is not silently renewed.
 
-Local three-scene audio/visuals were accepted. Handset preview and explicit
-result acceptance/hangup have positive human evidence. The latest call did not
-exercise a new spoken revision, all scenes, or the full continuity/interruption/
-zoom/Stop timing targets. Step d remains open; step e implementation is authorized. Future rehearsals
-need a fresh task/result preparation and separate specific call authorization.
-Keep screens/audio transient.
+The preview is on loopback 8767. Prepared TextEdit documents are
+`Rehearsal source.txt` and `Rehearsal result.txt` (revision 11). Check that the
+preview server is running, reload the actual page, and refresh/reopen documents
+from current results before any future call. The local server was restarted
+after the first call because its old process was no longer listening; the first
+call had displayed the existing unchanged pre-revision page.
 
-## Current implementation
+Exact target validation is metadata-only and requires current on-screen windows.
+TextEdit can retain stale external-file contents; confirm the displayed revision
+and source before preparing a manifest. Reopening changes window IDs. Keep all
+prepared windows on one current desktop and leave the fixture in front while
+ringing. Never relax visibility/freshness checks to make a rehearsal pass.
 
-The new explicit `handset_walkthrough` mode composes the existing coordinator,
-global call fence and encrypted receipts with one Deepgram dialogue, prepared
-scene renderer and LiveKit screen publisher. Historical c.1 schemas and hashes
-remain separate. An immutable export grant binds exact task/run/revision,
-verification, presentation, capture grant, destination, line and conversation.
-No local-only grant can export by itself.
+The original unrelated desktop service/task remains untouched. Earlier historical
+handset task acceptance at revision 28 belongs to a different task and does not
+accept this revision-11 desktop task. Apple Teams, sibling chert-facetime and the
+original checkout remain unchanged.
 
-Preparation validates exact native targets and fresh SDK frame acceptance before
-dialing. The same voice owns opening, conversation and scene explanations. Scene
-tools select prepared IDs; finalized instructions create one scoped run or a held
-correction. Only a fresh review call can accept its exact verified result. A new
-run invalidates old sharing, while conversation and coding continue. Sharing Stop
-joins capture and publishes blank-only frames; call end never cancels admitted
-coding. The scoped operator API cannot launch other tasks. Unknown outcomes keep
-their receipts and ownership fence.
+## Next action
 
-Read [the operator guide](CODING_DEMO_HANDSET_WALKTHROUGH.md) and the latest
-[build log](BUILD_LOG.md) for the exact checkpoint validation. The handset now
-has positive preview and explicit acceptance/hangup evidence; the full repaired
-revision-continuity path remains physically unqualified. SDK acceptance does not
-prove human visibility, audibility or remote clearance.
+1. Read the final diagnostic checkpoint and verify current task/readiness, session
+   lifetime, original closed receipts and exact local service version.
+2. Prepare fresh current preview/source/result views. Obtain specific authorization
+   for a new review call and any required standby/restore window. The user's two
+   calls for this rehearsal have both been used.
+3. Keep the exact views visible through ringing; collect the new bounded first-stop
+   diagnostic if sharing retires. Do not infer handset visibility from SDK frames.
+4. If the review connects, verify all requested scenes, acceptance without another
+   coding run, clean end, and exact backend restoration. Preserve any unknown
+   effect; no blind retries or automatic redial.
+5. Complete the approved three full two-call rehearsals and measured timing,
+   interruption, zoom, audio-continuity and Stop gates before tagging d/e complete.
+   This resumed flow advanced the task, but its review failed and does not count
+   as a completed two-call acceptance rehearsal.
 
-The repair allows an admitted fresh finalized human turn to receive an ordinary
-reply after sharing retirement, with bounded transient audio and stale-response
-fencing. Its prompt now directs the voice agent to ask for missing replacement
-text before submitting a vague confirmation; physical behavior needs retesting.
-The worker context identifies an exact answered decision as historical without
-duplicating the instruction. Acceptance now permits bounded conversational
-phrasing while preserving negation/condition refusals and exact review guards.
-
-## Resume
-
-1. Read the latest build-log repair and validation results. Preserve `visual-1/`,
-   `visual-2/` and `visual-3/` receipts; never replay an attempt. Verify the repair
-   checkpoint is committed/pushed and checks passed. Use the compact
-   external-dependency inspector and owner-only verification-plan file.
-2. Obtain fresh specific authorization for one visual handset call and, if
-   required, a temporary ClawdTime-backend-only standby/restore window. Previous
-   one-call authorizations are consumed and cannot authorize another call.
-3. Prepare fresh exact preview/code/verification windows and grants, resolve the
-   paired destination privately, and check exclusive idle line ownership.
-4. Run the specifically authorized call, collect physical observations, confirm
-   native/local cleanup and restore the previous backend settings. If coding is
-   still active, preserve its service until the worker and watcher settle.
-5. Prepare the fresh result for a separately authorized final-review call. Finish
-   the plan's rehearsals and measured interruption/zoom/timing gates before
-   tagging step d or declaring the desktop-to-phone demo fully qualified.
-
-Do not rerun used local attempts. Exact source windows can become offscreen after
-returning to chat; fresh target validation is mandatory. Browser automation cannot
-open the private local-file launcher, so any further local preview launch needs
-the user's click. No visibility guard was relaxed.
-
-Protected task/provider/session files remain beneath
-`/Users/garygao/.local/share/clawdtime-coding-demo-qualification` (owner-only).
-Never print credentials or include them in commands, logs or Git. Preserve
-original task pairing and all unknown receipts. Apple Teams and sibling
-chert-facetime remain untouched. No new call, line operation or deployment is
-authorized by this handoff; new work defaults to simulation/standby.
+Guides: [desktop](CODING_DEMO_DESKTOP.md),
+[desktop calls](CODING_DEMO_DESKTOP_CALLS.md),
+[handset walkthrough](CODING_DEMO_HANDSET_WALKTHROUGH.md), and
+[approved acceptance plan](CODING_DEMO_IMPLEMENTATION_PLAN.md).
