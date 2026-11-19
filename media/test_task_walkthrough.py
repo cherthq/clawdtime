@@ -244,6 +244,59 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.source.closed)
         self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop']['reason'], 'frame_stale')
         self.provider.open.assert_not_awaited()
+
+    async def test_bounded_slow_capture_has_no_extra_post_work_idle_while_ringing(self):
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        original = self.source.request
+        async def slow_capture(op, target):
+            captured_at = time.time() * 1000
+            if op == 'capture':
+                await asyncio.sleep(.45)
+            value = await original(op, target)
+            if op == 'capture':
+                # The native helper timestamps before SCK snapshot work.
+                value['capturedAt'] = captured_at
+            return value
+        self.source.request = slow_capture
+        initial = self.renderer.counts['sourceFrames']
+        await asyncio.sleep(2.6)
+        self.assertFalse(self.owner.sharing_stopped, self.owner.status()['sharingDiagnostics'])
+        self.assertGreaterEqual(self.renderer.counts['sourceFrames'], initial + 4)
+        _, evidence = await self.owner.fresh_video()
+        self.assertLess(time.time() * 1000 - evidence['capturedAt'], 1000)
+        self.provider.open.assert_not_awaited()
+
+    async def test_capture_overrun_does_not_create_a_catchup_burst(self):
+        await self.owner.prepare(self.b)
+        original, starts = self.source.request, []
+        async def varying_capture(op, target):
+            if op == 'capture':
+                starts.append(asyncio.get_running_loop().time())
+                if len(starts) == 1:
+                    await asyncio.sleep(.45)
+            return await original(op, target)
+        self.source.request = varying_capture
+        async with asyncio.timeout(2):
+            while len(starts) < 4:
+                await asyncio.sleep(.01)
+        self.assertGreaterEqual(starts[1] - starts[0], .44)
+        self.assertTrue(all(b - a >= .18 for a, b in zip(starts[1:3], starts[2:4])), starts)
+        self.assertFalse(self.owner.sharing_stopped)
+
+    async def test_explicit_publish_stale_is_classified_without_generic_export_reason(self):
+        await self.owner.prepare(self.b)
+        self.port.publish_video = AsyncMock(side_effect=VoiceError('walkthrough_frame_stale'))
+        async with asyncio.timeout(2):
+            while not self.owner.retirement_task:
+                await asyncio.sleep(.01)
+        await self.owner.retirement_task
+        value = self.owner.status()['sharingDiagnostics']
+        self.assertEqual(value['firstStop']['reason'], 'frame_stale')
+        self.assertEqual(value['firstStop']['mediaState'], 'prepared')
+        self.assertIsNone(value['presentationFailure'])
+        await self.owner.close()
+        self.assertEqual(self.owner.status()['sharingDiagnostics']['firstStop'], value['firstStop'])
     async def asyncTearDown(self):
         await self.owner.close()
         self.journal.close()
@@ -1225,6 +1278,27 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SDKTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publish_failure_categories_do_not_confuse_identity_or_stop_with_age(self):
+        image = io.BytesIO()
+        Image.new('RGB', (1280, 720), '#00ab55').save(image, 'JPEG')
+        for cause, expected in (('binding', 'walkthrough_frame_binding_refused'),
+                                ('old_source', 'walkthrough_frame_stale'),
+                                ('slow_sdk', 'walkthrough_frame_stale'),
+                                ('closed', 'walkthrough_video_unavailable')):
+            with self.subTest(cause=cause):
+                port = LiveKitWalkthroughPort('wss://example.invalid', 'key', 'secret', allowed_hosts={'example.invalid'})
+                port.binding = binding()
+                port.video_publication = SimpleNamespace(sid='synthetic_publication')
+                port.video_source = SimpleNamespace(capture_frame=lambda frame: setattr(port, 'closing', cause == 'closed'))
+                frame = {'presentationId': port.binding['presentationBinding']['presentationId'],
+                    'manifestFingerprint': port.binding['presentationBinding']['manifestFingerprint'],
+                    'capturedAt': 9000 if cause == 'old_source' else 10000, 'renderedAt': 10000}
+                if cause == 'binding':
+                    frame['presentationId'] = 'wrong_presentation'
+                with patch('task_walkthrough_livekit.time.time', side_effect=[10, 11.01 if cause == 'slow_sdk' else 10]):
+                    with self.assertRaisesRegex(VoiceError, '^' + expected + '$'):
+                        await port.publish_video(image.getvalue(), frame)
+
     async def test_actual_sdk_rgba_frame_and_blank_only_after_stop(self):
         port = LiveKitWalkthroughPort('wss://example.invalid', 'key', 'secret', allowed_hosts={'example.invalid'})
         port.binding = binding()

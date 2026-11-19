@@ -450,6 +450,8 @@ class TaskPresentationRuntime:
                 raise
 
     async def capture_loop(self):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
         while not self.stopping:
             policy = await self.check()
             pending = self.pending_scene
@@ -488,7 +490,11 @@ class TaskPresentationRuntime:
                 if self.transition_at is None:
                     self.transition_at = self.clock()
                 self.frames_changed.set()
-            await asyncio.sleep(.2)
+            # Capture/authority work consumes the 5fps budget. Adding a full
+            # period after slow work needlessly ages the last exported source.
+            # Reset overruns to now, never issue a catch-up burst.
+            deadline = max(deadline + .2, loop.time())
+            await asyncio.sleep(max(0, deadline - loop.time()))
 
     def render(self):
         source, scene = self.source_frame, self.scene

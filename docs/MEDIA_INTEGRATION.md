@@ -140,6 +140,17 @@ These diagnostics do not relax fresh-frame activation or authorize a voice-only
 fallback. Earlier attempts without these fields cannot be diagnosed retroactively
 from a generic export failure or a single completed show receipt.
 
+Capture runs on a deadline-based maximum 5 fps cadence: acquisition and authority
+work consume the period instead of adding a fixed 200 ms idle afterward. Overruns
+reset the deadline without catch-up bursts. An offline regression with 450 ms
+captures, timestamped before acquisition like the native helper, reproduced
+premature retirement with the old cadence and remains fresh with the new one.
+The one-second export/SDK acceptance limit is unchanged; genuine stalls still
+blank and retire sharing. Explicit SDK frame-age refusals now report `frame_stale`
+instead of generic `export_unavailable`; binding and closure failures remain
+distinct. This repairs a reproduced timing defect, not an established explanation
+of the historical ringing failures.
+
 The new controller uses the same private binding, voice, provider, LiveKit,
 control and journal flags as the audio controller, plus `--presentation-file`:
 

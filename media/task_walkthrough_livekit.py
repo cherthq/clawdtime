@@ -137,8 +137,9 @@ class LiveKitWalkthroughPort(LiveKitAudioPort):
                 raise VoiceError('walkthrough_video_unavailable')
             expected = self.binding['presentationBinding']
             now = time.time() * 1000
-            if (frame.get('presentationId') != expected['presentationId'] or frame.get('manifestFingerprint') != expected['manifestFingerprint']
-                    or not 0 <= now - frame['capturedAt'] < 1000 or not frame['capturedAt'] <= frame['renderedAt'] <= now):
+            if frame.get('presentationId') != expected['presentationId'] or frame.get('manifestFingerprint') != expected['manifestFingerprint']:
+                raise VoiceError('walkthrough_frame_binding_refused')
+            if not 0 <= now - frame['capturedAt'] < 1000 or not frame['capturedAt'] <= frame['renderedAt'] <= now:
                 raise VoiceError('walkthrough_frame_stale')
             with Image.open(io.BytesIO(jpeg)) as image:
                 if image.format != 'JPEG' or image.size != (1280, 720):
@@ -146,7 +147,9 @@ class LiveKitWalkthroughPort(LiveKitAudioPort):
                 raw = image.convert('RGBA').tobytes()
             self.video_source.capture_frame(rtc.VideoFrame(1280, 720, rtc.VideoBufferType.RGBA, raw))
             accepted = time.time() * 1000
-            if self.video_stopped or self.closing or accepted - frame['capturedAt'] >= 1000:
+            if self.video_stopped or self.closing:
+                raise VoiceError('walkthrough_video_unavailable')
+            if accepted - frame['capturedAt'] >= 1000:
                 raise VoiceError('walkthrough_frame_stale')
             self.video_frames = min(1000000, self.video_frames + 1)
             self.video_evidence = {key: frame[key] for key in ('presentationId', 'manifestFingerprint', 'sceneId', 'generation',
@@ -368,9 +371,11 @@ class TaskWalkthroughLiveKit(TaskVoiceLiveKit):
                 await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             if not self.stopping:
-                self._record_sharing_stop('export_unavailable')
+                reason = ('frame_stale' if type(error) is VoiceError and error.args == ('walkthrough_frame_stale',)
+                          else 'export_unavailable')
+                self._record_sharing_stop(reason)
                 if not self.retirement_submitted:
                     self.retirement_submitted = True
                     self.retirement_task = asyncio.create_task(self._retire_sharing())

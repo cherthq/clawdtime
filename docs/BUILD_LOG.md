@@ -2077,3 +2077,72 @@ lifecycle/Stop/initial proof; connector independently reviewed media and ledger.
 All owners reported no remaining blocker. Lead scope/secret review and
 `git diff --check` passed. No Swift source changed and no physical qualification
 or d/e completion tag is claimed.
+
+
+## November 19, 2026 — one continuous-sharing handset retest failed
+
+The user authorized one visual retest and separately confirmed temporary
+ClawdTime-only standby/restoration. The lead refreshed the idle local desktop
+owner to `48b7b6f`, retaining identity, configuration, all receipts and the accepted
+revision-12 task. Created a new task through the desktop operation API to review
+the unchanged fixture. Its single real worker run completed and both independent
+checks passed; browser inspection also confirmed uppercase RELEASE filtering,
+No tasks match and Clear filters. Source matched the project; the result document
+showed current revision 3. Native target resolution confirmed all three views
+before the one submission.
+
+Task `task_a3f116c1-d47f-44d6-ac43-ef5d7533b996` remains review-ready revision 3;
+run `run_2505bcd1-26a4-460d-a77a-8da63f441099` and verification
+`verification_218a8983-9323-4095-9173-d3a797fbdb4f` passed. Fresh call-continuity
+capture/export grants and current standby/identity/exclusive-idle-line checks
+preceded the single attempt. No prior grant or call request was replayed.
+
+Attempt `call_attempt_34aa06c4-f4bd-4740-a991-0a960c0d1bb8` completed media prepare
+and native dial, but sharing retired while prepared. Diagnostics: first reason
+export_unavailable, elapsed 12,386 ms, last successful source-frame age 1,034 ms,
+21 source frames, 119 rendered frames, no presentationFailure, zero speechFrames.
+Activation subsequently recorded unknown; retain that historical effect even
+though native end/media close and all cleanup are now confirmed. The lead also
+submitted one exact local Stop request during cleanup, without retrying a dial.
+The user reported only that it hung up. No acceptance/instruction/new run occurred;
+this failed attempt did not physically exercise continuity or scene switching.
+
+Standby deployment `540dcc71-0d5d-4491-9ab6-a303edfa8c73` was removed after restore.
+Restored deployment `7ab45fa8-0e05-4f2f-bbaa-06e5384b1d2a` matched exact original
+variables, runtime/environment live and traffic true, with zero pending/unknown
+hosted effects and active calls. All five local admissions are closed with cleanup
+confirmed. Original accepted task remains revision 12 with three historical runs.
+No screen/audio was persisted. Private bounded proofs are in
+`continuity-retest-20261119/`. Both one-call and standby authorization are consumed.
+
+Team investigation found no new context-wire or ringing authority mismatch.
+The generic export reason can include a one-second frame-age rejection; the
+recorded last-successful-frame age alone does not prove the live trigger. Media
+is reproducing the capture cadence separately while preserving all freshness
+and authority limits. No repair claim is inferred from this failure.
+
+
+Offline reproduction and narrow repair: the native helper timestamps before
+SCScreenshotManager capture. Injecting 450 ms acquisition into the prepared/ringing
+fixture reproduced premature retirement under the old loop: first stop at about
+2.040 seconds, last frame age 1,015 ms, source count 5 / rendered count 28. The
+loop added a full 200 ms sleep after work, aging the current frame unnecessarily.
+Changed capture scheduling to a maximum 5 fps deadline cadence, accounting for
+work and avoiding catch-up bursts. The same regression passed after the change;
+connector independently reproduced the passing case. No timestamp, one-second
+export limit, authority check or Stop fence was relaxed.
+
+Explicit SDK publication frame-age errors now retain the existing `frame_stale`
+category instead of collapsing into generic export_unavailable. Binding and
+closure errors are separated from actual age failures. Added slow-capture,
+no-catch-up, retained-first-cause and SDK diagnostic-category regressions.
+Connector's five independent targeted checks passed; source review approved the
+narrow change. This fixes a demonstrated scheduling defect but does not establish
+that it caused this handset attempt or that the live experience is now repaired.
+
+Final validation: `npm run check` passed typecheck, **1,287 tests in 73 files
+(12.18s)** and build. Full media discovery passed **369 tests in 88.460s**.
+Lead scope/secret review and `git diff --check` passed. Connector independently
+reviewed the source and five targeted regressions; transport reviewed evidence
+and handoff boundaries. No Swift source changed. This checkpoint has no new
+handset acceptance or step-d/e qualification tag.
