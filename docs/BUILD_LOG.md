@@ -2216,3 +2216,45 @@ Final validation: `npm run check` passed typecheck, 1,308 tests across 73 files
 Independent transport/connector/media reviews and `git diff --check` passed.
 This checkpoint preserves diagnostic evidence; it does not claim a live repair
 or physical acceptance of continuous sharing.
+
+## November 19, 2026 — local capture investigation, visibility prerequisite
+
+User authorized local capture testing and fixing the stall before another phone
+call, with the existing specialist team. Lead inspected the current task and
+prepared source/result/fixture contents; revision 3 and all six closed admissions
+are unchanged. No call, provider connection, deployment, daemon refresh or task
+mutation occurred.
+
+Media built a private, bounded local probe using the native exact-window helper,
+production presentation renderer and an unconnected LiveKit SDK video source.
+It requires a fresh exact grant, single-use configuration intent, current read-only
+task proof and prompt signal-driven Stop with joined child cleanup. It emits only
+sanitized timing/count summaries. Its local authority/export loop is explicitly
+an approximation, not production call admission or handset evidence. Four private
+harness tests passed in 4.019s, including replay refusal, Stop during an awaited
+authority check with zero capture, cleanup and actual unconnected SDK conversion.
+Connector independently reviewed the probe and passed three existing diagnostic
+regressions in 3.734s. Private scripts and bounded measurements are saved under
+`local-capture-20261119/` in the protected rehearsal root.
+
+Read-only task API baseline: 100 requests at 25/s, p50 1.82 ms, p95 3.93 ms,
+maximum 6.18 ms. This is not a measurement of the voice-context endpoint. At the
+prepared window's 2042×1792 source dimensions, 120 annotated transition renders
+took p50 16 ms, p95 22 ms and maximum 39 ms. The approximate pipeline passed
+100/300 ms injected acquisition but failed at 450 ms with 10 ms authority checks.
+The separate benchmark using actual TaskWalkthroughLiveKit prepare/export/
+watchdog/ExportAuthority, real rendering and SDK conversion reproduced the same
+pressure: 300 ms passed ten seconds; both 450 ms trials retired during prepare at
+1.830/1.832s with last exported source ages 1,031/1,035 ms. New source ages were
+517/537 ms, render ages 0/3 ms and last SDK accept was only 49/54 ms earlier.
+Thus a render wakeup alone is not an evidenced reliable fix while respecting
+15 fps and one-second freshness. These synthetic cases do not establish actual
+native acquisition cost or explain the failed handset attempt conclusively.
+
+Real capture remains pending: permission and unlocked-console preflight passed,
+but both native window APIs marked all three prepared windows offscreen. The
+attempt to foreground Chrome via its native Window menu timed out. Lead asked
+the user to bring the prepared windows onto the current desktop. No capture
+grant was created or capture started after that failed target resolution. Do not
+relax the visibility/freshness guards or place another call. Measure actual
+native acquisition, then the local pipeline, before selecting a production fix.

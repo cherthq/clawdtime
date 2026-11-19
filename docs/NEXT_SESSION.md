@@ -1,5 +1,47 @@
 # Pre-speech freshness failure remains unresolved; backend restored
 
+## Local investigation authorized — November 19, 2026
+
+The user subsequently authorized local capture testing and repair before any
+further phone call. This authorizes fresh, bounded capture of the same prepared
+views for local diagnosis, not a handset call or deployment. No need to request
+the same local-test permission again.
+
+Local test setup is saved privately under the rehearsal root's
+`local-capture-20261119/`. `prepare.mts` reads the current task, resolves each
+exact prepared window anew, and creates a fresh short-lived local grant and
+protected probe configuration. Each probe configuration is single-use, including
+failed runs. Keep its `.used` intent file; prepare a new configuration for a new
+measurement. The probe captures only to memory, can be stopped with SIGINT or
+SIGTERM, joins the native child on cleanup, and has no room/provider/call action.
+Its pipeline mode uses the production renderer and unconnected SDK conversion,
+but substitutes read-only task checks for presentation/voice authority and uses a
+local exporter/watchdog. Do not claim it qualifies the whole production call.
+
+Initial setup is blocked on window visibility: Screen Recording permission and
+the unlocked console passed, but both ScreenCaptureKit and WindowServer marked
+all three exact prepared windows offscreen. Native Chrome foregrounding timed
+out. The user was asked to put the fixture, Rehearsal source.txt and Rehearsal
+result.txt on the current desktop, leaving the fixture in front. No native capture
+has started. Once visible, freshly resolve and prepare, run native-only timing
+first, then the pipeline probe; stop on first failure and inspect bounded timing
+metadata before selecting a fix. Do not bypass the onscreen guard.
+
+Read-only task endpoint baseline: 100 requests at 25/s, p50 1.82 ms, p95 3.93 ms,
+maximum 6.18 ms. This excludes the production voice-context handler. Synthetic
+2042×1792 annotated rendering: 120 samples, p50 16 ms, p95 22 ms, maximum 39 ms.
+The approximate local pipeline survived injected 100/300 ms capture delays but
+retired at 450 ms with four 10 ms authority checks per source cycle; a newer
+rendered source was still unexported when the previous exported source aged out.
+This isolates a timing-pressure scenario, not the actual native cause or a fix.
+The separate production-owner benchmark (real prepare/export/watchdog and
+ExportAuthority, renderer and unconnected SDK; injected capture/API) also passed
+300 ms acquisition for ten seconds, then failed both 450 ms trials during prepare
+at 1.830/1.832 seconds. At retirement the newer render was only 0–3 ms old and
+the prior SDK submission only 49–54 ms earlier. Waking on the render alone cannot
+guarantee recovery within the existing 15 fps and one-second limits. No production
+behavior was changed based on these synthetic results.
+
 ## Latest retest — November 19, 2026
 
 The user authorized one more visual retest and the previously described temporary
