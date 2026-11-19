@@ -2258,3 +2258,105 @@ the user to bring the prepared windows onto the current desktop. No capture
 grant was created or capture started after that failed target resolution. Do not
 relax the visibility/freshness guards or place another call. Measure actual
 native acquisition, then the local pipeline, before selecting a production fix.
+
+## November 19, 2026 — real local capture reproduces the stall
+
+User requested one further test call. Lead held dialing because local qualification
+reproduced the failure; that call authorization has not been consumed. No new
+standby authorization was requested and no deployment changed. Read-only hosted
+readiness still showed the restored live deployment with zero pending/unknown
+effects and active calls.
+
+The now-visible exact prepared windows allowed a fresh local-only native probe.
+It captured 368 frames over 75.193s before source visibility was lost; immediate
+metadata resolution marked all three prepared windows offscreen. Returned source
+age was p50 100 ms, p95 139 ms and maximum 272 ms. Cleanup joined. This first
+failure is distinct from freshness retirement.
+
+After the user restored visibility, the local renderer/unconnected-SDK pipeline
+failed at 100.755s with a watchdog age of 1,105 ms (488 source, 1,490 rendered and
+1,477 accepted SDK frames). All three exact windows still resolved immediately
+afterward. Maximum loop lag was 304 ms; the longest observed source-timestamp gap
+was 797 ms. Other agents had been running synthetic checks during that interval,
+so load was a confound, not an established cause.
+
+A subsequent isolated probe ran with every team benchmark stopped and froze a
+bounded numeric stage timeline at first failure. It retired at 20.875s: native
+I/O was pending for 845 ms while Python's maximum loop lag was 9 ms, task checks
+at most 14 ms, current rendering 14 ms and SDK publication about 3 ms. There were
+98 source frames and 303 SDK submissions; the last shared source aged to 1,004
+ms. Cleanup joined and the exact windows still resolved. This narrows that local
+failure to the native helper/pipe path, not specifically a native API yet.
+
+Lead gracefully refreshed the authenticated idle loopback owner to load the
+current diagnostic parser. The original owner exited and released its lock
+before replacement. Both task histories, all six closed admissions and all
+static configuration bytes were verified unchanged; the new instance is still
+the sole owner on 13336. No task, call, provider or remote room was started.
+
+The Mac specialist added opt-in native phase telemetry. Default capture behavior
+is unchanged. Telemetry uses closed phases, bounded elapsed time and sequence
+numbers only, with small nonblocking stderr writes and no retries. The private
+reader detects observed sequence gaps and preserves transient pixels in memory.
+No observed gap does not rule out a lost final marker; phase attribution must also
+consider the surrounding healthy reader/timeline. Independent review caught and
+removed synchronous diagnostic backpressure before actual profiling.
+
+The first native-phase probe completed 60s with 295 source frames and 885 SDK
+submissions, maximum accepted source age 523 ms, and joined cleanup. This short
+pass does not repair or disprove the intermittent failure. A fresh technical
+grant under the existing local-test authorization is being used to measure
+prepared-view switching.
+Private one-shot grants, summaries and probe scripts remain under
+`local-capture-20261119/`; no screenshots, recordings or transcripts were saved.
+
+The longer profiled run completed 240.004s with joined cleanup, 1,192 source
+frames and 3,573 SDK submissions. All 11 requested view replacements received
+fresh matching scene/generation evidence; measured transition-to-receipt times
+were 996–1,187 ms. Maximum accepted source age was 660 ms and maximum native
+request time 431 ms. This validates that local run only, not handset continuity
+or elimination of the intermittent native stall.
+
+A second profiled switching run stopped after 27.191s with `source_stopped`,
+133 source frames, 398 SDK submissions and one completed replacement. The last
+accepted source was only 320 ms old. Its native trace returned a refusal after
+the post-capture validation marker and before JPEG encoding; the exact guard
+is not yet known and no sequence gap was observed. All three exact windows
+resolved immediately afterward. This refusal does not reproduce the earlier
+long native I/O wait. Cleanup
+joined. A same-build profiler-off comparison follows to avoid treating diagnostic
+timing changes as a behavioral fix.
+
+The profiler-off comparison on the same helper build stopped at 88.510s with
+`source_stopped`, 437 source frames, 1,312 SDK submissions and four completed
+switches. Last accepted source age was 292 ms and cleanup joined. It does not
+isolate the refused guard or establish a profiling observer effect. The Mac
+specialist then added 21 fixed refusal markers covering the existing identity,
+visibility, geometry, capture and encoding guards. Standard stdout and all guard
+conditions remain unchanged. Independent connector review approved the change;
+`swift test --package-path mac --filter TaskCaptureTimingTests` passed both tests
+in 0.002s and rebuilt the helper. A fresh 90-second run uses the expanded reader.
+
+The expanded native trace reproduced the freshness stall at 27.738s. The final
+marker was `capture_image`, pending for about 843 ms, while the Python capture
+request was pending 884 ms and last accepted source age reached 1,045 ms.
+Rendering remained responsive (last render 13 ms, current render age 1 ms), and
+SDK publication continued. The native reader reported neither failure nor an
+observed sequence gap. There were 131 source frames, 405 SDK submissions and one
+completed switch; cleanup joined. This localizes the observed wait to the
+`SCScreenshotManager.captureImage` interval, subject to telemetry's missing-final-
+marker caveat. The earlier post-validation refusals remain separately unresolved.
+The user was released from holding the prepared desktop visible. No call or
+standby deployment was made. The next implementation experiment must avoid
+replaying cached pixels or extending the one-second freshness limit.
+
+Diagnostic checkpoint validation: `npm run check` passed typecheck, all 1,308
+TypeScript tests across 73 files (12.33s), and build. `swift test --package-path
+mac` passed 60 tests (0.116s overall test-suite time). `media/.venv/bin/python
+-m unittest discover -s media -p test_task_presentation.py` passed 33 tests in
+7.016s. Independent connector source review and `git diff --check` passed.
+Transport prepared an independently reviewed private actual-owner/native probe;
+five offline tests passed in 13.052s, including single-use refusal, forbidden
+external actions, actual owner switching/Stop and signal cleanup. It has not yet
+performed actual native capture. No step completion tag or physical acceptance
+is claimed by this diagnostic checkpoint.

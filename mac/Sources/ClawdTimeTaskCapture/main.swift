@@ -69,23 +69,62 @@ private func rectangle(_ value: CGRect) -> [String: Double] {
   return result
 }
 
-@MainActor private func inspect(_ target: TaskCaptureTarget, _ grant: TaskCaptureGrant) async throws -> (SCWindow, CGRect, Int, Int) {
-  guard available(), grant.permits(target, now: Date().timeIntervalSince1970 * 1000),
-    CGDisplayIsActive(target.displayId) != 0,
-    let app = NSRunningApplication(processIdentifier: target.ownerPid), !app.isHidden,
-    app.bundleIdentifier == target.appId, lifetime(app) == target.processIdentity else { throw failure() }
-  let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+@MainActor private final class CaptureProfiler {
+  private let start = ProcessInfo.processInfo.systemUptime
+  private let enabled: Bool
+  private var sequence = 0
+  init() {
+    let flags = fcntl(STDERR_FILENO, F_GETFL)
+    enabled = flags >= 0 && fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK) == 0
+  }
+  func phase(_ phase: TaskCaptureTiming.Phase) {
+    guard enabled else { return }
+    sequence = min(1_000_000, sequence + 1)
+    let record = TaskCaptureTiming(phase: phase, elapsedMilliseconds: (ProcessInfo.processInfo.systemUptime - start) * 1000, sequence: sequence)
+    if var data = try? JSONEncoder().encode(record) {
+      data.append(10)
+      // Tiny records are atomic on the pipe. Drop on EAGAIN/error rather than
+      // letting optional telemetry stall capture or retry external work.
+      guard data.count <= 128 else { return }
+      _ = data.withUnsafeBytes { Darwin.write(STDERR_FILENO, $0.baseAddress, $0.count) }
+    }
+  }
+}
+
+@MainActor private func refuse(_ profiler: CaptureProfiler?, _ phase: TaskCaptureTiming.Phase) -> NSError {
+  profiler?.phase(phase)
+  return failure()
+}
+
+@MainActor private func inspect(_ target: TaskCaptureTarget, _ grant: TaskCaptureGrant, profiler: CaptureProfiler? = nil, after: Bool = false) async throws -> (SCWindow, CGRect, Int, Int) {
+  profiler?.phase(after ? .afterGuard : .beforeGuard)
+  guard available() else { throw refuse(profiler, .refusedAvailability) }
+  guard grant.permits(target, now: Date().timeIntervalSince1970 * 1000) else { throw refuse(profiler, .refusedGrant) }
+  guard CGDisplayIsActive(target.displayId) != 0 else { throw refuse(profiler, .refusedDisplay) }
+  guard let app = NSRunningApplication(processIdentifier: target.ownerPid) else { throw refuse(profiler, .refusedOwnerMissing) }
+  guard !app.isHidden else { throw refuse(profiler, .refusedOwnerHidden) }
+  guard app.bundleIdentifier == target.appId else { throw refuse(profiler, .refusedOwnerBundle) }
+  guard lifetime(app) == target.processIdentity else { throw refuse(profiler, .refusedLifetime) }
+  profiler?.phase(after ? .afterShareable : .beforeShareable)
+  let content: SCShareableContent
+  do { content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) }
+  catch { throw refuse(profiler, .refusedEnumeration) }
+  profiler?.phase(after ? .afterValidate : .beforeValidate)
   let matches = content.windows.filter { String($0.windowID) == target.windowId }
-  guard matches.count == 1, let window = matches.first, window.isOnScreen, window.windowLayer == 0,
-    window.owningApplication?.processID == target.ownerPid,
-    window.owningApplication?.bundleIdentifier == target.appId,
-    let title = window.title, hash(Data(title.utf8)) == target.titleHash else { throw failure() }
+  guard matches.count == 1, let window = matches.first else { throw refuse(profiler, .refusedWindowMatch) }
+  guard window.isOnScreen else { throw refuse(profiler, .refusedOnScreen) }
+  guard window.windowLayer == 0 else { throw refuse(profiler, .refusedLayer) }
+  guard window.owningApplication?.processID == target.ownerPid else { throw refuse(profiler, .refusedWindowPID) }
+  guard window.owningApplication?.bundleIdentifier == target.appId else { throw refuse(profiler, .refusedWindowBundle) }
+  guard let title = window.title, hash(Data(title.utf8)) == target.titleHash else { throw refuse(profiler, .refusedTitle) }
   let filter = SCContentFilter(desktopIndependentWindow: window)
   let width = Int((window.frame.width * Double(filter.pointPixelScale)).rounded())
   let height = Int((window.frame.height * Double(filter.pointPixelScale)).rounded())
-  guard TaskCapturePolicy.geometry(width: width, height: height, bounds: window.frame, display: CGDisplayBounds(target.displayId)),
-    !content.displays.contains(where: { $0.displayID != target.displayId && CGDisplayBounds($0.displayID).intersects(window.frame) }),
-    available(), grant.permits(target, now: Date().timeIntervalSince1970 * 1000), lifetime(app) == target.processIdentity else { throw failure() }
+  guard TaskCapturePolicy.geometry(width: width, height: height, bounds: window.frame, display: CGDisplayBounds(target.displayId)) else { throw refuse(profiler, .refusedGeometry) }
+  guard !content.displays.contains(where: { $0.displayID != target.displayId && CGDisplayBounds($0.displayID).intersects(window.frame) }) else { throw refuse(profiler, .refusedDisplayOverlap) }
+  guard available() else { throw refuse(profiler, .refusedAvailability) }
+  guard grant.permits(target, now: Date().timeIntervalSince1970 * 1000) else { throw refuse(profiler, .refusedGrant) }
+  guard lifetime(app) == target.processIdentity else { throw refuse(profiler, .refusedLifetime) }
   return (window, window.frame, width, height)
 }
 
@@ -148,7 +187,8 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
         try FileHandle.standardOutput.write(contentsOf: result)
         return
       }
-      guard args.count == 3, args[1] == "--config" else { throw failure() }
+      guard (args.count == 3 || (args.count == 4 && args[3] == "--profile-timing")), args[1] == "--config" else { throw failure() }
+      let profiler = args.count == 4 ? CaptureProfiler() : nil
       let path = args[2]
       var file = stat()
       guard lstat(path, &file) == 0, (file.st_mode & S_IFMT) == S_IFREG,
@@ -157,13 +197,14 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
       let output = FileHandle.standardOutput
       // bytes.lines is incremental; no screen bytes are written to disk.
       for try await line in FileHandle.standardInput.bytes.lines {
+        profiler?.phase(.inputReceived)
         guard line.utf8.count <= 8192, let data = line.data(using: .utf8) else { throw failure() }
         let request = try JSONDecoder().decode(Request.self, from: data)
         guard validID(request.id) else { throw failure() }
         if request.op == "stop" { break }
         do {
           guard ["inspect", "capture"].contains(request.op), let target = request.target else { throw failure() }
-          let before = try await inspect(target, grant)
+          let before = try await inspect(target, grant, profiler: profiler)
           var result: [String: Any] = ["id": request.id, "ok": true, "target": try JSONSerialization.jsonObject(with: JSONEncoder().encode(target)),
             "observedAt": Date().timeIntervalSince1970 * 1000, "width": before.2, "height": before.3]
           let bounds: [String: Double] = ["x": before.1.minX, "y": before.1.minY, "width": before.1.width, "height": before.1.height]
@@ -177,27 +218,35 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
             config.width = before.2; config.height = before.3
             config.showsCursor = false; config.capturesAudio = false
             config.ignoreShadowsSingleWindow = true
-            let image = try await SCScreenshotManager.captureImage(
-              contentFilter: SCContentFilter(desktopIndependentWindow: before.0), configuration: config)
-            let after = try await inspect(target, grant)
-            guard before.1 == after.1, before.2 == after.2, before.3 == after.3,
-              image.width == before.2, image.height == before.3,
-              Date().timeIntervalSince1970 * 1000 - capturedAt < 1500 else { throw failure() }
+            profiler?.phase(.captureImage)
+            let image: CGImage
+            do {
+              image = try await SCScreenshotManager.captureImage(
+                contentFilter: SCContentFilter(desktopIndependentWindow: before.0), configuration: config)
+            } catch { throw refuse(profiler, .refusedCaptureImage) }
+            let after = try await inspect(target, grant, profiler: profiler, after: true)
+            guard before.1 == after.1, before.2 == after.2, before.3 == after.3 else { throw refuse(profiler, .refusedCaptureGeometry) }
+            guard image.width == before.2, image.height == before.3 else { throw refuse(profiler, .refusedImageDimensions) }
+            guard Date().timeIntervalSince1970 * 1000 - capturedAt < 1500 else { throw refuse(profiler, .refusedCaptureAge) }
+            profiler?.phase(.jpegEncode)
             guard let encoded = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85]),
-              encoded.count <= 2 * 1024 * 1024 else { throw failure() }
+              encoded.count <= 2 * 1024 * 1024 else { throw refuse(profiler, .refusedEncoding) }
             jpeg = encoded
             result["capturedAt"] = capturedAt; result["sourceFrameId"] = UUID().uuidString
             result["contentRevision"] = hash(jpeg)
           }
           result["bytes"] = jpeg.count
           var header = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]); header.append(10)
+          profiler?.phase(.responseWrite)
           try output.write(contentsOf: header)
           if !jpeg.isEmpty { try output.write(contentsOf: jpeg) }
+          profiler?.phase(.idle)
         } catch {
           // Never expose target titles, OS exceptions, screen bytes or secrets.
           let response: [String: Any] = ["id": request.id, "ok": false, "reason": "exact_window_unavailable", "bytes": 0]
           var header = try JSONSerialization.data(withJSONObject: response); header.append(10)
           try output.write(contentsOf: header)
+          profiler?.phase(.idle)
         }
       }
     } catch {

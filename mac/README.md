@@ -384,3 +384,24 @@ stdout bytes consumed by the local host; there is no screen recording file or
 full-display fallback. See [the task presentation setup](../docs/MEDIA_INTEGRATION.md#independent-task-walkthrough-local-candidate-step-d)
 for configuration and qualification boundaries. Building and tests do not grant
 permissions or establish real-pixel capture acceptance.
+
+For a lead-coordinated local timing probe, the child also accepts
+`--config /absolute/private/capture.json --profile-timing`. Profiling is off by
+default. It adds only fixed phase names and bounded `elapsedMs` / `sequence`
+integers to stderr; stdout retains its existing pixel protocol and generic
+`exact_window_unavailable` refusal. No window titles, IDs, geometry, raw OS errors,
+or screen bytes are included in the diagnostic stream.
+
+The phases distinguish stdin receipt, pre/post snapshot window enumeration and
+validation, the snapshot await, JPEG encoding, and stdout writes. Closed
+`refused_*` markers identify the failed check; the preceding ordinary phase
+identifies pre- versus post-capture inspection. Permission/console availability,
+grant expiry, process identity/lifetime, window match/title/visibility/layer,
+display geometry, pre/post geometry equality, image dimensions, and capture age
+remain mandatory. Diagnostics neither retry nor relax a refusal.
+
+A consumer must drain stderr concurrently with stdout and retain only bounded
+metadata. Diagnostic writes are nonblocking, at most 128 bytes, and never retried;
+sequence gaps mark incomplete telemetry. No observed gap does not rule out a
+trailing dropped marker. This option is diagnostic instrumentation, not a stall
+repair or evidence of physical acceptance.

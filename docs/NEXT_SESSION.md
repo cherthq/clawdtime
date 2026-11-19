@@ -18,14 +18,41 @@ Its pipeline mode uses the production renderer and unconnected SDK conversion,
 but substitutes read-only task checks for presentation/voice authority and uses a
 local exporter/watchdog. Do not claim it qualifies the whole production call.
 
-Initial setup is blocked on window visibility: Screen Recording permission and
-the unlocked console passed, but both ScreenCaptureKit and WindowServer marked
-all three exact prepared windows offscreen. Native Chrome foregrounding timed
-out. The user was asked to put the fixture, Rehearsal source.txt and Rehearsal
-result.txt on the current desktop, leaving the fixture in front. No native capture
-has started. Once visible, freshly resolve and prepare, run native-only timing
-first, then the pipeline probe; stop on first failure and inspect bounded timing
-metadata before selecting a fix. Do not bypass the onscreen guard.
+Actual capture has now reproduced the stall. A native-only probe captured 368
+frames over 75.193 seconds before all three windows went offscreen. A pipeline
+probe then failed freshness at 100.755 seconds while windows still resolved,
+but concurrent synthetic jobs were a load confound. With every team job paused,
+an isolated probe failed at 20.875 seconds: native I/O was pending for 845 ms,
+Python loop lag was at most 9 ms, task checks at most 14 ms, and rendering/SDK
+publication remained responsive. Exact windows still resolved afterward.
+
+Opt-in native phase telemetry now measures guard, shareable-content enumeration,
+validation, screenshot, JPEG and pipe stages using bounded numeric metadata.
+Writes are nonblocking and dropped rather than retried; the private reader detects
+observed sequence gaps. A missing final marker remains possible even without an
+observed gap. The first profiled pipeline passed 60 seconds (295 source frames,
+885 SDK submissions, maximum accepted source age 523 ms). A subsequent switching
+attempt stopped at 10.667 seconds because all three windows went offscreen,
+before its first switch. Neither result establishes a repair. A subsequent
+240.004-second run passed
+11 view switches (1,192 source frames, 3,573 SDK submissions, maximum accepted
+source age 660 ms). The following run refused after the post-capture validation
+marker
+at 27.191 seconds, before JPEG encoding; the exact guard is not yet known. Last
+accepted source age was 320 ms and all three windows resolved again immediately
+afterward. This did not reproduce the prior long native I/O wait. A profiler-off
+comparison also stopped on a source refusal at 88.510s after
+four switches. The expanded trace then reproduced the freshness stall at 27.738s:
+`capture_image` pending about 843 ms, last shared source age 1,045 ms, responsive
+render/SDK loops, no observed telemetry gaps. Cleanup joined. This implicates the
+one-shot screenshot interval; the separate post-validation refusal is not yet
+isolated. Capture is stopped and the user need not keep the desktop in front.
+No call was placed.
+
+The user authorized one further test call; that authorization remains unused.
+A new ClawdTime-only standby/restore deployment window has not been authorized.
+Keep the call on hold until local capture qualification is resolved. Fresh local
+probe grants remain covered by the existing local-testing permission.
 
 Read-only task endpoint baseline: 100 requests at 25/s, p50 1.82 ms, p95 3.93 ms,
 maximum 6.18 ms. This excludes the production voice-context handler. Synthetic
@@ -41,6 +68,25 @@ at 1.830/1.832 seconds. At retirement the newer render was only 0–3 ms old and
 the prior SDK submission only 49–54 ms earlier. Waking on the render alone cannot
 guarantee recovery within the existing 15 fps and one-second limits. No production
 behavior was changed based on these synthetic results.
+
+## Next local experiment
+
+The current change is diagnostic only. Default acquisition still uses
+`SCScreenshotManager.captureImage`; no reliability repair is claimed. An optional
+per-request exact-window `SCStream` candidate is planned to obtain a newly
+completed frame, stop the stream, then apply unchanged post-capture checks.
+Idle stream events and cached images cannot renew freshness; native timestamps,
+identity, geometry, expiry and the one-second export limit must be preserved.
+Do not enable a candidate by default or dial until it passes local qualification.
+
+The protected `local-capture-20261119/clawdtime_owner_native_probe.py` extends
+local testing to actual Python owner prepare/export/watchdog/scene-switch/Stop
+loops with real native capture and unconnected SDK conversion. It uses synthetic
+voice context backed by read-only task GET, hard-refuses calls/provider activation
+and task mutations, and creates separate local journals beside a fresh single-use
+configuration. Five offline harness tests passed; actual native owner capture is
+not yet run. This still does not establish production voice authority or handset
+acceptance. Tests live beside the private script, not in the repository.
 
 ## Latest retest — November 19, 2026
 
@@ -98,10 +144,11 @@ Loopback 13336 owns the task store, worker, verification and call admissions.
 Keep this same owner; never launch another operator on its database. Its fixture
 source session and actual handset destination are separate identities joined by
 the delegated export grant/native inspector. Verify session lifetime before reuse;
-never silently renew it. The owner was last refreshed to `48b7b6f`; fresh Python
-attempts loaded `2809bb0`. The subsequent diagnostic wire change also touches
-TypeScript: gracefully refresh the idle owner before using that new media/schema
-combination, preserving configuration, task state and receipts exactly.
+never silently renew it. The lead gracefully refreshed the idle owner at
+`9ab7047`, loading the `093cfb7` diagnostic schema. PID 59794 replaced PID 98302
+only after the original listener and store lock were released. Both task histories,
+all six closed admissions and static configuration hashes were unchanged.
+Do not rerun the private one-shot refresh script or start a second owner.
 
 Preview: `http://127.0.0.1:8767/`. TextEdit: `Rehearsal source.txt` and
 `Rehearsal result.txt`, showing the current review task's revision 3. Recheck the
@@ -124,8 +171,8 @@ not physical capture reliability or the cause of the failed live call.
 Before proposing another handset retest, complete local capture qualification on
 the same prepared views under appropriate fresh capture authority. Preserve all
 freshness checks; do not solve this by keeping a frozen frame, raising the timeout,
-relaxing permission or repeatedly trying calls. The next phone call and any
-standby/restore window require fresh explicit authorization.
+relaxing permission or repeatedly trying calls. One phone-call authorization remains unused; the temporary standby/restore
+window still requires specific deployment authorization before live execution.
 
 For one future review call: preview → source → verification; say “I accept the
 result” as a standalone utterance; confirm the picture remains visible; switch
