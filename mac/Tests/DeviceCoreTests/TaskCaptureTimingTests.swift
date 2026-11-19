@@ -4,7 +4,7 @@ import XCTest
 final class TaskCaptureTimingTests: XCTestCase {
   func testRefusalMarkersContainNoValuesAndKeepTimingWire() throws {
     let refusals = TaskCaptureTiming.Phase.allCases.filter { $0.rawValue.hasPrefix("refused_") }
-    XCTAssertEqual(refusals.count, 21)
+    XCTAssertEqual(refusals.count, 23)
     for phase in refusals {
       let data = try JSONEncoder().encode(TaskCaptureTiming(phase: phase, elapsedMilliseconds: 200, sequence: 9))
       let record = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

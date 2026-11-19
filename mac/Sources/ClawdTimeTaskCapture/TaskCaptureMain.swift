@@ -187,8 +187,12 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
         try FileHandle.standardOutput.write(contentsOf: result)
         return
       }
-      guard (args.count == 3 || (args.count == 4 && args[3] == "--profile-timing")), args[1] == "--config" else { throw failure() }
-      let profiler = args.count == 4 ? CaptureProfiler() : nil
+      guard args.count >= 3, args[1] == "--config" else { throw failure() }
+      let flags = Array(args.dropFirst(3))
+      guard flags.count <= 2, Set(flags).count == flags.count,
+        flags.allSatisfy({ ["--profile-timing", "--capture-stream"].contains($0) }) else { throw failure() }
+      let profiler = flags.contains("--profile-timing") ? CaptureProfiler() : nil
+      let useStream = flags.contains("--capture-stream")
       let path = args[2]
       var file = stat()
       guard lstat(path, &file) == 0, (file.st_mode & S_IFMT) == S_IFREG,
@@ -213,7 +217,7 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
           result["geometryGeneration"] = hash(try encoder.encode(bounds))
           var jpeg = Data()
           if request.op == "capture" {
-            let capturedAt = Date().timeIntervalSince1970 * 1000
+            var capturedAt = Date().timeIntervalSince1970 * 1000
             let config = SCStreamConfiguration()
             config.width = before.2; config.height = before.3
             config.showsCursor = false; config.capturesAudio = false
@@ -221,8 +225,13 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
             profiler?.phase(.captureImage)
             let image: CGImage
             do {
-              image = try await SCScreenshotManager.captureImage(
-                contentFilter: SCContentFilter(desktopIndependentWindow: before.0), configuration: config)
+              if useStream {
+                let frame = try await captureStreamFrame(window: before.0, configuration: config, phase: { profiler?.phase($0) })
+                image = frame.0; capturedAt = frame.1
+              } else {
+                image = try await SCScreenshotManager.captureImage(
+                  contentFilter: SCContentFilter(desktopIndependentWindow: before.0), configuration: config)
+              }
             } catch { throw refuse(profiler, .refusedCaptureImage) }
             let after = try await inspect(target, grant, profiler: profiler, after: true)
             guard before.1 == after.1, before.2 == after.2, before.3 == after.3 else { throw refuse(profiler, .refusedCaptureGeometry) }

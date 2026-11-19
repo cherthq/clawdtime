@@ -2360,3 +2360,42 @@ five offline tests passed in 13.052s, including single-use refusal, forbidden
 external actions, actual owner switching/Stop and signal cleanup. It has not yet
 performed actual native capture. No step completion tag or physical acceptance
 is claimed by this diagnostic checkpoint.
+
+## November 19, 2026 — optional fresh-stream acquisition candidate
+
+After diagnostic checkpoint `9a92445`, the Mac specialist implemented an opt-in
+`--capture-stream` acquisition strategy; production/default capture remains the
+one-shot screenshot path. Each request creates one exact-window screen-only
+stream, accepts only a valid complete image with a native WindowServer timestamp
+at or after request start, then joins stream shutdown before the original
+post-capture identity/geometry/expiry/image-size checks. Idle/started/blank events,
+old/future timestamps, and wrong dimensions cannot qualify. There is no cached
+frame, retry or fallback. The actual native frame age determines `capturedAt`.
+
+A 600 ms frame wait and a separately fenced 1.25s process lifecycle bound prevent
+late startup/stop from escaping into a later request. Unconfirmed shutdown exits
+the owned child; the parent still joins it. Independent reviews found and fixed
+pre-cancellation admission and a deadline-claim race before qualification. A
+monotonic elapsed check also rejects completion if the timer itself runs late.
+The executable entry file was renamed to `TaskCaptureMain.swift` because the new
+capture source makes the SwiftPM executable multi-file; binary/commands are
+unchanged. These safeguards are tested behavior, not measured native latency.
+
+`swift test --package-path mac` passed 68 tests (0.107s overall suite time) and
+built the candidate. `npm run check` passed typecheck, 1,308 tests across 73 files
+(12.14s), and build. `media/.venv/bin/python -m unittest discover -s media -p
+test_task_presentation.py` passed 33 tests in 7.114s. Independent connector and
+transport source reviews passed; `git diff --check` passed.
+
+The attempted local preparation stopped before grant creation/capture: the exact
+fixture existed but both native metadata witnesses marked it offscreen. Do not
+promote this candidate or claim the stall fixed without actual-window tests.
+Private V6 profiling and the actual-owner probe are ready; the private preparer
+accepts `--capture-stream-candidate` to select the protected wrapper without
+changing production configuration. The existing one-call authorization remains
+unused; no new standby deployment permission has been requested.
+
+After moving the private harness/tests to their persistent protected paths and
+selecting the V6 reader, all five offline owner-harness tests passed again in
+13.037s. The lead asked only for prepared-window visibility to run the local
+candidate; no additional call or deployment was requested at this checkpoint.

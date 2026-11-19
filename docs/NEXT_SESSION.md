@@ -71,13 +71,22 @@ behavior was changed based on these synthetic results.
 
 ## Next local experiment
 
-The current change is diagnostic only. Default acquisition still uses
+Diagnostic checkpoint `9a92445` is pushed. Default acquisition still uses
 `SCScreenshotManager.captureImage`; no reliability repair is claimed. An optional
-per-request exact-window `SCStream` candidate is planned to obtain a newly
-completed frame, stop the stream, then apply unchanged post-capture checks.
+`--capture-stream` candidate is now implemented, independently reviewed and
+built. It obtains a newly completed exact-window frame, joins stream stop, then
+applies unchanged post-capture checks. All 68 Swift tests, 1,308 TypeScript tests
+and 33 affected Python presentation tests passed.
 Idle stream events and cached images cannot renew freshness; native timestamps,
 identity, geometry, expiry and the one-second export limit must be preserved.
-Do not enable a candidate by default or dial until it passes local qualification.
+Do not enable the candidate by default or dial until it passes local qualification.
+The first preparation attempt found the fixture offscreen; no candidate capture
+started. The private preparer now accepts `--capture-stream-candidate`, selecting
+`stream-capture-candidate` as helperBinary in a fresh config. Use the V6 probe
+reader with the new stream/refusal phase enum; V4/V5 cannot parse those phases.
+First qualify 60s local capture/switching, then the actual-owner probe for a longer
+run and Stop. All team tests/benchmarks must be idle during these measurements.
+Reuse neither `.used` configurations nor previous capture grants.
 
 The protected `local-capture-20261119/clawdtime_owner_native_probe.py` extends
 local testing to actual Python owner prepare/export/watchdog/scene-switch/Stop

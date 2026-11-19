@@ -19,6 +19,8 @@ public struct TaskCaptureTiming: Codable, Equatable {
     case refusedCaptureGeometry = "refused_capture_geometry", refusedImageDimensions = "refused_image_dimensions"
     case refusedCaptureAge = "refused_capture_age", refusedCaptureImage = "refused_capture_image"
     case refusedEncoding = "refused_encoding"
+    case streamStart = "stream_start", streamWait = "stream_wait", streamStop = "stream_stop"
+    case refusedStreamStop = "refused_stream_stop", refusedStreamFrame = "refused_stream_frame"
   }
   public let phase: Phase
   public let elapsedMs: Int

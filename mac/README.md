@@ -405,3 +405,31 @@ metadata. Diagnostic writes are nonblocking, at most 128 bytes, and never retrie
 sequence gaps mark incomplete telemetry. No observed gap does not rule out a
 trailing dropped marker. This option is diagnostic instrumentation, not a stall
 repair or evidence of physical acceptance.
+
+### Experimental per-request stream acquisition
+
+`--config /absolute/private/capture.json --capture-stream` selects an opt-in
+acquisition candidate. It can be combined with `--profile-timing`; the default
+remains `SCScreenshotManager`. Each capture request creates one screen-only
+`SCStream` for the freshly inspected exact window, accepts at most one valid
+`.complete` image buffer, and joins stream stop before the original post-capture
+identity, geometry, image-size, and age checks. No stream or image is reused across
+requests, and there is no retry or one-shot fallback.
+
+The sample's WindowServer `displayTime` must fall between the request's native
+host time and callback time. Its real host-clock age determines `capturedAt`;
+receipt time does not renew old pixels. Idle, started, blank, invalid, wrong-size,
+old, and future frames do not qualify. Apple's [frame-status documentation](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle)
+explains that an idle event contains no newly generated frame; [Core Media's host-time conversion](https://developer.apple.com/documentation/coremedia/cmclockmakehosttimefromsystemunits(_:))
+converts the native `mach_absolute_time` units.
+
+A 600 ms soft frame deadline rejects a request that has no admissible frame.
+Start must settle and stop must complete before a result can return. If a lifecycle
+callback remains unconfirmed after 1.25 seconds, or stop fails, the experimental
+helper terminates itself rather than letting late capture survive into another
+request. A native monotonic elapsed check also refuses completion if the deadline
+callback itself was scheduled late. The parent observes EOF and joins its owned child; no success is inferred
+from submitted cancellation. Parent Stop still terminates that exact child.
+`stream_start`, `stream_wait`, and `stream_stop` profiling phases expose this path.
+These bounds and lifecycle tests are not proof of native startup latency or a
+repair; real exact-window qualification is required before changing the default.
