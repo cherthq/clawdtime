@@ -880,7 +880,9 @@ export async function supervisorCli(
         print(
           "No language model key is set: I tell the state and take a clear approve or deny.",
         );
-      print("Listening for your text messages. Ctrl+C stops it.");
+      print(
+        `Listening for your text messages. Ctrl+C stops it.\nA text counts when it comes from a phone that is joined to your project and whose number ends with the last four digits of yours${found.settings.word ? ", and when it starts with your word" : ""}. Keep the phone list of the project to your own phone.`,
+      );
       const stop = new AbortController();
       process.once("SIGINT", () => stop.abort());
       process.once("SIGTERM", () => stop.abort());
@@ -888,6 +890,12 @@ export async function supervisorCli(
       if (ended === "refused") {
         process.exitCode = 3;
         print("The project API key was refused. The channel stopped.");
+      }
+      if (ended === "busy") {
+        process.exitCode = 4;
+        print(
+          "Another clawdtime texts run already answers these texts on this Mac. This one did not start.",
+        );
       }
       return supervisor.learning;
     }

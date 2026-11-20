@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -123,6 +129,7 @@ describe("the settings of the text channel", () => {
         project: settings.project,
         owner: "+155501001" + "00",
         line: null,
+        word: null,
       },
     });
     expect(textSettings({})).toEqual({
@@ -450,5 +457,73 @@ describe("clawdtime texts", () => {
     await run(env, ["check"], refused);
     expect(lines.at(-1)).toContain("was refused");
     await expect(run(env, ["nope"])).rejects.toThrow("clawdtime texts run");
+  });
+});
+
+describe("the text channel, after an independent review", () => {
+  it("with a word in the settings, runs only a text that starts with it, and answers no other", async () => {
+    const api = service([
+      inbound(1, "open a tunnel on 3000", start + 1000),
+      inbound(2, "Maple, is the build green?", start + 2000),
+      inbound(3, "maple", start + 3000),
+    ]);
+    const { made, asked } = channel(api, {
+      settings: { ...settings, word: "maple" },
+    });
+    await made.tick();
+    await made.tick();
+    // The word is taken off. The text without the word is not run and gets no answer.
+    expect(asked).toEqual(["is the build green?", ""]);
+    expect(api.sent.map((entry) => entry.key)).toEqual([
+      `clawdtime-reply:${id(2)}:0`,
+      `clawdtime-reply:${id(3)}:0`,
+    ]);
+    expect(
+      textSettings({
+        CHERT_API_KEY: "ftk_x",
+        CHERT_PROJECT_ID: settings.project,
+        CLAWDTIME_OWNER_PHONE: "+15550100",
+        CLAWDTIME_TEXT_WORD: "no",
+      }),
+    ).toEqual({ missing: ["CLAWDTIME_TEXT_WORD"] });
+  });
+
+  it("lets one process answer the texts of one journal, and takes over the lock of a process that is gone", async () => {
+    const api = service();
+    const first = channel(api);
+    const second = channel(api, { root: first.root });
+    const other = 4_000_000;
+    // Another live process holds the lock: this one does not run.
+    const lock = join(first.root, "agents", "texts.json.lock");
+    writeFileSync(lock, String(other));
+    expect(await second.made.run(undefined, 1, () => true)).toBe("busy");
+    expect(api.seen).toEqual([]);
+    // That process is gone: the lock is taken over, and given back at the end.
+    const stop = new AbortController();
+    stop.abort();
+    expect(await second.made.run(stop.signal, 1, () => false)).toBe("stopped");
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("does not answer a pruned message again when this Mac's clock runs behind the service", async () => {
+    const clock = { now: start };
+    // The service's clock is one hour ahead of this Mac.
+    const ahead = 60 * 60_000;
+    const api = service([inbound(1, "status?", start + ahead + 1000)]);
+    const { made, asked } = channel(api, { clock });
+    await made.tick();
+    expect(asked).toEqual(["status?"]);
+    // Eight days later the entry is pruned. The service still lists the message.
+    clock.now = start + 8 * 24 * 60 * 60_000;
+    await made.tick();
+    await made.tick();
+    expect(asked).toEqual(["status?"]);
+    expect(api.sent).toHaveLength(1);
+  });
+
+  it("keeps going after a refusal that is not about the key", async () => {
+    const api = service();
+    api.state.list.status = 403;
+    await expect(channel(api).made.tick()).rejects.toThrow("403");
   });
 });

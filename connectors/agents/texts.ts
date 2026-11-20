@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,10 +25,15 @@ import type { JobFacts } from "./jobs.js";
  *   or after the journal was lost.
  * - The work of one message runs once. A message is written down as claimed
  *   before any work. After a restart a claimed message is not run again.
- * - Only the owner commands this Mac. A message counts only when its sender
- *   ends with the last four digits of the owner's number, and an answer goes
- *   only to the owner's number from the settings, never to a value from a
- *   message.
+ * - An answer goes only to the owner's number from the settings, never to a
+ *   value from a message.
+ *
+ * Who can command this Mac by text: a phone that is joined to the project,
+ * whose number ends with the last four digits of the owner's number. The
+ * service gives no more of a sender than those digits, so the list of joined
+ * phones of the project is the real guard. Keep it to the owner's phone, and
+ * turn off joining by code. An optional word from the settings, which a text
+ * must start with, adds a second check that this program holds itself.
  *
  * The journal holds ids, states and the text of an answer that is still to be
  * sent. Nothing here logs the text of a message or a number.
@@ -41,6 +47,8 @@ export interface TextSettings {
   owner: string;
   /** The line to listen on. null: the line of the owner's own texts. */
   line: string | null;
+  /** A word that every text must start with. null: no such word. */
+  word?: string | null;
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,6 +62,7 @@ export function textSettings(
   const project = env.CHERT_PROJECT_ID?.trim() ?? "";
   const owner = (env.CLAWDTIME_OWNER_PHONE ?? "").replace(/[\s().-]/g, "");
   const line = env.CHERT_LINE_ID?.trim() || null;
+  const word = env.CLAWDTIME_TEXT_WORD?.trim().toLowerCase() || null;
   const base = (
     env.CHERT_API_BASE?.trim() || "https://app.trychert.com/api/v1"
   ).replace(/\/+$/, "");
@@ -61,16 +70,20 @@ export function textSettings(
   if (!uuid.test(project)) missing.push("CHERT_PROJECT_ID");
   if (!/^\+?[0-9]{7,15}$/.test(owner)) missing.push("CLAWDTIME_OWNER_PHONE");
   if (line && !uuid.test(line)) missing.push("CHERT_LINE_ID");
+  if (word && !/^[\p{L}\p{N}]{4,40}$/u.test(word))
+    missing.push("CLAWDTIME_TEXT_WORD");
   // The key travels in a header: only an encrypted address may receive it.
   if (!/^https:\/\/[^\s/]+/.test(base)) missing.push("CHERT_API_BASE");
   return missing.length
     ? { missing }
-    : { settings: { base, key, project, owner, line } };
+    : { settings: { base, key, project, owner, line, word } };
 }
 
 interface Item {
   status: "claimed" | "answered";
   at: number;
+  /** When the service made the message, by the service's clock. */
+  created?: number;
   /** The answer, kept from the moment it exists until it is sent. */
   reply?: string;
   outcomes?: string[];
@@ -137,6 +150,16 @@ export async function checkTexts(
     return "failed";
   }
 }
+
+const processAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // No such process: gone. No permission: it runs, as another user.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
 
 export const restartNote =
   "I restarted while I worked on that. Send it again if you still need it.";
@@ -234,8 +257,17 @@ export class TextChannel {
     for (const [id, item] of Object.entries(this.journal.items))
       if (item.status === "answered" && item.at < edge) {
         delete this.journal.items[id];
-        this.journal.baselineAt = Math.max(this.journal.baselineAt, item.at);
+        // The baseline moves to the message's own time, by the service's
+        // clock: a clock of this Mac that runs behind cannot bring it back.
+        this.journal.baselineAt = Math.max(
+          this.journal.baselineAt,
+          item.created ?? item.at,
+        );
       }
+    // Job ids sort by time: the newest 200 are enough to send each answer once.
+    const sentJobs = Object.keys(this.journal.jobs).sort();
+    for (const id of sentJobs.slice(0, Math.max(0, sentJobs.length - 200)))
+      delete this.journal.jobs[id];
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     const temporary = `${this.file}.tmp`;
     writeFileSync(temporary, JSON.stringify(this.journal), { mode: 0o600 });
@@ -318,10 +350,60 @@ export class TextChannel {
     this.journal.items[id] = {
       status: "answered",
       at: this.now(),
+      ...(item.created !== undefined ? { created: item.created } : {}),
       outcomes,
     };
     this.save();
     this.log(`answered ${id.slice(0, 8)} ${outcomes.join(",")}`);
+  }
+
+  /** The text without the word that it must start with, or null when the word is missing. */
+  private withoutWord(text: string): string | null {
+    const word = this.options.settings.word;
+    if (!word) return text;
+    const found = /^\s*([\p{L}\p{N}]+)[\s,.:;!-]*/u.exec(text);
+    return found && found[1]!.toLowerCase() === word
+      ? text.slice(found[0].length)
+      : null;
+  }
+
+  /**
+   * One process answers the texts of one journal. This takes the lock, or
+   * says that another process of this Mac holds it.
+   */
+  acquire(alive: (pid: number) => boolean = processAlive): boolean {
+    const lock = `${this.file}.lock`;
+    mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        return true;
+      } catch {
+        let holder = Number.NaN;
+        try {
+          holder = Number.parseInt(readFileSync(lock, "utf8"), 10);
+        } catch {
+          holder = Number.NaN;
+        }
+        if (Number.isFinite(holder) && holder !== process.pid && alive(holder))
+          return false;
+        // The holder is gone: its lock is taken over.
+        try {
+          unlinkSync(lock);
+        } catch {
+          return false;
+        }
+      }
+    }
+    return false;
+  }
+  release() {
+    const lock = `${this.file}.lock`;
+    try {
+      if (readFileSync(lock, "utf8") === String(process.pid)) unlinkSync(lock);
+    } catch {
+      /* The lock is already gone. */
+    }
   }
 
   /** After a restart: a claimed message is answered, and its work is not run again. */
@@ -366,8 +448,25 @@ export class TextChannel {
       )
       .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
     for (const message of fresh) {
+      const words = this.withoutWord(message.text);
+      if (words === null) {
+        // No word, no work and no answer: the text is written down so it is not looked at again.
+        this.journal.items[message.id] = {
+          status: "answered",
+          at: this.now(),
+          created: Date.parse(message.created_at),
+          outcomes: ["no_word"],
+        };
+        this.save();
+        this.log(`ignored ${message.id.slice(0, 8)} no_word`);
+        continue;
+      }
       // Written down before any work: the work of one message runs once.
-      this.journal.items[message.id] = { status: "claimed", at: this.now() };
+      this.journal.items[message.id] = {
+        status: "claimed",
+        at: this.now(),
+        created: Date.parse(message.created_at),
+      };
       this.journal.line = message.line_id;
       this.save();
       this.log(`claimed ${message.id.slice(0, 8)}`);
@@ -377,8 +476,7 @@ export class TextChannel {
       }
       let answer: string;
       try {
-        answer =
-          messageText(await this.options.answer(message.text)) || "Done.";
+        answer = messageText(await this.options.answer(words)) || "Done.";
       } catch {
         answer = failedNote;
       }
@@ -420,20 +518,31 @@ export class TextChannel {
     }
   }
 
-  /** Runs until the signal ends it, or until the key is refused. Returns why it ended. */
+  /**
+   * Runs until the signal ends it, or until the key is refused. Returns why it
+   * ended. "busy": another process of this Mac already answers these texts.
+   */
   async run(
     signal?: AbortSignal,
     everyMs = 3000,
-  ): Promise<"stopped" | "refused"> {
-    while (!signal?.aborted) {
-      try {
-        if ((await this.tick()) === "stop") return "refused";
-      } catch (error) {
-        this.log(error instanceof Error ? error.message : "The round failed.");
-        await this.sleep(10_000);
+    alive: (pid: number) => boolean = processAlive,
+  ): Promise<"stopped" | "refused" | "busy"> {
+    if (!this.acquire(alive)) return "busy";
+    try {
+      while (!signal?.aborted) {
+        try {
+          if ((await this.tick()) === "stop") return "refused";
+        } catch (error) {
+          this.log(
+            error instanceof Error ? error.message : "The round failed.",
+          );
+          await this.sleep(10_000);
+        }
+        await this.sleep(everyMs);
       }
-      await this.sleep(everyMs);
+      return "stopped";
+    } finally {
+      this.release();
     }
-    return "stopped";
   }
 }
