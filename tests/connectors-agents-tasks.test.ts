@@ -189,6 +189,150 @@ const asking: Partial<TaskFacts> = {
   canAnswer: true,
 };
 
+describe("direct software requests start without a confirmation loop", () => {
+  const demo =
+    "Build a draft landing page for Chert using this project's existing content and branding. Run it locally and check that it works. Call me when it's ready so we can review it together. Don't deploy it yet.";
+
+  it.each([
+    demo,
+    `Yes, ${demo}`,
+    `Can you ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `Please ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+  ])(
+    "starts a clear request exactly once without asking the conversational model: %s",
+    async (spoken) => {
+      const tasks = fakeTasks();
+      const run = scripted(["Should I proceed?"]);
+      const answer = await new Supervisor(
+        world(tasks.port).value,
+        run.model,
+      ).reply([], spoken, "voice");
+      expect(run.seen).toEqual([]);
+      expect(tasks.calls).toHaveLength(1);
+      expect(tasks.calls[0]).toMatchObject({ kind: "start", text: spoken });
+      expect(answer).toBe(
+        "Simulation task recorded. No coding worker was started.",
+      );
+      expect(answer).not.toMatch(/proceed|approve|restate/i);
+    },
+  );
+
+  it("keeps constraints beyond the conversational model's 2,000-character excerpt", async () => {
+    const spoken = `Build a landing page. ${"Use the supplied brand text. ".repeat(85)}Don't deploy it yet.`;
+    const tasks = fakeTasks();
+    await new Supervisor(
+      world(tasks.port).value,
+      scripted(["Should I proceed?"]).model,
+    ).reply([], spoken, "chat");
+    expect(tasks.calls[0]!.text).toBe(spoken);
+  });
+
+  it("acknowledges only a successful real start and keeps an active task unchanged", async () => {
+    const tasks = fakeTasks();
+    const originalStart = tasks.port.start;
+    tasks.port.start = async (goal, eventId) => {
+      const result = await originalStart(goal, eventId);
+      return result.ok
+        ? { ok: true, message: "Task queued for the coding worker." }
+        : result;
+    };
+    const supervisor = new Supervisor(
+      world(tasks.port).value,
+      scripted(["Should I proceed?"]).model,
+    );
+    expect(await supervisor.reply([], demo, "chat")).toBe(
+      "I'll get started. Task queued for the coding worker.",
+    );
+    expect(
+      await supervisor.reply([], "Build a different website", "chat"),
+    ).toBe("Finish or reconcile the current task before starting another.");
+    expect(tasks.task()!.goal).toBe(demo);
+    expect(tasks.calls).toHaveLength(2);
+  });
+
+  it.each([true, false])(
+    "routes a direct revision to the waiting task instead of starting another (model=%s)",
+    async (withModel) => {
+      const tasks = fakeTasks({
+        goal: demo,
+        state: "needs_decision",
+        question: "Which color should the landing page use?",
+        choices: ["Blue", "Green"],
+        canAnswer: true,
+      });
+      const run = scripted([
+        [call("start_task", { goal: "make a new page" })],
+        "Should I start another task?",
+      ]);
+      const supervisor = new Supervisor(
+        world(tasks.port).value,
+        withModel ? run.model : null,
+      );
+      const revision = "Make the landing page blue. Don't deploy it yet.";
+      expect(await supervisor.reply([], revision, "voice")).toBe(
+        "Simulation task recorded.",
+      );
+      expect(tasks.calls).toHaveLength(1);
+      expect(tasks.calls[0]).toMatchObject({ kind: "answer", text: revision });
+      expect(tasks.task()!.goal).toBe(demo);
+      expect(tasks.task()!.canAnswer).toBe(false);
+      expect(run.seen).toEqual([]);
+    },
+  );
+
+  it("accepts a politely phrased revision while the task waits", async () => {
+    const tasks = fakeTasks({ ...asking, goal: demo });
+    const revision = "Could you make the landing page blue?";
+    await new Supervisor(world(tasks.port).value, null).reply(
+      [],
+      revision,
+      "chat",
+    );
+    expect(tasks.calls).toHaveLength(1);
+    expect(tasks.calls[0]).toMatchObject({ kind: "answer", text: revision });
+    expect(tasks.task()!.goal).toBe(demo);
+  });
+
+  it("reports a missing service instead of saying it started", async () => {
+    expect(
+      await new Supervisor(
+        world().value,
+        scripted(["Should I proceed?"]).model,
+      ).reply([], demo, "chat"),
+    ).toBe("Tasks need ClawdTime's desktop service. It is not running here.");
+  });
+
+  it.each([
+    "Can you explain how to build a landing page?",
+    "Should we build a landing page?",
+    "How is the landing page build going?",
+    "Don't build a landing page yet.",
+    "Don't start a task: build a landing page.",
+    "Could you not start a task to build a landing page?",
+    "Can you not build the landing page yet?",
+    "Build a landing page, but don't start yet.",
+    "For example: build a landing page.",
+    "Click the Save button in the app window.",
+    "Type build a landing page into the browser field.",
+    "Yes, please proceed.",
+  ])(
+    "does not let a model turn discussion or a UI instruction into a coding start: %s",
+    async (spoken) => {
+      const tasks = fakeTasks();
+      const run = scripted([
+        [call("start_task", { goal: "build a landing page" })],
+        "No task started.",
+      ]);
+      await new Supervisor(world(tasks.port).value, run.model).reply(
+        [],
+        spoken,
+        "chat",
+      );
+      expect(tasks.calls).toEqual([]);
+    },
+  );
+});
+
 describe("a task by talking, with a language model", () => {
   it("still starts a coding task to implement an email feature", async () => {
     const tasks = fakeTasks();

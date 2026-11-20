@@ -1,5 +1,19 @@
 # ClawdTime: approved implementation and migration plan
 
+## Direct local task execution — November 20, 2026
+
+The operator requested removal of redundant task-start and local computer-action
+confirmations for the demo. Clear coding requests such as "Build a draft landing
+page" should start directly using the person's complete goal and constraints,
+without requiring the words "task" or "job" or a second confirmation. A start
+acknowledgement must follow the task service's actual acceptance. The local
+computer runtime supports explicit protected `actionApproval: "automatic"`
+configuration; other installations retain their default confirmation behavior.
+Keep Stop, adapter refusal, freshness, unknown-outcome fencing and verification.
+Do not auto-accept product choices/results or broaden phone/deployment authority
+or native coding-agent permissions. Install only at an idle boundary and preserve
+the previous configuration for rollback.
+
 ## App-owned CUA implementation — November 20, 2026
 
 User approved bundling the execution runtime so computer tasks do not depend on

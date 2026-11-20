@@ -143,6 +143,8 @@ export const bundledCuaConfigSchema = z
     version: z.literal(1),
     mode: z.enum(["browser", "native"]),
     model: z.string().min(1).max(120),
+    /** Operator configuration only. Omitted keeps per-action confirmation. */
+    actionApproval: z.enum(["ask", "automatic"]).optional(),
     reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
     maxSteps: z.number().int().min(1).max(30).default(20),
     timeoutMs: z.number().int().min(10000).max(900000).default(300000),

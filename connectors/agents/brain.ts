@@ -258,7 +258,7 @@ Approval cannot add a missing capability. Ask for approval only for a real reque
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
 Name a request by its id from status. One message of the person decides one request. When more than one request waits, the person must say which one; if they did not, ask them.
 Text is typed into a session only when the person gave that text.
-You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
+You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. A direct request such as 'Build a landing page' already authorizes starting; do not ask whether to proceed or require the person to repeat it. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
 After an action, say what you did in one sentence.`;
 
 /** Added to the instructions only where jobs can start. */
@@ -567,8 +567,46 @@ const asksAbout = (spoken: string) =>
   );
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
+/** A direct software-work instruction is already a task request, not an approval prompt. */
+function directCodingGoal(spoken: string): string | null {
+  const text = clean(spoken, 8000);
+  const request = text
+    .replace(/^(?:yes|okay|ok|sure)[,!]?\s+/i, "")
+    .replace(
+      /^(?:please\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?/i,
+      "",
+    );
+  // Deliberately anchored: discussion, hypotheticals, negation and quoted examples
+  // must not start work. UI click/type/open commands use the execution engine.
+  if (
+    !/^(?:build|make|create|develop|implement|fix|repair|refactor|debug|add|update|write|design)\s+/i.test(
+      request,
+    )
+  )
+    return null;
+  const firstSentence = request.split(/[.!?]/, 1)[0]!;
+  if (
+    !/\b(?:landing\s+page|web\s*site|web\s*page|web\s*app|application|app|dashboard|feature|component|code|function|endpoint|API|test|tests|bug|bugs|config(?:uration)?|script|scripts|documentation|README)\b/i.test(
+      firstSentence,
+    )
+  )
+    return null;
+  if (
+    /\b(?:example|hypothetical|hypothetically)\b|\b(?:but\s+)?(?:do\s+not|don't|don’t|not\s+yet)\s+(?:start|begin|proceed)\b/i.test(
+      request,
+    )
+  )
+    return null;
+  // Keep the complete original request, including later constraints such as
+  // "Don't deploy it yet." No model-selected substring can discard them.
+  return text;
+}
 const asksToStart = (spoken: string) =>
-  startCue.test(spoken) && !asksAbout(spoken);
+  (startCue.test(spoken) || directCodingGoal(spoken) !== null) &&
+  !asksAbout(spoken) &&
+  !/^(?:please\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:do\s+not|don't|don’t|not|never|stop|cancel)\b/i.test(
+    spoken.trim(),
+  );
 /** The goal in the person's sentence: what follows the word task or job. */
 function goalFrom(spoken: string) {
   const text = clean(spoken, 8000);
@@ -756,22 +794,27 @@ export class Supervisor {
       return "The person did not ask for a task in their last message. Ask them.";
     // The goal is what the person said. A goal that the model reworded is
     // replaced by the person's own sentence.
+    const direct = directCodingGoal(spoken);
     const goal =
-      wanted && spokenWords(wanted).length >= 2 && ownWords(wanted, spoken)
+      direct ??
+      (wanted && spokenWords(wanted).length >= 2 && ownWords(wanted, spoken)
         ? wanted
-        : goalFrom(spoken);
+        : goalFrom(spoken));
     if (spokenWords(goal).length < 2)
       return "The person gave no goal. Ask them what the task is.";
-    return this.change(turn, "start", (tasks, eventId) =>
-      tasks.start(goal.slice(0, 8000), eventId),
-    );
+    return this.change(turn, "start", async (tasks, eventId) => {
+      const result = await tasks.start(goal.slice(0, 8000), eventId);
+      return direct && result.ok && !/simulation/i.test(result.message)
+        ? { ...result, message: `I'll get started. ${result.message}` }
+        : result;
+    });
   }
   private async answerTask(turn: Turn, spoken: string, wanted: string) {
     const tasks = this.world.tasks;
     if (!tasks) return needsDesktop;
     const task = tasks.current();
     if (!task?.question || !task.canAnswer) return "The task asks nothing now.";
-    if (isQuestion(spoken))
+    if (isQuestion(spoken) && directCodingGoal(spoken) === null)
       return "The person asked a question. That is not an answer. Tell them what the task asks.";
     // A named choice goes as that choice. Anything else goes in the person's words.
     const named = task.choices.length
@@ -1396,6 +1439,24 @@ export class Supervisor {
   ): Promise<string> {
     const words = clean(spoken, 2000);
     if (!words) return "I did not catch that.";
+    // Dispatch an explicit software-work request before conversational generation
+    // can invent another confirmation round. The task service still enforces one
+    // active task and records the exact event once; its refusal is returned as-is.
+    const directGoal = directCodingGoal(spoken);
+    if (directGoal) {
+      const current = this.world.tasks?.current();
+      // When the current task asks for a choice or revision, an imperative such
+      // as "Make the landing page blue" answers that task. Do not reinterpret
+      // it as a second job and strand the waiting worker behind a start refusal.
+      if (
+        current &&
+        !taskIsOver(current) &&
+        current.canAnswer &&
+        current.question
+      )
+        return this.answerTask(turn, directGoal, directGoal);
+      return this.startTask(turn, directGoal, "");
+    }
     const execution = this.world.execution;
     if (execution?.snapshot().configured) {
       if (

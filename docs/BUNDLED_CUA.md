@@ -21,15 +21,15 @@ attach to Chrome, import cookies, use a personal profile or inherit browser logi
 Origins must be configured explicitly. Network requests are limited to GET/HEAD
 on those origins; redirects are checked, while popups, dialogs, downloads,
 file choosers, service workers and WebSockets are refused. GET is not inherently
-effect-free: the origin allowlist must contain trusted task surfaces. All input
+effect-free: the origin allowlist must contain trusted task surfaces. By default, input
 requires an exact action approval except explicitly configured disposable loopback
-fixture grants. Sensitive input targets are refused. This release cannot log into
+fixture grants; the operator can explicitly select automatic mode below. Sensitive input targets are refused. This release cannot log into
 email or freely operate arbitrary websites.
 
 The native adapter uses the companion's separate local-task lease API. It needs
 an allowlisted executor/display, local Enable, Screen Recording, Accessibility,
 and exclusive ownership. It shares the existing ownership slot with call control
-and cannot take over a live call. Each action requires approval. Captures exclude
+and cannot take over a live call. Each action requires approval by default. Captures exclude
 known ClawdTime control windows; input into or through those windows is refused
 to prevent the agent approving its own actions. Native permission prompts, login
 and arbitrary terminal execution are not automated. The native core flow has passed the bounded two-app qualification described below. Native approvals now use a
@@ -86,7 +86,18 @@ Native mode is an internal pilot with bounded physical acceptance on one Mac.
 
 ## Approval, Stop and recovery
 
-The panel shows the pending action with **Approve action** and **Deny action**.
+An operator can set `"actionApproval": "automatic"` in the protected
+`bundled-cua.json` and restart an idle service to omit ClawdTime's per-action
+confirmation prompts. This is appropriate only when the operator deliberately
+chooses automatic execution for the local workflow. Omitted or `"ask"` keeps
+the existing approval behavior. The setting does not change adapter refusals,
+configured apps/origins, macOS permissions, target freshness, Stop, result
+verification or unknown-outcome fences. It does not approve another agent's
+native permission requests or authorize a phone call or deployment. Changing it
+does not replay an old task or resolve an unknown action.
+
+In confirmation mode, the panel shows the pending action with **Approve action**
+and **Deny action**.
 Approval binds one action ID, not the whole task or future actions. Changed
 pixels require a fresh proof of the original exact native target; unsupported
 image, web, or virtualized surfaces refuse this semantic proof. Focus, target
