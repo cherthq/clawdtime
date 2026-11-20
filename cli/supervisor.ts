@@ -66,6 +66,7 @@ import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
+import { TextChannel, textSettings } from "../connectors/agents/texts.js";
 import { titleReader } from "../connectors/agents/topics.js";
 import { sessionWindow } from "../connectors/agents/windows.js";
 import type {
@@ -81,6 +82,8 @@ export interface SupervisorDependencies {
   findSession: (snapshot: BoardSnapshot, query: string) => AgentSession;
   /** The language model of the ClawdTime agent. Tests script it. */
   model?: ModelClient | null;
+  /** The HTTP client of the text message channel. Tests script it. */
+  request?: typeof fetch;
 }
 
 /**
@@ -151,6 +154,8 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
   chat [TEXT]                          talk to ClawdTime in text: it answers and can act
   talk                                 the same by voice: you speak, it speaks back
+  jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
+  texts run | check                    answer your text messages on your Chert line (check sends nothing)
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
   agents call check                    ask the backend whether a call would work now; no call is placed
 ID is the request's id, or its first four characters or more, as \`agents pending\` prints it.`;
@@ -776,7 +781,7 @@ export async function supervisorCli(
     return;
   }
 
-  if (group === "chat" || group === "talk") {
+  if (group === "chat" || group === "talk" || group === "texts") {
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();
     const titles = titleReader(system);
@@ -819,6 +824,47 @@ export async function supervisorCli(
       log.append({ role: "assistant", text: answer, at: system.now(), via });
       return answer;
     };
+    if (group === "texts") {
+      const found = textSettings(system.env);
+      if ("missing" in found)
+        throw new Error(
+          `Text messages need these settings in the environment: ${found.missing.join(", ")}. See SETUP_CLAWDTIME.md.`,
+        );
+      const channel = new TextChannel({
+        settings: found.settings,
+        root,
+        now: () => system.now(),
+        answer: (words) => turn(words, "chat"),
+        jobs: () => jobsFor(system, root, runner).recent(20),
+        ...(deps.request ? { request: deps.request } : {}),
+        log: (line) => print(`${new Date(system.now()).toISOString()} ${line}`),
+      });
+      if (command === "check") {
+        // One read of the messages. It sends nothing and prints no text and no number.
+        const state = await channel.tick();
+        return print(
+          state === "stop"
+            ? "The project API key was refused. Make a key with read and write access, and check the project id."
+            : "The key works and the messages can be read. Run: clawdtime texts run",
+        );
+      }
+      if (command !== "run")
+        throw new Error("Use: clawdtime texts run, or clawdtime texts check");
+      if (!supervisor.ready)
+        print(
+          "No language model key is set: I tell the state and take a clear approve or deny.",
+        );
+      print("Listening for your text messages. Ctrl+C stops it.");
+      const stop = new AbortController();
+      process.once("SIGINT", () => stop.abort());
+      process.once("SIGTERM", () => stop.abort());
+      const ended = await channel.run(stop.signal);
+      if (ended === "refused") {
+        process.exitCode = 3;
+        print("The project API key was refused. The channel stopped.");
+      }
+      return supervisor.learning;
+    }
     if (group === "chat") {
       if (args.length) {
         print(await turn(args.join(" "), "chat"));

@@ -69,6 +69,8 @@ ${supervisorHelp}`;
 export interface AgentsDependencies {
   /** The language model of the ClawdTime agent. Tests script it. */
   model?: ModelClient | null;
+  /** The HTTP client of the text message channel. Tests script it. */
+  request?: typeof fetch;
   system?: System;
   runner?: Runner;
   print?: (line: string) => void;
@@ -394,6 +396,7 @@ export async function agentsCli(
       hookScript: dependencies.hookScript ?? hookScriptPath(),
       findSession,
       model: dependencies.model,
+      ...(dependencies.request ? { request: dependencies.request } : {}),
     });
   const command = args[0] && !args[0].startsWith("--") ? args[0] : "list";
   const rest = command === args[0] ? args.slice(1) : args;

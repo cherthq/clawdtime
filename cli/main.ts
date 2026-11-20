@@ -66,6 +66,7 @@ export async function main(args = process.argv.slice(2)) {
       "chat",
       "talk",
       "jobs",
+      "texts",
     ].includes(command)
   )
     return agentsCli(["--supervisor", command, ...args.slice(1)]);

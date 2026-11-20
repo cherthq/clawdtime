@@ -32,8 +32,10 @@ export interface JobFacts {
   job: string;
   startedAt: number;
   done: boolean;
-  /** The answer that the session wrote, as plain text. null while it works. */
+  /** The answer that the session wrote, as one plain line for speech. null while it works. */
   result: string | null;
+  /** The same answer with its lines kept, for a text message. */
+  text?: string | null;
 }
 
 export interface JobPort {
@@ -62,6 +64,18 @@ export function plainAnswer(text: string, limit = 1200) {
     .replace(/\s+/g, " ")
     .trim();
   return plain.length > limit ? `${plain.slice(0, limit)} ... (cut)` : plain;
+}
+/** The answer with its lines kept: a link stays on a line of its own. */
+export function plainLines(text: string, limit = 3500) {
+  const plain = text
+    .replace(ANSI, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\P{C}\n]/gu, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return plain.length > limit ? `${plain.slice(0, limit)}\n... (cut)` : plain;
 }
 /** A job in words only: one paragraph, no control character, at most 2000 characters. */
 export const cleanJob = (job: string) =>
@@ -197,6 +211,10 @@ export class Jobs implements JobPort {
           answer === null
             ? null
             : plainAnswer(answer) || "The session wrote an empty answer.",
+        text:
+          answer === null
+            ? null
+            : plainLines(answer) || "The session wrote an empty answer.",
       });
     }
     return found;
