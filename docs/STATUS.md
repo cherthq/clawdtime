@@ -1,5 +1,15 @@
 # ClawdTime implementation status
 
+## November 20, 2026 — desktop execution connection
+
+An opt-in pinned-chat bridge connects supervisor requests to existing native
+browser/desktop tools and returns observed result receipts to the desktop chat.
+A real disposable Chrome type/click/save task passed via explicit polling in the
+original active chat. Automatic wake did not pass: CLI resumption was uncertain.
+This is not unattended CUA readiness or phone/capture acceptance. See
+[the executor report](DESKTOP_EXECUTOR.md) for boundaries and the recommendation
+to bundle a persistent runtime for the independent product.
+
 November 12, 2026 — America/New_York.
 
 **Backend/media source `0814e50` is deployed with the speech repair, bounded

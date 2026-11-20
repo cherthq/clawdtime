@@ -27,17 +27,69 @@ public struct ChatTranscript: Codable, Equatable {
   /// The person turned memory on. A service that does not say counts as off.
   public let memory: Bool?
   public let messages: [Message]
-  public init(version: Int, model: Bool, speech: Bool, voiceDirectory: String, messages: [Message], memory: Bool? = nil) {
+  public let execution: ChatExecution?
+  public init(version: Int, model: Bool, speech: Bool, voiceDirectory: String, messages: [Message], memory: Bool? = nil, execution: ChatExecution? = nil) {
     self.version = version; self.model = model; self.speech = speech; self.voiceDirectory = voiceDirectory; self.messages = messages
-    self.memory = memory
+    self.memory = memory; self.execution = execution
   }
   public func validate() throws {
+    try execution?.validate()
     guard version == 1, messages.count <= 400, voiceDirectory.hasPrefix("/"), voiceDirectory.count <= 4096,
       messages.allSatisfy({ ["user", "assistant"].contains($0.role) && $0.text.count <= 2000 && ["chat", "voice", "call"].contains($0.via)
         && ($0.choices ?? []).count <= 4 && ($0.choices ?? []).allSatisfy { (1...80).contains($0.count) } })
     else { throw PanelFailure.response }
   }
 }
+/// Optional same-chat executor metadata. It grants no desktop or capture authority.
+public struct ChatExecution: Codable, Equatable {
+  public let configured: Bool
+  public let state: String
+  public let canStop: Bool
+  public let message: String
+  public init(configured: Bool, state: String, canStop: Bool, message: String) {
+    self.configured = configured; self.state = state; self.canStop = canStop; self.message = message
+  }
+  public func validate() throws {
+    guard (1...80).contains(state.count), !state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      state.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+      message.count <= 2000, configured || !canStop else { throw PanelFailure.response }
+  }
+}
+public struct ChatExecutionReply: Codable, Equatable { public let execution: ChatExecution }
+
+/// Stop has its own lane, independent of a pending chat/voice answer. Reads
+/// started before Stop or its response cannot restore an old execution affordance.
+public struct ChatExecutionControl: Equatable {
+  public private(set) var execution: ChatExecution?
+  public private(set) var generation: UInt64 = 0
+  public private(set) var stopping = false
+  public private(set) var awaitingRead = false
+  public private(set) var notice: String?
+  public init() {}
+  public var canStop: Bool { execution?.canStop == true && !stopping && !awaitingRead }
+  public mutating func receive(_ value: ChatExecution?, readGeneration: UInt64) {
+    guard generation == readGeneration, !stopping else { return }
+    execution = value; awaitingRead = false; notice = nil
+  }
+  @discardableResult public mutating func beginStop() -> Bool {
+    guard canStop else { return false }
+    generation &+= 1; stopping = true
+    notice = "Requesting stop; an action already underway may finish."
+    return true
+  }
+  public mutating func finishStop(_ value: ChatExecution?) {
+    guard stopping else { return }
+    generation &+= 1; stopping = false
+    if let value {
+      execution = value; awaitingRead = false
+      notice = "Stop requested; an action already underway may finish."
+    } else {
+      awaitingRead = true
+      notice = "Stop could not be confirmed. An action already underway may finish."
+    }
+  }
+}
+
 public struct ChatReply: Codable, Equatable { public let reply: ChatTranscript.Message }
 public struct VoiceReply: Codable, Equatable {
   public let heard: String

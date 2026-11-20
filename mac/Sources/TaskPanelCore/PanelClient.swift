@@ -23,7 +23,7 @@ public final class PanelClient {
   private func request(path: String, body: Data? = nil, patient: Bool = false) async throws -> Data {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
-      path == "/desktop/chat" || path == "/desktop/voice" || path == "/desktop/memory" ||
+      path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
@@ -114,6 +114,14 @@ public final class PanelClient {
     let result = try JSONDecoder().decode(ChatTranscript.self, from: await request(path: "/desktop/chat"))
     try result.validate()
     return result
+  }
+  /// One cooperative stop request. Unknown results are reconciled by chat reads,
+  /// never by replaying this POST or claiming an in-flight action was interrupted.
+  public func stopExecution() async throws -> ChatExecution {
+    let result = try JSONDecoder().decode(ChatExecutionReply.self,
+      from: await request(path: "/desktop/execution/stop", body: Data("{}".utf8)))
+    try result.execution.validate()
+    return result.execution
   }
   /// One typed message. The answer can take as long as the language model takes.
   public func say(_ text: String) async throws -> ChatTranscript.Message {

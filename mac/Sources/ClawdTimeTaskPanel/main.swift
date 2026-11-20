@@ -32,6 +32,7 @@ import TaskPanelCore
   private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
   private let voice = VoiceController()
   private var transcript: ChatTranscript?
+  private var executionControl = ChatExecutionControl()
   private var chatPending: String?
   private var chatNotice = ""
   /// The last spoken turn, shown on the mascot while the chat is closed.
@@ -277,6 +278,7 @@ import TaskPanelCore
     let chat = chatPanel.view
     chat.onSend = { [weak self] text in self?.sendChat(text) }
     chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
+    chat.onStopWork = { [weak self] in self?.stopExecution() }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
     let view = boardPanel.view
     view.onOpenSession = { [weak self] id in self?.openAgent(id) }
@@ -335,10 +337,29 @@ import TaskPanelCore
   @objc private func toggleTalk(_ sender: Any?) {
     if voice.phase == .off { startTalk() } else { voice.stop() }
   }
+  private func readChat(_ client: PanelClient) async {
+    let generation = executionControl.generation
+    if let fresh = try? await client.chat() {
+      transcript = fresh
+      executionControl.receive(fresh.execution, readGeneration: generation)
+    }
+  }
+  private func stopExecution() {
+    guard let client, state.connected, executionControl.beginStop() else { return }
+    renderChat()
+    Task {
+      let result = try? await client.stopExecution()
+      executionControl.finishStop(result)
+      renderChat()
+      // Only a new read may reconcile a missing or unconfirmed response.
+      await readChat(client)
+      renderChat()
+    }
+  }
   private func refreshChat() {
     guard let client else { return }
     Task {
-      if let fresh = try? await client.chat() { transcript = fresh }
+      await readChat(client)
       renderChat()
     }
   }
@@ -351,6 +372,10 @@ import TaskPanelCore
     model.voice = voice.phase
     model.notice = chatNotice
     model.memory = transcript?.memory == true
+    model.execution = executionControl.execution
+    model.executionStopping = executionControl.stopping
+    model.executionCanStop = executionControl.canStop
+    model.executionNotice = executionControl.notice
     chatPanel.view.render(model)
   }
   private func renderTalk() {
@@ -363,9 +388,9 @@ import TaskPanelCore
     chatPending = text; chatNotice = ""; renderChat()
     Task {
       let reply = try? await client.say(text)
-      if let fresh = try? await client.chat() { transcript = fresh }
+      await readChat(client)
       chatPending = nil
-      if reply == nil { chatNotice = "ClawdTime did not answer. Nothing was done." }
+      if reply == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." }
       pet.react(success: reply != nil)
       renderChat()
       // It may have answered a request or changed away mode.
@@ -377,8 +402,8 @@ import TaskPanelCore
   private func heard(_ recording: String) async -> URL? {
     guard let client else { return nil }
     let result = try? await client.hear(recording)
-    if let fresh = try? await client.chat() { transcript = fresh }
-    if result == nil { chatNotice = "ClawdTime did not answer. Nothing was done." } else if result?.reply != nil { chatNotice = "" }
+    await readChat(client)
+    if result == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." } else if result?.reply != nil { chatNotice = "" }
     if let result, let reply = result.reply {
       let caption = PetStatus.Bubble.said(heard: result.heard, reply: reply.text, at: reply.at)
       said = (caption.bubble, Date().addingTimeInterval(caption.seconds))
@@ -392,7 +417,7 @@ import TaskPanelCore
   private func startTalk() {
     guard let client else { return }
     Task {
-      if let fresh = try? await client.chat() { transcript = fresh }
+      await readChat(client)
       guard let transcript else { chatNotice = "The task service did not answer. ClawdTime cannot listen now."; openChat(); return }
       guard transcript.speech else {
         chatNotice = "Speech needs an OpenAI key. Set CLAWDTIME_OPENAI_API_KEY and start ClawdTime again. Typing works now."
@@ -436,7 +461,7 @@ import TaskPanelCore
           self.incidents = try? await client.incidents()
           // The chat is read while it is in view, and once at the start.
           if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil {
-            if let fresh = try? await client.chat() { self.transcript = fresh }
+            await self.readChat(client)
           }
           self.render(); self.renderChat()
           let waiting = self.state.pending.filter(\.unresolved).map(\.eventId)
@@ -536,7 +561,7 @@ import TaskPanelCore
     let next = transcript?.memory != true
     Task {
       try? await client.setMemory(next)
-      if let fresh = try? await client.chat() { transcript = fresh }
+      await readChat(client)
       refreshMenus(); renderChat()
       boardPanel.view.showToast(transcript?.memory == true ? "Memory is on. ClawdTime keeps what you tell it." : "Memory is off. Nothing is kept.")
     }

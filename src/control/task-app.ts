@@ -10,6 +10,7 @@ import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
 import type { TaskDesktopCalls } from "./task-desktop-calls.js";
+import type { DesktopExecutor } from "./desktop-executor.js";
 
 /**
  * The agent board as the panel routes see it. The board is built in a separate
@@ -80,6 +81,7 @@ export function createTaskApp(
   desktop?: TaskDesktopService,
   calls?: TaskDesktopCalls,
   agents?: AgentBoardPort,
+  executor?: DesktopExecutor,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -157,6 +159,15 @@ export function createTaskApp(
   );
   if (desktop) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
+    if (executor) {
+      app.post("/desktop/execution/stop", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json({ execution: executor.stop() });
+      });
+      app.post("/executor/command", async (c) =>
+        c.json(executor.command(credential(c), await c.req.json())),
+      );
+    }
     app.get("/desktop/state", (c) => c.json(desktop.snapshot(credential(c))));
     app.get("/desktop/operations/:eventId", (c) =>
       c.json(desktop.operation(credential(c), c.req.param("eventId"))),

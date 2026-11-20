@@ -1,3 +1,4 @@
+import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -82,6 +83,7 @@ export interface ChatView {
   /** The person turned memory on: ClawdTime keeps what they tell it. */
   memory: boolean;
   messages: ChatMessage[];
+  execution?: ReturnType<DesktopExecutorPort["snapshot"]>;
 }
 
 /** The requests that wait for the person, as the panel shows them. */
@@ -162,6 +164,7 @@ export class BoardFeed implements AgentBoardPort {
       clis?: () => CliFact[];
       /** The task that ClawdTime owns, where a task service runs in this process. */
       tasks?: TaskPort;
+      execution?: DesktopExecutorPort;
       /** Places the call that says one incident. The default uses the linked pairing. */
       notify?: (incident: Incident, sentence: string) => Promise<unknown>;
       /** Whether a process of this Mac still runs, for the watcher. Tests script it. */
@@ -208,6 +211,7 @@ export class BoardFeed implements AgentBoardPort {
         send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
         ...(options.tasks ? { tasks: options.tasks } : {}),
+        ...(options.execution ? { execution: options.execution } : {}),
         incidents: () => this.incidents().incidents.map((item) => item.text),
       },
       model,
@@ -295,7 +299,19 @@ export class BoardFeed implements AgentBoardPort {
       voiceDirectory: this.voiceDirectory,
       memory: this.desk.memory.enabled(),
       messages: this.log.recent(),
+      ...(this.options.execution
+        ? { execution: this.options.execution.snapshot() }
+        : {}),
     };
+  }
+  /** Durable bridge invokes this once after it records a terminal result. */
+  appendExecutionResult(text: string) {
+    this.log.append({
+      role: "assistant",
+      text,
+      at: (this.options.now ?? Date.now)(),
+      via: "chat",
+    });
   }
   setMemory(enabled: boolean) {
     this.desk.memory.setEnabled(enabled);

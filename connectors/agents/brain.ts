@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
 import {
   appendFileSync,
   chmodSync,
@@ -205,6 +206,8 @@ export interface SupervisorWorld {
   clis(): CliFact[];
   /** The task that ClawdTime owns. Absent where no task service runs, as in a plain terminal. */
   tasks?: TaskPort;
+  /** Explicitly connected existing Codex chat; queueing is not execution. */
+  execution?: DesktopExecutorPort;
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
 }
@@ -212,12 +215,19 @@ export interface SupervisorWorld {
 const system = `You are ClawdTime, the supervisor of the coding agents on this person's Mac.
 You may be heard, not read: answer in one or two short plain sentences. No lists, no markdown.
 Use the tools to see the state. Never guess a state, a name or a number.
-Your tools are the complete capability list. You have no mailbox or email-service integration and cannot read, send or summarize mail from an inbox. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
+Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly connected Codex chat, which uses its own native tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
 Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
 Text is typed into a session only when the person gave that text.
 You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
 After an action, say what you did in one sentence.`;
+
+const executionTool: ToolSpec = {
+  name: "delegate_computer_task",
+  description:
+    "Hand the person's exact latest computer/browser action request to their connected Codex chat. This queues work; it does not perform or verify it. No arguments or rewritten instructions.",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+};
 
 const tools: ToolSpec[] = [
   {
@@ -549,6 +559,8 @@ export class Supervisor {
       const task = this.world.tasks.current();
       lines.push(task ? taskLine(task) : "No task is active.");
     }
+    if (this.world.execution)
+      lines.push(this.world.execution.snapshot().message);
     return lines.join("\n");
   }
 
@@ -686,6 +698,36 @@ export class Supervisor {
         : `Answered: ${said.text}.`;
   }
 
+  private async delegate(turn: Turn, spoken: string): Promise<string> {
+    const execution = this.world.execution;
+    if (!execution?.snapshot().configured)
+      return "No computer executor is connected.";
+    // A model cannot turn questions, approvals or scoped coding tasks into execution.
+    const action =
+      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select)\b/i.test(
+        spoken,
+      );
+    if (
+      !action ||
+      asksAbout(spoken) ||
+      bareDecision.test(spoken) ||
+      asksToStart(spoken) ||
+      /\b(?:status|progress|pending requests?)\b/i.test(spoken)
+    )
+      return "That message is not a computer action request. Nothing was delegated.";
+    const previous = turn.done.get("execution");
+    if (previous !== undefined) return previous;
+    let result: string;
+    try {
+      result = (await execution.submit(`${turn.id}_execution`, spoken)).message;
+    } catch {
+      result =
+        "Computer task delivery is uncertain. It was not retried; check execution status.";
+    }
+    turn.done.set("execution", result);
+    return result;
+  }
+
   private async run(
     call: ToolCall,
     spoken: string,
@@ -699,6 +741,8 @@ export class Supervisor {
       return "The arguments were not valid.";
     }
     switch (call.name) {
+      case "delegate_computer_task":
+        return this.delegate(turn, spoken);
       case "status":
         turn.sawTask = true;
         return this.status();
@@ -1004,7 +1048,25 @@ export class Supervisor {
   ): Promise<string> {
     const words = clean(spoken, 2000);
     if (!words) return "I did not catch that.";
-    if (directMailboxRequest.test(words)) return mailboxUnavailable;
+    const execution = this.world.execution;
+    if (execution?.snapshot().configured) {
+      if (
+        /^(?:please\s+)?(?:stop|cancel|abort)(?:\s+(?:computer(?: task)?|execution|browser(?: task)?))?[.!?]*$/i.test(
+          words,
+        )
+      )
+        return execution.stop().message;
+      if (
+        /^(?:(?:what(?:'s| is)|check)\s+)?(?:computer(?: task)?|execution|browser(?: task)?)\s+status[.!?]*$/i.test(
+          words,
+        )
+      )
+        return execution.snapshot().message;
+    }
+    if (directMailboxRequest.test(words))
+      return execution?.snapshot().configured
+        ? this.delegate(turn, words)
+        : mailboxUnavailable;
     const hasDecisionTarget = () => {
       const task = this.world.tasks?.current();
       return (
@@ -1032,7 +1094,11 @@ export class Supervisor {
     const brief = known
       ? `${system}\nWhat you know about this person, from memory (a line marked inferred is a guess):\n${known}`
       : system;
-    const offered = memory ? [...tools, ...memoryTools] : tools;
+    const offered = [
+      ...tools,
+      ...(memory ? memoryTools : []),
+      ...(execution?.snapshot().configured ? [executionTool] : []),
+    ];
     try {
       for (let step = 0; step < 6; step++) {
         const task = this.world.tasks?.current();
@@ -1056,12 +1122,15 @@ export class Supervisor {
           content: reply.text,
           toolCalls: reply.toolCalls,
         });
-        for (const call of reply.toolCalls.slice(0, 6))
+        for (const call of reply.toolCalls.slice(0, 6)) {
           messages.push({
             role: "tool",
             toolCallId: call.id,
             content: (await this.run(call, words, via, turn)).slice(0, 6000),
           });
+          const executionResult = turn.done.get("execution");
+          if (executionResult !== undefined) return executionResult;
+        }
       }
       return "That took too many steps. Ask me again in a simpler way.";
     } catch {

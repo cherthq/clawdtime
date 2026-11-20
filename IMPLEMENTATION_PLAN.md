@@ -1,5 +1,16 @@
 # ClawdTime: approved implementation and migration plan
 
+## Desktop execution connection — November 20, 2026
+
+The authorized desktop-supervisor connection now delegates exact computer tasks
+to a pinned existing Codex chat using its own native tools and policies. Preserve
+encrypted receipts, one-time claims, observed results and cooperative local Stop.
+The local browser fixture passed through explicit active-chat polling; automatic
+idle-chat wake remains unqualified. This does not complete the independent-agent
+product vision. Evaluate an app-owned browser/desktop runtime as the next product
+milestone; retain external-agent connections as optional adapters. See
+[implementation evidence and recommendation](docs/DESKTOP_EXECUTOR.md).
+
 ## Persistent sharing requirement — November 19, 2026
 
 User-directed update: screen sharing stays active for the authorized call. A

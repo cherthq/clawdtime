@@ -24,6 +24,11 @@ every session and tells you when one has waited for you too long, hangs, ended
 badly or is done. See the
 [supervisor guide](docs/SUPERVISOR.md).
 
+Desktop computer tasks can now be handed to an explicitly connected existing
+Codex chat, with result receipts and a **Stop work** control. The active-chat
+browser path has been physically tested; automatic wake of an idle chat has not.
+See [execution setup and the bundled-CUA recommendation](docs/DESKTOP_EXECUTOR.md).
+
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is
 requested, replace it mid-call when its first fresh frame is ready; do not blank

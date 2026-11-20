@@ -33,6 +33,11 @@ import {
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
+import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
+import {
+  DesktopExecutor,
+  desktopExecutorConfigSchema,
+} from "../src/control/desktop-executor.js";
 import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
@@ -305,9 +310,55 @@ if (calls && desktop) calls.selectedTaskId = () => desktop.selectedTaskId();
 // it cannot delay task, voice or presentation work in this one.
 // The agent that the person talks to reaches the task through the desktop
 // service of this process, with that service's own receipts.
-const agentBoard =
+let agentBoard: BoardFeed | undefined;
+const executorPath = join(directory, "desktop-executor.json");
+const executorConfig =
+  desktop && existsSync(executorPath)
+    ? desktopExecutorConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(executorPath).toString("utf8")),
+      )
+    : undefined;
+if (
+  executorConfig &&
+  (executorConfig.origin !== `http://127.0.0.1:${port}` ||
+    calls ||
+    presentation ||
+    flags.get("--agents") === "false")
+)
+  throw Error(
+    "Desktop execution requires its exact local origin, agent board and a service without phone/presentation actors.",
+  );
+if (
+  executorConfig &&
+  [
+    config.operatorToken,
+    desktopSetup?.config.token,
+    desktopSetup?.config.sessionToken,
+  ].includes(executorConfig.token)
+)
+  throw Error("Desktop execution needs a separate credential.");
+const executor = executorConfig
+  ? new DesktopExecutor(
+      store,
+      vault,
+      executorConfig,
+      (id) =>
+        queueDesktopRequest(
+          executorConfig.binary,
+          executorConfig.threadId,
+          id,
+          executorConfig.clientPath,
+          executorPath,
+        ),
+      (text) => agentBoard?.appendExecutionResult(text),
+    )
+  : undefined;
+agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
-    ? new BoardFeed({ tasks: deskTasks(desktop, desktopSetup.config.token) })
+    ? new BoardFeed({
+        tasks: deskTasks(desktop, desktopSetup.config.token),
+        ...(executor ? { execution: executor } : {}),
+      })
     : undefined;
 agentBoard?.start();
 process.on("exit", () => agentBoard?.close());
@@ -321,6 +372,7 @@ const app = createTaskApp(
   desktop,
   calls,
   agentBoard,
+  executor,
 );
 const presentationWatch = presentation
   ? setInterval(() => {

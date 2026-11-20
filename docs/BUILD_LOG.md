@@ -1,5 +1,28 @@
 # Coding demo build log
 
+## November 20, 2026 — attached desktop executor
+
+Added an opt-in protected connection from native supervisor chat to one existing
+Codex chat. Exact user requests have encrypted reservations, one delivery attempt,
+one claim, a 15-minute deadline, observed completion receipts and read-only
+uncertain-outcome reconciliation. Native Stop work remains available independently
+of pending chat/voice. Scoped coding-worker permissions were not expanded.
+
+Lead integrated contracts/routes/runtime/config/client and documentation;
+connector specialist implemented supervisor routing and queue adapter; Mac
+specialist implemented the Stop/status UI. Independent reviews found and repaired
+uncertain-enqueue Stop, result-summary argument exposure, notice/client mismatch
+and restart receipt preservation before approval.
+
+Fresh checks: `npm run check` passed 1,544 tests in 86 files, TypeScript and build;
+Swift build and all 143 tests passed. The real model selected delegation and the
+original chat used native Chrome tools to type/click/save a disposable local
+fixture, observe success and return the completion to desktop chat. No personal
+mail or external messages were accessed. The CLI wake returned uncertain, so the
+test used explicit active-chat polling; automatic idle-chat wake is not accepted.
+See [the executor report](DESKTOP_EXECUTOR.md). No phone call or hosted deployment
+was part of this work.
+
 ## November 18, 2026 — source audit and step a
 
 Branch: `demo/coding-flow`, isolated worktree `/Users/garygao/clawdtime-coding-demo`.

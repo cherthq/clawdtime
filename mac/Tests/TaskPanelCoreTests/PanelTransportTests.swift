@@ -58,6 +58,41 @@ final class PanelTransportTests: XCTestCase {
       token: String(repeating: "synthetic", count: 8), projectRoot: "/tmp/panel-worker-fixture",
       receiptDirectory: "/tmp/panel-state-fixture", configurationFingerprint: String(repeating: "a", count: 64))
   }
+  func testExecutionStatusAndCooperativeStopUseFixedAuthenticatedRoutes() async throws {
+    let execution = #"{"configured":true,"state":"stop_requested","canStop":false,"message":"Stop requested; an action already underway may finish."}"#
+    let server = try FixtureHTTP { request, _ in
+      let body = request.hasPrefix("GET /desktop/chat ")
+        ? #"{"version":1,"model":true,"speech":false,"voiceDirectory":"/tmp/voice","messages":[],"execution":"# + execution + "}"
+        : #"{"execution":"# + execution + "}"
+      return (200, ["Content-Type": "application/json"], Data(body.utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let chat = try await client.chat()
+    let result = try await client.stopExecution()
+    XCTAssertEqual(chat.execution, result)
+    XCTAssertFalse(result.canStop)
+    let requests = server.requests()
+    XCTAssertEqual(requests.count, 2)
+    XCTAssertTrue(requests[1].hasPrefix("POST /desktop/execution/stop "))
+    XCTAssertTrue(requests[1].contains("Content-Length: 2\r\n"))
+    XCTAssertTrue(requests[1].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+  }
+
+  func testUnconfirmedExecutorStopNeverRetriesOrFollowsRedirect() async throws {
+    for status in [302, 503, 200] {
+      let server = try FixtureHTTP { _, port in
+        (status, ["Location": "http://127.0.0.1:\(port)/other"],
+          Data(#"{"execution":{"configured":false,"state":"running","canStop":true,"message":"invalid"}}"#.utf8))
+      }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { _ = try await client.stopExecution(); XCTFail("Unconfirmed Stop accepted") } catch {}
+      XCTAssertEqual(server.requests().count, 1)
+      XCTAssertTrue(server.requests()[0].hasPrefix("POST /desktop/execution/stop "))
+    }
+  }
+
   func testHTTPRedirectIsNotFollowedOrSentCredentialsAgain() async throws {
     let server = try FixtureHTTP { _, port in (302, ["Location": "http://127.0.0.1:\(port)/redirect-target"], Data()) }
     try await server.start(); defer { server.close() }
