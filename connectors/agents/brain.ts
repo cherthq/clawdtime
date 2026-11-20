@@ -224,8 +224,14 @@ export interface SupervisorWorld {
   clis(): CliFact[];
   /** The task that ClawdTime owns. Absent where no task service runs, as in a plain terminal. */
   tasks?: TaskPort;
-  /** Explicitly connected existing Codex chat; queueing is not execution. */
-  execution?: DesktopExecutorPort;
+  /**
+   * What does computer work: an explicitly connected existing Codex chat, where
+   * queueing is not execution, or the app-owned computer worker. Only the
+   * worker has `answer`: it takes the person's reply to what it asks.
+   */
+  execution?: DesktopExecutorPort & {
+    answer?(text: string): Promise<{ message: string }>;
+  };
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
 }
@@ -1209,6 +1215,21 @@ export class Supervisor {
         )
       )
         return execution.snapshot().message;
+      // The computer worker asked the person something: this message is the
+      // answer. One message answers one thing, so with an agent's request
+      // waiting too it answers neither.
+      if (
+        execution.answer &&
+        execution.snapshot().state === "waiting_for_person"
+      ) {
+        if (this.world.desk.pending().length)
+          return "The computer task and an agent's request both wait for you. Answer the agent's request first, in the panel or in its terminal. Then answer the computer task here.";
+        try {
+          return (await execution.answer(words)).message;
+        } catch {
+          return "The computer task did not take that. Say it again.";
+        }
+      }
     }
     if (directMailboxRequest.test(words))
       return execution?.snapshot().configured
