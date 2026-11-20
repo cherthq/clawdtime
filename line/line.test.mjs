@@ -963,11 +963,14 @@ test("a job with no start time counts only when it was not there at the start of
     [
       { id: 1, done: true, result: "Was done before the call." },
       { id: 2, done: false },
+      { id: 4, startedAt: 0, done: false },
     ],
     [
       { id: 1, done: true, result: "Was done before the call." },
       { id: 2, done: true, result: "Was running before the call." },
       { id: 3, done: true, result: "New on this call." },
+      { id: 4, startedAt: 0, done: true, result: "Start time 0, before." },
+      { id: 5, startedAt: 0, done: true, result: "Start time 0, new." },
     ],
   ];
   const watch = watchJobs({
@@ -978,7 +981,26 @@ test("a job with no start time counts only when it was not there at the start of
   await watch.check();
   await watch.check();
   watch.stop();
-  assert.deepEqual(said, ["New on this call."]);
+  assert.deepEqual(said, ["New on this call.", "Start time 0, new."]);
+});
+
+test("a start time that is cut to the second still counts for the call", async () => {
+  // The call starts at 0.7 seconds past a second. The command gives start times in whole seconds.
+  const since = 1_000_000_000_700,
+    said = [];
+  const watch = watchJobs({
+    since,
+    everyMs: 1e7,
+    say: (job) => said.push(job.id),
+    read: async () => [
+      { id: "same second", startedAt: 1_000_000_000_000, done: true },
+      { id: "the second before", startedAt: 999_999_999_000, done: true },
+      { id: "later", startedAt: 1_000_000_003_000, done: true },
+    ],
+  });
+  await watch.check();
+  watch.stop();
+  assert.deepEqual(said, ["same second", "later"]);
 });
 
 test("the watch looks on a timer, one look at a time, and stops with the call", async () => {

@@ -130,8 +130,8 @@ function startedAt(job) {
 
 /**
  * Watches the jobs during a call. When a job that was started on this call is done, it calls `say(job)`, once
- * for each job. A job is of this call when it started at or after `since`. A job with no usable start time is
- * of this call when it was not in the first list that this watch read.
+ * for each job. A job is of this call when it started at or after `since`, to the second. A job with no usable
+ * start time (none, or 0) is of this call when it was not in the first list that this watch read.
  *  - `check()` looks now, and resolves when that look is over. Call it after each request, so a new job is
  *    seen at once.
  *  - `stop()` ends the watch. Nothing is said after it.
@@ -149,6 +149,8 @@ export function watchJobs({
   since = Date.now(),
 }) {
   const said = new Set();
+  // A start time can be cut to the whole second, so the start of the call is cut in the same way.
+  const from = Math.floor(since / 1000) * 1000;
   let before = null,
     stopped = false,
     looking = false,
@@ -196,7 +198,7 @@ export function watchJobs({
             started = startedAt(job);
           if (
             said.has(id) ||
-            (started === null ? before.has(id) : started < since)
+            (started === null ? before.has(id) : started < from)
           )
             continue;
           said.add(id);
