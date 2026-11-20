@@ -495,7 +495,7 @@ final class PetController: NSObject {
     let dx = (pointer.x - box.midX) / (box.width * 0.42), dy = (pointer.y - (box.midY - 4)) / (box.height * 0.36)
     let overStone = dx * dx + dy * dy <= 1
     let overButtons = buttons.value > 0.3 && pointer.y >= box.maxY - 40 && box.contains(pointer) && (pointer.x <= box.minX + 40 || pointer.x >= box.maxX - 40)
-    let inside = drag != nil || overStone || overButtons
+    let inside = !clickThrough && (drag != nil || overStone || overButtons)
     if window.ignoresMouseEvents == inside { window.ignoresMouseEvents = !inside }
     mascot.hovering = inside && drag == nil
 
@@ -504,6 +504,7 @@ final class PetController: NSObject {
       reveal.target = mascot.hovering ? PetLayout.revealHover : wants ? PetLayout.revealAttention : PetLayout.revealResting
       lean.target = side == .right ? 0.30 : -0.30
     } else { lean.target = 0 }
+    if let pointing { lean.target = GuidedPath.lean(from: CGPoint(x: box.midX, y: box.midY), to: pointing) }
     reveal.step(step); lean.step(step)
     mascot.lean = lean.value
 
@@ -593,4 +594,17 @@ final class PetController: NSObject {
   }
   /// The board sets this while it opens or closes.
   var wantsBoost = false
+
+  // MARK: computer use
+
+  private var pointing: CGPoint?
+  private var clickThrough = false
+  /// The middle of the mascot on the screen, where the guided cursor leaves it. Nil while the mascot is put away.
+  var handsOrigin: CGPoint? { visible ? CGPoint(x: window.frame.midX, y: window.frame.midY) : nil }
+  /// Where the hands point now: the mascot leans toward it. Nil: it stands straight again.
+  func point(at target: CGPoint?) { pointing = target }
+  /// The hands type: the mascot shows it.
+  func setTyping(_ on: Bool) { mascot.typing = on }
+  /// The hands click a place that is behind the mascot: the mascot lets the click through.
+  func letClicksThrough(_ on: Bool) { clickThrough = on; if on { window.ignoresMouseEvents = true } }
 }
