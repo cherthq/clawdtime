@@ -116,6 +116,52 @@ function fixture() {
   };
 }
 
+describe("native capture drain for phone ownership", () => {
+  it("checks an idle updated helper without starting capture or a lease", async () => {
+    const f = fixture();
+    await expect(f.native.assertReviewIdle()).rejects.toThrow(
+      "confirmed idle capture",
+    );
+    Object.assign(f.status, { nativeCaptureDrain: true, captureActive: false });
+    await expect(f.native.assertReviewIdle()).resolves.toBeUndefined();
+    Object.assign(f.status, { captureActive: true });
+    await expect(f.native.assertReviewIdle()).rejects.toThrow(
+      "confirmed idle capture",
+    );
+    expect(f.calls("/sessions")).toHaveLength(0);
+    expect(f.calls("/frame")).toHaveLength(0);
+  });
+  it("refuses an older helper before acquiring any local lease", async () => {
+    const f = fixture();
+    const native = new BundledCuaNative(
+      config,
+      f.request,
+      () => 1_000_000,
+      true,
+    );
+    await expect(native.open(f.task, f.signal)).rejects.toThrow(
+      "confirmed capture drain",
+    );
+    expect(f.calls("/sessions")).toHaveLength(0);
+  });
+  it("requires explicit captureStopped proof after lease revocation", async () => {
+    const f = fixture();
+    Object.assign(f.status, { nativeCaptureDrain: true });
+    const native = new BundledCuaNative(
+      config,
+      f.request,
+      () => 1_000_000,
+      true,
+    );
+    await native.open(f.task, f.signal);
+    await expect(native.stop()).rejects.toThrow("capture drain is unconfirmed");
+    f.dispatch.mockImplementation(async () =>
+      json({ stopped: true, captureStopped: true }),
+    );
+    await expect(native.stop()).resolves.toBeUndefined();
+  });
+});
+
 function windowsFixture() {
   const f = fixture();
   const catalog = {

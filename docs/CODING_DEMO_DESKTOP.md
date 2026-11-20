@@ -1,5 +1,12 @@
 # Coding demo desktop panel
 
+The current supervisor also supports semantic task admission, coding turns with
+no overall wall-clock deadline, persistent progress/diagnostics and task-linked
+review callbacks. Review status distinguishes preparation, missing phone setup,
+delivery uncertainty and explicit acceptance. See
+[long-running tasks and review](TASK_REVIEW_LIFECYCLE.md). Building this branch
+does not upgrade an installed service or reconcile an interrupted run.
+
 The native floating panel uses the existing independent task service. It can
 submit a coding job, show worker and independent-check progress, answer a product
 decision, request a scoped revision, accept a verified result, and separately

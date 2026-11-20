@@ -81,6 +81,21 @@ are required but do not establish physical handset visibility or timing.
 
 Prepared November 11, 2026, America/New_York.
 
+## November 20 implementation checkpoint
+
+The approved long-running workflow supersedes the historical Mode 2 deferral
+below for local desktop task initiation. Development now adds structured semantic
+admission, removes the coding worker's overall three-minute deadline, preserves
+Stop/unknown outcomes, and connects independently checked results to durable
+supervisor review callbacks. Revisions retain the task's original constraints;
+final acceptance remains explicit and never authorizes deployment.
+
+See [the current implementation and recovery guide](docs/TASK_REVIEW_LIFECYCLE.md)
+for the actual preparation queue, exclusive capture handoff, validation and
+remaining phone/capture gates. The installed interrupted run remains unresolved;
+no installation, live call, remote sharing or deployment is included in this
+checkpoint. Existing worktrees and uncommitted drafts are preserved.
+
 ## Status and authority
 
 The user approved this plan. This handoff session creates the directory and planning documents only; it does not implement the application, install a helper, create hosting, or change live traffic. The next coding session should context itself and execute the plan using agent teams.

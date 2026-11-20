@@ -19,6 +19,7 @@ import { TaskService } from "../src/control/task-service.js";
 import { TaskEngine } from "../src/control/task-engine.js";
 import { TaskVoiceService } from "../src/control/task-voice-service.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
+import { TaskReviewService } from "../src/control/task-review-service.js";
 import {
   TaskDesktopCalls,
   type DesktopAttemptFactory,
@@ -323,6 +324,7 @@ function fixture() {
       presentationPort: undefined,
       status: () => ({
         state: ended ? "ended" : "connected",
+        connectedOnce: start.mock.calls.length > 0,
         reserved: true,
         ended,
       }),
@@ -542,6 +544,168 @@ function fixture() {
 }
 
 describe("same-owner desktop task and prepared call integration", () => {
+  it("pumps one prepared review through the real call coordinator and holds ownership through cleanup", async () => {
+    const f = fixture();
+    await f.ready();
+    const reviews = new TaskReviewService(
+      f.tasks,
+      f.session.token,
+      f.engine,
+      true,
+    );
+    cleanups.push(async () => reviews.close());
+    f.calls.reviews = reviews.ledger;
+    let held: string | undefined;
+    const acquireReviewOwnership = vi.fn((id: string) => {
+      expect(held).toBeUndefined();
+      held = id;
+    });
+    const releaseReviewOwnership = vi.fn((id: string) => {
+      expect(held).toBe(id);
+      held = undefined;
+    });
+    f.calls.executionOwnership = {
+      acquireReviewOwnership,
+      releaseReviewOwnership,
+    };
+    const envelope = f.request("automatic_review");
+    const prepare = vi.fn(async () => envelope);
+    reviews.configureDelivery(f.calls, { prepare });
+    const original = f.factory.getMockImplementation()!;
+    f.factory.mockImplementationOnce(async (...args) => {
+      expect(held).toBe(args[2].attemptId);
+      expect(reviews.ledger.list(f.session.session.id)[0]?.state).toBe(
+        "dispatching",
+      );
+      return original(...args);
+    });
+    await reviews.pump();
+    await vi.waitFor(() => expect(f.attempts[0]?.start).toHaveBeenCalledOnce());
+    const callback = reviews.ledger.list(f.session.session.id)[0]!;
+    expect(callback.attemptId).toBe(f.attempts[0]!.plan.id);
+    expect(acquireReviewOwnership).toHaveBeenCalledOnce();
+    expect(releaseReviewOwnership).not.toHaveBeenCalled();
+    f.calls.reconcileReview();
+    expect(reviews.ledger.get(f.session.session.id, callback.id).state).toBe(
+      "in_review",
+    );
+    await reviews.pump();
+    expect(f.factory).toHaveBeenCalledOnce();
+    f.attempts[0]!.finish();
+    await vi.waitFor(() => expect(f.calls.ledger.unresolved()).toHaveLength(0));
+    expect(releaseReviewOwnership).toHaveBeenCalledOnce();
+    expect(held).toBeUndefined();
+    expect(reviews.ledger.get(f.session.session.id, callback.id).state).toBe(
+      "delivered",
+    );
+    expect(f.calls.request(envelope).replayed).toBe(true);
+    await reviews.pump();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(f.factory).toHaveBeenCalledOnce();
+  });
+  it("keeps callback and execution ownership fenced after a factory outcome becomes unknown", async () => {
+    const f = fixture();
+    await f.ready();
+    const reviews = new TaskReviewService(
+      f.tasks,
+      f.session.token,
+      f.engine,
+      true,
+    );
+    cleanups.push(async () => reviews.close());
+    f.calls.reviews = reviews.ledger;
+    const acquireReviewOwnership = vi.fn(),
+      releaseReviewOwnership = vi.fn();
+    f.calls.executionOwnership = {
+      acquireReviewOwnership,
+      releaseReviewOwnership,
+    };
+    const envelope = f.request("unknown_review");
+    reviews.configureDelivery(f.calls, { prepare: async () => envelope });
+    f.factory.mockRejectedValueOnce(
+      new Error("synthetic factory outcome unknown"),
+    );
+    await reviews.pump();
+    await vi.waitFor(() =>
+      expect(reviews.ledger.list(f.session.session.id)[0]?.state).toBe(
+        "unknown",
+      ),
+    );
+    expect(f.calls.ledger.unresolved()).toHaveLength(1);
+    expect(acquireReviewOwnership).toHaveBeenCalledOnce();
+    expect(releaseReviewOwnership).not.toHaveBeenCalled();
+    await reviews.pump();
+    expect(f.factory).toHaveBeenCalledOnce();
+  });
+  it("does not reserve a call or start capture when local execution refuses the handoff", async () => {
+    const f = fixture();
+    await f.ready();
+    const reviews = new TaskReviewService(
+      f.tasks,
+      f.session.token,
+      f.engine,
+      true,
+    );
+    cleanups.push(async () => reviews.close());
+    f.calls.reviews = reviews.ledger;
+    const releaseReviewOwnership = vi.fn();
+    f.calls.executionOwnership = {
+      acquireReviewOwnership: () => {
+        throw new Error("local work remains active");
+      },
+      releaseReviewOwnership,
+    };
+    reviews.configureDelivery(f.calls, {
+      prepare: async () => f.request("refused_review"),
+    });
+    await reviews.pump();
+    expect(f.calls.ledger.unresolved()).toHaveLength(0);
+    const record = reviews.ledger.list(f.session.session.id)[0]!;
+    expect(record.state).toBe("blocked");
+    expect(record.attemptId).toBeUndefined();
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(releaseReviewOwnership).not.toHaveBeenCalled();
+    await reviews.pump();
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+  it("releases reserved review ownership after a known idle-preflight refusal without starting a factory", async () => {
+    const f = fixture();
+    await f.ready();
+    const reviews = new TaskReviewService(
+      f.tasks,
+      f.session.token,
+      f.engine,
+      true,
+    );
+    cleanups.push(async () => reviews.close());
+    f.calls.reviews = reviews.ledger;
+    const acquireReviewOwnership = vi.fn(),
+      releaseReviewOwnership = vi.fn();
+    const confirmReviewOwnership = vi.fn(async () => {
+      throw new Error("synthetic helper capture still active");
+    });
+    f.calls.executionOwnership = {
+      acquireReviewOwnership,
+      confirmReviewOwnership,
+      releaseReviewOwnership,
+    };
+    reviews.configureDelivery(f.calls, {
+      prepare: async () => f.request("preflight_refused_review"),
+    });
+    await reviews.pump();
+    await vi.waitFor(() =>
+      expect(reviews.ledger.list(f.session.session.id)[0]?.state).toBe(
+        "failed",
+      ),
+    );
+    expect(acquireReviewOwnership).toHaveBeenCalledOnce();
+    expect(confirmReviewOwnership).toHaveBeenCalledOnce();
+    expect(releaseReviewOwnership).toHaveBeenCalledOnce();
+    expect(f.calls.ledger.unresolved()).toHaveLength(0);
+    expect(f.factory).not.toHaveBeenCalled();
+    await reviews.pump();
+    expect(confirmReviewOwnership).toHaveBeenCalledOnce();
+  });
   it("reads an exact historical non-continuity receipt without upgrading it or creating another attempt", async () => {
     const f = fixture();
     await f.ready();

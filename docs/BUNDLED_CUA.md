@@ -69,9 +69,13 @@ Provider retention policies are separate from local storage.
 Start `npm run task:desktop -- --state PRIVATE_STATE --project PROJECT
 --port UNUSED_PORT --panel-binary ABSOLUTE_PANEL_EXECUTABLE`. The normal desktop
 panel must be built first as documented in [the Mac guide](../mac/README.md).
-The agent board must be enabled. `desktop-executor.json`, phone call configuration
-and local presentation actors cannot coexist with bundled execution in this
-service. Preserve an existing installation's configuration and receipts before
+The agent board must be enabled. `desktop-executor.json` and standalone local
+presentation actors cannot coexist with bundled execution in this service.
+Prepared phone review can share this service through the explicit ownership
+handoff in [the review lifecycle guide](TASK_REVIEW_LIFECYCLE.md): local work and
+capture must finish before phone preparation, and uncertain cleanup blocks reuse.
+Combined native mode requires the updated helper's capture-drain capability;
+an older installed helper is refused. Preserve an existing installation's configuration and receipts before
 planning a migration; do not overwrite them or switch an active owner.
 
 For native mode, replace `browser` with `native` containing `origin` (exact

@@ -1,5 +1,14 @@
 # Desktop-created tasks and prepared calls
 
+November 20 update: the supervisor now retains one durable callback intent per
+checked result and an encrypted prepared-delivery queue. A fresh authorized
+envelope can be staged at `POST /operator/review-callbacks/:callbackId/prepare`;
+the supervisor dispatches it once through this same call runtime. Restart,
+duplicate submission, Stop and uncertain outcomes preserve the original receipt.
+Missing phone setup or fresh views are reported explicitly. See
+[the current lifecycle and recovery guide](TASK_REVIEW_LIFECYCLE.md) for automatic
+preparation-port integration, native capture-drain handoff and remaining gates.
+
 The desktop service can carry a task through a decision call, a new scoped run,
 independent verification, and a separate final-review call without closing the
 panel service or handing its database to another process. One owner holds the

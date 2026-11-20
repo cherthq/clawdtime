@@ -150,6 +150,54 @@ async function pending(f: ReturnType<typeof fixture>) {
   return f.runtime.snapshot().pendingAction!;
 }
 
+describe("exclusive review capture handoff", () => {
+  it("blocks local admission until exact confirmed review release", async () => {
+    const f = fixture({ allowed: true });
+    f.runtime.acquireReviewOwnership("review_attempt");
+    expect(
+      (await f.runtime.submit("during_review", "Update the fixture")).message,
+    ).toContain("Review capture owns");
+    expect(f.device.open).not.toHaveBeenCalled();
+    expect(() => f.runtime.releaseReviewOwnership("other_attempt")).toThrow(
+      "does not match",
+    );
+    f.runtime.releaseReviewOwnership("review_attempt");
+    await f.runtime.submit("after_review", "Update the fixture");
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().state).toBe("completed");
+  });
+  it("refuses handoff while local work or its cleanup is pending", async () => {
+    const f = fixture({ allowed: true });
+    const drain = gate();
+    f.device.stop.mockImplementation(async () => drain.promise);
+    await f.runtime.submit("local_work", "Update the fixture");
+    await vi.waitFor(() => expect(f.device.stop).toHaveBeenCalled());
+    expect(() => f.runtime.acquireReviewOwnership("review_attempt")).toThrow(
+      "confirmed cleanup",
+    );
+    drain.release();
+    await f.runtime.waitForIdle();
+    f.runtime.acquireReviewOwnership("review_attempt");
+    f.runtime.releaseReviewOwnership("review_attempt");
+  });
+  it("retains uncertainty fence after failed local cleanup and restored call ownership", async () => {
+    const f = fixture({ allowed: true });
+    f.device.stop.mockRejectedValue(new Error("synthetic cleanup failure"));
+    await f.runtime.submit("uncertain_local", "Update the fixture");
+    await f.runtime.waitForIdle();
+    expect(() => f.runtime.acquireReviewOwnership("review_attempt")).toThrow(
+      "confirmed cleanup",
+    );
+    const idle = fixture();
+    idle.runtime.setOwnershipGuard(() => false);
+    expect(
+      (await idle.runtime.submit("restored_call", "Update the fixture"))
+        .message,
+    ).toContain("cleanup is unresolved");
+    expect(idle.device.open).not.toHaveBeenCalled();
+  });
+});
+
 describe("app-owned CUA task engine", () => {
   it("runs configured automatic actions without a decision and still verifies the result", async () => {
     const f = fixture({ actionApproval: "automatic" });

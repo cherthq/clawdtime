@@ -20,6 +20,8 @@ const statusSchema = z.object({
   policyRevision: z.number().int().nonnegative(),
   activeSessionId: z.string().nullable().optional(),
   unresolvedActions: z.number().int().nonnegative(),
+  nativeCaptureDrain: z.boolean().optional(),
+  captureActive: z.boolean().optional(),
 });
 const targetsSchema = z
   .object({
@@ -84,9 +86,24 @@ export class BundledCuaNative implements CuaDevice {
     private config: Config,
     private request: typeof fetch = fetch,
     private now = Date.now,
+    private requireCaptureDrain = false,
   ) {
     if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(config.origin))
       throw Error("Native runtime requires loopback.");
+  }
+  /** Read-only handoff proof; does not enable permissions, capture, or acquire a lease. */
+  async assertReviewIdle() {
+    const status = statusSchema.parse(await this.json("/status", "GET"));
+    if (
+      status.deviceId !== this.config.deviceId ||
+      status.nativeCaptureDrain !== true ||
+      status.captureActive !== false ||
+      status.activeSessionId ||
+      status.unresolvedActions
+    )
+      throw Error(
+        "Updated native helper and confirmed idle capture are required for review handoff.",
+      );
   }
   private guard(signal?: AbortSignal) {
     signal?.throwIfAborted();
@@ -175,6 +192,10 @@ export class BundledCuaNative implements CuaDevice {
     );
     if (generation !== this.generation)
       throw Error("Native opening was stopped.");
+    if (this.requireCaptureDrain && status.nativeCaptureDrain !== true)
+      throw Error(
+        "The installed helper must support confirmed capture drain before combined execution and phone review.",
+      );
     if (
       status.deviceId !== this.config.deviceId ||
       !status.localEnabled ||
@@ -504,6 +525,10 @@ export class BundledCuaNative implements CuaDevice {
         {},
       );
       if (result.stopped !== true) throw Error("Native cleanup is uncertain.");
+      if (this.requireCaptureDrain && result.captureStopped !== true)
+        throw Error(
+          "Native capture drain is unconfirmed; review handoff is blocked.",
+        );
     }
   }
 }

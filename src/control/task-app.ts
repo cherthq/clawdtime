@@ -48,7 +48,7 @@ const incidentDismissSchema = z
   .object({ id: z.string().regex(/^[0-9a-f]{12}$/) })
   .strict();
 const memorySchema = z.object({ enabled: z.boolean() }).strict();
-const chatSchema = z.object({ text: z.string().min(1).max(2000) }).strict();
+const chatSchema = z.object({ text: z.string().min(1).max(8000) }).strict();
 const voiceSchema = z
   .object({ recording: z.string().regex(/^[A-Za-z0-9_-]{1,60}\.(wav|m4a)$/) })
   .strict();
@@ -277,6 +277,21 @@ export function createTaskApp(
     app.post("/operator/desktop-calls", async (c) =>
       c.json(calls.request(await c.req.json()), 202),
     );
+  }
+  if (desktop?.reviews) {
+    app.use("/operator/review-callbacks/*", async (c, next) => {
+      if (!equal(bearer(c.req.header("authorization")), operatorToken))
+        return c.json({ error: "Operator authorization required." }, 401);
+      await next();
+    });
+    app.post("/operator/review-callbacks/:id/prepare", async (c) => {
+      const result = desktop.reviews!.stage(
+        c.req.param("id"),
+        await c.req.json(),
+      );
+      void desktop.reviews!.pump();
+      return c.json(result, 202);
+    });
   }
   if (presentation) {
     const credential = (c: any) => bearer(c.req.header("authorization"));

@@ -479,7 +479,7 @@ export async function supervisorCli(
             const history = log.recent(24);
             log.append({
               role: "user",
-              text: spoken.slice(0, 2000),
+              text: spoken,
               at: system.now(),
               via: "call",
             });
@@ -769,7 +769,7 @@ export async function supervisorCli(
       const history = log.recent(24);
       log.append({
         role: "user",
-        text: words.slice(0, 2000),
+        text: words,
         at: system.now(),
         via,
       });

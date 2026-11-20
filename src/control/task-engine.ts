@@ -112,7 +112,15 @@ export class TaskEngine {
               projectRoot: claim.projectRoot,
               context: this.context(claim),
             },
-            () => {},
+            ({ phase, threadId, turnId }) => {
+              this.service.ledger.progress(
+                claim.sessionId,
+                claim.id,
+                run.id,
+                phase,
+                { threadId, turnId },
+              );
+            },
             controller.signal,
           );
       } catch {
@@ -179,6 +187,11 @@ export class TaskEngine {
       goal: task.goal,
       projectRoot: task.projectRoot,
       instruction: run.instruction,
+      // Human restrictions introduced in an earlier revision must survive later
+      // turns. Worker summaries are not an authoritative substitute for them.
+      priorHumanInstructions: task.runs
+        .slice(0, -1)
+        .map((prior) => prior.instruction),
       priorResults: task.runs.slice(-3, -1).map((prior) => ({
         runId: prior.id,
         outcome: prior.state,
@@ -214,7 +227,7 @@ export class TaskEngine {
           }
         : undefined,
       constraints:
-        "Work only in this selected project. This is a new scoped run. Do not place calls or change credentials. A decision marked answered is historical; its exact answer is the instruction. Report only genuinely remaining product decisions, not an already answered question. Native permissions cannot be approved through ClawdTime.",
+        "Work only in this selected project. This is a new scoped run. Preserve the original goal and every restriction in it across all revisions, including don't deploy, draft only, and don't send. Result acceptance never authorizes deployment. Do not deploy, publish, send messages, place calls or change credentials. The supervisor owns review callbacks. A decision marked answered is historical; its exact answer is the instruction. Report only genuinely remaining product decisions, not an already answered question. Native permissions cannot be approved through ClawdTime.",
     });
   }
 }

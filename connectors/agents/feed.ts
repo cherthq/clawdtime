@@ -332,7 +332,7 @@ export class BoardFeed implements AgentBoardPort {
     const history = this.log.recent(24);
     this.log.append({
       role: "user",
-      text: text.slice(0, 2000),
+      text,
       at: now(),
       via,
     });

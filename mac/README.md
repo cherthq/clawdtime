@@ -360,7 +360,6 @@ or receipt stores. Media supplies actual speaking/listening state for the exact
 call. Ended and muted status remain authoritative and are never replaced by a
 status from another media session.
 
-
 ## Independent task exact-window child
 
 `ClawdTimeTaskCapture` is a separate local presentation child, not the menu-bar
@@ -420,7 +419,7 @@ The sample's WindowServer `displayTime` must fall between the request's native
 host time and callback time. Its real host-clock age determines `capturedAt`;
 receipt time does not renew old pixels. Idle, started, blank, invalid, wrong-size,
 old, and future frames do not qualify. Apple's [frame-status documentation](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle)
-explains that an idle event contains no newly generated frame; [Core Media's host-time conversion](https://developer.apple.com/documentation/coremedia/cmclockmakehosttimefromsystemunits(_:))
+explains that an idle event contains no newly generated frame; [Core Media's host-time conversion](<https://developer.apple.com/documentation/coremedia/cmclockmakehosttimefromsystemunits(_:)>)
 converts the native `mach_absolute_time` units.
 
 A 600 ms soft frame deadline rejects a request that has no admissible frame.
@@ -460,21 +459,27 @@ and session loss revoke local work too; wake/unlock does not resume it.
 All routes require the existing private helper bearer; requests never arm the
 helper or prompt for macOS permissions:
 
-| Route | Result |
-| --- | --- |
-| `GET /local/v1/status` | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
-| `POST /local/v1/sessions` | Reserve a new exact local lease. |
-| `POST /local/v1/sessions/:id/renew` | Change only expiration, at most 30 seconds from the helper clock. |
-| `GET /local/v1/sessions/:id/frame` | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`. |
-| `POST /local/v1/sessions/:id/actions` | Reserve and submit one bounded action; return its durable receipt. |
-| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry. |
-| `POST /local/v1/sessions/:id/stop` | Idempotently stop that previously reserved lease; never stop a different current owner. |
+| Route                                          | Result                                                                                                                                                                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /local/v1/status`                         | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`, `nativeCaptureDrain: true`, `captureActive`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
+| `POST /local/v1/sessions`                      | Reserve a new exact local lease.                                                                                                                                                                                                                                    |
+| `POST /local/v1/sessions/:id/renew`            | Change only expiration, at most 30 seconds from the helper clock.                                                                                                                                                                                                   |
+| `GET /local/v1/sessions/:id/frame`             | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`.                                                                                                                                                             |
+| `POST /local/v1/sessions/:id/actions`          | Reserve and submit one bounded action; return its durable receipt.                                                                                                                                                                                                  |
+| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry.                                                                                                                                                                                                    |
+| `POST /local/v1/sessions/:id/stop`             | Idempotently stop that previously reserved lease; never stop a different current owner.                                                                                                                                                                             |
 
 A lease is `{id,deviceId,sessionId,taskId,executorId,executorEpoch,policyRevision,
 displayId,expiresAt}`. Expiration is ISO 8601; responses use the helper's existing
 whole-second ISO serialization. Renewal cannot change any identity, epoch,
 policy, or display. Used lease IDs are durably retained and cannot be resumed
-after restart. Input uses the existing click/type/scroll body, additionally
+after restart. The session Stop endpoint revokes the lease, then waits up to
+1.5 seconds for an outstanding native screenshot callback to finish. Confirmed
+cleanup returns `stopped: true, captureStopped: true`; a stalled callback returns
+503 and must remain unconfirmed. Combined local-execution/review-call services
+require `nativeCaptureDrain: true` and the confirmed Stop result before starting
+review capture. An older helper's `stopped: true` alone does not prove native
+capture has finished. Input uses the existing click/type/scroll body, additionally
 requiring `sessionId`, `executorEpoch`, and `policyRevision` to match the lease.
 There are no new shell, clipboard, arbitrary-key, or application-launch actions.
 
@@ -519,7 +524,6 @@ failure records `state: "rejected", evidence: "input_not_dispatched"`. These
 outcomes do not create an unresolved-input fence, but the rejected action ID is
 not replayable. After event posting begins, lost responses or persistence failure
 remain uncertain; they cannot become a definite refusal.
-
 
 ### Separate local-only helper bundle
 
