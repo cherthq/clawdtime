@@ -18,12 +18,38 @@ You can also text the same number and get the answers as text messages.
 This page takes you from nothing to the first call. Each step is one you do
 yourself.
 
+## Let your coding agent set it up
+
+Paste this into Codex or Claude Code on the Mac. It works through this page for
+you, hosts ClawdTime, and keeps it on the newest `main`.
+
+```text
+Set up ClawdTime on a FaceTime line on this Mac, host it, and keep it up to date. Do every step yourself. Ask me only where a step says "ask me".
+
+Source: https://github.com/cherthq/clawdtime, branch main. Read SETUP_CLAWDTIME.md and AGENTS.md there first. If this prompt and SETUP_CLAWDTIME.md disagree, the file wins.
+
+1. Check the Mac: node --version (22.12 or later, 24 or 26), ffmpeg -version, tmux -V, chert --version, and claude --version or codex --version. Install what is missing (brew install ffmpeg tmux; npm install -g @trychert/facetime@beta) and tell me what you installed.
+2. Get the newest main in ~/clawdtime. If that folder is a clean checkout of main, run git pull --ff-only there. If it does not exist, clone the repository there. Do not put it inside Documents, Desktop or Downloads: the scheduled update cannot read those folders. Never touch another checkout, its branch or its uncommitted work. Run npm ci and npm run build. If no clawdtime command exists (command -v clawdtime), run npm link. If one exists and points to another folder, ask me before you replace it. Prove it: "clawdtime agents" must list the coding sessions on this Mac.
+3. The line: run chert whoami. If this Mac is not signed in, run chert login --device --json, show me the address and the code, and wait. Never approve the sign-in yourself. If I belong to several projects, ask me which one, and put its id in line/.env.local as CLAWDTIME_LINE_CHERT_PROJECT.
+4. The line agent: in line/, run npm install. If line/.env.local does not exist, run cp .env.example .env.local and chmod 600 .env.local. Ask me to put the three LiveKit values and the OpenAI key into line/.env.local myself. Never ask for a key in this chat. Never print, log or commit that file.
+5. Check: in line/, run chert doctor --agent clawdtime. Fix what you can. Tell me each failed check that only I can fix, in its own words.
+6. Host it: in line/, run ./host.sh start. It runs the agent and chert dev in a tmux session named clawdtime-line. Read the records file that it names until agent_warm. Never pass --takeover or --force. Stop it only with ./host.sh stop.
+7. Keep it up to date: in line/, run ./host.sh schedule, then ./host.sh update once, and show me its line. Every 15 minutes the schedule takes the newest main, builds it and restarts the agent. It acts only when main changed, the checkout is a clean main, and no call runs.
+8. Tell me the number that chert dev shows in its records. Tell me that my phone must be joined to that line before I call, and how (SETUP_CLAWDTIME.md, step 1).
+9. Wait for my FaceTime Video call. Then report from the records: call_incoming, call_accepted, call_media, call_ended. Say plainly what you did not verify.
+
+Rules: this setup needs no ClawdTime backend, no deploy and no line handoff; do none of them. Do not change the repository's code. Do not set up text messages unless I ask. macOS asks for Screen Recording and Automation for the terminal app: tell me when it does. After a restart of the Mac, ./host.sh start must run again from a terminal. End with a short report: what runs, where its logs are, how to stop it (./host.sh stop) and how to remove the schedule (./host.sh unschedule).
+```
+
+The rest of this page is the same path by hand.
+
 ## What you need
 
 | Thing                               | Check                                       |
 | ----------------------------------- | ------------------------------------------- |
 | A Mac that stays awake              | The agents and ClawdTime run on it          |
 | Node 22.12 or later, 24 or 26       | `node --version`                            |
+| `tmux`, to keep it running          | `tmux -V` (`brew install tmux`)             |
 | `ffmpeg`, to share the screen       | `ffmpeg -version` (`brew install ffmpeg`)   |
 | A coding agent that is signed in    | `claude --version` or `codex --version`     |
 | An OpenAI API key with realtime use | It speaks on the call and chooses the tools |
@@ -98,20 +124,42 @@ Never commit `.env.local`, and never paste its values into a chat.
 
 ## 4. Start it
 
-Two terminals, both in `line/`.
+In `line/`:
 
 ```sh
-# Terminal 1: the agent
-./start.sh
-
-# Terminal 2: connect it to your line
 chert doctor --agent clawdtime     # each failed check says what to fix
-chert dev --agent clawdtime        # add --project UUID when you have several
+./host.sh start                    # the agent and chert dev, in a tmux session
+./host.sh status                   # what runs, and the last records
 ```
 
-`chert dev` prints the number of your line and says when the agent is in a
-waiting room. Leave both terminals open. Press Ctrl+C in terminal 2 when you are
-done: that frees the line.
+`host.sh start` keeps both programs running after you close the terminal. The
+records of `chert dev` go to `~/.local/share/clawdtime/line/dev.jsonl`: they
+show the number of your line and say `agent_warm` when the agent is in a
+waiting room. `./host.sh stop` frees the line and stops the agent.
+
+When you belong to several projects, put the id of the one to use in
+`.env.local` as `CLAWDTIME_LINE_CHERT_PROJECT`.
+
+With no tmux, use two terminals: `./start.sh` in the first, and
+`chert dev --agent clawdtime --env-file .env.local` in the second. Press Ctrl+C
+in the second when you are done: that frees the line.
+
+### Keep it on the newest main
+
+```sh
+./host.sh schedule      # every 15 minutes: take the newest main when it changed
+./host.sh update        # the same, once, now
+./host.sh unschedule    # stop that
+```
+
+An update pulls `main`, builds it, installs only when a lock file changed, and
+restarts the agent. It does nothing when the checkout is not a clean `main`,
+and it never restarts during a call. Its record is
+`~/.local/share/clawdtime/line/update.log`. The schedule is one line in your
+crontab. Keep the checkout outside Documents, Desktop and Downloads: a scheduled
+job cannot read those folders. After a restart of the Mac, run
+`./host.sh start` again from a terminal, so the screen share keeps its
+permission.
 
 ## 5. Call it
 
