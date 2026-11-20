@@ -367,6 +367,7 @@ const bundled = bundledConfig
           process.env.OPENAI_API_KEY ??
           "",
         model: bundledConfig.model,
+        reasoningEffort: bundledConfig.reasoningEffort,
       }),
       () =>
         bundledConfig.mode === "browser"

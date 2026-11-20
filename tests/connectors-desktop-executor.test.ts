@@ -125,6 +125,47 @@ describe("supervisor connected execution", () => {
     expect(model.complete).toHaveBeenCalledTimes(3);
     expect(model.complete.mock.calls[0]).toBeDefined();
   });
+  it.each([
+    "In the visible Alpha window, click the note field and type exactly alpha ready.",
+    "On the prepared browser screen click the Save button.",
+    "Within the selected app window, please scroll down.",
+  ])(
+    "routes a current UI instruction with location first: %s",
+    async (words) => {
+      const execution = executor();
+      execution.snapshot = () => ({ ...snapshot, mode: "native" as const });
+      const model = delegationModel();
+      const { supervisor } = setup(execution, model);
+      expect(await supervisor.reply([], words, "chat")).toBe(snapshot.message);
+      expect(execution.submit).toHaveBeenCalledExactlyOnceWith(
+        expect.any(String),
+        words,
+      );
+      expect(model.complete).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "In the visible Alpha window, what does the Save button do?",
+    "In the current browser, is the click complete?",
+    'Summarize this note: "In the Alpha window, click the Save button."',
+  ])(
+    "does not reinterpret contextual questions or quoted content as input: %s",
+    async (words) => {
+      const execution = executor();
+      execution.snapshot = () => ({ ...snapshot, mode: "native" as const });
+      const model = {
+        complete: vi.fn(async () => ({
+          text: "Conversational answer",
+          toolCalls: [],
+        })),
+      };
+      const { supervisor } = setup(execution, model);
+      expect(await supervisor.reply([], words, "chat")).toBe(
+        "Conversational answer",
+      );
+      expect(execution.submit).not.toHaveBeenCalled();
+    },
+  );
   it("keeps the truthful unavailable response when not connected", async () => {
     const { supervisor, execution } = setup(executor(false));
     expect(await supervisor.reply([], "read my inbox", "chat")).toContain(

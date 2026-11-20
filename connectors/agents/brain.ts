@@ -432,6 +432,12 @@ const clean = (value: string, max: number) =>
 // explicit instructions to an existing agent continue through their own paths.
 const directMailboxRequest =
   /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search)(?:\s+and\s+(?:check|read|summari[sz]e|review|search))?\s+(?:(?:my|our|the)\s+)?(?:e-?mails?|inbox|gmail|outlook)(?:\s+(?:please|today|from today|from yesterday|for me))?[.!?]*$/i;
+// A bounded current instruction can name its UI location before the imperative.
+// This does not match status questions, quotations or instructions to an agent.
+const contextualUiRequest = (spoken: string) =>
+  /^(?:in|on|within)\s+(?:the\s+)?[^,.!?\n]{0,100}?\b(?:windows?|apps?|desktop|screen|browser)\b[^,.!?\n]{0,60}?(?:,\s*|\s+)(?:please\s+)?(?:click|type|scroll|switch|focus|fill|select|open|use)\b/i.test(
+    spoken,
+  );
 const mailboxUnavailable =
   "I cannot access your inbox because ClawdTime has no email integration. You can paste email text here for a summary; approval will not connect your mailbox.";
 const bareDecision =
@@ -705,6 +711,7 @@ export class Supervisor {
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
+      contextualUiRequest(spoken) ||
       /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show)\b/i.test(
         spoken,
       );
@@ -1070,9 +1077,10 @@ export class Supervisor {
     if (
       execution?.snapshot().configured &&
       (executionMode === "native" || executionMode === "browser") &&
-      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:use|click|type|scroll|switch|focus|fill|select|bring|open|navigate)\b/i.test(
-        words,
-      ) &&
+      (contextualUiRequest(words) ||
+        /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:use|click|type|scroll|switch|focus|fill|select|bring|open|navigate)\b/i.test(
+          words,
+        )) &&
       /\b(?:windows?|apps?|desktop|screen|browser|fields?|buttons?|dock)\b/i.test(
         words,
       ) &&

@@ -132,6 +132,7 @@ export const bundledCuaConfigSchema = z
     version: z.literal(1),
     mode: z.enum(["browser", "native"]),
     model: z.string().min(1).max(120),
+    reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
     maxSteps: z.number().int().min(1).max(30).default(20),
     timeoutMs: z.number().int().min(10000).max(900000).default(300000),
     browser: z

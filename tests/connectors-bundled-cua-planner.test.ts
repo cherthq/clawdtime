@@ -29,6 +29,9 @@ describe("app-owned structured CUA planner", () => {
       expect(schema).not.toContain('"oneOf"');
       expect(options.maxRetries).toBe(0);
       expect(options.providerOptions.openai.store).toBe(false);
+      expect(options.providerOptions.openai).not.toHaveProperty(
+        "reasoningEffort",
+      );
       expect(options.abortSignal).toBeInstanceOf(AbortSignal);
       expect(options.messages[0].content[1]).toEqual({
         type: "file",
@@ -181,7 +184,7 @@ describe("app-owned structured CUA planner", () => {
   });
   it("uses native catalog centers as exact observations without adding authority or action fields", async () => {
     const context = JSON.stringify({
-      native: {
+      targets: {
         untrusted: true,
         targets: [
           {
@@ -195,8 +198,18 @@ describe("app-owned structured CUA planner", () => {
       },
     });
     const generate = (async (options: any) => {
-      expect(options.system).toContain("When native.targets is supplied");
+      expect(options.system).toContain(
+        "When context.targets.targets is supplied",
+      );
       expect(options.system).toContain("copy its canonical x and y exactly");
+      expect(options.system).toContain("Work on the earliest unmet part");
+      expect(options.system).toContain(
+        "clicked directly at its canonical center",
+      );
+      expect(options.system).toContain(
+        "Never activate a window merely because the goal mentions its name",
+      );
+      expect(options.system).toContain("do not alternate window activations");
       expect(options.system).toContain(
         "If no catalog target matches the requested native action, pause",
       );
@@ -277,6 +290,94 @@ describe("app-owned structured CUA planner", () => {
       ).rejects.toThrow("invalid plan");
     }
   });
+  it("pauses a repeated activation-only loop rather than alternating windows indefinitely", async () => {
+    const context = JSON.stringify({
+      windows: {
+        untrusted: true,
+        windows: [
+          { id: "window-alpha", app: "Fixture", title: "Alpha" },
+          { id: "window-beta", app: "Fixture", title: "Beta" },
+        ],
+      },
+    });
+    const generate = (async () => ({
+      output: {
+        plan: {
+          kind: "action",
+          observationId: observation.id,
+          description: "Activate Alpha again",
+          action: { type: "activate", targetId: "window-alpha" },
+        },
+      },
+    })) as never;
+    const planner = new BundledCuaPlanner({} as never, generate);
+    const result = await planner.plan(
+      {
+        ...input,
+        observation: { ...observation, context },
+        previousActions: [
+          { type: "activate", targetId: "window-alpha" },
+          { type: "activate", targetId: "window-beta" },
+        ],
+      },
+      signal(),
+    );
+    expect(result).toMatchObject({
+      kind: "pause",
+      observationId: observation.id,
+    });
+    if (result.kind === "pause")
+      expect(result.reason).toContain("Repeated activation was stopped");
+    const afterWork = await planner.plan(
+      {
+        ...input,
+        observation: { ...observation, context },
+        previousActions: [
+          { type: "activate", targetId: "window-alpha" },
+          { type: "click", x: 0.2, y: 0.3 },
+          { type: "activate", targetId: "window-beta" },
+        ],
+      },
+      signal(),
+    );
+    expect(afterWork.kind).toBe("action");
+  });
+  it.each(["none", "low", "medium", "high"] as const)(
+    "passes explicit %s reasoning to planning and verification without changing limits",
+    async (reasoningEffort) => {
+      let calls = 0;
+      const generate = (async (options: any) => {
+        calls++;
+        expect(options.providerOptions.openai).toEqual({
+          store: false,
+          reasoningEffort,
+        });
+        expect(options.maxRetries).toBe(0);
+        expect(options.maxOutputTokens).toBe(1400);
+        return {
+          output:
+            calls === 1
+              ? {
+                  plan: {
+                    kind: "done",
+                    observationId: observation.id,
+                    summary: "Visible fixture",
+                  },
+                }
+              : { verified: true, summary: "Visible fixture" },
+        };
+      }) as never;
+      const planner = new BundledCuaPlanner({} as never, generate, {
+        reasoningEffort,
+      });
+      await planner.plan(input, signal());
+      await planner.verify(
+        { goal: input.goal, observation, proposedSummary: "Visible fixture" },
+        signal(),
+      );
+      expect(calls).toBe(2);
+    },
+  );
   it("requires explicit API and model configuration", () => {
     expect(() =>
       openAiBundledCuaPlanner({ apiKey: "", model: "explicit-model" }),

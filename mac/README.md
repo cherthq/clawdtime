@@ -557,3 +557,12 @@ It retains Accessibility, non-secure-input and active-display gates, including
 both pre-reservation and final preflight. AXRaise/application activation is a
 submitted effect, not proof of the requested UI result; a fresh observation is
 still required. Physical cross-window behavior remains a separate qualification.
+
+Directly spawned applications may lack a Launch Services launch date. Local
+witnesses then use the kernel's exact PID/start-time tuple; missing or invalid
+lifetime evidence still refuses. The bounded window catalog combines actual
+`AXWindows`, `AXMainWindow` and `AXFocusedWindow` references, deduplicates them,
+and checks each owning PID. An empty `AXWindows` array is not replaced by a
+fabricated window ID. Activation revalidation uses the same current membership
+and unchanged geometry/title/document checks. On-screen control discovery still
+requires its original on-screen CG window and complete AX semantic witness.

@@ -1,8 +1,10 @@
 # Standalone runtime qualification — November 20, 2026
 
 PR #7 (`bundled-cua-runtime`) is undergoing the user-authorized native test and
-installation. Automated TypeScript validation passes 1,681 tests. Browser
-standalone qualification passed earlier; actual native input has not yet passed.
+installation. Automated TypeScript validation passes 1,692 tests. Browser
+standalone qualification passed earlier; native activation and pending-action Stop have been observed, but typing/save
+acceptance has not yet passed. A synthetic two-window planner check passes with
+GPT-6.1 Terra and reasoning effort none; GPT-4.1 mini failed the same check.
 Current fixes preserve keyboard focus while approving, distinguish definite
 no-input refusals from uncertain effects, bind changed frames to exact native
 AX targets, and activate only observed existing windows in an explicit app

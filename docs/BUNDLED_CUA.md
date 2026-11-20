@@ -139,7 +139,6 @@ migration was performed. Native physical acceptance, authenticated account setup
 operator recovery UX, distribution signing/notarization and clean-install testing
 remain production gates. Phone continuous-sharing qualification is separate.
 
-
 PR #7 native follow-up validation passes 1,681 TypeScript tests and 175 Swift
 tests. Independent reviewers covered the target/window proofs, preserved native
 preflight guards, local-only helper identity and competing-helper refusal. The
@@ -152,3 +151,20 @@ witnesses now use a real kernel process-start tuple when necessary, and combine
 actual AXWindows/MainWindow/FocusedWindow references with bounded type/PID checks.
 A read-only probe of the exact source finds and revalidates both fixtures. Local
 Stop was observed, but activation/type/save acceptance is still pending.
+
+The next native attempt surfaced both windows and independently exercised Stop
+while an action awaited approval, but the small planner model repeatedly switched
+windows instead of completing the task. The planner now consumes the actual
+`context.targets.targets` catalog, prioritizes unfinished visible controls, and
+pauses repeated activation-only loops. Optional `reasoningEffort` is forwarded
+explicitly; omitted preserves provider defaults.
+
+`npm run cua:qualify-native-planner -- MODEL [none]` runs a paid-model planning
+check with two synthetic native-looking windows in isolated headless Chromium.
+It performs no Mac input and captures no personal screen. It enforces exact
+fixture effects, checks both saved values independently, then requests separate
+model verification. GPT-4.1 mini failed this check at a typing action;
+`gpt-6.1-terra` with `reasoningEffort: "none"` passed in five actions and 17.8
+seconds. This matches its documented visual/computer-use role, but establishes
+only this fixture result, not general reliability or native physical acceptance.
+See [the official model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-terra).
