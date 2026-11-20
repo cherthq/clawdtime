@@ -35,9 +35,14 @@ How it behaves:
 - A hook waits only while someone attends the desk: the panel, or `agents watch`.
   With nobody there it says nothing, and the agent works exactly as it does with
   no hook.
-- Claude Code shows its own prompt at the same time. You can still answer in the
-  terminal. The first answer wins, and a request that the terminal answered
-  leaves the desk at once.
+- For a permission request, Claude Code shows its own prompt at the same time.
+  You can still answer in the terminal. The first answer wins, and a request
+  that the terminal answered leaves the desk at once.
+- A question or a plan is different. Its hook runs before the dialog, and the
+  agent waits for the hook. So the dialog of a question or a plan shows in the
+  terminal only after the hold: 45 seconds at the desk, 9 minutes in away mode.
+  An answer in ClawdTime ends the hold at once and stands in for the dialog.
+  With nobody at the desk there is no hold, and the dialog shows at once.
 - A request waits 45 seconds on the desk. After that only the terminal answers.
   In away mode it waits up to 9 minutes.
 - A request that you cannot see whole is allowed only in its terminal. ClawdTime
