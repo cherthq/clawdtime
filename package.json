@@ -23,7 +23,8 @@
     "task:service": "tsx scripts/task-server.ts",
     "task:simulate": "tsx scripts/task-simulation.ts",
     "task:fixture": "tsx scripts/prepare-coding-demo.ts",
-    "task:desktop": "tsx cli/task-desktop.ts"
+    "task:desktop": "tsx cli/task-desktop.ts",
+    "agents": "tsx cli/index.ts agents"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.114",

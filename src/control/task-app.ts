@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { buildTaskBrief } from "../attention/task-ledger.js";
 import { bodyLimit } from "hono/body-limit";
 import { equal, DomainError } from "../storage/security.js";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import type { TaskCommand } from "../contracts.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
@@ -10,6 +10,19 @@ import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
 import type { TaskDesktopCalls } from "./task-desktop-calls.js";
+
+/**
+ * The agent board as the panel routes see it. The board is built in a separate
+ * process; these calls only read its latest snapshot and bring a terminal forward.
+ */
+export interface AgentBoardPort {
+  /** The latest snapshot, or null when none is fresh. */
+  snapshot(): unknown | null;
+  focus(id: string): Promise<{ ok: boolean; precision: string }>;
+}
+const agentFocusSchema = z
+  .object({ id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,40}$/) })
+  .strict();
 
 export function createTaskApp(
   service: TaskService,
@@ -20,6 +33,7 @@ export function createTaskApp(
   handset?: { taskId: string; voiceId: string; presentationId?: string },
   desktop?: TaskDesktopService,
   calls?: TaskDesktopCalls,
+  agents?: AgentBoardPort,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -104,6 +118,21 @@ export function createTaskApp(
     app.post("/desktop/operations", async (c) =>
       c.json(await desktop.submit(credential(c), await c.req.json())),
     );
+    if (agents) {
+      app.get("/desktop/agents", (c) => {
+        desktop.authorizePanel(credential(c));
+        const board = agents.snapshot();
+        if (!board) throw new DomainError(503, "Agent board unavailable.");
+        return c.json(board);
+      });
+      // Focus brings a terminal forward. It sends nothing to the session.
+      app.post("/desktop/agents/focus", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id } = agentFocusSchema.parse(await c.req.json());
+        const { ok, precision } = await agents.focus(id);
+        return c.json({ ok, precision });
+      });
+    }
   }
   if (calls) {
     app.use("/operator/desktop-calls", async (c, next) => {
