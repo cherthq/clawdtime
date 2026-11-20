@@ -59,8 +59,8 @@ The body has weight, in every style:
   screen. Let go against the left or right edge: it tucks there.
 - Click it: a real jump, with a crouch, the flight and a landing that rings.
 - Point at it after a while: it waves.
-- Loose parts act the motion out: a ring or a halo trails and tips, a flake
-  waves, liquid sloshes.
+- Loose parts act the motion out: a ring trails and tips, a flake waves,
+  antennas fold back, and the eyes of a plain stone lean into its way.
 
 - Click the mascot: it jumps, and the board opens out of it. Click again or
   click anywhere else to close the board.
