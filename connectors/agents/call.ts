@@ -315,7 +315,11 @@ async function onCall<T>(
 export async function answerByCall(
   client: CallClient,
   request: DecisionRequest,
-  options: CallTiming & { recalled?: string | null },
+  options: CallTiming & {
+    recalled?: string | null;
+    /** Names this try of the call. The default is the request's id. */
+    key?: string;
+  },
 ): Promise<{
   decision: "allow" | "deny" | "answer";
   text: string | null;
@@ -326,7 +330,7 @@ export async function answerByCall(
     client,
     {
       // The same request never places a second call.
-      idempotencyKey: `decision-${request.id}`,
+      idempotencyKey: `decision-${options.key ?? request.id}`,
       reason: request.kind === "question" ? "decision" : "approval",
       question: spokenQuestion(request, options.recalled ?? null),
     },
@@ -404,7 +408,12 @@ export type CallLink = z.infer<typeof linkSchema>;
 const linkPath = (root: string) => join(deskDirectory(root), "call.json");
 
 export function saveCallLink(root: string, link: Omit<CallLink, "version">) {
-  // Fails here, at link time, when the connection is not usable.
+  // Fails here, at link time, when the connection is not usable. A project
+  // that was never paired is the common case: say that, and what to run.
+  if (!existsSync(link.connectionFile))
+    throw new Error(
+      `This project is not paired for ${link.adapter}. Pair it first: clawdtime setup --agent ${link.adapter} --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false. Then link again.`,
+    );
   loadConnection(link.connectionFile, link.project, link.adapter as Adapter);
   secureWrite(linkPath(root), { version: 1, ...link });
 }

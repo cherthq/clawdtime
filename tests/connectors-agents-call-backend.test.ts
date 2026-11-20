@@ -12,6 +12,7 @@ import {
   checkCall,
   converseByCall,
   openCall,
+  loadCallLink,
   saveCallLink,
   sayByCall,
   spokenQuestion,
@@ -630,6 +631,33 @@ describe("away mode, end to end, against the real backend in simulation", () => 
     ]);
     expect(line.refused).toEqual([]);
     feed.close();
+  });
+});
+
+describe("a link to a project that was never paired", () => {
+  it("says so in plain words, names the command, and saves no link", () => {
+    const directory = mkdtempSync(join(tmpdir(), "clawdtime-link-"));
+    const project = canonicalProject(
+      mkdtempSync(join(tmpdir(), "clawdtime-unpaired-")),
+    );
+    const missing = join(directory, "connections", "none", "connection.json");
+    let message = "";
+    try {
+      saveCallLink(directory, {
+        connectionFile: missing,
+        project,
+        adapter: "claude-code",
+        linkedAt: 1,
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("This project is not paired for claude-code.");
+    expect(message).toContain("clawdtime setup --agent claude-code");
+    // No system error text and no private path reach the person.
+    expect(message).not.toMatch(/ENOENT|lstat/);
+    expect(message).not.toContain(directory);
+    expect(loadCallLink(directory)).toBeNull();
   });
 });
 

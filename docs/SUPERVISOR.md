@@ -147,6 +147,15 @@ simulation or standby it does not.
   times.
 - One request places one call. An unanswered call leaves the request for the
   panel and the terminal.
+- Away mode needs no panel. With a phone link, the desktop service attends the
+  desk by itself, so a request is held and called also when the panel is closed
+  or macOS slows it while the screen is off.
+- The phone is one line, so calls go one at a time, the oldest request first.
+  An agent that waits comes before news: an incident is told only when no
+  request waits for its call.
+- A call that could not be placed (the line was busy, or the backend did not
+  answer) is tried again after 8 seconds, then 16, then every 30 seconds, for as
+  long as the agent waits.
 - The supervisor claims no screen and no input for the call. It only talks.
 
 ## Watcher

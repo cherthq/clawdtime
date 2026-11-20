@@ -121,15 +121,28 @@ const maximumLine = 2 * 1024 * 1024;
  * Runs the publisher as a child and keeps its latest valid snapshot. A child
  * that ends is started again after a delay that grows to one minute.
  */
+/** The longest pause before a call that could not be placed is tried again. */
+const longestCallPauseMs = 30_000;
+
 export class BoardFeed implements AgentBoardPort {
   private child: ChildProcess | undefined;
   private latest: BoardSnapshot | undefined;
   private buffer = "";
   private closed = false;
   private restart: NodeJS.Timeout | undefined;
+  /** The service's own rhythm for away mode. It needs no panel. */
+  private awayTimer: NodeJS.Timeout | undefined;
   private delayMs = 2000;
   readonly desk: DecisionDesk;
-  private readonly calling = new Set<string>();
+  /**
+   * The calls for requests. `done`: the call was placed, so there is no second
+   * one. Otherwise `tries` counts the calls that could not be placed, and
+   * `retryAt` is when the next try may start.
+   */
+  private readonly calling = new Map<
+    string,
+    { tries: number; retryAt: number; done: boolean }
+  >();
   /** Calls for requests that are in flight now. */
   private flights = 0;
   /** A call that tells an incident is in flight now. */
@@ -144,11 +157,21 @@ export class BoardFeed implements AgentBoardPort {
       runner?: Runner;
       /** The state folder of the desk and the trove. */
       root?: string;
-      /** Places the call for one request. The default uses the linked pairing. */
-      call?: (request: DecisionRequest) => Promise<{
+      /**
+       * Places the call for one request. The default uses the linked pairing.
+       * It rejects when the call could not be placed, and resolves with null
+       * when it was placed and the person gave no answer. `attempt` counts the
+       * tries for this request from 0.
+       */
+      call?: (
+        request: DecisionRequest,
+        attempt: number,
+      ) => Promise<{
         decision: "allow" | "deny" | "answer";
         text: string | null;
       } | null>;
+      /** The pause before a call that could not be placed is tried again. It doubles each time, up to 30 seconds. */
+      retryMs?: number;
       /** The language model. The default is OpenAI when a key is in the environment. */
       model?: ModelClient | null;
       /** Speech settings. The default reads the environment. */
@@ -224,6 +247,13 @@ export class BoardFeed implements AgentBoardPort {
   private report() {
     if (this.telling || this.flights > 0 || !this.desk.away()) return;
     if (!this.options.notify && loadCallLink(this.root) === null) return;
+    // An agent that waits comes before news: its request gets the line first.
+    if (
+      this.desk
+        .pending()
+        .some((request) => this.calling.get(request.id)?.done !== true)
+    )
+      return;
     const allowed = this.watchStore.rules().callOn;
     const incident = this.watcher
       .open()
@@ -355,8 +385,35 @@ export class BoardFeed implements AgentBoardPort {
     return this.options.intervalMs ?? 3000;
   }
 
+  /**
+   * Away: the service attends the desk by itself. The person is not at the Mac,
+   * so nothing may depend on the panel: it can be closed, and macOS can slow a
+   * hidden app while the screen is off. With a phone link, a hook holds and its
+   * request becomes a call. With no phone link nothing here can answer, so
+   * nothing is held. At the desk (away off) only a panel that reads attends.
+   */
+  superviseAway() {
+    if (!this.desk.away()) return;
+    const link = this.options.call ? true : loadCallLink(this.root) !== null;
+    if (!link) return;
+    this.desk.attend();
+    const pending = this.desk.pending();
+    this.forgetCalls(pending);
+    for (const request of pending) this.escalate(request);
+  }
+
   start() {
     if (this.closed || this.child) return;
+    if (!this.awayTimer) {
+      this.awayTimer = setInterval(() => {
+        try {
+          this.superviseAway();
+        } catch {
+          // A fault here never costs the board. The next turn tries again.
+        }
+      }, 2000);
+      this.awayTimer.unref();
+    }
     // The same runtime and loader as this process: tsx in development, plain
     // node for the built files. The publisher file has the matching extension.
     const script = fileURLToPath(
@@ -438,7 +495,10 @@ export class BoardFeed implements AgentBoardPort {
     const away = this.desk.away();
     const link = this.options.call ? true : loadCallLink(this.root) !== null;
     const pending = this.desk.pending();
-    if (away && link) for (const request of pending) this.escalate(request);
+    if (away && link) {
+      this.forgetCalls(pending);
+      for (const request of pending) this.escalate(request);
+    }
     // The remote Macs are asked in the background. This read shows what they
     // last said, and their hooks learn there that someone attends here.
     void this.remoteDesk.poll();
@@ -493,32 +553,63 @@ export class BoardFeed implements AgentBoardPort {
   }
   /** Away: one call for each request, and its spoken answer goes to the desk. */
   private escalate(request: DecisionRequest) {
-    // One phone: while a call tells an incident, this request waits for the next read.
-    if (this.calling.has(request.id) || this.telling) return;
-    this.calling.add(request.id);
-    this.flights++;
+    // One phone line: one call at a time. A second request, and a request
+    // that arrives while a call tells an incident, waits for the next turn.
+    if (this.flights > 0 || this.telling) return;
     const now = this.options.now ?? Date.now;
+    const state = this.calling.get(request.id) ?? {
+      tries: 0,
+      retryAt: 0,
+      done: false,
+    };
+    if (state.done || now() < state.retryAt) return;
+    this.calling.set(request.id, state);
+    this.flights++;
+    const attempt = state.tries;
     const place =
       this.options.call ??
-      (async (item: DecisionRequest) => {
+      (async (item: DecisionRequest, attempt: number) => {
         const link = loadCallLink(this.root);
         if (!link) return null;
-        return answerByCall(await openCall(link, item.id), item, {
+        // A session that ended cannot be opened again, so each try has its own name.
+        const key = attempt === 0 ? item.id : `${item.id}-r${attempt}`;
+        return answerByCall(await openCall(link, key), item, {
           now,
           deadline: item.holdUntil - 5000,
           recalled: this.desk.recalled(item),
+          key,
         });
       });
-    void place(request)
+    void place(request, attempt)
       .then((answer) => {
+        // The call was placed. With no answer the request stays for the panel
+        // and the terminal: the same request never rings twice.
+        state.done = true;
         if (answer) this.desk.answer(request.id, { ...answer, via: "call" });
       })
       .catch(() => {
-        // A call that could not be placed leaves the request for the panel and the terminal.
+        // The call could not be placed: the line was busy, or the backend did
+        // not answer. The agent still waits, so try again after a pause.
+        // It keeps trying for as long as the request is held: the hook
+        // waits up to nine minutes, and a busy line frees within that time.
+        state.tries++;
+        state.retryAt =
+          now() +
+          Math.min(
+            longestCallPauseMs,
+            (this.options.retryMs ?? 8000) * 2 ** (state.tries - 1),
+          );
       })
       .finally(() => {
         this.flights--;
       });
+  }
+  /** Forgets the calls of requests that are gone. */
+  private forgetCalls(pending: DecisionRequest[]) {
+    if (this.calling.size <= pending.length) return;
+    const waiting = new Set(pending.map((request) => request.id));
+    for (const id of this.calling.keys())
+      if (!waiting.has(id)) this.calling.delete(id);
   }
   answer(input: {
     id: string;
@@ -542,6 +633,7 @@ export class BoardFeed implements AgentBoardPort {
   close() {
     this.closed = true;
     if (this.restart) clearTimeout(this.restart);
+    if (this.awayTimer) clearInterval(this.awayTimer);
     this.child?.kill("SIGTERM");
     this.child = undefined;
   }

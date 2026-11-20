@@ -1472,6 +1472,194 @@ describe("answer by phone", () => {
     expect(late.log).toEqual([]);
   });
 
+  it("in away mode the service attends the desk and places the call by itself, with no panel", async () => {
+    const directory = root();
+    const calls: string[] = [];
+    const feed = new BoardFeed({
+      root: directory,
+      now: () => Date.now(),
+      call: async (item) => {
+        calls.push(item.id);
+        return { decision: "allow", text: null };
+      },
+    });
+    // At the desk nobody reads the panel: the service alone does not attend,
+    // so a hook would not hold and the agent keeps its own prompt.
+    feed.superviseAway();
+    expect(feed.desk.attended()).toBe(false);
+    expect(
+      holdPolicy({ attended: feed.desk.attended(), away: feed.desk.away() }),
+    ).toEqual({ hold: false, seconds: 0 });
+    // Away, with a phone link: the service attends. No panel read happens here.
+    feed.setAway(true);
+    feed.superviseAway();
+    expect(feed.desk.attended()).toBe(true);
+    expect(
+      holdPolicy({ attended: feed.desk.attended(), away: feed.desk.away() }),
+    ).toEqual({ hold: true, seconds: 540 });
+    const waiting = feed.desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: describeRequest(permission("npm test"))!,
+      holdSeconds: 540,
+    });
+    feed.superviseAway();
+    feed.superviseAway();
+    await new Promise((done) => setTimeout(done, 10));
+    // One call for the request, however often the service looks.
+    expect(calls).toEqual([waiting.id]);
+    expect(feed.desk.take(waiting.id)).toMatchObject({
+      decision: "allow",
+      via: "call",
+    });
+    // Away with no phone link: nothing here can answer, so nothing is held.
+    const bare = new BoardFeed({ root: root(), now: () => Date.now() });
+    bare.setAway(true);
+    bare.superviseAway();
+    expect(bare.desk.attended()).toBe(false);
+  });
+
+  it("one phone line: two requests get their calls one after the other, and an unanswered call is not repeated", async () => {
+    const clock = { now: 1_000_000 };
+    type Answer = {
+      decision: "allow" | "deny" | "answer";
+      text: string | null;
+    };
+    const started: string[] = [];
+    const finish = new Map<string, (answer: Answer | null) => void>();
+    const feed = new BoardFeed({
+      root: root(),
+      now: () => clock.now,
+      call: (item) =>
+        new Promise((done) => {
+          started.push(item.id);
+          finish.set(item.id, done);
+        }),
+    });
+    const settle = () => new Promise((done) => setTimeout(done, 5));
+    const ask = (command: string) => {
+      clock.now += 10;
+      return feed.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: describeRequest(permission(command))!,
+        holdSeconds: 540,
+      });
+    };
+    feed.setAway(true);
+    const first = ask("npm test"),
+      second = ask("git push origin main");
+    feed.superviseAway();
+    feed.superviseAway();
+    // The older request has the line. The newer one waits: the backend would refuse it.
+    expect(started).toEqual([first.id]);
+    finish.get(first.id)!({ decision: "allow", text: null });
+    await settle();
+    expect(feed.desk.take(first.id)).toMatchObject({
+      decision: "allow",
+      via: "call",
+    });
+    feed.superviseAway();
+    expect(started).toEqual([first.id, second.id]);
+    // The person does not answer the second call. It stays for the panel, and it does not ring again.
+    finish.get(second.id)!(null);
+    await settle();
+    feed.superviseAway();
+    feed.decisions();
+    await settle();
+    expect(started).toEqual([first.id, second.id]);
+    expect(feed.desk.take(second.id)).toBeNull();
+  });
+
+  it("a call that could not be placed is tried again after a pause, under a new name, for as long as the request waits", async () => {
+    const clock = { now: 1_000_000 };
+    const settle = () => new Promise((done) => setTimeout(done, 5));
+    const tries: number[] = [];
+    let refusals = 2;
+    const feed = new BoardFeed({
+      root: root(),
+      now: () => clock.now,
+      retryMs: 1000,
+      call: async (_item, attempt) => {
+        tries.push(attempt);
+        if (refusals-- > 0) throw new Error("The line is still reserved.");
+        return { decision: "deny", text: "Not now." };
+      },
+    });
+    const turn = async (after: number) => {
+      clock.now += after;
+      feed.superviseAway();
+      await settle();
+    };
+    feed.setAway(true);
+    const waiting = feed.desk.open({
+      agent: "codex",
+      sessionId: "t",
+      cwd: "/work/site",
+      pids: [],
+      described: describeRequest(permission("npm publish"))!,
+      holdSeconds: 540,
+    });
+    await turn(0);
+    expect(tries).toEqual([0]);
+    // Not before the pause.
+    await turn(999);
+    expect(tries).toEqual([0]);
+    await turn(1);
+    expect(tries).toEqual([0, 1]);
+    // The pause doubles.
+    await turn(1999);
+    expect(tries).toEqual([0, 1]);
+    await turn(1);
+    expect(tries).toEqual([0, 1, 2]);
+    expect(feed.desk.take(waiting.id)).toMatchObject({
+      decision: "deny",
+      text: "Not now.",
+      via: "call",
+    });
+    // A line that stays busy: it keeps trying while the request is held, and
+    // the pause stops growing at 30 seconds. When the hold is over, it stops.
+    const busy: { attempt: number; at: number }[] = [];
+    const stuck = new BoardFeed({
+      root: root(),
+      now: () => clock.now,
+      retryMs: 1000,
+      call: async (_item, attempt) => {
+        busy.push({ attempt, at: clock.now });
+        throw new Error("The line is still reserved.");
+      },
+    });
+    stuck.setAway(true);
+    const from = clock.now;
+    stuck.desk.open({
+      agent: "codex",
+      sessionId: "u",
+      cwd: "/work/site",
+      pids: [],
+      described: describeRequest(permission("npm publish"))!,
+      holdSeconds: 540,
+    });
+    for (let second = 0; second <= 600; second++) {
+      clock.now = from + second * 1000;
+      stuck.superviseAway();
+      await settle();
+    }
+    const gaps = busy.slice(1).map((item, index) => item.at - busy[index]!.at);
+    expect(busy.map((item) => item.attempt)).toEqual(
+      busy.map((_item, index) => index),
+    );
+    // 1, 2, 4, 8, 16 seconds, then 30 seconds each time.
+    expect(gaps.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16_000, 30_000]);
+    expect(gaps.slice(5).every((gap) => gap === 30_000)).toBe(true);
+    // It tried through the whole nine minutes, and not after them.
+    expect(busy.length).toBeGreaterThan(15);
+    expect(busy.at(-1)!.at).toBeLessThanOrEqual(from + 540_000);
+  });
+
   it("in away mode the service places one call for a waiting request and the spoken answer reaches the hook", async () => {
     const directory = root();
     const calls: string[] = [];

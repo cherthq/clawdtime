@@ -12,7 +12,10 @@ import { agentsCli } from "../cli/agents.js";
 import { BoardScanner } from "../connectors/agents/board.js";
 import { Supervisor } from "../connectors/agents/brain.js";
 import { sayByCall, type CallClient } from "../connectors/agents/call.js";
-import { DecisionDesk } from "../connectors/agents/decisions.js";
+import {
+  DecisionDesk,
+  describeRequest,
+} from "../connectors/agents/decisions.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import {
   boardSnapshotSchema,
@@ -797,6 +800,70 @@ describe("the watcher in the service", () => {
     expect(feed.dismissIncident(view.incidents[0]!.id)).toBe(true);
     expect(feed.dismissIncident(view.incidents[0]!.id)).toBe(false);
     expect(feed.incidents().incidents).toEqual([]);
+  });
+
+  it("an agent that waits gets the line before news: no incident is told until its call was placed", async () => {
+    const clock = { now: start };
+    const told: string[] = [];
+    const asked: string[] = [];
+    let answer: (() => void) | undefined;
+    const feed = new BoardFeed({
+      root: root(),
+      now: () => clock.now,
+      model: null,
+      speech: null,
+      exists: () => false,
+      notify: async (incident) => {
+        told.push(incident.kind);
+      },
+      call: (item) =>
+        new Promise((done) => {
+          asked.push(item.id);
+          answer = () => done({ decision: "allow", text: null });
+        }),
+    });
+    const scan = (at: number, sessions: AgentSession[]) => {
+      clock.now = at;
+      feed.receive(line(board(at, sessions)));
+    };
+    const one = session({ id: "1-a", pid: 1, name: "one", since: start });
+    const two = session({ id: "2-b", pid: 2, name: "two", since: start });
+    feed.setAway(true);
+    scan(start, [one, two]);
+    // An agent asks, and a session dies in the same moments.
+    const waiting = feed.desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: describeRequest({
+        session_id: "s",
+        cwd: "/work/app",
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      })!,
+      holdSeconds: 540,
+    });
+    scan(start + 3000, [one]);
+    scan(start + 6000, [one]);
+    expect(feed.incidents().incidents.map((item) => item.kind)).toEqual([
+      "failed",
+    ]);
+    await tick();
+    // The news waits: the request has not had its call yet.
+    expect(told).toEqual([]);
+    feed.superviseAway();
+    expect(asked).toEqual([waiting.id]);
+    // While that call runs, the news still waits.
+    scan(start + 9000, [one]);
+    await tick();
+    expect(told).toEqual([]);
+    answer!();
+    await tick();
+    scan(start + 12_000, [one]);
+    await tick();
+    expect(told).toEqual(["failed"]);
   });
 
   it("places one call for an incident in away mode, for the kinds that the rules allow, and never two at once", async () => {
