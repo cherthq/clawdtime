@@ -9,6 +9,15 @@ public struct KeyCombo: Equatable, Sendable {
   /// The character that the key prints with no modifier, when it prints one. A
   /// keyboard of another country can have it on another key: the panel looks there.
   public let character: String?
+  /// The key prints a character: a letter, a digit, a sign or a space.
+  public let printing: Bool
+  public init(keyCode: UInt16, flags: UInt64, character: String?, printing: Bool? = nil) {
+    self.keyCode = keyCode; self.flags = flags; self.character = character
+    self.printing = printing ?? (character != nil)
+  }
+  /// The combo puts a character into a field, as typed text does. With Command or
+  /// Control it is a shortcut. A combo that types never goes into a password field.
+  public var typesText: Bool { printing && flags & (KeyCombo.command | KeyCombo.control) == 0 }
 
   public static let shift: UInt64 = 0x0002_0000, control: UInt64 = 0x0004_0000, option: UInt64 = 0x0008_0000
   public static let command: UInt64 = 0x0010_0000, function: UInt64 = 0x0080_0000
@@ -58,11 +67,13 @@ public struct KeyCombo: Equatable, Sendable {
     guard modifiers[last] == nil else { return nil }
     if last == "plus" {
       // On a United States keyboard the plus sign is Shift and the equals key.
-      return KeyCombo(keyCode: 24, flags: flags | shift, character: nil)
+      return KeyCombo(keyCode: 24, flags: flags | shift, character: nil, printing: true)
     }
     if let code = printed[last] { return KeyCombo(keyCode: code, flags: flags, character: last) }
     let name = last.replacingOccurrences(of: "_", with: "").replacingOccurrences(of: " ", with: "")
-    if let code = named[name] { return KeyCombo(keyCode: code, flags: flags, character: name == "minus" ? "-" : nil) }
+    if let code = named[name] {
+      return KeyCombo(keyCode: code, flags: flags, character: name == "minus" ? "-" : nil, printing: name == "minus" || name == "space")
+    }
     return nil
   }
 }

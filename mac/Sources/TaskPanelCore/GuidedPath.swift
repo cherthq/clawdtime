@@ -48,7 +48,7 @@ public struct GuidedPath: Equatable, Sendable {
   /// The points for events sent every `interval` seconds. The last one is the target itself.
   public func points(every interval: Double) -> [CGPoint] {
     guard duration > 0, interval > 0 else { return [target] }
-    let count = min(600, max(1, Int((duration / interval).rounded(.up))))
+    let count = max(1, Int(min(600, (duration / interval).rounded(.up))))
     return (1...count).map { $0 == count ? target : point(at: duration * Double($0) / Double(count)) }
   }
   /// Seconds for the real pointer to cross `length` points: short, and a little longer for a long way.

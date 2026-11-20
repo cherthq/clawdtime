@@ -20,8 +20,9 @@ public struct ScreenMap: Equatable, Sendable {
     guard width.isFinite, height.isFinite, scale.isFinite, width >= 1, height >= 1, scale > 0, maxImageWidth >= 1 else { return nil }
     self.width = width; self.height = height; self.scale = scale
     // The picture never has more pixels than the display, and never more than the limit.
-    imageWidth = max(1, min(maxImageWidth, Int((width * scale).rounded())))
-    imageHeight = max(1, Int((Double(imageWidth) * height / width).rounded()))
+    // Each limit comes before the whole number, so no size of display can stop the app.
+    imageWidth = max(1, Int(min(Double(maxImageWidth), (width * scale).rounded())))
+    imageHeight = max(1, Int(min(Double(maxImageWidth) * 16, (Double(imageWidth) * height / width).rounded())))
   }
   /// The screen point under a pixel of the picture.
   public func point(pixel: CGPoint) -> CGPoint {
@@ -62,8 +63,9 @@ public enum ScrollPlan {
     func lines(_ value: Double) -> Int {
       guard value.isFinite, value != 0 else { return 0 }
       // A part of a line is one line: a scroll that was asked for always moves.
-      let whole = max(1, Int(abs(value).rounded()))
-      return (value > 0 ? -1 : 1) * min(limit, whole)
+      // The limit comes first: a number too large for a whole number must not stop the app.
+      let whole = max(1, Int(min(abs(value).rounded(), Double(limit))))
+      return (value > 0 ? -1 : 1) * whole
     }
     var vertical = lines(dy), horizontal = lines(dx)
     var ticks: [Tick] = []

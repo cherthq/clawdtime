@@ -61,6 +61,10 @@ final class HandsScreenTests: XCTestCase {
     for (width, height, scale) in [(0.0, 800.0, 1.0), (1280, 0, 1), (1280, 800, 0), (.nan, 800, 1), (1280, .infinity, 2)] {
       XCTAssertNil(ScreenMap(width: width, height: height, scale: scale))
     }
+    // A size that no whole number holds gives a bounded picture, never a stop.
+    XCTAssertEqual(ScreenMap(width: 1e300, height: 1, scale: 4)?.imageWidth, 1280)
+    XCTAssertEqual(ScreenMap(width: 1e300, height: 1, scale: 4)?.imageHeight, 1)
+    XCTAssertEqual(ScreenMap(width: 1, height: 1e300, scale: 1)?.imageHeight, 20480)
   }
 
   func raw(_ role: String, subrole: String? = nil, label: String? = nil, title: String? = nil, description: String? = nil,

@@ -99,6 +99,7 @@ final class GuidedPathTests: XCTestCase {
     XCTAssertEqual(GuidedPath.dragDuration(length: 0), 0.25); XCTAssertEqual(GuidedPath.dragDuration(length: 100_000), 0.60)
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 0).points(every: 0.01), [target])
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: 0.001).count, 600)
+    XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: .leastNonzeroMagnitude).count, 600)
   }
 
   func testTheMascotLeansTowardTheTarget() {

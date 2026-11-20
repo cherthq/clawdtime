@@ -40,11 +40,23 @@ final class HandsInputTests: XCTestCase {
       XCTAssertEqual(KeyCombo.parse("cmd+" + name), KeyCombo(keyCode: code, flags: KeyCombo.command, character: name), name)
     }
     // The plus key shares its sign with the separator.
-    XCTAssertEqual(KeyCombo.parse("cmd++"), KeyCombo(keyCode: 24, flags: KeyCombo.command | KeyCombo.shift, character: nil))
+    XCTAssertEqual(KeyCombo.parse("cmd++"), KeyCombo(keyCode: 24, flags: KeyCombo.command | KeyCombo.shift, character: nil, printing: true))
     XCTAssertEqual(KeyCombo.parse("cmd+plus"), KeyCombo.parse("cmd++"))
     XCTAssertEqual(KeyCombo.parse("+")?.keyCode, 24)
     XCTAssertEqual(KeyCombo.parse("cmd+-"), KeyCombo(keyCode: 27, flags: KeyCombo.command, character: "-"))
     XCTAssertEqual(KeyCombo.parse("cmd+minus"), KeyCombo.parse("cmd+-"))
+  }
+
+  func testAKeyThatPrintsIsTextAndAShortcutIsNot() {
+    // A key that puts a character into a field is text. The hands keep text out of a password field.
+    for combo in ["a", "shift+a", "alt+a", "fn+a", "7", "-", "minus", "+", "plus", "shift+plus", "space", "shift+space", ".", "`"] {
+      XCTAssertEqual(KeyCombo.parse(combo)?.typesText, true, combo)
+    }
+    // With Command or Control it is a shortcut. A key with a name moves, confirms or deletes.
+    for combo in ["cmd+a", "ctrl+a", "cmd+shift+4", "ctrl+alt+space", "cmd++", "return", "enter", "tab", "shift+tab", "escape",
+                  "delete", "forwarddelete", "left", "up", "home", "pagedown", "f5"] {
+      XCTAssertEqual(KeyCombo.parse(combo)?.typesText, false, combo)
+    }
   }
 
   func testAKeyComboThatIsNotKnownIsRefused() {
@@ -109,6 +121,11 @@ final class HandsInputTests: XCTestCase {
     let far = ScrollPlan.ticks(dx: 0, dy: 100_000)
     XCTAssertEqual(far.reduce(0) { $0 + Int($1.vertical) }, -ScrollPlan.limit)
     XCTAssertTrue(far.allSatisfy { abs($0.vertical) <= Int32(ScrollPlan.linesPerEvent) })
+    // The contract takes any finite number. One too large for a whole number is cut like the others.
+    for huge in [1e30, 1e300, Double.greatestFiniteMagnitude] {
+      XCTAssertEqual(ScrollPlan.ticks(dx: 0, dy: huge).reduce(0) { $0 + Int($1.vertical) }, -ScrollPlan.limit)
+      XCTAssertEqual(ScrollPlan.ticks(dx: -huge, dy: 0).reduce(0) { $0 + Int($1.horizontal) }, ScrollPlan.limit)
+    }
   }
 
   func testOnlyAWebAddressIsOpened() {
