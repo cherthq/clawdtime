@@ -433,3 +433,71 @@ from submitted cancellation. Parent Stop still terminates that exact child.
 `stream_start`, `stream_wait`, and `stream_stop` profiling phases expose this path.
 These bounds and lifecycle tests are not proof of native startup latency or a
 repair; real exact-window qualification is required before changing the default.
+
+## App-owned local desktop execution
+
+The companion also supports an explicitly configured local task executor. This
+path has task/session/executor identities, **no call or paired-member identity**,
+and requires no media server or voice provider. It is implemented and covered by
+policy/receipt tests; packaged native capture/input and approval-focus behavior
+still require physical qualification. Building this code does not install it,
+request macOS permissions, enable capture, or grant input.
+
+An owner-only helper configuration may add:
+
+```json
+"localExecutors": [{ "executorId": "app-runtime", "displayId": 123456 }]
+```
+
+This is a separate display/control opt-in. It is accepted only with loopback
+binding. Existing configurations without it retain the call-helper behavior.
+Screen Recording, Accessibility, an unlocked active console session, a local
+control policy other than View only, and **Enable locally** are still required.
+The local and call paths share one execution slot and all unresolved receipt
+stores block new control. Local Stop, policy change, display change, sleep, lock,
+and session loss revoke local work too; wake/unlock does not resume it.
+
+All routes require the existing private helper bearer; requests never arm the
+helper or prompt for macOS permissions:
+
+| Route | Result |
+| --- | --- |
+| `GET /local/v1/status` | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
+| `POST /local/v1/sessions` | Reserve a new exact local lease. |
+| `POST /local/v1/sessions/:id/renew` | Change only expiration, at most 30 seconds from the helper clock. |
+| `GET /local/v1/sessions/:id/frame` | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`. |
+| `POST /local/v1/sessions/:id/actions` | Reserve and submit one bounded action; return its durable receipt. |
+| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry. |
+| `POST /local/v1/sessions/:id/stop` | Idempotently stop that previously reserved lease; never stop a different current owner. |
+
+A lease is `{id,deviceId,sessionId,taskId,executorId,executorEpoch,policyRevision,
+displayId,expiresAt}`. Expiration is ISO 8601; responses use the helper's existing
+whole-second ISO serialization. Renewal cannot change any identity, epoch,
+policy, or display. Used lease IDs are durably retained and cannot be resumed
+after restart. Input uses the existing click/type/scroll body, additionally
+requiring `sessionId`, `executorEpoch`, and `policyRevision` to match the lease.
+There are no new shell, clipboard, arbitrary-key, or application-launch actions.
+
+Only local-mode screenshots omit the cursor and the explicitly identified
+ClawdTime companion/panel apps (including the existing supervisor bundle).
+The native input path refuses typing into those apps and refuses click/scroll
+points covered by their on-screen windows, even if AX hit testing reports an
+underlying app. It requires a non-ClawdTime AX target witness; unavailable
+identity fails closed. Focus identity is checked before/after capture and before
+input, with exact focused-element equality for typing. An approval click that
+changes focus can therefore require a fresh observation and plan; it is never
+hidden or bypassed. Unsigned/unidentified app behavior remains a qualification
+constraint, not an automatic name-based exclusion.
+
+Local receipts live in the helper's private `local-execution` journal. They store
+identity, a payload hash, state, timestamps and fixed evidence, never typed text
+or pixels. Dispatch is fsynced before native input; restart changes unfinished
+dispatch to unknown. A submitted receipt means events were posted, not UI
+success. Only a subsequent fresh frame records observation availability; unknown
+outcomes remain blocking and are never replayed under another action ID.
+
+The chat panel optionally displays an exact pending action with **Approve action**
+and **Deny action**. Both send one decision for that action ID; an unconfirmed
+response is reconciled by reads, not replayed. **Stop work** remains a separate
+control while approval or chat/voice requests are pending. Its wording describes
+a cooperative stop: an action already underway may finish.

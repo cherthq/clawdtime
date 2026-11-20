@@ -18,7 +18,7 @@ cat > "$output/Contents/Info.plist" <<'PLIST'
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSScreenCaptureUsageDescription</key><string>Show your selected screen in your authorized ClawdTime call.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Capture your selected screen for an authorized ClawdTime call or an explicitly enabled local task.</string>
 </dict></plist>
 PLIST
 identity="${CLAWDTIME_SIGNING_IDENTITY:--}"

@@ -21,6 +21,8 @@ struct HelperStatus: Codable {
 @MainActor final class DeviceApp: NSObject, NSApplicationDelegate {
   let config: HelperConfig
   let policy: DevicePolicy
+  let localPolicy: LocalExecutionPolicy
+  let localLedger: LocalExecutionStore
   let ledger: ReceiptStore
   let preferences: ControlPreferenceStore
   let controlPanel = ControlPanelState()
@@ -33,6 +35,7 @@ struct HelperStatus: Codable {
   var timer: Timer?
   var lastFrameRequest = Date.distantPast
   var frameBounds: CGRect?
+  var localFrameFocus: LocalFocusWitness?
   var setupWindow: NSWindow?
   var setupStateLabel: NSTextField?
   var setupScreenLabel: NSTextField?
@@ -53,6 +56,8 @@ struct HelperStatus: Codable {
       url: ledgerURL.deletingLastPathComponent().appendingPathComponent("control-policy.json"),
       deviceId: config.deviceId)
     self.policy = try DevicePolicy(config: config, preferences: preferences.value)
+    self.localPolicy = LocalExecutionPolicy(shared: self.policy)
+    self.localLedger = try LocalExecutionStore(folder: ledgerURL.deletingLastPathComponent().appendingPathComponent("local-execution", isDirectory: true))
     super.init()
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -63,7 +68,7 @@ struct HelperStatus: Codable {
       .target = self
     menu.addItem(.separator())
     menu.addItem(
-      withTitle: "Enable remote sharing locally", action: #selector(arm), keyEquivalent: ""
+      withTitle: "Enable authorized screen work locally", action: #selector(arm), keyEquivalent: ""
     ).target = self
     menu.addItem(withTitle: "STOP sharing and control", action: #selector(stop), keyEquivalent: "s")
       .target = self
@@ -102,6 +107,7 @@ struct HelperStatus: Codable {
       Task { @MainActor in
         guard let self else { return }
         _ = try? self.policy.check(now: Date(), sessionAvailable: self.session.available)
+        _ = try? self.localPolicy.check(now: Date(), available: self.session.available)
         self.updateIndicator()
       }
     }
@@ -137,6 +143,8 @@ struct HelperStatus: Codable {
     updateIndicator()
   }
   @objc func stop() {
+    localPolicy.stop()
+    localFrameFocus = nil
     policy.stop(disarm: true)
     updateIndicator()
   }
@@ -173,9 +181,10 @@ struct HelperStatus: Codable {
       policy.lease.map {
         "\($0.mode == "control" ? "Controlling" : "Viewing") display \($0.displayId)"
       }
+      ?? localPolicy.lease.map { "Local work on display \($0.displayId)" }
       ?? (policy.armed ? "Ready for authorized requests" : "Stopped locally")
     let symbol =
-      policy.lease == nil
+      policy.lease == nil && localPolicy.lease == nil
       ? (policy.armed ? "display" : "display.trianglebadge.exclamationmark") : "record.circle.fill"
     status?.button?.title = ""
     status?.button?.image =
@@ -184,12 +193,13 @@ struct HelperStatus: Codable {
       ?? NSImage(systemSymbolName: "display", accessibilityDescription: "ClawdTime Companion")
     status?.button?.setAccessibilityLabel("ClawdTime Companion: \(state)")
     status?.button?.toolTip = "ClawdTime Companion, \(state). Click for Control Panel or Stop."
-    status?.button?.contentTintColor = policy.lease == nil ? nil : .systemRed
-    guard let lease = policy.lease else {
+    status?.button?.contentTintColor = policy.lease == nil && localPolicy.lease == nil ? nil : .systemRed
+    guard policy.lease != nil || localPolicy.lease != nil else {
       panel?.orderOut(nil)
       return
     }
-    let title = "◉ \(lease.mode == "control" ? "CONTROL" : "VIEW") · \(lease.displayId)"
+    let title = localPolicy.lease.map { "◉ LOCAL WORK · \($0.displayId)" }
+      ?? policy.lease.map { "◉ \($0.mode == "control" ? "CONTROL" : "VIEW") · \($0.displayId)" } ?? "Stopped"
     if panel == nil {
       let p = NSPanel(
         contentRect: NSRect(x: 30, y: 30, width: 300, height: 85),
@@ -234,6 +244,8 @@ struct HelperStatus: Codable {
       guard authenticated(request.headers["authorization"] ?? "", secret: config.secret) else {
         throw HelperError(401, "Authentication required.")
       }
+      _ = try? localPolicy.check(now: Date(), available: session.available)
+      if request.path.hasPrefix("/local/v1/") { return try await handleLocal(request) }
       let parts = request.path.split(separator: "/").map(String.init)
       if request.method == "GET", request.path == "/v1/status" {
         return try .json(
@@ -242,7 +254,7 @@ struct HelperStatus: Codable {
             screenPermission: CGPreflightScreenCaptureAccess(),
             controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id,
             controlPolicy: policy.preferences.policy.rawValue, policyRevision: policy.preferences.revision,
-            unresolvedActionCount: ledger.unresolvedActionCount,
+            unresolvedActionCount: ledger.unresolvedActionCount + localLedger.unresolvedActions,
             historicalObservedActionCount: ledger.historicalObservedActionCount,
             historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
             panelCommand: controlPanel.command,
@@ -272,7 +284,7 @@ struct HelperStatus: Codable {
         guard !ledger.isHistoricallyRetiredLease(lease.id) else {
           throw HelperError(409, "This historical lease is retired; its input cannot be replayed.")
         }
-        if ledger.unresolvedActionCount > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
+        if (ledger.unresolvedActionCount + localLedger.unresolvedActions) > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
         }
         try policy.begin(
@@ -292,6 +304,9 @@ struct HelperStatus: Codable {
         let action = try decode(InputAction.self, request.body)
         if let existing = try ledger.existing(action, leaseId: leaseId) {
           return try .json(existing)
+        }
+        guard localPolicy.lease == nil, localLedger.unresolvedActions == 0 else {
+          throw HelperError(409, "Local execution ownership or unresolved input blocks call control.")
         }
         let lease = try policy.validateAction(
           action, leaseId: leaseId, now: Date(), sessionAvailable: session.available,
@@ -326,7 +341,7 @@ struct HelperStatus: Codable {
       if request.method == "POST", parts.count == 4, parts[3] == "renew" {
         let renewed = try decode(Lease.self, request.body)
         guard renewed.id == leaseId else { throw HelperError(409, "Wrong lease renewal.") }
-        if renewed.executorEpoch != lease.executorEpoch && ledger.unresolvedActionCount > 0 {
+        if renewed.executorEpoch != lease.executorEpoch && (ledger.unresolvedActionCount + localLedger.unresolvedActions) > 0 {
           throw HelperError(409, "Reconcile outstanding input before changing executor.")
         }
         try policy.renew(

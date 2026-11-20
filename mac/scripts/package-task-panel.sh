@@ -21,6 +21,8 @@ cat > "$output/Contents/Info.plist" <<'PLIST'
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>LSUIElement</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>ClawdTime listens only while you talk to it, and sends what you said to be turned into text.</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
 PLIST

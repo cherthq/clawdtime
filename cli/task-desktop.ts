@@ -118,6 +118,7 @@ function childEnvironment(): NodeJS.ProcessEnv {
         [
           "HOME",
           "PATH",
+          "PLAYWRIGHT_BROWSERS_PATH",
           "USER",
           "LOGNAME",
           "SHELL",
@@ -323,10 +324,16 @@ export async function desktopCli(
     writeFileSync(launch, JSON.stringify({ pid: process.pid }));
     const attach = existsSync(ownerPath);
     if (!attach) {
+      // Installed artifacts contain dist JavaScript and production dependencies only.
+      // A source checkout keeps the TS loader; never require tsx in the artifact.
+      const compiledService = join(root, "scripts/task-server.js");
+      const sourceService = join(root, "scripts/task-server.ts");
+      const entry =
+        existsSync(compiledService) && !existsSync(sourceService)
+          ? [compiledService]
+          : ["--import", "tsx", sourceService];
       const serviceArgs = [
-        "--import",
-        "tsx",
-        join(root, "scripts/task-server.ts"),
+        ...entry,
         "--state",
         state,
         "--project",

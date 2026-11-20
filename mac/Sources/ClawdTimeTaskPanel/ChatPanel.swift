@@ -16,6 +16,7 @@ struct ChatModel {
   var execution: ChatExecution?
   var executionStopping = false
   var executionCanStop = false
+  var executionCanDecide = false
   var executionNotice: String?
 }
 
@@ -103,6 +104,7 @@ final class ChatView: NSView, SheetContent {
   var onSend: ((String) -> Void)?
   var onTalk: (() -> Void)?
   var onStopWork: (() -> Void)?
+  var onExecutionDecision: ((String, Bool) -> Void)?
   var onClose: (() -> Void)?
   var onResize: (() -> Void)?
   var maxHeight: CGFloat = 640
@@ -122,6 +124,10 @@ final class ChatView: NSView, SheetContent {
   private let executionRow = NSStackView()
   private let executionStatus = Theme.label("", font: Theme.sans(12), color: .labelSecondary, lines: 3)
   private var stopWork: PillButton!
+  private let decisionRow = NSStackView()
+  private let decisionText = Theme.label("", font: Theme.sans(12), color: .label, lines: 4)
+  private var approveAction: PillButton!
+  private var denyAction: PillButton!
   private var shown: [String] = []
   private var model = ChatModel()
   private static let starters = ["What needs me?", "What is every agent doing?", "Which agent commands are on this Mac?"]
@@ -167,11 +173,17 @@ final class ChatView: NSView, SheetContent {
     executionStatus.setContentHuggingPriority(.defaultLow, for: .horizontal)
     stopWork.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+    approveAction = PillButton("Approve action", kind: .primary, small: true, target: self, action: #selector(approveExecution))
+    denyAction = PillButton("Deny action", kind: .secondary, small: true, target: self, action: #selector(denyExecution))
+    let choices = NSStackView(views: [approveAction, denyAction]); choices.orientation = .horizontal; choices.spacing = 8
+    decisionRow.orientation = .vertical; decisionRow.alignment = .leading; decisionRow.spacing = 6
+    decisionRow.addArrangedSubview(decisionText); decisionRow.addArrangedSubview(choices)
+    decisionText.preferredMaxLayoutWidth = Self.width - 44
     // The notice and the field stand on the bottom edge. A hidden notice takes no room.
     foot.orientation = .vertical; foot.alignment = .leading; foot.spacing = 8; foot.detachesHiddenViews = true
     // The notice lines up with the headline, six points in from the field's edge.
     noticeRow.addSubview(notice); notice.translatesAutoresizingMaskIntoConstraints = false
-    foot.addArrangedSubview(executionRow); foot.addArrangedSubview(noticeRow); foot.addArrangedSubview(compose)
+    foot.addArrangedSubview(executionRow); foot.addArrangedSubview(decisionRow); foot.addArrangedSubview(noticeRow); foot.addArrangedSubview(compose)
     for view in [header, scroll, foot] as [NSView] { addSubview(view); view.translatesAutoresizingMaskIntoConstraints = false }
     scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 120)
     let pad = CGFloat(DesignTokens.space5)
@@ -188,6 +200,8 @@ final class ChatView: NSView, SheetContent {
       foot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), foot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
       foot.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
       executionRow.widthAnchor.constraint(equalTo: foot.widthAnchor),
+      decisionRow.widthAnchor.constraint(equalTo: foot.widthAnchor),
+      decisionText.widthAnchor.constraint(equalTo: decisionRow.widthAnchor),
       compose.widthAnchor.constraint(equalTo: foot.widthAnchor), noticeRow.widthAnchor.constraint(equalTo: foot.widthAnchor),
       notice.leadingAnchor.constraint(equalTo: noticeRow.leadingAnchor, constant: 6), notice.trailingAnchor.constraint(equalTo: noticeRow.trailingAnchor, constant: -8),
       notice.topAnchor.constraint(equalTo: noticeRow.topAnchor), notice.bottomAnchor.constraint(equalTo: noticeRow.bottomAnchor),
@@ -239,7 +253,13 @@ final class ChatView: NSView, SheetContent {
     executionStatus.stringValue = executionText; executionStatus.toolTip = executionText
     executionRow.isHidden = hideExecution
     stopWork.isEnabled = model.connected && model.executionCanStop
-    if executionChanged { onResize?() }
+    let actionText = model.execution?.pendingAction?.description ?? ""
+    let decisionChanged = decisionText.stringValue != actionText || decisionRow.isHidden != (model.execution?.pendingAction == nil)
+    decisionText.stringValue = actionText; decisionText.toolTip = actionText
+    decisionRow.isHidden = model.execution?.pendingAction == nil
+    approveAction.isEnabled = model.connected && model.executionCanDecide
+    denyAction.isEnabled = model.connected && model.executionCanDecide
+    if executionChanged || decisionChanged { onResize?() }
     var keys = model.messages.suffix(60).map { "\($0.role)|\($0.at)|\($0.via)|\($0.text)|\($0.offered.joined(separator: "\u{1F}"))" }
     if let pending = model.pending { keys.append("pending|" + pending); keys.append("thinking") }
     if model.voice == .thinking && model.pending == nil { keys.append("thinking") }
@@ -278,6 +298,12 @@ final class ChatView: NSView, SheetContent {
 
   @objc private func closePressed() { onClose?() }
   @objc private func talkPressed() { onTalk?() }
+  @objc private func approveExecution() { decideExecution(true) }
+  @objc private func denyExecution() { decideExecution(false) }
+  private func decideExecution(_ approve: Bool) {
+    guard model.connected, model.executionCanDecide, let id = model.execution?.pendingAction?.id else { return }
+    onExecutionDecision?(id, approve)
+  }
   @objc private func stopWorkPressed() {
     guard model.connected, model.executionCanStop else { return }
     onStopWork?()

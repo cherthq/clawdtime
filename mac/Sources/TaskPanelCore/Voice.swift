@@ -41,15 +41,29 @@ public struct ChatTranscript: Codable, Equatable {
   }
 }
 /// Optional same-chat executor metadata. It grants no desktop or capture authority.
+public struct ChatPendingAction: Codable, Equatable {
+  public let id: String
+  public let description: String
+  public init(id: String, description: String) { self.id = id; self.description = description }
+  public func validate() throws {
+    guard id.range(of: "^[A-Za-z0-9_-]{1,160}$", options: .regularExpression) != nil,
+      (1...2000).contains(description.count), !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw PanelFailure.response
+    }
+  }
+}
 public struct ChatExecution: Codable, Equatable {
   public let configured: Bool
   public let state: String
   public let canStop: Bool
   public let message: String
-  public init(configured: Bool, state: String, canStop: Bool, message: String) {
-    self.configured = configured; self.state = state; self.canStop = canStop; self.message = message
+  public let pendingAction: ChatPendingAction?
+  public init(configured: Bool, state: String, canStop: Bool, message: String, pendingAction: ChatPendingAction? = nil) {
+    self.configured = configured; self.state = state; self.canStop = canStop; self.message = message; self.pendingAction = pendingAction
   }
   public func validate() throws {
+    try pendingAction?.validate()
+    guard pendingAction == nil || configured else { throw PanelFailure.response }
     guard (1...80).contains(state.count), !state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       state.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
       message.count <= 2000, configured || !canStop else { throw PanelFailure.response }
@@ -65,10 +79,33 @@ public struct ChatExecutionControl: Equatable {
   public private(set) var stopping = false
   public private(set) var awaitingRead = false
   public private(set) var notice: String?
+  public private(set) var deciding: String?
+  private var decisionGeneration: UInt64?
+  private var attemptedDecisions = Set<String>()
   public init() {}
+  public var canDecide: Bool {
+    guard let action = execution?.pendingAction else { return false }
+    return !stopping && !awaitingRead && deciding == nil && !attemptedDecisions.contains(action.id) && attemptedDecisions.count < 10000
+  }
+  @discardableResult public mutating func beginDecision(_ id: String) -> Bool {
+    guard canDecide, execution?.pendingAction?.id == id else { return false }
+    generation &+= 1; decisionGeneration = generation; deciding = id
+    attemptedDecisions.insert(id); notice = "Sending your decision."
+    return true
+  }
+  public mutating func finishDecision(_ id: String, value: ChatExecution?) {
+    guard deciding == id else { return }
+    deciding = nil
+    let admitted = decisionGeneration; decisionGeneration = nil
+    // Stop is independent and always wins over a late decision response.
+    guard admitted == generation else { return }
+    generation &+= 1
+    if let value { execution = value; notice = nil }
+    else { notice = "Action decision could not be confirmed. Checking status without sending it again." }
+  }
   public var canStop: Bool { execution?.canStop == true && !stopping && !awaitingRead }
   public mutating func receive(_ value: ChatExecution?, readGeneration: UInt64) {
-    guard generation == readGeneration, !stopping else { return }
+    guard generation == readGeneration, !stopping, deciding == nil else { return }
     execution = value; awaitingRead = false; notice = nil
   }
   @discardableResult public mutating func beginStop() -> Bool {

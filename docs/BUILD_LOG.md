@@ -1,5 +1,34 @@
 # Coding demo build log
 
+## November 20, 2026 — bundled computer runtime
+
+Added a separate app-owned desktop execution mode. The lead integrated contracts,
+bounded task state/receipts, native HTTP adapter, routes, packaging and protected
+model qualification; connector specialist built screenshot planning, isolated
+Chromium and compiled CLI startup; Mac specialist added local-task helper leases,
+capture/input exclusion and exact approval UI. Independent reviewers exercised
+engine cancellation/recovery, native identity, HTTP permissions and packaging.
+
+The real `gpt-4.1-mini` standalone task clicked, typed and saved an exact note on a
+disposable loopback fixture. Its server independently observed the saved value;
+the child service had no Codex environment, chat tools or queue dependency.
+Earlier fixture runs that fell outside exact grants stopped for approval without
+dispatch. Control grounding was improved; the grants were not broadened. Private
+qualification metadata was retained locally; no screenshots or personal data
+entered Git. Swift build and 158 tests passed. Native app packages built and
+passed strict signature verification with ad-hoc signatures only. Final
+`npm run check` passed 1,630 tests in 92 files, TypeScript and build. Changed
+TypeScript/JavaScript/JSON formatting and `git diff --check` passed. The production
+artifact repeated the model-driven fixture successfully using its bundled Node
+and Chromium with a system-only PATH; the exact saved value was independently
+confirmed again. Its compiled CLI also passed cold-start and authenticated
+readiness using a no-UI test panel, followed by confirmed owned-service cleanup.
+
+No installed service was replaced, no phone call or deployment occurred, and no
+native OS input or TCC change was performed. Native physical qualification,
+operator recovery UX, account setup and notarized distribution remain outstanding.
+See [BUNDLED_CUA.md](BUNDLED_CUA.md) for the executable test and packaging commands.
+
 ## November 20, 2026 — attached desktop executor
 
 Added an opt-in protected connection from native supervisor chat to one existing

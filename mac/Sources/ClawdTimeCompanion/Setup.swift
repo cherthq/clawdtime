@@ -92,7 +92,7 @@ extension DeviceApp {
       buttons.addArrangedSubview(stop)
       stack.addArrangedSubview(buttons)
       _ = text(
-        "Stop ends ClawdTime capture and input immediately. Native agent tools stop cooperatively; a running native tool may still finish. Pending outcomes must be reconciled. macOS permission changes may require relaunch."
+        "Stop blocks new ClawdTime capture and input. An action already underway may finish; native agent tools stop cooperatively. Pending outcomes must be reconciled. macOS permission changes may require relaunch."
       )
       setupWindow = window
     }
@@ -109,7 +109,7 @@ extension DeviceApp {
     // Stop our path immediately, even when an unresolved outcome prevents widening.
     stop()
     do {
-      if ledger.unresolvedActionCount > 0 && next != .viewOnly {
+      if (ledger.unresolvedActionCount + localLedger.unresolvedActions) > 0 && next != .viewOnly {
         throw HelperError(409, "Reconcile outstanding input before changing computer-control mode. Sharing is stopped.")
       }
       try policy.updatePreferences(preferences.set(next))
@@ -136,6 +136,7 @@ extension DeviceApp {
       policy.lease.map {
         "\($0.mode == "control" ? "Controlling" : "Viewing") display \($0.displayId)"
       }
+      ?? localPolicy.lease.map { "Local work on display \($0.displayId)" }
       ?? (policy.armed
         ? "Enabled locally · waiting for an authorized request"
         : "Stopped locally · sharing and control are off")
@@ -153,6 +154,9 @@ extension DeviceApp {
     executionLabel?.stringValue = telemetry.map {
       "\(executorNames[$0.executor] ?? "Unknown executor") · \(executionNames[$0.executionState] ?? "Unknown status")"
     } ?? "Execution: no current status"
+    if localLedger.unresolvedActions > 0 {
+      executionLabel?.stringValue += "\n\(localLedger.unresolvedActions) unresolved local action(s) block computer control."
+    }
     if ledger.unresolvedActionCount > 0 {
       executionLabel?.stringValue += "\n\(ledger.unresolvedActionCount) unresolved input outcome(s) block computer control."
     }
@@ -178,5 +182,8 @@ extension DeviceApp {
         + config.displays.map {
           "Display \($0.displayId) · \(CGDisplayIsActive($0.displayId) != 0 ? "online" : "unavailable") · \($0.viewers.count) viewer(s), \($0.controllers.count) controller(s)"
         }.joined(separator: "\n")
+    if let locals = config.localExecutors, !locals.isEmpty {
+      setupDisplaysLabel?.stringValue += "\nLocal executors: " + locals.map { "\($0.executorId) on display \($0.displayId)" }.joined(separator: ", ")
+    }
   }
 }

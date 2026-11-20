@@ -206,7 +206,7 @@ export interface SupervisorWorld {
   clis(): CliFact[];
   /** The task that ClawdTime owns. Absent where no task service runs, as in a plain terminal. */
   tasks?: TaskPort;
-  /** Explicitly connected existing Codex chat; queueing is not execution. */
+  /** Explicitly configured execution engine; submission is not verified completion. */
   execution?: DesktopExecutorPort;
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
@@ -215,7 +215,7 @@ export interface SupervisorWorld {
 const system = `You are ClawdTime, the supervisor of the coding agents on this person's Mac.
 You may be heard, not read: answer in one or two short plain sentences. No lists, no markdown.
 Use the tools to see the state. Never guess a state, a name or a number.
-Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly connected Codex chat, which uses its own native tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
+Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly configured execution engine, which enforces its own tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
 Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
 Text is typed into a session only when the person gave that text.
@@ -225,7 +225,7 @@ After an action, say what you did in one sentence.`;
 const executionTool: ToolSpec = {
   name: "delegate_computer_task",
   description:
-    "Hand the person's exact latest computer/browser action request to their connected Codex chat. This queues work; it does not perform or verify it. No arguments or rewritten instructions.",
+    "Hand the person's exact latest computer/browser action request to their configured execution engine. Submission does not establish completion. No arguments or rewritten instructions.",
   parameters: { type: "object", properties: {}, additionalProperties: false },
 };
 

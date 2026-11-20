@@ -396,6 +396,35 @@ describe("independent desktop service launcher", () => {
       expect(f.spawnMock).not.toHaveBeenCalled();
     },
   );
+  it("launches production JavaScript without a TS loader and preserves source mode", async () => {
+    const f = fixture();
+    mkdirSync(join(f.root, "scripts"));
+    const entry = join(f.root, "scripts/task-server.js");
+    writeFileSync(entry, "// compiled service fixture");
+    await f.run();
+    expect(f.spawnMock.mock.calls[0]![1].slice(0, 3)).toEqual([
+      entry,
+      "--state",
+      f.state,
+    ]);
+    expect(f.spawnMock.mock.calls[0]![1]).not.toContain("tsx");
+    const source = fixture();
+    mkdirSync(join(source.root, "scripts"));
+    writeFileSync(
+      join(source.root, "scripts/task-server.js"),
+      "// adjacent artifact",
+    );
+    writeFileSync(
+      join(source.root, "scripts/task-server.ts"),
+      "// source entry",
+    );
+    await source.run();
+    expect(source.spawnMock.mock.calls[0]![1].slice(0, 3)).toEqual([
+      "--import",
+      "tsx",
+      join(source.root, "scripts/task-server.ts"),
+    ]);
+  });
   it("starts simulation separately, then reopens against exactly the same service", async () => {
     const f = fixture();
     await f.run();

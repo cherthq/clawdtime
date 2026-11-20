@@ -20,21 +20,27 @@ public struct DisplayPermission: Codable {
     self.controllers = controllers
   }
 }
+public struct LocalExecutorPermission: Codable, Equatable {
+  public var executorId: String
+  public var displayId: UInt32
+  public init(executorId: String, displayId: UInt32) { self.executorId = executorId; self.displayId = displayId }
+}
 public struct HelperConfig: Codable {
   public var deviceId: String
   public var bind: String
   public var port: UInt16
   public var secret: String
   public var displays: [DisplayPermission]
+  public var localExecutors: [LocalExecutorPermission]?
   public init(
     deviceId: String, bind: String = "127.0.0.1", port: UInt16 = 4213, secret: String,
-    displays: [DisplayPermission]
+    displays: [DisplayPermission], localExecutors: [LocalExecutorPermission]? = nil
   ) {
     self.deviceId = deviceId
     self.bind = bind
     self.port = port
     self.secret = secret
-    self.displays = displays
+    self.displays = displays; self.localExecutors = localExecutors
   }
   public func validate() throws {
     let octets = bind.split(separator: ".").compactMap { UInt8($0) }
@@ -43,6 +49,12 @@ public struct HelperConfig: Codable {
       && octets.map(String.init).joined(separator: ".") == bind
     guard bind == "127.0.0.1" || tailnet else {
       throw HelperError(400, "Bind only to loopback or an explicit Tailscale IPv4 address.")
+    }
+    let locals = localExecutors ?? []
+    guard locals.count <= 32, locals.isEmpty || bind == "127.0.0.1",
+      Set(locals.map { "\($0.executorId):\($0.displayId)" }).count == locals.count,
+      locals.allSatisfy({ validID($0.executorId) && $0.displayId > 0 }) else {
+      throw HelperError(400, "Local executors require explicit unique display bindings and loopback.")
     }
     guard validID(deviceId), secret.utf8.count >= 32, port > 0,
       Set(displays.map(\.displayId)).count == displays.count,
@@ -180,6 +192,7 @@ public final class DevicePolicy {
   public private(set) var armed = false
   public private(set) var lease: Lease?
   public private(set) var frame: FrameStamp?
+  public private(set) var localSessionOwner: String?
   public private(set) var generation = 0
   private var retired = Set<String>()
   public init(config: HelperConfig, preferences: ControlPreferences? = nil) throws {
@@ -198,9 +211,19 @@ public final class DevicePolicy {
     preferences = next
   }
   public func arm() { armed = true }
+  public func claimLocal(_ id: String) throws {
+    guard lease == nil, localSessionOwner == nil || localSessionOwner == id else {
+      throw HelperError(409, "Another execution owner is active.")
+    }
+    localSessionOwner = id
+  }
+  public func releaseLocal(_ id: String) {
+    if localSessionOwner == id { localSessionOwner = nil; generation += 1 }
+  }
   public func stop(disarm: Bool = false) {
     if let lease { retired.insert(lease.id) }
     lease = nil
+    localSessionOwner = nil
     frame = nil
     generation += 1
     if disarm { armed = false }
@@ -258,6 +281,7 @@ public final class DevicePolicy {
   {
     try check(now: now, sessionAvailable: sessionAvailable)
     try authorize(proposed, now: now, accessibility: accessibility)
+    guard localSessionOwner == nil else { throw HelperError(409, "A local executor owns the screen.") }
     guard !retired.contains(proposed.id) else {
       throw HelperError(409, "A stopped lease cannot be resumed.")
     }

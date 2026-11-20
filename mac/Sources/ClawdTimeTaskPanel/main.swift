@@ -279,6 +279,7 @@ import TaskPanelCore
     chat.onSend = { [weak self] text in self?.sendChat(text) }
     chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
     chat.onStopWork = { [weak self] in self?.stopExecution() }
+    chat.onExecutionDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
     let view = boardPanel.view
     view.onOpenSession = { [weak self] id in self?.openAgent(id) }
@@ -344,6 +345,16 @@ import TaskPanelCore
       executionControl.receive(fresh.execution, readGeneration: generation)
     }
   }
+  private func decideExecution(_ id: String, approve: Bool) {
+    guard let client, state.connected, executionControl.beginDecision(id) else { return }
+    renderChat()
+    Task {
+      let result = try? await client.decideExecution(actionId: id, approve: approve)
+      executionControl.finishDecision(id, value: result)
+      renderChat()
+      await readChat(client); renderChat()
+    }
+  }
   private func stopExecution() {
     guard let client, state.connected, executionControl.beginStop() else { return }
     renderChat()
@@ -375,6 +386,7 @@ import TaskPanelCore
     model.execution = executionControl.execution
     model.executionStopping = executionControl.stopping
     model.executionCanStop = executionControl.canStop
+    model.executionCanDecide = executionControl.canDecide
     model.executionNotice = executionControl.notice
     chatPanel.view.render(model)
   }

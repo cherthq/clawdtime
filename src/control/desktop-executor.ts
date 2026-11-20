@@ -9,6 +9,7 @@ export interface DesktopExecutionSnapshot {
   state: string;
   canStop: boolean;
   message: string;
+  pendingAction?: { id: string; description: string };
 }
 export interface DesktopExecutorPort {
   snapshot(): DesktopExecutionSnapshot;
