@@ -14,11 +14,14 @@ dark mode, Fraunces for the headline, Instrument Sans for the interface and
 JetBrains Mono for times and paths. The three typefaces ship inside the app
 under the SIL Open Font License.
 
-The mascot is real 3D, built in code, so it is sharp at every size. Its eyes
-follow the pointer and blink, and its light is the status: warm at rest, blue
-while agents work, amber when something waits for the person, red while the
-screen is shared. The person picks a style in the mascot's menu, where each
-style shows its picture:
+The mascot is drawn in code, so it is sharp at every size. It has two looks, and
+the person picks one in the mascot's menu. Flat is the default: each mascot is a
+few solid shapes with one edge around them, in the language of the Chert mark,
+with no light, shadow or reflection. 3D is the same mascot as a lit figure. In
+both, the eyes follow the pointer and blink, and the light is the status: warm
+at rest, blue while agents work, amber when something waits for the person, red
+while the screen is shared. The person picks a style in the same menu, where
+each style shows its picture:
 
 | Style | What it is |
 |---|---|

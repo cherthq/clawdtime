@@ -40,6 +40,7 @@ import TaskPanelCore
   private var stopSharingItems: [NSMenuItem] = []
   private var stopCallItems: [NSMenuItem] = []
   private var styleItems: [NSMenuItem] = []
+  private var lookItems: [NSMenuItem] = []
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // An accessory: no Dock icon and no menu bar takeover. It lives beside the work.
@@ -66,6 +67,13 @@ import TaskPanelCore
     let styleMenu = NSMenu(title: "Mascot")
     // Each style shows its picture. The pictures are drawn when the menu first opens.
     styleMenu.delegate = self
+    // The look comes first: flat shapes, or the lit 3D figure.
+    for look in MascotLook.allCases {
+      let item = styleMenu.addItem(withTitle: look.title, action: #selector(chooseLook(_:)), keyEquivalent: "")
+      item.target = self; item.representedObject = "look:" + look.rawValue
+      lookItems.append(item)
+    }
+    styleMenu.addItem(.separator())
     for style in MascotStyle.allCases {
       let item = styleMenu.addItem(withTitle: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
       if #available(macOS 14.4, *) { item.subtitle = style.summary } else { item.title = style.title + ": " + style.summary }
@@ -131,10 +139,15 @@ import TaskPanelCore
     return image
   }
   func menuWillOpen(_ menu: NSMenu) {
-    for item in menu.items where item.image == nil {
+    for item in menu.items {
       guard let raw = item.representedObject as? String, let style = MascotStyle(rawValue: raw) else { continue }
-      item.image = MascotCatalog.thumbnail(style)
+      // The picture shows the style in the look that is chosen now.
+      item.image = pet.look == .flat ? MascotCatalog.flatImage(style) : MascotCatalog.thumbnail(style)
     }
+  }
+  @objc private func chooseLook(_ sender: NSMenuItem) {
+    guard let raw = sender.representedObject as? String, let look = MascotLook(rawValue: String(raw.dropFirst(5))) else { return }
+    pet.look = look; refreshMenus()
   }
   @objc private func chooseStyle(_ sender: NSMenuItem) {
     guard let raw = sender.representedObject as? String, let style = MascotStyle(rawValue: raw) else { return }
@@ -142,6 +155,7 @@ import TaskPanelCore
   }
   private func refreshMenus() {
     for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
+    for item in lookItems { item.state = (item.representedObject as? String) == "look:" + pet.look.rawValue ? .on : .off }
     for item in awayItems {
       item.state = decisions?.away == true ? .on : .off
       item.title = decisions?.callReady == false ? "Away: answer by phone (no phone link yet)" : "Away: answer by phone"

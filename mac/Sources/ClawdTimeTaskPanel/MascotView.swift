@@ -2,19 +2,30 @@ import AppKit
 import SceneKit
 import TaskPanelCore
 
-/// The live mascot: the 3D stone, its shadow, and the clock that moves both.
+/// The live mascot and the clock that moves it. It is drawn flat, as solid shapes,
+/// or as the lit 3D figure: the pose, the mood and the body's physics are the same.
 final class MascotView: NSView {
-  private(set) var mascot: MascotFigure = MascotCatalog.make(.flint)
+  /// The lit 3D figure. It is built only when the person chooses that look.
+  private var solid: MascotFigure?
+  private let flat = FlatMascotView()
+  /// Flat shapes, or the 3D figure.
+  var look = MascotLook.flat { didSet { if look != oldValue { rebuild() } } }
   /// Changes the drawing. The pose, the mood and the clock carry over.
-  var style = MascotStyle.flint {
-    didSet {
-      guard style != oldValue else { return }
-      mascot = MascotCatalog.make(style)
-      mascot.set(mood: mood)
-      scene.scene = mascot.scene; scene.pointOfView = mascot.camera
-      lastPose = nil
-      setAccessibilityLabel("ClawdTime, " + style.title)
+  var style = MascotStyle.flint { didSet { if style != oldValue { rebuild() } } }
+  private func rebuild() {
+    lastPose = nil
+    jelly(stretch: 0, angle: 0)
+    flat.isHidden = look != .flat; scene.isHidden = look == .flat; deskShadow.isHidden = look == .flat
+    if look == .flat {
+      flat.figure = MascotCatalog.flat(style); flat.mood = mood
+      solid = nil; scene.scene = nil
+    } else {
+      let figure = MascotCatalog.make(style)
+      figure.set(mood: mood)
+      solid = figure; scene.scene = figure.scene; scene.pointOfView = figure.camera
+      flat.figure = nil
     }
+    setAccessibilityLabel("ClawdTime, " + style.title)
   }
   let clock = FrameClock()
   private let scene = SCNView()
@@ -23,7 +34,7 @@ final class MascotView: NSView {
   /// edge of the window ends softly and never shows the window's square.
   private let feather = CALayer()
   private var animator = MascotAnimator(seed: UInt64(Date().timeIntervalSince1970 * 1000) & 0xFFFF_FFFF)
-  var mood = MascotMood.idle { didSet { if mood != oldValue { mascot.set(mood: mood) } } }
+  var mood = MascotMood.idle { didSet { if mood != oldValue { solid?.set(mood: mood); flat.mood = mood; lastPose = nil } } }
   var hovering = false
   var pressed = false
   var dragVelocity = CGVector.zero
@@ -50,7 +61,6 @@ final class MascotView: NSView {
     deskShadow.contents = Self.shadowImage()
     deskShadow.opacity = 0.9
     layer?.addSublayer(deskShadow)
-    scene.scene = mascot.scene; scene.pointOfView = mascot.camera
     scene.backgroundColor = .clear
     scene.antialiasingMode = .multisampling4X
     scene.rendersContinuously = false; scene.isPlaying = false
@@ -61,6 +71,10 @@ final class MascotView: NSView {
     feather.contents = Self.featherImage()
     feather.contentsCenter = CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.2)
     scene.layer?.mask = feather
+    flat.wantsLayer = true; flat.layerContentsRedrawPolicy = .onSetNeedsDisplay
+    flat.autoresizingMask = [.width, .height]; flat.frame = bounds
+    addSubview(flat)
+    rebuild()
     setAccessibilityElement(true); setAccessibilityRole(.button); setAccessibilityLabel("ClawdTime")
   }
   required init?(coder: NSCoder) { fatalError("Unavailable") }
@@ -80,8 +94,8 @@ final class MascotView: NSView {
   private func jelly(stretch: Double, angle: Double) {
     guard abs(stretch - shownStretch) > 0.001 || (stretch == 0 && shownStretch != 0) else { return }
     shownStretch = stretch
-    guard let layer = scene.layer else { return }
-    let box = scene.bounds
+    guard let layer = (look == .flat ? flat : scene).layer else { return }
+    let box = bounds
     var transform = CGAffineTransform.identity
     if stretch > 0.001 {
       let long = CGFloat(1 + stretch), thin = 1 / long
@@ -149,8 +163,10 @@ final class MascotView: NSView {
     input.gait = motion.gait; input.gaitPhase = motion.gaitPhase; input.held = held
     var pose = animator.step(step, input)
     pose.roll += lean
-    if pose != lastPose {
-      mascot.apply(pose); lastPose = pose
+    if pose != lastPose, look == .flat {
+      flat.pose = pose; lastPose = pose
+    } else if pose != lastPose {
+      solid?.apply(pose); lastPose = pose
       // The shadow stays on the desk: it shrinks and fades as the stone rises.
       let height = CGFloat(max(0, pose.bob + pose.lift + 0.05))
       let width = bounds.width * 0.46 * (1 - min(0.4, height * 0.7)) * CGFloat(pose.scale)
