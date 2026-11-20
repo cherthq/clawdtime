@@ -1,6 +1,10 @@
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
+  AppleEventsBrowser,
+  probeScript,
+} from "../connectors/computer/browser.js";
+import {
   pageHelpers,
   pageLimits,
   pageScript,
@@ -1779,5 +1783,168 @@ describe("the page script: scroll and back", () => {
       error: "This tab has no earlier page.",
     });
     expect(page.log).toHaveLength(1);
+  });
+});
+
+/**
+ * The driver with a browser on paper that holds a hand-made page. The runner
+ * does what the browser does with the command: it runs the last argument, the
+ * page script, in the page that is in front, and prints its value.
+ */
+function world(first: FakePage) {
+  const state = {
+    page: first,
+    /** Called after each wait of the driver, with the count of waits so far. */
+    afterWait: (_count: number) => {},
+  };
+  const commands: string[][] = [];
+  const slept: number[] = [];
+  let time = 0;
+  const browser = new AppleEventsBrowser(
+    async (command, args) => {
+      commands.push([command, ...args]);
+      if (args[1] === probeScript)
+        return { status: 0, stdout: "front com.google.Chrome\n" };
+      return {
+        status: 0,
+        stdout: `${String(state.page.evaluate(args[2]!))}\n`,
+      };
+    },
+    {
+      now: () => time,
+      sleep: async (ms) => {
+        slept.push(ms);
+        time += ms;
+        state.afterWait(slept.length);
+      },
+    },
+  );
+  return { browser, state, commands, slept };
+}
+
+describe("the driver and the page script together", () => {
+  it("brings what the worker types to the field unchanged, whatever it holds", async () => {
+    const notes = textarea({ id: "notes", "aria-label": "Notes" });
+    const { browser, commands } = world(new FakePage(notes));
+    const text = `He said "hi" \\ 'yes'\nline two\r\n\ttab \u2028 \u00e9 \u65e5\u672c \u{1f600} \`tick\` \${x} $(id) " & quit & " </script> ${String.fromCharCode(0)} end`;
+    const [field] = (await browser.read()).elements;
+    const after = await browser.type(field!.index, text, false);
+    expect(notes.value).toBe(text);
+    expect(after.elements[0]!.value).toBe(pageHelpers.oneLine(text, 200));
+    // Every argument of every command holds plain characters only.
+    expect(commands.length).toBeGreaterThan(3);
+    for (const [command, ...args] of commands) {
+      expect(command).toBe("/usr/bin/osascript");
+      for (const arg of args) expect(arg).toMatch(/^[\x20-\x7e\n]*$/);
+    }
+  });
+
+  it("brings a very long text whole", async () => {
+    const notes = textarea({ "aria-label": "Notes" });
+    const { browser } = world(new FakePage(notes));
+    const text = "row \u65e5 ".repeat(20_000);
+    await browser.read();
+    await browser.type(1, text, false);
+    expect(notes.value).toHaveLength(120_000);
+    expect(notes.value).toBe(text);
+  });
+
+  it("never lets a number of an older page name an element of the page now", async () => {
+    const first = new FakePage(
+      h("button", { id: "archive" }, "Archive"),
+      h("button", { id: "keep" }, "Keep"),
+    );
+    const { browser, state } = world(first);
+    const before = await browser.read();
+    expect(before.elements.map((element) => element.index)).toEqual([1, 2]);
+    // The browser shows another document now.
+    const second = new FakePage(
+      h("button", { id: "delete" }, "Delete everything"),
+      h("button", { id: "cancel" }, "Cancel"),
+    );
+    state.page = second;
+    await expect(browser.click(1)).rejects.toThrow(
+      "Number 1 is not on the page any more. Read the page again and use a number from that reading.",
+    );
+    await expect(browser.type(2, "x", true)).rejects.toThrow(
+      "Number 2 is not on the page any more.",
+    );
+    expect(second.log).toEqual([]);
+    const after = await browser.read();
+    expect(
+      after.elements.map((element) => [element.label, element.index]),
+    ).toEqual([
+      ["Delete everything", 3],
+      ["Cancel", 4],
+    ]);
+    // Back on the first document, its elements still carry their numbers.
+    state.page = first;
+    await browser.click(2);
+    expect(first.log).toContain("click@keep");
+    await expect(browser.click(3)).rejects.toThrow(
+      "Number 3 is not on the page any more.",
+    );
+  });
+
+  it("returns the page that a link leads to, once it is there and loaded", async () => {
+    const link = h(
+      "a",
+      { id: "next", href: "https://example.test/next" },
+      "Next",
+    );
+    const first = new FakePage(link);
+    // A real page starts to leave when its link is followed.
+    link.addEventListener("click", () => first.fire("beforeunload"));
+    const second = new FakePage(
+      h("h1", {}, "Arrived"),
+      h("button", {}, "Continue"),
+    );
+    second.url = "https://example.test/next";
+    second.title = "The next page";
+    second.readyState = "loading";
+    const { browser, state, slept } = world(first);
+    await browser.read();
+    state.afterWait = (count) => {
+      // The old page stays for two looks. Then the new one is there, and loads.
+      if (count === 3) state.page = second;
+      if (count === 4) second.readyState = "complete";
+    };
+    expect(await browser.click(1)).toEqual({
+      browser: "chrome",
+      title: "The next page",
+      url: "https://example.test/next",
+      text: "Arrived Continue",
+      elements: [entry({ index: 2, label: "Continue" })],
+    });
+    expect(first.followed).toEqual(["https://example.test/next"]);
+    expect(slept).toEqual([150, 250, 250, 250]);
+  });
+
+  it("refuses a password field through the driver, and never shows what it holds", async () => {
+    const secret = input({
+      type: "password",
+      "aria-label": "Password",
+      value: "hunter2",
+    });
+    const { browser, commands } = world(new FakePage(secret));
+    expect(await browser.doctor()).toEqual({
+      ok: true,
+      browser: "Google Chrome",
+      reason: "Google Chrome can be read and operated.",
+    });
+    expect((await browser.read()).elements).toEqual([
+      entry({
+        tag: "input",
+        role: "textbox",
+        label: "Password",
+        password: true,
+      }),
+    ]);
+    await expect(browser.type(1, "guess", true)).rejects.toThrow(
+      'Number 1, "Password", is a password field. The worker never types a password: ask the person to type it.',
+    );
+    expect(secret.value).toBe("hunter2");
+    expect(secret.owner!.log).toEqual([]);
+    expect(commands.length).toBeGreaterThan(0);
   });
 });
