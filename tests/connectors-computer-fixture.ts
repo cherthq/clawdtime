@@ -149,7 +149,7 @@ export const page = (
 export class FakeBrowser implements BrowserPort {
   readonly calls: string[] = [];
   constructor(public current: BrowserPage = page()) {}
-  async doctor() {
+  async doctor(): ReturnType<BrowserPort["doctor"]> {
     return { ok: true, browser: "chrome", reason: "" };
   }
   async open(url: string) {
