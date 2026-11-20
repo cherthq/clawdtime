@@ -26,6 +26,9 @@ import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
+import { realSystem, type System } from "./system.js";
+import { titleReader } from "./topics.js";
+import { sessionWindow } from "./windows.js";
 import { rememberable } from "./trove.js";
 import type { TaskPort } from "./tasks.js";
 import {
@@ -176,8 +179,11 @@ export class BoardFeed implements AgentBoardPort {
       notify?: (incident: Incident, sentence: string) => Promise<unknown>;
       /** Whether a process of this Mac still runs, for the watcher. Tests script it. */
       exists?: (pid: number) => boolean;
+      /** Reads the title that a session shows in its terminal. Tests script it. */
+      system?: System;
     } = {},
   ) {
+    this.titles = titleReader(options.system ?? realSystem());
     this.root =
       options.root ?? stateRoot({ env: process.env, home: homedir() });
     this.desk = new DecisionDesk(this.root, options.now ?? Date.now);
@@ -217,6 +223,16 @@ export class BoardFeed implements AgentBoardPort {
         focus: (session) => this.focusOne(session),
         send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
+        // A session of a remote Mac shows its title there: only its name is known here.
+        titles: (session) =>
+          session.host ? [title(session)] : this.titles(session),
+        window: (session, action) =>
+          sessionWindow(
+            session,
+            action,
+            options.runner ?? realRunner,
+            this.titles(session),
+          ),
         ...(options.tasks ? { tasks: options.tasks } : {}),
         ...(options.execution ? { execution: options.execution } : {}),
         incidents: () => this.incidents().incidents.map((item) => item.text),
@@ -274,9 +290,11 @@ export class BoardFeed implements AgentBoardPort {
   private readonly book: HostBook;
   private readonly remoteDesk: RemoteDesk;
   /** A session of this Mac comes forward here. One of a remote Mac opens in a new window over ssh. */
+  private readonly titles: (session: AgentSession) => string[];
   private async focusOne(session: AgentSession) {
     const run = this.options.runner ?? realRunner;
-    if (!session.host) return focusSession(session, run);
+    if (!session.host)
+      return focusSession(session, run, "tmux", this.titles(session));
     const host = this.book.get(session.host);
     return host
       ? focusRemote(host, session, run, this.root)

@@ -78,6 +78,68 @@ end run`,
 };
 scripts.iTerm = scripts.iTerm2!;
 
+/**
+ * Ghostty before release 1.4 names no TTY. Its terminals are listed by id and
+ * by the title that each one shows. The separator is made outside the tell
+ * block: inside it, "tab" is a Ghostty object.
+ */
+const ghosttyList = `on run argv
+  set sep to character id 9
+  set out to ""
+  tell application "Ghostty"
+    repeat with t in terminals
+      set out to out & (id of t) & sep & (name of t) & linefeed
+    end repeat
+  end tell
+  return out
+end run`;
+/** Takes the id as an argument. The id is never placed inside the script text. */
+const ghosttyFocus = `on run argv
+  set wanted to item 1 of argv
+  tell application "Ghostty"
+    set matches to every terminal whose id is wanted
+    if (count of matches) is 0 then return "missing"
+    focus (item 1 of matches)
+    activate
+    return "ok"
+  end tell
+end run`;
+/** A title as it is compared: a terminal puts a state mark before the title that the session set. */
+const bare = (value: string) =>
+  value
+    .replace(/\p{C}/gu, " ")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+/**
+ * The id of the one Ghostty terminal that shows one of these titles. null when
+ * no terminal shows one, or when more than one does: a part of a title is not
+ * a title, and two equal titles name no terminal.
+ */
+export async function ghosttyTerminal(
+  run: Runner,
+  titles: string[],
+): Promise<string | null> {
+  const wanted = new Set(titles.map(bare).filter(Boolean));
+  if (!wanted.size) return null;
+  const listed = await run("/usr/bin/osascript", ["-e", ghosttyList], 5000);
+  if (listed.status !== 0) return null;
+  const found = new Set<string>();
+  for (const line of listed.stdout.split("\n").slice(0, 400)) {
+    const cut = line.indexOf("\t");
+    if (cut <= 0) continue;
+    const id = line.slice(0, cut);
+    if (
+      /^[0-9A-Za-z._:-]{1,80}$/.test(id) &&
+      wanted.has(bare(line.slice(cut + 1)))
+    )
+      found.add(id);
+  }
+  return found.size === 1 ? [...found][0]! : null;
+}
+
 export interface FocusResult {
   ok: boolean;
   /**
@@ -97,6 +159,8 @@ export async function focusSession(
   session: AgentSession,
   run: Runner = realRunner,
   tmuxBinary = "tmux",
+  /** The name of the session and the title it shows in its terminal: see topics.ts. */
+  titles: string[] = [],
 ): Promise<FocusResult> {
   const { terminal } = session;
   // A session of a remote Mac has no window here: see focusRemote in hosts.ts.
@@ -126,6 +190,18 @@ export async function focusSession(
       5000,
     );
     tab = result.status === 0 && result.stdout.trim() === "ok";
+  }
+  // A Ghostty that names no TTY: the terminal is found by the title it shows.
+  if (!tab && !terminal.tmux && terminal.app === "Ghostty" && titles.length) {
+    const id = await ghosttyTerminal(run, titles);
+    if (id) {
+      const result = await run(
+        "/usr/bin/osascript",
+        ["-e", ghosttyFocus, id],
+        5000,
+      );
+      tab = result.status === 0 && result.stdout.trim() === "ok";
+    }
   }
   let app = tab;
   if (!tab && terminal.appPath)

@@ -456,7 +456,8 @@ describe("the ClawdTime agent", () => {
     ).map((message) => message.content);
     expect(results).toEqual([
       "Opened docs.",
-      "No single session has that name.",
+      // "d" names no single session. The person's own words name docs.
+      "Opened docs.",
       "Kept in the trove as a critical decision.",
       // The person said nothing about being away: the model alone changes nothing.
       "The person did not ask for away mode. Ask them.",

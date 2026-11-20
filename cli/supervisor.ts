@@ -65,6 +65,14 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
+import {
+  checkTexts,
+  TextChannel,
+  textSettings,
+} from "../connectors/agents/texts.js";
+import { titleReader } from "../connectors/agents/topics.js";
+import { sessionWindow } from "../connectors/agents/windows.js";
 import type {
   AgentSession,
   BoardSnapshot,
@@ -78,6 +86,8 @@ export interface SupervisorDependencies {
   findSession: (snapshot: BoardSnapshot, query: string) => AgentSession;
   /** The language model of the ClawdTime agent. Tests script it. */
   model?: ModelClient | null;
+  /** The HTTP client of the text message channel. Tests script it. */
+  request?: typeof fetch;
 }
 
 /**
@@ -148,6 +158,8 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
   chat [TEXT]                          talk to ClawdTime in text: it answers and can act
   talk                                 the same by voice: you speak, it speaks back
+  jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
+  texts run | check                    answer your text messages on your Chert line (check sends nothing)
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
   agents call check                    ask the backend whether a call would work now; no call is placed
 ID is the request's id, or its first four characters or more, as \`agents pending\` prints it.`;
@@ -303,6 +315,21 @@ export function nextSteps(
   return steps;
 }
 
+/**
+ * The jobs of this Mac. A session works in the folder that the command was
+ * started in, with the person's own coding agent.
+ */
+function jobsFor(system: System, root: string, runner: Runner) {
+  const agent = system.env.CLAWDTIME_JOB_AGENT as JobAgent | undefined;
+  return new Jobs(root, {
+    project: system.env.CLAWDTIME_JOB_PROJECT || process.cwd(),
+    now: () => system.now(),
+    run: runner,
+    agent: agent && jobAgents.includes(agent) ? agent : "claude",
+    terminal: system.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
+  });
+}
+
 export async function supervisorCli(
   group: string,
   args: string[],
@@ -313,6 +340,18 @@ export async function supervisorCli(
   const desk = new DecisionDesk(root, () => system.now());
   const trove = desk.trove;
   const command = args[0] ?? "";
+
+  if (group === "jobs") {
+    const { flags } = split(args, ["json"], []);
+    const list = jobsFor(system, root, runner).recent(20);
+    if (flags.json) return print(JSON.stringify(list, null, 2));
+    if (!list.length) return print("ClawdTime started no job yet.");
+    for (const job of list)
+      print(
+        `${job.done ? "DONE   " : "WORKING"}  ${job.id}  ${job.job.slice(0, 80)}${job.done ? `\n         ${(job.result ?? "").slice(0, 300)}` : ""}`,
+      );
+    return;
+  }
 
   if (group === "agents") {
     if (command === "pending") {
@@ -452,6 +491,7 @@ export async function supervisorCli(
           );
         const board = () =>
           new BoardScanner(system, { includeHeadless: false }).scan();
+        const titles = titleReader(system);
         const key =
           system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
         const supervisor = new Supervisor(
@@ -459,10 +499,15 @@ export async function supervisorCli(
             now: () => system.now(),
             board,
             desk,
-            focus: (session) => focusSession(session, runner),
+            focus: (session) =>
+              focusSession(session, runner, "tmux", titles(session)),
             send: (session, text) =>
               sendText(session, text, { enter: true }, runner),
             clis: () => inventory(system, board()),
+            titles,
+            window: (session, action) =>
+              sessionWindow(session, action, runner, titles(session)),
+            jobs: jobsFor(system, root, runner),
           },
           key
             ? new OpenAIModel(
@@ -740,9 +785,10 @@ export async function supervisorCli(
     return;
   }
 
-  if (group === "chat" || group === "talk") {
+  if (group === "chat" || group === "talk" || group === "texts") {
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();
+    const titles = titleReader(system);
     const key =
       system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
     const supervisor = new Supervisor(
@@ -750,10 +796,15 @@ export async function supervisorCli(
         now: () => system.now(),
         board,
         desk,
-        focus: (session) => focusSession(session, runner),
+        focus: (session) =>
+          focusSession(session, runner, "tmux", titles(session)),
         send: (session, text) =>
           sendText(session, text, { enter: true }, runner),
         clis: () => inventory(system, board()),
+        titles,
+        window: (session, action) =>
+          sessionWindow(session, action, runner, titles(session)),
+        jobs: jobsFor(system, root, runner),
       },
       deps.model !== undefined
         ? deps.model
@@ -777,6 +828,49 @@ export async function supervisorCli(
       log.append({ role: "assistant", text: answer, at: system.now(), via });
       return answer;
     };
+    if (group === "texts") {
+      const found = textSettings(system.env);
+      if ("missing" in found)
+        throw new Error(
+          `Text messages need these settings in the environment: ${found.missing.join(", ")}. See SETUP_CLAWDTIME.md.`,
+        );
+      if (command === "check") {
+        // One read of the messages. It writes nothing, runs no work and sends nothing.
+        const state = await checkTexts(found.settings, deps.request);
+        return print(
+          state === "ok"
+            ? "The key works and the messages can be read. Run: clawdtime texts run"
+            : state === "refused"
+              ? "The project API key was refused. Make a key with read and write access, and check the project id."
+              : "The messages could not be read now. Check the network and CHERT_API_BASE, then try again.",
+        );
+      }
+      if (command !== "run")
+        throw new Error("Use: clawdtime texts run, or clawdtime texts check");
+      const channel = new TextChannel({
+        settings: found.settings,
+        root,
+        now: () => system.now(),
+        answer: (words) => turn(words, "chat"),
+        jobs: () => jobsFor(system, root, runner).recent(20),
+        ...(deps.request ? { request: deps.request } : {}),
+        log: (line) => print(`${new Date(system.now()).toISOString()} ${line}`),
+      });
+      if (!supervisor.ready)
+        print(
+          "No language model key is set: I tell the state and take a clear approve or deny.",
+        );
+      print("Listening for your text messages. Ctrl+C stops it.");
+      const stop = new AbortController();
+      process.once("SIGINT", () => stop.abort());
+      process.once("SIGTERM", () => stop.abort());
+      const ended = await channel.run(stop.signal);
+      if (ended === "refused") {
+        process.exitCode = 3;
+        print("The project API key was refused. The channel stopped.");
+      }
+      return supervisor.learning;
+    }
     if (group === "chat") {
       if (args.length) {
         print(await turn(args.join(" "), "chat"));
