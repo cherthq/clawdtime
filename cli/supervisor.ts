@@ -71,7 +71,7 @@ import {
   TextChannel,
   textSettings,
 } from "../connectors/agents/texts.js";
-import { titleReader } from "../connectors/agents/topics.js";
+import { tabTitles, titleReader } from "../connectors/agents/topics.js";
 import { sessionWindow } from "../connectors/agents/windows.js";
 import type {
   AgentSession,
@@ -500,13 +500,23 @@ export async function supervisorCli(
             board,
             desk,
             focus: (session) =>
-              focusSession(session, runner, "tmux", titles(session)),
+              focusSession(
+                session,
+                runner,
+                "tmux",
+                tabTitles(session, titles(session)),
+              ),
             send: (session, text) =>
               sendText(session, text, { enter: true }, runner),
             clis: () => inventory(system, board()),
             titles,
             window: (session, action) =>
-              sessionWindow(session, action, runner, titles(session)),
+              sessionWindow(
+                session,
+                action,
+                runner,
+                tabTitles(session, titles(session)),
+              ),
             jobs: jobsFor(system, root, runner),
           },
           key
@@ -797,13 +807,23 @@ export async function supervisorCli(
         board,
         desk,
         focus: (session) =>
-          focusSession(session, runner, "tmux", titles(session)),
+          focusSession(
+            session,
+            runner,
+            "tmux",
+            tabTitles(session, titles(session)),
+          ),
         send: (session, text) =>
           sendText(session, text, { enter: true }, runner),
         clis: () => inventory(system, board()),
         titles,
         window: (session, action) =>
-          sessionWindow(session, action, runner, titles(session)),
+          sessionWindow(
+            session,
+            action,
+            runner,
+            tabTitles(session, titles(session)),
+          ),
         jobs: jobsFor(system, root, runner),
       },
       deps.model !== undefined

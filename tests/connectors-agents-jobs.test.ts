@@ -420,3 +420,81 @@ describe("the brain hands work to a job", () => {
     expect(run.results[0]).toBe("I cannot open a terminal window from here.");
   });
 });
+
+describe("the gate of a job, after an independent review", () => {
+  it.each([
+    "Thanks for the update",
+    "Do not build the landing page yet",
+    "Never mind, forget that",
+    "Should we delete the production database?",
+    "Tell me the status",
+    "Is the build done yet",
+    "Build the page? no, wait",
+  ])("starts no job for %j, whatever the model asks", async (words) => {
+    const { value, started } = world();
+    const run = scripted([[call("start_job")], "Nothing started."]);
+    await new Supervisor(value, run.model).reply([], words, "call");
+    expect(started).toEqual([]);
+  });
+
+  it.each([
+    "Can you open a tunnel for port 3000 and give me the link?",
+    "Okay, restart the dev server",
+    "Open Chrome, go to the docs and tell me the top heading",
+  ])("still starts a job for %j", async (words) => {
+    const { value, started } = world();
+    const run = scripted([[call("start_job")], "Started."]);
+    await new Supervisor(value, run.model).reply([], words, "call");
+    expect(started).toEqual([words]);
+  });
+
+  it("starts no job from a sentence that answers a waiting agent request", async () => {
+    const { value, started } = world();
+    const request = value.desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: {
+        kind: "permission",
+        tool: "Bash",
+        summary: "git push origin main",
+        options: [],
+      },
+      holdSeconds: 45,
+    });
+    const run = scripted([
+      [
+        call("decide", { request: request.id, decision: "allow" }),
+        call("start_job", {}, "c-2"),
+      ],
+      "Done.",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "Yes, update the config",
+      "call",
+    );
+    expect(value.desk.pending()).toHaveLength(0);
+    expect(started).toEqual([]);
+  });
+
+  it("leaves a job of an earlier day out of the status, and still gives it when asked", async () => {
+    const old: JobFacts = {
+      id: "20261119T010000-ab12",
+      job: "Open a tunnel for port 3000",
+      startedAt: now - 2 * 24 * 60 * 60 * 1000,
+      done: true,
+      result: "The tunnel was up.",
+    };
+    const { value } = world([old]);
+    expect(new Supervisor(value, null).status()).not.toContain("tunnel");
+    const run = scripted([[call("job_result")], "Here."]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "what did it find",
+      "call",
+    );
+    expect(run.results[0]).toContain("The tunnel was up.");
+  });
+});

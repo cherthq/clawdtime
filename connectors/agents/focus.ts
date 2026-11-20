@@ -80,15 +80,18 @@ scripts.iTerm = scripts.iTerm2!;
 
 /**
  * Ghostty before release 1.4 names no TTY. Its terminals are listed by id and
- * by the title that each one shows. The separator is made outside the tell
+ * by the title that each one shows. The separators are the two control
+ * characters for a unit and a record, which no title holds: a title with a
+ * line break or a tab cannot make a second row. They are made outside the tell
  * block: inside it, "tab" is a Ghostty object.
  */
 const ghosttyList = `on run argv
-  set sep to character id 9
+  set fieldMark to character id 31
+  set rowMark to character id 30
   set out to ""
   tell application "Ghostty"
     repeat with t in terminals
-      set out to out & (id of t) & sep & (name of t) & linefeed
+      set out to out & (id of t) & fieldMark & (name of t) & rowMark
     end repeat
   end tell
   return out
@@ -127,13 +130,14 @@ export async function ghosttyTerminal(
   const listed = await run("/usr/bin/osascript", ["-e", ghosttyList], 5000);
   if (listed.status !== 0) return null;
   const found = new Set<string>();
-  for (const line of listed.stdout.split("\n").slice(0, 400)) {
-    const cut = line.indexOf("\t");
+  for (const row of listed.stdout.split("\u001e").slice(0, 400)) {
+    const cut = row.indexOf("\u001f");
     if (cut <= 0) continue;
-    const id = line.slice(0, cut);
+    const id = row.slice(0, cut).trim();
+    // An id is a plain word. It never starts with a dash, which a command would read as an option.
     if (
-      /^[0-9A-Za-z._:-]{1,80}$/.test(id) &&
-      wanted.has(bare(line.slice(cut + 1)))
+      /^[0-9A-Za-z][0-9A-Za-z._:-]{0,79}$/.test(id) &&
+      wanted.has(bare(row.slice(cut + 1)))
     )
       found.add(id);
   }

@@ -27,7 +27,7 @@ import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
 import { realSystem, type System } from "./system.js";
-import { titleReader } from "./topics.js";
+import { tabTitles, titleReader } from "./topics.js";
 import { sessionWindow } from "./windows.js";
 import { rememberable } from "./trove.js";
 import type { TaskPort } from "./tasks.js";
@@ -231,7 +231,7 @@ export class BoardFeed implements AgentBoardPort {
             session,
             action,
             options.runner ?? realRunner,
-            this.titles(session),
+            tabTitles(session, this.titles(session)),
           ),
         ...(options.tasks ? { tasks: options.tasks } : {}),
         ...(options.execution ? { execution: options.execution } : {}),
@@ -294,7 +294,12 @@ export class BoardFeed implements AgentBoardPort {
   private async focusOne(session: AgentSession) {
     const run = this.options.runner ?? realRunner;
     if (!session.host)
-      return focusSession(session, run, "tmux", this.titles(session));
+      return focusSession(
+        session,
+        run,
+        "tmux",
+        tabTitles(session, this.titles(session)),
+      );
     const host = this.book.get(session.host);
     return host
       ? focusRemote(host, session, run, this.root)

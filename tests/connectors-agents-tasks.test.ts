@@ -1335,3 +1335,118 @@ describe("a direct software request, after an independent review", () => {
     expect(tasks.calls.map((entry) => entry.kind)).toEqual(["start"]);
   });
 });
+
+describe("the start rules, after a second review", () => {
+  const waiting = (desk: DecisionDesk) =>
+    desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: {
+        kind: "permission",
+        tool: "Bash",
+        summary: "git push origin main",
+        options: [],
+      },
+      holdSeconds: 45,
+    });
+  const talks = () => scripted(["Okay."]);
+
+  it("does not let one sentence both allow an agent's request and start a task, also when the model asks for both", async () => {
+    const tasks = fakeTasks();
+    const { value, desk } = world(tasks.port);
+    const request = waiting(desk);
+    const run = scripted([
+      [
+        call("decide", { request: request.id, decision: "allow" }),
+        call("start_task", { goal: "update the config" }, "c-2"),
+      ],
+      "Done.",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "Yes, update the config",
+      "call",
+    );
+    expect(desk.pending()).toHaveLength(0);
+    expect(tasks.calls).toEqual([]);
+    // A sentence that names a task still starts it while a request waits.
+    const named = fakeTasks();
+    const second = world(named.port);
+    waiting(second.desk);
+    await new Supervisor(
+      second.value,
+      scripted([[call("start_task", { goal: "update the config" })], "Done."])
+        .model,
+    ).reply([], "Start a task: update the config of the app", "call");
+    expect(named.calls.map((entry) => entry.kind)).toEqual(["start"]);
+  });
+
+  it.each([
+    "Update me on the tests",
+    "Add up the test results",
+    "Write me the status of the tests",
+    "Make a test call to my phone",
+    "Update the Slack app",
+  ])("starts no task for %j when no model answers", async (words) => {
+    const tasks = fakeTasks();
+    await new Supervisor(world(tasks.port).value, null).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(tasks.calls).toEqual([]);
+  });
+
+  it.each([
+    "Make the API tests window bigger",
+    "Make the dashboard window fill the screen",
+    "Write down that the API key rotates monthly",
+    "Add to memory that the dashboard uses React",
+    "Add that to my notes app",
+    "Build a landing page is what the client said",
+    "Design feature flags are hard",
+    "Make sure you do not touch the code",
+  ])("starts no task before the model for %j", async (words) => {
+    const tasks = fakeTasks();
+    const run = talks();
+    await new Supervisor(world(tasks.port).value, run.model).reply(
+      [],
+      words,
+      "call",
+    );
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen.length).toBeGreaterThan(0);
+  });
+
+  it.each(["Make the test window bigger", "Would you add tests if I asked?"])(
+    "does not send %j to a waiting task as its answer",
+    async (words) => {
+      const tasks = fakeTasks({ ...asking });
+      await new Supervisor(world(tasks.port).value, talks().model).reply(
+        [],
+        words,
+        "call",
+      );
+      expect(tasks.calls).toEqual([]);
+    },
+  );
+
+  it("starts the task at once when a session only sits in a folder named app", async () => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    value.board = () => ({
+      ...board,
+      sessions: [{ ...session, name: null, project: "app" }],
+    });
+    await new Supervisor(value, talks().model).reply(
+      [],
+      "Fix the bug in the app",
+      "call",
+    );
+    expect(tasks.calls.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["start", "Fix the bug in the app"],
+    ]);
+  });
+});

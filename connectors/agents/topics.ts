@@ -116,16 +116,37 @@ please show open bring switch go get put take back me my i you your we us can co
 see look view display focus zoom into onto front window windows terminal terminals screen session sessions
 tab tabs agent agents claude code codex one ones up down again now there here where which what who if all
 about doing working work works running run runs thing stuff just some any make bigger larger smaller size
-maximize maximise restore text full`.split(/\s+/),
+maximize maximise restore text full them they everything something anything nothing other another read
+tell say give`.split(/\s+/),
+);
+/** Words that ask for the newest session. They describe none. */
+const newestWords = new Set(
+  "new newest latest recent just started opened made created last".split(" "),
 );
 const wordsOf = (value: string) =>
   value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-/** Two words are the same word when one starts the other and at least four letters agree: "lines" and "line". */
-const same = (a: string, b: string) =>
-  a === b ||
-  (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)));
+/** A word and what it is without a plain ending: "lines" and "line", "checking" and "check". */
+const forms = (word: string) => {
+  const found = [word];
+  for (const ending of ["ing", "ed", "es", "s"])
+    if (word.endsWith(ending) && word.length - ending.length >= 3)
+      found.push(word.slice(0, -ending.length));
+  return found;
+};
+/**
+ * Two words are the same word when they agree but for a plain ending. The
+ * start of one word is not the other word: "them" is not "theme", and "read"
+ * is not "ready".
+ */
+const same = (a: string, b: string) => {
+  const other = forms(b);
+  return forms(a).some((form) => other.includes(form));
+};
 const asksForNewest =
   /\b(?:new|newest|latest|recent|just (?:started|opened|made|created)|last (?:started|opened))\b/i;
+/** What the person rules out names no session: "not the billing one" is cut before the count. */
+const ruledOut =
+  /\b(?:not|except|without|other than|rather than|instead of)\b[^,.;:!?]*/gi;
 
 /**
  * The session that the words are about. It counts, for each session, how many
@@ -140,10 +161,15 @@ export function pickSession(
   titles: (session: AgentSession) => string[],
 ): SessionPick {
   const wanted = [
-    ...new Set(wordsOf(words).filter((word) => !filler.has(word))),
+    ...new Set(
+      wordsOf(words.replace(ruledOut, " ")).filter(
+        (word) => !filler.has(word) && !newestWords.has(word),
+      ),
+    ),
   ];
   if (wanted.length) {
-    const scored = sessions
+    const sure = (score: number) => score >= 2 || score === wanted.length;
+    const all = sessions
       .map((session) => {
         const own = titles(session).flatMap(wordsOf);
         return {
@@ -152,19 +178,26 @@ export function pickSession(
             .length,
         };
       })
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score);
+      .filter((entry) => entry.score > 0);
+    // A session to show needs a window. One that has a window and fits for
+    // sure is not hidden by a better fit that has none.
+    const windowed = all.filter((entry) => entry.session.focus !== "none");
+    const scored = (
+      windowed.some((entry) => sure(entry.score)) ? windowed : all
+    ).sort((a, b) => b.score - a.score);
     if (scored.length) {
       const top = scored[0]!.score;
       const best = scored.filter((entry) => entry.score === top);
       // One word that fits is enough only when it is all that the person
       // gave. "The session that checks the lines" is not the session about a
       // dedicated line: one fitting word of several is a maybe, not an answer.
-      const sure = top >= 2 || top === wanted.length;
-      return sure && best.length === 1
+      return sure(top) && best.length === 1
         ? { kind: "one", session: best[0]!.session }
         : { kind: "many", sessions: best.slice(0, 5).map((e) => e.session) };
     }
+    // The person described a session and nothing fits: "the new deploy
+    // session" is not the newest session of any kind.
+    return { kind: "none" };
   }
   if (asksForNewest.test(words)) {
     // The new session to show is one that has a window on this Mac.
@@ -175,6 +208,17 @@ export function pickSession(
   }
   return { kind: "none" };
 }
+
+/**
+ * The titles that a session's own terminal tab can show. Only a Claude Code
+ * session of this Mac is known to show its name or its title there. For any
+ * other session the tab is not found by a title: a tab of another session
+ * could carry the same words.
+ */
+export const tabTitles = (session: AgentSession, titles: string[]) =>
+  session.agent === "claude-code" && session.pid !== null && !session.host
+    ? titles
+    : [];
 
 /**
  * The titles of sessions, kept for a few seconds: one status reads the title

@@ -620,12 +620,23 @@ function codingGoal(
         ),
       );
     if (text.includes("?") && !polite) return null;
-    // "Update me", "add up": a request for the state, not for work.
-    if (["me", "us", "up"].includes(object)) return null;
-    // Work on a phone, in mail or in a chat application is not a software task.
+    // "Update me", "add up", "write down", "make sure", "add to", "add that":
+    // a request for the state, a note or a caution, not for work.
+    if (["me", "us", "up", "down", "sure", "to", "that"].includes(object))
+      return null;
+    // Work on a phone, in mail, in a chat application or in memory is not a software task.
     if (
-      /\b(?:call|phone|e-?mail|mail|message|slack|note|reminder|calendar|meeting)\b/i.test(
+      /\b(?:call|phone|e-?mail|mail|message|slack|notes?|memory|remember|reminder|calendar|meeting)\b/i.test(
         firstSentence,
+      )
+    )
+      return null;
+    // A window to make bigger is the window tool's, whatever the window shows.
+    if (asksForSize(text)) return null;
+    // What another person said or wrote, a "what if", and a remark about the work start nothing.
+    if (
+      /\b(?:said|told|wrote)\b|\bif\s+(?:i|we)\s+(?:asked|ask|wanted|want|said|say)\b|\b(?:is|are)\s+(?:hard|easy|difficult|tricky|fun|boring|great|good|bad|important)\b/i.test(
+        request,
       )
     )
       return null;
@@ -686,14 +697,39 @@ const asksForSize = (spoken: string) =>
   /\b(?:zoom|maximi[sz]e|full\s*screen|fill|bigger|larger|enlarge|smaller|shrink|restore|resize|normal size|text size|font)\b/i.test(
     spoken,
   );
+/** The person takes it back, delays it or forbids it. */
+const takesBack =
+  /\b(?:never\s*mind|actually,? no|no,? wait|scratch that|forget (?:it|that)|hold off|not now|not yet|until i say)\b|\b(?:do\s+not|don't|don\u2019t)\b/i;
 /**
- * The person's own words ask for something to be done. A question about the
- * state, a bare yes or no, and one or two words ask for no work.
+ * The person's own words ask for something to be done. This is the code's
+ * gate before a new session starts, whatever the model chose. A question, a
+ * thank-you, a request for the state, a sentence that takes work back, a bare
+ * yes or no, and one or two words ask for no work. A polite request that ends
+ * as a question ("Can you open a tunnel?") asks for work.
  */
-const asksForWork = (spoken: string) =>
-  !asksAbout(spoken) &&
-  !bareDecision.test(spoken.trim()) &&
-  spokenWords(spoken).length >= 3;
+const asksForWork = (spoken: string) => {
+  const text = spoken.trim();
+  const polite =
+    /^(?:(?:okay|ok|yes|yeah|sure|so|well|hey|please)[,.!]?\s+)*(?:can|could|would|will)\s+(?:you|u)\b/i.test(
+      text,
+    );
+  return (
+    !asksAbout(text) &&
+    !/^(?:should|shall|does|am|may|might)\b|^do\s+(?:we|i|you|they|it)\b/i.test(
+      text,
+    ) &&
+    !(/\?\s*$/.test(text) && !polite) &&
+    !takesBack.test(text) &&
+    !/^(?:thanks|thank you|thx|cheers|great|nice|perfect|awesome|good job|well done)\b/i.test(
+      text,
+    ) &&
+    !/^(?:tell|give|show)\s+me\b[^.?!]{0,40}\b(?:status|state|progress|update)\b/i.test(
+      text,
+    ) &&
+    !bareDecision.test(text) &&
+    spokenWords(text).length >= 3
+  );
+};
 /** One job in a sentence that can be said aloud. */
 function jobLine(job: JobFacts, now: number) {
   const head = `Job "${clean(job.job, 120)}", started ${elapsed(job.startedAt, now)} ago`;
@@ -701,6 +737,8 @@ function jobLine(job: JobFacts, now: number) {
     ? `${head}, is done. Its answer: ${clean(job.result ?? "", 600)}`
     : `${head}, still works.`;
 }
+const requestOwns =
+  "An agent's request waits for the person's answer, and this sentence names no task. It starts no work. Answer the request first.";
 const needsDesktop =
   "Tasks need ClawdTime's desktop service. It is not running here.";
 
@@ -784,7 +822,9 @@ export class Supervisor {
       lines.push(task ? taskLine(task) : "No task is active.");
     }
     // What a job answered is text from a session: data, never an instruction.
-    for (const job of this.jobsNow(3)) lines.push(jobLine(job, now));
+    for (const job of this.jobsNow(3))
+      if (now - job.startedAt < 24 * 60 * 60 * 1000)
+        lines.push(jobLine(job, now));
     if (this.world.execution)
       lines.push(this.world.execution.snapshot().message);
     return lines.join("\n");
@@ -803,9 +843,22 @@ export class Supervisor {
   private forSession(words: string) {
     return (
       /\b(?:agents?|sessions?)\b/i.test(words) ||
-      (this.world.board()?.sessions ?? []).some((session) =>
-        saidAsWords(title(session), words),
+      (this.world.board()?.sessions ?? []).some(
+        // Only a name that the session carries. A folder named "app" does
+        // not make "fix the bug in the app" a sentence for a session.
+        (session) => session.name !== null && saidAsWords(session.name, words),
       )
+    );
+  }
+  /**
+   * True while an agent's request waits, or after this turn answered one, for
+   * a sentence that names no task. Such a sentence belongs to that request:
+   * "Yes, update the config" allows it and starts no work besides.
+   */
+  private ownedByRequest(turn: Turn, spoken: string) {
+    return (
+      (this.world.desk.pending().length > 0 || turn.done.has("decide")) &&
+      !startCue.test(spoken)
     );
   }
   /** One change to the task. A turn does each kind of change once. */
@@ -833,6 +886,7 @@ export class Supervisor {
     // the work goes to a new coding session instead of a refusal.
     if (!this.world.tasks)
       return this.world.jobs ? this.startJob(turn, spoken) : needsDesktop;
+    if (this.ownedByRequest(turn, spoken)) return requestOwns;
     // The person's own last words must ask for a task. The model alone cannot start one.
     if (!asksToStart(spoken))
       return "The person did not ask for a task in their last message. Ask them.";
@@ -927,6 +981,7 @@ export class Supervisor {
     if (!jobs) return "I cannot open a terminal window from here.";
     const before = turn.done.get("job");
     if (before !== undefined) return before;
+    if (this.ownedByRequest(turn, spoken)) return requestOwns;
     if (!asksForWork(spoken))
       return "The person did not ask for work in their last message. Ask them what to do.";
     let said: string;
@@ -957,9 +1012,9 @@ export class Supervisor {
   /**
    * The session to show. The person's own words come first: a name that they
    * said in full, then what their words say about a job. The model's choice
-   * stands when it names a session, except when that session has no window
-   * here and the person's words find one that has. Nothing is guessed: words
-   * that fit several sessions return them all.
+   * stands only where the person's words name no single session. When the two
+   * disagree, both sessions are returned and none is opened. Nothing is
+   * guessed: words that fit several sessions return them all.
    */
   private pick(named: string, spoken: string): SessionPick {
     const sessions = this.world.board()?.sessions ?? [];
@@ -973,21 +1028,44 @@ export class Supervisor {
     const said = sessions.filter((session) =>
       saidAsWords(title(session), spoken),
     );
-    if (said.length === 1) return { kind: "one", session: said[0]! };
-    const byName = this.session(named);
-    if (byName && said.includes(byName))
-      return { kind: "one", session: byName };
     const bySpoken = pickSession(spoken, sessions, titles);
-    if (byName)
-      return byName.focus === "none" &&
-        bySpoken.kind === "one" &&
-        bySpoken.session.focus !== "none"
-        ? bySpoken
-        : { kind: "one", session: byName };
-    const byModel = pickSession(named, sessions, titles);
-    if (byModel.kind === "one") return byModel;
-    if (bySpoken.kind === "one") return bySpoken;
-    return byModel.kind === "many" ? byModel : bySpoken;
+    const one = (session: AgentSession): SessionPick => ({
+      kind: "one",
+      session,
+    });
+    const both = (a: AgentSession, b: AgentSession): SessionPick => ({
+      kind: "many",
+      sessions: [a, b],
+    });
+    // 1. A name that the person said in full. When their own description
+    //    fits another session for sure, the two are named and none is opened.
+    if (said.length === 1)
+      return bySpoken.kind === "one" && bySpoken.session !== said[0]
+        ? both(said[0]!, bySpoken.session)
+        : one(said[0]!);
+    const byName = this.session(named);
+    if (byName && said.includes(byName)) return one(byName);
+    const byModel: SessionPick = byName
+      ? one(byName)
+      : pickSession(named, sessions, titles);
+    // 2. What the person's own words say about a session. The model's other
+    //    choice does not win over it: the two are named. A choice of the
+    //    model that has no window here is dropped.
+    if (bySpoken.kind === "one")
+      return byModel.kind === "one" &&
+        byModel.session !== bySpoken.session &&
+        byModel.session.focus !== "none"
+        ? both(bySpoken.session, byModel.session)
+        : bySpoken;
+    // 3. The person's words fit no single session ("open it"): the model's
+    //    choice stands, when it is one of those that the words fit or the
+    //    words fit none.
+    if (byModel.kind === "one")
+      return bySpoken.kind === "none" ||
+        bySpoken.sessions.includes(byModel.session)
+        ? byModel
+        : bySpoken;
+    return bySpoken.kind === "many" ? bySpoken : byModel;
   }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
@@ -1355,7 +1433,13 @@ export class Supervisor {
       // "Start a task: ..." names the task and keeps its place. A bare
       // instruction starts a task only when no agent request waits: with one
       // waiting, "Yes, update the config" is the answer to that request.
-      if (asksToStart(spoken) && (startCue.test(spoken) || !pending.length))
+      // No model asked here, so the plain reader decides: "update me on the
+      // tests" is a request for the state.
+      if (
+        asksToStart(spoken) &&
+        (startCue.test(spoken) ||
+          (!pending.length && codingGoal(spoken, "plain") !== null))
+      )
         return this.startTask(turn, spoken, "");
       if (
         task?.canCancel &&
