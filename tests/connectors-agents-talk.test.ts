@@ -442,6 +442,31 @@ describe("the ClawdTime agent", () => {
     expect(loop.seen).toHaveLength(6);
   });
 
+  it("with no model, or after a model fault, a question or an unsure word allows nothing", async () => {
+    const broken: ModelClient = {
+      complete: async () => {
+        throw new Error("offline");
+      },
+    };
+    for (const model of [null, broken])
+      for (const words of [
+        "Is it ok to allow this?",
+        "is it ok to allow this",
+        "I'm not sure",
+        "I would not allow that",
+      ]) {
+        const { value, desk } = world([session()]);
+        const request = ask(desk);
+        expect(
+          await new Supervisor(value, model).reply([], words, "chat"),
+          words,
+        ).toBe(
+          "One request waits for your answer: git push origin main. Say approve or deny to answer a request.",
+        );
+        expect(desk.take(request.id), words).toBeNull();
+      }
+  });
+
   it("sends the model its tools and history, and reports only a status on failure", async () => {
     const bodies: any[] = [];
     const ok = (async (_url: string, init: RequestInit) => {

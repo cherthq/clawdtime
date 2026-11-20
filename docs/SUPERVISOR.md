@@ -159,9 +159,16 @@ for each check, and says whether a phone would ring: in live mode it does, in
 simulation or standby it does not.
 
 - Only clear words count. "Approve", "yes", "go ahead" allow. "Deny", "no",
-  "stop" deny, and your words become the reason for the agent. Unclear words, both
-  at once, silence or other sound never approve: the call asks again, up to three
-  times.
+  "stop" deny, and your words become the reason for the agent. Nothing else
+  approves, and the call asks again, up to three times. That holds for unclear
+  words, yes and no together, silence or other sound, an approval with "not" in
+  the sentence ("I would not allow that"), a hedge ("not sure", "maybe", "I
+  think"), words that ask for time ("wait", "hold on") and a question ("is it
+  safe to allow", with or without a question mark). A sentence that opens with
+  its refusal ("No, why would it do that?") still denies.
+- What you say in one go is read together, so a sentence that arrives in parts
+  is one sentence. The same reading is used in the chat, with or without a
+  language model.
 - One request places one call. An unanswered call leaves the request for the
   panel and the terminal.
 - Away mode needs no panel. With a phone link, the desktop service attends the

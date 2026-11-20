@@ -1502,6 +1502,87 @@ describe("answer by phone", () => {
     expect(read("that is acknowledged")).toBeNull();
   });
 
+  it("a negation, a hedge or a question is never an approval", () => {
+    const read = (words: string, item = request()) => interpret(words, item);
+    for (const words of [
+      "I would not allow that",
+      "I'm not sure",
+      "I’m not sure",
+      "I can't approve that",
+      "I cannot approve that",
+      "I won't approve this",
+      "that is not okay",
+      "never approve that",
+      "maybe yes",
+      "I think so, yes",
+      "I guess it's okay",
+      "Is it ok to allow this?",
+      "is it ok to allow this",
+      "should I approve it",
+      "can you approve that",
+      "what happens if I allow it",
+      "ok is it safe to allow",
+      "Okay. What is it asking",
+      "wait, okay, what is it asking",
+      "hold on, okay",
+      "Yeah? Hello?",
+      "yeah hello",
+      "why would I approve that",
+      "do you think it is ok",
+      "does it look okay",
+    ])
+      expect(read(words), words).toBeNull();
+    // A clear answer still stands.
+    for (const words of [
+      "Approve.",
+      "yes",
+      "okay",
+      "ok do it",
+      "Yes, go ahead and approve it",
+      "um, sure",
+    ])
+      expect(read(words)?.decision, words).toBe("allow");
+    // A sentence that opens with its refusal denies, whatever follows.
+    for (const words of [
+      "No.",
+      "Deny",
+      "never",
+      "Do not run that",
+      "don't",
+      "I said no",
+      "No, why would it do that?",
+      "No, I think that is wrong",
+    ])
+      expect(read(words)?.decision, words).toBe("deny");
+    // A refusal that is asked or hedged is no answer either.
+    for (const words of ["should I deny it", "maybe deny it", "I don't know"])
+      expect(read(words), words).toBeNull();
+
+    for (const words of [
+      "Which one is safer?",
+      "which one is safer",
+      "hold on one moment",
+      "give me one second",
+      "I do not want the first",
+      "not the first one",
+      "maybe red",
+      "Red?",
+    ])
+      expect(read(words, question), words).toBeNull();
+    expect(read("number one", question)?.text).toBe("Red");
+    expect(read("I want red please", question)?.text).toBe("Red");
+    // A choice whose own words refuse or ask is still that choice.
+    const yesNo = request({ kind: "question", options: ["Yes", "No"] });
+    expect(read("no", yesNo)).toEqual({ decision: "answer", text: "No" });
+    expect(read("Yes.", yesNo)).toEqual({ decision: "answer", text: "Yes" });
+    const worded = request({
+      kind: "question",
+      options: ["What we have now", "Do not migrate"],
+    });
+    expect(read("what we have now", worded)?.text).toBe("What we have now");
+    expect(read("do not migrate, please", worded)?.text).toBe("Do not migrate");
+  });
+
   function phone(
     script: {
       turns: { id: string; sequence: number; text?: string }[];
@@ -1577,6 +1658,48 @@ describe("answer by phone", () => {
       "turns after 0",
       "turns after 1",
     ]);
+  });
+
+  it("reads all turns of a batch together, and a negation that ends a batch holds for the next", async () => {
+    let clock = now;
+    const timing = () => ({
+      now: () => (clock += 1000),
+      deadline: now + 500_000,
+      pollMs: 1,
+      beatMs: 100_000,
+    });
+    // One sentence in two fragments: its last fragment alone would approve.
+    const split = phone([
+      {
+        turns: [
+          { id: "t1", sequence: 1, text: "Do not" },
+          { id: "t2", sequence: 2, text: "approve that." },
+        ],
+      },
+      { turns: [{ id: "t3", sequence: 3, text: "Deny it." }] },
+    ]);
+    expect(await answerByCall(split.client, request(), timing())).toEqual({
+      decision: "deny",
+      text: "Deny it.",
+    });
+    expect(split.log).toContain(
+      'reply {"turnId":"t2","replyId":"reply-t2","text":"Say approve, or say deny.","expectedCursor":2}',
+    );
+    expect(split.log.join("\n")).not.toContain("Approved");
+    // The same kind of sentence over two reads.
+    clock = now;
+    const late = phone([
+      { turns: [{ id: "t1", sequence: 1, text: "I would not" }] },
+      { turns: [{ id: "t2", sequence: 2, text: "allow that" }] },
+      { turns: [{ id: "t3", sequence: 3, text: "approve" }] },
+    ]);
+    expect(await answerByCall(late.client, request(), timing())).toEqual({
+      decision: "allow",
+      text: null,
+    });
+    expect(
+      late.log.filter((line) => line.includes("Say approve, or say deny.")),
+    ).toHaveLength(2);
   });
 
   it("gives no answer when the call is not picked up, ends, or runs out of time", async () => {
