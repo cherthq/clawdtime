@@ -65,11 +65,16 @@ public enum PetLayout {
   }
   /// The speech bubble sits above the mascot, or below when there is no room. `tail` is
   /// the x of its pointer inside the bubble.
-  public static func bubble(size: CGSize, pet: CGRect, in visible: CGRect, gap: CGFloat = 2) -> (frame: CGRect, tail: CGFloat, below: Bool) {
+  /// `clear` is the bar that hangs on the mascot: the bubble goes past it, never over it.
+  public static func bubble(size: CGSize, pet: CGRect, in visible: CGRect, gap: CGFloat = 2, clear: CGRect? = nil) -> (frame: CGRect, tail: CGFloat, below: Bool) {
     let shownPet = pet.intersection(visible)
     let centerX = shownPet.isNull ? pet.midX : shownPet.midX
-    let above = pet.maxY + gap + size.height <= visible.maxY - 4
-    var frame = CGRect(x: centerX - size.width / 2, y: above ? pet.maxY + gap : pet.minY - gap - size.height, width: size.width, height: size.height)
+    var top = pet.maxY, bottom = pet.minY
+    if let clear, !clear.isEmpty {
+      if clear.midY >= pet.midY { top = max(top, clear.maxY + 4) } else { bottom = min(bottom, clear.minY - 4) }
+    }
+    let above = top + gap + size.height <= visible.maxY - 4
+    var frame = CGRect(x: centerX - size.width / 2, y: above ? top + gap : bottom - gap - size.height, width: size.width, height: size.height)
     frame.origin.x = max(visible.minX + 8, min(frame.origin.x, visible.maxX - size.width - 8))
     let tail = max(18, min(size.width - 18, centerX - frame.minX))
     return (frame, tail, !above)
@@ -94,8 +99,17 @@ public struct PetStatus: Equatable, Sendable {
     public let sessionId: String?
     /// A request that the person can allow or deny right on the bubble.
     public let decisionId: String?
-    public init(key: String, title: String, detail: String, sessionId: String?, decisionId: String? = nil) {
+    /// What ClawdTime heard and what it answered, in a spoken conversation. It may take three lines.
+    public let caption: Bool
+    public init(key: String, title: String, detail: String, sessionId: String?, decisionId: String? = nil, caption: Bool = false) {
       self.key = key; self.title = title; self.detail = detail; self.sessionId = sessionId; self.decisionId = decisionId
+      self.caption = caption
+    }
+    /// The caption of one spoken turn. It stays longer for a longer answer.
+    public static func said(heard: String, reply: String, at: Double) -> (bubble: Bubble, seconds: Double) {
+      let words = heard.count > 60 ? String(heard.prefix(57)) + "..." : heard
+      return (Bubble(key: "say-\(Int(at))", title: "\u{201C}" + words + "\u{201D}", detail: reply, sessionId: nil, caption: true),
+              max(5, min(14, 3 + Double(reply.count) / 16)))
     }
   }
   public let mood: MascotMood

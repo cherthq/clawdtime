@@ -204,7 +204,9 @@ final class PillButton: NSControl {
 
 /// A round button that holds one glyph. It always has a name for the pointer and for VoiceOver.
 final class IconButton: NSControl {
-  private let symbolName: String
+  var symbolName: String { didSet { if symbolName != oldValue { needsDisplay = true } } }
+  /// The glyph takes this color when the control is on, for example a live microphone.
+  var active: ColorToken? { didSet { needsDisplay = true } }
   private let diameter: CGFloat
   /// On the desktop, with no panel behind it, the button carries its own ground.
   var floating = false { didSet { needsDisplay = true } }
@@ -228,7 +230,7 @@ final class IconButton: NSControl {
       Theme.color(.borderSubtle).setStroke(); circle.lineWidth = 1; circle.stroke()
     }
     if hovering || pressing { Theme.color(pressing ? .fillPressed : .fill).setFill(); circle.fill() }
-    let ink = Theme.color(danger && hovering ? .danger : hovering ? .label : .labelSecondary)
+    let ink = Theme.color(danger && hovering ? .danger : active ?? (hovering ? .label : .labelSecondary))
     guard let glyph = Theme.symbol(symbolName, size: diameter * 0.40, weight: .bold) else { return }
     let tinted = NSImage(size: glyph.size, flipped: false) { rect in glyph.draw(in: rect); ink.set(); rect.fill(using: .sourceAtop); return true }
     tinted.draw(in: NSRect(x: bounds.midX - glyph.size.width / 2, y: bounds.midY - glyph.size.height / 2, width: glyph.size.width, height: glyph.size.height))
@@ -317,6 +319,24 @@ final class StateMark: NSView {
       shape.path = CGPath(ellipseIn: box.insetBy(dx: 5, dy: 5), transform: nil); shape.fillColor = color; shape.opacity = 0.6
     case .unknown:
       shape.path = CGPath(ellipseIn: box.insetBy(dx: 4.5, dy: 4.5), transform: nil); shape.strokeColor = color; shape.lineWidth = 1.5; shape.opacity = 0.7
+    }
+  }
+}
+
+/// A few bars that move with a voice.
+final class LevelBarsView: NSView {
+  var levels: [Double] = Array(repeating: 0.14, count: 5) { didSet { needsDisplay = true } }
+  var tint = ColorToken.labelSecondary { didSet { needsDisplay = true } }
+  override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 22) }
+  override func draw(_ dirtyRect: NSRect) {
+    Theme.color(tint).setFill()
+    let width: CGFloat = 3.2, gap: CGFloat = 3.6
+    let total = CGFloat(levels.count) * width + CGFloat(levels.count - 1) * gap
+    var x = bounds.midX - total / 2
+    for level in levels {
+      let height = max(width, bounds.height * CGFloat(level))
+      NSBezierPath(roundedRect: NSRect(x: x, y: bounds.midY - height / 2, width: width, height: height), xRadius: width / 2, yRadius: width / 2).fill()
+      x += width + gap
     }
   }
 }

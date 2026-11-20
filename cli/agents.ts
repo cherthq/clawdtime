@@ -25,6 +25,7 @@ import {
   removeHookPlan,
 } from "../connectors/agents/hooks.js";
 import { supervisorCli, supervisorHelp } from "./supervisor.js";
+import type { ModelClient } from "../connectors/agents/brain.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { renderBoard, title } from "../connectors/agents/render.js";
@@ -47,6 +48,8 @@ Listing and focus only read. Nothing is sent to a session unless you ask for it 
 ${supervisorHelp}`;
 
 export interface AgentsDependencies {
+  /** The language model of the ClawdTime agent. Tests script it. */
+  model?: ModelClient | null;
   system?: System;
   runner?: Runner;
   print?: (line: string) => void;
@@ -312,6 +315,7 @@ export async function agentsCli(
       print,
       hookScript: dependencies.hookScript ?? hookScriptPath(),
       findSession,
+      model: dependencies.model,
     });
   const command = args[0] && !args[0].startsWith("--") ? args[0] : "list";
   const rest = command === args[0] ? args.slice(1) : args;

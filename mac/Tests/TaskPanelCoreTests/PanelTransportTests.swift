@@ -118,4 +118,43 @@ final class PanelTransportTests: XCTestCase {
       do { _ = try await client.focusAgent("100-abc123"); XCTFail("Invalid focus result accepted") } catch {}
     }
   }
+  func testChatAndVoiceUseThePanelCredentialAndRefuseUnsafeNames() async throws {
+    let transcript = #"{"version":1,"model":true,"speech":true,"voiceDirectory":"/tmp/voice","messages":[{"role":"user","text":"hi","at":1,"via":"chat"}]}"#
+    let server = try FixtureHTTP { request, _ in
+      if request.hasPrefix("GET /desktop/chat ") { return (200, ["Content-Type": "application/json"], Data(transcript.utf8)) }
+      if request.hasPrefix("POST /desktop/chat ") {
+        return (200, ["Content-Type": "application/json"], Data(#"{"reply":{"role":"assistant","text":"Hello.","at":2,"via":"chat"}}"#.utf8))
+      }
+      return (200, ["Content-Type": "application/json"],
+        Data(#"{"heard":"what needs me","reply":{"role":"assistant","text":"Nothing.","at":3,"via":"voice"},"audio":"reply-abc123.mp3"}"#.utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let chat = try await client.chat()
+    XCTAssertEqual(chat.messages.map(\.text), ["hi"]); XCTAssertTrue(chat.speech); XCTAssertEqual(chat.voiceDirectory, "/tmp/voice")
+    XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    let reply = try await client.say("what needs me?")
+    XCTAssertEqual(reply.text, "Hello."); XCTAssertFalse(reply.mine)
+    XCTAssertTrue(server.requests()[1].hasPrefix("POST /desktop/chat "))
+    let heard = try await client.hear("rec-1795170939254.wav")
+    XCTAssertEqual(heard.heard, "what needs me"); XCTAssertEqual(heard.audioName, "reply-abc123.mp3"); XCTAssertEqual(heard.reply?.via, "voice")
+    XCTAssertTrue(server.requests()[2].hasPrefix("POST /desktop/voice "))
+    // The recording goes by its name only: {"recording":"rec-1795170939254.wav"} is 37 bytes.
+    XCTAssertTrue(server.requests()[2].contains("Content-Length: 37\r\n"))
+    // A name that could leave the voice folder, and an empty message, are refused before any request.
+    do { _ = try await client.hear("../chat.jsonl"); XCTFail("Unsafe recording name accepted") } catch {}
+    do { _ = try await client.hear("rec.mp3"); XCTFail("Unknown recording type accepted") } catch {}
+    do { _ = try await client.say(""); XCTFail("Empty message accepted") } catch {}
+    XCTAssertEqual(server.requests().count, 3)
+  }
+  func testAChatOfAnotherVersionOrARelativeVoiceFolderIsRejected() async throws {
+    for body in [#"{"version":2,"model":true,"speech":true,"voiceDirectory":"/tmp/voice","messages":[]}"#,
+                 #"{"version":1,"model":true,"speech":true,"voiceDirectory":"voice","messages":[]}"#,
+                 #"{"version":1,"model":true,"speech":true,"voiceDirectory":"/tmp/voice","messages":[{"role":"system","text":"x","at":1,"via":"chat"}]}"#] {
+      let server = try FixtureHTTP { _, _ in (200, ["Content-Type": "application/json"], Data(body.utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { _ = try await client.chat(); XCTFail("Invalid chat accepted") } catch {}
+    }
+  }
 }

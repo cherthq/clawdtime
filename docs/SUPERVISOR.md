@@ -2,8 +2,9 @@
 
 ClawdTime supervises the coding agents on this Mac. The [agent board](AGENT_BOARD.md)
 shows them. This page is about what ClawdTime can do for you: answer an agent,
-remember your decisions, reach you by phone, type into a terminal, report on the
-agent commands you use, and work with the browser.
+remember your decisions, reach you by phone, talk with you in text or by voice,
+type into a terminal, report on the agent commands you use, and work with the
+browser.
 
 Every action here starts with you: a click, a command, or your voice on a call.
 The one exception is a standing rule, and only you can make one.
@@ -90,6 +91,71 @@ clawdtime agents away on
   panel and the terminal.
 - The supervisor claims no screen and no input for the call. It only talks.
 
+## Talk to ClawdTime
+
+ClawdTime is also an agent that you can talk to. It sees what the board sees and
+acts through the same desk and trove. There are three ways, and they share one
+conversation:
+
+| Way | How |
+|---|---|
+| Text | The chat button on the bar under the mascot, or `clawdtime chat`. `clawdtime chat "what needs me?"` answers one question and exits. |
+| Voice on the Mac | The talk button on the bar, or `clawdtime talk`. You speak, it answers aloud. |
+| FaceTime | `clawdtime agents call me`. ClawdTime calls you through the linked pairing and you talk to it. Say goodbye to end the call. |
+
+What it can do when you ask:
+
+- Say what every agent does and what waits for you.
+- Allow or deny a waiting request, or answer a question with one of its choices.
+- Bring a session's terminal to the front.
+- Type your words into a session's terminal.
+- Search the trove, and keep a critical decision that you state.
+- Turn away mode on or off.
+- List the agent commands on this Mac and their use.
+
+Two rules are in the code, not in the model's instructions:
+
+- A request is allowed or denied only when your own last message says so. "What
+  does it want?" allows nothing. "Yes, approve it" allows it. The same reading
+  of your words is used on a call.
+- Text is typed into a terminal only when it is part of what you said.
+
+A critical decision is kept in your words. When the model rewords it with a word
+that you did not say, your own sentence is stored.
+
+### The bar under the mascot
+
+At rest the bar has two buttons: chat and talk. In a conversation it opens into
+a microphone switch, the level of the voice as moving bars, a speaker switch and
+an end button. The bars are blue while it listens and orange while it speaks,
+and the mascot's light and mouth move with the voice. A pause of about one
+second ends your sentence. ClawdTime does not listen while it speaks. The
+speaker switch stops the voice at once; the answer still shows in the chat.
+
+### The key and the models
+
+Speech and the language model use the OpenAI API. Set `CLAWDTIME_OPENAI_API_KEY`
+(or `OPENAI_API_KEY`) in the environment of the command that starts the desktop
+service, `clawdtime chat` or `clawdtime talk`. Never put the key in an argument
+or a file of the repository.
+
+| Variable | Default | Use |
+|---|---|---|
+| `CLAWDTIME_SUPERVISOR_MODEL` | `gpt-4.1-mini` | Chooses tools and writes the answers |
+| `CLAWDTIME_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Turns your speech into text |
+| `CLAWDTIME_SPEAK_MODEL` | `gpt-4o-mini-tts` | Speaks the answer |
+| `CLAWDTIME_VOICE` | `alloy` | The voice |
+
+With no key ClawdTime still answers in text: it tells the state from the board,
+and it takes a clear "approve" or "deny" when exactly one request waits. Voice
+needs the key.
+
+With a key, three things leave this Mac for the OpenAI API, and only when you
+talk to ClawdTime: what you said or typed, your recording while it is turned
+into text, and the state in words that the model asked for (session names,
+project folder names, the text of waiting requests, trove entries). Nothing is
+sent while you do not talk to it.
+
 ## Terminal use
 
 ```sh
@@ -138,6 +204,10 @@ moves it):
 - `trove/decisions.jsonl`, `trove/rules.json`, `trove/notes.jsonl`: the trove.
 - `agents/decisions/call.json`: the link to a pairing for away mode. The pairing
   credential stays in its own connection file.
+- `agents/chat.jsonl`: the conversation with ClawdTime, 2,000 characters for
+  each message at most.
+- `agents/voice/`: one recording while it is turned into text, then it is
+  removed; and the newest spoken answer only.
 
 The board snapshot still holds no request text. Request text reaches the panel
 only through `GET /desktop/decisions`, under the private panel credential.
@@ -152,3 +222,10 @@ only through `GET /desktop/decisions`, under the private panel credential.
 - Tab selection and typing through AppleScript (Terminal, iTerm2, Ghostty 1.4)
   and the browser commands are tested with a recorded command runner. tmux input
   is run for real.
+- Chat, the guards, the trove and a full voice round trip (speech to text, the
+  answer, text to speech) are run for real against the OpenAI API. The
+  microphone in the panel and a conversation on a real FaceTime call are tested
+  with a scripted backend only: the first needs your consent for the
+  microphone, the second your approval for that call.
+- The first time you talk, macOS asks to use the microphone. The request names
+  the app that started ClawdTime, for example your terminal.

@@ -126,6 +126,13 @@ function childEnvironment(): NodeJS.ProcessEnv {
           "CODEX_HOME",
           // Where the agent desk and the trove live, when the person moved them.
           "CLAWDTIME_CONFIG_HOME",
+          // The language model and speech of the ClawdTime agent.
+          "CLAWDTIME_OPENAI_API_KEY",
+          "OPENAI_API_KEY",
+          "CLAWDTIME_SUPERVISOR_MODEL",
+          "CLAWDTIME_TRANSCRIBE_MODEL",
+          "CLAWDTIME_SPEAK_MODEL",
+          "CLAWDTIME_VOICE",
         ].includes(key) || key.startsWith("LC_"),
     ),
   );

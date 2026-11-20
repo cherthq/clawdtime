@@ -557,6 +557,13 @@ it("real desktop service serves the board to the panel credential only, and turn
   const stateFolder = join(temporary, "clawdtime-state");
   const previousState = process.env.CLAWDTIME_CONFIG_HOME;
   process.env.CLAWDTIME_CONFIG_HOME = stateFolder;
+  // No language model key reaches this service: its answers are the plain ones.
+  const previousKeys = {
+    CLAWDTIME_OPENAI_API_KEY: process.env.CLAWDTIME_OPENAI_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  };
+  delete process.env.CLAWDTIME_OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
   try {
     const request = await start("on", []);
     // The first scan runs in the publisher process, so the board is not there at once.
@@ -687,6 +694,52 @@ it("real desktop service serves the board to the panel credential only, and turn
       (await post("/desktop/agents/send", { id: "999999-zz", text: "" }))
         .status,
     ).toBe(400);
+    // The person talks to ClawdTime through the same credential. With no
+    // language model key it answers in plain words from the state.
+    const chat = await request("/desktop/chat");
+    expect(chat.status).toBe(200);
+    expect(await chat.json()).toEqual({
+      version: 1,
+      model: false,
+      speech: false,
+      voiceDirectory: join(stateFolder, "agents", "voice"),
+      messages: [],
+    });
+    expect((await request("/desktop/chat", {}, "x".repeat(64))).status).toBe(
+      401,
+    );
+    const said = (await (
+      await post("/desktop/chat", { text: "what needs me?" })
+    ).json()) as { reply: { role: string; text: string; via: string } };
+    expect(said.reply).toMatchObject({ role: "assistant", via: "chat" });
+    expect(said.reply.text).toContain("Say approve or deny");
+    const kept = (await (await request("/desktop/chat")).json()) as {
+      messages: { role: string; text: string }[];
+    };
+    expect(kept.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(kept.messages[0]!.text).toBe("what needs me?");
+    expect((await post("/desktop/chat", { text: "" })).status).toBe(400);
+    expect((await post("/desktop/chat", { text: "x", extra: 1 })).status).toBe(
+      400,
+    );
+    expect(
+      (await post("/desktop/chat", { text: "hi" }, "x".repeat(64))).status,
+    ).toBe(401);
+    // A recording is named, never sent in the request, and the name cannot
+    // leave the voice folder.
+    expect(
+      (await post("/desktop/voice", { recording: "../chat.jsonl" })).status,
+    ).toBe(400);
+    expect(
+      await (await post("/desktop/voice", { recording: "rec-1.wav" })).json(),
+    ).toEqual({ heard: "", reply: null, audio: null });
+    expect(
+      (await post("/desktop/voice", { recording: "rec-1.wav" }, "x".repeat(64)))
+        .status,
+    ).toBe(401);
     const off = await start("off", ["--agents", "false", "--tucked", "true"]);
     // Only the tucked start passes the switch to the panel.
     expect(panelArguments.map((args) => args.includes("--tucked"))).toEqual([
@@ -697,6 +750,8 @@ it("real desktop service serves the board to the panel credential only, and turn
     expect((await off("/desktop/agents")).status).toBe(404);
     expect((await off("/desktop/state")).status).toBe(200);
   } finally {
+    for (const [name, value] of Object.entries(previousKeys))
+      if (value !== undefined) process.env[name] = value;
     if (previousState === undefined) delete process.env.CLAWDTIME_CONFIG_HOME;
     else process.env.CLAWDTIME_CONFIG_HOME = previousState;
     await Promise.all(children.map(closeOwned));

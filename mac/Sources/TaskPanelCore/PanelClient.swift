@@ -16,13 +16,14 @@ public final class PanelClient {
     let policy = transportConfiguration ?? URLSessionConfiguration.ephemeral
     policy.httpCookieStorage = nil; policy.httpShouldSetCookies = false
     policy.urlCache = nil; policy.requestCachePolicy = .reloadIgnoringLocalCacheData
-    policy.timeoutIntervalForRequest = 4; policy.timeoutIntervalForResource = 8
+    policy.timeoutIntervalForRequest = 4; policy.timeoutIntervalForResource = 120
     session = URLSession(configuration: policy, delegate: delegate, delegateQueue: nil)
   }
   public func close() { session.invalidateAndCancel() }
-  private func request(path: String, body: Data? = nil) async throws -> Data {
+  private func request(path: String, body: Data? = nil, patient: Bool = false) async throws -> Data {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
+      path == "/desktop/chat" || path == "/desktop/voice" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
@@ -30,6 +31,8 @@ public final class PanelClient {
     request.httpMethod = body == nil ? "GET" : "POST"
     request.setValue("Bearer " + configuration.token, forHTTPHeaderField: "Authorization")
     request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+    // An answer from the language model, or speech, takes longer than a task read.
+    if patient { request.timeoutInterval = 90 }
     if let body { request.httpBody = body; request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     do {
       let (bytes, raw) = try await session.bytes(for: request)
@@ -87,6 +90,24 @@ public final class PanelClient {
   public func setAway(_ away: Bool) async throws {
     let data = try JSONSerialization.data(withJSONObject: ["away": away], options: [.sortedKeys])
     _ = try await request(path: "/desktop/decisions/away", body: data)
+  }
+  /// The conversation with ClawdTime.
+  public func chat() async throws -> ChatTranscript {
+    let result = try JSONDecoder().decode(ChatTranscript.self, from: await request(path: "/desktop/chat"))
+    try result.validate()
+    return result
+  }
+  /// One typed message. The answer can take as long as the language model takes.
+  public func say(_ text: String) async throws -> ChatTranscript.Message {
+    guard (1...2000).contains(text.count) else { throw PanelFailure.configuration }
+    let body = try JSONSerialization.data(withJSONObject: ["text": text], options: [.sortedKeys])
+    return try JSONDecoder().decode(ChatReply.self, from: await request(path: "/desktop/chat", body: body, patient: true)).reply
+  }
+  /// One recording that the panel wrote into the voice folder, by its file name.
+  public func hear(_ recording: String) async throws -> VoiceReply {
+    guard recording.range(of: "^[A-Za-z0-9_-]{1,60}\\.(wav|m4a)$", options: .regularExpression) != nil else { throw PanelFailure.configuration }
+    let body = try JSONSerialization.data(withJSONObject: ["recording": recording], options: [.sortedKeys])
+    return try JSONDecoder().decode(VoiceReply.self, from: await request(path: "/desktop/voice", body: body, patient: true))
   }
   public func submit(_ payload: Data, eventId: String, action: PanelAction) async throws -> PanelOperation {
     // Exactly one POST. Redirects and network failures never trigger a replay.

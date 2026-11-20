@@ -1,6 +1,22 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import {
+  ChatLog,
+  OpenAIModel,
+  Supervisor,
+  type ChatMessage,
+  type ModelClient,
+} from "./brain.js";
+import type { CliFact } from "./inventory.js";
+import {
+  speak,
+  speechSettings,
+  transcribe,
+  type SpeechSettings,
+} from "./speech.js";
 import { answerByCall, loadCallLink, openCall } from "./call.js";
 import { agentLabel } from "./catalog.js";
 import { DecisionDesk, type DecisionRequest } from "./decisions.js";
@@ -24,6 +40,25 @@ export interface AgentBoardPort {
   }): boolean;
   setAway(away: boolean): void;
   send(id: string, text: string, enter: boolean): ReturnType<typeof sendText>;
+  chat(): ChatView;
+  say(text: string): Promise<ChatMessage>;
+  hear(recording: string): Promise<{
+    heard: string;
+    reply: ChatMessage | null;
+    audio: string | null;
+  }>;
+}
+
+/** The conversation with ClawdTime, as the chat screen shows it. */
+export interface ChatView {
+  version: 1;
+  /** A language model answers. Without one ClawdTime tells the state and takes a clear yes or no. */
+  model: boolean;
+  /** Speech in and out is available. */
+  speech: boolean;
+  /** The folder for recordings and spoken answers. The panel writes and reads there. */
+  voiceDirectory: string;
+  messages: ChatMessage[];
 }
 
 /** The requests that wait for the person, as the panel shows them. */
@@ -81,13 +116,125 @@ export class BoardFeed implements AgentBoardPort {
         decision: "allow" | "deny" | "answer";
         text: string | null;
       } | null>;
+      /** The language model. The default is OpenAI when a key is in the environment. */
+      model?: ModelClient | null;
+      /** Speech settings. The default reads the environment. */
+      speech?: SpeechSettings | null;
+      clis?: () => CliFact[];
     } = {},
   ) {
     this.root =
       options.root ?? stateRoot({ env: process.env, home: homedir() });
     this.desk = new DecisionDesk(this.root, options.now ?? Date.now);
+    this.log = new ChatLog(this.root);
+    const key =
+      process.env.CLAWDTIME_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    const model =
+      options.model !== undefined
+        ? options.model
+        : key
+          ? new OpenAIModel(
+              key,
+              process.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
+            )
+          : null;
+    this.speech =
+      options.speech !== undefined
+        ? options.speech
+        : speechSettings(process.env);
+    this.supervisor = new Supervisor(
+      {
+        now: options.now ?? Date.now,
+        board: () => this.snapshot(),
+        desk: this.desk,
+        focus: (session) =>
+          focusSession(session, this.options.runner ?? realRunner),
+        send: (session, text) =>
+          sendText(
+            session,
+            text,
+            { enter: true },
+            this.options.runner ?? realRunner,
+          ),
+        clis: options.clis ?? (() => []),
+      },
+      model,
+    );
   }
   private readonly root: string;
+  private readonly log: ChatLog;
+  private readonly supervisor: Supervisor;
+  private readonly speech: SpeechSettings | null;
+  private get voiceDirectory() {
+    return join(this.root, "agents", "voice");
+  }
+
+  chat(): ChatView {
+    mkdirSync(this.voiceDirectory, { recursive: true, mode: 0o700 });
+    return {
+      version: 1,
+      model: this.supervisor.ready,
+      speech: this.speech !== null,
+      voiceDirectory: this.voiceDirectory,
+      messages: this.log.recent(),
+    };
+  }
+  /** One typed message from the person, and ClawdTime's answer. */
+  async say(
+    text: string,
+    via: ChatMessage["via"] = "chat",
+  ): Promise<ChatMessage> {
+    const now = this.options.now ?? Date.now;
+    const history = this.log.recent(24);
+    this.log.append({
+      role: "user",
+      text: text.slice(0, 2000),
+      at: now(),
+      via,
+    });
+    const reply: ChatMessage = {
+      role: "assistant",
+      text: await this.supervisor.reply(history, text, via),
+      at: now(),
+      via,
+    };
+    this.log.append(reply);
+    return reply;
+  }
+  /**
+   * One recording from the panel: its words, ClawdTime's answer, and the answer
+   * as speech. The recording is removed once its words are known.
+   */
+  async hear(recording: string) {
+    if (!this.speech || !/^[A-Za-z0-9_-]{1,60}\.(wav|m4a)$/.test(recording))
+      return { heard: "", reply: null, audio: null };
+    const file = join(this.voiceDirectory, recording);
+    let heard = "";
+    try {
+      heard = await transcribe(file, this.speech);
+    } catch {
+      heard = "";
+    } finally {
+      rmSync(file, { force: true });
+    }
+    if (!heard) return { heard: "", reply: null, audio: null };
+    const reply = await this.say(heard, "voice");
+    let audio: string | null = `reply-${Date.now().toString(36)}.mp3`;
+    try {
+      // Only the newest answer is kept as sound.
+      for (const name of readdirSync(this.voiceDirectory))
+        if (/^reply-[a-z0-9]+\.mp3$/.test(name))
+          rmSync(join(this.voiceDirectory, name), { force: true });
+      writeFileSync(
+        join(this.voiceDirectory, audio),
+        await speak(reply.text, this.speech),
+        { mode: 0o600 },
+      );
+    } catch {
+      audio = null;
+    }
+    return { heard, reply, audio };
+  }
 
   private get intervalMs() {
     return this.options.intervalMs ?? 3000;
@@ -217,7 +364,7 @@ export class BoardFeed implements AgentBoardPort {
       (async (item: DecisionRequest) => {
         const link = loadCallLink(this.root);
         if (!link) return null;
-        return answerByCall(await openCall(link, item), item, {
+        return answerByCall(await openCall(link, item.id), item, {
           now,
           deadline: item.holdUntil - 5000,
         });

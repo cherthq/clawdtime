@@ -287,7 +287,8 @@ export function removeCallLink(root: string) {
 /** A fresh backend session for one call, from the linked pairing. */
 export async function openCall(
   link: CallLink,
-  request: DecisionRequest,
+  /** Names this one call: a request id, or any unique word. */
+  key: string,
 ): Promise<CallClient> {
   const connection = loadConnection(
     link.connectionFile,
@@ -302,7 +303,7 @@ export async function openCall(
     adapter: connection.adapter,
     adapterVersion: connection.adapterVersion,
     projectRoot: connection.projectRoot,
-    externalSessionId: `clawdtime-supervisor-${request.id}`,
+    externalSessionId: `clawdtime-supervisor-${key}`,
     hostId: connection.hostId || hostname(),
     // The supervisor only talks. It claims no screen and no input.
     capabilities: sessionCapabilities({
@@ -312,4 +313,102 @@ export async function openCall(
     }),
   });
   return new ClawdTimeClient(connection.baseUrl, registered.token);
+}
+
+const farewell =
+  /\b(bye|goodbye|that's all|that is all|hang up|end the call|thanks,? that's it|nothing else)\b/;
+
+/**
+ * A conversation with ClawdTime on a call. Each thing the person says goes to
+ * `respond`, and its answer is spoken. It ends when the person says goodbye,
+ * hangs up, or the time runs out.
+ */
+export async function converseByCall(
+  client: CallClient,
+  respond: (spoken: string) => Promise<string>,
+  options: {
+    now: () => number;
+    deadline: number;
+    greeting: string;
+    pollMs?: number;
+    beatMs?: number;
+    key: string;
+  },
+): Promise<{ turns: number; ended: "goodbye" | "hung_up" | "time" }> {
+  const remaining = () => options.deadline - options.now();
+  const { request: attention } = await client.requestAttention({
+    taskId: "clawdtime-supervisor",
+    idempotencyKey: `talk-${options.key}`,
+    reason: "decision",
+    question: options.greeting,
+    timeoutSeconds: Math.max(20, Math.floor(remaining() / 1000)),
+  });
+  const beat = setInterval(
+    () => void client.heartbeat().catch(() => {}),
+    options.beatMs ?? 5000,
+  );
+  let cursor = 0,
+    count = 0;
+  try {
+    while (remaining() > 0) {
+      const page = await client.conversationTurns(
+        attention.id,
+        cursor,
+        Math.max(1, Math.min(options.pollMs ?? 10_000, remaining())),
+      );
+      const turns = page.turns
+        .flatMap((raw) => {
+          const parsed = turnSchema.safeParse(raw);
+          return parsed.success ? [parsed.data] : [];
+        })
+        .filter((turn) => turn.sequence > cursor)
+        .sort((left, right) => left.sequence - right.sequence);
+      for (const turn of turns) {
+        cursor = turn.sequence;
+        await client
+          .conversationOperation(attention.id, "ack", { turnId: turn.id })
+          .catch(() => {});
+      }
+      const last = turns.at(-1);
+      // Fragments of one sentence arrive as several turns: they are answered together.
+      const spoken = turns
+        .map((turn) => turn.text ?? "")
+        .join(" ")
+        .trim();
+      if (last && spoken) {
+        count++;
+        const bye = farewell.test(spoken.toLowerCase());
+        const answer = bye ? "Goodbye." : await respond(spoken);
+        await client
+          .conversationOperation(attention.id, "reply", {
+            turnId: last.id,
+            replyId: `reply-${last.id}`,
+            text: answer.slice(0, 900),
+            expectedCursor: cursor,
+          })
+          .catch(() => {});
+        await client
+          .conversationOperation(attention.id, "progress", {
+            turnId: last.id,
+            state: "completed",
+          })
+          .catch(() => {});
+        if (bye) {
+          await client
+            .conversationOperation(attention.id, "end", {})
+            .catch(() => {});
+          return { turns: count, ended: "goodbye" };
+        }
+      }
+      if (
+        ended.includes(page.request?.state ?? "") ||
+        page.conversation?.state === "ended"
+      )
+        return { turns: count, ended: "hung_up" };
+    }
+    await client.conversationOperation(attention.id, "end", {}).catch(() => {});
+    return { turns: count, ended: "time" };
+  } finally {
+    clearInterval(beat);
+  }
 }

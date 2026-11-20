@@ -142,6 +142,8 @@ final class ComposerView: NSView, NSTextViewDelegate {
   private let text = PlaceholderTextView()
   private let scroll = NSScrollView()
   var onChange: (() -> Void)?
+  /// Return sends, when this is set. Shift and Return starts a new line.
+  var onReturn: (() -> Void)?
   /// The field grew or shrank: its container lays out again.
   var onExpandChange: (() -> Void)?
   var placeholder: String {
@@ -190,6 +192,11 @@ final class ComposerView: NSView, NSTextViewDelegate {
   required init?(coder: NSCoder) { fatalError("Unavailable") }
   func focus() { window?.makeFirstResponder(text) }
   func textDidChange(_ notification: Notification) { text.needsDisplay = true; refreshHeight(); onChange?() }
+  func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    guard let onReturn, selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+    if NSApp.currentEvent?.modifierFlags.contains(.shift) == true { return false }
+    onReturn(); return true
+  }
   override func draw(_ dirtyRect: NSRect) {
     let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 10, yRadius: 10)
     Theme.color(.fill).setFill(); shape.fill()
@@ -323,7 +330,7 @@ final class DecisionCardView: NSView {
 }
 
 /// The card: a headline that says the most urgent thing, the sessions, and the task.
-final class BoardView: NSView {
+final class BoardView: NSView, SheetContent {
   var onOpenSession: ((String) -> Void)?
   /// request id, decision, text, remember
   var onDecide: ((String, String, String?, Bool) -> Void)?
@@ -688,10 +695,21 @@ final class BoardView: NSView {
   }
 }
 
-/// The board's window: it opens out of the mascot with a spring and closes back into it.
-final class BoardController: NSObject {
+/// What a sheet shows: a view of one width that knows how tall it wants to be.
+protocol SheetContent: NSView {
+  static var width: CGFloat { get }
+  var maxHeight: CGFloat { get set }
+  var fittingHeight: CGFloat { get }
+  /// Something is half written: a click elsewhere does not put the sheet away.
+  var hasDraft: Bool { get }
+  var onResize: (() -> Void)? { get set }
+}
+
+/// A sheet's window: it opens out of the mascot with a spring and closes back into it.
+/// The board and the chat are both sheets.
+final class SheetController<Content: SheetContent>: NSObject {
   let window: BoardWindow
-  let view = BoardView(frame: NSRect(x: 0, y: 0, width: BoardView.width, height: 400))
+  let view: Content
   private let holder = NSView()
   private var progress = Spring(0, response: MotionToken.surface.response, dampingRatio: MotionToken.surface.dampingRatio)
   private var anchor = CGPoint(x: 1, y: 1)
@@ -701,8 +719,9 @@ final class BoardController: NSObject {
   private var outside: Any?
   var onClosed: (() -> Void)?
 
-  override init() {
-    window = BoardWindow(contentRect: NSRect(x: 0, y: 0, width: BoardView.width, height: 400), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+  init(_ view: Content) {
+    self.view = view
+    window = BoardWindow(contentRect: NSRect(x: 0, y: 0, width: Content.width, height: 400), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     super.init()
     window.level = .floating; window.isFloatingPanel = true; window.becomesKeyOnlyIfNeeded = true
     window.hidesOnDeactivate = false; window.isReleasedWhenClosed = false
@@ -721,7 +740,7 @@ final class BoardController: NSObject {
   private func place() {
     guard isOpen || window.isVisible else { return }
     view.maxHeight = max(320, min(660, screenFrame.height - 72))
-    let size = CGSize(width: BoardView.width, height: view.fittingHeight)
+    let size = CGSize(width: Content.width, height: view.fittingHeight)
     let placed = PetLayout.panel(size: size, pet: petFrame, in: screenFrame)
     anchor = placed.anchor
     if window.frame != placed.frame { window.setFrame(placed.frame, display: true); view.frame = holder.bounds; apply() }

@@ -23,7 +23,14 @@ import TaskPanelCore
   private var startTucked = false
   private var localNotice = ""
   private let pet = PetController()
-  private let boardPanel = BoardController()
+  private let boardPanel = SheetController(BoardView(frame: NSRect(x: 0, y: 0, width: BoardView.width, height: 400)))
+  private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
+  private let voice = VoiceController()
+  private var transcript: ChatTranscript?
+  private var chatPending: String?
+  private var chatNotice = ""
+  /// The last spoken turn, shown on the mascot while the chat is closed.
+  private var said: (bubble: PetStatus.Bubble, until: Date)?
   private var statusItem: NSStatusItem?
   private var stopSharingItems: [NSMenuItem] = []
   private var stopCallItems: [NSMenuItem] = []
@@ -47,6 +54,8 @@ import TaskPanelCore
   private func actions(into menu: NSMenu) {
     menu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "0").target = self
     menu.addItem(withTitle: "Open or close the board", action: #selector(toggleBoard), keyEquivalent: "b").target = self
+    menu.addItem(withTitle: "Chat with ClawdTime", action: #selector(toggleChat), keyEquivalent: "k").target = self
+    menu.addItem(withTitle: "Talk to ClawdTime", action: #selector(toggleTalk), keyEquivalent: "t").target = self
     menu.addItem(withTitle: "Tuck against the edge", action: #selector(tuck), keyEquivalent: "").target = self
     let styles = NSMenuItem(title: "Mascot", action: nil, keyEquivalent: "")
     let styleMenu = NSMenu(title: "Mascot")
@@ -157,15 +166,30 @@ import TaskPanelCore
     pet.onDecide = { [weak self] id, decision in self?.decide(id, decision, nil, false) }
     pet.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
     pet.onStopCall = { [weak self] in self?.perform(.stopCall) }
-    pet.onHide = { [weak self] in self?.closeBoard(); self?.pet.hide() }
+    pet.onHide = { [weak self] in self?.closeBoard(); self?.chatPanel.close(); self?.voice.stop(); self?.pet.hide() }
     pet.onMoved = { [weak self] in self?.followPet() }
     pet.menu = { [weak self] in self?.contextMenu() ?? NSMenu() }
     pet.afterFrame = { [weak self] step in
       guard let self else { return }
-      self.boardPanel.step(step)
-      self.pet.wantsBoost = !self.boardPanel.settled
+      self.boardPanel.step(step); self.chatPanel.step(step)
+      self.pet.wantsBoost = !self.boardPanel.settled || !self.chatPanel.settled
     }
-    boardPanel.onClosed = { [weak self] in self?.pet.boardOpen = false }
+    boardPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.chatPanel.isOpen ?? false }
+    chatPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.boardPanel.isOpen ?? false }
+    // The bar under the mascot, and the conversation it starts.
+    pet.onChat = { [weak self] in self?.toggleChat(nil) }
+    pet.onTalk = { [weak self] in self?.startTalk() }
+    pet.onMic = { [weak self] in self?.voice.micOn.toggle() }
+    pet.onSpeaker = { [weak self] in self?.voice.speakerOn.toggle() }
+    pet.onEndTalk = { [weak self] in self?.voice.stop() }
+    pet.voiceLevel = { [weak self] in self?.voice.level ?? 0 }
+    voice.onChange = { [weak self] in self?.renderTalk() }
+    voice.onError = { [weak self] message in self?.chatNotice = message; self?.openChat(); self?.renderChat() }
+    voice.answer = { [weak self] recording in await self?.heard(recording) }
+    let chat = chatPanel.view
+    chat.onSend = { [weak self] text in self?.sendChat(text) }
+    chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
+    chat.onClose = { [weak self] in self?.chatPanel.close() }
     let view = boardPanel.view
     view.onOpenSession = { [weak self] id in self?.openAgent(id) }
     view.onDecide = { [weak self] id, decision, text, remember in self?.decide(id, decision, text, remember) }
@@ -183,9 +207,14 @@ import TaskPanelCore
   // MARK: mascot and board
 
   private var petScreen: CGRect { (pet.window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero }
-  private func followPet() { if boardPanel.isOpen { boardPanel.follow(pet: pet.frame, screen: petScreen) } }
+  private func followPet() {
+    if boardPanel.isOpen { boardPanel.follow(pet: pet.frame, screen: petScreen) }
+    if chatPanel.isOpen { chatPanel.follow(pet: pet.frame, screen: petScreen) }
+  }
   private func openBoard() {
     if pet.isDocked { pet.undock() }
+    // One sheet at a time: the board and the chat share the place beside the mascot.
+    chatPanel.close()
     pet.boardOpen = true
     boardPanel.open(pet: pet.frame, screen: petScreen)
   }
@@ -196,17 +225,104 @@ import TaskPanelCore
   }
   @objc private func tuck(_ sender: Any?) {
     if !pet.visible { pet.show() }
-    closeBoard(); pet.dock()
+    closeBoard(); chatPanel.close(); voice.stop(); pet.dock()
+  }
+
+  // MARK: talking to ClawdTime
+
+  private func openChat() {
+    if !pet.visible { pet.show() }
+    if pet.isDocked { pet.undock() }
+    boardPanel.close()
+    pet.boardOpen = true
+    renderChat()
+    chatPanel.open(pet: pet.frame, screen: petScreen)
+    // The person opened it to write: the field takes the keys.
+    chatPanel.window.makeKey(); chatPanel.view.focus()
+    refreshChat()
+  }
+  @objc private func toggleChat(_ sender: Any?) {
+    if chatPanel.isOpen { chatPanel.close() } else { openChat() }
+  }
+  @objc private func toggleTalk(_ sender: Any?) {
+    if voice.phase == .off { startTalk() } else { voice.stop() }
+  }
+  private func refreshChat() {
+    guard let client else { return }
+    Task {
+      if let fresh = try? await client.chat() { transcript = fresh }
+      renderChat()
+    }
+  }
+  private func renderChat() {
+    var model = ChatModel()
+    model.messages = transcript?.messages ?? []
+    model.pending = chatPending
+    model.modelReady = transcript?.model ?? true
+    model.connected = state.connected
+    model.voice = voice.phase
+    model.notice = chatNotice
+    chatPanel.view.render(model)
+  }
+  private func renderTalk() {
+    pet.setTalk(on: voice.phase != .off, micOn: voice.micOn, speakerOn: voice.speakerOn, speaking: voice.phase == .speaking, thinking: voice.phase == .thinking)
+    renderChat()
+  }
+  /// One typed message. The words show at once; the answer follows.
+  private func sendChat(_ text: String) {
+    guard let client, chatPending == nil else { return }
+    chatPending = text; chatNotice = ""; renderChat()
+    Task {
+      let reply = try? await client.say(text)
+      if let fresh = try? await client.chat() { transcript = fresh }
+      chatPending = nil
+      if reply == nil { chatNotice = "ClawdTime did not answer. Nothing was done." }
+      pet.react(success: reply != nil)
+      renderChat()
+      // It may have answered a request or changed away mode.
+      decisions = try? await client.decisions()
+      render()
+    }
+  }
+  /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
+  private func heard(_ recording: String) async -> URL? {
+    guard let client else { return nil }
+    let result = try? await client.hear(recording)
+    if let fresh = try? await client.chat() { transcript = fresh }
+    if result == nil { chatNotice = "ClawdTime did not answer. Nothing was done." } else if result?.reply != nil { chatNotice = "" }
+    if let result, let reply = result.reply {
+      let caption = PetStatus.Bubble.said(heard: result.heard, reply: reply.text, at: reply.at)
+      said = (caption.bubble, Date().addingTimeInterval(caption.seconds))
+    }
+    renderChat()
+    decisions = try? await client.decisions()
+    render()
+    guard let name = result?.audioName, let directory = transcript?.voiceDirectory else { return nil }
+    return URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent(name)
+  }
+  private func startTalk() {
+    guard let client else { return }
+    Task {
+      if let fresh = try? await client.chat() { transcript = fresh }
+      guard let transcript else { chatNotice = "The task service did not answer. ClawdTime cannot listen now."; openChat(); return }
+      guard transcript.speech else {
+        chatNotice = "Speech needs an OpenAI key. Set CLAWDTIME_OPENAI_API_KEY and start ClawdTime again. Typing works now."
+        openChat(); return
+      }
+      chatNotice = ""
+      voice.directory = URL(fileURLWithPath: transcript.voiceDirectory, isDirectory: true)
+      voice.start()
+    }
   }
   @objc func showPanel(_ sender: Any?) {
     pet.show()
-    if !boardPanel.isOpen { openBoard() }
+    if !boardPanel.isOpen && !chatPanel.isOpen { openBoard() }
   }
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(nil); return true }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
   func applicationWillTerminate(_ notification: Notification) {
     DistributedNotificationCenter.default().removeObserver(self)
-    pet.mascot.stop()
+    pet.mascot.stop(); voice.stop()
     pollTask?.cancel(); client?.close()
   }
 
@@ -227,7 +343,11 @@ import TaskPanelCore
           self.board = try? await client.agents()
           // Reading this also tells the agents' hooks that someone is here to answer.
           self.decisions = try? await client.decisions()
-          self.render()
+          // The chat is read while it is in view, and once at the start.
+          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil {
+            if let fresh = try? await client.chat() { self.transcript = fresh }
+          }
+          self.render(); self.renderChat()
           let waiting = self.state.pending.filter(\.unresolved).map(\.eventId)
           let found = await withTaskGroup(of: PanelOperation?.self) { group in
             for id in waiting { group.addTask { try? await client.operation(id) } }
@@ -262,7 +382,10 @@ import TaskPanelCore
     let asked = (decisions?.pending ?? []).filter { $0.holdUntil > now }
     let status = PetStatus.make(board: liveBoard, connected: state.connected, taskNeedsPerson: taskNeedsPerson, sharing: sharing,
                                 quietSeconds: pet.mascot.quietSeconds, now: now, decisions: asked)
-    pet.status = status
+    // In a spoken conversation the bubble is the caption: what it heard, what it answered.
+    if let said, said.until > Date(), !chatPanel.isOpen {
+      pet.status = PetStatus(mood: status.mood, headline: status.headline, detail: status.detail, bubble: said.bubble)
+    } else { pet.status = status }
     // Stop is always one click away: on the mascot, in the board and in every menu.
     pet.setStop(sharing: state.allows(.stopSharing), call: state.allows(.stopCall))
     refreshMenus()

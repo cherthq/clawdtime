@@ -37,8 +37,16 @@ The board's headline says the most urgent thing in words, for example "1 agent
 needs you" or "All quiet". A task that waits for an answer comes before the
 agents. The task field is one line at rest and opens when the person clicks it.
 
-**Stop sharing** and **Stop call** are a row on the mascot, a bar at the top of
-the board, and items in every menu, whenever either can be stopped. A tucked
+A small bar hangs under the mascot. At rest it holds two buttons: **Chat** opens
+the chat screen beside the mascot, and **Talk** starts a spoken conversation. In
+a conversation the bar opens with a spring into a microphone switch, the level
+of the voice as moving bars, a speaker switch and an end button. While you talk
+with the chat closed, the mascot's bubble shows what it heard and what it
+answered. The board and the chat share the place beside the mascot, so one is
+open at a time. See [Talk to ClawdTime](SUPERVISOR.md#talk-to-clawdtime).
+
+**Stop sharing** and **Stop call** join that bar, sit as a bar at the top of
+the board, and are items in every menu, whenever either can be stopped. A tucked
 mascot comes out when a Stop control appears. They reflect the actual service
 permissions. Closing or tucking does not stop sharing or a call, and nothing here
 starts sharing. There is no new sharing toggle or permission change.

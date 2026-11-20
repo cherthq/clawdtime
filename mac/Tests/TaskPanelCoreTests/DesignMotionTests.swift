@@ -334,4 +334,92 @@ final class DesignMotionTests: XCTestCase {
     // A question has choices: it is answered on the board, not with two buttons on the bubble.
     XCTAssertNil(two.bubble?.decisionId)
   }
+
+  // MARK: talking to ClawdTime
+
+  func testChatAndVoiceRepliesDecodeTheServiceContract() throws {
+    let json = #"{"version":1,"model":true,"speech":true,"voiceDirectory":"/Users/x/.local/share/clawdtime/agents/voice","messages":[{"role":"user","text":"what needs me?","at":1,"via":"voice"},{"role":"assistant","text":"Nothing.","at":2,"via":"voice"}]}"#
+    let transcript = try JSONDecoder().decode(ChatTranscript.self, from: Data(json.utf8))
+    try transcript.validate()
+    XCTAssertEqual(transcript.messages.map(\.mine), [true, false])
+    XCTAssertThrowsError(try ChatTranscript(version: 1, model: true, speech: true, voiceDirectory: "relative", messages: []).validate())
+    XCTAssertThrowsError(try ChatTranscript(version: 1, model: true, speech: true, voiceDirectory: "/v", messages: [.init(role: "system", text: "x", at: 1, via: "chat")]).validate())
+    let reply = try JSONDecoder().decode(VoiceReply.self, from: Data(#"{"heard":"hi","reply":{"role":"assistant","text":"Hello.","at":3,"via":"voice"},"audio":"reply-mabc123.mp3"}"#.utf8))
+    XCTAssertEqual(reply.audioName, "reply-mabc123.mp3")
+    // A name that is not one the service writes is never played.
+    XCTAssertNil(VoiceReply(heard: "", reply: nil, audio: "../../etc/passwd").audioName)
+    XCTAssertNil(VoiceReply(heard: "", reply: nil, audio: "reply-x.wav").audioName)
+    XCTAssertNil(VoiceReply(heard: "", reply: nil, audio: nil).audioName)
+  }
+  func testTheMeterRisesFastFallsSlowlyAndStaysInRange() {
+    var meter = VoiceMeter()
+    for _ in 0..<6 { meter.feed(rms: 0.3) }
+    let loud = meter.level
+    XCTAssertGreaterThan(loud, 0.8)
+    meter.feed(rms: 0); XCTAssertGreaterThan(meter.level, loud * 0.8, "one quiet buffer does not drop the meter")
+    for _ in 0..<60 { meter.feed(rms: 0) }
+    XCTAssertLessThan(meter.level, 0.01)
+    for value in [0.0, 1e-9, 0.5, 1, 5] { meter.feed(rms: value); XCTAssertTrue((0...1).contains(meter.level)) }
+    let bars = meter.bars(5, phase: 0.3)
+    XCTAssertEqual(bars.count, 5); XCTAssertTrue(bars.allSatisfy { (0.14...1).contains($0) })
+    // The bars move on their own, so the shape is read over a full turn of the phase.
+    var middle = 0.0, edge = 0.0
+    for step in 0..<90 { let frame = meter.bars(5, phase: Double(step) / 90 * 2 * .pi / 7); middle += frame[2]; edge += frame[0] }
+    XCTAssertGreaterThan(middle, edge * 1.2, "the middle bar is the tallest")
+    meter.rest(); XCTAssertEqual(meter.bars(5, phase: 0), Array(repeating: 0.14, count: 5))
+  }
+  func testOneSentenceStartsOnSpeechAndEndsOnAPause() {
+    var activity = VoiceActivity()
+    var events: [VoiceActivity.Event] = []
+    func feed(_ level: Double, _ seconds: Double) { var left = seconds; while left > 0 { let event = activity.feed(level: level, seconds: 0.02); if event != .none { events.append(event) }; left -= 0.02 } }
+    feed(0.05, 1); XCTAssertEqual(events, []); XCTAssertFalse(activity.speaking)
+    feed(0.6, 0.06); feed(0.05, 0.1); XCTAssertEqual(events, [], "a click is not speech")
+    feed(0.6, 0.2); XCTAssertEqual(events, [.started])
+    feed(0.05, 0.6); feed(0.6, 0.4); XCTAssertEqual(events, [.started], "a short pause inside a sentence does not end it")
+    feed(0.05, 1.2); XCTAssertEqual(events.first, .started); XCTAssertEqual(events.last, .ended)
+    // Silence only: the recording is thrown away after six seconds.
+    activity.reset(); events = []
+    feed(0.02, 6.2); XCTAssertEqual(events.first, .discard)
+    // Talk that never stops is cut at half a minute.
+    activity.reset(); events = []
+    feed(0.7, 31); XCTAssertEqual(events.first, .started); XCTAssertTrue(events.contains(.ended))
+  }
+  func testAVoiceLightsTheSparkAndOpensTheMouth() {
+    var animator = MascotAnimator(seed: 4)
+    var quiet = MascotInput(mood: .idle), loud = MascotInput(mood: .idle)
+    loud.voice = 0.9; quiet.voice = 0
+    var silent = MascotPose(), spoken = MascotPose()
+    for _ in 0..<60 { silent = animator.step(1.0 / 60, quiet) }
+    for _ in 0..<30 { spoken = animator.step(1.0 / 60, loud) }
+    XCTAssertGreaterThan(spoken.glow, 0.85); XCTAssertGreaterThan(spoken.smile, silent.smile + 0.3)
+    XCTAssertEqual(animator.preferredFramesPerSecond(loud), 60)
+  }
+  func testTheBubbleGoesPastTheBarAndNeverOverIt() {
+    let screen = CGRect(x: 0, y: 0, width: 1440, height: 900), size = CGSize(width: 207, height: 62)
+    // Near the top of the screen the bubble is under the mascot, and so is the bar.
+    let top = CGRect(x: 1280, y: 740, width: 148, height: 148)
+    let bar = PetLayout.controls(size: CGSize(width: 86, height: 40), pet: top, in: screen)
+    let under = PetLayout.bubble(size: size, pet: top, in: screen, clear: bar)
+    XCTAssertTrue(under.below); XCTAssertFalse(under.frame.intersects(bar)); XCTAssertLessThanOrEqual(under.frame.maxY, bar.minY - 4)
+    XCTAssertTrue(PetLayout.bubble(size: size, pet: top, in: screen).frame.intersects(bar), "without the bar in mind they would overlap")
+    // In the middle the bubble is above and the bar is below: nothing changes.
+    let middle = CGRect(x: 600, y: 400, width: 148, height: 148)
+    let low = PetLayout.controls(size: CGSize(width: 86, height: 40), pet: middle, in: screen)
+    XCTAssertEqual(PetLayout.bubble(size: size, pet: middle, in: screen, clear: low).frame, PetLayout.bubble(size: size, pet: middle, in: screen).frame)
+    // At the bottom edge the bar goes over the mascot, and the bubble goes over the bar.
+    let bottom = CGRect(x: 600, y: 4, width: 148, height: 148)
+    let high = PetLayout.controls(size: CGSize(width: 86, height: 40), pet: bottom, in: screen)
+    XCTAssertGreaterThan(high.minY, bottom.midY)
+    let over = PetLayout.bubble(size: size, pet: bottom, in: screen, clear: high)
+    XCTAssertFalse(over.below); XCTAssertFalse(over.frame.intersects(high)); XCTAssertGreaterThanOrEqual(over.frame.minY, high.maxY + 4)
+  }
+  func testASpokenTurnBecomesACaptionThatStaysLongerForALongerAnswer() {
+    let short = PetStatus.Bubble.said(heard: "what needs me", reply: "Nothing.", at: 1795170939254)
+    XCTAssertTrue(short.bubble.caption); XCTAssertEqual(short.bubble.title, "\u{201C}what needs me\u{201D}"); XCTAssertEqual(short.bubble.detail, "Nothing.")
+    XCTAssertEqual(short.bubble.key, "say-1795170939254"); XCTAssertNil(short.bubble.sessionId); XCTAssertNil(short.bubble.decisionId)
+    XCTAssertEqual(short.seconds, 5)
+    let long = PetStatus.Bubble.said(heard: String(repeating: "word ", count: 30), reply: String(repeating: "a", count: 400), at: 2)
+    XCTAssertEqual(long.seconds, 14); XCTAssertLessThanOrEqual(long.bubble.title.count, 62)
+    XCTAssertFalse(PetStatus.Bubble(key: "k", title: "t", detail: "d", sessionId: nil).caption)
+  }
 }

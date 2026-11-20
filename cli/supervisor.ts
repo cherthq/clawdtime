@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -21,10 +22,26 @@ import {
   type DecisionRequest,
 } from "../connectors/agents/decisions.js";
 import {
+  converseByCall,
   loadCallLink,
+  openCall,
   removeCallLink,
   saveCallLink,
 } from "../connectors/agents/call.js";
+import {
+  ChatLog,
+  OpenAIModel,
+  Supervisor,
+  type ModelClient,
+} from "../connectors/agents/brain.js";
+import { focusSession } from "../connectors/agents/focus.js";
+import {
+  speak,
+  speechSettings,
+  transcribe,
+} from "../connectors/agents/speech.js";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import { connectionPath } from "../connectors/shared/state.js";
 import { claudeHome, codexHome } from "../connectors/agents/evidence.js";
 import type { Runner } from "../connectors/agents/focus.js";
@@ -50,6 +67,60 @@ export interface SupervisorDependencies {
   print: (line: string) => void;
   hookScript: string;
   findSession: (snapshot: BoardSnapshot, query: string) => AgentSession;
+  /** The language model of the ClawdTime agent. Tests script it. */
+  model?: ModelClient | null;
+}
+
+/**
+ * A spoken conversation in a terminal. Return starts a recording, Return again
+ * sends it; the answer is printed and spoken. "q" or the end of input stops it.
+ */
+export async function talkLoop(io: {
+  print: (line: string) => void;
+  /** One line that the person entered. Null when the input ended. */
+  next: () => Promise<string | null>;
+  /** Starts a recording. `stop` ends it and gives its file. */
+  record: () => { stop: () => Promise<string> };
+  /** The words in one recording. */
+  hear: (file: string) => Promise<string>;
+  answer: (words: string) => Promise<string>;
+  say: (text: string) => Promise<void>;
+}): Promise<number> {
+  let turns = 0;
+  io.print(
+    "Press Return, speak, and press Return again. Type q and Return to stop.",
+  );
+  for (;;) {
+    const start = await io.next();
+    if (start === null || start.trim() === "q") return turns;
+    const recording = io.record();
+    io.print("Listening. Press Return to send.");
+    const end = await io.next();
+    const file = await recording.stop();
+    let heard = "";
+    try {
+      heard = await io.hear(file);
+    } catch (error) {
+      io.print(
+        error instanceof Error ? error.message : "Transcription failed.",
+      );
+    }
+    if (end === null || end.trim() === "q") return turns;
+    if (!heard) {
+      io.print("I did not catch that. Press Return to try again.");
+      continue;
+    }
+    turns++;
+    io.print(`You: ${heard}`);
+    const answer = await io.answer(heard);
+    io.print(`ClawdTime: ${answer}`);
+    try {
+      await io.say(answer);
+    } catch (error) {
+      io.print(error instanceof Error ? error.message : "Speech failed.");
+    }
+    io.print("Press Return to speak again, or q and Return to stop.");
+  }
 }
 
 export const supervisorHelp = `Answer agents, and what ClawdTime remembers
@@ -64,6 +135,9 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   clis [--json]                        agent commands on this Mac, with versions and use
   report [--out FILE] [--open]         the same as a slide deck
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
+  chat [TEXT]                          talk to ClawdTime in text: it answers and can act
+  talk                                 the same by voice: you speak, it speaks back
+  agents call me                       ClawdTime calls you on FaceTime, and you talk to it
 ID is the request's id, its first letters, or its number in the pending list.`;
 
 function split(args: string[], switches: string[], values: string[]) {
@@ -314,6 +388,65 @@ export async function supervisorCli(
           "Linked. In away mode a request that waits becomes a FaceTime call through this pairing, and your spoken answer goes to the agent.",
         );
       }
+      if (action === "me") {
+        const link = loadCallLink(root);
+        if (!link)
+          throw new Error(
+            "No phone link. First: clawdtime agents call connect --agent claude-code --project PATH",
+          );
+        const board = () =>
+          new BoardScanner(system, { includeHeadless: false }).scan();
+        const key =
+          system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
+        const supervisor = new Supervisor(
+          {
+            now: () => system.now(),
+            board,
+            desk,
+            focus: (session) => focusSession(session, runner),
+            send: (session, text) =>
+              sendText(session, text, { enter: true }, runner),
+            clis: () => inventory(system, board()),
+          },
+          key
+            ? new OpenAIModel(
+                key,
+                system.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
+              )
+            : null,
+        );
+        const log = new ChatLog(root);
+        print("Calling you. Say goodbye to end the call.");
+        const result = await converseByCall(
+          await openCall(link, `talk-${system.now().toString(36)}`),
+          async (spoken) => {
+            const history = log.recent(24);
+            log.append({
+              role: "user",
+              text: spoken.slice(0, 2000),
+              at: system.now(),
+              via: "call",
+            });
+            const answer = await supervisor.reply(history, spoken, "call");
+            log.append({
+              role: "assistant",
+              text: answer,
+              at: system.now(),
+              via: "call",
+            });
+            return answer;
+          },
+          {
+            now: () => Date.now(),
+            deadline: Date.now() + 10 * 60_000,
+            greeting: "ClawdTime here. What do you need?",
+            key: system.now().toString(36),
+          },
+        );
+        return print(
+          `The call ended (${result.ended.replace("_", " ")}) after ${result.turns} ${result.turns === 1 ? "turn" : "turns"}.`,
+        );
+      }
       if (action === "disconnect") {
         removeCallLink(root);
         return print(
@@ -321,7 +454,9 @@ export async function supervisorCli(
         );
       }
       if (action !== "status")
-        throw new Error("Use: clawdtime agents call connect|status|disconnect");
+        throw new Error(
+          "Use: clawdtime agents call connect|status|me|disconnect",
+        );
       const link = loadCallLink(root);
       return print(
         link
@@ -456,6 +591,138 @@ export async function supervisorCli(
     writeFileSync(file, deck, { mode: 0o600 });
     print(`Report written to ${file}`);
     if (flags.open) await runner("/usr/bin/open", [file], 8000);
+    return;
+  }
+
+  if (group === "chat" || group === "talk") {
+    const board = () =>
+      new BoardScanner(system, { includeHeadless: false }).scan();
+    const key =
+      system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
+    const supervisor = new Supervisor(
+      {
+        now: () => system.now(),
+        board,
+        desk,
+        focus: (session) => focusSession(session, runner),
+        send: (session, text) =>
+          sendText(session, text, { enter: true }, runner),
+        clis: () => inventory(system, board()),
+      },
+      deps.model !== undefined
+        ? deps.model
+        : key
+          ? new OpenAIModel(
+              key,
+              system.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
+            )
+          : null,
+    );
+    const log = new ChatLog(root);
+    const turn = async (words: string, via: "chat" | "voice") => {
+      const history = log.recent(24);
+      log.append({
+        role: "user",
+        text: words.slice(0, 2000),
+        at: system.now(),
+        via,
+      });
+      const answer = await supervisor.reply(history, words, via);
+      log.append({ role: "assistant", text: answer, at: system.now(), via });
+      return answer;
+    };
+    if (group === "chat") {
+      if (args.length) return print(await turn(args.join(" "), "chat"));
+      if (!supervisor.ready)
+        print(
+          "No language model key is set: I tell the state and take a clear approve or deny.",
+        );
+      const lines = createInterface({ input: process.stdin });
+      for await (const line of lines)
+        if (line.trim()) print(await turn(line, "chat"));
+      return;
+    }
+    const speech = speechSettings(system.env);
+    if (!speech)
+      throw new Error(
+        "Speech needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in the environment.",
+      );
+    const folder = join(root, "agents", "voice");
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    // Each line of input is read once, in order, however fast it arrives.
+    const lines = createInterface({ input: process.stdin });
+    const waiting: string[] = [];
+    let wake: ((line: string | null) => void) | null = null;
+    let ended = false;
+    lines.on("line", (line) => {
+      if (wake) {
+        const done = wake;
+        wake = null;
+        done(line);
+      } else waiting.push(line);
+    });
+    lines.on("close", () => {
+      ended = true;
+      wake?.(null);
+    });
+    await talkLoop({
+      print,
+      next: () =>
+        new Promise<string | null>((done) => {
+          const line = waiting.shift();
+          if (line !== undefined) done(line);
+          else if (ended) done(null);
+          else wake = done;
+        }),
+      record: () => {
+        const file = join(folder, `talk-${Date.now().toString(36)}.wav`);
+        // The default microphone, one channel, 16 kHz: enough for speech.
+        const recorder = spawn(
+          "ffmpeg",
+          [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "avfoundation",
+            "-i",
+            ":default",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-y",
+            file,
+          ],
+          { stdio: ["pipe", "ignore", "ignore"] },
+        );
+        const exited = new Promise<void>((done) => {
+          recorder.once("exit", () => done());
+          recorder.once("error", () => done());
+        });
+        return {
+          stop: async () => {
+            recorder.stdin?.write("q");
+            await exited;
+            return file;
+          },
+        };
+      },
+      hear: async (file) => {
+        try {
+          return await transcribe(file, speech);
+        } finally {
+          rmSync(file, { force: true });
+        }
+      },
+      answer: (words) => turn(words, "voice"),
+      say: async (text) => {
+        const sound = join(folder, "talk-reply.mp3");
+        writeFileSync(sound, await speak(text, speech), { mode: 0o600 });
+        await runner("/usr/bin/afplay", [sound], 60_000);
+      },
+    });
+    lines.close();
     return;
   }
 

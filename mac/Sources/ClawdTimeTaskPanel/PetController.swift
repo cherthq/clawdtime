@@ -53,16 +53,33 @@ final class BubbleView: NSView {
     setAccessibilityElement(true); setAccessibilityRole(.button)
   }
   required init?(coder: NSCoder) { fatalError("Unavailable") }
+  /// A caption holds what ClawdTime said: up to three lines, where other news has one.
+  var caption = false {
+    didSet {
+      guard caption != oldValue else { return }
+      detail.maximumNumberOfLines = caption ? 3 : 1
+      detail.lineBreakMode = caption ? .byWordWrapping : .byTruncatingTail
+      detail.cell?.wraps = caption; detail.cell?.truncatesLastVisibleLine = true
+      needsLayout = true
+    }
+  }
+  /// The room that a caption's extra lines take.
+  private var extra: CGFloat {
+    guard caption, let font = detail.font else { return 0 }
+    let box = (detail.stringValue as NSString).boundingRect(with: NSSize(width: 292 - 28, height: 200), options: [.usesLineFragmentOrigin], attributes: [.font: font])
+    return min(34, max(0, ceil(box.height) - 16))
+  }
   func fit() -> NSSize {
-    let width = min(292, max(168, max(title.intrinsicContentSize.width, detail.intrinsicContentSize.width) + 58))
-    return NSSize(width: ceil(max(width, showsActions ? 208 : 0)), height: 54 + (showsActions ? 36 : 0) + Self.tailHeight)
+    let width = caption ? 292 : min(292, max(168, max(title.intrinsicContentSize.width, detail.intrinsicContentSize.width) + 58))
+    return NSSize(width: ceil(max(width, showsActions ? 208 : 0)), height: 54 + extra + (showsActions ? 36 : 0) + Self.tailHeight)
   }
   override func layout() {
     super.layout()
     let base = (below ? 0 : Self.tailHeight) + (showsActions ? 36 : 0)
-    title.frame = NSRect(x: 14, y: base + 27, width: bounds.width - 46, height: 18)
-    detail.frame = NSRect(x: 14, y: base + 9, width: bounds.width - 28, height: 16)
-    dismiss.frame = NSRect(x: bounds.width - 26, y: base + 28, width: 18, height: 18)
+    let extra = self.extra
+    title.frame = NSRect(x: 14, y: base + 27 + extra, width: bounds.width - 46, height: 18)
+    detail.frame = NSRect(x: 14, y: base + 9, width: bounds.width - 28, height: 16 + extra)
+    dismiss.frame = NSRect(x: bounds.width - 26, y: base + 28 + extra, width: 18, height: 18)
     let row = base - 30
     approve.frame = NSRect(x: 12, y: row, width: approve.intrinsicContentSize.width, height: 26)
     deny.frame = NSRect(x: approve.frame.maxX + 8, y: row, width: deny.intrinsicContentSize.width, height: 26)
@@ -94,25 +111,73 @@ final class BubbleView: NSView {
   @objc private func denied() { onDeny?() }
 }
 
-/// Stop sharing and Stop call, always one click away while either can be stopped.
-final class ControlsView: NSView {
+/// The bar under the mascot. At rest: chat and talk. In a conversation it widens
+/// into the microphone, the level of the voice, the speaker and an end button.
+/// Stop sharing and Stop call join it whenever either can be stopped.
+final class DockBarView: NSView {
+  var talking = false { didSet { if talking != oldValue { needsLayout = true } } }
+  let chat: IconButton, talk: IconButton, mic: IconButton, speaker: IconButton, end: IconButton
+  let bars = LevelBarsView()
   let sharing: PillButton, call: PillButton
-  private let row: NSStackView
-  init(target: AnyObject, stopSharing: Selector, stopCall: Selector) {
+  private var dividers: [CGFloat] = []
+  init(target: AnyObject, chat chatAction: Selector, talk talkAction: Selector, mic micAction: Selector, speaker speakerAction: Selector,
+       end endAction: Selector, stopSharing: Selector, stopCall: Selector) {
+    chat = IconButton(symbol: "text.bubble.fill", label: "Chat with ClawdTime", diameter: 30, target: target, action: chatAction)
+    talk = IconButton(symbol: "waveform", label: "Talk to ClawdTime", diameter: 30, target: target, action: talkAction)
+    mic = IconButton(symbol: "mic.fill", label: "Mute the microphone", diameter: 30, target: target, action: micAction)
+    speaker = IconButton(symbol: "speaker.wave.2.fill", label: "Mute ClawdTime's voice", diameter: 30, target: target, action: speakerAction)
+    end = IconButton(symbol: "xmark", label: "End the conversation", diameter: 30, target: target, action: endAction)
     sharing = PillButton("Stop sharing", kind: .danger, small: true, symbol: "stop.fill", target: target, action: stopSharing)
     call = PillButton("Stop call", kind: .danger, small: true, symbol: "phone.down.fill", target: target, action: stopCall)
-    row = NSStackView(views: [sharing, call])
     super.init(frame: .zero)
-    row.orientation = .horizontal; row.spacing = 6; row.detachesHiddenViews = true
-    addSubview(row); row.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5), row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
-      row.topAnchor.constraint(equalTo: topAnchor, constant: 5), row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5)])
+    end.danger = true
+    for view in [chat, talk, mic, bars, speaker, end, sharing, call] as [NSView] { addSubview(view) }
+    sharing.isHidden = true; call.isHidden = true
   }
   required init?(coder: NSCoder) { fatalError("Unavailable") }
+  private struct Slot { let view: NSView; let width: CGFloat; let divider: Bool }
+  private var row: [Slot] {
+    var items: [Slot] = [Slot(view: chat, width: 30, divider: true)]
+    if talking {
+      items.append(Slot(view: mic, width: 30, divider: false))
+      items.append(Slot(view: bars, width: 40, divider: false))
+      items.append(Slot(view: speaker, width: 30, divider: false))
+      items.append(Slot(view: end, width: 30, divider: false))
+    } else {
+      items.append(Slot(view: talk, width: 30, divider: false))
+    }
+    for pill in [sharing, call] where !pill.isHidden {
+      items.append(Slot(view: pill, width: pill.intrinsicContentSize.width, divider: false))
+    }
+    return items
+  }
+  func fit() -> NSSize {
+    var width: CGFloat = 12
+    let items = row
+    for item in items { width += item.width + (item.divider ? 9 : 0) }
+    width += CGFloat(items.count - 1) * 4
+    return NSSize(width: width, height: 40)
+  }
+  override func layout() {
+    super.layout()
+    for view in [talk, mic, bars, speaker, end] as [NSView] { view.isHidden = true }
+    var x: CGFloat = 6
+    dividers = []
+    for item in row {
+      item.view.isHidden = false
+      let height = item.view is PillButton ? 26 : item.view is LevelBarsView ? 22 : 30
+      item.view.frame = NSRect(x: x, y: (bounds.height - CGFloat(height)) / 2, width: item.width, height: CGFloat(height))
+      x += item.width + 4
+      if item.divider { dividers.append(x + 2); x += 9 }
+    }
+    needsDisplay = true
+  }
   override func draw(_ dirtyRect: NSRect) {
     let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: bounds.height / 2, yRadius: bounds.height / 2)
     Theme.color(.raised).setFill(); pill.fill()
     Theme.color(.borderSubtle).setStroke(); pill.lineWidth = 1; pill.stroke()
+    Theme.color(.borderSubtle).setFill()
+    for x in dividers where x < bounds.width - 8 { NSRect(x: x, y: 11, width: 1, height: bounds.height - 22).fill() }
   }
 }
 
@@ -127,7 +192,9 @@ final class PetController: NSObject {
   private let bubbleWindow: PetWindow
   private let bubble = BubbleView(frame: .zero)
   private let controlsWindow: PetWindow
-  private var controls: ControlsView!
+  private var bar: DockBarView!
+  private var barWidth = Spring(86, response: 0.30, dampingRatio: 0.72)
+  private var phase = 0.0
   private let defaults = UserDefaults.standard
 
   var onToggleBoard: (() -> Void)?
@@ -136,6 +203,14 @@ final class PetController: NSObject {
   var onDecide: ((String, String) -> Void)?
   var onStopSharing: (() -> Void)?
   var onStopCall: (() -> Void)?
+  /// The bar under the mascot: chat, talk, and the controls of a conversation.
+  var onChat: (() -> Void)?
+  var onTalk: (() -> Void)?
+  var onMic: (() -> Void)?
+  var onSpeaker: (() -> Void)?
+  var onEndTalk: (() -> Void)?
+  /// The loudness of the conversation, read every frame.
+  var voiceLevel: (() -> Double)?
   var onHide: (() -> Void)?
   var onMoved: (() -> Void)?
   var menu: (() -> NSMenu)?
@@ -184,15 +259,16 @@ final class PetController: NSObject {
     bubble.onDismiss = { [weak self] in self?.dismissedBubble = self?.shownBubble?.key }
     bubble.onApprove = { [weak self] in self?.decided("allow") }
     bubble.onDeny = { [weak self] in self?.decided("deny") }
-    controls = ControlsView(target: self, stopSharing: #selector(stopSharing), stopCall: #selector(stopCall))
-    controlsWindow.contentView = controls; controlsWindow.hasShadow = true
+    bar = DockBarView(target: self, chat: #selector(chatPressed), talk: #selector(talkPressed), mic: #selector(micPressed), speaker: #selector(speakerPressed),
+      end: #selector(endPressed), stopSharing: #selector(stopSharing), stopCall: #selector(stopCall))
+    controlsWindow.contentView = bar; controlsWindow.hasShadow = true
     mascot.afterFrame = { [weak self] step in self?.frame(step) }
     NotificationCenter.default.addObserver(self, selector: #selector(screensChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
   }
 
   private var visibleFrame: CGRect { (window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900) }
 
-  /// Pebble or Core. The choice is kept between starts.
+  /// How the mascot is drawn. The choice is kept between starts.
   var style: MascotStyle {
     get { mascot.style }
     set { mascot.style = newValue; defaults.set(newValue.rawValue, forKey: "pet.style"); mascot.tap() }
@@ -263,6 +339,23 @@ final class PetController: NSObject {
   }
   @objc private func sideRequested() { dock() }
   @objc private func hideRequested() { onHide?() }
+  @objc private func chatPressed() { onChat?() }
+  @objc private func talkPressed() { onTalk?() }
+  @objc private func micPressed() { onMic?() }
+  @objc private func speakerPressed() { onSpeaker?() }
+  @objc private func endPressed() { onEndTalk?() }
+  /// What the conversation does now: the bar and the mascot follow it.
+  func setTalk(on: Bool, micOn: Bool, speakerOn: Bool, speaking: Bool, thinking: Bool) {
+    if on && isDocked { undock() }
+    bar.talking = on
+    bar.mic.symbolName = micOn ? "mic.fill" : "mic.slash.fill"
+    bar.mic.active = on && micOn && !speaking && !thinking ? .accentText : nil
+    bar.mic.toolTip = micOn ? "Mute the microphone" : "Turn the microphone on"
+    bar.speaker.symbolName = speakerOn ? "speaker.wave.2.fill" : "speaker.slash.fill"
+    bar.speaker.toolTip = speakerOn ? "Mute ClawdTime's voice" : "Let ClawdTime speak"
+    bar.bars.tint = speaking ? .accentText : thinking ? .labelSecondary : .info
+    bar.talk.toolTip = "Talk to ClawdTime"
+  }
   @objc private func stopSharing() { onStopSharing?() }
   @objc private func stopCall() { onStopCall?() }
   @objc private func screensChanged() {
@@ -273,15 +366,16 @@ final class PetController: NSObject {
   func setStop(sharing: Bool, call: Bool) {
     let changed = sharing != stopSharingAllowed || call != stopCallAllowed
     stopSharingAllowed = sharing; stopCallAllowed = call
-    controls.sharing.isHidden = !sharing; controls.call.isHidden = !call
+    bar.sharing.isHidden = !sharing; bar.call.isHidden = !call
     guard changed else { return }
     if (sharing || call) && isDocked { undock() }
+    bar.needsLayout = true
     layoutControls()
   }
   private func layoutControls() {
-    guard visible, stopSharingAllowed || stopCallAllowed else { controlsWindow.orderOut(nil); return }
-    controls.layoutSubtreeIfNeeded()
-    let size = controls.fittingSize
+    // The bar stays under a free mascot. A tucked mascot keeps it only for a conversation or a Stop control.
+    guard visible, !isDocked || bar.talking || stopSharingAllowed || stopCallAllowed else { controlsWindow.orderOut(nil); return }
+    let size = NSSize(width: CGFloat(barWidth.value), height: 40)
     controlsWindow.setFrame(PetLayout.controls(size: size, pet: window.frame, in: visibleFrame), display: true)
     if !controlsWindow.isVisible { controlsWindow.orderFrontRegardless(); controlsWindow.invalidateShadow() }
   }
@@ -330,7 +424,7 @@ final class PetController: NSObject {
   private func bubbleClicked() {
     guard let shown = shownBubble else { return }
     dismissedBubble = shown.key
-    if let session = shown.sessionId { onOpenSession?(session) } else { onToggleBoard?() }
+    if shown.caption { onChat?() } else if let session = shown.sessionId { onOpenSession?(session) } else { onToggleBoard?() }
   }
   /// The mascot answers what the person did: a nod for yes, one shake for no.
   func react(success: Bool) { if success { mascot.nod() } else { mascot.shake() } }
@@ -384,14 +478,15 @@ final class PetController: NSObject {
     if let news, news != shownBubble {
       shownBubble = news
       bubble.title.stringValue = news.title; bubble.detail.stringValue = news.detail
-      bubble.showsActions = news.decisionId != nil
-      bubble.toolTip = news.decisionId != nil ? "Answer here, or click to open the board" : news.sessionId == nil ? "Open the board" : "Open this session's terminal"
+      bubble.showsActions = news.decisionId != nil; bubble.caption = news.caption
+      bubble.needsLayout = true
+      bubble.toolTip = news.caption ? "Open the chat" : news.decisionId != nil ? "Answer here, or click to open the board" : news.sessionId == nil ? "Open the board" : "Open this session's terminal"
     }
     bubbleShown.target = news == nil ? 0 : 1
     bubbleShown.step(step)
     if Theme.reduceMotion { bubbleShown.snap() }
     if bubbleShown.value > 0.02, shownBubble != nil {
-      let placed = PetLayout.bubble(size: bubble.fit(), pet: window.frame, in: screen)
+      let placed = PetLayout.bubble(size: bubble.fit(), pet: window.frame, in: screen, clear: controlsWindow.isVisible ? controlsWindow.frame : nil)
       bubble.tail = placed.tail; bubble.below = placed.below
       // It grows out of its pointer.
       let grow = CGFloat(min(1.06, max(0, bubbleShown.value)))
@@ -404,8 +499,24 @@ final class PetController: NSObject {
       if !bubbleWindow.isVisible { bubbleWindow.orderFrontRegardless() }
     } else if bubbleWindow.isVisible { bubbleWindow.orderOut(nil); if news == nil { shownBubble = nil } }
 
+    // The bar: its width follows what it holds, and its bars follow the voice.
+    barWidth.target = Double(bar.fit().width)
+    barWidth.step(step)
+    if Theme.reduceMotion { barWidth.snap() }
+    if !barWidth.settled || !controlsWindow.isVisible || abs(controlsWindow.frame.width - CGFloat(barWidth.value)) > 0.5 { layoutControls(); controlsWindow.invalidateShadow() }
+    controlsWindow.alphaValue = drag?.didDrag == true ? 0.4 : 1
+    let voice = voiceLevel?() ?? 0
+    mascot.voice = voice
+    if bar.talking {
+      phase += step
+      var meter = VoiceMeter()
+      // The meter's own smoothing ran already: here the level only shapes the bars.
+      for _ in 0..<12 { meter.feed(rms: voice <= 0 ? 0 : pow(10, (voice * 40 - 50) / 20)) }
+      bar.bars.levels = meter.bars(5, phase: phase)
+    }
+
     afterFrame?(step)
-    mascot.boost = !(x.settled && y.settled && buttons.settled && bubbleShown.settled && reveal.settled && lean.settled) || drag != nil || wantsBoost
+    mascot.boost = !(x.settled && y.settled && buttons.settled && bubbleShown.settled && reveal.settled && lean.settled && barWidth.settled) || drag != nil || wantsBoost || voice > 0.02
   }
   /// The board sets this while it opens or closes.
   var wantsBoost = false

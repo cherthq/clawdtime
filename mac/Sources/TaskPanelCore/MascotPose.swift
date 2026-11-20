@@ -56,6 +56,8 @@ public struct MascotInput: Equatable, Sendable {
   public var dragVelocityX = 0.0
   public var dragVelocityY = 0.0
   public var reduceMotion = false
+  /// 0 to 1: how loud the conversation is, the person's voice or ClawdTime's own.
+  public var voice = 0.0
   public init(mood: MascotMood) { self.mood = mood }
 }
 
@@ -138,7 +140,7 @@ public struct MascotAnimator: Sendable {
   public func preferredFramesPerSecond(_ input: MascotInput) -> Int {
     if input.reduceMotion { return input.pointerActive || input.hovering ? 30 : 10 }
     let reacting = time - tapStart < 1 || time - nodStart < 1 || time - shakeStart < 1 || time - sheenStart < 1.2
-    if input.hovering || input.pressed || reacting || abs(input.dragVelocityX) + abs(input.dragVelocityY) > 1 { return 60 }
+    if input.hovering || input.pressed || reacting || input.voice > 0.02 || abs(input.dragVelocityX) + abs(input.dragVelocityY) > 1 { return 60 }
     switch input.mood {
     case .asleep, .offline: return 15
     case .working, .attention: return 60
@@ -221,7 +223,11 @@ public struct MascotAnimator: Sendable {
     pose.sparkAngle = sparkAngle
     pose.ringWobble = still ? 0 : sin(time * 1.3) * 0.05 + (mood == .attention ? sin(time * 9) * 0.03 : 0)
     let pulse = mood == .attention || mood == .sharing ? 0.75 + 0.25 * sin(time * 5.5) : 1
-    pose.glow = max(0, min(1, glow.value * (still ? 1 : pulse)))
+    // A voice lights the spark and opens the mouth, in every mood.
+    let voice = max(0, min(1, input.voice))
+    pose.glow = max(0, min(1, max(glow.value * (still ? 1 : pulse), voice)))
+    pose.smile = max(pose.smile, voice * 0.9)
+    if !still { pose.squash *= 1 + voice * 0.035 }
 
     // The sheen of the Chert mark: on a click, and now and then at rest.
     if !still && awake && time >= nextSheen && time - sheenStart > 2 { sheenStart = time; nextSheen = time + 9 + unit() * 8 }

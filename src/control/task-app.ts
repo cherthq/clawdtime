@@ -33,7 +33,15 @@ export interface AgentBoardPort {
     text: string,
     enter: boolean,
   ): Promise<{ ok: boolean; route: string }>;
+  /** The conversation with ClawdTime itself. */
+  chat(): unknown;
+  say(text: string): Promise<unknown>;
+  hear(recording: string): Promise<unknown>;
 }
+const chatSchema = z.object({ text: z.string().min(1).max(2000) }).strict();
+const voiceSchema = z
+  .object({ recording: z.string().regex(/^[A-Za-z0-9_-]{1,60}\.(wav|m4a)$/) })
+  .strict();
 const decisionAnswerSchema = z
   .object({
     id: z.string().regex(/^[0-9a-f]{16}$/),
@@ -179,6 +187,21 @@ export function createTaskApp(
         const { away } = awaySchema.parse(await c.req.json());
         agents.setAway(away);
         return c.json({ away });
+      });
+      // The person talks to ClawdTime: typed here, or one recording at a time.
+      app.get("/desktop/chat", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.chat());
+      });
+      app.post("/desktop/chat", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { text } = chatSchema.parse(await c.req.json());
+        return c.json({ reply: await agents.say(text) });
+      });
+      app.post("/desktop/voice", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { recording } = voiceSchema.parse(await c.req.json());
+        return c.json(await agents.hear(recording));
       });
       // Types the person's own words into one session's terminal.
       app.post("/desktop/agents/send", async (c) => {

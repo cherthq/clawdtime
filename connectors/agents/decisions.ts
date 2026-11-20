@@ -324,7 +324,12 @@ export class DecisionDesk {
         rmSync(join(directory, name), { force: true });
         continue;
       }
-      if (this.now() <= request.holdUntil) result.push(request);
+      // An answered request waits only for its hook to take the answer: it is no longer the person's.
+      if (
+        this.now() <= request.holdUntil &&
+        !existsSync(this.path("answers", request.id))
+      )
+        result.push(request);
     }
     return result.sort(
       (left, right) =>

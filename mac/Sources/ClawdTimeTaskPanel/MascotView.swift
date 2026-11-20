@@ -26,6 +26,8 @@ final class MascotView: NSView {
   var dragVelocity = CGVector.zero
   /// Lean toward the middle of the screen while it hangs over an edge, in radians.
   var lean = 0.0
+  /// 0 to 1: the loudness of the conversation, when the person talks to ClawdTime.
+  var voice = 0.0
   /// Another animation is running and wants the full frame rate.
   var boost = false
   /// Runs after each frame of the mascot, on the same clock.
@@ -90,6 +92,7 @@ final class MascotView: NSView {
     input.hovering = hovering; input.pressed = pressed
     input.dragVelocityX = Double(dragVelocity.dx); input.dragVelocityY = Double(dragVelocity.dy)
     input.reduceMotion = Theme.reduceMotion
+    input.voice = voice
     var pose = animator.step(step, input)
     pose.roll += lean
     if pose != lastPose {

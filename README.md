@@ -13,8 +13,9 @@ Supervisor: ClawdTime can also answer an agent for you. Approve or deny a
 permission request from the panel, the mascot's bubble, a command, or a FaceTime
 call when you are away. It keeps each decision in a trove, repeats an answer only
 where you made a rule, types into a session's terminal on request, and reports
-the agent commands you use as a slide deck. See the
-[supervisor guide](docs/SUPERVISOR.md).
+the agent commands you use as a slide deck. You can also talk to it: in a chat
+screen, by voice on the Mac, where it answers aloud, or on a FaceTime call. See
+the [supervisor guide](docs/SUPERVISOR.md).
 
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is
