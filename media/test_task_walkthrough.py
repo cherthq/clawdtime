@@ -212,6 +212,50 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 showing.cancel()
             await asyncio.gather(showing, return_exceptions=True)
 
+    async def test_revision_and_scene_switch_in_same_render_tick_keep_current_source(self):
+        scene = copy.deepcopy(self.p['manifest']['scenes'][0])
+        scene.update(id='scene_preview', kind='preview', title='Preview')
+        scene['target']['windowId'] = '102'
+        self.p['manifest']['scenes'].append(scene)
+        self.enable_continuity()
+        await self.owner.prepare(self.b)
+        old_source = self.renderer.source_frame
+        self.source.capture_gate = asyncio.Event()
+        self.api.value.update(runId='run_next', revision=5, sequence=5,
+                              state='running', sceneEvidenceCurrent=False)
+        self.owner.remote_generation = 2
+        showing = None
+        try:
+            # Freeze only rendering to reproduce the scheduling window between
+            # obsolete-overlay removal and the next freshly rendered output.
+            with patch.object(self.renderer, 'render'):
+                self.renderer.set_scene_evidence(False)
+                self.assertIsNone(self.renderer.output)
+                showing = asyncio.create_task(self.owner.show_scene({
+                    'callAttemptId': self.b['callAttemptId'],
+                    'presentationId': self.p['presentationId'],
+                    'manifestFingerprint': self.p['fingerprint'],
+                    'operationId': 'show_after_revision', 'sceneId': 'scene_preview', 'generation': 2}))
+                async with asyncio.timeout(.5):
+                    while self.renderer.pending_scene is None and self.renderer.scene['id'] == 'scene_code':
+                        await asyncio.sleep(.001)
+                self.assertEqual(self.renderer.scene['id'], 'scene_code')
+                self.assertIs(self.renderer.source_frame, old_source)
+                self.assertIsNotNone(self.renderer.pending_scene)
+            self.renderer.render()
+            self.assertIsNotNone(self.renderer.output)
+            self.assertFalse(self.renderer.scene_evidence_current)
+            self.source.capture_gate.set()
+            result = await showing
+            self.assertEqual(result['frame']['sceneId'], 'scene_preview')
+            self.assertFalse(self.owner.sharing_stopped)
+        finally:
+            self.source.capture_gate.set()
+            if showing and not showing.done():
+                showing.cancel()
+            if showing:
+                await asyncio.gather(showing, return_exceptions=True)
+
     async def test_continuity_stop_during_pending_scene_cannot_export_late_source(self):
         self.enable_continuity()
         await self.owner.prepare(self.b)

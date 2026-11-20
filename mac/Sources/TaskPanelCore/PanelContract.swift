@@ -46,7 +46,7 @@ public struct PanelConfiguration: Codable, Equatable {
 }
 
 public enum PanelAction: String, Codable, CaseIterable {
-  case submit, decide, accept, cancel, stopSharing = "stop_sharing", stopCall = "stop_call"
+  case submit, decide, accept, cancel, callback, stopSharing = "stop_sharing", stopCall = "stop_call"
   public var isStop: Bool { self == .stopSharing || self == .stopCall }
   public var label: String {
     switch self {
@@ -54,6 +54,7 @@ public enum PanelAction: String, Codable, CaseIterable {
     case .decide: return "Send answer"
     case .accept: return "Accept result"
     case .cancel: return "Cancel task"
+    case .callback: return "Request review callback"
     case .stopSharing: return "Stop sharing"
     case .stopCall: return "Stop call"
     }

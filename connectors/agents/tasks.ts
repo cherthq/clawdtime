@@ -5,10 +5,15 @@
  * acts once however often it is tried.
  */
 export interface TaskFacts {
+  identity?: { id: string; runId: string; revision: number };
   goal: string;
   /** The task service's own word for where the task is. */
   state: string;
   summary: string;
+  reviewState?: string;
+  reviewMessage?: string;
+  progress?: { phase: string; at: number };
+  reasonCode?: string;
   /** What the task asks the person, when it waits for an answer. */
   question: string | null;
   /** The answers it offers for that question. */
@@ -31,6 +36,7 @@ export interface TaskPort {
   answer(text: string, eventId: string): Promise<TaskResult>;
   accept(eventId: string): Promise<TaskResult>;
   cancel(eventId: string): Promise<TaskResult>;
+  requestCallback?(eventId: string): Promise<TaskResult>;
 }
 
 /** The part of the desktop task service that this door uses. */
@@ -44,6 +50,9 @@ export interface DesktopTasks {
       goal: string;
       state: string;
       summary: string;
+      review?: { state: string; message: string };
+      progress?: { phase: string; at: number };
+      reasonCode?: string;
       decision: { question: string; options?: string[] } | null;
       canDecide: boolean;
       canAccept: boolean;
@@ -57,6 +66,12 @@ export interface DesktopTasks {
 }
 
 const stateWords: Record<string, string> = {
+  working: "working",
+  preparing_review: "preparing your review",
+  awaiting_call: "waiting for the review call",
+  in_review: "in review with you",
+  revising: "applying your revision",
+  blocked: "blocked",
   queued: "waiting to run",
   running: "running",
   verifying: "being checked",
@@ -127,9 +142,18 @@ export function deskTasks(desktop: DesktopTasks, credential: string): TaskPort {
       const task = view()?.task;
       if (!task) return null;
       return {
+        identity: { id: task.id, runId: task.runId, revision: task.revision },
         goal: task.goal,
         state: task.state,
         summary: task.summary,
+        ...(task.review
+          ? {
+              reviewState: task.review.state,
+              reviewMessage: task.review.message,
+            }
+          : {}),
+        ...(task.progress ? { progress: task.progress } : {}),
+        ...(task.reasonCode ? { reasonCode: task.reasonCode } : {}),
         question: task.decision?.question ?? null,
         choices: task.decision?.options ?? [],
         canAnswer: task.canDecide,
@@ -142,5 +166,6 @@ export function deskTasks(desktop: DesktopTasks, credential: string): TaskPort {
     answer: (text, eventId) => bound("decide", eventId, { instruction: text }),
     accept: (eventId) => bound("accept", eventId),
     cancel: (eventId) => bound("cancel", eventId),
+    requestCallback: (eventId) => bound("callback", eventId),
   };
 }

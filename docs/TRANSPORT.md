@@ -863,3 +863,59 @@ must use explicit acceptance phrases from saved trusted utterances.
 This section describes source implementation and synthetic regression evidence.
 It does not authorize a live call, export, line handoff or deployment, and does not
 claim handset walkthrough physical acceptance.
+
+## Durable task review callback intent (November 20, 2026)
+
+`TaskReviewCallbackLedger` persists encrypted supervisor callback intent alongside
+existing tasks. It does not own a phone runtime or grant dialing permission.
+The existing `TaskDesktopCalls` admission, authorization envelope, preparation,
+call receipts and native inspector remain the only live delivery path.
+
+Scheduling derives one intent from the exact session, task, current run and
+independent verification. It retains the original goal and constraints, review
+revision and authoritative brief. Successful completed work becomes a review;
+failed or blocked runs and failed checks produce an honest decision brief. Work
+that is still running, canceled, uncertain or not independently checked cannot be
+scheduled. Call delivery never accepts the result or authorizes deployment.
+
+Intent moves from `preparing` through `awaiting_call`, `dispatching` and
+`in_review` to `delivered`, with distinct `blocked`, `failed`, `canceled` and
+`unknown` states. Phone setup blockers can be resolved before reservation. The
+prepared manifest fingerprint and exact result revision must still match when an
+attempt is reserved. Reservation binds one existing call attempt, returns replay
+status on duplicates, and refuses any replacement attempt even after failure.
+A restart during dispatch or review becomes unknown; its history and original
+attempt remain fenced. Unknown delivery cannot be converted into success by a
+late callback without a separate reviewed reconciliation path.
+
+Revisions and Stop retire only unsubmitted intents. They preserve prior delivery
+and uncertainty records; an in-flight call still requires the existing call Stop
+and cleanup mechanisms. A new verified run of the same task gets a separate
+review intent, while duplicate settlement notifications do not create calls.
+Screens, audio, credentials and actual frame data are not stored by this ledger.
+
+`TaskLedger` now retains fixed worker diagnostic reason codes, bounded progress
+phases and outcome history. Progress does not increment the task command revision.
+A late authoritative result can settle the exact original run after a lost
+connection, but retains the prior unknown observation and dispatch identity. A
+restart marks an active run unknown with `restart_during_run`; it does not retry
+that run or discard the last progress observation.
+
+The callback ledger tests use isolated SQLite fixtures and simulated effects.
+They prove persistence, identity checks, deduplication, Stop/revision retirement,
+uncertainty fences and constraints retention, not actual call delivery or visual
+continuity. Fresh authorized views and phone setup remain prerequisites for a live
+review; old consumed grants are never renewed by scheduling an intent.
+
+The supervisor also persists exact operator-prepared delivery envelopes in
+`coding-review-delivery-v1`. Its serialized pump sends a queued envelope through
+the existing call coordinator once. A configured authorized-view preparation
+adapter can supply the current result envelope automatically; otherwise the
+protected preparation route supplies it. Phone/view authorization is never
+inferred from worker text or task acceptance. Unsubmitted queued delivery survives
+restart; a submission in progress becomes unknown and fences the callback itself,
+including when no attempt identity was confirmed. Refused and uncertain delivery
+are never silently requeued. The full lifecycle simulation exercises the
+structured supervisor, actual task/desktop services, Codex protocol worker,
+independent verification, preparation adapter, durable delivery pump, revision and
+acceptance; its clock advances 181 seconds before worker completion.

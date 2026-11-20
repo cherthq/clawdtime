@@ -138,6 +138,54 @@ const completed: TaskWorkerResult = {
 };
 
 describe("service-owned task engine and independent watcher", () => {
+  it("preserves exact restrictions introduced in an earlier revision through later worker contexts", async () => {
+    const contexts: Array<Record<string, any>> = [];
+    const f = fixture(
+      {
+        run: async (input) => {
+          contexts.push(JSON.parse(input.context));
+          return { outcome: "completed", summary: "Fixture changes complete." };
+        },
+      },
+      async (_root, runId) => report(runId),
+    );
+    let task = f.create();
+    f.engine.start(task.sessionId, task.id);
+    await f.engine.wait(task.id);
+    task = f.get(task);
+    const restriction =
+      "Make the page blue. Draft only: don't deploy, publish, or send it.";
+    task = f.command(task, {
+      action: "decide",
+      runId: task.runs.at(-1)!.id,
+      instruction: restriction,
+    });
+    f.engine.start(task.sessionId, task.id);
+    await f.engine.wait(task.id);
+    task = f.get(task);
+    task = f.command(task, {
+      action: "decide",
+      runId: task.runs.at(-1)!.id,
+      instruction: "Change the header to green.",
+    });
+    f.engine.start(task.sessionId, task.id);
+    await f.engine.wait(task.id);
+    expect(contexts).toHaveLength(3);
+    expect(contexts[2]!.priorHumanInstructions).toEqual([
+      task.goal,
+      restriction,
+    ]);
+    expect(contexts[2]!.instruction).toBe("Change the header to green.");
+    expect(contexts[2]!.priorResults).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          summary: expect.stringContaining("don't deploy"),
+        }),
+      ]),
+    );
+    expect(f.get(task).goal).toBe("Add the task filter.");
+  });
+
   it("releases one held spoken instruction after the real engine settles, even after voice end", async () => {
     const secondRun = deferred<TaskWorkerResult>();
     const worker = {

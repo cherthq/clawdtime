@@ -713,6 +713,7 @@ export async function runHandsetAttempt(
       ended = false,
       ready = false,
       lastState = "initializing",
+      connectedOnce = false,
       stopRequested = false;
     let desktopTasksRetired = false;
     const desktopSetup =
@@ -1016,6 +1017,7 @@ export async function runHandsetAttempt(
           throw Error("Media preparation requires reconciliation.");
         if (stopRequested) throw Error("Stopped before dialing.");
         s = await coordinator.dial(plan.id);
+        if (s.state === "connected") connectedOnce = true;
         lastState = s.state;
         console.log(JSON.stringify({ event: "dial_result", state: s.state }));
       } catch {
@@ -1060,6 +1062,7 @@ export async function runHandsetAttempt(
           }
         }
         const s = await monitor.tick();
+        if (s.state === "connected") connectedOnce = true;
         if (s.state !== lastState) {
           lastState = s.state;
           console.log(
@@ -1134,7 +1137,12 @@ export async function runHandsetAttempt(
       controls,
       finished,
       presentationPort: presenter,
-      status: () => ({ state: lastState, reserved, ended }),
+      status: (): {
+        state: string;
+        reserved: boolean;
+        ended: boolean;
+        connectedOnce?: boolean;
+      } => ({ state: lastState, reserved, ended, connectedOnce }),
     };
   } catch {
     for (const cleanup of setupCleanups.reverse()) {

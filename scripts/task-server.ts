@@ -44,6 +44,7 @@ import {
   desktopExecutorConfigSchema,
 } from "../src/control/desktop-executor.js";
 import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
+import { TaskReviewService } from "../src/control/task-review-service.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
   prepareTaskDesktop,
@@ -311,6 +312,17 @@ const desktop = desktopSetup
     )
   : undefined;
 if (calls && desktop) calls.selectedTaskId = () => desktop.selectedTaskId();
+const reviews = desktopSetup
+  ? new TaskReviewService(
+      service,
+      desktopSetup.config.sessionToken,
+      engine,
+      !!calls,
+    )
+  : undefined;
+if (desktop) desktop.reviews = reviews;
+if (calls) calls.reviews = reviews?.ledger;
+if (calls && reviews) reviews.configureDelivery(calls);
 // The panel's board of coding-agent sessions. It scans in its own process, so
 // it cannot delay task, voice or presentation work in this one.
 // The agent that the person talks to reaches the task through the desktop
@@ -351,10 +363,10 @@ const bundledConfig =
     : undefined;
 if (
   bundledConfig &&
-  (executorConfig || calls || presentation || flags.get("--agents") === "false")
+  (executorConfig || presentation || flags.get("--agents") === "false")
 )
   throw Error(
-    "Select exactly one desktop executor, with no phone/presentation actors.",
+    "Select exactly one desktop executor; standalone presentation actors cannot share its ownership.",
   );
 const bundled = bundledConfig
   ? new BundledCuaRuntime(
@@ -372,10 +384,28 @@ const bundled = bundledConfig
       () =>
         bundledConfig.mode === "browser"
           ? new BundledCuaBrowser(bundledConfig.browser!)
-          : new BundledCuaNative(bundledConfig.native!),
+          : new BundledCuaNative(
+              bundledConfig.native!,
+              fetch,
+              Date.now,
+              !!calls,
+            ),
       (text) => agentBoard?.appendExecutionResult(text),
     )
   : undefined;
+if (calls && bundled) {
+  calls.executionOwnership = {
+    acquireReviewOwnership: (id) => bundled.acquireReviewOwnership(id),
+    releaseReviewOwnership: (id) => bundled.releaseReviewOwnership(id),
+    ...(bundledConfig!.mode === "native"
+      ? {
+          confirmReviewOwnership: () =>
+            new BundledCuaNative(bundledConfig!.native!).assertReviewIdle(),
+        }
+      : {}),
+  };
+  bundled.setOwnershipGuard(() => calls!.ledger.unresolved().length === 0);
+}
 const executor =
   bundled ??
   (executorConfig
@@ -420,6 +450,17 @@ const presentationWatch = presentation
       void presentation!.reconcile().catch(() => {});
     }, 100)
   : undefined;
+const reviewWatch = reviews
+  ? setInterval(() => {
+      try {
+        reviews.refresh();
+        calls?.reconcileReview();
+        void reviews.pump();
+      } catch {
+        /* Expired authority never starts effects. */
+      }
+    }, 1000)
+  : undefined;
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
   if (desktopSetup)
     writeDesktopPrivateJSON(
@@ -427,7 +468,7 @@ const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
       desktopSetup.descriptor,
     );
   console.log(
-    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${bundled ? "App-owned computer runtime configured; task input and exact action permissions remain required. No phone." : calls ? "Desktop calls configured but dormant; each exact prepared result requires fresh operator authorization." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${calls ? "Review callbacks retain exact result intent. Fresh prepared call authorization and exclusive capture handoff are required." : bundled ? "App-owned computer runtime configured. Phone setup missing; callbacks cannot be delivered." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
   );
 });
 let shuttingDown = false;
@@ -436,6 +477,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     if (shuttingDown) return;
     shuttingDown = true;
     if (presentationWatch) clearInterval(presentationWatch);
+    if (reviewWatch) clearInterval(reviewWatch);
+    reviews?.close();
     agentBoard?.close();
     void (async () => {
       await bundled?.close();

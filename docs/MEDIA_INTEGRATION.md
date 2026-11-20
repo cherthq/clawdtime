@@ -178,7 +178,12 @@ control and journal flags as the audio controller, plus `--presentation-file`:
 
 ```json
 {
-  "prepare": {"presentationId": "prepared-id", "manifest": "EXACT_MANIFEST_OBJECT", "grant": "EXACT_CAPTURE_GRANT_OBJECT", "fingerprint": "ROOT_CANONICAL_SHA256"},
+  "prepare": {
+    "presentationId": "prepared-id",
+    "manifest": "EXACT_MANIFEST_OBJECT",
+    "grant": "EXACT_CAPTURE_GRANT_OBJECT",
+    "fingerprint": "ROOT_CANONICAL_SHA256"
+  },
   "taskOrigin": "http://127.0.0.1:13323",
   "taskToken": "PROTECTED_TASK_CAPABILITY",
   "helperBinary": "/absolute/worktree/mac/.build/debug/ClawdTimeTaskCapture",
@@ -294,7 +299,12 @@ The coordinating lead supplies owner-only files (0600; directory0700):
 
 ```json
 {
-  "prepare": {"presentationId": "prepared-id", "manifest": "EXACT_PREPARED_MANIFEST_OBJECT", "grant": "EXACT_LOCAL_GRANT_OBJECT", "fingerprint": "ROOT_CANONICAL_SHA256"},
+  "prepare": {
+    "presentationId": "prepared-id",
+    "manifest": "EXACT_PREPARED_MANIFEST_OBJECT",
+    "grant": "EXACT_LOCAL_GRANT_OBJECT",
+    "fingerprint": "ROOT_CANONICAL_SHA256"
+  },
   "taskOrigin": "http://127.0.0.1:13323",
   "taskToken": "PROTECTED_TASK_CAPABILITY",
   "helperBinary": "/absolute/worktree/mac/.build/debug/ClawdTimeTaskCapture",
@@ -1134,3 +1144,120 @@ to the fixed registered helper. Readiness returns local policy revision and pend
 call controls to the backend. These are separate from capture authorization and
 cannot mutate local preferences. Full wire and local restriction behavior is in
 [the companion README](../mac/README.md#agent-owned-conversation-and-control-panel-protocol-2).
+
+## Task callback integration — November 20, 2026
+
+The supervisor's task review cycle must reuse `TaskPresentationRuntime` and
+`TaskWalkthroughLiveKit` with the existing exact-window manifest and
+`continuity: "call"` grant. Task submission, revision and acceptance invalidate
+prepared result evidence, not the current view's capture authority. A replacement
+scene becomes current only after its first fresh authorized source frame. The
+scene-switch path now retains the current source when result invalidation has
+just cleared its cached overlay, before the next render tick. This avoids treating
+an overlay cache miss as a reason to clear the current authorized view. Source,
+authority and export freshness limits remain unchanged; old pixels never acquire
+a new capture timestamp.
+
+The existing native helper lease and durable action receipts remain the control
+boundary. Before preparing phone capture, the supervisor must await the local
+executor's cleanup and confirm no active or unresolved local action. A pending or
+uncertain cleanup cannot become permission to start capture or another executor.
+The exact-window `ClawdTimeTaskCapture` process may coexist with an idle Local
+Control app; it does not run the call Companion or acquire a helper input lease.
+The task service must hold its review-ownership fence from preparation through
+confirmed capture/call cleanup, including recovery of unknown admissions after a
+restart. Merely seeing no helper lease is insufficient if a call is unresolved.
+The alternate panel-owned HandsController in the unmerged computer-use branch
+must not run beside the helper: its independent main-display capture/input loop
+is not an acknowledgement of the helper's exclusive lease. This change does not
+install or enable either loop.
+
+Offline validation covers revision/acceptance continuity, fresh-frame switching,
+Stop during pending capture, stale frames, authority loss and frozen first-stop
+diagnostics. It does not explain or resolve the historical handset capture stalls.
+No network screen sharing or handset call is authorized by this development
+session. A local-only disposable capture probe is within the authorized local
+testing scope; its exact synthetic windows and temporary grant are separate from
+historical call grants.
+
+Before proposing a handset retest, obtain fresh local-only capture authority for
+exact prepared preview/source/verification windows and an idle local executor.
+Use the local presentation command above with a new protected grant and journal;
+keep pixels/audio transient. Run at 15 fps for at least four minutes, switch each
+prepared view repeatedly, trigger result-evidence invalidation while switching,
+and confirm uninterrupted fresh output. Then exercise Stop, permission loss and
+capture delay, confirming output clears and cannot restart from late callbacks.
+Retain only bounded first-stop timing/counter metadata and the source revision.
+If any stage stalls, preserve that outcome and investigate locally; do not redial,
+reuse a consumed grant, raise freshness limits or present an old successful call
+as evidence for this build. A passing local run precedes a separately authorized
+handset test and still does not constitute physical handset acceptance.
+
+`media/qualify_task_capture.py` runs that local-only probe using one temporary
+app with two synthetic windows. Compile `mac/scripts/task-capture-fixture.swift` and supply that fixture
+and `ClawdTimeTaskCapture` paths; default duration is 240 seconds. It uses the real
+native source and 15 fps renderer, checks one-second freshness continuously even
+during scene switches, invalidates prepared evidence, and confirms helper cleanup.
+It has no media room, network export, audio or input channel. Only bounded counters
+and fixed failure reasons are printed; images remain in memory and temporary
+metadata/journals/fixture bundles are removed after the attempt.
+
+The local helper now advertises `nativeCaptureDrain: true` at
+`GET /local/v1/status`. Its session Stop invalidates authority immediately, then
+waits at most 1.5 seconds for any native screenshot callback to finish. Only then
+can it return `{stopped:true,captureStopped:true}`. A stalled callback returns an
+unconfirmed-cleanup error; it cannot authorize review capture. This bounded
+cleanup wait is independent of coding-task duration. Older helpers lack the
+capability and cannot qualify combined local-execution/review-capture handoff.
+
+November 20 qualification evidence: read-only preflight reported Screen Recording
+available, unlocked active console and completed login for the built helper.
+A one-second disposable native smoke passed with 10 source frames, 27 rendered
+frames and maximum measured source age 295 ms; helper cleanup was confirmed.
+The first extended probe reached 41 seconds, two switches and 210 source frames,
+including result-evidence invalidation, before the tool session was interrupted.
+Its final outcome is inconclusive. Subsequent process inspection found no remaining
+probe, capture helper or fixture processes; this is cleanup evidence, not a
+four-minute qualification pass. A distinct follow-up probe retains only bounded
+counters/final outcome in a local temporary log so interruption cannot erase the
+completion evidence. None of these probes use historical call permissions.
+
+The distinct 240-second follow-up attempt failed before its first 20-second
+switch checkpoint with `capture_qualification_failed`. Helper shutdown and child
+join were confirmed; no pixels were persisted and no call started. The retained
+summary does not isolate the native capture or renderer stage, so the root cause
+remains unresolved. The qualification runner now includes the runtime's bounded
+first-failure phase/reason and frame counters for future investigation. The failure is preserved while subsequent instrumented attempts investigate
+its cause; a later success cannot erase it. Unit tests and a brief smoke are not
+substitutes for extended local qualification and handset acceptance.
+
+The instrumented diagnostic isolated `refused_geometry` in the native helper,
+1,957 ms after start (8 source frames, 22 renders), with cleanup confirmed.
+A subsequent metadata-only check found a synthetic window at x=-1,554 outside
+the only active display (0,0,1512,982). The fixture chooses the AppKit screen
+matching `CGMainDisplayID` and joins active spaces; no production window, geometry,
+permission or freshness check was changed. Subsequent attempts showed that this
+alone did not keep the fixture on-screen reliably. A metadata-only run then resolved both
+exact targets within the active display, with `captureStarted:false` and confirmed
+fixture cleanup. `--resolve-only` provides this setup check without capture.
+The helper also reports `captureActive` in local status so review handoff can
+check idle capture and drain capability even for runs completed by older helpers.
+
+The final stationary fixture attempt used one accessory app with two normal-layer
+windows and AppKit's `canJoinAllApplications`/`stationary` collection behavior.
+It still failed native `refused_geometry` at 7,579 ms after 36 source frames and
+107 rendered frames. The exact window passed initial resolution but failed the
+unchanged geometry guard later. Helper and fixture shutdown/join were confirmed;
+no pixels were persisted or exported, and no audio or remote call was produced. This does not establish a screenshot
+latency defect or justify switching the capture implementation. Local extended
+qualification remains failed because the fixture's geometry was not admissible
+throughout the run; a fresh instrumented investigation must distinguish actual
+window movement, desktop transitions and inconsistent native window metadata.
+The previous failures and interrupted attempt remain part of the evidence.
+
+Next local qualification prerequisite: keep both exact synthetic fixture windows
+wholly within the active display for the entire four-minute run, without desktop,
+app-set or display transitions that move them out of bounds. Resolve both exact
+targets first, use a fresh grant, and retain the existing geometry/freshness gates.
+The script fails and joins its children if that prerequisite stops holding. Do not
+propose a handset visual test until this extended local qualification passes.

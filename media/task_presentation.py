@@ -424,7 +424,11 @@ class TaskPresentationRuntime:
                 if self.narrator:
                     await self.narrator.interrupt()
                     await self.check(value['generation'])
-                if self.call_continuity and self.scene and self.source_frame and self.output:
+                # Evidence invalidation deliberately discards the prepared overlay.
+                # That cache miss must not discard the still-authorized source
+                # while a fresh replacement is pending. Freshness is checked by
+                # render/export; retaining the source never extends its lifetime.
+                if self.call_continuity and self.scene and self.source_frame:
                     self.pending_scene = {'scene': scene, 'generation': value['generation'], 'operationId': value['operationId']}
                 else:
                     self.generation = value['generation']

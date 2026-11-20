@@ -19,6 +19,29 @@ const decisionStates = new Set([
   "review_call",
 ]);
 const terminalRuns = new Set(["completed", "failed", "blocked", "canceled"]);
+const workerPhases = new Set([
+  "connecting",
+  "accepted",
+  "permission_blocked",
+  "reasoning",
+  "editing",
+  "tool_completed",
+  "interrupting",
+]);
+const workerReasons = new Set([
+  "completed",
+  "canceled",
+  "worker_failed",
+  "permission_blocked",
+  "initialization_failed",
+  "protocol_invalid",
+  "connection_lost",
+  "process_exit",
+  "submission_unconfirmed",
+  "interrupt_unconfirmed",
+  "unresolved_effects",
+  "progress_unavailable",
+]);
 
 function bounded(value: unknown, label: string, max = 8000): string {
   if (typeof value !== "string" || !value.trim() || value.length > max)
@@ -163,7 +186,15 @@ export class TaskLedger {
         if (task.state === "running" || task.state === "verifying") {
           task.state = "unknown";
           const run = task.runs.at(-1);
-          if (run?.state === "running") run.state = "unknown";
+          if (run?.state === "running") {
+            run.state = "unknown";
+            run.reasonCode = "restart_during_run";
+            (run.outcomeHistory ??= []).push({
+              state: "unknown",
+              at: this.clock(),
+              reason: "restart_during_run",
+            });
+          }
           changed = true;
         }
         if (task.call?.state === "connected") {
@@ -241,6 +272,48 @@ export class TaskLedger {
     return this.tasks.all().filter((task) => task.sessionId === sessionId);
   }
 
+  /** Progress is a diagnostic observation, not a new command/result revision. */
+  progress(
+    sessionId: string,
+    taskId: string,
+    runId: string,
+    phase: string,
+    identities: { threadId?: string; turnId?: string } = {},
+  ): CodingTask {
+    if (!workerPhases.has(phase))
+      throw new DomainError(400, "Invalid worker phase.");
+    return this.store.transaction(() => {
+      const task = this.get(sessionId, taskId),
+        run = task.runs.at(-1);
+      if (
+        !run ||
+        run.id !== runId ||
+        run.state !== "running" ||
+        task.state !== "running"
+      )
+        throw new DomainError(
+          409,
+          "Progress does not match the current active run.",
+        );
+      for (const key of ["threadId", "turnId"] as const) {
+        const value = identities[key];
+        if (value === undefined) continue;
+        bounded(value, `worker ${key}`, 200);
+        if (run[key] !== undefined && run[key] !== value)
+          throw new DomainError(
+            409,
+            "Worker identity changed within the same dispatch.",
+          );
+        run[key] = value;
+      }
+      if (run.turnId && !run.threadId)
+        throw new DomainError(400, "Worker turn requires its thread identity.");
+      run.progress = { phase, at: this.clock() };
+      task.updatedAt = this.clock();
+      return this.tasks.put(task);
+    });
+  }
+
   transition(
     sessionId: string,
     taskId: string,
@@ -302,6 +375,10 @@ export class TaskLedger {
         delete task.brief;
         run.state = "running";
         run.startedAt = this.clock();
+        (run.outcomeHistory ??= []).push({
+          state: "running",
+          at: this.clock(),
+        });
         break;
       }
       case "run_result": {
@@ -322,14 +399,31 @@ export class TaskLedger {
         )
           throw new DomainError(400, "Invalid worker outcome.");
         run.summary = bounded(command.summary, "worker summary", 4000);
-        if (command.threadId !== undefined)
+        if (
+          command.reasonCode !== undefined &&
+          !workerReasons.has(command.reasonCode)
+        )
+          throw new DomainError(400, "Invalid worker reason code.");
+        if (command.threadId !== undefined) {
+          if (run.threadId !== undefined && run.threadId !== command.threadId)
+            throw new DomainError(
+              409,
+              "Worker result thread conflicts with the original dispatch.",
+            );
           run.threadId = bounded(
             command.threadId,
             "worker thread identity",
             200,
           );
-        if (command.turnId !== undefined)
+        }
+        if (command.turnId !== undefined) {
+          if (run.turnId !== undefined && run.turnId !== command.turnId)
+            throw new DomainError(
+              409,
+              "Worker result turn conflicts with the original dispatch.",
+            );
           run.turnId = bounded(command.turnId, "worker turn identity", 200);
+        }
         if (command.decision !== undefined)
           run.decision = bounded(command.decision, "decision", 2000);
         if (command.decisionOptions !== undefined) {
@@ -355,7 +449,26 @@ export class TaskLedger {
             throw new DomainError(400, "Decision options must be distinct.");
           run.decisionOptions = normalized;
         }
+        // Older ledgers may not have history. Preserve their uncertainty before
+        // applying authoritative late evidence for the original dispatch.
+        if (
+          run.state === "unknown" &&
+          !run.outcomeHistory?.some((entry) => entry.state === "unknown")
+        )
+          (run.outcomeHistory ??= []).push({
+            state: "unknown",
+            at: task.updatedAt,
+            reason: "prior_unresolved_outcome",
+          });
         run.state = command.outcome;
+        if (command.reasonCode !== undefined)
+          run.reasonCode = command.reasonCode;
+        else delete run.reasonCode;
+        (run.outcomeHistory ??= []).push({
+          state: command.outcome,
+          at: this.clock(),
+          ...(command.reasonCode ? { reason: command.reasonCode } : {}),
+        });
         if (command.outcome !== "unknown") run.endedAt = this.clock();
         task.state =
           command.outcome === "unknown"

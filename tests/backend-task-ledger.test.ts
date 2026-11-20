@@ -97,6 +97,126 @@ function fixture(path = ":memory:") {
 }
 
 describe("independent task ledger", () => {
+  it("persists bounded progress without changing command revision or accepting late events", () => {
+    const f = fixture();
+    const task = f.claim(f.create());
+    const updated = f.ledger.progress(
+      session.id,
+      task.id,
+      task.runs[0]!.id,
+      "reasoning",
+    );
+    expect(updated.revision).toBe(task.revision);
+    expect(updated.runs[0]!.progress).toEqual({ phase: "reasoning", at: 1000 });
+    expect(() =>
+      f.ledger.progress(session.id, task.id, "wrong-run", "editing"),
+    ).toThrow(/current active/);
+    expect(() =>
+      f.ledger.progress(
+        session.id,
+        task.id,
+        task.runs[0]!.id,
+        "private tool output",
+      ),
+    ).toThrow(/phase/);
+    f.result(updated);
+    expect(() =>
+      f.ledger.progress(session.id, task.id, task.runs[0]!.id, "editing"),
+    ).toThrow(/current active/);
+  });
+
+  it("retains uncertainty history and fixed reason codes after authoritative late recovery", () => {
+    const f = fixture();
+    let task = f.claim(f.create());
+    expect(() =>
+      f.result(task, { reasonCode: "raw private exception text" }),
+    ).toThrow(/reason code/);
+    task = f.result(task, {
+      outcome: "unknown",
+      reasonCode: "connection_lost",
+    });
+    expect(task.runs[0]!.reasonCode).toBe("connection_lost");
+    task = f.result(task, { outcome: "completed", reasonCode: "completed" });
+    expect(task.runs[0]!.reasonCode).toBe("completed");
+    expect(task.runs[0]!.outcomeHistory).toEqual([
+      { state: "running", at: 1000 },
+      { state: "unknown", at: 1000, reason: "connection_lost" },
+      { state: "completed", at: 1000, reason: "completed" },
+    ]);
+  });
+
+  it("records restart uncertainty without erasing the original dispatch or prior progress", () => {
+    const f = fixture(),
+      task = f.claim(f.create());
+    f.ledger.progress(session.id, task.id, task.runs[0]!.id, "editing");
+    const recovered = new TaskLedger(f.store, f.vault, () => 1001).get(
+      session.id,
+      task.id,
+    );
+    expect(recovered.runs[0]).toMatchObject({
+      state: "unknown",
+      reasonCode: "restart_during_run",
+      dispatchId: task.runs[0]!.dispatchId,
+      progress: { phase: "editing", at: 1000 },
+    });
+    expect(recovered.runs[0]!.outcomeHistory!.at(-1)).toEqual({
+      state: "unknown",
+      at: 1001,
+      reason: "restart_during_run",
+    });
+  });
+
+  it("persists immutable worker identities before completion for restart recovery", () => {
+    const f = fixture(),
+      task = f.claim(f.create()),
+      runId = task.runs[0]!.id;
+    expect(() =>
+      f.ledger.progress(session.id, task.id, runId, "accepted", {
+        turnId: "orphan",
+      }),
+    ).toThrow(/thread identity/);
+    f.ledger.progress(session.id, task.id, runId, "connecting", {
+      threadId: "original-thread",
+    });
+    const bound = f.ledger.progress(session.id, task.id, runId, "accepted", {
+      threadId: "original-thread",
+      turnId: "original-turn",
+    });
+    expect(bound.revision).toBe(task.revision);
+    expect(() =>
+      f.result(bound, {
+        threadId: "different-thread",
+        turnId: "original-turn",
+      }),
+    ).toThrow(/original dispatch/);
+    expect(() =>
+      f.result(bound, {
+        threadId: "original-thread",
+        turnId: "different-turn",
+      }),
+    ).toThrow(/original dispatch/);
+    expect(() =>
+      f.ledger.progress(session.id, task.id, runId, "accepted", {
+        threadId: "other-thread",
+      }),
+    ).toThrow(/identity changed/);
+    expect(() =>
+      f.ledger.progress(session.id, task.id, runId, "accepted", {
+        turnId: "x".repeat(201),
+      }),
+    ).toThrow(/worker turnId/);
+    const restored = new TaskLedger(f.store, f.vault, () => 1001).get(
+      session.id,
+      task.id,
+    );
+    expect(restored.runs[0]).toMatchObject({
+      state: "unknown",
+      threadId: "original-thread",
+      turnId: "original-turn",
+      dispatchId: task.runs[0]!.dispatchId,
+    });
+  });
+
   it("preserves suggested answers through verification and explicit follow-up without selecting one", () => {
     const f = fixture();
     let task = f.claim(f.create());
