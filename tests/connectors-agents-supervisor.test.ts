@@ -1024,6 +1024,52 @@ describe("terminal input", () => {
     expect(calls).toEqual([
       ["tmux", "-L", "work", "send-keys", "-t", "%7", "-l", "--", "-h"],
     ]);
+    // Text that must not be sent off holds no line break: a line break in a
+    // terminal sends the line.
+    calls.length = 0;
+    await sendText(
+      inTmux,
+      "first line\nsecond line\r\n\nthird",
+      { enter: false },
+      run,
+    );
+    expect(calls).toEqual([
+      [
+        "tmux",
+        "-L",
+        "work",
+        "send-keys",
+        "-t",
+        "%7",
+        "-l",
+        "--",
+        "first line second line third",
+      ],
+    ]);
+    const scripted = recorder(() => ({ status: 0, stdout: "ok\n" }));
+    await sendText(
+      session({
+        terminal: {
+          tty: "ttys001",
+          app: "iTerm2",
+          appPath: null,
+          tmux: null,
+          remote: false,
+        },
+      }),
+      "one\ntwo",
+      { enter: false },
+      scripted.run,
+    );
+    expect(scripted.calls[0]!.slice(-3)).toEqual([
+      "ttys001",
+      "one two",
+      "stay",
+    ]);
+    // With Return, the lines stay as the person gave them.
+    calls.length = 0;
+    await sendText(inTmux, "one\ntwo", { enter: true }, run);
+    expect(calls[0]!.at(-1)).toBe("one\ntwo");
   });
 
   it("uses the terminal's own scripting, with the text as an argument", async () => {

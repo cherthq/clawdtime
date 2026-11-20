@@ -914,6 +914,17 @@ describe("text and windows for a remote session", () => {
       route: "none",
     });
     expect(calls).toHaveLength(1);
+    // Text that must not be sent off holds no line break on the way there either.
+    await remoteSend(mini, theirs, "one\ntwo\r\nthree", false, run);
+    expect(asked(calls[1]!)).toEqual([
+      "agents",
+      "send",
+      "200-def",
+      "--no-enter",
+      "--",
+      "one two three",
+    ]);
+    calls.length = 1;
     const failing = recorder(() => ({ status: 2, stdout: "" }));
     expect(await remoteSend(mini, theirs, "hello", true, failing.run)).toEqual({
       ok: false,

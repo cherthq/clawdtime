@@ -12,7 +12,7 @@ import { secureWrite } from "../shared/state.js";
 import { countStates, order } from "./board.js";
 import { requestSchema, type DecisionRequest } from "./decisions.js";
 import type { Runner } from "./focus.js";
-import { cleanInput } from "./input.js";
+import { cleanInput, unbroken } from "./input.js";
 import {
   boardSnapshotSchema,
   hostNameSchema,
@@ -454,7 +454,7 @@ export async function remoteSend(
   enter: boolean,
   run: Runner,
 ): Promise<{ ok: boolean; route: "remote" | "none" }> {
-  const text = cleanInput(value);
+  const text = cleanInput(enter ? value : unbroken(value));
   if (!text.trim()) return { ok: false, route: "none" };
   const result = await remoteCall(
     host,

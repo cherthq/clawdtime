@@ -402,6 +402,9 @@ for a session in tmux, in Terminal, in iTerm2, and in Ghostty 1.4 or later.
 Control characters are removed, so the text cannot carry an escape sequence. A
 session in another terminal is refused with the reason.
 
+With `--no-enter` the text stays on the line and nothing sends it: line breaks
+in the text become spaces, because a line break in a terminal sends the line.
+
 ## Agent commands, use, and slides
 
 ```sh
