@@ -11,6 +11,7 @@ import { z } from "zod";
 import { interpret } from "./call.js";
 import type { DecisionDesk, DecisionRequest } from "./decisions.js";
 import type { CliFact } from "./inventory.js";
+import { factKinds, type FactKind, type Memory } from "./memory.js";
 import { detailLabels, elapsed, summary, title } from "./render.js";
 import type { AgentSession, BoardSnapshot } from "./types.js";
 
@@ -138,10 +139,15 @@ export class OpenAIModel implements ModelClient {
         body: JSON.stringify({
           model: this.model,
           messages,
-          tools: input.tools.map((tool) => ({
-            type: "function",
-            function: tool,
-          })),
+          // A request with no tools carries no tool list: an empty one is refused.
+          ...(input.tools.length
+            ? {
+                tools: input.tools.map((tool) => ({
+                  type: "function",
+                  function: tool,
+                })),
+              }
+            : {}),
         }),
         signal: AbortSignal.timeout(45_000),
       },
@@ -287,8 +293,70 @@ const tools: ToolSpec[] = [
   },
 ];
 
+/** Offered only while the person has memory turned on. */
+const memoryTools: ToolSpec[] = [
+  {
+    name: "remember",
+    description:
+      "Keep one lasting thing that the person states about themselves or their work: a preference, a decision, a constraint.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "In the person's own words." },
+        kind: { type: "string", enum: [...factKinds] },
+        days: {
+          type: "integer",
+          description: "For something that holds only for a while: how long.",
+        },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "recall",
+    description: "Search what the person told you before.",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "forget",
+    description: "Remove what the person asks you to forget.",
+    parameters: {
+      type: "object",
+      properties: {
+        what: {
+          type: "string",
+          description: "The id of the fact, or words from it.",
+        },
+      },
+      required: ["what"],
+    },
+  },
+];
+
+const learnSystem = `From what the person said, list what is worth keeping for later: a preference, a decision, a constraint, who they are, what they work on, or something that holds for a while. Use the person's own words where you can. Skip questions, orders to you, small talk, the state of the agents, and anything secret.
+Answer with JSON only: an array of at most 3 objects {"text": one sentence that stands alone, "kind": "fact" or "preference" or "episode", "days": days until it stops being true (only for an episode), "replaces": the id of a known fact that this one makes untrue}. Answer [] when nothing is worth keeping.`;
+const proposalSchema = z
+  .array(
+    z.object({
+      text: z.string().min(3).max(400),
+      kind: z.enum(factKinds).catch("fact"),
+      days: z.number().positive().max(3650).nullish().catch(null),
+      replaces: z.string().nullish().catch(null),
+    }),
+  )
+  .max(10);
+
 const spokenWords = (value: string) =>
   value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+/** True when every word of `text` is a word that the person said. */
+const ownWords = (text: string, spoken: string) => {
+  const own = new Set(spokenWords(spoken));
+  return spokenWords(text).every((word) => own.has(word));
+};
 const clean = (value: string, max: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -299,6 +367,16 @@ export class Supervisor {
   ) {}
   get ready() {
     return this.model !== null;
+  }
+  /**
+   * What still runs after the last answer: memory that is being written. A
+   * command that ends at once waits for it. It never rejects.
+   */
+  learning: Promise<void> = Promise.resolve();
+  /** The memory, when the person turned it on. Off means that it does not exist for the agent. */
+  private memory(): Memory | null {
+    const memory = this.world.desk.memory;
+    return memory.enabled() ? memory : null;
   }
 
   /** The state in words: the base of every answer, and the whole answer with no model. */
@@ -439,14 +517,56 @@ export class Supervisor {
         if (!text) return "There was no text to keep.";
         // The trove keeps what the person said. When the model's wording adds a
         // word that the person did not say, the person's own sentence is kept.
-        const own = new Set(spokenWords(spoken));
-        const faithful = spokenWords(text).every((word) => own.has(word));
         this.world.desk.trove.note(
-          faithful ? text : clean(spoken, 2000),
+          ownWords(text, spoken) ? text : clean(spoken, 2000),
           null,
           this.world.now(),
         );
         return "Kept in the trove as a critical decision.";
+      }
+      case "remember":
+      case "recall":
+      case "forget": {
+        const memory = this.memory();
+        if (!memory) return "There is no such tool.";
+        try {
+          if (call.name === "recall") {
+            const found = memory.search(String(args.query ?? ""));
+            return found.length
+              ? found
+                  .map(
+                    ({ fact }) =>
+                      `${fact.id} ${fact.text}${fact.source === "inferred" ? " (inferred)" : ""}`,
+                  )
+                  .join("\n")
+              : "Nothing in memory matches.";
+          }
+          if (call.name === "forget") {
+            // Only the person's own last words remove something.
+            if (!/\b(forget|delete|remove|erase)\b/i.test(spoken))
+              return "The person did not ask to forget. Ask them.";
+            const removed = memory.forget(String(args.what ?? ""));
+            return removed
+              ? `Removed ${removed} from memory.`
+              : "Nothing in memory matches that.";
+          }
+          const text = clean(String(args.text ?? ""), 400);
+          if (!text) return "There was no text to keep.";
+          // Memory keeps the person's words, as the trove does.
+          memory.remember({
+            text: ownWords(text, spoken) ? text : clean(spoken, 400),
+            kind: factKinds.includes(args.kind as FactKind)
+              ? (args.kind as FactKind)
+              : "fact",
+            days: typeof args.days === "number" ? args.days : null,
+            source: "said",
+          });
+          return "Kept in memory.";
+        } catch (error) {
+          return error instanceof Error
+            ? error.message
+            : "Memory could not be changed.";
+        }
       }
       case "set_away":
         this.world.desk.setAway(args.away === true);
@@ -487,6 +607,46 @@ export class Supervisor {
     return `${head} Say approve or deny to answer a request.`;
   }
 
+  /**
+   * After an answer: one more question to the model, with no tools, for the
+   * lasting facts in the person's message. A fact in the person's own words is
+   * marked as said; one that the model worded is marked as inferred.
+   */
+  private async learn(memory: Memory, spoken: string) {
+    if (!this.model || spokenWords(spoken).length < 5) return;
+    const near = memory.search(spoken, { limit: 8, threshold: 0.15 });
+    const turn = await this.model.complete({
+      system: learnSystem,
+      messages: [
+        {
+          role: "user",
+          content: `Known facts:\n${near.map(({ fact }) => `${fact.id} ${fact.text}`).join("\n") || "none"}\n\nThe person said:\n${spoken}`,
+        },
+      ],
+      tools: [],
+    });
+    const start = turn.text.indexOf("[");
+    const end = turn.text.lastIndexOf("]");
+    if (start < 0 || end <= start) return;
+    const proposed = proposalSchema.safeParse(
+      JSON.parse(turn.text.slice(start, end + 1)),
+    );
+    if (!proposed.success) return;
+    for (const item of proposed.data.slice(0, 3)) {
+      try {
+        memory.remember({
+          text: item.text,
+          kind: item.kind,
+          days: item.days ?? null,
+          replaces: item.replaces ?? null,
+          source: ownWords(item.text, spoken) ? "said" : "inferred",
+        });
+      } catch {
+        // A line that memory refuses, such as a credential, is left out.
+      }
+    }
+  }
+
   /** One turn: the person's words in, ClawdTime's answer out. It never throws. */
   async reply(
     history: ChatMessage[],
@@ -502,10 +662,30 @@ export class Supervisor {
         .map((message) => ({ role: message.role, content: message.text })),
       { role: "user" as const, content: words },
     ];
+    // With memory on, the agent starts from what it knows about the person.
+    const memory = this.memory();
+    let known = "";
+    try {
+      known = memory?.profile() ?? "";
+    } catch {
+      known = "";
+    }
+    const brief = known
+      ? `${system}\nWhat you know about this person, from memory (a line marked inferred is a guess):\n${known}`
+      : system;
+    const offered = memory ? [...tools, ...memoryTools] : tools;
     try {
       for (let step = 0; step < 6; step++) {
-        const turn = await this.model.complete({ system, messages, tools });
-        if (!turn.toolCalls.length) return clean(turn.text, 900) || "Done.";
+        const turn = await this.model.complete({
+          system: brief,
+          messages,
+          tools: offered,
+        });
+        if (!turn.toolCalls.length) {
+          // The answer is ready. What the message teaches is written after it.
+          if (memory) this.learning = this.learn(memory, words).catch(() => {});
+          return clean(turn.text, 900) || "Done.";
+        }
         messages.push({
           role: "assistant",
           content: turn.text,

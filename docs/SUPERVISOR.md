@@ -70,6 +70,52 @@ command with pipes, lists or substitutions gets the bare key `Bash`, and the bar
 key cannot become a rule. An answer given in the terminal is not in the trove,
 because ClawdTime does not see which answer it was.
 
+## Memory
+
+The trove keeps what you decided. Memory keeps what you tell ClawdTime about
+yourself and your work: a preference, a constraint, what you work on, something
+that holds for a while. **It is off until you turn it on.** While it is off,
+nothing is read, nothing is written, and ClawdTime has no memory tools.
+
+```sh
+clawdtime memory on                  # or the menu: Memory: keep what I tell ClawdTime
+clawdtime memory remember "Never force push to main."
+clawdtime memory remember "Use pnpm here." --kind preference --project .
+clawdtime memory remember "The demo is on Friday." --kind episode --days 3
+clawdtime memory show                # every fact, with what replaced what
+clawdtime memory search push main
+clawdtime memory forget ID           # or words from the fact. It is removed for good
+clawdtime memory off
+```
+
+How it works:
+
+- One fact is one sentence that stands alone. The same fact again adds no copy:
+  it counts for more. A preference that you repeat rises to the top.
+- A newer fact can replace an older one ("I work on the Mac fleet now"). The
+  older one stays as history, marked as replaced, and is not used.
+- An episode expires: after 14 days, or after the days you give. A fact holds
+  until it changes.
+- A fact can belong to one project. It never shows for another project.
+- A credential is never kept. Text that holds a key, a token or a password with
+  its value is refused.
+- With memory on, ClawdTime starts each conversation from a small summary: at
+  most ten lasting lines and six recent ones. It can search the rest by words.
+  No model and no index is used to search.
+- When you say "remember ...", your own words are kept. After an answer,
+  ClawdTime may also keep up to three facts from your message. A fact that it
+  worded itself is marked as inferred, and an inferred fact never decides
+  anything.
+- "Forget ..." removes a fact only when you ask for it yourself.
+- A waiting request shows what you said before about it ("You said: Never force
+  push to main."): in the panel, in `clawdtime agents pending`, and in the
+  question on a call.
+
+Memory is a set of plain files on this Mac. It has no service of its own. With
+an OpenAI key, the step that keeps facts after an answer sends your message to
+the language model, as the chat itself does. With memory off, nothing more is
+sent than before.
+
 ## Away: answer by phone
 
 Away mode turns a waiting request into a FaceTime call through the ClawdTime
@@ -206,6 +252,9 @@ moves it):
   credential stays in its own connection file.
 - `agents/chat.jsonl`: the conversation with ClawdTime, 2,000 characters for
   each message at most.
+- `memory/settings.json` and `memory/facts.json`: whether memory is on, and the
+  facts, 400 characters for each at most and 2,000 facts at most. Nothing is
+  written there while memory is off.
 - `agents/voice/`: one recording while it is turned into text, then it is
   removed; and the newest spoken answer only.
 

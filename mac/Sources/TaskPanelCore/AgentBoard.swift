@@ -265,12 +265,15 @@ public struct PendingDecisions: Codable, Equatable {
     public let canRemember: Bool
     /// The remote Mac whose agent asks. Nil for an agent on this Mac.
     public let host: String?
+    /// What the person said before that bears on this request, from memory. Nil with memory off.
+    public let recalled: String?
     public init(id: String, agentLabel: String, kind: String, tool: String, summary: String, options: [String], project: String,
                 session: String?, sessionId: String?, createdAt: Double, holdUntil: Double, allowedBefore: Int, deniedBefore: Int, canRemember: Bool,
-                host: String? = nil) {
+                host: String? = nil, recalled: String? = nil) {
       self.id = id; self.agentLabel = agentLabel; self.kind = kind; self.tool = tool; self.summary = summary; self.options = options
       self.project = project; self.session = session; self.sessionId = sessionId; self.createdAt = createdAt; self.holdUntil = holdUntil
       self.allowedBefore = allowedBefore; self.deniedBefore = deniedBefore; self.canRemember = canRemember; self.host = host
+      self.recalled = recalled
     }
     public var isQuestion: Bool { kind == "question" }
   }
@@ -288,7 +291,7 @@ public struct PendingDecisions: Codable, Equatable {
       guard Self.identity(request.id), ["permission", "question", "plan"].contains(request.kind), request.summary.count <= 600,
         request.tool.count <= 80, request.agentLabel.count <= 40, request.project.count <= 4096, request.options.count <= 8,
         request.options.allSatisfy({ $0.count <= 200 }), (request.session?.count ?? 0) <= 200,
-        request.allowedBefore >= 0, request.deniedBefore >= 0, request.holdUntil >= request.createdAt,
+        request.allowedBefore >= 0, request.deniedBefore >= 0, request.holdUntil >= request.createdAt, (request.recalled?.count ?? 0) <= 400,
         request.host.map(AgentBoard.hostName) ?? true,
         !request.isQuestion || !request.options.isEmpty else { throw PanelFailure.response }
     }
@@ -325,6 +328,11 @@ public enum DecisionText {
     case (0, let denied): return "You denied this \(times(denied)) here."
     case (let allowed, let denied): return "Here before: allowed \(times(allowed)), denied \(times(denied))."
     }
+  }
+  /// What the person said before that bears on this request, when memory is on.
+  public static func said(_ request: PendingDecisions.Request) -> String {
+    let text = AgentBoardText.clean(request.recalled ?? "", limit: 120)
+    return text.isEmpty ? "" : "You said: " + text
   }
   /// How long the answer still works from here. After that the agent's terminal is the only place.
   public static func remaining(_ request: PendingDecisions.Request, now: Double = Date().timeIntervalSince1970 * 1000) -> String {

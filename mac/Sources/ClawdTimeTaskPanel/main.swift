@@ -18,6 +18,7 @@ import TaskPanelCore
   private var board: AgentBoard?
   private var decisions: PendingDecisions?
   private var awayItems: [NSMenuItem] = []
+  private var memoryItems: [NSMenuItem] = []
   private var showRevision = false
   private var lastTaskId: String?
   private var startTucked = false
@@ -70,6 +71,9 @@ import TaskPanelCore
     styles.submenu = styleMenu; menu.addItem(styles)
     let away = menu.addItem(withTitle: "Away: answer by phone", action: #selector(toggleAway(_:)), keyEquivalent: "")
     away.target = self; awayItems.append(away)
+    // Off by default. On, ClawdTime keeps what the person tells it, on this Mac.
+    let memory = menu.addItem(withTitle: "Memory: keep what I tell ClawdTime", action: #selector(toggleMemory(_:)), keyEquivalent: "")
+    memory.target = self; memoryItems.append(memory)
     menu.addItem(.separator())
     let sharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
     sharing.target = self; stopSharingItems.append(sharing)
@@ -138,6 +142,7 @@ import TaskPanelCore
       item.state = decisions?.away == true ? .on : .off
       item.title = decisions?.callReady == false ? "Away: answer by phone (no phone link yet)" : "Away: answer by phone"
     }
+    for item in memoryItems { item.state = transcript?.memory == true ? .on : .off }
     for item in stopSharingItems { item.isEnabled = state.allows(.stopSharing) }
     for item in stopCallItems { item.isEnabled = state.allows(.stopCall) }
   }
@@ -283,6 +288,7 @@ import TaskPanelCore
     model.connected = state.connected
     model.voice = voice.phase
     model.notice = chatNotice
+    model.memory = transcript?.memory == true
     chatPanel.view.render(model)
   }
   private func renderTalk() {
@@ -454,6 +460,16 @@ import TaskPanelCore
         : decision == "deny" ? "Denied. It is told." : "Answered. It continues.")
       decisions = try? await client.decisions()
       render()
+    }
+  }
+  @objc private func toggleMemory(_ sender: Any?) {
+    guard let client else { return }
+    let next = transcript?.memory != true
+    Task {
+      try? await client.setMemory(next)
+      if let fresh = try? await client.chat() { transcript = fresh }
+      refreshMenus(); renderChat()
+      boardPanel.view.showToast(transcript?.memory == true ? "Memory is on. ClawdTime keeps what you tell it." : "Memory is off. Nothing is kept.")
     }
   }
   @objc private func toggleAway(_ sender: Any?) {

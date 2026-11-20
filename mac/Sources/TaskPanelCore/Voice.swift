@@ -15,9 +15,12 @@ public struct ChatTranscript: Codable, Equatable {
   public let model: Bool
   public let speech: Bool
   public let voiceDirectory: String
+  /// The person turned memory on. A service that does not say counts as off.
+  public let memory: Bool?
   public let messages: [Message]
-  public init(version: Int, model: Bool, speech: Bool, voiceDirectory: String, messages: [Message]) {
+  public init(version: Int, model: Bool, speech: Bool, voiceDirectory: String, messages: [Message], memory: Bool? = nil) {
     self.version = version; self.model = model; self.speech = speech; self.voiceDirectory = voiceDirectory; self.messages = messages
+    self.memory = memory
   }
   public func validate() throws {
     guard version == 1, messages.count <= 400, voiceDirectory.hasPrefix("/"), voiceDirectory.count <= 4096,

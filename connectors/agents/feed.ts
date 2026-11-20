@@ -47,6 +47,8 @@ export interface AgentBoardPort {
   setAway(away: boolean): void;
   send(id: string, text: string, enter: boolean): ReturnType<typeof sendText>;
   chat(): ChatView;
+  /** Memory on or off. It is off until the person turns it on. */
+  setMemory(enabled: boolean): void;
   say(text: string): Promise<ChatMessage>;
   hear(recording: string): Promise<{
     heard: string;
@@ -64,6 +66,8 @@ export interface ChatView {
   speech: boolean;
   /** The folder for recordings and spoken answers. The panel writes and reads there. */
   voiceDirectory: string;
+  /** The person turned memory on: ClawdTime keeps what they tell it. */
+  memory: boolean;
   messages: ChatMessage[];
 }
 
@@ -93,6 +97,8 @@ export interface DecisionsView {
     canRemember: boolean;
     /** The remote Mac whose agent asks. Absent for an agent on this Mac. */
     host?: string;
+    /** What the person said before that bears on this request. Null with memory off. */
+    recalled: string | null;
   }[];
 }
 
@@ -202,8 +208,12 @@ export class BoardFeed implements AgentBoardPort {
       model: this.supervisor.ready,
       speech: this.speech !== null,
       voiceDirectory: this.voiceDirectory,
+      memory: this.desk.memory.enabled(),
       messages: this.log.recent(),
     };
+  }
+  setMemory(enabled: boolean) {
+    this.desk.memory.setEnabled(enabled);
   }
   /** One typed message from the person, and ClawdTime's answer. */
   async say(
@@ -388,6 +398,7 @@ export class BoardFeed implements AgentBoardPort {
             request.kind === "permission" &&
             request.cwd !== null &&
             request.pattern !== "Bash",
+          recalled: this.desk.recalled(request),
         };
       }),
     };
@@ -405,6 +416,7 @@ export class BoardFeed implements AgentBoardPort {
         return answerByCall(await openCall(link, item.id), item, {
           now,
           deadline: item.holdUntil - 5000,
+          recalled: this.desk.recalled(item),
         });
       });
     void place(request)

@@ -23,7 +23,7 @@ public final class PanelClient {
   private func request(path: String, body: Data? = nil, patient: Bool = false) async throws -> Data {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
-      path == "/desktop/chat" || path == "/desktop/voice" ||
+      path == "/desktop/chat" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
@@ -90,6 +90,11 @@ public final class PanelClient {
   public func setAway(_ away: Bool) async throws {
     let data = try JSONSerialization.data(withJSONObject: ["away": away], options: [.sortedKeys])
     _ = try await request(path: "/desktop/decisions/away", body: data)
+  }
+  /// Memory on or off. It is off until the person turns it on.
+  public func setMemory(_ enabled: Bool) async throws {
+    let data = try JSONSerialization.data(withJSONObject: ["enabled": enabled], options: [.sortedKeys])
+    _ = try await request(path: "/desktop/memory", body: data)
   }
   /// The conversation with ClawdTime.
   public func chat() async throws -> ChatTranscript {

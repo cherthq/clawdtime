@@ -11,6 +11,8 @@ struct ChatModel {
   var connected = true
   var voice = VoiceController.Phase.off
   var notice = ""
+  /// The person turned memory on.
+  var memory = false
 }
 
 private final class ChatFlippedView: NSView { override var isFlipped: Bool { true } }
@@ -208,7 +210,7 @@ final class ChatView: NSView, SheetContent {
       : model.voice == .listening ? "Listening. Speak, then stop for a moment."
       : model.voice == .thinking ? "Working on its answer."
       : model.voice == .speaking ? "Speaking."
-      : model.modelReady ? "It sees every agent, answers for you only when you say so, and remembers."
+      : model.modelReady ? "It sees every agent, answers for you only when you say so, and remembers." + (model.memory ? " Memory is on." : "")
       : "No language model key: it tells the state and takes a clear approve or deny."
     notice.stringValue = model.notice; noticeRow.isHidden = model.notice.isEmpty
     var keys = model.messages.suffix(60).map { "\($0.role)|\($0.at)|\($0.via)|\($0.text)" }

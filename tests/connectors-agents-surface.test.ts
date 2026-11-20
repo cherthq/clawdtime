@@ -717,11 +717,52 @@ it("real desktop service serves the board to the panel credential only, and turn
       model: false,
       speech: false,
       voiceDirectory: join(stateFolder, "agents", "voice"),
+      memory: false,
       messages: [],
     });
     expect((await request("/desktop/chat", {}, "x".repeat(64))).status).toBe(
       401,
     );
+    // Memory is off until the person turns it on, through the same credential.
+    expect(
+      (await post("/desktop/memory", { enabled: true }, "x".repeat(64))).status,
+    ).toBe(401);
+    expect((await post("/desktop/memory", { enabled: "yes" })).status).toBe(
+      400,
+    );
+    expect(
+      await (await post("/desktop/memory", { enabled: true })).json(),
+    ).toEqual({ enabled: true });
+    expect(
+      ((await (await request("/desktop/chat")).json()) as { memory: boolean })
+        .memory,
+    ).toBe(true);
+    expect(desk.memory.enabled()).toBe(true);
+    desk.memory.remember({ text: "Run the tests before every push." });
+    desk.open({
+      agent: "claude-code",
+      sessionId: "s2",
+      cwd: "/work/app",
+      pids: [],
+      described: {
+        kind: "permission",
+        tool: "Bash",
+        summary: "npm run tests",
+        options: [],
+      },
+      holdSeconds: 45,
+    });
+    const recalled = (await (await request("/desktop/decisions")).json()) as {
+      pending: { summary: string; recalled: string | null }[];
+    };
+    expect(
+      recalled.pending.find((item) => item.summary === "npm run tests")!
+        .recalled,
+    ).toBe("Run the tests before every push.");
+    expect(
+      await (await post("/desktop/memory", { enabled: false })).json(),
+    ).toEqual({ enabled: false });
+    expect(desk.memory.enabled()).toBe(false);
     const said = (await (
       await post("/desktop/chat", { text: "what needs me?" })
     ).json()) as { reply: { role: string; text: string; via: string } };

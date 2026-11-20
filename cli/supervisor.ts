@@ -137,6 +137,8 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   agents away on|off|status            away: requests wait for a phone call
   agents call connect|status|disconnect  link a paired project, so away mode can call you
   trove [list|search WORDS|rules|forget RULE|note TEXT|playbook [--out FILE]]
+  memory [status|on|off|show|search WORDS|remember TEXT|forget ID|TEXT]
+                                       what you told ClawdTime. Off until you turn it on
   clis [--json]                        agent commands on this Mac, with versions and use
   report [--out FILE] [--open]         the same as a slide deck
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
@@ -327,6 +329,8 @@ export async function supervisorCli(
         request.options.forEach((option, choice) =>
           print(`     ${choice + 1}) ${option}`),
         );
+        const said = desk.recalled(request);
+        if (said) print(`     you said before: ${cut(said, 110)}`);
       });
       return;
     }
@@ -576,6 +580,85 @@ export async function supervisorCli(
     );
   }
 
+  if (group === "memory") {
+    const memory = desk.memory;
+    const mark = (fact: { source: string; current: boolean }) =>
+      `${fact.source === "inferred" ? "  (inferred)" : ""}${fact.current ? "" : "  (replaced)"}`;
+    if (command === "" || command === "status") {
+      const facts = memory.facts();
+      const kept = facts.filter((fact) => fact.current).length;
+      return print(
+        `Memory is ${memory.enabled() ? "on" : "off"}. ${kept} ${kept === 1 ? "fact" : "facts"} kept${facts.length > kept ? `, ${facts.length - kept} replaced` : ""}.${memory.enabled() ? "" : " Turn it on: clawdtime memory on"}`,
+      );
+    }
+    if (command === "on" || command === "off") {
+      memory.setEnabled(command === "on");
+      return print(
+        command === "on"
+          ? "Memory is on. ClawdTime keeps what you tell it, on this Mac only."
+          : "Memory is off. Nothing is read and nothing is written. What was kept stays until you forget it.",
+      );
+    }
+    if (command === "show") {
+      const facts = memory
+        .facts()
+        .sort(
+          (left, right) =>
+            Number(right.current) - Number(left.current) ||
+            right.updatedAt - left.updatedAt,
+        );
+      if (!facts.length) return print("Memory is empty.");
+      for (const fact of facts)
+        print(
+          `${fact.id}  ${day(fact.updatedAt)}  ${fact.kind.padEnd(10)} ${fact.strength > 1 ? `x${fact.strength} ` : ""}${fact.scope ? `[${project(fact.scope)}] ` : ""}${fact.text}${fact.expiresAt ? `  (until ${day(fact.expiresAt)})` : ""}${mark(fact)}`,
+        );
+      return;
+    }
+    if (command === "search") {
+      const found = memory.search(args.slice(1).join(" "));
+      if (!found.length) return print("Nothing in memory matches.");
+      for (const { fact, score } of found)
+        print(`${fact.id}  ${score.toFixed(2)}  ${fact.text}${mark(fact)}`);
+      return;
+    }
+    if (command === "remember") {
+      if (!memory.enabled())
+        throw new Error("Memory is off. Turn it on: clawdtime memory on");
+      const { flags, rest } = split(
+        args.slice(1),
+        [],
+        ["kind", "days", "project"],
+      );
+      const kind = flags.kind ?? "fact";
+      if (kind !== "fact" && kind !== "preference" && kind !== "episode")
+        throw new Error("Use --kind fact, preference or episode.");
+      const kept = memory.remember({
+        text: rest.join(" "),
+        kind,
+        days: flags.days ? Number(flags.days) : null,
+        scope: flags.project ? realpathSync(flags.project) : null,
+      });
+      return print(
+        kept.added
+          ? `Kept (${kept.fact.id}).`
+          : `Known already (${kept.fact.id}). It counts for more now.`,
+      );
+    }
+    if (command === "forget") {
+      const removed = memory.forget(args.slice(1).join(" "));
+      if (!removed) {
+        process.exitCode = 2;
+        return print("Nothing in memory matches. See: clawdtime memory show");
+      }
+      return print(
+        `Removed ${removed} ${removed === 1 ? "fact" : "facts"} for good.`,
+      );
+    }
+    throw new Error(
+      "Use: clawdtime memory status|on|off|show|search WORDS|remember TEXT|forget ID|TEXT",
+    );
+  }
+
   if (group === "clis" || group === "report") {
     const board = new BoardScanner(system, { includeHeadless: false }).scan();
     const clis = inventory(system, board);
@@ -656,7 +739,11 @@ export async function supervisorCli(
       return answer;
     };
     if (group === "chat") {
-      if (args.length) return print(await turn(args.join(" "), "chat"));
+      if (args.length) {
+        print(await turn(args.join(" "), "chat"));
+        // With memory on, what the message taught is still being written.
+        return supervisor.learning;
+      }
       if (!supervisor.ready)
         print(
           "No language model key is set: I tell the state and take a clear approve or deny.",
@@ -664,7 +751,7 @@ export async function supervisorCli(
       const lines = createInterface({ input: process.stdin });
       for await (const line of lines)
         if (line.trim()) print(await turn(line, "chat"));
-      return;
+      return supervisor.learning;
     }
     const speech = speechSettings(system.env);
     if (!speech)

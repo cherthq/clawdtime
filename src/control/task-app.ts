@@ -37,7 +37,9 @@ export interface AgentBoardPort {
   chat(): unknown;
   say(text: string): Promise<unknown>;
   hear(recording: string): Promise<unknown>;
+  setMemory(enabled: boolean): void;
 }
+const memorySchema = z.object({ enabled: z.boolean() }).strict();
 const chatSchema = z.object({ text: z.string().min(1).max(2000) }).strict();
 const voiceSchema = z
   .object({ recording: z.string().regex(/^[A-Za-z0-9_-]{1,60}\.(wav|m4a)$/) })
@@ -205,6 +207,13 @@ export function createTaskApp(
         desktop.authorizePanel(credential(c));
         const { recording } = voiceSchema.parse(await c.req.json());
         return c.json(await agents.hear(recording));
+      });
+      // Memory is off until the person turns it on, here or with `clawdtime memory on`.
+      app.post("/desktop/memory", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { enabled } = memorySchema.parse(await c.req.json());
+        agents.setMemory(enabled);
+        return c.json({ enabled });
       });
       // Types the person's own words into one session's terminal.
       app.post("/desktop/agents/send", async (c) => {

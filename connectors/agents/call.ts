@@ -62,14 +62,21 @@ const ordinals = [
 ];
 
 /** What the call says first: who asks, what, and how to answer. */
-export function spokenQuestion(request: DecisionRequest) {
+export function spokenQuestion(
+  request: DecisionRequest,
+  /** What the person said before that bears on it, from memory. */
+  recalled: string | null = null,
+) {
   const who = `${agentLabel(request.agent)}${request.cwd ? ` in ${request.cwd.split("/").filter(Boolean).at(-1)}` : ""}`;
   const what = request.summary.slice(0, 220);
+  const before = recalled
+    ? ` You said before: ${recalled.slice(0, 160).replace(/[.!?]+$/, "")}.`
+    : "";
   if (request.kind === "question")
-    return `${who} asks: ${what} ${request.options.map((option, index) => `${numbers[index]}, ${option}.`).join(" ")} Say the number or the answer.`;
+    return `${who} asks: ${what} ${request.options.map((option, index) => `${numbers[index]}, ${option}.`).join(" ")}${before} Say the number or the answer.`;
   if (request.kind === "plan")
-    return `${who} has a plan ready. Say approve to start it, or deny.`;
-  return `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}. Say approve or deny.`;
+    return `${who} has a plan ready.${before} Say approve to start it, or deny.`;
+  return `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} Say approve or deny.`;
 }
 
 const refuse =
@@ -157,6 +164,7 @@ export async function answerByCall(
     deadline: number;
     pollMs?: number;
     beatMs?: number;
+    recalled?: string | null;
   },
 ): Promise<{
   decision: "allow" | "deny" | "answer";
@@ -169,7 +177,7 @@ export async function answerByCall(
     // The same request never places a second call.
     idempotencyKey: `decision-${request.id}`,
     reason: request.kind === "question" ? "decision" : "approval",
-    question: spokenQuestion(request),
+    question: spokenQuestion(request, options.recalled ?? null),
     timeoutSeconds: Math.max(20, Math.floor(remaining() / 1000)),
   });
   // The backend stops a session that is silent for 20 seconds.

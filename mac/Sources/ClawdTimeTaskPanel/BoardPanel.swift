@@ -309,7 +309,7 @@ final class DecisionCardView: NSView {
   func update(_ request: PendingDecisions.Request, now: Double) {
     title.stringValue = DecisionText.title(request)
     summary.stringValue = DecisionText.summary(request)
-    hint.stringValue = [DecisionText.history(request), DecisionText.remaining(request, now: now)].filter { !$0.isEmpty }.joined(separator: "  ·  ")
+    hint.stringValue = [DecisionText.history(request), DecisionText.said(request), DecisionText.remaining(request, now: now)].filter { !$0.isEmpty }.joined(separator: "  ·  ")
   }
   override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
   override func draw(_ dirtyRect: NSRect) {

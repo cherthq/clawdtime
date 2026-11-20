@@ -56,7 +56,11 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "task") return taskCli(args.slice(1));
   if (command === "agents") return agentsCli(args.slice(1));
   if (command === "hosts") return agentsCli(["--hosts", ...args.slice(1)]);
-  if (["trove", "clis", "report", "browser", "chat", "talk"].includes(command))
+  if (
+    ["trove", "memory", "clis", "report", "browser", "chat", "talk"].includes(
+      command,
+    )
+  )
     return agentsCli(["--supervisor", command, ...args.slice(1)]);
   if (command === "help" || command === "--help") {
     console.log(

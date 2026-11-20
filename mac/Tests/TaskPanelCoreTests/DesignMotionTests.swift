@@ -564,4 +564,25 @@ final class DesignMotionTests: XCTestCase {
     let calm = animator.step(1.0 / 60, input)
     XCTAssertEqual(calm.gait, 0); XCTAssertEqual(calm.roll, 0); XCTAssertEqual(calm.bob, 0)
   }
+  func testMemoryShowsOnARequestAndInTheChatOnlyWhenTheServiceSaysSo() throws {
+    func request(_ recalled: String?) -> PendingDecisions.Request {
+      PendingDecisions.Request(id: "0123456789abcdef", agentLabel: "Claude Code", kind: "permission", tool: "Bash", summary: "git push origin main",
+        options: [], project: "app", session: nil, sessionId: nil, createdAt: 1, holdUntil: 2, allowedBefore: 0, deniedBefore: 0, canRemember: true, recalled: recalled)
+    }
+    XCTAssertEqual(DecisionText.said(request("Never force push to main.")), "You said: Never force push to main.")
+    XCTAssertEqual(DecisionText.said(request(nil)), "")
+    XCTAssertEqual(DecisionText.said(request("  \u{1B} ")), "")
+    XCTAssertThrowsError(try PendingDecisions(version: 1, away: false, callReady: false, pending: [request(String(repeating: "x", count: 401))]).validate())
+    // A service with memory off, or an older one, sends no such field.
+    let json = #"{"version":1,"away":false,"callReady":false,"pending":[{"id":"0123456789abcdef","agentLabel":"Claude Code","kind":"permission","tool":"Bash","summary":"npm test","options":[],"project":"app","session":null,"sessionId":null,"createdAt":1,"holdUntil":2,"allowedBefore":0,"deniedBefore":0,"canRemember":true}]}"#
+    XCTAssertNil(try JSONDecoder().decode(PendingDecisions.self, from: Data(json.utf8)).pending[0].recalled)
+    let filled = json.replacingOccurrences(of: #""canRemember":true"#, with: #""canRemember":true,"recalled":"Use pnpm here.""#)
+    let decoded = try JSONDecoder().decode(PendingDecisions.self, from: Data(filled.utf8))
+    try decoded.validate()
+    XCTAssertEqual(decoded.pending[0].recalled, "Use pnpm here.")
+    let on = try JSONDecoder().decode(ChatTranscript.self, from: Data(#"{"version":1,"model":true,"speech":false,"voiceDirectory":"/v","memory":true,"messages":[]}"#.utf8))
+    XCTAssertEqual(on.memory, true)
+    let older = try JSONDecoder().decode(ChatTranscript.self, from: Data(#"{"version":1,"model":true,"speech":false,"voiceDirectory":"/v","messages":[]}"#.utf8))
+    XCTAssertNil(older.memory)
+  }
 }

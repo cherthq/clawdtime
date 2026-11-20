@@ -9,6 +9,7 @@ import {
 import { basename, join } from "node:path";
 import { z } from "zod";
 import { secureWrite } from "../shared/state.js";
+import { Memory } from "./memory.js";
 import {
   decisionKinds,
   decisionValues,
@@ -225,12 +226,30 @@ export function holdPolicy(facts: { attended: boolean; away: boolean }): {
 export class DecisionDesk {
   private readonly directory: string;
   readonly trove: Trove;
+  /** What the person told ClawdTime. It does nothing until the person turns it on. */
+  readonly memory: Memory;
   constructor(
     readonly root: string,
     private readonly now: () => number = Date.now,
   ) {
     this.directory = deskDirectory(root);
     this.trove = new Trove(root);
+    this.memory = new Memory(root, now);
+  }
+  /**
+   * What the person said before that bears on this request, in its project.
+   * Null when memory is off or nothing matches well.
+   */
+  recalled(request: Pick<DecisionRequest, "summary" | "cwd">): string | null {
+    try {
+      if (!this.memory.enabled()) return null;
+      return (
+        this.memory.search(request.summary, { scope: request.cwd, limit: 1 })[0]
+          ?.fact.text ?? null
+      );
+    } catch {
+      return null;
+    }
   }
   private path(kind: "pending" | "answers", id: string) {
     return join(this.directory, kind, `${id}.json`);

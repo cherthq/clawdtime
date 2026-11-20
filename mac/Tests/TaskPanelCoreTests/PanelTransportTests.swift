@@ -157,4 +157,14 @@ final class PanelTransportTests: XCTestCase {
       do { _ = try await client.chat(); XCTFail("Invalid chat accepted") } catch {}
     }
   }
+  func testMemoryIsSwitchedWithThePanelCredential() async throws {
+    let server = try FixtureHTTP { _, _ in (200, ["Content-Type": "application/json"], Data(#"{"enabled":true}"#.utf8)) }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    try await client.setMemory(true)
+    XCTAssertTrue(server.requests()[0].hasPrefix("POST /desktop/memory "))
+    XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    // The body is exactly {"enabled":true}: 16 bytes.
+    XCTAssertTrue(server.requests()[0].contains("Content-Length: 16\r\n"))
+  }
 }
