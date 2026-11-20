@@ -34,6 +34,7 @@ function fixture(
     allowed?: boolean;
     maxSteps?: number;
     windowCatalog?: boolean;
+    actionApproval?: "ask" | "automatic";
   } = {},
 ) {
   const store = new Store();
@@ -99,6 +100,9 @@ function fixture(
     version: 1,
     mode: "browser",
     model: "fixture-model",
+    ...(options.actionApproval
+      ? { actionApproval: options.actionApproval }
+      : {}),
     timeoutMs: 10_000,
     maxSteps: options.maxSteps ?? 6,
     browser: {
@@ -147,6 +151,74 @@ async function pending(f: ReturnType<typeof fixture>) {
 }
 
 describe("app-owned CUA task engine", () => {
+  it("runs configured automatic actions without a decision and still verifies the result", async () => {
+    const f = fixture({ actionApproval: "automatic" });
+    expect(f.runtime.snapshot().message).toContain(
+      "without extra action confirmations",
+    );
+    await f.runtime.submit("automatic_1", "Update the disposable fixture");
+    await f.runtime.waitForIdle();
+    expect(f.device.authorize).toHaveBeenCalled();
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+    expect(f.planner.verify).toHaveBeenCalledTimes(1);
+    expect(f.runtime.snapshot().state).toBe("completed");
+    expect(f.runtime.snapshot().pendingAction).toBeUndefined();
+    await f.runtime.submit("automatic_1", "Update the disposable fixture");
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("automatic mode cannot override an adapter refusal", async () => {
+    const f = fixture({ actionApproval: "automatic" });
+    f.device.authorize.mockResolvedValue("refused");
+    await f.runtime.submit("automatic_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).toBe("blocked");
+  });
+
+  it("automatic mode discards an action when its final target changed", async () => {
+    const f = fixture({ actionApproval: "automatic" });
+    let count = 0;
+    f.device.observe.mockImplementation(async () => {
+      const frame = f.observation();
+      return ++count === 3
+        ? { ...frame, fingerprint: "changed_target" }
+        : frame;
+    });
+    await f.runtime.submit("automatic_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).toBe("blocked");
+  });
+
+  it("Stop cancels automatic work while its permission check is in flight", async () => {
+    const f = fixture({ actionApproval: "automatic" });
+    const held = gate();
+    f.device.authorize.mockImplementation(async () => {
+      await held.promise;
+      return "confirm";
+    });
+    await f.runtime.submit("automatic_1", "Update fixture");
+    await vi.waitFor(() => expect(f.device.authorize).toHaveBeenCalled());
+    f.runtime.stop();
+    held.release();
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).toBe("canceled");
+  });
+
+  it("automatic mode preserves unknown effects and never repeats them", async () => {
+    const f = fixture({ actionApproval: "automatic" });
+    f.device.execute.mockRejectedValue(Error("Input outcome unknown"));
+    await f.runtime.submit("automatic_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().state).toBe("uncertain");
+    await f.runtime.submit("automatic_2", "Update fixture again");
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+    expect(f.planner.verify).not.toHaveBeenCalled();
+  });
+
   it("waits for the exact action decision and does not treat model prose as approval", async () => {
     const f = fixture();
     await f.runtime.submit(

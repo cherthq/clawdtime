@@ -123,8 +123,12 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
       message:
         r?.message ??
         (this.config.mode === "native"
-          ? "Standalone computer control is configured. Enable the local companion to work in your apps; actions still require approval."
-          : "ClawdTime's own browser runtime is configured. It does not depend on a coding chat."),
+          ? this.config.actionApproval === "automatic"
+            ? "Computer tasks run without extra action confirmations. Local control must be enabled. Stop work remains available."
+            : "Standalone computer control is configured. Enable the local companion to work in your apps; actions still require approval."
+          : this.config.actionApproval === "automatic"
+            ? "Browser tasks run without extra action confirmations. Stop work remains available."
+            : "ClawdTime's own browser runtime is configured. It does not depend on a coding chat."),
       ...(r?.pendingAction ? { pendingAction: r.pendingAction } : {}),
     };
   }
@@ -341,7 +345,10 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
           break;
         }
         const actionId = `action_${randomUUID()}`;
-        if (permission === "confirm") {
+        if (
+          permission === "confirm" &&
+          this.config.actionApproval !== "automatic"
+        ) {
           this.update(id, {
             state: "pending_approval",
             pendingAction: {
