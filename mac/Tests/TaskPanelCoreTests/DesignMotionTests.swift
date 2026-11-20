@@ -133,7 +133,9 @@ final class DesignMotionTests: XCTestCase {
       if pose.sheen >= 0 { sheen = true }
       final = pose
     }
-    XCTAssertLessThan(low, 0.9, "pressed"); XCTAssertGreaterThan(high, 1.03, "rebound"); XCTAssertEqual(final.squash, 1, accuracy: 0.01)
+    XCTAssertLessThan(low, 0.9, "pressed"); XCTAssertGreaterThan(high, 1.03, "rebound")
+    // At rest it still breathes, by a little more than one percent.
+    XCTAssertEqual(final.squash, 1, accuracy: 0.02)
     XCTAssertTrue(sheen); XCTAssertGreaterThan(smiled, 0.8); XCTAssertEqual(final.squint, 0, accuracy: 0.01)
   }
   func testOnlyAttentionHopsAndTheSparkSpeedIsTheStatus() {
@@ -394,6 +396,20 @@ final class DesignMotionTests: XCTestCase {
     XCTAssertGreaterThan(spoken.glow, 0.85); XCTAssertGreaterThan(spoken.smile, silent.smile + 0.3)
     XCTAssertEqual(animator.preferredFramesPerSecond(loud), 60)
   }
+  func testEveryMascotStyleHasANameAndTheClockStopsUnderReducedMotion() {
+    XCTAssertEqual(MascotStyle.allCases.map(\.rawValue), ["flint", "pebble", "core", "neon", "orb", "onyx", "flux", "iris"])
+    XCTAssertEqual(MascotStyle.allCases.first, .flint, "a new install starts with the Chert mark")
+    XCTAssertEqual(Set(MascotStyle.allCases.map(\.title)).count, 8)
+    XCTAssertTrue(MascotStyle.allCases.allSatisfy { !$0.summary.isEmpty && $0.summary.count < 60 })
+    var animator = MascotAnimator(seed: 2)
+    var moving = MascotInput(mood: .working), still = MascotInput(mood: .working)
+    moving.voice = 0.5; still.reduceMotion = true
+    var pose = MascotPose()
+    for _ in 0..<30 { pose = animator.step(1.0 / 60, moving) }
+    XCTAssertEqual(pose.clock, 0.5, accuracy: 0.001); XCTAssertEqual(pose.voice, 0.5)
+    pose = animator.step(1.0 / 60, still)
+    XCTAssertEqual(pose.clock, 0, "a style that moves on its own stops under reduced motion")
+  }
   func testTheBubbleGoesPastTheBarAndNeverOverIt() {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 900), size = CGSize(width: 207, height: 62)
     // Near the top of the screen the bubble is under the mascot, and so is the bar.
@@ -421,5 +437,131 @@ final class DesignMotionTests: XCTestCase {
     let long = PetStatus.Bubble.said(heard: String(repeating: "word ", count: 30), reply: String(repeating: "a", count: 400), at: 2)
     XCTAssertEqual(long.seconds, 14); XCTAssertLessThanOrEqual(long.bubble.title.count, 62)
     XCTAssertFalse(PetStatus.Bubble(key: "k", title: "t", detail: "d", sessionId: nil).caption)
+  }
+
+  // MARK: the body has weight
+
+  private let room = BodyPhysics.Bounds(minX: 0, minY: 0, maxX: 1000, maxY: 800)
+
+  func testAHeldBodyLagsTheHandThenReachesIt() {
+    var body = BodyPhysics(x: 100, y: 100)
+    body.hold(x: 400, y: 100)
+    var frame = body.step(1.0 / 60, bounds: room)
+    XCTAssertGreaterThan(frame.x, 100); XCTAssertLessThan(frame.x, 300, "it does not jump to the hand")
+    var furthest = frame.x
+    for _ in 0..<90 { frame = body.step(1.0 / 60, bounds: room); furthest = max(furthest, frame.x) }
+    XCTAssertEqual(frame.x, 400, accuracy: 0.5); XCTAssertEqual(frame.y, 100, accuracy: 0.5)
+    XCTAssertGreaterThan(furthest, 401, "a little past the hand, then back: it has weight")
+    XCTAssertLessThan(furthest, 440)
+    XCTAssertTrue(frame.moving, "held is never at rest")
+  }
+  func testAPullSwingsTheBodyBackAndTheSwingDiesOut() {
+    var body = BodyPhysics(x: 100, y: 300)
+    var lowest = 0.0, highest = 0.0
+    // The hand goes to the right, fast, for a fifth of a second, then stops.
+    for step in 0..<12 { body.hold(x: 100 + Double(step + 1) * 30, y: 300); let frame = body.step(1.0 / 60, bounds: room); lowest = min(lowest, frame.swing); highest = max(highest, frame.swing) }
+    XCTAssertLessThan(lowest, -0.10, "pulled to the right, the base stays behind")
+    var last = BodyPhysics.Frame()
+    for _ in 0..<150 { last = body.step(1.0 / 60, bounds: room); lowest = min(lowest, last.swing); highest = max(highest, last.swing) }
+    XCTAssertGreaterThan(highest, 0.05, "it swings through to the other side")
+    XCTAssertEqual(last.swing, 0, accuracy: 0.01); XCTAssertGreaterThanOrEqual(lowest, -0.85)
+  }
+  func testAThrowFliesSlowsBouncesOffTheEdgeAndRests() {
+    var body = BodyPhysics(x: 600, y: 400)
+    for step in 0..<10 { body.hold(x: 600 + Double(step + 1) * 26, y: 400); _ = body.step(1.0 / 60, bounds: room) }
+    body.letGo()
+    XCTAssertGreaterThan(body.vx, 900, "it leaves the hand at the hand's speed")
+    var impacts: [Double] = [], frames = 0, last = BodyPhysics.Frame(), turned = false
+    repeat {
+      last = body.step(1.0 / 60, bounds: room); frames += 1
+      if last.impact > 0 { impacts.append(last.impact) }
+      if body.vx < 0 { turned = true }
+      XCTAssertLessThanOrEqual(last.x, 1000); XCTAssertGreaterThanOrEqual(last.x, 0)
+    } while last.moving && frames < 600
+    XCTAssertEqual(impacts.count, 1, "one hit on the right edge"); XCTAssertGreaterThan(impacts[0], 0.2)
+    XCTAssertTrue(turned, "it came back from the edge")
+    XCTAssertLessThan(frames, 300, "at rest within five seconds"); XCTAssertFalse(last.moving)
+    XCTAssertEqual(last.swing, 0); XCTAssertEqual(last.stretch, 0); XCTAssertEqual(last.gait, 0)
+    XCTAssertLessThan(last.x, 1000)
+  }
+  func testSpeedStretchesTheBodyAlongItsWayAndGivesItACadence() {
+    var body = BodyPhysics(x: 800, y: 100)
+    var frame = BodyPhysics.Frame(), phases: Set<Int> = []
+    // To the left and a little up, fast.
+    for step in 0..<30 { body.hold(x: 800 - Double(step + 1) * 20, y: 100 + Double(step + 1) * 4); frame = body.step(1.0 / 60, bounds: room); phases.insert(Int(frame.gaitPhase)) }
+    XCTAssertGreaterThan(frame.stretch, 0.2); XCTAssertLessThanOrEqual(frame.stretch, 0.26)
+    XCTAssertEqual(frame.stretchAngle, atan2(4, -20), accuracy: 0.12)
+    XCTAssertLessThan(frame.travel, -0.8); XCTAssertGreaterThan(frame.gait, 0.8)
+    XCTAssertGreaterThan(phases.count, 2, "the cadence turns while it runs")
+    for _ in 0..<240 { frame = body.step(1.0 / 60, bounds: room) }
+    XCTAssertEqual(frame.stretch, 0, accuracy: 0.004); XCTAssertEqual(frame.gait, 0, accuracy: 0.02); XCTAssertEqual(frame.travel, 0, accuracy: 0.02)
+  }
+  func testADropAtRestStaysAndReducedMotionFollowsTheHandExactly() {
+    var body = BodyPhysics(x: 300, y: 300)
+    body.hold(x: 300, y: 300); _ = body.step(1.0 / 60, bounds: room); body.letGo()
+    var frame = body.step(1.0 / 60, bounds: room)
+    for _ in 0..<30 { frame = body.step(1.0 / 60, bounds: room) }
+    XCTAssertFalse(frame.moving); XCTAssertEqual(frame.x, 300, accuracy: 0.01)
+    var calm = BodyPhysics(x: 0, y: 0)
+    calm.hold(x: 420, y: 77)
+    let still = calm.step(1.0 / 60, bounds: room, still: true)
+    XCTAssertEqual(still.x, 420); XCTAssertEqual(still.y, 77); XCTAssertEqual(still.swing, 0); XCTAssertEqual(still.stretch, 0); XCTAssertEqual(still.gait, 0)
+    calm.letGo()
+    XCTAssertFalse(calm.step(1.0 / 60, bounds: room, still: true).moving)
+    // A place outside the screen comes back inside.
+    calm.place(x: 5000, y: -50)
+    let inside = calm.step(1.0 / 60, bounds: room, still: true)
+    XCTAssertEqual(inside.x, 1000); XCTAssertEqual(inside.y, 0)
+  }
+  func testAClickIsARealJumpWithACrouchAFlightAndALanding() {
+    var animator = MascotAnimator(seed: 3)
+    let input = MascotInput(mood: .idle)
+    for _ in 0..<30 { _ = animator.step(1.0 / 60, input) }
+    animator.jump()
+    var crouch = 1.0, top = 0.0, air = 0.0, long = 1.0, landing = 1.0, last = MascotPose()
+    for frame in 0..<120 {
+      last = animator.step(1.0 / 60, input)
+      let t = Double(frame + 1) / 60
+      if t <= 0.12 { crouch = min(crouch, last.squash); XCTAssertEqual(last.lift, 0, "it crouches before it leaves the ground") }
+      else if t < 0.55 { top = max(top, last.lift); air = max(air, last.air); long = max(long, last.squash) }
+      else if t < 0.9 { landing = min(landing, last.squash) }
+    }
+    XCTAssertLessThan(crouch, 0.86); XCTAssertGreaterThan(top, 0.42); XCTAssertGreaterThan(air, 0.95)
+    XCTAssertGreaterThan(long, 1.08, "long in the air"); XCTAssertLessThan(landing, 0.93, "it lands with weight")
+    XCTAssertEqual(last.lift, 0); XCTAssertEqual(last.air, 0); XCTAssertEqual(last.squash, 1, accuracy: 0.04)
+    // Reduced motion: no jump at all.
+    var calm = MascotAnimator(seed: 3); var still = MascotInput(mood: .idle); still.reduceMotion = true
+    calm.jump()
+    for _ in 0..<40 { let pose = calm.step(1.0 / 60, still); XCTAssertEqual(pose.lift, 0); XCTAssertEqual(pose.squash, 1) }
+  }
+  func testAWaveRocksTheBodyAndTheBodyActsOutItsTravel() {
+    var animator = MascotAnimator(seed: 5)
+    var input = MascotInput(mood: .idle)
+    for _ in 0..<30 { _ = animator.step(1.0 / 60, input) }
+    animator.wave()
+    var rock = 0.0, raised = 0.0, sides: Set<Bool> = []
+    for _ in 0..<57 { let pose = animator.step(1.0 / 60, input); rock = max(rock, abs(pose.roll)); raised = max(raised, pose.wave); if abs(pose.roll) > 0.05 { sides.insert(pose.roll > 0) } }
+    XCTAssertGreaterThan(rock, 0.12); XCTAssertGreaterThan(raised, 0.95); XCTAssertEqual(sides.count, 2, "to both sides")
+    for _ in 0..<30 { _ = animator.step(1.0 / 60, input) }
+    XCTAssertEqual(animator.step(1.0 / 60, input).wave, 0)
+    // Carried to the right at a run, with the base hanging back.
+    input.held = true; input.gait = 1; input.travel = 1; input.swing = -0.3
+    var strides: Set<Bool> = [], pose = MascotPose(), wide = 0.0, steps = 0, before = 0.0, rising = false
+    for frame in 0..<60 {
+      input.gaitPhase = Double(frame) * 0.23
+      pose = animator.step(1.0 / 60, input)
+      if abs(pose.stride) > 0.3 { strides.insert(pose.stride > 0) }
+      // Each step is one rise and one fall of the body.
+      if frame > 0 { let up = pose.bob > before; if up && !rising { steps += 1 }; rising = up }
+      before = pose.bob
+      if frame < 12 { wide = max(wide, pose.eyeOpen) }
+    }
+    XCTAssertGreaterThan(pose.yaw, 0.35, "it faces the way it goes"); XCTAssertLessThan(pose.roll, -0.2)
+    XCTAssertEqual(pose.gait, 1); XCTAssertEqual(pose.travel, 1); XCTAssertTrue(pose.held)
+    XCTAssertEqual(strides.count, 2, "its steps alternate"); XCTAssertGreaterThanOrEqual(steps, 3, "it bobs with its steps")
+    XCTAssertGreaterThan(wide, 1.2, "picked up: wide eyes for a moment")
+    input.reduceMotion = true
+    let calm = animator.step(1.0 / 60, input)
+    XCTAssertEqual(calm.gait, 0); XCTAssertEqual(calm.roll, 0); XCTAssertEqual(calm.bob, 0)
   }
 }

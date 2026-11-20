@@ -6,7 +6,7 @@ import TaskPanelCore
 /// The app: one mascot on the desktop and one board that opens out of it. The task
 /// service owns every fact. This process shows them, sends the person's actions once,
 /// and keeps a receipt for each.
-@MainActor final class TaskPanelApp: NSObject, NSApplicationDelegate {
+@MainActor final class TaskPanelApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var exitStatus: Int32 = 0
   private var reopenName: Notification.Name?
   private var configuration: PanelConfiguration?
@@ -59,8 +59,11 @@ import TaskPanelCore
     menu.addItem(withTitle: "Tuck against the edge", action: #selector(tuck), keyEquivalent: "").target = self
     let styles = NSMenuItem(title: "Mascot", action: nil, keyEquivalent: "")
     let styleMenu = NSMenu(title: "Mascot")
+    // Each style shows its picture. The pictures are drawn when the menu first opens.
+    styleMenu.delegate = self
     for style in MascotStyle.allCases {
-      let item = styleMenu.addItem(withTitle: style.title + ": " + style.summary, action: #selector(chooseStyle(_:)), keyEquivalent: "")
+      let item = styleMenu.addItem(withTitle: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
+      if #available(macOS 14.4, *) { item.subtitle = style.summary } else { item.title = style.title + ": " + style.summary }
       item.target = self; item.representedObject = style.rawValue
       styleItems.append(item)
     }
@@ -94,18 +97,36 @@ import TaskPanelCore
     statusItem?.button?.toolTip = "ClawdTime"
     let statusMenu = NSMenu(); actions(into: statusMenu); statusItem?.menu = statusMenu
   }
-  /// The stone and its ring, as a template image for the menu bar.
+  /// The Chert mark, as a template image for the menu bar: the core with its window, and the flake.
   private static func markImage() -> NSImage {
     let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+      // The points of the mark on its own 900 point frame, y down.
+      func outline(_ points: [(CGFloat, CGFloat)]) -> NSBezierPath {
+        let shape = NSBezierPath()
+        for (index, point) in points.enumerated() {
+          let place = NSPoint(x: 1.3 + (point.0 - 250) * 0.0385, y: 16.4 - (point.1 - 262) * 0.0385)
+          if index == 0 { shape.move(to: place) } else { shape.line(to: place) }
+        }
+        shape.close(); shape.lineJoinStyle = .round; shape.lineWidth = 1.0
+        return shape
+      }
       NSColor.black.setFill(); NSColor.black.setStroke()
-      NSBezierPath(roundedRect: NSRect(x: 4.5, y: 4.5, width: 9, height: 8.5), xRadius: 4, yRadius: 4).fill()
-      let ring = NSBezierPath(ovalIn: NSRect(x: 1.2, y: 6, width: 15.6, height: 5.6))
-      var tilt = AffineTransform(translationByX: 9, byY: 9); tilt.rotate(byDegrees: -18); tilt.translate(x: -9, y: -9)
-      ring.transform(using: tilt); ring.lineWidth = 1.3; ring.stroke()
+      for piece in [[(455, 262), (527, 318), (467, 385), (535, 632), (328, 640), (250, 402)], [(590, 362), (650, 407), (588, 558), (527, 404)]] as [[(CGFloat, CGFloat)]] {
+        let shape = outline(piece); shape.fill(); shape.stroke()
+      }
+      // The window is cut out of the core.
+      NSGraphicsContext.current?.compositingOperation = .destinationOut
+      outline([(322, 436), (456, 521), (439, 596), (360, 600), (316, 454)]).fill()
       return true
     }
     image.isTemplate = true
     return image
+  }
+  func menuWillOpen(_ menu: NSMenu) {
+    for item in menu.items where item.image == nil {
+      guard let raw = item.representedObject as? String, let style = MascotStyle(rawValue: raw) else { continue }
+      item.image = MascotCatalog.thumbnail(style)
+    }
   }
   @objc private func chooseStyle(_ sender: NSMenuItem) {
     guard let raw = sender.representedObject as? String, let style = MascotStyle(rawValue: raw) else { return }

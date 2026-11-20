@@ -5,12 +5,35 @@ public enum MascotMood: String, CaseIterable, Sendable {
   case idle, working, attention, sharing, sleepy, asleep, offline
 }
 
-/// How the mascot is drawn. Pebble is the Chert stone with a face. Core is an
-/// instrument: a glass orb with an iris of light.
+/// How the mascot is drawn. Every style reads the same poses, so each one blinks,
+/// looks, jumps, runs with a drag and shows the state in its own way. Flint, the
+/// Chert mark, is the one a new install starts with.
 public enum MascotStyle: String, CaseIterable, Sendable {
-  case pebble, core
-  public var title: String { self == .pebble ? "Pebble" : "Core" }
-  public var summary: String { self == .pebble ? "The Chert stone, friendly" : "A glass orb with an iris of light" }
+  case flint, pebble, core, neon, orb, onyx, flux, iris
+  public var title: String {
+    switch self {
+    case .flint: return "Flint"
+    case .pebble: return "Pebble"
+    case .core: return "Core"
+    case .neon: return "Neon"
+    case .orb: return "Orb"
+    case .onyx: return "Onyx"
+    case .flux: return "Flux"
+    case .iris: return "Iris"
+    }
+  }
+  public var summary: String {
+    switch self {
+    case .flint: return "The Chert mark: a cut stone with an eye, and its flake"
+    case .pebble: return "The round stone, friendly"
+    case .core: return "A glass orb with an iris of light"
+    case .neon: return "A night-city droid in black chrome and neon"
+    case .orb: return "A metal ball droid with two small robotic eyes"
+    case .onyx: return "Black stone with veins of gold light"
+    case .flux: return "Liquid chrome with small robotic eyes"
+    case .iris: return "A lens that watches: glass, steel, an aperture"
+    }
+  }
 }
 
 /// One frame of the mascot. Every value is plain data, so a frame can be drawn,
@@ -40,6 +63,23 @@ public struct MascotPose: Equatable, Sendable {
   public var glow = 0.6
   /// 0 to 1 progress of the sheen across the stone. Negative: no sheen.
   public var sheen = -1.0
+  /// 0 to 1: how loud the conversation is. A mascot moves its mouth or its light with it.
+  public var voice = 0.0
+  /// Seconds of animation. It stands still under reduced motion, so a style
+  /// that moves on its own (a tail, a flicker, a wave) stops with it.
+  public var clock = 0.0
+  /// 0 still, 1 at a full run: the mascot is carried or thrown across the screen.
+  public var gait = 0.0
+  /// -1 to 1, one swing for each step. Legs, a tail or ears alternate with it.
+  public var stride = 0.0
+  /// -1 to the left, 1 to the right: the way it travels. The body already turns that way.
+  public var travel = 0.0
+  /// 0 to 1 while it waves to the person. A style with a hand raises it.
+  public var wave = 0.0
+  /// 0 to 1 while it is off the ground in a jump.
+  public var air = 0.0
+  /// True while a hand holds it.
+  public var held = false
   public init() {}
 }
 
@@ -58,6 +98,12 @@ public struct MascotInput: Equatable, Sendable {
   public var reduceMotion = false
   /// 0 to 1: how loud the conversation is, the person's voice or ClawdTime's own.
   public var voice = 0.0
+  /// From the body's physics: the swing under a hand, the way and the speed it travels.
+  public var swing = 0.0
+  public var travel = 0.0
+  public var gait = 0.0
+  public var gaitPhase = 0.0
+  public var held = false
   public init(mood: MascotMood) { self.mood = mood }
 }
 
@@ -69,6 +115,11 @@ public struct MascotAnimator: Sendable {
   private var blinkStart = -10.0
   private var secondBlink = -10.0
   private var tapStart = -10.0
+  private var jumpStart = -10.0
+  private var jumpLanded = true
+  private var waveStart = -10.0
+  private var heldSince = -10.0
+  private var wasHeld = false
   private var nodStart = -10.0
   private var shakeStart = -10.0
   private var sheenStart = -10.0
@@ -97,6 +148,12 @@ public struct MascotAnimator: Sendable {
 
   /// The person clicked the mascot: a quick press, a rebound, a smile and a sheen.
   public mutating func tap() { tapStart = time; squash.velocity -= 5.5; sheenStart = time }
+  /// A real jump: it crouches, leaves the ground, lands with weight and settles.
+  public mutating func jump() { jumpStart = time; jumpLanded = false; tapStart = time; sheenStart = time }
+  /// A greeting: the body rocks from side to side, and a style with a hand waves it.
+  public mutating func wave() { if time - waveStart > 1.2 { waveStart = time } }
+  /// It hit something, for example the edge of the screen. `strength` goes from 0 to 1.
+  public mutating func thud(_ strength: Double) { squash.velocity -= 2 + 6 * max(0, min(1, strength)) }
   /// Something the person asked for worked: a nod.
   public mutating func nod() { nodStart = time; sheenStart = time }
   /// Something could not be done: one shake.
@@ -139,8 +196,9 @@ public struct MascotAnimator: Sendable {
   /// Frames per second that the current motion needs. A view may draw less often when this is low.
   public func preferredFramesPerSecond(_ input: MascotInput) -> Int {
     if input.reduceMotion { return input.pointerActive || input.hovering ? 30 : 10 }
-    let reacting = time - tapStart < 1 || time - nodStart < 1 || time - shakeStart < 1 || time - sheenStart < 1.2
-    if input.hovering || input.pressed || reacting || input.voice > 0.02 || abs(input.dragVelocityX) + abs(input.dragVelocityY) > 1 { return 60 }
+    let reacting = time - tapStart < 1 || time - nodStart < 1 || time - shakeStart < 1 || time - sheenStart < 1.2 || time - jumpStart < 1.2 || time - waveStart < 1.1
+    let carried = input.held || input.gait > 0.01 || abs(input.swing) > 0.003
+    if input.hovering || input.pressed || reacting || carried || input.voice > 0.02 || abs(input.dragVelocityX) + abs(input.dragVelocityY) > 1 { return 60 }
     switch input.mood {
     case .asleep, .offline: return 15
     case .working, .attention: return 60
@@ -203,16 +261,71 @@ public struct MascotAnimator: Sendable {
       pose.bob = sin(time * 2 * .pi / period) * depth
       if mood == .attention {
         let cycle = (time - moodStart).truncatingRemainder(dividingBy: 3.4)
-        for start in [0.0, 0.36] where cycle >= start && cycle < start + 0.34 {
-          let phase = (cycle - start) / 0.34
-          pose.lift = sin(phase * .pi) * 0.24
-          pose.squash = 1 + sin(phase * .pi) * 0.07
+        for start in [0.0, 0.38] where cycle >= start && cycle < start + 0.36 {
+          let phase = (cycle - start) / 0.36
+          pose.lift = sin(phase * .pi) * 0.32
+          pose.squash = 1 + abs(cos(phase * .pi)) * 0.10
+          pose.air = sin(phase * .pi)
         }
+        // After the hops it waves, so it is clear that it asks for the person.
+        if cycle > 0.9 && cycle < 1.8 { pose.wave = sin((cycle - 0.9) / 0.9 * .pi) }
       }
     }
+    if !still {
+      // It breathes at rest, and it keeps a beat while agents work.
+      let breath = mood == .asleep ? 0.020 : mood == .offline ? 0 : 0.012
+      pose.squash *= 1 + breath * sin(time * 2 * .pi / (mood == .asleep ? 5.2 : 3.8))
+      if mood == .working {
+        pose.bob += 0.020 * sin(time * 2 * .pi * 1.7)
+        pose.squash *= 1 + 0.012 * sin(time * 2 * .pi * 3.4)
+      }
+      // The jump: a crouch, the flight, the landing. The spring rings after it lands.
+      let jump = time - jumpStart
+      if jump >= 0 && jump < 0.56 {
+        if jump < 0.12 {
+          let down = jump / 0.12
+          pose.squash *= 1 - 0.20 * down * (2 - down)
+        } else {
+          let flight = (jump - 0.12) / 0.44
+          pose.lift += 0.46 * sin(flight * .pi)
+          // Long at the start of the flight, round at the top, long again on the way down.
+          pose.squash *= 1 + 0.15 * abs(cos(flight * .pi))
+          pose.air = sin(flight * .pi)
+        }
+      } else if !jumpLanded {
+        jumpLanded = true
+        squash.velocity -= 6.5
+      }
+      // Carried or thrown: it runs with a cadence, leans into its way and faces it.
+      let gait = max(0, min(1, input.gait))
+      if gait > 0.01 {
+        pose.bob += 0.075 * gait * abs(sin(input.gaitPhase))
+        pose.squash *= 1 - 0.05 * gait * cos(2 * input.gaitPhase)
+      }
+      pose.gait = gait; pose.stride = gait > 0.01 ? sin(input.gaitPhase) : 0
+      pose.travel = max(-1, min(1, input.travel))
+    }
+    pose.held = input.held
+    if input.held && !wasHeld { heldSince = time }
+    wasHeld = input.held
     pose.squash *= max(0.6, min(1.4, squash.value))
     pose.scale = max(0, scale.value)
     pose.yaw = yaw.value; pose.pitch = pitch.value; pose.roll = roll.value
+    if !still {
+      pose.roll += max(-0.85, min(0.85, input.swing))
+      pose.yaw += 0.5 * pose.travel
+      pose.pitch += 0.10 * pose.gait
+      // The wave: three rocks from side to side that fade out.
+      let wave = time - waveStart
+      if wave >= 0 && wave < 0.95 {
+        let fade = sin(wave / 0.95 * .pi)
+        pose.roll += 0.27 * fade * sin(wave * 2 * .pi * 3.0)
+        pose.bob += 0.05 * fade * abs(sin(wave * 2 * .pi * 3.0))
+        pose.wave = fade
+      }
+      // Picked up: a moment of wide eyes.
+      if time - heldSince < 0.4 { pose.eyeOpen = max(pose.eyeOpen, 1.22) }
+    }
     let nod = time - nodStart, shake = time - shakeStart
     if !still && nod >= 0 && nod < 0.5 { pose.pitch += sin(nod / 0.5 * 2 * .pi) * 0.22 * (1 - nod / 0.5) }
     if !still && shake >= 0 && shake < 0.45 { pose.yaw += sin(shake / 0.45 * 6 * .pi) * 0.22 * (1 - shake / 0.45) }
@@ -227,6 +340,8 @@ public struct MascotAnimator: Sendable {
     let voice = max(0, min(1, input.voice))
     pose.glow = max(0, min(1, max(glow.value * (still ? 1 : pulse), voice)))
     pose.smile = max(pose.smile, voice * 0.9)
+    pose.voice = voice
+    pose.clock = still ? 0 : time
     if !still { pose.squash *= 1 + voice * 0.035 }
 
     // The sheen of the Chert mark: on a click, and now and then at rest.

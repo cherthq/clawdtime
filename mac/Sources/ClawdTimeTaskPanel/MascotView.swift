@@ -4,12 +4,12 @@ import TaskPanelCore
 
 /// The live mascot: the 3D stone, its shadow, and the clock that moves both.
 final class MascotView: NSView {
-  private(set) var mascot: MascotFigure = MascotScene()
+  private(set) var mascot: MascotFigure = MascotCatalog.make(.flint)
   /// Changes the drawing. The pose, the mood and the clock carry over.
-  var style = MascotStyle.pebble {
+  var style = MascotStyle.flint {
     didSet {
       guard style != oldValue else { return }
-      mascot = style == .pebble ? MascotScene() : CoreScene()
+      mascot = MascotCatalog.make(style)
       mascot.set(mood: mood)
       scene.scene = mascot.scene; scene.pointOfView = mascot.camera
       lastPose = nil
@@ -19,6 +19,9 @@ final class MascotView: NSView {
   let clock = FrameClock()
   private let scene = SCNView()
   private let deskShadow = CALayer()
+  /// Fades the last points at each edge to nothing, so a glow that reaches the
+  /// edge of the window ends softly and never shows the window's square.
+  private let feather = CALayer()
   private var animator = MascotAnimator(seed: UInt64(Date().timeIntervalSince1970 * 1000) & 0xFFFF_FFFF)
   var mood = MascotMood.idle { didSet { if mood != oldValue { mascot.set(mood: mood) } } }
   var hovering = false
@@ -28,6 +31,10 @@ final class MascotView: NSView {
   var lean = 0.0
   /// 0 to 1: the loudness of the conversation, when the person talks to ClawdTime.
   var voice = 0.0
+  /// What the body's physics says about this frame: the swing, the way it travels, its stretch.
+  var motion = BodyPhysics.Frame()
+  /// A hand holds the mascot.
+  var held = false
   /// Another animation is running and wants the full frame rate.
   var boost = false
   /// Runs after each frame of the mascot, on the same clock.
@@ -50,12 +57,54 @@ final class MascotView: NSView {
     scene.allowsCameraControl = false; scene.autoenablesDefaultLighting = false
     scene.autoresizingMask = [.width, .height]; scene.frame = bounds
     addSubview(scene)
+    scene.wantsLayer = true
+    feather.contents = Self.featherImage()
+    feather.contentsCenter = CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.2)
+    scene.layer?.mask = feather
     setAccessibilityElement(true); setAccessibilityRole(.button); setAccessibilityLabel("ClawdTime")
   }
   required init?(coder: NSCoder) { fatalError("Unavailable") }
   // The stone never takes the click itself: the window's content view owns the gesture.
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+  override func layout() {
+    super.layout()
+    CATransaction.begin(); CATransaction.setDisableActions(true)
+    feather.frame = scene.bounds
+    feather.contentsScale = window?.backingScaleFactor ?? 2
+    CATransaction.commit()
+  }
+  private var shownStretch = 0.0
+  /// The whole figure grows longer along its way and thinner across it, and keeps
+  /// its area: the stretch of a soft body at speed. It works for every style.
+  private func jelly(stretch: Double, angle: Double) {
+    guard abs(stretch - shownStretch) > 0.001 || (stretch == 0 && shownStretch != 0) else { return }
+    shownStretch = stretch
+    guard let layer = scene.layer else { return }
+    let box = scene.bounds
+    var transform = CGAffineTransform.identity
+    if stretch > 0.001 {
+      let long = CGFloat(1 + stretch), thin = 1 / long
+      transform = CGAffineTransform(translationX: box.midX, y: box.midY)
+        .rotated(by: CGFloat(angle)).scaledBy(x: long, y: thin).rotated(by: -CGFloat(angle))
+        .translatedBy(x: -box.midX, y: -box.midY)
+    }
+    CATransaction.begin(); CATransaction.setDisableActions(true)
+    layer.setAffineTransform(transform)
+    CATransaction.commit()
+  }
+  /// Solid in the middle, clear at the edges, with a soft step of about ten points between.
+  private static func featherImage() -> CGImage {
+    let size = 96, inset: CGFloat = 13
+    let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    // The blurred copy of the shape gives the soft step; the shape itself keeps the middle solid.
+    context.setShadow(offset: .zero, blur: 9, color: NSColor.black.cgColor)
+    context.setFillColor(NSColor.black.cgColor)
+    let box = CGRect(x: inset, y: inset, width: CGFloat(size) - inset * 2, height: CGFloat(size) - inset * 2)
+    context.addPath(CGPath(roundedRect: box, cornerWidth: 12, cornerHeight: 12, transform: nil)); context.fillPath()
+    return context.makeImage()!
+  }
   private static func shadowImage() -> CGImage {
     let context = CGContext(data: nil, width: 128, height: 32, bitsPerComponent: 8, bytesPerRow: 0,
       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -73,6 +122,9 @@ final class MascotView: NSView {
   }
   func stop() { clock.stop() }
   func tap() { animator.tap() }
+  func jump() { animator.jump() }
+  func wave() { animator.wave() }
+  func thud(_ strength: Double) { animator.thud(strength) }
   func nod() { animator.nod() }
   func shake() { animator.shake() }
   func land() { animator.land() }
@@ -93,6 +145,8 @@ final class MascotView: NSView {
     input.dragVelocityX = Double(dragVelocity.dx); input.dragVelocityY = Double(dragVelocity.dy)
     input.reduceMotion = Theme.reduceMotion
     input.voice = voice
+    input.swing = motion.swing; input.travel = motion.travel
+    input.gait = motion.gait; input.gaitPhase = motion.gaitPhase; input.held = held
     var pose = animator.step(step, input)
     pose.roll += lean
     if pose != lastPose {
@@ -105,6 +159,7 @@ final class MascotView: NSView {
       deskShadow.opacity = Float(max(0.25, 0.95 - height * 1.6))
       CATransaction.commit()
     }
+    jelly(stretch: Theme.reduceMotion ? 0 : motion.stretch, angle: motion.stretchAngle)
     clock.framesPerSecond = boost ? 120 : animator.preferredFramesPerSecond(input)
     afterFrame?(step)
   }

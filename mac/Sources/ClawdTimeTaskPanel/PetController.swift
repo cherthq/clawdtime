@@ -229,6 +229,12 @@ final class PetController: NSObject {
   private var bubbleShown = Spring(0, response: 0.30, dampingRatio: 0.68)
   private var drag: PanelDrag?
   private var lastDrag: (point: CGPoint, time: TimeInterval)?
+  /// The body has weight: while a hand drags it, and after a throw until it rests, its physics owns its place.
+  private var body = BodyPhysics(x: 0, y: 0)
+  private var bodyActive = false
+  private var wasHovering = false
+  private var lastWave = -100.0
+  private var clockTime = 0.0
   private var dismissedBubble: String?
   private var shownBubble: PetStatus.Bubble?
   private var stopSharingAllowed = false, stopCallAllowed = false
@@ -277,7 +283,8 @@ final class PetController: NSObject {
   func show() {
     guard !visible else { return }
     visible = true
-    mascot.style = MascotStyle(rawValue: defaults.string(forKey: "pet.style") ?? "") ?? .pebble
+    // No choice yet, or a style that is no longer there: the Chert mark.
+    mascot.style = MascotStyle(rawValue: defaults.string(forKey: "pet.style") ?? "") ?? .flint
     let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? visibleFrame
     if defaults.object(forKey: "pet.x") != nil {
       origin = PetLayout.origin(fraction: CGPoint(x: defaults.double(forKey: "pet.x"), y: defaults.double(forKey: "pet.y")), in: screen)
@@ -287,6 +294,7 @@ final class PetController: NSObject {
     let start = target(in: screen)
     x.snap(to: Double(start.x)); y.snap(to: Double(start.y))
     window.setFrameOrigin(start)
+    body.place(x: Double(start.x), y: Double(start.y)); bodyActive = false
     window.alphaValue = 0; window.orderFrontRegardless()
     NSAnimationContext.runAnimationGroup { context in context.duration = Theme.reduceMotion ? 0 : 0.18; window.animator().alphaValue = 1 }
     mascot.appear(); mascot.start()
@@ -392,15 +400,9 @@ final class PetController: NSObject {
     let point = NSEvent.mouseLocation
     if let moved = gesture.move(to: point) {
       if isDocked { placement = .free }
-      window.setFrameOrigin(moved)
-      x.snap(to: Double(moved.x)); y.snap(to: Double(moved.y)); origin = moved
-      let now = event.timestamp
-      if let last = lastDrag, now > last.time {
-        let span = CGFloat(now - last.time)
-        mascot.dragVelocity = CGVector(dx: (point.x - last.point.x) / span, dy: (point.y - last.point.y) / span)
-      }
-      lastDrag = (point, now)
-      layoutControls(); onMoved?()
+      // The hand does not carry the window. It pulls the body, and the body follows with its weight.
+      if !bodyActive { body.place(x: Double(window.frame.minX), y: Double(window.frame.minY)); bodyActive = true }
+      body.hold(x: Double(moved.x), y: Double(moved.y))
     }
     drag = gesture
   }
@@ -408,13 +410,20 @@ final class PetController: NSObject {
     guard let gesture = drag else { return }
     drag = nil; mascot.pressed = false; mascot.dragVelocity = .zero
     if gesture.didDrag {
-      mascot.land()
       let screen = visibleFrame
-      if let side = PetLayout.magneticSide(frame: window.frame, in: screen) { dock(side) }
-      else { origin = PetLayout.clamp(origin: window.frame.origin, in: screen); dockY = origin.y; save(); onMoved?() }
+      if let side = PetLayout.magneticSide(frame: window.frame, in: screen) {
+        // Let go against the left or right edge: it tucks there.
+        body.place(x: Double(window.frame.minX), y: Double(window.frame.minY)); bodyActive = false
+        mascot.motion = BodyPhysics.Frame(); mascot.held = false
+        mascot.land(); dock(side)
+      } else {
+        // Let go in the open: it keeps its speed, slows, and may bounce off an edge.
+        body.letGo()
+        if body.speed < 1 { mascot.land() }
+      }
       updateSideButton()
     } else if isDocked { undock() }
-    else { mascot.tap(); onToggleBoard?() }
+    else { mascot.jump(); onToggleBoard?() }
   }
   private func decided(_ decision: String) {
     guard let shown = shownBubble, let request = shown.decisionId else { return }
@@ -452,7 +461,25 @@ final class PetController: NSObject {
     reveal.step(step); lean.step(step)
     mascot.lean = lean.value
 
-    if drag == nil {
+    clockTime += step
+    if mascot.hovering && !wasHovering && drag == nil && !isDocked && clockTime - lastWave > 8 { mascot.wave(); lastWave = clockTime }
+    wasHovering = mascot.hovering
+    if bodyActive {
+      let size = PetLayout.petSize
+      let bounds = BodyPhysics.Bounds(minX: Double(screen.minX) + 6, minY: Double(screen.minY) + 6,
+        maxX: Double(screen.maxX - size.width) - 6, maxY: Double(screen.maxY - size.height) - 6)
+      let moved = body.step(step, bounds: bounds, still: Theme.reduceMotion)
+      mascot.motion = moved; mascot.held = body.held
+      if moved.impact > 0 { mascot.thud(moved.impact) }
+      let next = CGPoint(x: moved.x, y: moved.y)
+      if abs(next.x - box.minX) > 0.05 || abs(next.y - box.minY) > 0.05 { window.setFrameOrigin(next); layoutControls(); onMoved?() }
+      x.snap(to: moved.x); y.snap(to: moved.y); origin = next
+      if !moved.moving && drag == nil {
+        // At rest: this is its place from now on.
+        bodyActive = false; mascot.motion = BodyPhysics.Frame(); mascot.held = false
+        origin = PetLayout.clamp(origin: next, in: screen); dockY = origin.y; save(); updateSideButton()
+      }
+    } else if drag == nil {
       let goal = target(in: screen)
       x.target = Double(goal.x); y.target = Double(goal.y)
       x.step(step); y.step(step)
@@ -516,7 +543,7 @@ final class PetController: NSObject {
     }
 
     afterFrame?(step)
-    mascot.boost = !(x.settled && y.settled && buttons.settled && bubbleShown.settled && reveal.settled && lean.settled && barWidth.settled) || drag != nil || wantsBoost || voice > 0.02
+    mascot.boost = !(x.settled && y.settled && buttons.settled && bubbleShown.settled && reveal.settled && lean.settled && barWidth.settled) || drag != nil || bodyActive || wantsBoost || voice > 0.02
   }
   /// The board sets this while it opens or closes.
   var wantsBoost = false
