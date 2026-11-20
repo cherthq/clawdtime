@@ -26,6 +26,7 @@ public final class PanelClient {
       path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
+      path == "/desktop/hands/result" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}$", options: .regularExpression) != nil ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -122,6 +123,21 @@ public final class PanelClient {
       from: await request(path: "/desktop/execution/stop", body: Data("{}".utf8)))
     try result.execution.validate()
     return result.execution
+  }
+  /// Computer use: the next command for the hands, if one waits, and what the worker
+  /// does now. `after` is the last sequence number that the hands took.
+  public func handsNext(after seq: Int) async throws -> HandsNext {
+    guard seq >= 0 else { throw PanelFailure.configuration }
+    let result = try JSONDecoder().decode(HandsNext.self, from: await request(path: "/desktop/hands/next?after=\(seq)"))
+    try result.validate()
+    return result
+  }
+  /// Computer use: the result of one command. Exactly one POST: a failure is never
+  /// sent again, and the worker reads a missing answer as an unknown outcome.
+  public func handsResult(_ result: HandResult) async throws {
+    try result.validate()
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    _ = try await request(path: "/desktop/hands/result", body: try encoder.encode(result))
   }
   /// One typed message. The answer can take as long as the language model takes.
   public func say(_ text: String) async throws -> ChatTranscript.Message {
