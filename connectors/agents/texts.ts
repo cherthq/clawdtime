@@ -109,6 +109,35 @@ const isMessage = (value: unknown): value is Message => {
   );
 };
 
+/**
+ * One read of the messages, to prove the key and the project. It writes no
+ * journal, runs no work and sends nothing: "ok", "refused" (the key or the
+ * project is wrong) or "failed" (the service did not answer as it should).
+ */
+export async function checkTexts(
+  settings: TextSettings,
+  request: typeof fetch = fetch,
+): Promise<"ok" | "refused" | "failed"> {
+  try {
+    const response = await request(`${settings.base}/shared-messages`, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${settings.key}`,
+        "x-chert-project-id": settings.project,
+      },
+      // The key goes to the configured address only, never on to another one.
+      redirect: "error",
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (response.status === 401 || response.status === 403) return "refused";
+    if (response.status !== 200) return "failed";
+    const body = (await response.json()) as { data?: { items?: unknown } };
+    return Array.isArray(body?.data?.items) ? "ok" : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 export const restartNote =
   "I restarted while I worked on that. Send it again if you still need it.";
 const failedNote = "I could not finish that request.";
@@ -229,6 +258,8 @@ export class TextChannel {
         ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
+      // The key and the owner's number go to the configured address only.
+      redirect: "error",
       signal: AbortSignal.timeout(60_000),
     });
     let json: { data?: unknown; error?: { code?: unknown } } = {};
@@ -311,11 +342,18 @@ export class TextChannel {
     if (!this.recovered) await this.recover();
     const { settings } = this.options;
     const list = await this.api("GET");
-    if (list.status === 401 || list.status === 403) return "stop";
+    // The key is wrong or was revoked. Another refusal can pass: it is tried again.
+    if (
+      list.status === 401 ||
+      (list.status === 403 && list.code === "cli_scope_denied")
+    )
+      return "stop";
     if (list.status !== 200)
       throw new Error(`The messages could not be read (${list.status}).`);
     const items = (list.data as { items?: unknown } | null)?.items;
-    const fresh = (Array.isArray(items) ? items : [])
+    if (!Array.isArray(items))
+      throw new Error("The messages could not be read (not a list).");
+    const fresh = items
       .filter(isMessage)
       .filter(
         (message) =>

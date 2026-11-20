@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -414,10 +414,37 @@ describe("clawdtime texts", () => {
       CLAWDTIME_OWNER_PHONE: "+15550100",
       CHERT_API_BASE: "https://service.example.test/api/v1",
     };
-    const api = service([inbound(1, "old", start - 1000)]);
-    await run(env, ["check"], api);
+    // A fresh text of the owner that asks for work waits in the list.
+    const api = service([
+      inbound(1, "Build a landing page for the app", start + 1000),
+    ]);
+    const opened: string[][] = [];
+    await agentsCli(["--supervisor", "texts", "check"], {
+      system: fakeSystem({
+        now: start + 5000,
+        home: directory,
+        env: { CLAWDTIME_CONFIG_HOME: directory, ...env },
+      }),
+      runner: async (command, args) => {
+        opened.push([command, ...args]);
+        return { status: 0, stdout: "" };
+      },
+      print: (text: string) => lines.push(text),
+      model: null,
+      request: api.request,
+    });
     expect(lines.at(-1)).toContain("The key works");
+    // It only read: no answer, no job, no window, and no journal that would claim the message.
     expect(api.sent).toEqual([]);
+    expect(api.seen.map((entry) => entry.method)).toEqual(["GET"]);
+    expect(opened).toEqual([]);
+    expect(existsSync(join(directory, "agents", "texts.json"))).toBe(false);
+    expect(existsSync(join(directory, "agents", "jobs"))).toBe(false);
+    const page = service();
+    page.state.list.status = 200;
+    page.state.messages = "not a list" as unknown as unknown[];
+    await run(env, ["check"], page);
+    expect(lines.at(-1)).toContain("could not be read");
     const refused = service();
     refused.state.list.status = 401;
     await run(env, ["check"], refused);

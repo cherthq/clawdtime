@@ -66,7 +66,11 @@ import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
-import { TextChannel, textSettings } from "../connectors/agents/texts.js";
+import {
+  checkTexts,
+  TextChannel,
+  textSettings,
+} from "../connectors/agents/texts.js";
 import { titleReader } from "../connectors/agents/topics.js";
 import { sessionWindow } from "../connectors/agents/windows.js";
 import type {
@@ -830,6 +834,19 @@ export async function supervisorCli(
         throw new Error(
           `Text messages need these settings in the environment: ${found.missing.join(", ")}. See SETUP_CLAWDTIME.md.`,
         );
+      if (command === "check") {
+        // One read of the messages. It writes nothing, runs no work and sends nothing.
+        const state = await checkTexts(found.settings, deps.request);
+        return print(
+          state === "ok"
+            ? "The key works and the messages can be read. Run: clawdtime texts run"
+            : state === "refused"
+              ? "The project API key was refused. Make a key with read and write access, and check the project id."
+              : "The messages could not be read now. Check the network and CHERT_API_BASE, then try again.",
+        );
+      }
+      if (command !== "run")
+        throw new Error("Use: clawdtime texts run, or clawdtime texts check");
       const channel = new TextChannel({
         settings: found.settings,
         root,
@@ -839,17 +856,6 @@ export async function supervisorCli(
         ...(deps.request ? { request: deps.request } : {}),
         log: (line) => print(`${new Date(system.now()).toISOString()} ${line}`),
       });
-      if (command === "check") {
-        // One read of the messages. It sends nothing and prints no text and no number.
-        const state = await channel.tick();
-        return print(
-          state === "stop"
-            ? "The project API key was refused. Make a key with read and write access, and check the project id."
-            : "The key works and the messages can be read. Run: clawdtime texts run",
-        );
-      }
-      if (command !== "run")
-        throw new Error("Use: clawdtime texts run, or clawdtime texts check");
       if (!supervisor.ready)
         print(
           "No language model key is set: I tell the state and take a clear approve or deny.",
