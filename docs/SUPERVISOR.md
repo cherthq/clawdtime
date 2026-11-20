@@ -335,6 +335,21 @@ These rules are in the code, not in the model's instructions:
 A critical decision is kept in your words. When the model rewords it with a word
 that you did not say, your own sentence is stored.
 
+What it keeps of the conversation: the language model reads the last 30
+messages in full. From the 370 messages before them it reads only what you
+said, your statements and instructions, at most the newest 40 lines of 240
+characters. It never reads there an answer of ClawdTime, a question, a bare yes
+or no, a message that held a credential, or a message of more than 600
+characters, which is pasted text. So a fact from the start of a long
+conversation, or from yesterday, is still known. None of those older lines can
+start, open, type or approve anything: the checks in code read your last
+message only. For what must last longer, turn [memory](#memory) on.
+
+A question about the sessions, the agents or what waits is answered from the
+state, which ClawdTime reads before the model answers. When the model service
+is busy or the connection drops, ClawdTime asks it once more before it falls
+back to the plain answer.
+
 ### Give it a task
 
 While the desktop service runs, you can hand ClawdTime a task in the same

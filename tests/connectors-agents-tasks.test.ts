@@ -364,7 +364,9 @@ describe("a task by talking, with a language model", () => {
       "what is the login test doing?",
       "chat",
     );
+    // The question is about what runs, so the code reads the state first.
     expect(run.results()).toEqual([
+      expect.stringMatching(/^Sessions: /),
       "The person did not ask for a task in their last message. Ask them.",
     ]);
     expect(tasks.calls).toEqual([]);

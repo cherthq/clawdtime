@@ -311,7 +311,9 @@ describe("the brain opens an application", () => {
       const run = scripted([[call("open_app", args)], "No."]);
       await new Supervisor(value, run.model).reply([], words, "chat");
       expect(opened).toEqual([]);
-      expect(run.results[0]).toContain(why);
+      // A question about the agents is answered from the state, which the
+      // code reads first: the refusal is the last result that the model gets.
+      expect(run.results.at(-1)).toContain(why);
     }
   });
 
