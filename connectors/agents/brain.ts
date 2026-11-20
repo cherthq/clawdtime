@@ -12,7 +12,11 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { interpret } from "./call.js";
 import { agentLabel } from "./catalog.js";
-import type { DecisionDesk, DecisionRequest } from "./decisions.js";
+import {
+  answerInTerminalText,
+  type DecisionDesk,
+  type DecisionRequest,
+} from "./decisions.js";
 import type { CliFact } from "./inventory.js";
 import { factKinds, type FactKind, type Memory } from "./memory.js";
 import { detailLabels, elapsed, summary, title } from "./render.js";
@@ -554,7 +558,7 @@ export class Supervisor {
     // changes while the person and the model talk.
     for (const request of pending)
       lines.push(
-        `- ${request.id.slice(0, 8)}: ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary.slice(0, 200)}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}`,
+        `- ${request.id.slice(0, 8)}: ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}${request.answerInTerminal ? " (This is not all of it: it can be allowed only in its own terminal. It can be denied here.)" : ""}`,
       );
     const found = this.world.incidents?.() ?? [];
     if (found.length) {
@@ -740,6 +744,9 @@ export class Supervisor {
       if (named.length !== 1 || named[0]!.id !== request.id)
         return "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.";
     }
+    // What the person could not see whole is allowed only in its terminal.
+    if (said.decision === "allow" && request.answerInTerminal)
+      return answerInTerminalText;
     const ok = this.world.desk.answer(request.id, {
       decision: said.decision,
       text: said.text,
@@ -1000,7 +1007,7 @@ export class Supervisor {
       .filter((session) => session.state === "needs_you")
       .map((session) => title(session));
     const head = pending.length
-      ? `${pending.length === 1 ? "One request waits" : `${pending.length} requests wait`} for your answer: ${pending[0]!.summary.slice(0, 120)}.`
+      ? `${pending.length === 1 ? "One request waits" : `${pending.length} requests wait`} for your answer: ${pending[0]!.summary}.`
       : waiting.length
         ? `${waiting.slice(0, 3).join(", ")} ${waiting.length === 1 ? "needs" : "need"} you.`
         : board

@@ -48,6 +48,12 @@ export const requestSchema = z
     pattern: text(160),
     /** The file that a file tool asks for, as the agent gave it. A rule checks it. */
     path: text(4096).nullable().optional(),
+    /**
+     * The person cannot see all of the request here: its text is cut, or it
+     * has a line break. Only its terminal shows it whole, so only the
+     * terminal can allow it. A denial is still taken here.
+     */
+    answerInTerminal: z.boolean().optional(),
     /** The choices of a question. Empty for a permission. */
     options: z.array(text(200)).max(8),
     createdAt: z.number().int().nonnegative(),
@@ -90,6 +96,18 @@ const clip = (value: unknown, max: number) =>
   typeof value === "string"
     ? value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max)
     : "";
+/** True when the text is longer than what the person is shown. */
+const cut = (value: unknown) =>
+  typeof value === "string" &&
+  clip(value, shownLength + 1).length > shownLength;
+/** True when the text has a line break, or another character that the screen does not show. */
+const broken = (value: unknown) =>
+  typeof value === "string" &&
+  /[\p{C}\u2028\u2029]/u.test(value.replaceAll("\t", " "));
+
+/** What every way to answer says when a request can be allowed only in its terminal. */
+export const answerInTerminalText =
+  "ClawdTime does not show all of this request: it is longer than what is shown, or it has more than one line. Allow it in its own terminal. A denial is still taken here.";
 
 export interface Described {
   kind: (typeof decisionKinds)[number];
@@ -100,6 +118,8 @@ export interface Described {
   pattern?: string;
   /** The file that a file tool asks for, as the agent gave it. */
   path?: string | null;
+  /** The person cannot see all of the request here: only its terminal shows it. */
+  answerInTerminal?: boolean;
 }
 
 /**
@@ -121,25 +141,25 @@ export function describeRequest(
       toolInput.file_path ?? toolInput.path ?? toolInput.notebook_path;
     // A path that is too long to keep cannot be checked by a rule: the agent asks by itself.
     if (typeof file === "string" && file.length > 4096) return null;
-    const summary =
-      clip(command, shownLength) ||
-      clip(file, shownLength) ||
-      clip(
-        toolInput.url ??
-          toolInput.query ??
-          toolInput.description ??
-          toolInput.prompt,
-        shownLength,
-      ) ||
-      tool;
+    // The first of these that holds text is what the person is shown.
+    const shown = [
+      command,
+      file,
+      toolInput.url ??
+        toolInput.query ??
+        toolInput.description ??
+        toolInput.prompt,
+    ].find((value) => clip(value, shownLength));
     return {
       kind: "permission",
       tool,
-      summary,
+      summary: clip(shown, shownLength) || tool,
       options: [],
       // The key comes from the raw command, before its spaces change and before the cut.
       pattern: requestPattern(tool, typeof command === "string" ? command : ""),
       path: typeof file === "string" && file ? file : null,
+      // A line break starts a new command, and a cut hides the end.
+      answerInTerminal: broken(shown) || cut(shown),
     };
   }
   if (input.hook_event_name !== "PreToolUse") return null;
@@ -162,6 +182,7 @@ export function describeRequest(
       options,
       pattern: requestPattern(tool, ""),
       path: null,
+      answerInTerminal: cut(only.question),
     };
   }
   if (tool === "ExitPlanMode")
@@ -173,6 +194,8 @@ export function describeRequest(
       options: [],
       pattern: requestPattern(tool, ""),
       path: null,
+      // The lines of a plan are its layout. Only a cut hides a part of it.
+      answerInTerminal: cut(toolInput.plan),
     };
   return null;
 }
@@ -346,6 +369,7 @@ export class DecisionDesk {
         facts.described.pattern ??
         requestPattern(facts.described.tool, facts.described.summary),
       path: facts.described.path ?? null,
+      answerInTerminal: facts.described.answerInTerminal === true,
       options: facts.described.options,
       createdAt: at,
       holdUntil: at + Math.round(facts.holdSeconds * 1000),
@@ -401,6 +425,8 @@ export class DecisionDesk {
   ): boolean {
     const request = this.get(id);
     if (!request || this.now() > request.holdUntil) return false;
+    // What the person did not see whole is allowed only in its terminal.
+    if (request.answerInTerminal && answer.decision === "allow") return false;
     if (
       request.kind === "question"
         ? answer.decision === "allow"

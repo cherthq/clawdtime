@@ -40,6 +40,15 @@ How it behaves:
   leaves the desk at once.
 - A request waits 45 seconds on the desk. After that only the terminal answers.
   In away mode it waits up to 9 minutes.
+- A request that you cannot see whole is allowed only in its terminal. ClawdTime
+  shows 600 characters of a request, on one line. A request with more text, or a
+  command with a line break, is marked (`answerInTerminal` in
+  `GET /desktop/decisions`). The panel, a command, the chat and a call all refuse
+  to allow it, and say that its terminal shows it whole. You can still deny it
+  from ClawdTime. A plan is marked only when it is longer than what is shown.
+- A call reads 220 characters of a command. A longer command is approved in the
+  panel or in its terminal, not on the call. The live view `agents watch` shows
+  90 characters, and takes an approval only for a request that fits.
 - Supported: Claude Code permission requests, single-choice questions and plans;
   Codex approval requests. A question with several parts stays in the terminal.
 

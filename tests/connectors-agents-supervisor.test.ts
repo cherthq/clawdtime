@@ -22,7 +22,9 @@ import {
   parseTabs,
   webAddress,
 } from "../connectors/agents/browser.js";
+import { Supervisor } from "../connectors/agents/brain.js";
 import {
+  answerInTerminalText,
   DecisionDesk,
   describeRequest,
   holdPolicy,
@@ -31,6 +33,7 @@ import {
 } from "../connectors/agents/decisions.js";
 import {
   answerByCall,
+  callCanApprove,
   interpret,
   spokenQuestion,
   type CallClient,
@@ -131,6 +134,7 @@ describe("what an agent asks", () => {
       options: [],
       pattern: "Bash:npm test",
       path: null,
+      answerInTerminal: false,
     });
     expect(
       describeRequest({
@@ -176,6 +180,7 @@ describe("what an agent asks", () => {
       options: ["React", "Vue"],
       pattern: "AskUserQuestion",
       path: null,
+      answerInTerminal: false,
     });
     // Several questions, or several choices at once, stay in the terminal.
     expect(
@@ -509,6 +514,166 @@ describe("decision desk", () => {
       via: "call",
       remember: false,
     });
+  });
+
+  it("marks a request that the person cannot see whole, and allows it only in its terminal", async () => {
+    // A line break, or more text than is shown: only the terminal shows all of it.
+    expect(describeRequest(permission("npm test"))!.answerInTerminal).toBe(
+      false,
+    );
+    for (const command of [
+      "npm test\nrm -rf /work/app/x",
+      `npm test ${"a".repeat(600)}`,
+      "echo \u001b[2J",
+    ])
+      expect(
+        describeRequest(permission(command))!.answerInTerminal,
+        command,
+      ).toBe(true);
+    const plan = (text: string) =>
+      describeRequest({
+        hook_event_name: "PreToolUse",
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: text },
+      })!;
+    // The lines of a plan are layout. A plan is marked only when it is cut.
+    expect(plan("1. Read the code\n2. Fix it").answerInTerminal).toBe(false);
+    expect(plan("step ".repeat(200)).answerInTerminal).toBe(true);
+
+    const directory = root();
+    const desk = new DecisionDesk(directory);
+    const open = (command: string) =>
+      desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: describeRequest(permission(command))!,
+        holdSeconds: 45,
+      });
+    const request = open("npm test\nrm -rf /work/app/x");
+    expect(request.answerInTerminal).toBe(true);
+    expect(open("npm test").answerInTerminal).toBe(false);
+    desk.close(
+      desk.pending().find((item) => item.id !== request.id)!,
+      null,
+    );
+    // The desk itself refuses, so every way to answer is covered.
+    for (const via of ["panel", "cli", "call"] as const)
+      expect(desk.answer(request.id, { decision: "allow", via }), via).toBe(
+        false,
+      );
+    // The view says so, and the panel route gets a refusal.
+    const feed = new BoardFeed({ root: directory });
+    expect(feed.decisions().pending).toMatchObject([
+      { id: request.id, answerInTerminal: true, canRemember: false },
+    ]);
+    expect(await feed.answer({ id: request.id, decision: "allow" })).toBe(
+      false,
+    );
+    // The command.
+    const lines: string[] = [];
+    const before = process.exitCode;
+    await agentsCli(["approve", request.id.slice(0, 8)], {
+      system: fakeSystem({
+        now: Date.now(),
+        env: { CLAWDTIME_CONFIG_HOME: directory },
+      }),
+      print: (line) => lines.push(line),
+      hookScript: "/x/agent-hook.js",
+    });
+    expect(process.exitCode).toBe(2);
+    process.exitCode = before;
+    expect(lines.at(-1)).toBe(answerInTerminalText);
+    // The chat, with no model and with one.
+    const world = {
+      now: () => Date.now(),
+      board: () => null,
+      desk,
+      focus: async () => ({ ok: true }),
+      send: async () => ({ ok: true, route: "tmux" }),
+      clis: () => [],
+    };
+    expect(await new Supervisor(world, null).reply([], "approve", "chat")).toBe(
+      answerInTerminalText,
+    );
+    const seen: string[] = [];
+    await new Supervisor(world, {
+      complete: async (input) => {
+        const last = input.messages.at(-1)!;
+        if (last.role === "tool") seen.push(last.content);
+        return seen.length
+          ? { text: "ok", toolCalls: [] }
+          : {
+              text: "",
+              toolCalls: [
+                {
+                  id: "c1",
+                  name: "decide",
+                  arguments: JSON.stringify({
+                    request: request.id,
+                    decision: "allow",
+                  }),
+                },
+              ],
+            };
+      },
+    }).reply([], "yes, approve it", "chat");
+    expect(seen).toEqual([answerInTerminalText]);
+    // The call says that it cannot approve, and still takes a denial.
+    expect(spokenQuestion(request)).toBe(
+      "Claude Code in app asks to run the command: npm test rm -rf /work/app/x. That is not all of it, so I cannot approve it here: approve it in its terminal, or say deny.",
+    );
+    // A command that is shown whole in the panel, and is longer than what a call reads.
+    const long = open(`npm test ${"b".repeat(300)}`);
+    expect(long.answerInTerminal).toBe(false);
+    expect(callCanApprove(long)).toBe(false);
+    expect(callCanApprove(open("npm test"))).toBe(true);
+    expect(spokenQuestion(long)).toContain(
+      "That is not all of it, so I cannot approve it here: approve it in the panel or its terminal, or say deny.",
+    );
+    for (const item of desk.pending())
+      if (item.id !== request.id) desk.close(item, null);
+    const said: string[] = [];
+    let reads = 0;
+    let clock = Date.now();
+    const answer = await answerByCall(
+      {
+        requestAttention: async () => ({
+          request: { id: "att-1", state: "requested" },
+        }),
+        conversationTurns: async () => ({
+          turns: [
+            reads++ === 0
+              ? { id: "t1", sequence: 1, text: "Approve it." }
+              : { id: "t2", sequence: 2, text: "Deny it." },
+          ],
+          request: { state: "connected" },
+        }),
+        conversationOperation: async (_id, operation, body) => {
+          if (operation === "reply") said.push((body as { text: string }).text);
+          return {};
+        },
+        heartbeat: async () => ({}),
+      },
+      request,
+      {
+        now: () => (clock += 1000),
+        deadline: clock + 500_000,
+        pollMs: 1,
+        beatMs: 100_000,
+      },
+    );
+    expect(said).toEqual([
+      "I cannot approve this one here. Approve it in its terminal, or say deny.",
+      "Denied. I told it.",
+    ]);
+    expect(answer).toEqual({ decision: "deny", text: "Deny it." });
+    expect(desk.take(request.id)).toBeNull();
+    // A denial is taken.
+    expect(desk.answer(request.id, { decision: "deny", via: "panel" })).toBe(
+      true,
+    );
   });
 });
 
@@ -1523,7 +1688,7 @@ describe("answer by phone", () => {
     for (const words of [
       "I would not allow that",
       "I'm not sure",
-      "I’m not sure",
+      "I\u2019m not sure",
       "I can't approve that",
       "I cannot approve that",
       "I won't approve this",

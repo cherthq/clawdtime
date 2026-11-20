@@ -111,6 +111,12 @@ export interface DecisionsView {
     deniedBefore: number;
     /** The person can make a rule from this answer. */
     canRemember: boolean;
+    /**
+     * The request is not shown whole here: its text is cut, or it has a line
+     * break. An allow is refused; the person allows it in its terminal. A
+     * denial is still taken.
+     */
+    answerInTerminal: boolean;
     /** The remote Mac whose agent asks. Absent for an agent on this Mac. */
     host?: string;
     /** What the person said before that bears on this request. Null with memory off. */
@@ -538,7 +544,11 @@ export class BoardFeed implements AgentBoardPort {
           holdUntil: request.holdUntil,
           allowedBefore: before.allowed,
           deniedBefore: before.denied,
-          canRemember: request.kind === "permission" && rememberable(request),
+          canRemember:
+            request.kind === "permission" &&
+            !request.answerInTerminal &&
+            rememberable(request),
+          answerInTerminal: request.answerInTerminal === true,
           recalled: this.desk.recalled(request),
         };
       }),

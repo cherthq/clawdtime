@@ -18,6 +18,7 @@ import {
   type BrowserName,
 } from "../connectors/agents/browser.js";
 import {
+  answerInTerminalText,
   DecisionDesk,
   type DecisionRequest,
 } from "../connectors/agents/decisions.js";
@@ -178,7 +179,7 @@ function split(args: string[], switches: string[], values: string[]) {
 
 /** One request as the list prints it: its id first, since the id is its name. */
 const listed = (request: DecisionRequest) =>
-  `${request.id.slice(0, 8)}  ${request.agent} in ${project(request.cwd)}  ${request.kind}: ${cut(request.summary, 90)}`;
+  `${request.id.slice(0, 8)}  ${request.agent} in ${project(request.cwd)}  ${request.kind}: ${request.summary}`;
 /**
  * The request with this id, or the one whose id starts with these characters.
  * A place in the list is not taken: the list changes while a person types, so
@@ -344,6 +345,10 @@ export async function supervisorCli(
         request.options.forEach((option, choice) =>
           print(`     ${choice + 1}) ${option}`),
         );
+        if (request.answerInTerminal)
+          print(
+            "     This is not all of it. Allow it in its own terminal. You can deny it here.",
+          );
         const said = desk.recalled(request);
         if (said) print(`     you said before: ${cut(said, 110)}`);
       });
@@ -373,6 +378,8 @@ export async function supervisorCli(
       }
       if (!ok) {
         process.exitCode = 2;
+        if (command === "approve" && request.answerInTerminal)
+          return print(answerInTerminalText);
         return print(
           request.kind === "question" &&
             command !== "answer" &&

@@ -68,16 +68,37 @@ export function spokenQuestion(
   recalled: string | null = null,
 ) {
   const who = `${agentLabel(request.agent)}${request.cwd ? ` in ${request.cwd.split("/").filter(Boolean).at(-1)}` : ""}`;
-  const what = request.summary.slice(0, 220);
+  const what = request.summary.slice(0, spokenLength);
   const before = recalled
     ? ` You said before: ${recalled.slice(0, 160).replace(/[.!?]+$/, "")}.`
     : "";
   if (request.kind === "question")
     return `${who} asks: ${what} ${request.options.map((option, index) => `${numbers[index]}, ${option}.`).join(" ")}${before} Say the number or the answer.`;
   if (request.kind === "plan")
-    return `${who} has a plan ready.${before} Say approve to start it, or deny.`;
-  return `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} Say approve or deny.`;
+    return callCanApprove(request)
+      ? `${who} has a plan ready.${before} Say approve to start it, or deny.`
+      : `${who} has a plan ready.${before} It is too long to approve here: approve it ${readable(request)}, or say deny.`;
+  return callCanApprove(request)
+    ? `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} Say approve or deny.`
+    : `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} That is not all of it, so I cannot approve it here: approve it ${readable(request)}, or say deny.`;
 }
+
+/** How much of a request a call reads aloud. */
+const spokenLength = 220;
+/**
+ * True when a call can take an approval for this request: the person hears
+ * all of it. A request that is not shown whole anywhere, and a command that
+ * is longer than what the call reads, are approved where the person can read
+ * them. A denial is taken on the call in every case.
+ */
+export const callCanApprove = (
+  request: Pick<DecisionRequest, "kind" | "summary" | "answerInTerminal">,
+) =>
+  !request.answerInTerminal &&
+  (request.kind !== "permission" || request.summary.length <= spokenLength);
+/** Where the person can read all of the request. */
+const readable = (request: Pick<DecisionRequest, "answerInTerminal">) =>
+  request.answerInTerminal ? "in its terminal" : "in the panel or its terminal";
 
 const refuse =
   /\b(deny|denied|decline|declined|reject|no|nope|don'?t|do not|stop|cancel|refuse|never)\b/;
@@ -414,6 +435,13 @@ export async function answerByCall(
           : read;
       // A sentence can stop on "not" in one read and go on in the next.
       held = !answer && endsNegated(said) ? "not" : "";
+      // The person did not hear all of this request: the call takes no approval for it.
+      if (answer?.decision === "allow" && !callCanApprove(request)) {
+        await say(
+          `I cannot approve this one here. Approve it ${readable(request)}, or say deny.`,
+        );
+        return undefined;
+      }
       if (answer) {
         await say(
           answer.decision === "allow"

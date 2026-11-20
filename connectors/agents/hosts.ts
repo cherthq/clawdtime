@@ -418,6 +418,8 @@ export class RemoteDesk extends Polled<DecisionRequest[]> {
     const request = this.pending().find((item) => item.id === input.id);
     const host = this.book.get(request?.host);
     if (!request || !host) return false;
+    // What the person did not see whole is allowed only in its terminal.
+    if (request.answerInTerminal && input.decision === "allow") return false;
     const text = (input.text ?? "")
       .replace(/\p{C}/gu, " ")
       .trim()
