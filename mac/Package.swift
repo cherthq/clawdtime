@@ -11,7 +11,7 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     // The panel is a bare executable. Its Info.plist is linked in, so macOS can
     // say why it asks for the microphone when the person talks to ClawdTime.
     .executableTarget(name: "ClawdTimeTaskPanel", dependencies: ["TaskPanelCore"], exclude: ["Info.plist"],
-        resources: [.copy("Resources/Mascot.png"), .copy("Resources/Fonts")],
+        resources: [.copy("Resources/Fonts")],
         linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist",
             "-Xlinker", "\(Context.packageDirectory)/Sources/ClawdTimeTaskPanel/Info.plist"])]),
     .testTarget(name: "TaskPanelCoreTests", dependencies: ["TaskPanelCore"]),

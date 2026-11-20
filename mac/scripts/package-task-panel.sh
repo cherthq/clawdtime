@@ -5,7 +5,6 @@ swift build --product ClawdTimeTaskPanel
 output="$PWD/build/ClawdTime Task Panel.app"
 mkdir -p "$output/Contents/MacOS" "$output/Contents/Resources"
 cp .build/debug/ClawdTimeTaskPanel "$output/Contents/MacOS/ClawdTimeTaskPanel"
-cp Sources/ClawdTimeTaskPanel/Resources/Mascot.png "$output/Contents/Resources/Mascot.png"
 for resources in .build/debug/*ClawdTimeTaskPanel.bundle; do
   if [ -d "$resources" ]; then cp -R "$resources" "$output/Contents/Resources/"; fi
 done
