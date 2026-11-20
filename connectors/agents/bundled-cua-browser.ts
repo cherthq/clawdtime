@@ -7,6 +7,7 @@ import {
 } from "playwright";
 import { executorEnvironment } from "../codex/app-server.js";
 import {
+  CuaSetupRequired,
   cuaActionSchema,
   type BundledCuaConfig,
   type CuaAction,
@@ -37,6 +38,11 @@ const parseWeb = (value: string) => {
 };
 
 /** One isolated browser per task. This adapter never attaches to personal Chrome or a chat runtime. */
+/** The launch failed because the browser build that this version pins is not installed. */
+const browserMissing = (error: unknown) =>
+  error instanceof Error &&
+  /Executable doesn't exist|playwright install/i.test(error.message);
+
 export class BundledCuaBrowser implements CuaDevice {
   private browser?: Browser;
   private launching?: Promise<Browser>;
@@ -114,6 +120,14 @@ export class BundledCuaBrowser implements CuaDevice {
       });
       try {
         this.browser = await this.launching;
+      } catch (error) {
+        // The pinned browser build is not on this Mac. That is a setup step,
+        // not a permission problem: say which one.
+        if (browserMissing(error))
+          throw new CuaSetupRequired(
+            "ClawdTime's own browser is not installed. In the ClawdTime folder run: npm run cua:install-browser. Then give the task again.",
+          );
+        throw error;
       } finally {
         this.launching = undefined;
       }
@@ -178,8 +192,11 @@ export class BundledCuaBrowser implements CuaDevice {
         waitUntil: "domcontentloaded",
       });
       this.ready(signal);
-    } catch {
+    } catch (error) {
       await this.stop();
+      // A missing setup step keeps its own advice. Everything else gets the
+      // one general sentence, so no text of a failure is passed on.
+      if (error instanceof CuaSetupRequired) throw error;
       throw Error(
         "Isolated computer browser could not open. Check the installed browser and configured origin.",
       );
