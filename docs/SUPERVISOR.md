@@ -440,7 +440,9 @@ a tunnel and get its link, find something out: all of these are jobs.
   not choose the words.
 - Name the agent and it gets the job: "open Claude and build a landing page",
   "use Codex to fix the tests", "fix the tests with Codex". "Not with Codex"
-  gives the job to the other one. With no agent in the sentence, the agent of
+  gives the job to the other one, and so do "no Codex" and "avoid Codex". The
+  name also counts in fast or sloppy words ("opn codex nd write the tests"),
+  as long as it stands in your message. With no agent in the sentence, the agent of
   `CLAWDTIME_JOB_AGENT` takes it. "Open Claude and build ..." starts at once,
   also while sessions of that agent run. "Tell Claude to ..." and "open my
   Claude session and ..." can mean a session that runs, so ClawdTime works out
