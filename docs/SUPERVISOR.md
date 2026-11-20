@@ -164,12 +164,12 @@ The board says what each session does now. The watcher follows every session
 from one scan to the next and tells you the four things that you want to hear
 about without looking:
 
-| Incident | When | What it says |
-|---|---|---|
-| `waiting` | A session has needed you for longer than the wait limit (2 minutes) | "deploy fix has waited for you for 5m." |
-| `stalled` | A session is in work and has shown no sign of life for longer than the stall limit (10 minutes) | "deploy fix has shown no sign of life for 12m." |
-| `failed` | A session stopped on an error, or its process ended in the middle of its work | "deploy fix is gone: its process ended in the middle of its work." |
-| `finished` | A session went from work to idle after at least 3 minutes of work | "deploy fix is done after 12m." |
+| Incident   | When                                                                                            | What it says                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `waiting`  | A session has needed you for longer than the wait limit (2 minutes)                             | "deploy fix has waited for you for 5m."                            |
+| `stalled`  | A session is in work and has shown no sign of life for longer than the stall limit (10 minutes) | "deploy fix has shown no sign of life for 12m."                    |
+| `failed`   | A session stopped on an error, or its process ended in the middle of its work                   | "deploy fix is gone: its process ended in the middle of its work." |
+| `finished` | A session went from work to idle after at least 3 minutes of work                               | "deploy fix is done after 12m."                                    |
 
 Where you see an incident:
 
@@ -224,11 +224,11 @@ ClawdTime is also an agent that you can talk to. It sees what the board sees and
 acts through the same desk and trove. There are three ways, and they share one
 conversation:
 
-| Way | How |
-|---|---|
-| Text | The chat button on the bar under the mascot, or `clawdtime chat`. `clawdtime chat "what needs me?"` answers one question and exits. |
-| Voice on the Mac | The talk button on the bar, or `clawdtime talk`. You speak, it answers aloud. |
-| FaceTime | `clawdtime agents call me`. ClawdTime calls you through the linked pairing and you talk to it. Say goodbye to end the call. |
+| Way              | How                                                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Text             | The chat button on the bar under the mascot, or `clawdtime chat`. `clawdtime chat "what needs me?"` answers one question and exits. |
+| Voice on the Mac | The talk button on the bar, or `clawdtime talk`. You speak, it answers aloud.                                                       |
+| FaceTime         | `clawdtime agents call me`. ClawdTime calls you through the linked pairing and you talk to it. Say goodbye to end the call.         |
 
 What it can do when you ask:
 
@@ -259,13 +259,13 @@ conversation, typed, spoken or on a call. It goes to the same task service as
 the task field of the board, with the same receipts. In simulation the task is
 recorded and stays queued; no coding worker starts.
 
-| You say | What happens |
-|---|---|
+| You say                                                                              | What happens                                                 |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
 | "Start a task: fix the login test" or "New task: ..." or "I have a job for you: ..." | A task starts. Its goal is your words after "task" or "job". |
-| "How is the task?" | It says where the task is and what it asks. Nothing changes. |
-| One of the offered choices, or your answer in a sentence | Your answer goes to the question that the task asks. |
-| "Accept the result" | The result is accepted, when the task is ready for that. |
-| "Cancel the task" | The task is canceled. |
+| "How is the task?"                                                                   | It says where the task is and what it asks. Nothing changes. |
+| One of the offered choices, or your answer in a sentence                             | Your answer goes to the question that the task asks.         |
+| "Accept the result"                                                                  | The result is accepted, when the task is ready for that.     |
+| "Cancel the task"                                                                    | The task is canceled.                                        |
 
 When the task asks a question with choices, ClawdTime says them, and the chat
 screen shows them as buttons under its message. A click sends that choice as
@@ -305,12 +305,12 @@ Speech and the language model use the OpenAI API. Set `CLAWDTIME_OPENAI_API_KEY`
 service, `clawdtime chat` or `clawdtime talk`. Never put the key in an argument
 or a file of the repository.
 
-| Variable | Default | Use |
-|---|---|---|
-| `CLAWDTIME_SUPERVISOR_MODEL` | `gpt-4.1-mini` | Chooses tools and writes the answers |
-| `CLAWDTIME_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Turns your speech into text |
-| `CLAWDTIME_SPEAK_MODEL` | `gpt-4o-mini-tts` | Speaks the answer |
-| `CLAWDTIME_VOICE` | `alloy` | The voice |
+| Variable                     | Default                  | Use                                  |
+| ---------------------------- | ------------------------ | ------------------------------------ |
+| `CLAWDTIME_SUPERVISOR_MODEL` | `gpt-4.1-mini`           | Chooses tools and writes the answers |
+| `CLAWDTIME_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Turns your speech into text          |
+| `CLAWDTIME_SPEAK_MODEL`      | `gpt-4o-mini-tts`        | Speaks the answer                    |
+| `CLAWDTIME_VOICE`            | `alloy`                  | The voice                            |
 
 With no key ClawdTime still answers in text: it tells the state from the board,
 and it takes a clear "approve" or "deny" when exactly one request waits. Voice
