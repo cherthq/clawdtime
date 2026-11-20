@@ -372,10 +372,12 @@ function valueOf(el, kind) {
 
 // The state of this document for this driver. A document that starts to
 // leave is not ready, until the next one is there or a new step starts.
+// "known" holds every numbered element that is on the page, by its number:
+// a browser may drop what a script wrote on an element that no script holds.
 function held() {
   var state = win[STATE];
   if (!state || state.session !== call.session) {
-    state = { session: call.session, next: 1, leaving: false };
+    state = { session: call.session, next: 1, leaving: false, known: Object.create(null) };
     win[STATE] = state;
     if (typeof win.addEventListener === "function") {
       win.addEventListener("beforeunload", function () { state.leaving = true; });
@@ -405,6 +407,10 @@ function read() {
   var state = held();
   var width = win.innerWidth || 0;
   var height = win.innerHeight || 0;
+  // An element that left the page is let go, so the page can free it.
+  for (var number in state.known) {
+    if (state.known[number].isConnected === false) delete state.known[number];
+  }
   var found = [];
   each(doc, function (el) {
     var facts = factsOf(el);
@@ -424,6 +430,7 @@ function read() {
       state.next += 1;
       el[NUMBER] = { session: call.session, index: index };
     }
+    state.known[index] = el;
     var hidden = secret(el);
     var entry = { index: index, tag: cut(facts.tag, 40), role: facts.role, label: labelOf(el, facts.kind) };
     if (!hidden) {
@@ -451,12 +458,16 @@ function read() {
 // The element that carries this number. A number that no element carries
 // is an error: the script never picks another element in its place.
 function find(index) {
-  var hit = null;
-  each(doc, function (el) {
-    if (numberOf(el) !== index) return;
-    hit = el;
-    return false;
-  });
+  var hit = held().known[index] || null;
+  if (hit && (hit.isConnected === false || numberOf(hit) !== index)) hit = null;
+  // An element that left the page and came back still carries its number.
+  if (!hit) {
+    each(doc, function (el) {
+      if (numberOf(el) !== index) return;
+      hit = el;
+      return false;
+    });
+  }
   if (!hit) fail("Number " + index + " is not on the page any more. Read the page again and use a number from that reading.");
   return hit;
 }

@@ -561,6 +561,14 @@ class FakePage {
     this.context = vm.createContext(window);
   }
 
+  /** The elements that the script keeps hold of in this page, by number. */
+  kept() {
+    const state = this.evaluate(
+      'window[Symbol.for("clawdtime.browser.state")]',
+    ) as { known?: Record<string, FakeElement> } | undefined;
+    return { ...state?.known };
+  }
+
   get documentElement() {
     return { clientWidth: this.innerWidth, clientHeight: this.innerHeight };
   }
@@ -1352,6 +1360,27 @@ describe("the page script: numbers", () => {
         .read({ session: "new", start: 5 })
         .elements.map((element) => element.index),
     ).toEqual([5, 6]);
+  });
+
+  it("keeps hold of each numbered element while it is on the page, and lets go of it after", () => {
+    const first = h("button", {}, "First");
+    const second = h("button", { id: "second" }, "Second");
+    const page = new FakePage(first, second);
+    page.read();
+    // A browser may drop what a script wrote on an element that no script
+    // holds any more. So the script holds every element that has a number.
+    expect(page.kept()).toEqual({ 1: first, 2: second });
+    second.remove();
+    page.read();
+    expect(page.kept()).toEqual({ 1: first });
+    // An element that comes back with its number is found again.
+    page.body.append(second);
+    expect(page.run({ do: "click", index: 2 })).toEqual({ ok: true });
+    expect(page.log).toContain("click@second");
+    expect(page.read().elements.map((element) => element.index)).toEqual([
+      1, 2,
+    ]);
+    expect(page.kept()).toEqual({ 1: first, 2: second });
   });
 });
 
