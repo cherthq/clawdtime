@@ -86,6 +86,51 @@ describe("unexpected error reporting", () => {
     f.runtime.store.close();
   });
 
+  it("answers 400 to a malformed body and 413 to an oversize body without an error report", async () => {
+    const f = fixture();
+    const post = (body: string) =>
+      f.runtime.app.request("/api/pairing/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+    const malformed = await post(`{"token": "${secret}`);
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({
+      error: "Request body must be valid JSON.",
+    });
+    const oversize = await post(JSON.stringify({ token: "x".repeat(40_000) }));
+    expect(oversize.status).toBe(413);
+    expect(await oversize.json()).toEqual({
+      error: "Request body is too large.",
+    });
+    expect(f.lines).toHaveLength(0);
+    f.runtime.store.close();
+  });
+
+  it("still records a syntax error that the server raised on a valid body", async () => {
+    const f = fixture();
+    f.runtime.service.claimPairing = () => {
+      throw new SyntaxError(secret);
+    };
+    const response = await f.runtime.app.request("/api/pairing/claim", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const body = (await response.json()) as { requestId: string };
+    expect(response.status).toBe(409);
+    expect(f.records()).toHaveLength(1);
+    expect(f.records()[0]).toMatchObject({
+      event: "request_failed",
+      requestId: body.requestId,
+      route: "/api/pairing/claim",
+      name: "SyntaxError",
+    });
+    expect(f.lines.join("\n")).not.toContain("PRIVATE");
+    f.runtime.store.close();
+  });
+
   it("records a failing loop once per minute and reports it through readiness", async () => {
     const f = fixture();
     expect((await f.readiness()).loop).toEqual({ state: "never" });
