@@ -8,7 +8,7 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
 ], targets: [
     .target(name: "DeviceCore"),
     .target(name: "TaskPanelCore"),
-    .executableTarget(name: "ClawdTimeTaskPanel", dependencies: ["TaskPanelCore"], resources: [.copy("Resources/Mascot.png")]),
+    .executableTarget(name: "ClawdTimeTaskPanel", dependencies: ["TaskPanelCore"], resources: [.copy("Resources/Mascot.png"), .copy("Resources/Fonts")]),
     .testTarget(name: "TaskPanelCoreTests", dependencies: ["TaskPanelCore"]),
     .executableTarget(name: "ClawdTimeCompanion", dependencies: ["DeviceCore"]),
     .executableTarget(name: "ClawdTimeTaskCapture", dependencies: ["DeviceCore"]),

@@ -24,9 +24,10 @@ In `agents watch`, the arrow keys or `j` and `k` move, Enter brings the selected
 session forward, and `q` quits. `--all` also lists one-shot runs that have no
 person at a terminal, such as `claude -p` and `codex exec`.
 
-On screen: the [desktop panel](CODING_DEMO_DESKTOP.md) shows the same board above
-the task area. A click on a row brings that session forward. When a session waits
-for you, the toolbar line says so and the mascot shows the count. Start the panel
+On screen: the [desktop companion](CODING_DEMO_DESKTOP.md) shows the same board.
+Click the mascot to open it. A click on a row brings that session forward. When a
+session waits for you, the mascot hops, its spark turns amber, and a bubble names
+the session; a click on the bubble opens that session's terminal. Start the panel
 with `--tucked true` to open it as the mascot without taking focus. Start it with
 `--agents false` to turn the board off, for example during a call qualification
 run.

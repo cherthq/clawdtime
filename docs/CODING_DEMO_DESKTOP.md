@@ -8,37 +8,54 @@ is still required. Closing or quitting the panel leaves the service running.
 
 ## Desktop appearance
 
-The companion has a compact light notch toolbar, blue rounded action buttons,
-and an expandable task panel. Hide collapses the task details into the toolbar.
-Minimize retracts the bar into a draggable circle at its right edge using the
-supplied red mascot; clicking
-the badge restores the panel. The badge and notch stay floating while the app
-runs. Explicit Quit remains available and leaves the task service running.
-This does not install a login item or a background UI daemon.
+The companion is one mascot on the desktop and one board that opens out of it. It
+follows the Chert design system: cream paper in light mode and warm charcoal in
+dark mode, Fraunces for the headline, Instrument Sans for the interface and
+JetBrains Mono for times and paths. The three typefaces ship inside the app
+under the SIL Open Font License.
 
-Use the chevron or **⌘⇧M** to expand/collapse the task body. The minus button or
-**⌘W** tucks it into the mascot. The app menu's **Show ClawdTime** restores the
-expanded view. Moving focus back to an already-visible compact notch preserves
-that compact state.
+The mascot is the Chert mark in three dimensions: a stone in the sunset strata of
+the mark, the white ring in orbit around it, and a spark that rides the ring. It
+is built in code, so it is sharp at every size. Its eyes follow the pointer and
+blink. The spark is the status light: cream at rest, blue and fast while agents
+work, amber when something waits for the person, red while the screen is shared.
+A sheen crosses the stone on a click, as in the command-line intro.
 
-Drag the notch background or mascot to reposition the companion. The expanded
-task body follows the notch, and circle/bar transitions retain the bar's right
-edge instead of returning to the default corner. The group stays within the usable
-screen area; expanding near an edge can shift it enough to keep the task body
-readable. Circle/bar changes retract/expand without a fade, and the task body slides down/up when
-opened/closed. macOS Reduce Motion removes the spatial animation.
+- Click the mascot: it presses, springs back, and the board opens out of it.
+  Click again or click anywhere else to close the board.
+- Point at the mascot: two buttons appear. **Close** hides it; it stays in the
+  menu bar. **Side** tucks it against the nearer screen edge, where it keeps
+  watching. A drag that ends against the left or right edge also tucks it.
+- A tucked mascot comes out further when something waits for the person. Click
+  it to bring it back.
+- When an agent or the task waits for the person and the board is closed, the
+  mascot hops and a bubble says what waits. A click on the bubble opens that
+  session's terminal, or the board when more than one thing waits.
+- Drag the mascot anywhere. Its place is kept between starts.
 
-The notch keeps the existing **Stop sharing** and **Stop call** actions. The
-minimized badge exposes them in its context menu. They reflect the actual
-service permissions and stay disabled when unavailable. Minimizing does not
-stop sharing or a call, and restoring the panel never restarts sharing. There
-is no new two-way sharing toggle or permission change.
+The board's headline says the most urgent thing in words, for example "1 agent
+needs you" or "All quiet". A task that waits for an answer comes before the
+agents. The task field is one line at rest and opens when the person clicks it.
+
+**Stop sharing** and **Stop call** are a row on the mascot, a bar at the top of
+the board, and items in every menu, whenever either can be stopped. A tucked
+mascot comes out when a Stop control appears. They reflect the actual service
+permissions. Closing or tucking does not stop sharing or a call, and nothing here
+starts sharing. There is no new sharing toggle or permission change.
+
+Motion uses springs: a press sinks in 90 ms and releases with a slight overshoot,
+and the board is 95 percent open within 220 ms. macOS Reduce Motion removes
+drift, hops, scaling and the sheen; states then change at once.
+
+The app is an accessory: it has no Dock icon and never takes focus when it
+starts or when the board opens. The board becomes the key window only when the
+person clicks into a text field. Explicit Quit is in the menus and leaves the
+task service running. This does not install a login item or a background daemon.
 
 Task input, choices, revisions, checks, acceptance and separate cancellation use
-the same service and durable receipts as before. Changing the window's appearance
-or minimized state does not submit an action, cancel work or grant screen access.
-The supplied mascot is bundled unchanged as a local resource, with no network
-image loading or animated-pet dependency.
+the same service and durable receipts as before. Changing the appearance, moving,
+tucking or closing the mascot does not submit an action, cancel work or grant
+screen access.
 
 The user authorized step-e implementation while deferring remaining step-d
 handset rehearsals. This is a local implementation checkpoint, not a completed
@@ -51,8 +68,8 @@ The panel lists every coding-agent session on this Mac above the task area:
 Claude Code, Codex, pi and other command-line agents, with the ones that wait for
 you first. A click on a row brings that session's terminal to the front. The
 board only reads state. It sends nothing to a session, and it is separate from
-the task, its receipts and the Stop controls. When a session waits for you and
-the task does not, the toolbar line shows the count, and so does the mascot.
+the task, its receipts and the Stop controls. When a session waits for you, the
+mascot's spark turns amber and its bubble names the session.
 
 The task service keeps the board in a separate scanner process and serves it on
 `GET /desktop/agents` to the private panel credential. `--agents false` turns
