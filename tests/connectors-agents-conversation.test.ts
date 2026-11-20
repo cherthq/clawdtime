@@ -310,6 +310,9 @@ describe("a coding agent that the person names for work", () => {
     ["Fix the failing tests without using codex", "claude"],
     ["Fix the failing tests, never in codex", "claude"],
     ["Fix the failing tests with anything but claude", "codex"],
+    ["run the tests, no codex please", "claude"],
+    ["run the tests but avoid codex this time", "claude"],
+    ["fix the header, skip claude", "codex"],
     // No agent is chosen.
     ["Build a web app that works with Claude", null],
     ["write a bot that talks with codex", null],
@@ -392,6 +395,47 @@ describe("a coding agent that the person names for work", () => {
       expect(jobs.recent()[0]!.job).toBe(job);
     },
   );
+
+  it("takes the agent that the model read from sloppy words, only when the person named it", async () => {
+    const agentFor = async (sentence: string, agent: unknown) => {
+      const made = mac();
+      await new Supervisor(
+        made.world,
+        scripted([[call("start_job", { agent })], "Okay."]).model,
+      ).reply([], sentence, "chat");
+      expect(made.jobs.recent()[0]!.job).toBe(sentence);
+      return made.file("start.command");
+    };
+    // The readers in code miss the typos. The model reads Codex, and the person said it.
+    expect(
+      await agentFor("opn codex nd write tests for the login page", "codex"),
+    ).toContain("exec codex ");
+    expect(
+      await agentFor("codex should write tests for the login page", "codex"),
+    ).toContain("exec codex ");
+    // The person never said that agent: the setting of this Mac holds.
+    expect(await agentFor("write tests for the login page", "codex")).toContain(
+      "exec claude ",
+    );
+    // The person excludes it: the readers in code win.
+    expect(
+      await agentFor("write tests for the login page, not with codex", "codex"),
+    ).toContain("exec claude ");
+    // Other words that exclude it: the readers in code win there, too.
+    expect(await agentFor("run the tests, no codex please", "codex")).toContain(
+      "exec claude ",
+    );
+    expect(
+      await agentFor("run the tests but avoid codex this time", "codex"),
+    ).toContain("exec claude ");
+    // Anything else than the two names is not an agent.
+    expect(
+      await agentFor(
+        "write tests with codex for the login page",
+        "codex; rm -rf ~",
+      ),
+    ).not.toContain("rm -rf");
+  });
 
   it("does not open the application of that name when the model asks for it", async () => {
     // A session is named as the agent, so the choice is the model's.
@@ -1651,6 +1695,11 @@ describe("the conversation goes with the work", () => {
     // "Then ask it" is no dead end: the model says the sentence that sends the question.
     expect(seen[0]!.system).toContain(
       'Say "tell <session name>: <the words>" and I type it.',
+    );
+    // That hint is for asking a session only: more work on something from before is a job.
+    expect(seen[0]!.system).toContain("never words of yours");
+    expect(seen[0]!.system).toContain(
+      "do not offer a sentence to type into a session",
     );
     expect(seen[0]!.system).toContain(
       "jobs that you started in the last 24 hours=0; newest job has its answer=false; sessions by agent: none;",
