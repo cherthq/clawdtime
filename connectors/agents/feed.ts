@@ -26,6 +26,7 @@ import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
+import { rememberable } from "./trove.js";
 import type { TaskPort } from "./tasks.js";
 import {
   incidentSentence,
@@ -110,6 +111,12 @@ export interface DecisionsView {
     deniedBefore: number;
     /** The person can make a rule from this answer. */
     canRemember: boolean;
+    /**
+     * The request is not shown whole here: its text is cut, or it has a line
+     * break. An allow is refused; the person allows it in its terminal. A
+     * denial is still taken.
+     */
+    answerInTerminal: boolean;
     /** The remote Mac whose agent asks. Absent for an agent on this Mac. */
     host?: string;
     /** What the person said before that bears on this request. Null with memory off. */
@@ -539,8 +546,9 @@ export class BoardFeed implements AgentBoardPort {
           deniedBefore: before.denied,
           canRemember:
             request.kind === "permission" &&
-            request.cwd !== null &&
-            request.pattern !== "Bash",
+            !request.answerInTerminal &&
+            rememberable(request),
+          answerInTerminal: request.answerInTerminal === true,
           recalled: this.desk.recalled(request),
         };
       }),

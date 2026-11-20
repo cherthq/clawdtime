@@ -15,6 +15,7 @@ import {
   decisionValues,
   decisionVias,
   requestPattern,
+  shownLength,
   Trove,
   type TroveEntry,
 } from "./trove.js";
@@ -45,6 +46,14 @@ export const requestSchema = z
     tool: text(80),
     summary: text(600),
     pattern: text(160),
+    /** The file that a file tool asks for, as the agent gave it. A rule checks it. */
+    path: text(4096).nullable().optional(),
+    /**
+     * The person cannot see all of the request here: its text is cut, or it
+     * has a line break. Only its terminal shows it whole, so only the
+     * terminal can allow it. A denial is still taken here.
+     */
+    answerInTerminal: z.boolean().optional(),
     /** The choices of a question. Empty for a permission. */
     options: z.array(text(200)).max(8),
     createdAt: z.number().int().nonnegative(),
@@ -87,12 +96,30 @@ const clip = (value: unknown, max: number) =>
   typeof value === "string"
     ? value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max)
     : "";
+/** True when the text is longer than what the person is shown. */
+const cut = (value: unknown) =>
+  typeof value === "string" &&
+  clip(value, shownLength + 1).length > shownLength;
+/** True when the text has a line break, or another character that the screen does not show. */
+const broken = (value: unknown) =>
+  typeof value === "string" &&
+  /[\p{C}\u2028\u2029]/u.test(value.replaceAll("\t", " "));
+
+/** What every way to answer says when a request can be allowed only in its terminal. */
+export const answerInTerminalText =
+  "ClawdTime does not show all of this request: it is longer than what is shown, or it has more than one line. Allow it in its own terminal. A denial is still taken here.";
 
 export interface Described {
   kind: (typeof decisionKinds)[number];
   tool: string;
   summary: string;
   options: string[];
+  /** The key of the request, made from its raw text. Absent: it is made from the summary. */
+  pattern?: string;
+  /** The file that a file tool asks for, as the agent gave it. */
+  path?: string | null;
+  /** The person cannot see all of the request here: only its terminal shows it. */
+  answerInTerminal?: boolean;
 }
 
 /**
@@ -110,21 +137,30 @@ export function describeRequest(
     const command = Array.isArray(toolInput.command)
       ? toolInput.command.filter((part) => typeof part === "string").join(" ")
       : toolInput.command;
-    const summary =
-      clip(command, 600) ||
-      clip(
-        toolInput.file_path ?? toolInput.path ?? toolInput.notebook_path,
-        600,
-      ) ||
-      clip(
-        toolInput.url ??
-          toolInput.query ??
-          toolInput.description ??
-          toolInput.prompt,
-        600,
-      ) ||
-      tool;
-    return { kind: "permission", tool, summary, options: [] };
+    const file =
+      toolInput.file_path ?? toolInput.path ?? toolInput.notebook_path;
+    // A path that is too long to keep cannot be checked by a rule: the agent asks by itself.
+    if (typeof file === "string" && file.length > 4096) return null;
+    // The first of these that holds text is what the person is shown.
+    const shown = [
+      command,
+      file,
+      toolInput.url ??
+        toolInput.query ??
+        toolInput.description ??
+        toolInput.prompt,
+    ].find((value) => clip(value, shownLength));
+    return {
+      kind: "permission",
+      tool,
+      summary: clip(shown, shownLength) || tool,
+      options: [],
+      // The key comes from the raw command, before its spaces change and before the cut.
+      pattern: requestPattern(tool, typeof command === "string" ? command : ""),
+      path: typeof file === "string" && file ? file : null,
+      // A line break starts a new command, and a cut hides the end.
+      answerInTerminal: broken(shown) || cut(shown),
+    };
   }
   if (input.hook_event_name !== "PreToolUse") return null;
   if (tool === "AskUserQuestion") {
@@ -137,16 +173,29 @@ export function describeRequest(
       .map((option) => clip(record(option)?.label, 200))
       .filter(Boolean)
       .slice(0, 8);
-    const question = clip(only.question, 600);
+    const question = clip(only.question, shownLength);
     if (!question || !options.length) return null;
-    return { kind: "question", tool, summary: question, options };
+    return {
+      kind: "question",
+      tool,
+      summary: question,
+      options,
+      pattern: requestPattern(tool, ""),
+      path: null,
+      answerInTerminal: cut(only.question),
+    };
   }
   if (tool === "ExitPlanMode")
     return {
       kind: "plan",
       tool,
-      summary: clip(toolInput.plan, 600) || "A plan is ready for review.",
+      summary:
+        clip(toolInput.plan, shownLength) || "A plan is ready for review.",
       options: [],
+      pattern: requestPattern(tool, ""),
+      path: null,
+      // The lines of a plan are its layout. Only a cut hides a part of it.
+      answerInTerminal: cut(toolInput.plan),
     };
   return null;
 }
@@ -316,7 +365,11 @@ export class DecisionDesk {
       kind: facts.described.kind,
       tool: facts.described.tool,
       summary: facts.described.summary,
-      pattern: requestPattern(facts.described.tool, facts.described.summary),
+      pattern:
+        facts.described.pattern ??
+        requestPattern(facts.described.tool, facts.described.summary),
+      path: facts.described.path ?? null,
+      answerInTerminal: facts.described.answerInTerminal === true,
       options: facts.described.options,
       createdAt: at,
       holdUntil: at + Math.round(facts.holdSeconds * 1000),
@@ -372,6 +425,8 @@ export class DecisionDesk {
   ): boolean {
     const request = this.get(id);
     if (!request || this.now() > request.holdUntil) return false;
+    // What the person did not see whole is allowed only in its terminal.
+    if (request.answerInTerminal && answer.decision === "allow") return false;
     if (
       request.kind === "question"
         ? answer.decision === "allow"

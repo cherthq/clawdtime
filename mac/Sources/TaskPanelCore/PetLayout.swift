@@ -157,7 +157,8 @@ public struct PetStatus: Equatable, Sendable {
       let more = decisions.count > 1 ? "  +\(decisions.count - 1) more" : ""
       bubble = Bubble(key: "decision:" + request.id, title: DecisionText.title(request) + more,
         detail: AgentBoardText.clean(request.summary, limit: 120), sessionId: nil,
-        decisionId: request.isQuestion || request.kind == "plan" ? nil : request.id)
+        // The bubble offers Approve and Deny only for a request that it shows in full.
+        decisionId: request.isQuestion || request.kind == "plan" || request.approvalOnlyInTerminal ? nil : request.id)
     } else if taskNeedsPerson {
       bubble = Bubble(key: "task", title: "Your task needs an answer", detail: "Open the board to answer.", sessionId: nil)
     } else if waiting.count == 1, let session = waiting.first {

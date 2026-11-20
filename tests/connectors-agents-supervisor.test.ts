@@ -1,8 +1,11 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +22,9 @@ import {
   parseTabs,
   webAddress,
 } from "../connectors/agents/browser.js";
+import { Supervisor } from "../connectors/agents/brain.js";
 import {
+  answerInTerminalText,
   DecisionDesk,
   describeRequest,
   holdPolicy,
@@ -28,6 +33,7 @@ import {
 } from "../connectors/agents/decisions.js";
 import {
   answerByCall,
+  callCanApprove,
   interpret,
   spokenQuestion,
   type CallClient,
@@ -47,7 +53,11 @@ import {
 } from "../connectors/agents/input.js";
 import { inventory } from "../connectors/agents/inventory.js";
 import { headline, renderDeck } from "../connectors/agents/report.js";
-import { requestPattern, Trove } from "../connectors/agents/trove.js";
+import {
+  rememberable,
+  requestPattern,
+  Trove,
+} from "../connectors/agents/trove.js";
 import type {
   AgentSession,
   BoardSnapshot,
@@ -122,6 +132,9 @@ describe("what an agent asks", () => {
       tool: "Bash",
       summary: "npm test -- --watch",
       options: [],
+      pattern: "Bash:npm test",
+      path: null,
+      answerInTerminal: false,
     });
     expect(
       describeRequest({
@@ -165,6 +178,9 @@ describe("what an agent asks", () => {
       tool: "AskUserQuestion",
       summary: "Which framework?",
       options: ["React", "Vue"],
+      pattern: "AskUserQuestion",
+      path: null,
+      answerInTerminal: false,
     });
     // Several questions, or several choices at once, stay in the terminal.
     expect(
@@ -499,6 +515,166 @@ describe("decision desk", () => {
       remember: false,
     });
   });
+
+  it("marks a request that the person cannot see whole, and allows it only in its terminal", async () => {
+    // A line break, or more text than is shown: only the terminal shows all of it.
+    expect(describeRequest(permission("npm test"))!.answerInTerminal).toBe(
+      false,
+    );
+    for (const command of [
+      "npm test\nrm -rf /work/app/x",
+      `npm test ${"a".repeat(600)}`,
+      "echo \u001b[2J",
+    ])
+      expect(
+        describeRequest(permission(command))!.answerInTerminal,
+        command,
+      ).toBe(true);
+    const plan = (text: string) =>
+      describeRequest({
+        hook_event_name: "PreToolUse",
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: text },
+      })!;
+    // The lines of a plan are layout. A plan is marked only when it is cut.
+    expect(plan("1. Read the code\n2. Fix it").answerInTerminal).toBe(false);
+    expect(plan("step ".repeat(200)).answerInTerminal).toBe(true);
+
+    const directory = root();
+    const desk = new DecisionDesk(directory);
+    const open = (command: string) =>
+      desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: describeRequest(permission(command))!,
+        holdSeconds: 45,
+      });
+    const request = open("npm test\nrm -rf /work/app/x");
+    expect(request.answerInTerminal).toBe(true);
+    expect(open("npm test").answerInTerminal).toBe(false);
+    desk.close(
+      desk.pending().find((item) => item.id !== request.id)!,
+      null,
+    );
+    // The desk itself refuses, so every way to answer is covered.
+    for (const via of ["panel", "cli", "call"] as const)
+      expect(desk.answer(request.id, { decision: "allow", via }), via).toBe(
+        false,
+      );
+    // The view says so, and the panel route gets a refusal.
+    const feed = new BoardFeed({ root: directory });
+    expect(feed.decisions().pending).toMatchObject([
+      { id: request.id, answerInTerminal: true, canRemember: false },
+    ]);
+    expect(await feed.answer({ id: request.id, decision: "allow" })).toBe(
+      false,
+    );
+    // The command.
+    const lines: string[] = [];
+    const before = process.exitCode;
+    await agentsCli(["approve", request.id.slice(0, 8)], {
+      system: fakeSystem({
+        now: Date.now(),
+        env: { CLAWDTIME_CONFIG_HOME: directory },
+      }),
+      print: (line) => lines.push(line),
+      hookScript: "/x/agent-hook.js",
+    });
+    expect(process.exitCode).toBe(2);
+    process.exitCode = before;
+    expect(lines.at(-1)).toBe(answerInTerminalText);
+    // The chat, with no model and with one.
+    const world = {
+      now: () => Date.now(),
+      board: () => null,
+      desk,
+      focus: async () => ({ ok: true }),
+      send: async () => ({ ok: true, route: "tmux" }),
+      clis: () => [],
+    };
+    expect(await new Supervisor(world, null).reply([], "approve", "chat")).toBe(
+      answerInTerminalText,
+    );
+    const seen: string[] = [];
+    await new Supervisor(world, {
+      complete: async (input) => {
+        const last = input.messages.at(-1)!;
+        if (last.role === "tool") seen.push(last.content);
+        return seen.length
+          ? { text: "ok", toolCalls: [] }
+          : {
+              text: "",
+              toolCalls: [
+                {
+                  id: "c1",
+                  name: "decide",
+                  arguments: JSON.stringify({
+                    request: request.id,
+                    decision: "allow",
+                  }),
+                },
+              ],
+            };
+      },
+    }).reply([], "yes, approve it", "chat");
+    expect(seen).toEqual([answerInTerminalText]);
+    // The call says that it cannot approve, and still takes a denial.
+    expect(spokenQuestion(request)).toBe(
+      "Claude Code in app asks to run the command: npm test rm -rf /work/app/x. That is not all of it, so I cannot approve it here: approve it in its terminal, or say deny.",
+    );
+    // A command that is shown whole in the panel, and is longer than what a call reads.
+    const long = open(`npm test ${"b".repeat(300)}`);
+    expect(long.answerInTerminal).toBe(false);
+    expect(callCanApprove(long)).toBe(false);
+    expect(callCanApprove(open("npm test"))).toBe(true);
+    expect(spokenQuestion(long)).toContain(
+      "That is not all of it, so I cannot approve it here: approve it in the panel or its terminal, or say deny.",
+    );
+    for (const item of desk.pending())
+      if (item.id !== request.id) desk.close(item, null);
+    const said: string[] = [];
+    let reads = 0;
+    let clock = Date.now();
+    const answer = await answerByCall(
+      {
+        requestAttention: async () => ({
+          request: { id: "att-1", state: "requested" },
+        }),
+        conversationTurns: async () => ({
+          turns: [
+            reads++ === 0
+              ? { id: "t1", sequence: 1, text: "Approve it." }
+              : { id: "t2", sequence: 2, text: "Deny it." },
+          ],
+          request: { state: "connected" },
+        }),
+        conversationOperation: async (_id, operation, body) => {
+          if (operation === "reply") said.push((body as { text: string }).text);
+          return {};
+        },
+        heartbeat: async () => ({}),
+      },
+      request,
+      {
+        now: () => (clock += 1000),
+        deadline: clock + 500_000,
+        pollMs: 1,
+        beatMs: 100_000,
+      },
+    );
+    expect(said).toEqual([
+      "I cannot approve this one here. Approve it in its terminal, or say deny.",
+      "Denied. I told it.",
+    ]);
+    expect(answer).toEqual({ decision: "deny", text: "Deny it." });
+    expect(desk.take(request.id)).toBeNull();
+    // A denial is taken.
+    expect(desk.answer(request.id, { decision: "deny", via: "panel" })).toBe(
+      true,
+    );
+  });
 });
 
 describe("trove", () => {
@@ -507,9 +683,7 @@ describe("trove", () => {
     expect(requestPattern("Bash", "git push origin main")).toBe(
       "Bash:git push",
     );
-    expect(requestPattern("Bash", "/usr/local/bin/make deploy")).toBe(
-      "Bash:make deploy",
-    );
+    expect(requestPattern("Bash", "make deploy")).toBe("Bash:make deploy");
     expect(requestPattern("Bash", "ls -la")).toBe("Bash:ls");
     expect(requestPattern("shell", "cargo build")).toBe("Bash:cargo build");
     // Anything with shell syntax keeps the bare key, and the bare key takes no rule.
@@ -527,6 +701,137 @@ describe("trove", () => {
       "mcp__github__create_issue",
     );
     expect(requestPattern("", "x")).toBe("tool");
+  });
+
+  it("a standing rule never covers more than the command that the person saw", () => {
+    const key = (command: string) =>
+      describeRequest(permission(command))!.pattern;
+    expect(key("git status")).toBe("Bash:git status");
+    // The key comes from the raw command: a line break, a cut, or a program
+    // with a slash keeps the bare tool name, which no rule matches.
+    for (const command of [
+      "git status\nrm -rf /work/app/x",
+      "git status\r\nrm -rf /work/app/x",
+      `git status ${"a".repeat(600)}; rm -rf /work/app/x`,
+      `git status ${"a".repeat(600)}`,
+      "/tmp/other/git status",
+      "./git status",
+    ])
+      expect(key(command), command).toBe("Bash");
+    // The parts of a command list are joined, and a break in a part counts.
+    expect(
+      describeRequest({
+        hook_event_name: "PermissionRequest",
+        tool_name: "shell",
+        tool_input: { command: ["git", "status\nrm -rf x"] },
+      })!.pattern,
+    ).toBe("Bash");
+
+    const trove = new Trove(root());
+    const facts = { agent: "claude-code" as const, cwd: "/work/app" };
+    // A key that is the program alone groups past answers, and is never a rule.
+    for (const command of [
+      "rm build/tmp.txt",
+      "bash ./build.sh",
+      "ls -la",
+      "ls",
+    ]) {
+      const pattern = key(command)!;
+      expect(pattern, command).toMatch(/^Bash:\S+$/);
+      expect(rememberable({ ...facts, pattern }), command).toBe(false);
+      expect(() => trove.addRule({ ...facts, pattern }, "", now)).toThrow(
+        "too broad",
+      );
+    }
+    expect(rememberable({ ...facts, pattern: "Bash:git status" })).toBe(true);
+    expect(rememberable({ ...facts, pattern: "Bash" })).toBe(false);
+    expect(rememberable({ ...facts, cwd: null, pattern: "Bash:a b" })).toBe(
+      false,
+    );
+    // A rule of that kind that an earlier version wrote answers nothing.
+    const old = root();
+    mkdirSync(join(old, "trove"));
+    writeFileSync(
+      join(old, "trove", "rules.json"),
+      JSON.stringify([
+        {
+          version: 1,
+          id: "00000001",
+          agent: "claude-code",
+          cwd: "/work/app",
+          pattern: "Bash:rm",
+          decision: "allow",
+          createdAt: now,
+          note: "",
+        },
+      ]),
+    );
+    expect(new Trove(old).rules()).toHaveLength(1);
+    expect(new Trove(old).matchRule({ ...facts, pattern: "Bash:rm" })).toBe(
+      null,
+    );
+  });
+
+  it("a rule for a file tool covers only a path inside its project folder", () => {
+    const edit = (path: unknown) =>
+      describeRequest({
+        hook_event_name: "PermissionRequest",
+        tool_name: "Edit",
+        tool_input: { file_path: path },
+      })!;
+    expect(edit("/work/app/src/a.ts")).toMatchObject({
+      pattern: "Edit",
+      path: "/work/app/src/a.ts",
+    });
+    expect(describeRequest(permission("npm test"))!.path).toBeNull();
+    const trove = new Trove(root());
+    const facts = {
+      agent: "claude-code" as const,
+      cwd: "/work/app",
+      pattern: "Edit",
+    };
+    // A rule is not made from a file outside the folder, or with no file.
+    expect(() =>
+      trove.addRule({ ...facts, path: "/Users/me/.zshrc" }, "", now),
+    ).toThrow("outside the project folder");
+    expect(() => trove.addRule(facts, "", now)).toThrow(
+      "outside the project folder",
+    );
+    expect(rememberable({ ...facts, path: "/Users/me/.zshrc" })).toBe(false);
+    const rule = trove.addRule(
+      { ...facts, path: "/work/app/src/a.ts" },
+      "",
+      now,
+    );
+    for (const path of ["/work/app/src/b.ts", "src/b.ts", "/work/app"])
+      expect(trove.matchRule({ ...facts, path })?.id, path).toBe(rule.id);
+    for (const path of [
+      "/Users/me/.zshrc",
+      "/work/app/../other/a.ts",
+      "../other/a.ts",
+      "/work/application/a.ts",
+      null,
+      undefined,
+    ])
+      expect(trove.matchRule({ ...facts, path }), String(path)).toBeNull();
+    // A link inside the folder that leads out of it is outside.
+    const project = join(realpathSync(root()), "project");
+    const outside = realpathSync(root());
+    mkdirSync(project);
+    symlinkSync(outside, join(project, "link"));
+    const linked = new Trove(root());
+    const here = { ...facts, cwd: project };
+    linked.addRule({ ...here, path: join(project, "a.ts") }, "", now);
+    expect(
+      linked.matchRule({ ...here, path: join(project, "new", "b.ts") }),
+    ).not.toBeNull();
+    expect(
+      linked.matchRule({ ...here, path: join(project, "link", "secret") }),
+    ).toBeNull();
+    // Any other tool is keyed by its name, as before.
+    expect(
+      rememberable({ ...facts, pattern: "mcp__github__create_issue" }),
+    ).toBe(true);
   });
 
   it("suggests from past answers, keeps rules to one project, and refuses a broad rule", () => {
@@ -719,6 +1024,52 @@ describe("terminal input", () => {
     expect(calls).toEqual([
       ["tmux", "-L", "work", "send-keys", "-t", "%7", "-l", "--", "-h"],
     ]);
+    // Text that must not be sent off holds no line break: a line break in a
+    // terminal sends the line.
+    calls.length = 0;
+    await sendText(
+      inTmux,
+      "first line\nsecond line\r\n\nthird",
+      { enter: false },
+      run,
+    );
+    expect(calls).toEqual([
+      [
+        "tmux",
+        "-L",
+        "work",
+        "send-keys",
+        "-t",
+        "%7",
+        "-l",
+        "--",
+        "first line second line third",
+      ],
+    ]);
+    const scripted = recorder(() => ({ status: 0, stdout: "ok\n" }));
+    await sendText(
+      session({
+        terminal: {
+          tty: "ttys001",
+          app: "iTerm2",
+          appPath: null,
+          tmux: null,
+          remote: false,
+        },
+      }),
+      "one\ntwo",
+      { enter: false },
+      scripted.run,
+    );
+    expect(scripted.calls[0]!.slice(-3)).toEqual([
+      "ttys001",
+      "one two",
+      "stay",
+    ]);
+    // With Return, the lines stay as the person gave them.
+    calls.length = 0;
+    await sendText(inTmux, "one\ntwo", { enter: true }, run);
+    expect(calls[0]!.at(-1)).toBe("one\ntwo");
   });
 
   it("uses the terminal's own scripting, with the text as an argument", async () => {
@@ -1137,7 +1488,23 @@ describe("supervisor commands", () => {
     expect(listed).toContain(
       `${second.id.slice(0, 8)}  codex in site  permission: git push origin main`,
     );
-    expect(listed).toMatch(/^1\. .*\n2\. /);
+    // Each line starts with the id. A place in the list is not printed: it is not a name.
+    expect(listed).toMatch(/^[0-9a-f]{8}  .*\n[0-9a-f]{8}  /);
+    // A bare position is refused, and the message shows the ids.
+    for (const place of ["1", "2", "12", "abc"]) {
+      const refusal = await run("approve", place).then(
+        () => "",
+        (error: Error) => error.message,
+      );
+      expect(refusal, place).toContain(
+        "Give the id of the request, or its first four characters or more",
+      );
+      expect(refusal).toContain(`${first.id.slice(0, 8)}  claude-code in app`);
+      expect(refusal).toContain(`${second.id.slice(0, 8)}  codex in site`);
+    }
+    await expect(run("deny")).rejects.toThrow("Give the id of the request");
+    expect(desk.take(first.id)).toBeNull();
+    expect(desk.take(second.id)).toBeNull();
     await run("approve", first.id.slice(0, 8), "--always");
     expect(lines.at(-1)).toBe(
       "Allowed, and remembered for this project. The agent continues.",
@@ -1152,7 +1519,7 @@ describe("supervisor commands", () => {
       decision: "deny",
       text: "Not before review.",
     });
-    await expect(run("approve", "zzzz")).rejects.toThrow("no longer waits");
+    await expect(run("approve", "abcd")).rejects.toThrow("no longer waits");
     await run("away", "on");
     expect(lines.at(-1)).toContain("Away");
     expect(desk.away()).toBe(true);
@@ -1362,6 +1729,87 @@ describe("answer by phone", () => {
     expect(read("that is acknowledged")).toBeNull();
   });
 
+  it("a negation, a hedge or a question is never an approval", () => {
+    const read = (words: string, item = request()) => interpret(words, item);
+    for (const words of [
+      "I would not allow that",
+      "I'm not sure",
+      "I\u2019m not sure",
+      "I can't approve that",
+      "I cannot approve that",
+      "I won't approve this",
+      "that is not okay",
+      "never approve that",
+      "maybe yes",
+      "I think so, yes",
+      "I guess it's okay",
+      "Is it ok to allow this?",
+      "is it ok to allow this",
+      "should I approve it",
+      "can you approve that",
+      "what happens if I allow it",
+      "ok is it safe to allow",
+      "Okay. What is it asking",
+      "wait, okay, what is it asking",
+      "hold on, okay",
+      "Yeah? Hello?",
+      "yeah hello",
+      "why would I approve that",
+      "do you think it is ok",
+      "does it look okay",
+    ])
+      expect(read(words), words).toBeNull();
+    // A clear answer still stands.
+    for (const words of [
+      "Approve.",
+      "yes",
+      "okay",
+      "ok do it",
+      "Yes, go ahead and approve it",
+      "um, sure",
+    ])
+      expect(read(words)?.decision, words).toBe("allow");
+    // A sentence that opens with its refusal denies, whatever follows.
+    for (const words of [
+      "No.",
+      "Deny",
+      "never",
+      "Do not run that",
+      "don't",
+      "I said no",
+      "No, why would it do that?",
+      "No, I think that is wrong",
+    ])
+      expect(read(words)?.decision, words).toBe("deny");
+    // A refusal that is asked or hedged is no answer either.
+    for (const words of ["should I deny it", "maybe deny it", "I don't know"])
+      expect(read(words), words).toBeNull();
+
+    for (const words of [
+      "Which one is safer?",
+      "which one is safer",
+      "hold on one moment",
+      "give me one second",
+      "I do not want the first",
+      "not the first one",
+      "maybe red",
+      "Red?",
+    ])
+      expect(read(words, question), words).toBeNull();
+    expect(read("number one", question)?.text).toBe("Red");
+    expect(read("I want red please", question)?.text).toBe("Red");
+    // A choice whose own words refuse or ask is still that choice.
+    const yesNo = request({ kind: "question", options: ["Yes", "No"] });
+    expect(read("no", yesNo)).toEqual({ decision: "answer", text: "No" });
+    expect(read("Yes.", yesNo)).toEqual({ decision: "answer", text: "Yes" });
+    const worded = request({
+      kind: "question",
+      options: ["What we have now", "Do not migrate"],
+    });
+    expect(read("what we have now", worded)?.text).toBe("What we have now");
+    expect(read("do not migrate, please", worded)?.text).toBe("Do not migrate");
+  });
+
   function phone(
     script: {
       turns: { id: string; sequence: number; text?: string }[];
@@ -1437,6 +1885,48 @@ describe("answer by phone", () => {
       "turns after 0",
       "turns after 1",
     ]);
+  });
+
+  it("reads all turns of a batch together, and a negation that ends a batch holds for the next", async () => {
+    let clock = now;
+    const timing = () => ({
+      now: () => (clock += 1000),
+      deadline: now + 500_000,
+      pollMs: 1,
+      beatMs: 100_000,
+    });
+    // One sentence in two fragments: its last fragment alone would approve.
+    const split = phone([
+      {
+        turns: [
+          { id: "t1", sequence: 1, text: "Do not" },
+          { id: "t2", sequence: 2, text: "approve that." },
+        ],
+      },
+      { turns: [{ id: "t3", sequence: 3, text: "Deny it." }] },
+    ]);
+    expect(await answerByCall(split.client, request(), timing())).toEqual({
+      decision: "deny",
+      text: "Deny it.",
+    });
+    expect(split.log).toContain(
+      'reply {"turnId":"t2","replyId":"reply-t2","text":"Say approve, or say deny.","expectedCursor":2}',
+    );
+    expect(split.log.join("\n")).not.toContain("Approved");
+    // The same kind of sentence over two reads.
+    clock = now;
+    const late = phone([
+      { turns: [{ id: "t1", sequence: 1, text: "I would not" }] },
+      { turns: [{ id: "t2", sequence: 2, text: "allow that" }] },
+      { turns: [{ id: "t3", sequence: 3, text: "approve" }] },
+    ]);
+    expect(await answerByCall(late.client, request(), timing())).toEqual({
+      decision: "allow",
+      text: null,
+    });
+    expect(
+      late.log.filter((line) => line.includes("Say approve, or say deny.")),
+    ).toHaveLength(2);
   });
 
   it("gives no answer when the call is not picked up, ends, or runs out of time", async () => {

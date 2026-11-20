@@ -209,4 +209,22 @@ final class AgentBoardTests: XCTestCase {
       XCTAssertNil(PanelLaunch(arguments: arguments), arguments.joined(separator: " "))
     }
   }
+  func testARequestThatIsShownInPartHasNoApprovalInThePanelOrTheBubble() throws {
+    let json = #"{"version":1,"away":false,"callReady":false,"pending":[{"id":"0123456789abcdef","agentLabel":"Claude Code","kind":"permission","tool":"Bash","summary":"git status","options":[],"project":"app","session":null,"sessionId":null,"createdAt":1,"holdUntil":2,"allowedBefore":0,"deniedBefore":0,"canRemember":false,"answerInTerminal":true}]}"#
+    let cut = try JSONDecoder().decode(PendingDecisions.self, from: Data(json.utf8))
+    try cut.validate()
+    XCTAssertTrue(cut.pending[0].approvalOnlyInTerminal)
+    XCTAssertEqual(DecisionText.terminalOnly(cut.pending[0]), "This is only a part of the request. Approve it in its terminal, or deny it here.")
+    // An older service sends no such field: the request is whole.
+    let whole = try JSONDecoder().decode(PendingDecisions.self, from: Data(json.replacingOccurrences(of: #","answerInTerminal":true"#, with: "").utf8))
+    XCTAssertFalse(whole.pending[0].approvalOnlyInTerminal)
+    XCTAssertEqual(DecisionText.terminalOnly(whole.pending[0]), "")
+    // The bubble has Approve and Deny for the whole request, and none for the part.
+    func bubble(_ decisions: PendingDecisions) -> PetStatus.Bubble? {
+      PetStatus.make(board: nil, connected: true, taskNeedsPerson: false, sharing: false, quietSeconds: 0, now: 3, decisions: decisions.pending).bubble
+    }
+    XCTAssertEqual(bubble(whole)?.decisionId, "0123456789abcdef")
+    XCTAssertNotNil(bubble(cut))
+    XCTAssertNil(bubble(cut)?.decisionId)
+  }
 }

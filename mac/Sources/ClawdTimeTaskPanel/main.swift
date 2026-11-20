@@ -43,7 +43,6 @@ import TaskPanelCore
   private var stopSharingItems: [NSMenuItem] = []
   private var stopCallItems: [NSMenuItem] = []
   private var styleItems: [NSMenuItem] = []
-  private var lookItems: [NSMenuItem] = []
   private var eyeItems: [NSMenuItem] = []
   private var sizeSliders: [NSSlider] = []
 
@@ -72,15 +71,8 @@ import TaskPanelCore
     let styleMenu = NSMenu(title: "Mascot")
     // Each style shows its picture. The pictures are drawn when the menu first opens.
     styleMenu.delegate = self
-    // The 3D look is greyed for a style that has no lit figure.
+    // The menu does not enable or disable its rows by itself, so the size row, which has no action, stays enabled.
     styleMenu.autoenablesItems = false
-    // The look comes first: flat shapes, or the lit 3D figure.
-    for look in MascotLook.allCases {
-      let item = styleMenu.addItem(withTitle: look.title, action: #selector(chooseLook(_:)), keyEquivalent: "")
-      item.target = self; item.representedObject = "look:" + look.rawValue
-      lookItems.append(item)
-    }
-    styleMenu.addItem(.separator())
     // The size: a slider from half of the full size to one and a half.
     styleMenu.addItem(sizeItem())
     styleMenu.addItem(.separator())
@@ -179,13 +171,8 @@ import TaskPanelCore
   func menuWillOpen(_ menu: NSMenu) {
     for item in menu.items {
       guard let raw = item.representedObject as? String, let style = MascotStyle(rawValue: raw) else { continue }
-      // The picture shows the style in the look that is chosen now.
-      item.image = pet.look == .flat || !style.hasSolid ? MascotCatalog.flatImage(style, flintEye: pet.flintEye) : MascotCatalog.thumbnail(style, flintEye: pet.flintEye)
+      item.image = MascotCatalog.flatImage(style, flintEye: pet.flintEye)
     }
-  }
-  @objc private func chooseLook(_ sender: NSMenuItem) {
-    guard let raw = sender.representedObject as? String, let look = MascotLook(rawValue: String(raw.dropFirst(5))) else { return }
-    pet.look = look; refreshMenus()
   }
   @objc private func chooseStyle(_ sender: NSMenuItem) {
     guard let raw = sender.representedObject as? String, let style = MascotStyle(rawValue: raw) else { return }
@@ -193,13 +180,6 @@ import TaskPanelCore
   }
   private func refreshMenus() {
     for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
-    for item in lookItems {
-      let solid = (item.representedObject as? String) == "look:" + MascotLook.solid.rawValue
-      // A plain stone is flat in both looks: it shows as flat, and 3D is greyed.
-      let shown = pet.style.hasSolid ? pet.look : .flat
-      item.state = (item.representedObject as? String) == "look:" + shown.rawValue ? .on : .off
-      item.isEnabled = !solid || pet.style.hasSolid
-    }
     for item in eyeItems { item.state = pet.flintEye ? .on : .off }
     for slider in sizeSliders { slider.doubleValue = pet.scale }
     for item in awayItems {

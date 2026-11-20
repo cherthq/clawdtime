@@ -331,15 +331,23 @@ async function watch(
       const value = key.toString("utf8");
       if (value === "q" || value === "\u0003") return finish();
       if ((value === "a" || value === "d") && waiting[0]) {
-        const ok = desk.answer(waiting[0].id, {
-          decision: value === "a" ? "allow" : "deny",
-          via: "cli",
-        });
+        // This view shows 90 characters of a request. What it does not show
+        // whole is not allowed from here.
+        const whole =
+          !waiting[0].answerInTerminal && waiting[0].summary.length <= 90;
+        const ok =
+          (value === "d" || whole) &&
+          desk.answer(waiting[0].id, {
+            decision: value === "a" ? "allow" : "deny",
+            via: "cli",
+          });
         message = ok
           ? value === "a"
             ? "Allowed. The agent continues."
             : "Denied. The agent is told."
-          : "That request no longer waits.";
+          : value === "a" && !whole
+            ? "This view does not show all of that request. Allow it where you can read it: in its terminal or in the panel."
+            : "That request no longer waits.";
         waiting = desk.pending();
         return draw();
       }

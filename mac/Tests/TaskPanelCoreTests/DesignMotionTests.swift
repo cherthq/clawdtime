@@ -410,10 +410,7 @@ final class DesignMotionTests: XCTestCase {
     pose = animator.step(1.0 / 60, still)
     XCTAssertEqual(pose.clock, 0, "a style that moves on its own stops under reduced motion")
   }
-  func testThePlainStonesAreFlatOnlyAndARemovedStyleNoLongerReads() {
-    // The six plain stones are one flat shape each: they have no lit figure.
-    XCTAssertEqual(MascotStyle.allCases.filter { !$0.hasSolid }, [.jet, .jade, .lapis, .amber, .garnet, .amethyst])
-    XCTAssertTrue(MascotStyle.flint.hasSolid)
+  func testARemovedStyleNoLongerReads() {
     // A style that was removed no longer reads, so a kept choice of it falls back to the mark.
     for old in ["orb", "onyx", "flux"] { XCTAssertNil(MascotStyle(rawValue: old)) }
   }

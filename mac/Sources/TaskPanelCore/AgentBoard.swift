@@ -269,15 +269,20 @@ public struct PendingDecisions: Codable, Equatable {
     public let host: String?
     /// What the person said before that bears on this request, from memory. Nil with memory off.
     public let recalled: String?
+    /// The request is longer than ClawdTime can show in full, or has more than one line.
+    /// It can be denied here; an approval is taken only in the agent's own terminal.
+    public let answerInTerminal: Bool?
     public init(id: String, agentLabel: String, kind: String, tool: String, summary: String, options: [String], project: String,
                 session: String?, sessionId: String?, createdAt: Double, holdUntil: Double, allowedBefore: Int, deniedBefore: Int, canRemember: Bool,
-                host: String? = nil, recalled: String? = nil) {
+                host: String? = nil, recalled: String? = nil, answerInTerminal: Bool? = nil) {
       self.id = id; self.agentLabel = agentLabel; self.kind = kind; self.tool = tool; self.summary = summary; self.options = options
       self.project = project; self.session = session; self.sessionId = sessionId; self.createdAt = createdAt; self.holdUntil = holdUntil
       self.allowedBefore = allowedBefore; self.deniedBefore = deniedBefore; self.canRemember = canRemember; self.host = host
-      self.recalled = recalled
+      self.recalled = recalled; self.answerInTerminal = answerInTerminal
     }
     public var isQuestion: Bool { kind == "question" }
+    /// ClawdTime shows only a part of this request, so it offers no approval for it.
+    public var approvalOnlyInTerminal: Bool { answerInTerminal == true }
   }
   public let version: Int
   public let away: Bool
@@ -321,6 +326,10 @@ public enum DecisionText {
     }
   }
   public static func summary(_ request: PendingDecisions.Request) -> String { AgentBoardText.clean(request.summary, limit: 600) }
+  /// Why a request has no Approve here.
+  public static func terminalOnly(_ request: PendingDecisions.Request) -> String {
+    request.approvalOnlyInTerminal ? "This is only a part of the request. Approve it in its terminal, or deny it here." : ""
+  }
   /// What the person answered before to the same request in this project.
   public static func history(_ request: PendingDecisions.Request) -> String {
     func times(_ count: Int) -> String { count == 1 ? "once" : "\(count) times" }

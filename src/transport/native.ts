@@ -111,6 +111,9 @@ const credentialsSchema = z.object({
 });
 export const mediaSessionId = (requestId: string) =>
   `ct_${hash(requestId).slice(0, 40)}`;
+/** The media service answers 404 for a session that it does not hold. */
+const mediaNotFound = (error: unknown) =>
+  error instanceof Error && error.message === "Provider returned HTTP 404.";
 export class NativeTransport implements Transport {
   readonly mode = "live" as const;
   readonly messages: NativeMessages;
@@ -657,18 +660,41 @@ export class NativeTransport implements Transport {
     }
   }
   async call(attention: AttentionRequest, pairing: Pairing, effectId: string) {
-    this.guard(pairing);
+    const id = mediaSessionId(attention.id);
+    // Nothing that dispatches has been sent yet. When no earlier attempt left a
+    // media record, a refusal here is certain: the call never started.
+    const refusal = (error: DomainError) =>
+      this.store.get<MediaRecord>("media", id)
+        ? error
+        : new NotDispatched(error.message);
+    try {
+      this.guard(pairing);
+    } catch (error) {
+      throw error instanceof DomainError ? refusal(error) : error;
+    }
     await this.requireReady(pairing, "call");
     if (!this.messages.cursor())
-      throw new DomainError(
-        409,
-        "Verified native event boundary is required before dialing.",
+      throw refusal(
+        new DomainError(
+          409,
+          "Verified native event boundary is required before dialing.",
+        ),
       );
-    const id = mediaSessionId(attention.id),
-      old = this.store.get<MediaRecord>("media", id);
+    const old = this.store.get<MediaRecord>("media", id);
     if (old) {
       if (old.requestId === attention.id && old.providerCallId)
         return { callId: old.providerCallId, accepted: true };
+      // A record that stopped before the dial proves that no dial was sent. Its
+      // media session may still be open, so a status read settles the record.
+      if (
+        old.requestId === attention.id &&
+        ["preparing", "prepared", "closed"].includes(old.state)
+      ) {
+        if (old.state !== "closed")
+          this.store.put("media", { ...old, state: "unknown" });
+        throw new NotDispatched("An earlier attempt stopped before the dial.");
+      }
+      // Any other record may hide a dial that was sent: the outcome stays unknown.
       throw new DomainError(
         409,
         "Existing media/call outcome requires reconciliation.",
@@ -754,9 +780,10 @@ export class NativeTransport implements Transport {
       }
       // No dial left this process, so the call outcome is certain: it never
       // started. Only the prepared media session may remain, and it holds no line.
+      // A 404 means that the media service never created it, so nothing is open.
       const closed = await this.media(`/sessions/${id}/close`, {}).then(
         () => true,
-        () => false,
+        mediaNotFound,
       );
       this.store.put(
         "media",
@@ -1447,8 +1474,38 @@ export class NativeTransport implements Transport {
           }
         }
       }
+      await this.reconcileUndialedMedia();
     } finally {
       this.polling = false;
+    }
+  }
+  /** A media session whose call was refused before the dial holds no call and no
+   * line. When its close failed in transit, only a status read may settle the
+   * record: the media service does not hold the session, or reports it closed.
+   * The close is never sent again. */
+  private async reconcileUndialedMedia() {
+    for (const session of this.store
+      .all<MediaRecord>("media")
+      .filter(
+        (s) =>
+          s.state === "unknown" &&
+          !s.providerCallId &&
+          this.store.effect(`${s.requestId}:call`)?.state === "failed",
+      )) {
+      const closed = await this.media(`/sessions/${session.id}`).then(
+        (status) =>
+          status.id === session.id &&
+          status.alive === false &&
+          status.state === "closed",
+        mediaNotFound,
+      );
+      if (closed)
+        this.store.put<MediaRecord>("media", {
+          id: session.id,
+          requestId: session.requestId,
+          state: "closed",
+          outcome: "failed",
+        });
     }
   }
 }
