@@ -100,7 +100,9 @@ retain terminal cleanup. Reconnect within the live window retains the same sessi
 cursor and outcomes; stopped sessions cannot be revived with new heartbeats.
 
 The conversation service retains bounded human text for active delivery, removes
-text from terminal turns and retains minimal state/IDs/receipts. It does not store
+text from terminal turns and retains minimal state/IDs/receipts. After a hangup,
+a turn not yet acknowledged remains readable by the same live session; it is
+content for the original task and carries no call, reply or screen authority. It does not store
 a duplicate unrestricted agent context. V2 bridge effects persist a hash/receipt
 marker, not speech text, screenshots or observation payloads; replaying a bridge
 command returns the marker and asks for a fresh scoped status read. Initial

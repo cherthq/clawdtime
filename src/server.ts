@@ -1,10 +1,13 @@
 import { serve } from "@hono/node-server";
 import { createRuntime } from "./runtime.js";
+import { reportError } from "./error-report.js";
 function startRuntime() {
   try {
     return createRuntime();
-  } catch {
-    // Configuration validators may include parsed input. Never print their cause.
+  } catch (error) {
+    // Configuration validators may include parsed input. Never print their
+    // message; the report carries only the error class and stack frames.
+    reportError("startup_refused", error);
     throw new Error(
       "ClawdTime startup refused. Check protected configuration, ownership evidence and storage permissions; configuration values were withheld.",
     );

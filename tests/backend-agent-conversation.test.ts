@@ -370,6 +370,67 @@ describe("agent-owned ordered conversation", () => {
     );
     f.store.close();
   });
+  it("keeps an unread answer readable after the human hangs up, then redacts it once delivered", async () => {
+    const f = await fixture();
+    const answer = f.receive("answer", "Use the blue heading.");
+    f.service.observeCall(f.request.id, "ended");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.request.id)?.state,
+    ).toBe("disconnected");
+    // The one-second runtime tick prunes before the agent's next poll.
+    f.conversation.prune();
+    const unread = f.conversation.poll(f.agent.token, f.request.id).turns[0];
+    expect(unread).toMatchObject({
+      id: answer.id,
+      state: "received",
+      delivery: "pending",
+      text: "Use the blue heading.",
+    });
+    // A restart must not drop it either.
+    expect(
+      new ConversationService(f.service).poll(f.agent.token, f.request.id)
+        .turns[0]?.text,
+    ).toBe("Use the blue heading.");
+    f.conversation.acknowledge(f.agent.token, f.request.id, answer.id);
+    f.conversation.prune();
+    const delivered = f.conversation.poll(f.agent.token, f.request.id).turns[0];
+    expect(delivered).toMatchObject({
+      id: answer.id,
+      state: "canceled",
+      delivery: "acknowledged",
+    });
+    expect(delivered).not.toHaveProperty("text");
+    f.store.close();
+  });
+  it("drops the unread answer when the session stops after the hangup", async () => {
+    const f = await fixture();
+    const answer = f.receive("answer", "Use the blue heading.");
+    f.service.observeCall(f.request.id, "ended");
+    f.conversation.prune();
+    f.service.disconnect(f.agent.token);
+    f.conversation.prune();
+    const stored = f.store.get<{ state: string; text?: string }>(
+      "conversation_turn",
+      answer.id,
+    );
+    expect(stored).toMatchObject({ state: "canceled" });
+    expect(stored).not.toHaveProperty("text");
+    f.store.close();
+  });
+  it("drops an unread answer after 24 hours even when it was never delivered", async () => {
+    const f = await fixture();
+    const answer = f.receive("answer", "Use the blue heading.");
+    f.service.observeCall(f.request.id, "ended");
+    f.advance(24 * 60 * 60 * 1000);
+    f.conversation.prune();
+    const stored = f.store.get<{ state: string; text?: string }>(
+      "conversation_turn",
+      answer.id,
+    );
+    expect(stored).toMatchObject({ state: "canceled" });
+    expect(stored).not.toHaveProperty("text");
+    f.store.close();
+  });
   it("requires exact session and qualified voice without substituting for native approval", async () => {
     const f = await fixture(),
       a = f.receive("first");
@@ -453,7 +514,8 @@ describe("agent-owned ordered conversation", () => {
       if (reason === "stop")
         f.store.saveState(`listening-stopped:${f.request.id}`, true);
       expect(() => f.receive("second")).toThrow();
-      if (reason !== "stop") {
+      // A hangup keeps the unread turn for delivery; see the hangup test above.
+      if (reason === "heartbeat" || reason === "revocation") {
         f.conversation.prune();
         expect(
           f.store.get<{ text?: string }>("conversation_turn", a.id)?.text,
