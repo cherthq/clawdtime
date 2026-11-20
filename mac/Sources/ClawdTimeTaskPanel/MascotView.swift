@@ -4,7 +4,18 @@ import TaskPanelCore
 
 /// The live mascot: the 3D stone, its shadow, and the clock that moves both.
 final class MascotView: NSView {
-  let mascot = MascotScene()
+  private(set) var mascot: MascotFigure = MascotScene()
+  /// Changes the drawing. The pose, the mood and the clock carry over.
+  var style = MascotStyle.pebble {
+    didSet {
+      guard style != oldValue else { return }
+      mascot = style == .pebble ? MascotScene() : CoreScene()
+      mascot.set(mood: mood)
+      scene.scene = mascot.scene; scene.pointOfView = mascot.camera
+      lastPose = nil
+      setAccessibilityLabel("ClawdTime, " + style.title)
+    }
+  }
   let clock = FrameClock()
   private let scene = SCNView()
   private let deskShadow = CALayer()

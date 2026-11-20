@@ -176,10 +176,16 @@ final class PetController: NSObject {
 
   private var visibleFrame: CGRect { (window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900) }
 
+  /// Pebble or Core. The choice is kept between starts.
+  var style: MascotStyle {
+    get { mascot.style }
+    set { mascot.style = newValue; defaults.set(newValue.rawValue, forKey: "pet.style"); mascot.tap() }
+  }
   /// Shows the mascot where the person left it. It takes no focus.
   func show() {
     guard !visible else { return }
     visible = true
+    mascot.style = MascotStyle(rawValue: defaults.string(forKey: "pet.style") ?? "") ?? .pebble
     let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? visibleFrame
     if defaults.object(forKey: "pet.x") != nil {
       origin = PetLayout.origin(fraction: CGPoint(x: defaults.double(forKey: "pet.x"), y: defaults.double(forKey: "pet.y")), in: screen)

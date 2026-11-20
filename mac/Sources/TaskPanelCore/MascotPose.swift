@@ -5,6 +5,14 @@ public enum MascotMood: String, CaseIterable, Sendable {
   case idle, working, attention, sharing, sleepy, asleep, offline
 }
 
+/// How the mascot is drawn. Pebble is the Chert stone with a face. Core is an
+/// instrument: a glass orb with an iris of light.
+public enum MascotStyle: String, CaseIterable, Sendable {
+  case pebble, core
+  public var title: String { self == .pebble ? "Pebble" : "Core" }
+  public var summary: String { self == .pebble ? "The Chert stone, friendly" : "A glass orb with an iris of light" }
+}
+
 /// One frame of the mascot. Every value is plain data, so a frame can be drawn,
 /// tested and rendered off screen with no clock.
 public struct MascotPose: Equatable, Sendable {

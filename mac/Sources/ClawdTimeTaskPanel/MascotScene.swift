@@ -5,7 +5,24 @@ import TaskPanelCore
 /// The Chert stone as a living thing: a sunset-strata pebble, the white ring of the
 /// mark in orbit around it, and a spark that rides the ring as the status light.
 /// It is built from code, so it is sharp at every size and has no image to load.
-final class MascotScene {
+/// One drawing of the mascot. Each style reads the same poses, so every style
+/// blinks, follows the pointer and shows the state in its own way.
+protocol MascotFigure: AnyObject {
+  var scene: SCNScene { get }
+  var camera: SCNNode { get }
+  func set(mood: MascotMood)
+  func apply(_ pose: MascotPose)
+}
+extension MascotFigure {
+  /// A still frame, for the checks of the look and for the design board.
+  func snapshot(pixels: CGFloat) -> NSImage {
+    let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
+    renderer.scene = scene; renderer.pointOfView = camera; renderer.autoenablesDefaultLighting = false
+    return renderer.snapshot(atTime: 0, with: CGSize(width: pixels, height: pixels), antialiasingMode: .multisampling4X)
+  }
+}
+
+final class MascotScene: MascotFigure {
   let scene = SCNScene()
   let camera = SCNNode()
   private let root = SCNNode()
@@ -80,10 +97,10 @@ final class MascotScene {
       elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
   }
 
-  private static func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+  static func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
     NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
   }
-  private static func image(width: Int, height: Int, _ draw: (CGContext) -> Void) -> CGImage {
+  static func image(width: Int, height: Int, _ draw: (CGContext) -> Void) -> CGImage {
     let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     draw(context)
@@ -109,7 +126,7 @@ final class MascotScene {
     }
   }
   /// A soft band of light. Moved across the stone it is the sheen of the mark.
-  private static func sheenBand() -> CGImage {
+  static func sheenBand() -> CGImage {
     image(width: 8, height: 256) { context in
       context.setFillColor(NSColor.black.cgColor); context.fill(CGRect(x: 0, y: 0, width: 8, height: 256))
       let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -118,7 +135,7 @@ final class MascotScene {
     }
   }
   /// A small studio for reflections: a warm ceiling, a soft key box and a dark floor.
-  private static func studio() -> CGImage {
+  static func studio() -> CGImage {
     image(width: 512, height: 256) { context in
       let space = CGColorSpace(name: CGColorSpace.sRGB)!
       let sky = CGGradient(colorsSpace: space, colors: [color(0x59544F).cgColor, color(0x9A9186).cgColor, color(0xFFF6EA).cgColor] as CFArray, locations: [0, 0.45, 1])!
@@ -129,7 +146,7 @@ final class MascotScene {
       }
     }
   }
-  private static func halo() -> CGImage {
+  static func halo() -> CGImage {
     image(width: 128, height: 128) { context in
       let glow = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
         colors: [NSColor.white.withAlphaComponent(0.9).cgColor, NSColor.white.withAlphaComponent(0.25).cgColor, NSColor.white.withAlphaComponent(0).cgColor] as CFArray, locations: [0, 0.35, 1])!
@@ -301,12 +318,6 @@ final class MascotScene {
     } else if stone.emission.intensity != 0 { stone.emission.intensity = 0 }
   }
 
-  /// A still frame, for the tests of the look and for the design board.
-  func snapshot(pixels: CGFloat) -> NSImage {
-    let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
-    renderer.scene = scene; renderer.pointOfView = camera; renderer.autoenablesDefaultLighting = false
-    return renderer.snapshot(atTime: 0, with: CGSize(width: pixels, height: pixels), antialiasingMode: .multisampling4X)
-  }
 }
 
 private extension SCNMaterial {

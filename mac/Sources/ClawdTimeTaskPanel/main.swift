@@ -25,6 +25,7 @@ import TaskPanelCore
   private var statusItem: NSStatusItem?
   private var stopSharingItems: [NSMenuItem] = []
   private var stopCallItems: [NSMenuItem] = []
+  private var styleItems: [NSMenuItem] = []
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // An accessory: no Dock icon and no menu bar takeover. It lives beside the work.
@@ -45,6 +46,14 @@ import TaskPanelCore
     menu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "0").target = self
     menu.addItem(withTitle: "Open or close the board", action: #selector(toggleBoard), keyEquivalent: "b").target = self
     menu.addItem(withTitle: "Tuck against the edge", action: #selector(tuck), keyEquivalent: "").target = self
+    let styles = NSMenuItem(title: "Mascot", action: nil, keyEquivalent: "")
+    let styleMenu = NSMenu(title: "Mascot")
+    for style in MascotStyle.allCases {
+      let item = styleMenu.addItem(withTitle: style.title + ": " + style.summary, action: #selector(chooseStyle(_:)), keyEquivalent: "")
+      item.target = self; item.representedObject = style.rawValue
+      styleItems.append(item)
+    }
+    styles.submenu = styleMenu; menu.addItem(styles)
     menu.addItem(.separator())
     let sharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
     sharing.target = self; stopSharingItems.append(sharing)
@@ -85,7 +94,12 @@ import TaskPanelCore
     image.isTemplate = true
     return image
   }
+  @objc private func chooseStyle(_ sender: NSMenuItem) {
+    guard let raw = sender.representedObject as? String, let style = MascotStyle(rawValue: raw) else { return }
+    pet.style = style; refreshMenus()
+  }
   private func refreshMenus() {
+    for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
     for item in stopSharingItems { item.isEnabled = state.allows(.stopSharing) }
     for item in stopCallItems { item.isEnabled = state.allows(.stopCall) }
   }
