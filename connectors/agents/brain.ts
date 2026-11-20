@@ -730,7 +730,7 @@ export class Supervisor {
     if (!tasks) return needsDesktop;
     const task = tasks.current();
     if (!task?.question || !task.canAnswer) return "The task asks nothing now.";
-    if (isQuestion(spoken))
+    if (isQuestion(spoken) && directCodingGoal(spoken) === null)
       return "The person asked a question. That is not an answer. Tell them what the task asks.";
     // A named choice goes as that choice. Anything else goes in the person's words.
     const named = task.choices.length
@@ -1250,7 +1250,20 @@ export class Supervisor {
     // can invent another confirmation round. The task service still enforces one
     // active task and records the exact event once; its refusal is returned as-is.
     const directGoal = directCodingGoal(spoken);
-    if (directGoal) return this.startTask(turn, directGoal, "");
+    if (directGoal) {
+      const current = this.world.tasks?.current();
+      // When the current task asks for a choice or revision, an imperative such
+      // as "Make the landing page blue" answers that task. Do not reinterpret
+      // it as a second job and strand the waiting worker behind a start refusal.
+      if (
+        current &&
+        !taskIsOver(current) &&
+        current.canAnswer &&
+        current.question
+      )
+        return this.answerTask(turn, directGoal, directGoal);
+      return this.startTask(turn, directGoal, "");
+    }
     const execution = this.world.execution;
     if (execution?.snapshot().configured) {
       if (

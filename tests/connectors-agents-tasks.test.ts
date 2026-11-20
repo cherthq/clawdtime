@@ -250,6 +250,49 @@ describe("direct software requests start without a confirmation loop", () => {
     expect(tasks.calls).toHaveLength(2);
   });
 
+  it.each([true, false])(
+    "routes a direct revision to the waiting task instead of starting another (model=%s)",
+    async (withModel) => {
+      const tasks = fakeTasks({
+        goal: demo,
+        state: "needs_decision",
+        question: "Which color should the landing page use?",
+        choices: ["Blue", "Green"],
+        canAnswer: true,
+      });
+      const run = scripted([
+        [call("start_task", { goal: "make a new page" })],
+        "Should I start another task?",
+      ]);
+      const supervisor = new Supervisor(
+        world(tasks.port).value,
+        withModel ? run.model : null,
+      );
+      const revision = "Make the landing page blue. Don't deploy it yet.";
+      expect(await supervisor.reply([], revision, "voice")).toBe(
+        "Simulation task recorded.",
+      );
+      expect(tasks.calls).toHaveLength(1);
+      expect(tasks.calls[0]).toMatchObject({ kind: "answer", text: revision });
+      expect(tasks.task()!.goal).toBe(demo);
+      expect(tasks.task()!.canAnswer).toBe(false);
+      expect(run.seen).toEqual([]);
+    },
+  );
+
+  it("accepts a politely phrased revision while the task waits", async () => {
+    const tasks = fakeTasks({ ...asking, goal: demo });
+    const revision = "Could you make the landing page blue?";
+    await new Supervisor(world(tasks.port).value, null).reply(
+      [],
+      revision,
+      "chat",
+    );
+    expect(tasks.calls).toHaveLength(1);
+    expect(tasks.calls[0]).toMatchObject({ kind: "answer", text: revision });
+    expect(tasks.task()!.goal).toBe(demo);
+  });
+
   it("reports a missing service instead of saying it started", async () => {
     expect(
       await new Supervisor(
