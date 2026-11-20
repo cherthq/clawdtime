@@ -65,6 +65,9 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
+import { titleReader } from "../connectors/agents/topics.js";
+import { sessionWindow } from "../connectors/agents/windows.js";
 import type {
   AgentSession,
   BoardSnapshot,
@@ -303,6 +306,21 @@ export function nextSteps(
   return steps;
 }
 
+/**
+ * The jobs of this Mac. A session works in the folder that the command was
+ * started in, with the person's own coding agent.
+ */
+function jobsFor(system: System, root: string, runner: Runner) {
+  const agent = system.env.CLAWDTIME_JOB_AGENT as JobAgent | undefined;
+  return new Jobs(root, {
+    project: system.env.CLAWDTIME_JOB_PROJECT || process.cwd(),
+    now: () => system.now(),
+    run: runner,
+    agent: agent && jobAgents.includes(agent) ? agent : "claude",
+    terminal: system.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
+  });
+}
+
 export async function supervisorCli(
   group: string,
   args: string[],
@@ -313,6 +331,18 @@ export async function supervisorCli(
   const desk = new DecisionDesk(root, () => system.now());
   const trove = desk.trove;
   const command = args[0] ?? "";
+
+  if (group === "jobs") {
+    const { flags } = split(args, ["json"], []);
+    const list = jobsFor(system, root, runner).recent(20);
+    if (flags.json) return print(JSON.stringify(list, null, 2));
+    if (!list.length) return print("ClawdTime started no job yet.");
+    for (const job of list)
+      print(
+        `${job.done ? "DONE   " : "WORKING"}  ${job.id}  ${job.job.slice(0, 80)}${job.done ? `\n         ${(job.result ?? "").slice(0, 300)}` : ""}`,
+      );
+    return;
+  }
 
   if (group === "agents") {
     if (command === "pending") {
@@ -452,6 +482,7 @@ export async function supervisorCli(
           );
         const board = () =>
           new BoardScanner(system, { includeHeadless: false }).scan();
+        const titles = titleReader(system);
         const key =
           system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
         const supervisor = new Supervisor(
@@ -459,10 +490,15 @@ export async function supervisorCli(
             now: () => system.now(),
             board,
             desk,
-            focus: (session) => focusSession(session, runner),
+            focus: (session) =>
+              focusSession(session, runner, "tmux", titles(session)),
             send: (session, text) =>
               sendText(session, text, { enter: true }, runner),
             clis: () => inventory(system, board()),
+            titles,
+            window: (session, action) =>
+              sessionWindow(session, action, runner, titles(session)),
+            jobs: jobsFor(system, root, runner),
           },
           key
             ? new OpenAIModel(
@@ -743,6 +779,7 @@ export async function supervisorCli(
   if (group === "chat" || group === "talk") {
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();
+    const titles = titleReader(system);
     const key =
       system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
     const supervisor = new Supervisor(
@@ -750,10 +787,15 @@ export async function supervisorCli(
         now: () => system.now(),
         board,
         desk,
-        focus: (session) => focusSession(session, runner),
+        focus: (session) =>
+          focusSession(session, runner, "tmux", titles(session)),
         send: (session, text) =>
           sendText(session, text, { enter: true }, runner),
         clis: () => inventory(system, board()),
+        titles,
+        window: (session, action) =>
+          sessionWindow(session, action, runner, titles(session)),
+        jobs: jobsFor(system, root, runner),
       },
       deps.model !== undefined
         ? deps.model

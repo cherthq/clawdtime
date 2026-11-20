@@ -45,6 +45,7 @@ import {
   type Incident,
 } from "../connectors/agents/watch.js";
 import { realSystem, type System } from "../connectors/agents/system.js";
+import { sessionTitles } from "../connectors/agents/topics.js";
 import type {
   AgentKind,
   AgentSession,
@@ -253,6 +254,7 @@ async function watch(
   runner: Runner,
   desk: DecisionDesk,
   store: WatchStore,
+  system: System,
 ) {
   const output = process.stdout;
   const input = process.stdin;
@@ -356,7 +358,12 @@ async function watch(
       if (value === "\r" || value === "\n") {
         const session = snapshot.sessions[index()];
         if (!session) return;
-        void focusSession(session, runner).then((result) => {
+        void focusSession(
+          session,
+          runner,
+          "tmux",
+          sessionTitles(system, session),
+        ).then((result) => {
           message = result.ok
             ? `Focused ${precisionText[result.precision]}.`
             : "That session has no terminal on this Mac to focus.";
@@ -446,6 +453,7 @@ export async function agentsCli(
       runner,
       new DecisionDesk(stateRoot(system), () => system.now()),
       new WatchStore(stateRoot(system)),
+      system,
     );
   }
   if (command === "incidents") {
@@ -507,7 +515,12 @@ export async function agentsCli(
     const remote = new HostBook(stateRoot(system)).get(session.host);
     const result = remote
       ? await focusRemote(remote, session, runner, stateRoot(system))
-      : await focusSession(session, runner);
+      : await focusSession(
+          session,
+          runner,
+          "tmux",
+          sessionTitles(system, session),
+        );
     if (!result.ok) {
       process.exitCode = 2;
       return print(

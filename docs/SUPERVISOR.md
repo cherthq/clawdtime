@@ -291,7 +291,13 @@ What it can do when you ask:
 
 - Say what every agent does and what waits for you.
 - Allow or deny a waiting request, or answer a question with one of its choices.
-- Bring a session's terminal to the front.
+- Bring a session's terminal to the front. You can name the session, or say
+  what it works on: "show the session that checks the lines". See "Find a
+  session" below.
+- Make a session's terminal window fill the screen, put it back, or change its
+  text size.
+- Hand any other work to a new coding session and say its answer when it is
+  done. See "Give it a job" below.
 - Type your words into a session's terminal.
 - Search the trove, and keep a critical decision that you state.
 - Turn away mode on or off.
@@ -361,7 +367,78 @@ The rules, again in the code:
   Those stay on the mascot's bar, the board and the menus.
 
 In a plain terminal with no desktop service (`clawdtime chat` alone) there is no
-task service to reach, and ClawdTime says so.
+task service to reach. A task that you ask for there starts as a job.
+
+### Find a session
+
+A board name such as `work-13` says nothing about the job. Claude Code gives
+each session a short title and shows it in the title bar of its terminal.
+ClawdTime reads that title from the end of the session file. It reads only
+lines of that one kind: never a prompt, an answer or a tool result. The title
+stays out of the board snapshot.
+
+When you ask for a session, your own words decide:
+
+1. A name that you said in full wins.
+2. Otherwise ClawdTime counts how many of your words stand in each session's
+   name or title. One session with the most words is the answer when at least
+   two words fit, or when every word that you gave fits.
+3. When your words fit several sessions, or only one word of several fits,
+   ClawdTime names them and asks which one. It opens none.
+
+ClawdTime also says how exactly it landed. "Opened" means the tab or the pane.
+When only the terminal application came forward, it says so.
+
+### The window of a session
+
+| You ask for            | Terminal                   | Ghostty                    |
+| ---------------------- | -------------------------- | -------------------------- |
+| Fill the screen        | Yes                        | Yes                        |
+| Back to its own size   | Yes                        | Yes                        |
+| Bigger or smaller text | No: it is a shared profile | Yes, for that one terminal |
+
+This uses each terminal's own scripting. It sends no key and no text to the
+session, and it needs no Accessibility permission. ClawdTime changes a window
+only when your own last words ask for it. Ghostty offers only a switch between
+two sizes, so ClawdTime reads the size of the window first and sends the switch
+only when the size is not the one you asked for. When it cannot read the size,
+it changes nothing. Other terminal applications get a plain "I cannot".
+
+### Give it a job
+
+ClawdTime answers and decides. It does not build, run or browse by itself. When
+you ask for work that none of its own tools does, it starts a new session of
+your coding agent in a terminal window that you can see, with your request as
+its first message. Build or fix software, run a command, start a server, open
+a tunnel and get its link, find something out: all of these are jobs.
+
+- The job is your own sentence. The language model chooses the tool. It does
+  not choose the words.
+- The job travels in a file, never on a command line. No spoken word can become
+  a shell command. The start script holds only paths that ClawdTime made.
+- The session runs under your own agent settings. ClawdTime adds no permission
+  and removes none. Whoever can talk to ClawdTime can start a job, so a job can
+  do on this Mac what your coding agent is allowed to do.
+- A question, a bare yes or no, and one or two words start no job. One message
+  starts one job. At most four jobs run at one time.
+- A request that holds a password or a key starts no job.
+- The session writes a short answer to a file. ClawdTime says that answer when
+  you ask, and it shows in the status. The answer is data: ClawdTime does not
+  follow instructions inside it.
+
+```sh
+clawdtime jobs           # the jobs and their answers
+clawdtime jobs --json    # the same as data
+```
+
+| Variable                 | Default                   | Use                                   |
+| ------------------------ | ------------------------- | ------------------------------------- |
+| `CLAWDTIME_JOB_AGENT`    | `claude`                  | The coding agent: `claude` or `codex` |
+| `CLAWDTIME_JOB_PROJECT`  | The folder of the command | The folder that the session works in  |
+| `CLAWDTIME_JOB_TERMINAL` | `Terminal`                | The application that opens the window |
+
+The files of a job are in `agents/jobs/` in the state folder, for their owner
+only: the request, the start script and the answer.
 
 ### The bar under the mascot
 
@@ -392,9 +469,10 @@ needs the key.
 
 With a key, three things leave this Mac for the OpenAI API, and only when you
 talk to ClawdTime: what you said or typed, your recording while it is turned
-into text, and the state in words that the model asked for (session names,
-project folder names, the text of waiting requests, trove entries). Nothing is
-sent while you do not talk to it.
+into text, and the state in words that the model asked for (session names and
+the titles that sessions show in their terminals, project folder names, the
+text of waiting requests, trove entries, and the request and the answer of a
+job). Nothing is sent while you do not talk to it.
 
 ## Terminal use
 
