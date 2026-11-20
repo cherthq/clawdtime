@@ -153,6 +153,10 @@ export class TaskDesktopService {
     if (!equal(raw, this.config.token))
       throw new DomainError(401, "Desktop authorization required.");
   }
+  /** For panel routes that this service does not serve itself. */
+  authorizePanel(raw: string) {
+    this.authorizeUI(raw);
+  }
   private owned() {
     return this.records
       .all()

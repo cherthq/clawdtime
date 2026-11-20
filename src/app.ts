@@ -1,7 +1,8 @@
 import { ExecutionCoordinator } from "./control/execution.js";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { timingSafeEqual, createHash } from "node:crypto";
+import { routePath } from "hono/route";
+import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { ClawdTime, DomainError } from "./attention/service.js";
@@ -22,6 +23,7 @@ import {
 import { SetupService } from "./pairing/setup.js";
 import { mediaFailureSchema } from "./transport/media-diagnostics.js";
 import { publicPage } from "./public-page.js";
+import type { ReportError } from "./error-report.js";
 import {
   setupRetirementInput,
   type SetupRetirementInput,
@@ -42,6 +44,7 @@ export interface AppOptions {
   }) => unknown;
   callDiagnostics?: (requestId: string) => Promise<unknown>;
   retireSetupInvitation?: (input: SetupRetirementInput) => unknown;
+  reportError?: ReportError;
 }
 const bearer = (value?: string) =>
   value?.startsWith("Bearer ") ? value.slice(7) : "";
@@ -87,24 +90,33 @@ export function createApp(
       return c.json({ error: "JSON required." }, 415);
     await next();
   });
-  app.onError((err, c) =>
-    c.json(
+  app.onError((err, c) => {
+    const expected = err instanceof DomainError || err instanceof z.ZodError,
+      requestId = expected ? undefined : randomUUID();
+    // The matched route pattern is recorded, never the path: paths carry IDs.
+    if (requestId)
+      options.reportError?.("request_failed", err, {
+        requestId,
+        method: c.req.method,
+        route: routePath(c),
+      });
+    return c.json(
       {
         ...(err instanceof DomainError && err.code
           ? { errorCode: err.code }
           : {}),
-        error:
-          err instanceof DomainError || err instanceof z.ZodError
-            ? err.message
-            : "Request could not be completed. Check scoped state and readiness.",
+        error: expected
+          ? err.message
+          : "Request could not be completed. Check scoped state and readiness.",
+        ...(requestId ? { requestId } : {}),
       },
       err instanceof DomainError
         ? (err.status as 400)
         : err instanceof z.ZodError
           ? 400
           : 409,
-    ),
-  );
+    );
+  });
   app.get("/health", (c) =>
     c.json({
       ok: true,
@@ -511,17 +523,35 @@ export function createApp(
       replayAllowed: false,
     });
   });
-  app.get("/internal/readiness", (c) =>
-    c.json({
+  app.get("/internal/readiness", (c) => {
+    const heartbeat = service.store.state<{ ok: boolean; at: number }>(
+        "heartbeat",
+      ),
+      ageSeconds = heartbeat
+        ? Math.max(0, Math.floor((Date.now() - heartbeat.at) / 1000))
+        : undefined;
+    return c.json({
       mode: service.transport.mode,
+      // The background loop runs every second and records each pass.
+      loop:
+        !heartbeat || ageSeconds === undefined
+          ? { state: "never" }
+          : {
+              state: !heartbeat.ok
+                ? "failed"
+                : ageSeconds > 60
+                  ? "stale"
+                  : "fresh",
+              ageSeconds,
+            },
       pending: service.store.effects("pending").length,
       unknown: service.store.effects("unknown").length,
       activeCalls: service.store
         .all<CallSession>("call")
         .filter((s) => s.state !== "ended").length,
       physicalAcceptance: false,
-    }),
-  );
+    });
+  });
   app.post("/internal/pairing", async (c) => {
     const value = await c.req.json();
     const invite = service.createPairingInvite(value);

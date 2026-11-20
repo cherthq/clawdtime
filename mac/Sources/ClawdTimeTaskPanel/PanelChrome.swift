@@ -41,7 +41,14 @@ final class MascotBadge: NSView {
   var restore: (() -> Void)?
   var beginDrag: (() -> Void)?
   var clampAfterDrag: (() -> Void)?
-  var sharing = false { didSet { needsDisplay = true; setAccessibilityLabel(sharing ? "ClawdTime, sharing active. Open task panel" : "ClawdTime. Open task panel") } }
+  var sharing = false { didSet { needsDisplay = true; describe() } }
+  /// How many agent sessions wait for the person.
+  var attention = 0 { didSet { if attention != oldValue { needsDisplay = true; describe() } } }
+  private func describe() {
+    let parts = ["ClawdTime", sharing ? "sharing active" : "",
+      attention > 0 ? "\(attention) \(attention == 1 ? "agent needs" : "agents need") you" : ""].filter { !$0.isEmpty }
+    setAccessibilityLabel(parts.joined(separator: ", ") + ". Open task panel")
+  }
   private let mascot: NSImage?
   init(image: NSImage?) {
     mascot = image
@@ -58,6 +65,17 @@ final class MascotBadge: NSView {
     mascot?.draw(in: NSRect(x: bounds.midX - 16, y: bounds.midY - 16, width: 32, height: 32), from: .zero, operation: .sourceOver, fraction: 1)
     if sharing {
       NSColor.systemGreen.setFill(); NSBezierPath(ovalIn: NSRect(x: bounds.maxX - 15, y: 5, width: 9, height: 9)).fill()
+    }
+    if attention > 0 {
+      // Top right: the count of agents that wait for the person.
+      let text = attention > 9 ? "9+" : String(attention)
+      let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10, weight: .bold), .foregroundColor: NSColor.white]
+      let size = (text as NSString).size(withAttributes: attrs)
+      let width = max(16, ceil(size.width) + 8)
+      let pill = NSRect(x: bounds.maxX - width - 1, y: bounds.maxY - 17, width: width, height: 16)
+      NSColor(calibratedRed: 0.90, green: 0.47, blue: 0.02, alpha: 1).setFill()
+      NSBezierPath(roundedRect: pill, xRadius: 8, yRadius: 8).fill()
+      (text as NSString).draw(at: NSPoint(x: pill.midX - size.width / 2, y: pill.midY - size.height / 2), withAttributes: attrs)
     }
   }
   private let dragGesture = NativeWindowDrag()

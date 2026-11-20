@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { buildTaskBrief } from "../attention/task-ledger.js";
 import { bodyLimit } from "hono/body-limit";
 import { equal, DomainError } from "../storage/security.js";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import type { TaskCommand } from "../contracts.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
@@ -10,6 +10,65 @@ import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
 import type { TaskDesktopCalls } from "./task-desktop-calls.js";
+
+/**
+ * The agent board as the panel routes see it. The board is built in a separate
+ * process; these calls only read its latest snapshot and bring a terminal forward.
+ */
+export interface AgentBoardPort {
+  /** The latest snapshot, or null when none is fresh. */
+  snapshot(): unknown | null;
+  focus(id: string): Promise<{ ok: boolean; precision: string }>;
+  /** The requests of agents that wait for the person's answer. */
+  decisions(): unknown;
+  answer(input: {
+    id: string;
+    decision: "allow" | "deny" | "answer";
+    text?: string | null;
+    remember?: boolean;
+  }): boolean | Promise<boolean>;
+  setAway(away: boolean): void;
+  send(
+    id: string,
+    text: string,
+    enter: boolean,
+  ): Promise<{ ok: boolean; route: string }>;
+  /** The conversation with ClawdTime itself. */
+  chat(): unknown;
+  say(text: string): Promise<unknown>;
+  hear(recording: string): Promise<unknown>;
+  setMemory(enabled: boolean): void;
+  /** What the watcher found on the sessions. */
+  incidents(): unknown;
+  dismissIncident(id: string): boolean;
+}
+const incidentDismissSchema = z
+  .object({ id: z.string().regex(/^[0-9a-f]{12}$/) })
+  .strict();
+const memorySchema = z.object({ enabled: z.boolean() }).strict();
+const chatSchema = z.object({ text: z.string().min(1).max(2000) }).strict();
+const voiceSchema = z
+  .object({ recording: z.string().regex(/^[A-Za-z0-9_-]{1,60}\.(wav|m4a)$/) })
+  .strict();
+const decisionAnswerSchema = z
+  .object({
+    id: z.string().regex(/^[0-9a-f]{16}$/),
+    decision: z.enum(["allow", "deny", "answer"]),
+    text: z.string().max(600).nullable().optional(),
+    remember: z.boolean().optional(),
+  })
+  .strict();
+const awaySchema = z.object({ away: z.boolean() }).strict();
+const agentSendSchema = z
+  .object({
+    id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,63}$/),
+    text: z.string().min(1).max(4000),
+    enter: z.boolean().optional(),
+  })
+  .strict();
+const agentFocusSchema = z
+  .object({ id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,63}$/) })
+  .strict();
 
 export function createTaskApp(
   service: TaskService,
@@ -20,6 +79,7 @@ export function createTaskApp(
   handset?: { taskId: string; voiceId: string; presentationId?: string },
   desktop?: TaskDesktopService,
   calls?: TaskDesktopCalls,
+  agents?: AgentBoardPort,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -104,6 +164,81 @@ export function createTaskApp(
     app.post("/desktop/operations", async (c) =>
       c.json(await desktop.submit(credential(c), await c.req.json())),
     );
+    if (agents) {
+      app.get("/desktop/agents", (c) => {
+        desktop.authorizePanel(credential(c));
+        const board = agents.snapshot();
+        if (!board) throw new DomainError(503, "Agent board unavailable.");
+        return c.json(board);
+      });
+      // Focus brings a terminal forward. It sends nothing to the session.
+      app.post("/desktop/agents/focus", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id } = agentFocusSchema.parse(await c.req.json());
+        const { ok, precision } = await agents.focus(id);
+        return c.json({ ok, precision });
+      });
+      // What agents ask the person, and the person's answers. Reading this also
+      // tells the agents' hooks that someone is here to answer.
+      app.get("/desktop/decisions", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.decisions());
+      });
+      app.post("/desktop/decisions/answer", async (c) => {
+        desktop.authorizePanel(credential(c));
+        // An agent on a remote Mac gets its answer over ssh, so this can take a moment.
+        return c.json({
+          ok: await agents.answer(
+            decisionAnswerSchema.parse(await c.req.json()),
+          ),
+        });
+      });
+      app.post("/desktop/decisions/away", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { away } = awaySchema.parse(await c.req.json());
+        agents.setAway(away);
+        return c.json({ away });
+      });
+      // The person talks to ClawdTime: typed here, or one recording at a time.
+      app.get("/desktop/chat", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.chat());
+      });
+      app.post("/desktop/chat", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { text } = chatSchema.parse(await c.req.json());
+        return c.json({ reply: await agents.say(text) });
+      });
+      app.post("/desktop/voice", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { recording } = voiceSchema.parse(await c.req.json());
+        return c.json(await agents.hear(recording));
+      });
+      // Memory is off until the person turns it on, here or with `clawdtime memory on`.
+      app.post("/desktop/memory", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { enabled } = memorySchema.parse(await c.req.json());
+        agents.setMemory(enabled);
+        return c.json({ enabled });
+      });
+      // What the watcher found: a long wait, a stall, a bad end, finished work.
+      app.get("/desktop/incidents", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.incidents());
+      });
+      app.post("/desktop/incidents/dismiss", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id } = incidentDismissSchema.parse(await c.req.json());
+        return c.json({ ok: agents.dismissIncident(id) });
+      });
+      // Types the person's own words into one session's terminal.
+      app.post("/desktop/agents/send", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id, text, enter } = agentSendSchema.parse(await c.req.json());
+        const { ok, route } = await agents.send(id, text, enter !== false);
+        return c.json({ ok, route });
+      });
+    }
   }
   if (calls) {
     app.use("/operator/desktop-calls", async (c, next) => {

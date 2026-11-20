@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "generatedAt": 1795156200000,
+  "intervalMs": 3000,
+  "counts": { "needs_you": 1, "working": 3, "idle": 1, "unknown": 1 },
+  "sessions": [
+    {
+      "id": "100-abc123",
+      "pid": 100,
+      "agent": "claude-code",
+      "agentLabel": "Claude Code",
+      "agentVersion": "2.1.329",
+      "name": "deploy fix",
+      "project": "work",
+      "cwd": "/Users/tester/work",
+      "mode": "interactive",
+      "state": "needs_you",
+      "detail": "permission_prompt",
+      "since": 1795156110000,
+      "activeAt": 1795156110000,
+      "source": "registry",
+      "startedAt": 1795152600000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": "ttys001",
+        "app": "Terminal",
+        "appPath": "/System/Applications/Utilities/Terminal.app",
+        "tmux": null,
+        "remote": false
+      },
+      "focus": "tab"
+    },
+    {
+      "id": "300-abc123",
+      "pid": 300,
+      "agent": "pi",
+      "agentLabel": "pi",
+      "agentVersion": null,
+      "name": null,
+      "project": "site",
+      "cwd": "/Users/tester/site",
+      "mode": "interactive",
+      "state": "working",
+      "detail": "tool_running",
+      "since": 1795155600000,
+      "activeAt": 1795156188000,
+      "source": "transcript",
+      "startedAt": 1795152600000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": "ttys010",
+        "app": "Ghostty",
+        "appPath": "/Applications/Ghostty.app",
+        "tmux": {
+          "session": "main",
+          "window": 2,
+          "pane": 1,
+          "paneId": "%7",
+          "socketArgs": ["-L", "work"],
+          "clientTty": "ttys004"
+        },
+        "remote": false
+      },
+      "focus": "pane"
+    },
+    {
+      "id": "bg-4c49bc33",
+      "pid": null,
+      "agent": "claude-code",
+      "agentLabel": "Claude Code",
+      "agentVersion": null,
+      "name": "director",
+      "project": "work",
+      "cwd": "/Users/tester/work",
+      "mode": "background",
+      "state": "working",
+      "detail": "turn_running",
+      "since": null,
+      "source": "registry",
+      "startedAt": 1795152600000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": null,
+        "app": null,
+        "appPath": null,
+        "tmux": null,
+        "remote": false
+      },
+      "focus": "none"
+    },
+    {
+      "id": "mini_512-abc123",
+      "pid": 512,
+      "agent": "codex",
+      "agentLabel": "Codex",
+      "agentVersion": "0.169.0",
+      "name": "migrations",
+      "project": "api",
+      "cwd": "/Users/builder/api",
+      "mode": "interactive",
+      "state": "working",
+      "detail": "turn_running",
+      "since": 1795156000000,
+      "activeAt": 1795156150000,
+      "source": "transcript",
+      "startedAt": 1795152600000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": "ttys002",
+        "app": "Terminal",
+        "appPath": "/System/Applications/Utilities/Terminal.app",
+        "tmux": {
+          "session": "agents",
+          "window": 0,
+          "pane": 1,
+          "paneId": "%3",
+          "socketArgs": [],
+          "clientTty": null
+        },
+        "remote": false
+      },
+      "focus": "pane",
+      "host": "mini"
+    },
+    {
+      "id": "200-abc123",
+      "pid": 200,
+      "agent": "codex",
+      "agentLabel": "Codex",
+      "agentVersion": "0.169.0",
+      "name": null,
+      "project": "work",
+      "cwd": "/Users/tester/work",
+      "mode": "interactive",
+      "state": "idle",
+      "detail": "turn_complete",
+      "since": 1795145400000,
+      "source": "transcript",
+      "startedAt": 1795141800000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": "ttys003",
+        "app": "Ghostty",
+        "appPath": "/Applications/Ghostty.app",
+        "tmux": null,
+        "remote": false
+      },
+      "focus": "app"
+    },
+    {
+      "id": "400-abc123",
+      "pid": 400,
+      "agent": "amp",
+      "agentLabel": "Amp",
+      "agentVersion": null,
+      "name": null,
+      "project": "~",
+      "cwd": "/Users/tester",
+      "mode": "interactive",
+      "state": "unknown",
+      "detail": "no_signal",
+      "since": null,
+      "source": "process",
+      "startedAt": 1795155900000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": "ttys005",
+        "app": "Ghostty",
+        "appPath": "/Applications/Ghostty.app",
+        "tmux": null,
+        "remote": false
+      },
+      "focus": "app"
+    }
+  ],
+  "hosts": [
+    {
+      "name": "mini",
+      "ok": true,
+      "sessions": 1,
+      "checkedAt": 1795156195000,
+      "message": ""
+    },
+    {
+      "name": "studio",
+      "ok": false,
+      "sessions": 0,
+      "checkedAt": 1795156194000,
+      "message": "ssh could not connect. It must work with no password prompt: ssh studio true"
+    }
+  ]
+}

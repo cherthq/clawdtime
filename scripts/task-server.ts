@@ -31,6 +31,8 @@ import {
   taskPresentationGrantSchema,
 } from "../src/task-presentation-contracts.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
+import { BoardFeed } from "../connectors/agents/feed.js";
+import { deskTasks } from "../connectors/agents/tasks.js";
 import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
@@ -56,6 +58,7 @@ for (let i = 2; i < process.argv.length; i += 2) {
       "--desktop",
       "--session-file",
       "--calls-config",
+      "--agents",
     ].includes(key)
   )
     throw new Error(
@@ -63,6 +66,12 @@ for (let i = 2; i < process.argv.length; i += 2) {
     );
   flags.set(key, value);
 }
+if (
+  flags.has("--agents") &&
+  (!flags.has("--desktop") ||
+    !["true", "false"].includes(flags.get("--agents")!))
+)
+  throw Error("Use --agents true|false with --desktop true.");
 if (flags.has("--desktop") && flags.get("--desktop") !== "true")
   throw Error(
     "Use --desktop true to enable the separate native panel capability.",
@@ -292,6 +301,16 @@ const desktop = desktopSetup
     )
   : undefined;
 if (calls && desktop) calls.selectedTaskId = () => desktop.selectedTaskId();
+// The panel's board of coding-agent sessions. It scans in its own process, so
+// it cannot delay task, voice or presentation work in this one.
+// The agent that the person talks to reaches the task through the desktop
+// service of this process, with that service's own receipts.
+const agentBoard =
+  desktop && desktopSetup && flags.get("--agents") !== "false"
+    ? new BoardFeed({ tasks: deskTasks(desktop, desktopSetup.config.token) })
+    : undefined;
+agentBoard?.start();
+process.on("exit", () => agentBoard?.close());
 const app = createTaskApp(
   service,
   config.operatorToken,
@@ -301,6 +320,7 @@ const app = createTaskApp(
   undefined,
   desktop,
   calls,
+  agentBoard,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
@@ -323,6 +343,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     if (shuttingDown) return;
     shuttingDown = true;
     if (presentationWatch) clearInterval(presentationWatch);
+    agentBoard?.close();
     void (async () => {
       await calls?.close();
       await presentation?.close();

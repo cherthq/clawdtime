@@ -8,42 +8,126 @@ is still required. Closing or quitting the panel leaves the service running.
 
 ## Desktop appearance
 
-The companion has a compact light notch toolbar, blue rounded action buttons,
-and an expandable task panel. Hide collapses the task details into the toolbar.
-Minimize retracts the bar into a draggable circle at its right edge using the
-supplied red mascot; clicking
-the badge restores the panel. The badge and notch stay floating while the app
-runs. Explicit Quit remains available and leaves the task service running.
-This does not install a login item or a background UI daemon.
+The companion is one mascot on the desktop and one board that opens out of it. It
+follows the Chert design system: cream paper in light mode and warm charcoal in
+dark mode, Fraunces for the headline, Instrument Sans for the interface and
+JetBrains Mono for times and paths. The three typefaces ship inside the app
+under the SIL Open Font License.
 
-Use the chevron or **⌘⇧M** to expand/collapse the task body. The minus button or
-**⌘W** tucks it into the mascot. The app menu's **Show ClawdTime** restores the
-expanded view. Moving focus back to an already-visible compact notch preserves
-that compact state.
+The mascot is drawn in code, so it is sharp at every size. It has two looks, and
+the person picks one in the mascot's menu. Flat is the default: each mascot is a
+few solid shapes with one edge around them, in the language of the Chert mark,
+with no light, shadow or reflection. 3D is the same mascot as a lit figure. The
+light is the status: warm or pale at rest, blue while agents work, amber when
+something waits for the person, red while the screen is shared. The person picks
+a style in the same menu, where each style shows its picture:
 
-Drag the notch background or mascot to reposition the companion. The expanded
-task body follows the notch, and circle/bar transitions retain the bar's right
-edge instead of returning to the default corner. The group stays within the usable
-screen area; expanding near an edge can shift it enough to keep the task body
-readable. Circle/bar changes retract/expand without a fade, and the task body slides down/up when
-opened/closed. macOS Reduce Motion removes the spatial animation.
+| Style    | What it is                                                                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Flint    | The Chert mark and its flake, and nothing else. Its window is dark at rest and lit in the color of the state otherwise. A new install starts with it. |
+| Jet      | A round black pebble with two bar eyes.                                                                                                               |
+| Jade     | A green slab with two bar eyes.                                                                                                                       |
+| Lapis    | A blue wedge with five sides, cut like the large piece of the mark.                                                                                   |
+| Amber    | A drop of amber with two dark bar eyes.                                                                                                               |
+| Garnet   | A wine-red peak with two bar eyes.                                                                                                                    |
+| Amethyst | A violet flake with four sides, cut like the small piece of the mark.                                                                                 |
+| Pebble   | A round stone in the sunset strata, with the white ring in orbit. Friendly.                                                                           |
+| Core     | A dark glass orb with an iris of light and two fine rings.                                                                                            |
+| Neon     | A night-city droid head in black chrome, with a visor of LED eyes.                                                                                    |
+| Iris     | A lens: coated glass, an aperture that blinks, a hoop it hangs in.                                                                                    |
 
-The notch keeps the existing **Stop sharing** and **Stop call** actions. The
-minimized badge exposes them in its context menu. They reflect the actual
-service permissions and stay disabled when unavailable. Minimizing does not
-stop sharing or a call, and restoring the panel never restarts sharing. There
-is no new two-way sharing toggle or permission change.
+Jet, Jade, Lapis, Amber, Garnet and Amethyst are the plain stones: one solid
+shape and two eyes. The rim around a plain stone is its state, and its pale eyes
+take the same color. The eyes look at the pointer, shut to a line, bow when the
+stone is pleased and beat with a voice. A plain stone is flat in both looks, so
+the menu greys 3D while one is chosen.
+
+In the flat look every dark part has a pale rim, so a mascot holds on a dark
+desktop as well as on a light one.
+
+The same menu holds two more choices:
+
+- **Size**: a slider from half of the full size to one and a half. The mascot
+  changes size under the slider and keeps its place. A new install starts at
+  0.7 of the full size.
+- **Eye on Flint**: gives the Chert mark one ring eye in its window, which
+  looks at the pointer and blinks. It is off at the start.
+
+The body has weight, in every style:
+
+- Drag it: it follows the hand on a short spring, swings under the hand, turns
+  to face the way it goes, stretches with its speed and runs with a cadence.
+- Let go while it moves: it flies on, slows, and bounces off the edge of the
+  screen. Let go against the left or right edge: it tucks there.
+- Click it: a real jump, with a crouch, the flight and a landing that rings.
+- Point at it after a while: it waves.
+- Loose parts act the motion out: a ring or a halo trails and tips, a flake
+  waves, liquid sloshes.
+
+- Click the mascot: it jumps, and the board opens out of it. Click again or
+  click anywhere else to close the board.
+- Point at the mascot: two buttons appear. **Close** hides it; it stays in the
+  menu bar. **Side** tucks it against the nearer screen edge, where it keeps
+  watching. A drag that ends against the left or right edge also tucks it.
+- A tucked mascot comes out further when something waits for the person. Click
+  it to bring it back.
+- When an agent or the task waits for the person and the board is closed, the
+  mascot hops and a bubble says what waits. A click on the bubble opens that
+  session's terminal, or the board when more than one thing waits.
+- Drag or throw the mascot anywhere. Where it comes to rest is kept between
+  starts.
+
+The board's headline says the most urgent thing in words, for example "1 agent
+needs you" or "All quiet". A task that waits for an answer comes before the
+agents. The task field is one line at rest and opens when the person clicks it.
+
+A small bar hangs under the mascot. At rest it holds two buttons: **Chat** opens
+the chat screen beside the mascot, and **Talk** starts a spoken conversation. In
+a conversation the bar opens with a spring into a microphone switch, the level
+of the voice as moving bars, a speaker switch and an end button. While you talk
+with the chat closed, the mascot's bubble shows what it heard and what it
+answered. The board and the chat share the place beside the mascot, so one is
+open at a time. See [Talk to ClawdTime](SUPERVISOR.md#talk-to-clawdtime).
+
+**Stop sharing** and **Stop call** join that bar, sit as a bar at the top of
+the board, and are items in every menu, whenever either can be stopped. A tucked
+mascot comes out when a Stop control appears. They reflect the actual service
+permissions. Closing or tucking does not stop sharing or a call, and nothing here
+starts sharing. There is no new sharing toggle or permission change.
+
+Motion uses springs: a press sinks in 90 ms and releases with a slight overshoot,
+and the board is 95 percent open within 220 ms. macOS Reduce Motion removes
+drift, hops, scaling, the sheen and all of the body's physics: the mascot then
+goes exactly where the hand puts it, and states change at once.
+
+The app is an accessory: it has no Dock icon and never takes focus when it
+starts or when the board opens. The board becomes the key window only when the
+person clicks into a text field. Explicit Quit is in the menus and leaves the
+task service running. This does not install a login item or a background daemon.
 
 Task input, choices, revisions, checks, acceptance and separate cancellation use
-the same service and durable receipts as before. Changing the window's appearance
-or minimized state does not submit an action, cancel work or grant screen access.
-The supplied mascot is bundled unchanged as a local resource, with no network
-image loading or animated-pet dependency.
+the same service and durable receipts as before. Changing the appearance, moving,
+tucking or closing the mascot does not submit an action, cancel work or grant
+screen access.
 
 The user authorized step-e implementation while deferring remaining step-d
 handset rehearsals. This is a local implementation checkpoint, not a completed
 phone-acceptance gate. No call, line handoff, deployment, capture or permission
 grant occurs when launching the standalone panel.
+
+## Agent board
+
+The panel lists every coding-agent session on this Mac above the task area:
+Claude Code, Codex, pi and other command-line agents, with the ones that wait for
+you first. A click on a row brings that session's terminal to the front. The
+board only reads state. It sends nothing to a session, and it is separate from
+the task, its receipts and the Stop controls. When a session waits for you, the
+mascot's spark turns amber and its bubble names the session.
+
+The task service keeps the board in a separate scanner process and serves it on
+`GET /desktop/agents` to the private panel credential. `--agents false` turns
+the board off. `--tucked true` opens the panel as the mascot without taking
+focus. See the [agent board guide](AGENT_BOARD.md).
 
 ## Build and open
 

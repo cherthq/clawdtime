@@ -124,6 +124,15 @@ function childEnvironment(): NodeJS.ProcessEnv {
           "TMPDIR",
           "LANG",
           "CODEX_HOME",
+          // Where the agent desk and the trove live, when the person moved them.
+          "CLAWDTIME_CONFIG_HOME",
+          // The language model and speech of the ClawdTime agent.
+          "CLAWDTIME_OPENAI_API_KEY",
+          "OPENAI_API_KEY",
+          "CLAWDTIME_SUPERVISOR_MODEL",
+          "CLAWDTIME_TRANSCRIBE_MODEL",
+          "CLAWDTIME_SPEAK_MODEL",
+          "CLAWDTIME_VOICE",
         ].includes(key) || key.startsWith("LC_"),
     ),
   );
@@ -163,7 +172,7 @@ export async function desktopCli(
   const print = dependencies.print ?? console.log;
   if (!args.length || args[0] === "--help") {
     print(
-      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE]\nSimulation is the default. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
+      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. The panel also lists every coding-agent session on this Mac; --agents false turns that board off. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
     );
     return;
   }
@@ -182,6 +191,8 @@ export async function desktopCli(
         "--session-file",
         "--calls-config",
         "--panel-binary",
+        "--agents",
+        "--tucked",
       ].includes(key) ||
       !value ||
       value.startsWith("--") ||
@@ -222,6 +233,16 @@ export async function desktopCli(
     throw Error(
       "Calls configuration requires Codex, checks, and an explicit existing session file.",
     );
+  if (
+    options["--agents"] !== undefined &&
+    !["true", "false"].includes(options["--agents"])
+  )
+    throw Error("Use --agents true or --agents false.");
+  if (
+    options["--tucked"] !== undefined &&
+    !["true", "false"].includes(options["--tucked"])
+  )
+    throw Error("Use --tucked true or --tucked false.");
   const checksPath = options["--checks"]
     ? resolve(options["--checks"])
     : undefined;
@@ -319,6 +340,8 @@ export async function desktopCli(
         serviceArgs.push("--worker", "codex", "--checks", checksPath!);
       if (sessionPath) serviceArgs.push("--session-file", sessionPath);
       if (callsPath) serviceArgs.push("--calls-config", callsPath);
+      if (options["--agents"])
+        serviceArgs.push("--agents", options["--agents"]);
       serviceChild = spawnProcess(process.execPath, serviceArgs, {
         cwd: root,
         detached: true,
@@ -409,7 +432,10 @@ export async function desktopCli(
       throw Error(
         "Desktop service startup is unconfirmed. Preserve its owner lock and state; no replacement was started.",
       );
-    const panel = spawnProcess(panelBinary, ["--config", panelPath], {
+    // Tucked: the panel starts as the mascot and takes no focus.
+    const panelArgs = ["--config", panelPath];
+    if (options["--tucked"] === "true") panelArgs.push("--tucked");
+    const panel = spawnProcess(panelBinary, panelArgs, {
       cwd: root,
       detached: true,
       stdio: "ignore",

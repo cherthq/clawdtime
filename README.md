@@ -4,6 +4,26 @@ Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DE
 documents the runnable local task workflow, explicit Codex setup and current
 handset acceptance limits. The broader product vision below includes later work.
 
+Agent board: the desktop panel and `clawdtime agents` list every coding-agent
+session on this Mac (Claude Code, Codex, pi and more), show which ones wait for
+you, and bring a session's terminal forward. It reads state only and never sends
+input to a session. `clawdtime hosts add NAME SSH_TARGET` adds the sessions of
+another Mac, such as a Mac mini, over ssh. See the
+[agent board guide](docs/AGENT_BOARD.md).
+
+Supervisor: ClawdTime can also answer an agent for you. Approve or deny a
+permission request from the panel, the mascot's bubble, a command, or a FaceTime
+call when you are away. It keeps each decision in a trove, repeats an answer only
+where you made a rule, types into a session's terminal on request, and reports
+the agent commands you use as a slide deck. You can also talk to it: in a chat
+screen, by voice on the Mac, where it answers aloud, or on a FaceTime call. In
+that conversation you can give it a task, ask how the task goes, answer its
+question, and accept or cancel it. It has a memory for what you tell it about
+yourself and your work, which is off until you turn it on. Its watcher follows
+every session and tells you when one has waited for you too long, hangs, ended
+badly or is done. See the
+[supervisor guide](docs/SUPERVISOR.md).
+
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is
 requested, replace it mid-call when its first fresh frame is ready; do not blank

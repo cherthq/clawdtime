@@ -100,7 +100,9 @@ retain terminal cleanup. Reconnect within the live window retains the same sessi
 cursor and outcomes; stopped sessions cannot be revived with new heartbeats.
 
 The conversation service retains bounded human text for active delivery, removes
-text from terminal turns and retains minimal state/IDs/receipts. It does not store
+text from terminal turns and retains minimal state/IDs/receipts. After a hangup,
+a turn not yet acknowledged remains readable by the same live session; it is
+content for the original task and carries no call, reply or screen authority. It does not store
 a duplicate unrestricted agent context. V2 bridge effects persist a hash/receipt
 marker, not speech text, screenshots or observation payloads; replaying a bridge
 command returns the marker and asks for a fresh scoped status read. Initial
@@ -1063,6 +1065,16 @@ or turn voice permission into native worker approval. Source pairing remains
 unchanged when a distinct verified capture device receives explicit export
 authority. Synthetic authority tests establish these boundaries, not handset
 presentation acceptance.
+
+## Agent board commands
+
+`clawdtime agents` lists every coding-agent session on this Mac with its state
+(needs you, working, idle, unknown) and its terminal. `agents watch` is the live
+view, `agents focus ID|NAME` brings a session's terminal forward, `agents --json`
+prints the snapshot contract, and `agents doctor` states how exactly each agent's
+state is known. `agents hooks install --agent codex` adds the hook that reports
+Codex approval prompts. The commands read state only. They need no pairing, no
+connection file and no backend. See the [agent board guide](AGENT_BOARD.md).
 
 ## Independent task desktop launcher
 

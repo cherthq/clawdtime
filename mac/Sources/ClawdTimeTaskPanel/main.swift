@@ -2,51 +2,11 @@ import AppKit
 import Darwin
 import Foundation
 import TaskPanelCore
-import QuartzCore
 
-
-final class TaskWindow: NSPanel {
-  override var canBecomeKey: Bool { true }
-  override var canBecomeMain: Bool { true }
-}
-final class Card: NSView {
-  override init(frame: NSRect) {
-    super.init(frame: frame); wantsLayer = true; layer?.cornerRadius = 14; layer?.borderWidth = 1
-    refreshColors()
-  }
-  required init?(coder: NSCoder) { fatalError("Unavailable") }
-  override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshColors() }
-  private func refreshColors() {
-    layer?.backgroundColor = NSColor.clear.cgColor
-    layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
-  }
-}
-final class ChoiceButton: NSButton {
-  private var measuredWidth: CGFloat = 0
-  override var intrinsicContentSize: NSSize {
-    let available = max(180, bounds.width > 0 ? bounds.width - 28 : 300)
-    let rect = (title as NSString).boundingRect(with: NSSize(width: available, height: .greatestFiniteMagnitude),
-      options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font ?? NSFont.systemFont(ofSize: 13)])
-    return NSSize(width: NSView.noIntrinsicMetric, height: max(36, ceil(rect.height) + 18))
-  }
-  override func layout() {
-    super.layout()
-    if measuredWidth != bounds.width { measuredWidth = bounds.width; invalidateIntrinsicContentSize() }
-  }
-}
-final class Composer: NSTextView {
-  var placeholder = "What would you like to work on?"
-  override func draw(_ dirtyRect: NSRect) {
-    super.draw(dirtyRect)
-    if string.isEmpty {
-      (placeholder as NSString).draw(at: NSPoint(x: textContainerInset.width + 5, y: textContainerInset.height),
-        withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor(white: 0.43, alpha: 1)])
-    }
-  }
-  override var string: String { didSet { needsDisplay = true } }
-}
-
-@MainActor final class TaskPanelApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate {
+/// The app: one mascot on the desktop and one board that opens out of it. The task
+/// service owns every fact. This process shows them, sends the person's actions once,
+/// and keeps a receipt for each.
+@MainActor final class TaskPanelApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var exitStatus: Int32 = 0
   private var reopenName: Notification.Name?
   private var configuration: PanelConfiguration?
@@ -55,143 +15,201 @@ final class Composer: NSTextView {
   private var client: PanelClient?
   private var state = PanelState()
   private var pollTask: Task<Void, Never>?
-  private var panel: TaskWindow?
-  private var toolbar: TaskWindow?
-  private var badge: TaskWindow?
-  private var badgeView: MascotBadge?
-  private var displayMode: PanelDisplayMode = .expanded
-  private var anchor: CGPoint?
-  private var bodyClip: BodyClipView?
-  private var toolbarClip: ToolbarClipView?
-  private var animationTimer: Timer?
-  private var transition = PanelTransition()
-  private var placingWindows = false
-  private var draggingToolbar = false
-  private var draggingBadge = false
-  private var menuStopSharing: NSMenuItem?
-  private var menuStopCall: NSMenuItem?
-  private var expandButton: NSButton!
-  private let compactState = label("Ready", size: 12, weight: .medium)
-  private var badgeStopSharing: NSMenuItem?
-  private var badgeStopCall: NSMenuItem?
-  private var statusItem: NSStatusItem?
-  private let projectLabel = label("Selected project", size: 14, weight: .semibold)
-  private let projectPath = label("", size: 11, color: .secondaryLabelColor)
-  private let modeLabel = label("Connecting…", size: 11, weight: .medium, color: .secondaryLabelColor)
-  private let stage = label("Ready when you are", size: 19, weight: .semibold)
-  private let goal = label("Describe the work. ClawdTime will keep its progress here.", size: 13, color: .secondaryLabelColor)
-  private let summary = label("", size: 13)
-  private let notice = label("", size: 12, color: NSColor(calibratedRed: 0.57, green: 0.29, blue: 0.02, alpha: 1))
-  private let checks = NSStackView()
-  private let choices = NSStackView()
-  private let question = label("", size: 14, weight: .medium)
-  private let callLabel = label("No active call", size: 11, color: .secondaryLabelColor)
-  private let taskInput = Composer()
-  private let answerInput = Composer()
-  private var taskCard: NSView!
-  private var decisionCard: NSView!
-  private var reviewCard: NSView!
-  private var startButton: NSButton!
-  private var answerButton: NSButton!
-  private var acceptButton: NSButton!
-  private var reviseButton: NSButton!
-  private var cancelButton: NSButton!
-  private var stopSharingButton: NSButton!
-  private var stopCallButton: NSButton!
+  private var board: AgentBoard?
+  private var decisions: PendingDecisions?
+  /// What the watcher found: a long wait, a stall, a bad end, finished work.
+  private var incidents: Incidents?
+  /// Finished work that the mascot has already jumped for.
+  private var celebrated: Set<String> = []
+  private var awayItems: [NSMenuItem] = []
+  private var memoryItems: [NSMenuItem] = []
   private var showRevision = false
   private var lastTaskId: String?
+  private var startTucked = false
+  private var localNotice = ""
+  private let pet = PetController()
+  private let boardPanel = SheetController(BoardView(frame: NSRect(x: 0, y: 0, width: BoardView.width, height: 400)))
+  private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
+  private let voice = VoiceController()
+  private var transcript: ChatTranscript?
+  private var chatPending: String?
+  private var chatNotice = ""
+  /// The last spoken turn, shown on the mascot while the chat is closed.
+  private var said: (bubble: PetStatus.Bubble, until: Date)?
+  private var statusItem: NSStatusItem?
+  private var stopSharingItems: [NSMenuItem] = []
+  private var stopCallItems: [NSMenuItem] = []
+  private var styleItems: [NSMenuItem] = []
+  private var lookItems: [NSMenuItem] = []
+  private var eyeItems: [NSMenuItem] = []
+  private var sizeSliders: [NSSlider] = []
 
-  static func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular,
-                    color: NSColor = .labelColor) -> NSTextField {
-    let field = NSTextField(wrappingLabelWithString: text)
-    field.font = .systemFont(ofSize: size, weight: weight); field.textColor = color
-    field.isSelectable = true; field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    return field
-  }
-  private func button(_ title: String, _ action: Selector, primary: Bool = false) -> NSButton {
-    let result = GlossyButton(title: title, target: self, action: action)
-    result.isBordered = false; result.font = .systemFont(ofSize: 13, weight: .medium)
-    result.blue = primary
-    result.controlSize = .large
-    return result
-  }
-  private func stack(_ views: [NSView], vertical: Bool = true, spacing: CGFloat = 10) -> NSStackView {
-    let result = NSStackView(views: views); result.orientation = vertical ? .vertical : .horizontal
-    result.alignment = vertical ? .leading : .centerY; result.spacing = spacing
-    result.detachesHiddenViews = true
-    return result
-  }
-  private func fullWidth(_ child: NSView, in parent: NSView) {
-    child.translatesAutoresizingMaskIntoConstraints = false
-    child.widthAnchor.constraint(equalTo: parent.widthAnchor).isActive = true
-  }
-  private func card(_ views: [NSView]) -> NSView {
-    let card = Card(frame: .zero)
-    let contents = stack(views, spacing: 12)
-    card.addSubview(contents); contents.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([contents.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
-      contents.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
-      contents.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
-      contents.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16)])
-    for view in views { fullWidth(view, in: contents) }
-    return card
-  }
-  private func composer(_ text: Composer, placeholder: String) -> NSView {
-    text.placeholder = placeholder; text.delegate = self; text.font = .systemFont(ofSize: 14)
-    text.isRichText = false; text.importsGraphics = false; text.isAutomaticQuoteSubstitutionEnabled = false
-    text.isAutomaticDashSubstitutionEnabled = false; text.isAutomaticTextReplacementEnabled = false
-    text.textContainerInset = NSSize(width: 8, height: 10)
-    text.backgroundColor = NSColor(white: 1, alpha: 0.80); text.textColor = NSColor(white: 0.13, alpha: 1); text.insertionPointColor = .systemBlue
-    text.isVerticallyResizable = true; text.isHorizontallyResizable = false
-    text.textContainer?.widthTracksTextView = true; text.autoresizingMask = [.width]
-    text.minSize = NSSize(width: 0, height: 90); text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-    let scroll = NSScrollView(); scroll.documentView = text; scroll.hasVerticalScroller = true
-    scroll.borderType = .noBorder; scroll.wantsLayer = true; scroll.layer?.cornerRadius = 9
-    scroll.heightAnchor.constraint(equalToConstant: 96).isActive = true
-    text.setAccessibilityLabel(placeholder)
-    return scroll
-  }
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.regular)
+    // An accessory: no Dock icon and no menu bar takeover. It lives beside the work.
+    NSApp.setActivationPolicy(.accessory)
+    Theme.registerFonts()
     configureMenus()
-    let args = CommandLine.arguments
-    if let index = args.firstIndex(of: "--config"), args.count == index + 2, args[index + 1].hasPrefix("/") {
-      load(URL(fileURLWithPath: args[index + 1]))
+    if let launch = PanelLaunch(arguments: CommandLine.arguments) {
+      startTucked = launch.tucked
+      load(URL(fileURLWithPath: launch.configPath))
     } else {
       showStartupFailure(.configuration)
     }
   }
+
+  // MARK: menus
+
+  private func actions(into menu: NSMenu) {
+    menu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "0").target = self
+    menu.addItem(withTitle: "Open or close the board", action: #selector(toggleBoard), keyEquivalent: "b").target = self
+    menu.addItem(withTitle: "Chat with ClawdTime", action: #selector(toggleChat), keyEquivalent: "k").target = self
+    menu.addItem(withTitle: "Talk to ClawdTime", action: #selector(toggleTalk), keyEquivalent: "t").target = self
+    menu.addItem(withTitle: "Tuck against the edge", action: #selector(tuck), keyEquivalent: "").target = self
+    let styles = NSMenuItem(title: "Mascot", action: nil, keyEquivalent: "")
+    let styleMenu = NSMenu(title: "Mascot")
+    // Each style shows its picture. The pictures are drawn when the menu first opens.
+    styleMenu.delegate = self
+    // The 3D look is greyed for a style that has no lit figure.
+    styleMenu.autoenablesItems = false
+    // The look comes first: flat shapes, or the lit 3D figure.
+    for look in MascotLook.allCases {
+      let item = styleMenu.addItem(withTitle: look.title, action: #selector(chooseLook(_:)), keyEquivalent: "")
+      item.target = self; item.representedObject = "look:" + look.rawValue
+      lookItems.append(item)
+    }
+    styleMenu.addItem(.separator())
+    // The size: a slider from half of the full size to one and a half.
+    styleMenu.addItem(sizeItem())
+    styleMenu.addItem(.separator())
+    for style in MascotStyle.allCases {
+      let item = styleMenu.addItem(withTitle: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
+      if #available(macOS 14.4, *) { item.subtitle = style.summary } else { item.title = style.title + ": " + style.summary }
+      item.target = self; item.representedObject = style.rawValue
+      styleItems.append(item)
+    }
+    styleMenu.addItem(.separator())
+    // Flint is the plain Chert mark. This gives it an eye in its window.
+    let eye = styleMenu.addItem(withTitle: "Eye on Flint", action: #selector(toggleFlintEye(_:)), keyEquivalent: "")
+    eye.target = self; eyeItems.append(eye)
+    styles.submenu = styleMenu; menu.addItem(styles)
+    let away = menu.addItem(withTitle: "Away: answer by phone", action: #selector(toggleAway(_:)), keyEquivalent: "")
+    away.target = self; awayItems.append(away)
+    // Off by default. On, ClawdTime keeps what the person tells it, on this Mac.
+    let memory = menu.addItem(withTitle: "Memory: keep what I tell ClawdTime", action: #selector(toggleMemory(_:)), keyEquivalent: "")
+    memory.target = self; memoryItems.append(memory)
+    menu.addItem(.separator())
+    let sharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
+    sharing.target = self; stopSharingItems.append(sharing)
+    let call = menu.addItem(withTitle: "Stop call", action: #selector(stopCall), keyEquivalent: "")
+    call.target = self; stopCallItems.append(call)
+    menu.addItem(.separator())
+    menu.addItem(withTitle: "Quit ClawdTime. Work keeps running.", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    menu.autoenablesItems = false
+  }
+  /// A menu row with the size slider. The mascot changes size while the person drags.
+  private func sizeItem() -> NSMenuItem {
+    let item = NSMenuItem()
+    let row = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 30))
+    let label = NSTextField(labelWithString: "Size")
+    label.font = .menuFont(ofSize: 0); label.textColor = .labelColor
+    label.frame = NSRect(x: 22, y: 6, width: 40, height: 18)
+    let slider = NSSlider(value: pet.scale, minValue: PetLayout.scaleRange.lowerBound, maxValue: PetLayout.scaleRange.upperBound,
+      target: self, action: #selector(sizeChanged(_:)))
+    slider.isContinuous = true; slider.controlSize = .small
+    slider.frame = NSRect(x: 64, y: 5, width: 170, height: 20)
+    slider.toolTip = "The size of the mascot"; slider.setAccessibilityLabel("Mascot size")
+    row.addSubview(label); row.addSubview(slider)
+    item.view = row
+    sizeSliders.append(slider)
+    return item
+  }
+  @objc private func sizeChanged(_ sender: NSSlider) {
+    pet.scale = sender.doubleValue
+    for slider in sizeSliders where slider !== sender { slider.doubleValue = pet.scale }
+  }
+  @objc private func toggleFlintEye(_ sender: NSMenuItem) {
+    pet.flintEye.toggle(); refreshMenus()
+  }
+  private func contextMenu() -> NSMenu {
+    let menu = NSMenu(); actions(into: menu); refreshMenus(); return menu
+  }
   private func configureMenus() {
     let menu = NSMenu()
     let appItem = NSMenuItem(); menu.addItem(appItem)
-    let submenu = NSMenu(title: "ClawdTime")
-    submenu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "0").target = self
-    let expandMenu = submenu.addItem(withTitle: "Collapse / expand task panel", action: #selector(toggleExpanded), keyEquivalent: "m")
-    expandMenu.target = self; expandMenu.keyEquivalentModifierMask = [.command, .shift]
-    submenu.addItem(withTitle: "Tuck into mascot", action: #selector(minimizeToBadge), keyEquivalent: "w").target = self
-    submenu.addItem(.separator())
-    menuStopSharing = submenu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
-    menuStopSharing?.target = self
-    menuStopCall = submenu.addItem(withTitle: "Stop call", action: #selector(stopCall), keyEquivalent: "")
-    menuStopCall?.target = self
-    submenu.autoenablesItems = false
-    submenu.addItem(.separator())
-    submenu.addItem(withTitle: "Quit panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-    appItem.submenu = submenu
+    let submenu = NSMenu(title: "ClawdTime"); actions(into: submenu); appItem.submenu = submenu
+    // Copy and paste in the answer fields need the Edit commands, even with no menu bar.
     let editItem = NSMenuItem(); let edit = NSMenu(title: "Edit")
     for (title, selector, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
       edit.addItem(withTitle: title, action: Selector(selector), keyEquivalent: key)
     }
     editItem.submenu = edit; menu.addItem(editItem); NSApp.mainMenu = menu
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    statusItem?.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "ClawdTime task panel")
-    statusItem?.button?.toolTip = "ClawdTime — task panel"
-    let statusMenu = NSMenu()
-    statusMenu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "").target = self
-    statusMenu.addItem(.separator())
-    statusMenu.addItem(withTitle: "Quit panel — keep work running", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
-    statusItem?.menu = statusMenu
+    statusItem?.button?.image = Self.markImage()
+    statusItem?.button?.toolTip = "ClawdTime"
+    let statusMenu = NSMenu(); actions(into: statusMenu); statusItem?.menu = statusMenu
   }
+  /// The Chert mark, as a template image for the menu bar: the core with its window, and the flake.
+  private static func markImage() -> NSImage {
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+      // The points of the mark on its own 900 point frame, y down.
+      func outline(_ points: [(CGFloat, CGFloat)]) -> NSBezierPath {
+        let shape = NSBezierPath()
+        for (index, point) in points.enumerated() {
+          let place = NSPoint(x: 1.3 + (point.0 - 250) * 0.0385, y: 16.4 - (point.1 - 262) * 0.0385)
+          if index == 0 { shape.move(to: place) } else { shape.line(to: place) }
+        }
+        shape.close(); shape.lineJoinStyle = .round; shape.lineWidth = 1.0
+        return shape
+      }
+      NSColor.black.setFill(); NSColor.black.setStroke()
+      for piece in [[(455, 262), (527, 318), (467, 385), (535, 632), (328, 640), (250, 402)], [(590, 362), (650, 407), (588, 558), (527, 404)]] as [[(CGFloat, CGFloat)]] {
+        let shape = outline(piece); shape.fill(); shape.stroke()
+      }
+      // The window is cut out of the core.
+      NSGraphicsContext.current?.compositingOperation = .destinationOut
+      outline([(322, 436), (456, 521), (439, 596), (360, 600), (316, 454)]).fill()
+      return true
+    }
+    image.isTemplate = true
+    return image
+  }
+  func menuWillOpen(_ menu: NSMenu) {
+    for item in menu.items {
+      guard let raw = item.representedObject as? String, let style = MascotStyle(rawValue: raw) else { continue }
+      // The picture shows the style in the look that is chosen now.
+      item.image = pet.look == .flat || !style.hasSolid ? MascotCatalog.flatImage(style, flintEye: pet.flintEye) : MascotCatalog.thumbnail(style, flintEye: pet.flintEye)
+    }
+  }
+  @objc private func chooseLook(_ sender: NSMenuItem) {
+    guard let raw = sender.representedObject as? String, let look = MascotLook(rawValue: String(raw.dropFirst(5))) else { return }
+    pet.look = look; refreshMenus()
+  }
+  @objc private func chooseStyle(_ sender: NSMenuItem) {
+    guard let raw = sender.representedObject as? String, let style = MascotStyle(rawValue: raw) else { return }
+    pet.style = style; refreshMenus()
+  }
+  private func refreshMenus() {
+    for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
+    for item in lookItems {
+      let solid = (item.representedObject as? String) == "look:" + MascotLook.solid.rawValue
+      // A plain stone is flat in both looks: it shows as flat, and 3D is greyed.
+      let shown = pet.style.hasSolid ? pet.look : .flat
+      item.state = (item.representedObject as? String) == "look:" + shown.rawValue ? .on : .off
+      item.isEnabled = !solid || pet.style.hasSolid
+    }
+    for item in eyeItems { item.state = pet.flintEye ? .on : .off }
+    for slider in sizeSliders { slider.doubleValue = pet.scale }
+    for item in awayItems {
+      item.state = decisions?.away == true ? .on : .off
+      item.title = decisions?.callReady == false ? "Away: answer by phone (no phone link yet)" : "Away: answer by phone"
+    }
+    for item in memoryItems { item.state = transcript?.memory == true ? .on : .off }
+    for item in stopSharingItems { item.isEnabled = state.allows(.stopSharing) }
+    for item in stopCallItems { item.isEnabled = state.allows(.stopCall) }
+  }
+
+  // MARK: start
+
   private func load(_ path: URL) {
     do {
       let config = try PrivatePanelFiles.configuration(at: path)
@@ -205,14 +223,20 @@ final class Composer: NSTextView {
       let store: PanelReceiptStore
       do { store = try PanelReceiptStore(directory: config.receiptDirectory, binding: binding) }
       catch PanelFailure.alreadyOpen {
-        DistributedNotificationCenter.default().postNotificationName(name, object: nil, userInfo: nil, deliverImmediately: true)
+        // A tucked start asks for no attention, so it does not raise the open panel.
+        if !startTucked {
+          DistributedNotificationCenter.default().postNotificationName(name, object: nil, userInfo: nil, deliverImmediately: true)
+        }
         showStartupFailure(.alreadyOpen); return
       }
       reopenName = name
       DistributedNotificationCenter.default().addObserver(self, selector: #selector(showPanel), name: name, object: nil, suspensionBehavior: .deliverImmediately)
       self.configuration = config; self.configPath = path.standardizedFileURL
       receipts = store; client = PanelClient(configuration: config); state.pending = store.entries
-      buildWindow(); render(); showPanel(nil); beginPolling()
+      wire(); render()
+      pet.show()
+      if !startTucked { openBoard() }
+      beginPolling()
     } catch let failure as PanelFailure { showStartupFailure(failure) }
       catch { showStartupFailure(.configuration) }
   }
@@ -222,250 +246,176 @@ final class Composer: NSTextView {
     if case .alreadyOpen = failure { exitStatus = 0 } else { exitStatus = 2 }
     NSApp.terminate(nil)
   }
-  private func floatingWindow(_ title: String) -> TaskWindow {
-    let window = TaskWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
-    window.title = title; window.level = .floating; window.isFloatingPanel = true
-    window.hidesOnDeactivate = false; window.isReleasedWhenClosed = false
-    window.isMovableByWindowBackground = false
-    window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
-    window.appearance = NSAppearance(named: .aqua)
-    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    window.delegate = self
-    return window
-  }
-  private func mascotImage() -> NSImage? {
-    guard let url = Bundle.main.url(forResource: "Mascot", withExtension: "png") ?? Bundle.module.url(forResource: "Mascot", withExtension: "png") else { return nil }
-    return NSImage(contentsOf: url)
-  }
-  private func iconButton(_ symbol: String, label: String, action: Selector) -> NSButton {
-    let control = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
-    control.bezelStyle = .inline; control.isBordered = false; control.contentTintColor = NSColor(white: 0.20, alpha: 1)
-    control.toolTip = label; control.setAccessibilityLabel(label)
-    control.widthAnchor.constraint(equalToConstant: 28).isActive = true
-    control.heightAnchor.constraint(equalToConstant: 30).isActive = true
-    return control
-  }
-  private func buildWindow() {
-    let window = floatingWindow("ClawdTime task panel")
-    let content = GlassSurface(radius: 22)
-    let clip = BodyClipView(body: content); window.contentView = clip; bodyClip = clip
-    let bar = floatingWindow("ClawdTime toolbar")
-    let viewport = ToolbarClipView(); toolbarClip = viewport; bar.contentView = viewport
-    let barContent = viewport.controls
-    let barDrag = NativeWindowDrag()
-    barDrag.onBegin = { [weak self] in self?.beginToolbarDrag() }
-    barDrag.onEnd = { [weak self] _ in self?.finishToolbarDrag() }
-    viewport.surface.dragGesture = barDrag
-    let image = DragMascotImageView(); image.dragGesture = barDrag; image.image = mascotImage(); image.imageScaling = .scaleProportionallyUpOrDown
-    image.widthAnchor.constraint(equalToConstant: 32).isActive = true
-    image.heightAnchor.constraint(equalToConstant: 32).isActive = true
-    image.setAccessibilityLabel("ClawdTime")
-    compactState.maximumNumberOfLines = 1; compactState.lineBreakMode = .byTruncatingTail
-    compactState.isSelectable = false
-    compactState.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    expandButton = iconButton("chevron.up", label: "Collapse task panel", action: #selector(toggleExpanded))
-    stopSharingButton = button("Stop sharing", #selector(stopSharing), primary: true)
-    stopSharingButton.controlSize = .small; stopSharingButton.font = .systemFont(ofSize: 11, weight: .medium)
-    stopSharingButton.toolTip = "Stop existing sharing. Starting sharing requires a separate grant."
-    stopCallButton = button("Stop call", #selector(stopCall), primary: true); stopCallButton.controlSize = .small
-    stopCallButton.font = .systemFont(ofSize: 11, weight: .medium)
-    let minimize = iconButton("minus", label: "Minimize to mascot", action: #selector(minimizeToBadge))
-    let barRow = stack([compactState, expandButton, stopSharingButton, stopCallButton, minimize, image], vertical: false, spacing: 9)
-    viewport.controls.backgroundOnlyViews = [barRow, compactState]
-    barRow.setCustomSpacing(16, after: minimize)
-    barContent.addSubview(barRow); barRow.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([barRow.leadingAnchor.constraint(equalTo: barContent.leadingAnchor, constant: 15),
-      barRow.trailingAnchor.constraint(equalTo: barContent.trailingAnchor, constant: -15),
-      barRow.centerYAnchor.constraint(equalTo: barContent.centerYAnchor)])
 
-    cancelButton = button("Cancel task…", #selector(cancelTask)); cancelButton.contentTintColor = .systemRed
-    let footerText = Self.label("Work continues while this panel is tucked away.", size: 11, color: .secondaryLabelColor)
-    let footer = stack([footerText, cancelButton], vertical: false, spacing: 10)
-    footerText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.drawsBackground = false
-    scroll.autohidesScrollers = true
-    let document = NSView(); scroll.documentView = document
-    content.addSubview(scroll); content.addSubview(footer)
-    scroll.translatesAutoresizingMaskIntoConstraints = false; footer.translatesAutoresizingMaskIntoConstraints = false
-    document.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-      scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor), scroll.topAnchor.constraint(equalTo: content.topAnchor),
-      scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -12),
-      footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
-      footer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
-      footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
-      document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)])
-    projectPath.lineBreakMode = .byTruncatingMiddle; projectPath.maximumNumberOfLines = 1
-    let project = stack([projectLabel, projectPath, modeLabel], spacing: 4)
-    startButton = button("Start task", #selector(submitTask), primary: true)
-    taskCard = card([Self.label("What should we work on?", size: 13, weight: .semibold),
-      composer(taskInput, placeholder: "Describe the work you want done…"), startButton])
-    goal.maximumNumberOfLines = 5; summary.maximumNumberOfLines = 8
-    checks.orientation = .vertical; checks.alignment = .leading; checks.spacing = 7
-    let progress = stack([stage, goal, summary, checks], spacing: 10)
-    answerInput.placeholder = "Your answer or requested revision…"
-    answerButton = button("Send answer", #selector(sendAnswer), primary: true)
-    choices.orientation = .vertical; choices.alignment = .leading; choices.spacing = 6
-    decisionCard = card([question, choices, composer(answerInput, placeholder: "Your answer or requested revision…"), answerButton])
-    acceptButton = button("Accept result", #selector(acceptResult), primary: true)
-    reviseButton = button("Revise", #selector(reviseResult))
-    let reviewButtons = stack([acceptButton, reviseButton], vertical: false); reviewButtons.distribution = .fillEqually
-    reviewCard = card([Self.label("Your review", size: 13, weight: .semibold),
-      Self.label("Accept the verified result, or ask for a revision.", size: 12, color: .secondaryLabelColor), reviewButtons])
-    let all = stack([project, notice, taskCard, progress, decisionCard, reviewCard, callLabel], spacing: 18)
-    document.addSubview(all); all.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([all.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 22),
-      all.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -22),
-      all.topAnchor.constraint(equalTo: document.topAnchor, constant: 22),
-      all.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -10)])
-    for child in all.arrangedSubviews { fullWidth(child, in: all) }
-    panel = window; toolbar = bar
-    let badgeWindow = floatingWindow("ClawdTime mascot")
-    let mascot = MascotBadge(image: mascotImage()); badgeWindow.contentView = mascot
-    mascot.restore = { [weak self] in self?.showPanel(nil) }
-    mascot.beginDrag = { [weak self] in self?.beginBadgeDrag() }
-    mascot.clampAfterDrag = { [weak self] in self?.finishBadgeDrag() }
-    let menu = NSMenu()
-    menu.addItem(withTitle: "Open ClawdTime", action: #selector(showPanel), keyEquivalent: "").target = self
-    badgeStopSharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
-    badgeStopSharing?.target = self
-    badgeStopCall = menu.addItem(withTitle: "Stop call", action: #selector(stopCall), keyEquivalent: "")
-    badgeStopCall?.target = self
-    menu.addItem(.separator())
-    menu.addItem(withTitle: "Quit panel — keep work running", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
-    menu.autoenablesItems = false; mascot.menu = menu
-    badge = badgeWindow; badgeView = mascot
-    NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
-    placeWindows()
-  }
-  private func currentScreen() -> NSScreen? {
-    (displayMode == .badge ? badge?.screen : toolbar?.screen) ?? NSScreen.main ?? NSScreen.screens.first
-  }
-  private func placeWindows(on sourceScreen: NSScreen? = nil) {
-    guard let screen = sourceScreen ?? currentScreen() else { return }
-    let layout = PanelLayout.placement(in: screen.visibleFrame, anchor: anchor, mode: displayMode)
-    anchor = layout.anchor; placingWindows = true
-    bodyClip?.fullSize = layout.body.size; toolbarClip?.fullSize = layout.toolbar.size
-    toolbar?.setFrame(layout.toolbar, display: true); panel?.setFrame(layout.body, display: true)
-    badge?.setFrame(layout.badge, display: true)
-    placingWindows = false
-  }
-  private func settleAnimation() {
-    animationTimer?.invalidate(); animationTimer = nil
-    transition.request(displayMode)
-    placeWindows(); applyDisplayMode()
-  }
-  @objc private func screenChanged(_ notification: Notification) { settleAnimation() }
-  private func applyDisplayMode() {
-    expandButton?.image = NSImage(systemSymbolName: displayMode == .expanded ? "chevron.up" : "chevron.down", accessibilityDescription: nil)
-    let expandLabel = displayMode == .expanded ? "Collapse task panel" : "Expand task panel"
-    expandButton?.toolTip = expandLabel; expandButton?.setAccessibilityLabel(expandLabel)
-    for window in [toolbar, panel, badge] { window?.alphaValue = 1; window?.ignoresMouseEvents = false }
-    if displayMode == .badge {
-      panel?.orderOut(nil); toolbar?.orderOut(nil); badge?.orderFrontRegardless()
-      // Maintain our own key/main target without activating over another application.
-      if NSApp.isActive { badge?.makeKeyAndOrderFront(nil); badge?.makeMain() }
+  private func wire() {
+    pet.onToggleBoard = { [weak self] in self?.toggleBoard(nil) }
+    pet.onOpenSession = { [weak self] id in self?.openAgent(id) }
+    pet.onDecide = { [weak self] id, decision in self?.decide(id, decision, nil, false) }
+    pet.onDismissIncident = { [weak self] id in self?.dismissIncident(id) }
+    pet.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
+    pet.onStopCall = { [weak self] in self?.perform(.stopCall) }
+    pet.onHide = { [weak self] in self?.closeBoard(); self?.chatPanel.close(); self?.voice.stop(); self?.pet.hide() }
+    pet.onMoved = { [weak self] in self?.followPet() }
+    pet.menu = { [weak self] in self?.contextMenu() ?? NSMenu() }
+    pet.afterFrame = { [weak self] step in
+      guard let self else { return }
+      self.boardPanel.step(step); self.chatPanel.step(step)
+      self.pet.wantsBoost = !self.boardPanel.settled || !self.chatPanel.settled
     }
-    else {
-      badge?.orderOut(nil); toolbar?.orderFrontRegardless()
-      if displayMode == .expanded { panel?.makeKeyAndOrderFront(nil); panel?.makeMain() }
-      else { panel?.orderOut(nil); toolbar?.makeKeyAndOrderFront(nil); toolbar?.makeMain() }
+    boardPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.chatPanel.isOpen ?? false }
+    chatPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.boardPanel.isOpen ?? false }
+    // The bar under the mascot, and the conversation it starts.
+    pet.onChat = { [weak self] in self?.toggleChat(nil) }
+    pet.onTalk = { [weak self] in self?.startTalk() }
+    pet.onMic = { [weak self] in self?.voice.micOn.toggle() }
+    pet.onSpeaker = { [weak self] in self?.voice.speakerOn.toggle() }
+    pet.onEndTalk = { [weak self] in self?.voice.stop() }
+    pet.voiceLevel = { [weak self] in self?.voice.level ?? 0 }
+    voice.onChange = { [weak self] in self?.renderTalk() }
+    voice.onError = { [weak self] message in self?.chatNotice = message; self?.openChat(); self?.renderChat() }
+    voice.answer = { [weak self] recording in await self?.heard(recording) }
+    let chat = chatPanel.view
+    chat.onSend = { [weak self] text in self?.sendChat(text) }
+    chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
+    chat.onClose = { [weak self] in self?.chatPanel.close() }
+    let view = boardPanel.view
+    view.onOpenSession = { [weak self] id in self?.openAgent(id) }
+    view.onDecide = { [weak self] id, decision, text, remember in self?.decide(id, decision, text, remember) }
+    view.onSubmit = { [weak self] text in self?.perform(.submit, text: text) }
+    view.onAnswer = { [weak self] text in self?.perform(.decide, text: text) }
+    view.onAccept = { [weak self] in self?.perform(.accept) }
+    view.onCancelTask = { [weak self] in self?.cancelTask() }
+    view.onRevise = { [weak self] in self?.showRevision = true; self?.render() }
+    view.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
+    view.onStopCall = { [weak self] in self?.perform(.stopCall) }
+    view.onDock = { [weak self] in self?.tuck(nil) }
+    view.onClose = { [weak self] in self?.closeBoard() }
+  }
+
+  // MARK: mascot and board
+
+  private var petScreen: CGRect { (pet.window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero }
+  private func followPet() {
+    if boardPanel.isOpen { boardPanel.follow(pet: pet.frame, screen: petScreen) }
+    if chatPanel.isOpen { chatPanel.follow(pet: pet.frame, screen: petScreen) }
+  }
+  private func openBoard() {
+    if pet.isDocked { pet.undock() }
+    // One sheet at a time: the board and the chat share the place beside the mascot.
+    chatPanel.close()
+    pet.boardOpen = true
+    boardPanel.open(pet: pet.frame, screen: petScreen)
+  }
+  private func closeBoard() { boardPanel.close() }
+  @objc private func toggleBoard(_ sender: Any?) {
+    if !pet.visible { pet.show() }
+    if boardPanel.isOpen { closeBoard() } else { openBoard() }
+  }
+  @objc private func tuck(_ sender: Any?) {
+    if !pet.visible { pet.show() }
+    closeBoard(); chatPanel.close(); voice.stop(); pet.dock()
+  }
+
+  // MARK: talking to ClawdTime
+
+  private func openChat() {
+    if !pet.visible { pet.show() }
+    if pet.isDocked { pet.undock() }
+    boardPanel.close()
+    pet.boardOpen = true
+    renderChat()
+    chatPanel.open(pet: pet.frame, screen: petScreen)
+    // The person opened it to write: the field takes the keys.
+    chatPanel.window.makeKey(); chatPanel.view.focus()
+    refreshChat()
+  }
+  @objc private func toggleChat(_ sender: Any?) {
+    if chatPanel.isOpen { chatPanel.close() } else { openChat() }
+  }
+  @objc private func toggleTalk(_ sender: Any?) {
+    if voice.phase == .off { startTalk() } else { voice.stop() }
+  }
+  private func refreshChat() {
+    guard let client else { return }
+    Task {
+      if let fresh = try? await client.chat() { transcript = fresh }
+      renderChat()
     }
   }
-  private func requestDisplay(_ target: PanelDisplayMode, animated: Bool = true) {
-    // Only one cancellable timer owns geometry. Old callbacks cannot hide newer UI.
-    settleAnimation()
-    let previous = displayMode
-    let sourceScreen = currentScreen() // Choose the visible source, never a hidden wider target.
-    let oldBar = toolbar?.frame ?? .zero, oldBadge = badge?.frame ?? .zero
-    let oldBody = panel?.frame ?? .zero
-    displayMode = target
-    let generation = transition.request(target)
-    placeWindows(on: sourceScreen)
-    guard animated, previous != target, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-      let toolbar, let panel, let badge else { applyDisplayMode(); return }
-    let finalBar = toolbar.frame, finalBadge = badge.frame, finalBody = panel.frame
-    let changingShape = previous == .badge || target == .badge
-    let fromToolbar = previous == .badge ? oldBadge : oldBar
-    let toToolbar = target == .badge ? finalBadge : finalBar
-    let closedBody = NSRect(x: finalBody.minX, y: finalBody.maxY - 1, width: finalBody.width, height: 1)
-    let fromBody = previous == .expanded ? oldBody : closedBody
-    let toBody = target == .expanded ? finalBody : NSRect(x: oldBody.minX, y: oldBody.maxY - 1, width: oldBody.width, height: 1)
-    toolbar.ignoresMouseEvents = changingShape; badge.ignoresMouseEvents = true
-    panel.ignoresMouseEvents = true
-    if changingShape {
-      // Retract the actual fixed-size toolbar behind a rounded right-edge viewport.
-      // No duplicate shell or alpha transition: the red mascot remains at the edge.
-      badge.orderOut(nil)
-      placingWindows = true; toolbar.setFrame(fromToolbar, display: true); placingWindows = false
-      toolbar.alphaValue = 1; toolbar.orderFrontRegardless()
-    } else { toolbar.orderFrontRegardless(); badge.orderOut(nil) }
-    if previous == .expanded || target == .expanded {
-      placingWindows = true; panel.setFrame(fromBody, display: true); placingWindows = false
-      panel.alphaValue = 1; panel.orderFrontRegardless()
-    } else { panel.orderOut(nil) }
-    let started = CACurrentMediaTime()
-    let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
-      MainActor.assumeIsolated {
-        guard let self, self.transition.accepts(generation) else { timer.invalidate(); return }
-        let progress = min(1, (CACurrentMediaTime() - started) / 0.29)
-        self.placingWindows = true
-        if changingShape {
-          toolbar.setFrame(PanelLayout.interpolate(fromToolbar, toToolbar, progress: progress), display: true)
-        }
-        if previous == .expanded || target == .expanded {
-          panel.setFrame(PanelLayout.interpolate(fromBody, toBody, progress: progress), display: true)
-        }
-        self.placingWindows = false
-        if progress >= 1 {
-          timer.invalidate(); self.animationTimer = nil
-          guard self.transition.accepts(generation) else { return }
-          self.placeWindows(); self.applyDisplayMode()
-        }
+  private func renderChat() {
+    var model = ChatModel()
+    model.messages = transcript?.messages ?? []
+    model.pending = chatPending
+    model.modelReady = transcript?.model ?? true
+    model.connected = state.connected
+    model.voice = voice.phase
+    model.notice = chatNotice
+    model.memory = transcript?.memory == true
+    chatPanel.view.render(model)
+  }
+  private func renderTalk() {
+    pet.setTalk(on: voice.phase != .off, micOn: voice.micOn, speakerOn: voice.speakerOn, speaking: voice.phase == .speaking, thinking: voice.phase == .thinking)
+    renderChat()
+  }
+  /// One typed message. The words show at once; the answer follows.
+  private func sendChat(_ text: String) {
+    guard let client, chatPending == nil else { return }
+    chatPending = text; chatNotice = ""; renderChat()
+    Task {
+      let reply = try? await client.say(text)
+      if let fresh = try? await client.chat() { transcript = fresh }
+      chatPending = nil
+      if reply == nil { chatNotice = "ClawdTime did not answer. Nothing was done." }
+      pet.react(success: reply != nil)
+      renderChat()
+      // It may have answered a request or changed away mode.
+      decisions = try? await client.decisions()
+      render()
+    }
+  }
+  /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
+  private func heard(_ recording: String) async -> URL? {
+    guard let client else { return nil }
+    let result = try? await client.hear(recording)
+    if let fresh = try? await client.chat() { transcript = fresh }
+    if result == nil { chatNotice = "ClawdTime did not answer. Nothing was done." } else if result?.reply != nil { chatNotice = "" }
+    if let result, let reply = result.reply {
+      let caption = PetStatus.Bubble.said(heard: result.heard, reply: reply.text, at: reply.at)
+      said = (caption.bubble, Date().addingTimeInterval(caption.seconds))
+    }
+    renderChat()
+    decisions = try? await client.decisions()
+    render()
+    guard let name = result?.audioName, let directory = transcript?.voiceDirectory else { return nil }
+    return URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent(name)
+  }
+  private func startTalk() {
+    guard let client else { return }
+    Task {
+      if let fresh = try? await client.chat() { transcript = fresh }
+      guard let transcript else { chatNotice = "The task service did not answer. ClawdTime cannot listen now."; openChat(); return }
+      guard transcript.speech else {
+        chatNotice = "Speech needs an OpenAI key. Set CLAWDTIME_OPENAI_API_KEY and start ClawdTime again. Typing works now."
+        openChat(); return
       }
+      chatNotice = ""
+      voice.directory = URL(fileURLWithPath: transcript.voiceDirectory, isDirectory: true)
+      voice.start()
     }
-    animationTimer = timer; RunLoop.main.add(timer, forMode: .common)
   }
-  private func beginToolbarDrag() {
-    settleAnimation(); draggingToolbar = true
-  }
-  private func finishToolbarDrag() {
-    draggingToolbar = false
-    if let toolbar { anchor = CGPoint(x: toolbar.frame.midX, y: toolbar.frame.maxY) }
-    placeWindows()
-  }
-  private func beginBadgeDrag() { settleAnimation(); draggingBadge = true }
-  private func finishBadgeDrag() {
-    draggingBadge = false
-    if let badge, let screen = badge.screen ?? currentScreen() { anchor = PanelLayout.anchor(fromBadge: badge.frame, in: screen.visibleFrame) }
-    placeWindows()
-  }
-  func windowDidMove(_ notification: Notification) {
-    guard !placingWindows, animationTimer == nil, let moved = notification.object as? NSWindow else { return }
-    if moved === toolbar && draggingToolbar {
-      anchor = CGPoint(x: moved.frame.midX, y: moved.frame.maxY)
-      if displayMode == .expanded, let panel {
-        placingWindows = true
-        panel.setFrameOrigin(NSPoint(x: moved.frame.midX - panel.frame.width / 2, y: moved.frame.minY - 10 - panel.frame.height))
-        placingWindows = false
-      }
-    } else if moved === badge && draggingBadge, let screen = moved.screen ?? currentScreen() { anchor = PanelLayout.anchor(fromBadge: moved.frame, in: screen.visibleFrame) }
-  }
-  @objc private func toggleExpanded(_ sender: Any?) { requestDisplay(displayMode.toggled) }
-  @objc private func minimizeToBadge(_ sender: Any?) { requestDisplay(.badge) }
   @objc func showPanel(_ sender: Any?) {
-    requestDisplay(.expanded); NSApp.activate(ignoringOtherApps: true)
+    pet.show()
+    if !boardPanel.isOpen && !chatPanel.isOpen { openBoard() }
   }
-  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-    requestDisplay(displayMode.reopened(hasVisibleWindows: flag)); return true
-  }
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(nil); return true }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-  func windowShouldClose(_ sender: NSWindow) -> Bool { minimizeToBadge(nil); return false }
   func applicationWillTerminate(_ notification: Notification) {
-    DistributedNotificationCenter.default().removeObserver(self); NotificationCenter.default.removeObserver(self)
-    animationTimer?.invalidate(); transition.request(displayMode)
+    DistributedNotificationCenter.default().removeObserver(self)
+    pet.mascot.stop(); voice.stop()
     pollTask?.cancel(); client?.close()
   }
+
+  // MARK: data
 
   private func beginPolling() {
     pollTask = Task { [weak self] in
@@ -478,7 +428,17 @@ final class Composer: NSTextView {
           self.state.receive(snapshot, readGeneration: readGeneration)
           for operation in snapshot.operations { try self.receipts?.observe(operation) }
           self.state.pending = self.receipts?.entries ?? []
-          self.render()
+          // The board is optional. A service without one never affects the task state.
+          self.board = try? await client.agents()
+          // Reading this also tells the agents' hooks that someone is here to answer.
+          self.decisions = try? await client.decisions()
+          // The watcher is optional, as the board is: a service without one changes nothing.
+          self.incidents = try? await client.incidents()
+          // The chat is read while it is in view, and once at the start.
+          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil {
+            if let fresh = try? await client.chat() { self.transcript = fresh }
+          }
+          self.render(); self.renderChat()
           let waiting = self.state.pending.filter(\.unresolved).map(\.eventId)
           let found = await withTaskGroup(of: PanelOperation?.self) { group in
             for id in waiting { group.addTask { try? await client.operation(id) } }
@@ -495,105 +455,137 @@ final class Composer: NSTextView {
           }
           self.state.pending = self.receipts?.entries ?? []; delay = 1
         } catch {
-          self.state.connected = false; delay = min(5, delay * 2)
+          self.state.connected = false; self.board = nil; self.decisions = nil; self.incidents = nil; delay = min(5, delay * 2)
         }
         self.render()
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
       }
     }
   }
+
   private func render() {
-    guard panel != nil else { return }
     let snapshot = state.snapshot, task = snapshot?.task
-    projectLabel.stringValue = snapshot?.projectLabel ?? URL(fileURLWithPath: configuration?.projectRoot ?? "/").lastPathComponent
-    projectPath.stringValue = configuration?.projectRoot ?? ""; projectPath.toolTip = projectPath.stringValue
-    modeLabel.stringValue = snapshot?.worker == "simulation" ? "Simulation · tasks stay queued" : (state.connected ? "Codex · independently checked" : "Connecting to your task service…")
-    stage.stringValue = state.stage
-    compactState.stringValue = state.stage; compactState.toolTip = state.stage
-    let sharing = snapshot?.controls.sharingActive == true
-    let sharingPending = state.pending.contains { $0.unresolved && $0.action == .stopSharing } ||
-      (snapshot?.operations.contains { !$0.resolved && $0.action == .stopSharing } ?? false)
-    stopSharingButton.toolTip = sharingPending ? "Sharing cleanup is unconfirmed. Checking the existing request." :
-      sharing ? "Sharing is active. Stop only this prepared sharing session." :
-      state.allows(.stopSharing) ? "Sharing is prepared or cleanup is outstanding. Stop sharing." : "No sharing is available to stop."
-    stopCallButton.toolTip = state.allows(.stopCall) ? "Stop the existing call without canceling coding work." : "No call is available to stop."
-    badgeView?.sharing = sharing
-    badgeStopSharing?.isEnabled = state.allows(.stopSharing); badgeStopCall?.isEnabled = state.allows(.stopCall)
-    menuStopSharing?.isEnabled = state.allows(.stopSharing); menuStopCall?.isEnabled = state.allows(.stopCall)
-    goal.stringValue = task?.goal ?? "Describe the work. Progress and decisions will appear here."
-    goal.toolTip = task?.goal
-    summary.stringValue = task?.summary ?? ""
-    summary.isHidden = summary.stringValue.isEmpty
-    if task?.id != lastTaskId { showRevision = false; lastTaskId = task?.id }
-    taskCard.isHidden = snapshot?.canSubmit == false
-    decisionCard.isHidden = !(task?.decision != nil || (showRevision && task?.canDecide == true))
-    question.stringValue = task?.decision?.question ?? "What would you like to revise?"
-    choices.arrangedSubviews.forEach { choices.removeArrangedSubview($0); $0.removeFromSuperview() }
-    for (index, option) in (task?.decision?.options ?? []).enumerated() {
-      let choice = ChoiceButton(title: option, target: self, action: #selector(chooseAnswer))
-      choice.bezelStyle = .regularSquare; choice.font = .systemFont(ofSize: 13, weight: .medium)
-      choice.alignment = .left; choice.setContentCompressionResistancePriority(.required, for: .vertical)
-      choice.tag = index; choice.toolTip = option; choice.isEnabled = state.allows(.decide)
-      choice.cell?.wraps = true; choice.cell?.lineBreakMode = .byWordWrapping
-      choices.addArrangedSubview(choice)
-      choice.widthAnchor.constraint(equalTo: choices.widthAnchor).isActive = true
+    let now = Date().timeIntervalSince1970 * 1000
+    let liveBoard = board.flatMap { $0.isFresh(now: now) ? $0 : nil }
+    if task?.id != lastTaskId { showRevision = false; lastTaskId = task?.id; localNotice = "" }
+    let taskNeedsPerson = task?.decision != nil || task?.canAccept == true
+    let sharing = snapshot?.controls.sharingActive == true || snapshot?.controls.callActive == true
+    let asked = (decisions?.pending ?? []).filter { $0.holdUntil > now }
+    let found = liveBoard == nil ? [] : (incidents?.incidents ?? [])
+    let status = PetStatus.make(board: liveBoard, connected: state.connected, taskNeedsPerson: taskNeedsPerson, sharing: sharing,
+                                quietSeconds: pet.mascot.quietSeconds, now: now, decisions: asked, incidents: found)
+    // Work that is done: the mascot jumps once, when the news first shows.
+    if let id = status.bubble?.incidentId, found.first(where: { $0.id == id })?.kind == "finished", celebrated.insert(id).inserted {
+      pet.mascot.jump()
     }
-    choices.isHidden = choices.arrangedSubviews.isEmpty
-    answerButton.title = task?.decision == nil ? "Send revision" : "Send answer"
-    reviewCard.isHidden = task?.canAccept != true
-    startButton.isEnabled = state.allows(.submit) && validText(taskInput.string)
-    answerButton.isEnabled = state.allows(.decide) && validText(answerInput.string)
-    acceptButton.isEnabled = state.allows(.accept); reviseButton.isEnabled = state.allows(.decide)
-    cancelButton.isEnabled = state.allows(.cancel)
-    stopSharingButton.isEnabled = state.allows(.stopSharing); stopCallButton.isEnabled = state.allows(.stopCall)
-    callLabel.stringValue = state.callStatus; callLabel.toolTip = state.callStatus
-    checks.arrangedSubviews.forEach { checks.removeArrangedSubview($0); $0.removeFromSuperview() }
-    for check in task?.checks ?? [] {
-      let passed = check.state == "passed", failed = check.state == "failed"
-      let icon = NSImageView(image: NSImage(systemSymbolName: passed ? "checkmark.circle.fill" : failed ? "xmark.circle.fill" : "circle.dotted", accessibilityDescription: check.state)!)
-      icon.contentTintColor = passed ? .systemGreen : failed ? .systemOrange : .secondaryLabelColor
-      icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
-      let title = Self.label(check.name + " · " + check.state.replacingOccurrences(of: "_", with: " "), size: 12)
-      title.toolTip = check.summary
-      checks.addArrangedSubview(stack([icon, title], vertical: false, spacing: 7))
-    }
-    checks.isHidden = checks.arrangedSubviews.isEmpty
+    // In a spoken conversation the bubble is the caption: what it heard, what it answered.
+    if let said, said.until > Date(), !chatPanel.isOpen {
+      pet.status = PetStatus(mood: status.mood, headline: status.headline, detail: status.detail, bubble: said.bubble)
+    } else { pet.status = status }
+    // Stop is always one click away: on the mascot, in the board and in every menu.
+    pet.setStop(sharing: state.allows(.stopSharing), call: state.allows(.stopCall))
+    refreshMenus()
+
+    var model = BoardModel()
+    model.status = status; model.board = liveBoard; model.now = now; model.decisions = asked
+    model.projectPath = configuration?.projectRoot ?? ""
+    model.modeText = snapshot?.worker == "simulation" ? "Simulation · tasks stay queued" : state.connected ? "Codex · independently checked" : "Connecting"
+    model.stage = state.stage; model.task = task
+    model.canSubmit = snapshot?.canSubmit != false && state.connected
+    model.showRevision = showRevision
+    model.allowSubmit = state.allows(.submit); model.allowDecide = state.allows(.decide)
+    model.allowAccept = state.allows(.accept); model.allowCancel = state.allows(.cancel)
+    model.allowStopSharing = state.allows(.stopSharing); model.allowStopCall = state.allows(.stopCall)
+    model.sharingActive = sharing; model.callStatus = state.callStatus
     if !state.connected {
-      notice.stringValue = "Connection unavailable. Existing work continues; no requests are repeated."
+      model.notice = "Connection unavailable. Existing work continues; no requests are repeated."
     } else if state.pending.contains(where: \.unresolved) {
-      notice.stringValue = "A request is unconfirmed. Checking its receipt; it will not be sent again."
+      model.notice = "A request is unconfirmed. Checking its receipt; it will not be sent again."
     } else if state.waitingForSnapshot {
-      notice.stringValue = "Request recorded. Refreshing task progress…"
+      model.notice = "Request recorded. Refreshing task progress."
+    } else if !localNotice.isEmpty {
+      model.notice = localNotice
     } else if let message = snapshot?.notice, !message.isEmpty {
-      notice.stringValue = message
+      model.notice = message
     } else if let last = snapshot?.operations.last, last.state == "refused" {
-      notice.stringValue = "Request not applied. " + last.message
-    } else { notice.stringValue = "" }
-    notice.isHidden = notice.stringValue.isEmpty
+      model.notice = "Request not applied. " + last.message
+    }
+    boardPanel.view.render(model)
   }
-  private func validText(_ value: String) -> Bool { (1...8000).contains(value.count) && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-  func textDidChange(_ notification: Notification) { taskInput.needsDisplay = true; answerInput.needsDisplay = true; render() }
-  @objc private func submitTask(_ sender: Any?) { perform(.submit, text: taskInput.string) }
-  @objc private func chooseAnswer(_ sender: NSButton) {
-    guard let option = state.decisionOption(at: sender.tag) else { return }
-    answerInput.string = option; answerInput.needsDisplay = true
-    render(); panel?.makeFirstResponder(answerInput)
-  }
-  @objc private func sendAnswer(_ sender: Any?) { perform(.decide, text: answerInput.string) }
-  @objc private func acceptResult(_ sender: Any?) { perform(.accept) }
+
+  // MARK: actions
+
   @objc private func stopSharing(_ sender: Any?) { perform(.stopSharing) }
   @objc private func stopCall(_ sender: Any?) { perform(.stopCall) }
-  @objc private func reviseResult(_ sender: Any?) { showRevision = true; render(); panel?.makeFirstResponder(answerInput) }
-  @objc private func cancelTask(_ sender: Any?) {
-    guard state.allows(.cancel), let task = state.snapshot?.task, let panel else { return }
+
+  /// The person's answer to an agent. The agent's hook hands it over; the trove keeps it.
+  private func decide(_ id: String, _ decision: String, _ text: String?, _ remember: Bool) {
+    guard let client else { return }
+    Task {
+      let ok = (try? await client.answerDecision(id, decision: decision, text: text, remember: remember)) == true
+      pet.react(success: ok)
+      boardPanel.view.showToast(!ok ? "That request no longer waits here. Answer it in its terminal."
+        : decision == "allow" ? (remember ? "Allowed, and remembered for this project." : "Allowed. It continues.")
+        : decision == "deny" ? "Denied. It is told." : "Answered. It continues.")
+      decisions = try? await client.decisions()
+      render()
+    }
+  }
+  @objc private func toggleMemory(_ sender: Any?) {
+    guard let client else { return }
+    let next = transcript?.memory != true
+    Task {
+      try? await client.setMemory(next)
+      if let fresh = try? await client.chat() { transcript = fresh }
+      refreshMenus(); renderChat()
+      boardPanel.view.showToast(transcript?.memory == true ? "Memory is on. ClawdTime keeps what you tell it." : "Memory is off. Nothing is kept.")
+    }
+  }
+  /// The person has seen what the watcher found. It leaves every view.
+  private func dismissIncident(_ id: String) {
+    guard let client else { return }
+    Task {
+      _ = try? await client.dismissIncident(id)
+      incidents = try? await client.incidents()
+      render()
+    }
+  }
+  @objc private func toggleAway(_ sender: Any?) {
+    guard let client else { return }
+    let next = !(decisions?.away ?? false)
+    Task {
+      try? await client.setAway(next)
+      decisions = try? await client.decisions()
+      refreshMenus()
+      boardPanel.view.showToast(next ? "Away. Requests wait for an answer by phone." : "Here. Requests are answered on this Mac.")
+    }
+  }
+  /// Brings one session's terminal forward. This is not a task operation: it has no
+  /// receipt and it is safe to repeat.
+  private func openAgent(_ id: String) {
+    guard let client else { return }
+    Task {
+      let result = try? await client.focusAgent(id)
+      let opened = result?.ok == true
+      pet.react(success: opened)
+      boardPanel.view.showToast(result?.message ?? "The task service did not answer. Nothing was opened.")
+      if opened {
+        // The terminal is what the person asked for: the board gets out of its way.
+        try? await Task.sleep(nanoseconds: 420_000_000)
+        closeBoard()
+      }
+    }
+  }
+  private func cancelTask() {
+    guard state.allows(.cancel), let task = state.snapshot?.task else { return }
     let alert = NSAlert(); alert.messageText = "Cancel this task?"
     alert.informativeText = "This requests cancellation of the coding work. It is separate from stopping a call or sharing."
     alert.alertStyle = .warning; alert.addButton(withTitle: "Keep working"); alert.addButton(withTitle: "Cancel task")
-    alert.beginSheetModal(for: panel) { [weak self] response in
+    alert.beginSheetModal(for: boardPanel.window) { [weak self] response in
       guard response == .alertSecondButtonReturn, let self else { return }
       guard self.state.snapshot?.task?.id == task.id, self.state.snapshot?.task?.runId == task.runId,
         self.state.snapshot?.task?.revision == task.revision else {
-        self.notice.stringValue = "The task changed. Review its current state before canceling."; self.notice.isHidden = false; return
+        self.localNotice = "The task changed. Review its current state before canceling."; self.render(); return
       }
       self.perform(.cancel)
     }
@@ -612,15 +604,17 @@ final class Composer: NSTextView {
           if operation.resolved { state.taskMutationBoundary(action) }
           try receipts.observe(operation)
           if operation.state == "done" {
-            if action == .submit && taskInput.string == text { taskInput.string = "" }
-            if action == .decide && answerInput.string == text { answerInput.string = ""; showRevision = false }
-          }
+            let view = boardPanel.view
+            if action == .submit && view.taskInput.string == text { view.clearTaskInput() }
+            if action == .decide && view.answerInput.string == text { view.clearAnswerInput(); showRevision = false }
+            pet.react(success: true)
+          } else if operation.state == "refused" { pet.react(success: false) }
         } catch { try? receipts.markUnknown(id) }
         state.pending = receipts.entries; render()
       }
     } catch {
-      notice.stringValue = (error as? PanelFailure)?.errorDescription ?? "Request unavailable. No action was sent."
-      notice.isHidden = false; state.pending = receipts.entries
+      localNotice = (error as? PanelFailure)?.errorDescription ?? "Request unavailable. No action was sent."
+      state.pending = receipts.entries; render()
     }
   }
 }
