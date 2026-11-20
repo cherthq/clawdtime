@@ -158,6 +158,59 @@ describe("unexpected error reporting", () => {
     f.runtime.store.close();
   });
 
+  it("still cleans up and records the failed pass when the reporter itself throws", async () => {
+    const runtime = createRuntime(
+      {
+        CLAWDTIME_MODE: "simulation",
+        CLAWDTIME_DATABASE: ":memory:",
+        CLAWDTIME_OPERATOR_TOKEN: operatorToken,
+      },
+      {
+        reportError: () => {
+          throw new Error("standard error is closed");
+        },
+      },
+    );
+    const drains: unknown[] = [],
+      drain = runtime.service.drain.bind(runtime.service);
+    runtime.service.drain = (options) => {
+      drains.push(options);
+      return drain(options);
+    };
+    runtime.service.expireSessions = () => {
+      throw new RangeError(secret);
+    };
+    await expect(runtime.tick()).resolves.toBeUndefined();
+    // The cleanup drain ran, and the heartbeat is the last step of the pass.
+    expect(drains).toEqual([{ cleanupOnly: true }]);
+    expect(runtime.store.state("heartbeat")).toMatchObject({ ok: false });
+    const readiness = (await (
+      await runtime.app.request("/internal/readiness", {
+        headers: { authorization: `Bearer ${operatorToken}` },
+      })
+    ).json()) as { loop: { state: string } };
+    expect(readiness.loop.state).toBe("failed");
+    runtime.store.close();
+  });
+
+  it("reports an error whose name or stack is not a string", () => {
+    const lines: string[] = [];
+    const report = createErrorReporter({ write: (l) => lines.push(l) });
+    report(
+      "loop_failed",
+      Object.assign(new Error(secret), { name: undefined }),
+    );
+    report(
+      "startup_refused",
+      Object.assign(new Error(secret), { stack: [secret] }),
+    );
+    expect(lines.map((l) => JSON.parse(l))).toMatchObject([
+      { event: "loop_failed", name: "Error" },
+      { event: "startup_refused", name: "Error", frames: [] },
+    ]);
+    expect(lines.join("\n")).not.toContain("PRIVATE");
+  });
+
   it("reports a loop that stopped writing its heartbeat as stale", async () => {
     const f = fixture();
     f.runtime.store.saveState("heartbeat", {

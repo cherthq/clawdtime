@@ -13,7 +13,8 @@ export type ReportError = (
 const providerStatus = /^Provider returned HTTP (\d{3})\.$/;
 
 function frames(error: Error) {
-  const stack = error.stack ?? "",
+  // A thrown error can carry a name or a stack that is not a string.
+  const stack = typeof error.stack === "string" ? error.stack : "",
     head = `${error.name}: ${error.message}`;
   return (stack.startsWith(head) ? stack.slice(head.length) : stack)
     .split("\n")
@@ -38,7 +39,11 @@ export function createErrorReporter(
     seen = new Map<string, { at: number; repeats: number }>();
   return (event, error, fields = {}) => {
     const known = error instanceof Error,
-      name = known ? error.name.slice(0, 80) : "NonError",
+      name = !known
+        ? "NonError"
+        : typeof error.name === "string"
+          ? error.name.slice(0, 80)
+          : "Error",
       stack = known ? frames(error) : [],
       status = known ? providerStatus.exec(error.message) : null,
       now = clock();
