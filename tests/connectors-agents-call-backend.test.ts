@@ -7,12 +7,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   answerByCall,
+  callCheckText,
+  type CallLink,
+  checkCall,
   converseByCall,
   openCall,
   saveCallLink,
   sayByCall,
   spokenQuestion,
-  type CallLink,
 } from "../connectors/agents/call.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
@@ -100,6 +102,7 @@ async function backend(options: { picksUp?: boolean } = {}) {
   app.post("/api/sessions/heartbeat", (c) =>
     c.json({ session: service.heartbeat(token(c)) }),
   );
+  app.get("/api/doctor", (c) => c.json(service.doctor(token(c))));
   app.post("/api/attention", async (c) => {
     const before = store.all<AttentionRequest>("attention").length;
     const request = service.requestAttention(token(c), await c.req.json());
@@ -627,5 +630,62 @@ describe("away mode, end to end, against the real backend in simulation", () => 
     ]);
     expect(line.refused).toEqual([]);
     feed.close();
+  });
+});
+
+describe("a check before the first call", () => {
+  it("reads the backend's own readiness and places no call", async () => {
+    const b = await backend();
+    const check = await checkCall(b.link, "check-one");
+    expect(check.mode).toBe("simulation");
+    expect(check.ready).toBe(true);
+    // The backend's own checks for this pairing, as it names them.
+    expect(check.checks.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        "setup_reservation",
+        "runtime_mode",
+        "pairing_permission",
+        "session_heartbeat",
+      ]),
+    );
+    // In simulation the backend fails exactly one check: no live line is proven.
+    expect(
+      check.checks
+        .filter((item) => item.status === "fail")
+        .map((item) => item.id),
+    ).toEqual(["runtime_mode"]);
+    expect(check.checks.every((item) => item.message.length > 0)).toBe(true);
+    // Nothing was requested and nothing was dialed.
+    expect(b.requests()).toHaveLength(0);
+    expect(b.transport.calls).toHaveLength(0);
+    expect(b.refused).toEqual([]);
+    const lines = callCheckText(check);
+    expect(lines[0]).toBe("The backend answers. Mode: simulation.");
+    expect(lines).toContain(
+      "  FAIL  runtime_mode: Simulation is available; no live line or handset delivery is verified.",
+    );
+    expect(lines.at(-1)).toBe(
+      "A call can be placed in this mode, but no phone rings: the line is not live.",
+    );
+    expect(
+      callCheckText({
+        ready: false,
+        mode: "live",
+        checks: [
+          {
+            id: "paired_device",
+            status: "fail",
+            message: "No device is paired.",
+          },
+        ],
+      }),
+    ).toEqual([
+      "The backend answers. Mode: live.",
+      "  FAIL  paired_device: No device is paired.",
+      "A call would not go through. Fix the lines marked FAIL.",
+    ]);
+    expect(
+      callCheckText({ ready: true, mode: "live", checks: [] }).at(-1),
+    ).toBe("A call can be placed now, and your phone will ring.");
   });
 });

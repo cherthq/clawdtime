@@ -124,10 +124,22 @@ Code in app asks to run the command: npm test. Say approve or deny." Your spoken
 answer goes to the agent through the same desk as a click.
 
 ```sh
-clawdtime setup --agent claude-code --project PATH ...   # the existing pairing
+# 1. Pair the project once. The setup link comes from the person who runs the line.
+clawdtime setup --agent claude-code --project PATH \
+  --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN \
+  --allow-view true --allow-control false
+# 2. Point the supervisor at that pairing.
 clawdtime agents call connect --agent claude-code --project PATH
+# 3. Ask the backend whether a call would work now. No call is placed.
+clawdtime agents call check
+# 4. Turn away mode on, or let ClawdTime call you to talk.
 clawdtime agents away on
+clawdtime agents call me
 ```
+
+`agents call check` prints the backend's own readiness for the pairing, one line
+for each check, and says whether a phone would ring: in live mode it does, in
+simulation or standby it does not.
 
 - Only clear words count. "Approve", "yes", "go ahead" allow. "Deny", "no",
   "stop" deny, and your words become the reason for the agent. Unclear words, both

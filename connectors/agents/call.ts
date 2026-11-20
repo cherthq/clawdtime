@@ -426,7 +426,7 @@ export async function openCall(
   link: CallLink,
   /** Names this one call: a request id, or any unique word. */
   key: string,
-): Promise<CallClient> {
+): Promise<ClawdTimeClient> {
   const connection = loadConnection(
     link.connectionFile,
     link.project,
@@ -494,4 +494,83 @@ export async function converseByCall(
     turns: count,
     ended: "value" in result ? result.value : result.ended,
   };
+}
+
+const readinessSchema = z
+  .object({
+    mode: z.string().max(40).optional(),
+    ready: z.boolean().optional(),
+    readiness: z
+      .object({
+        checks: z
+          .array(
+            z
+              .object({
+                id: z.string().max(80),
+                status: z.string().max(20),
+                message: z.string().max(400),
+              })
+              .passthrough(),
+          )
+          .max(40),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+/** What the backend says about a call for this pairing, before any call is placed. */
+export interface CallCheck {
+  /** A call can be placed now. */
+  ready: boolean;
+  /** "live": a phone rings. "simulation" or "standby": no phone rings. */
+  mode: string;
+  /** "note" is anything the backend neither passes nor fails, for example that the mode is simulation. */
+  checks: { id: string; status: "pass" | "fail" | "note"; message: string }[];
+}
+
+/**
+ * Asks the backend whether a call would work now. It opens a session, as a call
+ * does, and reads the backend's own readiness. It places no call.
+ */
+export async function checkCall(
+  link: CallLink,
+  key: string,
+): Promise<CallCheck> {
+  const client = await openCall(link, key);
+  const report = readinessSchema.parse(await client.doctor());
+  const checks = (report.readiness?.checks ?? []).map((check) => ({
+    id: check.id,
+    status:
+      check.status === "pass"
+        ? ("pass" as const)
+        : check.status === "fail"
+          ? ("fail" as const)
+          : ("note" as const),
+    message: check.message.replace(/\p{C}/gu, " ").slice(0, 300),
+  }));
+  return {
+    ready: report.ready === true,
+    mode: report.mode ?? "unknown",
+    checks,
+  };
+}
+
+/** The check as lines for a terminal. */
+export function callCheckText(check: CallCheck): string[] {
+  const lines = [
+    `The backend answers. Mode: ${check.mode}.`,
+    ...check.checks.map(
+      (item) =>
+        `  ${item.status === "fail" ? "FAIL" : item.status}  ${item.id}: ${item.message}`,
+    ),
+  ];
+  lines.push(
+    check.ready
+      ? check.mode === "live"
+        ? "A call can be placed now, and your phone will ring."
+        : "A call can be placed in this mode, but no phone rings: the line is not live."
+      : "A call would not go through. Fix the lines marked FAIL.",
+  );
+  return lines;
 }

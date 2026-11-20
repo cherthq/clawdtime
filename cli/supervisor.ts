@@ -22,6 +22,8 @@ import {
   type DecisionRequest,
 } from "../connectors/agents/decisions.js";
 import {
+  callCheckText,
+  checkCall,
   converseByCall,
   loadCallLink,
   openCall,
@@ -145,6 +147,7 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   chat [TEXT]                          talk to ClawdTime in text: it answers and can act
   talk                                 the same by voice: you speak, it speaks back
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
+  agents call check                    ask the backend whether a call would work now; no call is placed
 ID is the request's id, its first letters, or its number in the pending list.`;
 
 function split(args: string[], switches: string[], values: string[]) {
@@ -405,6 +408,19 @@ export async function supervisorCli(
           "Linked. In away mode a request that waits becomes a FaceTime call through this pairing, and your spoken answer goes to the agent.",
         );
       }
+      if (action === "check") {
+        const link = loadCallLink(root);
+        if (!link)
+          throw new Error(
+            "No phone link. First: clawdtime agents call connect --agent claude-code --project PATH",
+          );
+        // It asks the backend only. No call is placed and no phone rings.
+        for (const line of callCheckText(
+          await checkCall(link, `check-${system.now().toString(36)}`),
+        ))
+          print(line);
+        return;
+      }
       if (action === "me") {
         const link = loadCallLink(root);
         if (!link)
@@ -472,7 +488,7 @@ export async function supervisorCli(
       }
       if (action !== "status")
         throw new Error(
-          "Use: clawdtime agents call connect|status|me|disconnect",
+          "Use: clawdtime agents call connect|status|check|me|disconnect",
         );
       const link = loadCallLink(root);
       return print(
