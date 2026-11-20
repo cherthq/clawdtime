@@ -753,10 +753,13 @@ export class ComputerWorker implements DesktopExecutorPort {
           `I could not finish. ${clean(checked.reason, 900)}`.trim(),
         );
       case "ask": {
+        // These are the planner's words, so they carry a mark. A question that
+        // the checks ask before an action has none: the planner cannot pose
+        // as them, and its answer allows nothing in code.
         const reply = await this.ask(
           run,
           "free",
-          clean(checked.question, 900) || "I need an answer from you to go on.",
+          `The task asks: ${clean(checked.question, 900) || "it needs an answer from you to go on."}`,
           "",
         );
         if (reply.kind !== "text") return;

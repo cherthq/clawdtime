@@ -121,9 +121,18 @@ export const dangerWords = [
   "shut down",
   "restart",
   "log off",
+  "quit",
+  "replace",
+  "overwrite",
+  "revert",
+  "don't save",
 ] as const;
+// A space in a word also stands for no space and for a hyphen: "log out",
+// "logout", "log-out". An apostrophe also stands for the curved one.
 const danger = new RegExp(
-  `\\b(?:${dangerWords.map((word) => word.replace(/ /g, "[\\s-]*")).join("|")})\\b`,
+  `\\b(?:${dangerWords
+    .map((word) => word.replace(/ /g, "[\\s-]*").replace(/'/g, "['’]?"))
+    .join("|")})\\b`,
   "i",
 );
 const dangerRisk = (name: string) => {
@@ -277,9 +286,10 @@ function keyRisk(
     observation.app.bundleId.toLowerCase() === "com.apple.mail"
   )
     return sendRisk;
-  // Return and Space press the default or the focused button of a window. So
-  // a key can do what a click on "Delete" does. With the focus in a text
-  // field the key goes to the text, and this does not apply.
+  // Return and Space press the default button of a window, the chosen item of
+  // an open menu, and whatever has the focus. So a key can do what a click on
+  // "Delete" does. With the focus in a text field the key goes to the text,
+  // and this does not apply.
   if ((key === "return" || key === "space") && !modifiers.size) {
     const writing = observation.elements.some(
       (item) => item.focused && textRoles.has(item.role),
@@ -288,7 +298,11 @@ function keyRisk(
       ? undefined
       : observation.elements.find(
           (item) =>
-            item.enabled && item.role === "AXButton" && danger.test(item.title),
+            item.enabled &&
+            (item.role === "AXButton" ||
+              item.role === "AXMenuItem" ||
+              item.focused) &&
+            danger.test(item.title),
         );
     if (button)
       return `This key can press "${clean(button.title, 40)}", which may be something that cannot be undone, or that speaks for you.`;

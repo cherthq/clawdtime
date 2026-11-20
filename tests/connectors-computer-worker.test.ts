@@ -1007,8 +1007,12 @@ describe("questions and endings of the planner", () => {
     ]);
     await worker.submit("r1", "Open my note");
     await waiting();
-    expect(worker.snapshot().message).toBe("Which note: Shopping or Work?");
-    expect(said).toEqual(["Which note: Shopping or Work?"]);
+    // A question of the planner is marked as one. A question that the checks
+    // ask before an action has no such mark, so the planner cannot pose as them.
+    expect(worker.snapshot().message).toBe(
+      "The task asks: Which note: Shopping or Work?",
+    );
+    expect(said).toEqual(["The task asks: Which note: Shopping or Work?"]);
     expect((await worker.answer("the shopping one")).message).toBe(
       "Thank you. I go on.",
     );

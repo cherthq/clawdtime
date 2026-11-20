@@ -215,6 +215,12 @@ describe("an action that needs the person's yes", () => {
       ["AXButton", "SEND"],
       ["AXButton", "Logout"],
       ["AXButton", "Place Order"],
+      ["AXMenuItem", "Quit Notes"],
+      ["AXButton", "Replace"],
+      ["AXButton", "Don’t Save"],
+      ["AXButton", "Don't Save"],
+      ["AXMenuItem", "Revert to Saved"],
+      ["AXButton", "Overwrite"],
     ]) {
       const seen = observation([element(1, { role: role!, title: title! })]);
       expect(
@@ -358,6 +364,25 @@ describe("an action that needs the person's yes", () => {
       element(2, { title: "OK" }),
     ]);
     expect(run({ kind: "key", combo: "return" }, view(plain)).risk).toBeNull();
+    // An open menu with such an item, and a link with such a name that has the focus.
+    const menu = observation([
+      element(1, { role: "AXMenuItem", title: "Rename" }),
+      element(2, { role: "AXMenuItem", title: "Move to Trash" }),
+    ]);
+    expect(run({ kind: "key", combo: "return" }, view(menu)).risk).toMatch(
+      /can press "Move to Trash"/,
+    );
+    const link = observation([
+      element(1, { role: "AXLink", title: "Delete account", focused: true }),
+    ]);
+    expect(run({ kind: "key", combo: "space" }, view(link)).risk).toMatch(
+      /can press "Delete account"/,
+    );
+    // A link with such a name that does not have the focus is not pressed by a key.
+    const page = observation([
+      element(1, { role: "AXLink", title: "Delete account" }),
+    ]);
+    expect(run({ kind: "key", combo: "return" }, view(page)).risk).toBeNull();
   });
 });
 
