@@ -17,7 +17,7 @@ import {
   transcribe,
   type SpeechSettings,
 } from "./speech.js";
-import { answerByCall, loadCallLink, openCall } from "./call.js";
+import { answerByCall, loadCallLink, openCall, sayByCall } from "./call.js";
 import { agentLabel } from "./catalog.js";
 import { DecisionDesk, type DecisionRequest } from "./decisions.js";
 import { focusSession, realRunner, type Runner } from "./focus.js";
@@ -26,6 +26,14 @@ import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
 import type { TaskPort } from "./tasks.js";
+import {
+  incidentSentence,
+  incidentsView,
+  Watcher,
+  WatchStore,
+  type Incident,
+  type IncidentsView,
+} from "./watch.js";
 import {
   boardSnapshotSchema,
   type AgentSession,
@@ -50,6 +58,10 @@ export interface AgentBoardPort {
   chat(): ChatView;
   /** Memory on or off. It is off until the person turns it on. */
   setMemory(enabled: boolean): void;
+  /** What the watcher found: a long wait, a stall, a bad end, finished work. */
+  incidents(): IncidentsView;
+  /** The person has seen one incident. False when it is not open. */
+  dismissIncident(id: string): boolean;
   say(text: string): Promise<ChatMessage>;
   hear(recording: string): Promise<{
     heard: string;
@@ -118,6 +130,12 @@ export class BoardFeed implements AgentBoardPort {
   private delayMs = 2000;
   readonly desk: DecisionDesk;
   private readonly calling = new Set<string>();
+  /** Calls for requests that are in flight now. */
+  private flights = 0;
+  /** A call that tells an incident is in flight now. */
+  private telling = false;
+  /** Incidents that were told by phone: one call for each. */
+  private readonly told = new Set<string>();
   constructor(
     private readonly options: {
       intervalMs?: number;
@@ -138,6 +156,10 @@ export class BoardFeed implements AgentBoardPort {
       clis?: () => CliFact[];
       /** The task that ClawdTime owns, where a task service runs in this process. */
       tasks?: TaskPort;
+      /** Places the call that says one incident. The default uses the linked pairing. */
+      notify?: (incident: Incident, sentence: string) => Promise<unknown>;
+      /** Whether a process of this Mac still runs, for the watcher. Tests script it. */
+      exists?: (pid: number) => boolean;
     } = {},
   ) {
     this.root =
@@ -150,6 +172,12 @@ export class BoardFeed implements AgentBoardPort {
       now: options.now ?? Date.now,
     });
     this.log = new ChatLog(this.root);
+    this.watchStore = new WatchStore(this.root);
+    this.watcher = new Watcher({
+      now: options.now ?? Date.now,
+      store: this.watchStore,
+      exists: options.exists,
+    });
     const key =
       process.env.CLAWDTIME_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
     const model =
@@ -174,11 +202,55 @@ export class BoardFeed implements AgentBoardPort {
         send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
         ...(options.tasks ? { tasks: options.tasks } : {}),
+        incidents: () => this.incidents().incidents.map((item) => item.text),
       },
       model,
     );
   }
   private readonly root: string;
+  private readonly watchStore: WatchStore;
+  private readonly watcher: Watcher;
+
+  incidents(): IncidentsView {
+    return incidentsView(this.watcher.open(), (this.options.now ?? Date.now)());
+  }
+  dismissIncident(id: string) {
+    return this.watcher.dismiss(id);
+  }
+  /**
+   * Away, with a phone: one call says one incident of a kind that the rules
+   * allow. Never two calls for one incident, and never while another call runs.
+   */
+  private report() {
+    if (this.telling || this.flights > 0 || !this.desk.away()) return;
+    if (!this.options.notify && loadCallLink(this.root) === null) return;
+    const allowed = this.watchStore.rules().callOn;
+    const incident = this.watcher
+      .open()
+      .find((item) => allowed.includes(item.kind) && !this.told.has(item.id));
+    if (!incident) return;
+    const now = this.options.now ?? Date.now;
+    this.told.add(incident.id);
+    this.telling = true;
+    const place =
+      this.options.notify ??
+      (async (item: Incident, sentence: string) => {
+        const link = loadCallLink(this.root);
+        if (!link) return;
+        await sayByCall(await openCall(link, `incident-${item.id}`), sentence, {
+          now,
+          deadline: now() + 90_000,
+          key: item.id,
+        });
+      });
+    void place(incident, incidentSentence(incident, now()))
+      .catch(() => {
+        // A call that could not be placed leaves the incident in the panel.
+      })
+      .finally(() => {
+        this.telling = false;
+      });
+  }
   private readonly book: HostBook;
   private readonly remoteDesk: RemoteDesk;
   /** A session of this Mac comes forward here. One of a remote Mac opens in a new window over ssh. */
@@ -323,11 +395,20 @@ export class BoardFeed implements AgentBoardPort {
       if (end < 0) return;
       const line = this.buffer.slice(0, end);
       this.buffer = this.buffer.slice(end + 1);
+      let snapshot: BoardSnapshot;
       try {
-        this.latest = boardSnapshotSchema.parse(JSON.parse(line));
-        this.delayMs = 2000;
+        snapshot = boardSnapshotSchema.parse(JSON.parse(line));
       } catch {
         // An invalid line is dropped. The last valid snapshot ages out.
+        continue;
+      }
+      this.latest = snapshot;
+      this.delayMs = 2000;
+      try {
+        this.watcher.observe(snapshot);
+        this.report();
+      } catch {
+        // A fault in the watcher never costs the board.
       }
     }
   }
@@ -412,8 +493,10 @@ export class BoardFeed implements AgentBoardPort {
   }
   /** Away: one call for each request, and its spoken answer goes to the desk. */
   private escalate(request: DecisionRequest) {
-    if (this.calling.has(request.id)) return;
+    // One phone: while a call tells an incident, this request waits for the next read.
+    if (this.calling.has(request.id) || this.telling) return;
     this.calling.add(request.id);
+    this.flights++;
     const now = this.options.now ?? Date.now;
     const place =
       this.options.call ??
@@ -432,6 +515,9 @@ export class BoardFeed implements AgentBoardPort {
       })
       .catch(() => {
         // A call that could not be placed leaves the request for the panel and the terminal.
+      })
+      .finally(() => {
+        this.flights--;
       });
   }
   answer(input: {

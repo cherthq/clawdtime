@@ -35,6 +35,15 @@ import type { ModelClient } from "../connectors/agents/brain.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { renderBoard, title } from "../connectors/agents/render.js";
+import {
+  incidentSentence,
+  incidentsView,
+  renderIncidents,
+  renderRules,
+  Watcher,
+  WatchStore,
+  type Incident,
+} from "../connectors/agents/watch.js";
 import { realSystem, type System } from "../connectors/agents/system.js";
 import type {
   AgentKind,
@@ -47,6 +56,8 @@ const help = `clawdtime agents: every coding-agent session on this Mac, and on t
   agents --local | --host NAME       this Mac only, or one remote Mac only
   agents watch [--interval SECONDS]  live board; arrows or j/k, Enter focuses, q quits
   agents focus ID|NAME               bring that session's terminal to the front
+  agents incidents [--json]          what the watcher found: a long wait, a stall, a bad end, finished work
+  agents watch-rules [set KEY VALUE] the watcher's limits: wait, stall, finished (a time), call (kinds)
   agents doctor                      how exactly each agent's state is known here
   agents hooks status|install|uninstall --agent claude-code|codex
 --all also lists one-shot runs that have no person at a terminal.
@@ -241,6 +252,7 @@ async function watch(
   intervalMs: number,
   runner: Runner,
   desk: DecisionDesk,
+  store: WatchStore,
 ) {
   const output = process.stdout;
   const input = process.stdin;
@@ -251,6 +263,17 @@ async function watch(
   let snapshot = scanner.scan(intervalMs);
   let selectedId = snapshot.sessions[0]?.id;
   let message = "";
+  // One watcher at a time. With the desktop service running, its findings are
+  // read here. With none, this view watches by itself for as long as it runs.
+  const own = store.readOpen(Date.now()).live
+    ? null
+    : new Watcher({ now: Date.now, store });
+  const findings = (): Incident[] => {
+    if (!own) return store.readOpen(Date.now()).incidents;
+    own.observe(snapshot);
+    return own.open();
+  };
+  let found = findings();
   // While this view runs, someone attends: agents' hooks wait here for an answer.
   desk.attend();
   let waiting = desk.pending();
@@ -274,8 +297,11 @@ async function watch(
       )
       .join("\n");
     const keys = waiting.length ? "a approves the first · d denies it · " : "";
+    const news = found.length
+      ? `${renderIncidents(found, { color: true, now: Date.now() })}\n\n`
+      : "";
     output.write(
-      `\u001b[H\u001b[2J${board}\n${asks ? `\n${asks}\n` : ""}\n\u001b[2m${keys}↑↓ or j/k move · Enter focuses · q quits\u001b[0m${message ? `\n${message}` : ""}\n`,
+      `\u001b[H\u001b[2J${news}${board}\n${asks ? `\n${asks}\n` : ""}\n\u001b[2m${keys}↑↓ or j/k move · Enter focuses · q quits\u001b[0m${message ? `\n${message}` : ""}\n`,
     );
   };
   const move = (step: number) => {
@@ -288,6 +314,7 @@ async function watch(
       snapshot = scanner.scan(intervalMs);
       desk.attend();
       waiting = desk.pending();
+      found = findings();
       draw();
     }, intervalMs);
     const finish = () => {
@@ -371,6 +398,23 @@ export async function agentsCli(
       host: values.host,
     });
     if (values.json === "true") return print(JSON.stringify(snapshot, null, 2));
+    // What the watcher found comes first: it is what the person must know.
+    const found = new WatchStore(stateRoot(system))
+      .readOpen(system.now())
+      .incidents.filter((incident) =>
+        values.local === "true"
+          ? !incident.host
+          : values.host === undefined || incident.host === values.host,
+      );
+    if (found.length) {
+      print(
+        renderIncidents(found, {
+          color: dependencies.isTTY ?? !!process.stdout.isTTY,
+          now: system.now(),
+        }),
+      );
+      print("");
+    }
     print(
       renderBoard(snapshot, {
         color: dependencies.isTTY ?? !!process.stdout.isTTY,
@@ -393,7 +437,56 @@ export async function agentsCli(
       Math.round(seconds * 1000),
       runner,
       new DecisionDesk(stateRoot(system), () => system.now()),
+      new WatchStore(stateRoot(system)),
     );
+  }
+  if (command === "incidents") {
+    const { values, positional } = flags(rest, { json: "switch" });
+    if (positional.length)
+      throw new Error("Use: clawdtime agents incidents [--json]");
+    const store = new WatchStore(stateRoot(system));
+    const now = system.now();
+    const { live, incidents } = store.readOpen(now);
+    const recent = store.recent(12);
+    if (values.json === "true")
+      return print(
+        JSON.stringify(
+          { live, open: incidentsView(incidents, now).incidents, recent },
+          null,
+          2,
+        ),
+      );
+    if (!live)
+      print(
+        "The watcher runs with the desktop service, and in: clawdtime agents watch. Neither runs now.",
+      );
+    else if (!incidents.length)
+      print(
+        "Nothing to report: no session waits too long, hangs or ended badly.",
+      );
+    else
+      print(
+        renderIncidents(incidents, {
+          color: dependencies.isTTY ?? !!process.stdout.isTTY,
+          now,
+        }),
+      );
+    if (recent.length) print("Recent");
+    for (const entry of recent)
+      print(
+        `  ${new Date(entry.at).toISOString().slice(0, 16).replace("T", " ")}Z  ${entry.event.padEnd(9)} ${incidentSentence(entry.incident, entry.at).replace(/\p{C}/gu, " ")}`,
+      );
+    return;
+  }
+  if (command === "watch-rules") {
+    const { positional } = flags(rest, {});
+    const store = new WatchStore(stateRoot(system));
+    if (!positional.length) return print(renderRules(store.rules()));
+    if (positional[0] !== "set" || positional.length !== 3)
+      throw new Error(
+        "Use: clawdtime agents watch-rules, or: clawdtime agents watch-rules set wait|stall|finished|call VALUE",
+      );
+    return print(renderRules(store.setRule(positional[1]!, positional[2]!)));
   }
   if (command === "focus") {
     const { positional } = flags(rest, {});

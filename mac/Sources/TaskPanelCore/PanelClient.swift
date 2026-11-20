@@ -25,6 +25,7 @@ public final class PanelClient {
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
       path == "/desktop/chat" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
+      path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -85,6 +86,18 @@ public final class PanelClient {
     if let text { body["text"] = text }
     let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     return try JSONDecoder().decode(DecisionAnswerResult.self, from: await request(path: "/desktop/decisions/answer", body: data)).ok
+  }
+  /// What the watcher found on the sessions. A service with no watcher answers with an error.
+  public func incidents() async throws -> Incidents {
+    let result = try JSONDecoder().decode(Incidents.self, from: await request(path: "/desktop/incidents"))
+    try result.validate()
+    return result
+  }
+  /// The person has seen one incident. False when it is no longer open.
+  public func dismissIncident(_ id: String) async throws -> Bool {
+    guard Incidents.identity(id) else { throw PanelFailure.configuration }
+    let data = try JSONSerialization.data(withJSONObject: ["id": id], options: [.sortedKeys])
+    return try JSONDecoder().decode(IncidentDismissResult.self, from: await request(path: "/desktop/incidents/dismiss", body: data)).ok
   }
   /// Away: requests wait for a phone call.
   public func setAway(_ away: Bool) async throws {

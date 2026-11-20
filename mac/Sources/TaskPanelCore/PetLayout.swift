@@ -101,9 +101,12 @@ public struct PetStatus: Equatable, Sendable {
     public let decisionId: String?
     /// What ClawdTime heard and what it answered, in a spoken conversation. It may take three lines.
     public let caption: Bool
-    public init(key: String, title: String, detail: String, sessionId: String?, decisionId: String? = nil, caption: Bool = false) {
+    /// What the watcher found. Closing the bubble tells the service that the person has seen it.
+    public let incidentId: String?
+    public init(key: String, title: String, detail: String, sessionId: String?, decisionId: String? = nil, caption: Bool = false,
+                incidentId: String? = nil) {
       self.key = key; self.title = title; self.detail = detail; self.sessionId = sessionId; self.decisionId = decisionId
-      self.caption = caption
+      self.caption = caption; self.incidentId = incidentId
     }
     /// The caption of one spoken turn. It stays longer for a longer answer.
     public static func said(heard: String, reply: String, at: Double) -> (bubble: Bubble, seconds: Double) {
@@ -121,7 +124,8 @@ public struct PetStatus: Equatable, Sendable {
   }
 
   public static func make(board: AgentBoard?, connected: Bool, taskNeedsPerson: Bool, sharing: Bool,
-                          quietSeconds: Double, now: Double, decisions: [PendingDecisions.Request] = []) -> PetStatus {
+                          quietSeconds: Double, now: Double, decisions: [PendingDecisions.Request] = [],
+                          incidents: [Incidents.Incident] = []) -> PetStatus {
     let sessions = board?.sessions ?? []
     let waiting = sessions.filter { $0.state == .needsYou }
     let working = board?.counts.working ?? 0
@@ -149,7 +153,14 @@ public struct PetStatus: Equatable, Sendable {
       let names = waiting.prefix(2).map { AgentBoardText.clean(AgentBoardText.title($0), limit: 22) }.joined(separator: ", ")
       bubble = Bubble(key: waiting.map(\.id).sorted().joined(separator: ","), title: agents(waiting.count, "needs you", "need you"),
         detail: waiting.count > 2 ? names + " and \(waiting.count - 2) more" : names, sessionId: nil)
+    } else if let incident = incidents.filter({ $0.kind != "waiting" }).max(by: { $0.raisedAt < $1.raisedAt }) {
+      // Nothing waits for the person: the newest thing the watcher found shows. A
+      // long wait is not repeated here, because a waiting session has its own bubble above.
+      let open = sessions.first { $0.id == incident.sessionId }
+      bubble = Bubble(key: "incident:" + incident.id, title: IncidentText.who(incident), detail: IncidentText.detail(incident, now: now),
+        sessionId: open?.canFocus == true ? incident.sessionId : nil, incidentId: incident.id)
     }
+    let trouble = incidents.filter(\.isTrouble).max(by: { $0.raisedAt < $1.raisedAt })
 
     let mood: MascotMood, headline: String
     if !connected { mood = .offline; headline = "Not connected" }
@@ -160,6 +171,8 @@ public struct PetStatus: Equatable, Sendable {
     }
     else if taskNeedsPerson { mood = .attention; headline = "Your task needs an answer" }
     else if !waiting.isEmpty { mood = .attention; headline = agents(waiting.count, "needs you", "need you") }
+    // A session that hangs or died asks for the person's eyes, before the quiet news of work.
+    else if let trouble { mood = .attention; headline = IncidentText.headline(trouble) }
     else if working > 0 { mood = .working; headline = agents(working, "at work", "at work") }
     else {
       mood = quietSeconds > 600 ? .asleep : quietSeconds > 180 ? .sleepy : .idle

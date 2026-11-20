@@ -233,6 +233,7 @@ export function observeHooks(
         since: event.since,
         source: "hook",
         at: event.at,
+        alive: event.at,
       },
     ];
     if (event.detail === "permission_prompt") {
@@ -257,6 +258,7 @@ export function observeHooks(
           since: started,
           source: "process",
           at: started,
+          alive: started,
         });
     }
     result.set(owner.process.pid, { evidence });

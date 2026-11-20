@@ -32,6 +32,10 @@ final class AgentBoardTests: XCTestCase {
     XCTAssertEqual(board.sessions[1].terminal.tmux, .init(session: "main", window: 2, pane: 1))
     XCTAssertEqual(board.sessions.map(\.canFocus), [true, true, false, true, true, true])
     XCTAssertNil(board.sessions[2].since)
+    // The time of the last sign of life, where the session's evidence carries one.
+    XCTAssertEqual(board.sessions.map(\.activeAt), [1_795_156_110_000, 1_795_156_188_000, nil, 1_795_156_150_000, nil, nil])
+    XCTAssertThrowsError(try self.board([.init(id: "100-abc123", agentLabel: "Claude Code", name: nil, project: "work", mode: "interactive",
+      state: .working, detail: "turn_running", since: 1, focus: "tab", terminal: .init(tty: nil, app: nil, tmux: nil, remote: false), activeAt: -1)]).validate())
   }
 
   // MARK: remote Macs

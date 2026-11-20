@@ -38,7 +38,13 @@ export interface AgentBoardPort {
   say(text: string): Promise<unknown>;
   hear(recording: string): Promise<unknown>;
   setMemory(enabled: boolean): void;
+  /** What the watcher found on the sessions. */
+  incidents(): unknown;
+  dismissIncident(id: string): boolean;
 }
+const incidentDismissSchema = z
+  .object({ id: z.string().regex(/^[0-9a-f]{12}$/) })
+  .strict();
 const memorySchema = z.object({ enabled: z.boolean() }).strict();
 const chatSchema = z.object({ text: z.string().min(1).max(2000) }).strict();
 const voiceSchema = z
@@ -214,6 +220,16 @@ export function createTaskApp(
         const { enabled } = memorySchema.parse(await c.req.json());
         agents.setMemory(enabled);
         return c.json({ enabled });
+      });
+      // What the watcher found: a long wait, a stall, a bad end, finished work.
+      app.get("/desktop/incidents", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.incidents());
+      });
+      app.post("/desktop/incidents/dismiss", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id } = incidentDismissSchema.parse(await c.req.json());
+        return c.json({ ok: agents.dismissIncident(id) });
       });
       // Types the person's own words into one session's terminal.
       app.post("/desktop/agents/send", async (c) => {

@@ -19,7 +19,9 @@ the agent commands you use as a slide deck. You can also talk to it: in a chat
 screen, by voice on the Mac, where it answers aloud, or on a FaceTime call. In
 that conversation you can give it a task, ask how the task goes, answer its
 question, and accept or cancel it. It has a memory for what you tell it about
-yourself and your work, which is off until you turn it on. See the
+yourself and your work, which is off until you turn it on. Its watcher follows
+every session and tells you when one has waited for you too long, hangs, ended
+badly or is done. See the
 [supervisor guide](docs/SUPERVISOR.md).
 
 During an authorized visual call, keep the current prepared window shared through

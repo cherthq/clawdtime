@@ -137,6 +137,66 @@ clawdtime agents away on
   panel and the terminal.
 - The supervisor claims no screen and no input for the call. It only talks.
 
+## Watcher
+
+The board says what each session does now. The watcher follows every session
+from one scan to the next and tells you the four things that you want to hear
+about without looking:
+
+| Incident | When | What it says |
+|---|---|---|
+| `waiting` | A session has needed you for longer than the wait limit (2 minutes) | "deploy fix has waited for you for 5m." |
+| `stalled` | A session is in work and has shown no sign of life for longer than the stall limit (10 minutes) | "deploy fix has shown no sign of life for 12m." |
+| `failed` | A session stopped on an error, or its process ended in the middle of its work | "deploy fix is gone: its process ended in the middle of its work." |
+| `finished` | A session went from work to idle after at least 3 minutes of work | "deploy fix is done after 12m." |
+
+Where you see an incident:
+
+- The mascot's bubble shows the newest one when nothing else waits for you. A
+  click opens that session. The close button tells ClawdTime that you have seen
+  it. A stalled or failed session makes the mascot ask for attention; finished
+  work makes it jump once.
+- `clawdtime agents` and `clawdtime agents watch` print the open incidents above
+  the sessions, most urgent first. `clawdtime agents incidents` lists the open
+  ones and the recent ones.
+- ClawdTime names them when you ask it what is going on, in chat, by voice or on
+  a call.
+- In away mode, with a phone link, one call says an incident and ends when you
+  say a word. Only the kinds in the `call` rule place a call: `waiting` and
+  `failed` at the start. There is one call for one incident, and never a second
+  call while one is in flight.
+
+How it knows:
+
+- A sign of life is the newest time in a session's own evidence: the time of its
+  status, the last change of its session file, its last hook record. Only the
+  time of a file is read, never its text. A session whose evidence carries no
+  time is never called stalled. A session that only waits for a background
+  shell is not stalled.
+- A session is `failed` as gone only when it was in work or needed you, it is
+  missing from two scans in a row, and its process no longer exists. A session
+  that you closed while it was idle, a one-shot run, and a session that you
+  interrupted are never reported.
+- For a remote Mac that does not answer, the watcher says nothing about its
+  sessions until it answers again.
+- An incident is raised once. A wait or a stall stays while it lasts. A failed
+  or finished one stays for 10 minutes, or until you dismiss it.
+
+Change the limits:
+
+```sh
+clawdtime agents watch-rules                  # print the rules
+clawdtime agents watch-rules set wait 5m      # also: stall, finished
+clawdtime agents watch-rules set call failed,stalled   # or: none
+```
+
+A limit under 30 seconds is refused: it would fire on every pause.
+
+The watcher only reads. It never sends input to a session and never answers
+anything. An incident holds names and times, as the board does: no prompt, no
+reply and no command. It runs inside the desktop service; with no service,
+`clawdtime agents watch` runs it for as long as that view is open.
+
 ## Talk to ClawdTime
 
 ClawdTime is also an agent that you can talk to. It sees what the board sees and
@@ -296,6 +356,9 @@ moves it):
   written there while memory is off.
 - `agents/voice/`: one recording while it is turned into text, then it is
   removed; and the newest spoken answer only.
+- `agents/watch.json`: the watcher's rules. `agents/watch-open.json`: the
+  incidents that are open now. `agents/incidents.jsonl`: when each incident was
+  raised, cleared or dismissed, the last 500 lines.
 
 The board snapshot still holds no request text. Request text reaches the panel
 only through `GET /desktop/decisions`, under the private panel credential.

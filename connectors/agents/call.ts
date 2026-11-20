@@ -261,6 +261,90 @@ export async function answerByCall(
   }
 }
 
+/**
+ * Places one call that says one thing, for example what the watcher found. It
+ * ends when the person says a word, when they hang up, or when the time runs
+ * out. Nothing the person says here is an answer to an agent.
+ */
+export async function sayByCall(
+  client: CallClient,
+  sentence: string,
+  options: {
+    now: () => number;
+    deadline: number;
+    /** Names this one call, so the same news never places a second one. */
+    key: string;
+    pollMs?: number;
+    beatMs?: number;
+  },
+): Promise<"heard" | "ended" | "time"> {
+  const remaining = () => options.deadline - options.now();
+  const { request: attention } = await client.requestAttention({
+    taskId: "clawdtime-supervisor",
+    idempotencyKey: `incident-${options.key}`,
+    reason: "decision",
+    question: `${sentence.slice(0, 300)} Say okay when you have heard this.`,
+    timeoutSeconds: Math.max(20, Math.floor(remaining() / 1000)),
+  });
+  const beat = setInterval(
+    () => void client.heartbeat().catch(() => {}),
+    options.beatMs ?? 5000,
+  );
+  let cursor = 0;
+  try {
+    while (remaining() > 0) {
+      const page = await client.conversationTurns(
+        attention.id,
+        cursor,
+        Math.max(1, Math.min(options.pollMs ?? 10_000, remaining())),
+      );
+      const turns = page.turns
+        .flatMap((raw) => {
+          const parsed = turnSchema.safeParse(raw);
+          return parsed.success ? [parsed.data] : [];
+        })
+        .filter((turn) => turn.sequence > cursor)
+        .sort((left, right) => left.sequence - right.sequence);
+      for (const turn of turns) {
+        cursor = turn.sequence;
+        await client
+          .conversationOperation(attention.id, "ack", { turnId: turn.id })
+          .catch(() => {});
+      }
+      const last = turns.findLast((turn) => turn.text?.trim());
+      if (last) {
+        await client
+          .conversationOperation(attention.id, "reply", {
+            turnId: last.id,
+            replyId: `reply-${last.id}`,
+            text: "Okay.",
+            expectedCursor: cursor,
+          })
+          .catch(() => {});
+        await client
+          .conversationOperation(attention.id, "progress", {
+            turnId: last.id,
+            state: "completed",
+          })
+          .catch(() => {});
+        await client
+          .conversationOperation(attention.id, "end", {})
+          .catch(() => {});
+        return "heard";
+      }
+      if (
+        ended.includes(page.request?.state ?? "") ||
+        page.conversation?.state === "ended"
+      )
+        return "ended";
+    }
+    await client.conversationOperation(attention.id, "end", {}).catch(() => {});
+    return "time";
+  } finally {
+    clearInterval(beat);
+  }
+}
+
 const linkSchema = z
   .object({
     version: z.literal(1),

@@ -201,6 +201,8 @@ final class PetController: NSObject {
   var onOpenSession: ((String) -> Void)?
   /// request id, "allow" or "deny"
   var onDecide: ((String, String) -> Void)?
+  /// The person closed the bubble of something the watcher found: its incident id.
+  var onDismissIncident: ((String) -> Void)?
   var onStopSharing: (() -> Void)?
   var onStopCall: (() -> Void)?
   /// The bar under the mascot: chat, talk, and the controls of a conversation.
@@ -262,7 +264,12 @@ final class PetController: NSObject {
     window.contentView = gestures
     bubbleWindow.contentView = bubble; bubbleWindow.hasShadow = true
     bubble.onClick = { [weak self] in self?.bubbleClicked() }
-    bubble.onDismiss = { [weak self] in self?.dismissedBubble = self?.shownBubble?.key }
+    bubble.onDismiss = { [weak self] in
+      guard let self else { return }
+      self.dismissedBubble = self.shownBubble?.key
+      // An incident that the person has seen is told to the service, so it leaves every view.
+      if let incident = self.shownBubble?.incidentId { self.onDismissIncident?(incident) }
+    }
     bubble.onApprove = { [weak self] in self?.decided("allow") }
     bubble.onDeny = { [weak self] in self?.decided("deny") }
     bar = DockBarView(target: self, chat: #selector(chatPressed), talk: #selector(talkPressed), mic: #selector(micPressed), speaker: #selector(speakerPressed),

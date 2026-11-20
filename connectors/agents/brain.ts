@@ -205,6 +205,8 @@ export interface SupervisorWorld {
   clis(): CliFact[];
   /** The task that ClawdTime owns. Absent where no task service runs, as in a plain terminal. */
   tasks?: TaskPort;
+  /** What the watcher found, one sentence each, most urgent first. */
+  incidents?: () => string[];
 }
 
 const system = `You are ClawdTime, the supervisor of the coding agents on this person's Mac.
@@ -520,6 +522,11 @@ export class Supervisor {
         `${index + 1}. ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary.slice(0, 200)}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}`,
       ),
     );
+    const found = this.world.incidents?.() ?? [];
+    if (found.length) {
+      lines.push(`The watcher found ${found.length}:`);
+      for (const sentence of found.slice(0, 10)) lines.push(`- ${sentence}`);
+    }
     lines.push(
       this.world.desk.away() ? "Away mode is on." : "Away mode is off.",
     );

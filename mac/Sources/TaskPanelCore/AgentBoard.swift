@@ -49,11 +49,13 @@ public struct AgentBoard: Codable, Equatable {
     /// The remote Mac that runs this session. Nil for a session of this Mac. With a
     /// host, the terminal is on that Mac, and a click opens a new window over ssh.
     public let host: String?
+    /// When the session last showed a sign of life. Nil when its evidence carries no time.
+    public let activeAt: Double?
     public init(id: String, agentLabel: String, name: String?, project: String, mode: String, state: State,
-                detail: String, since: Double?, focus: String, terminal: Terminal, host: String? = nil) {
+                detail: String, since: Double?, focus: String, terminal: Terminal, host: String? = nil, activeAt: Double? = nil) {
       self.id = id; self.agentLabel = agentLabel; self.name = name; self.project = project; self.mode = mode
       self.state = state; self.detail = detail; self.since = since; self.focus = focus; self.terminal = terminal
-      self.host = host
+      self.host = host; self.activeAt = activeAt
     }
     public var canFocus: Bool { ["tab", "pane", "app"].contains(focus) }
   }
@@ -101,7 +103,7 @@ public struct AgentBoard: Codable, Equatable {
         session.project.count <= 120, session.detail.count <= 40, session.mode.count <= 20,
         session.focus.count <= 10, (session.terminal.app?.count ?? 0) <= 120,
         (session.terminal.tty?.count ?? 0) <= 24, (session.terminal.tmux?.session.count ?? 0) <= 200,
-        session.since.map({ $0 >= 0 }) ?? true else { throw PanelFailure.response }
+        session.since.map({ $0 >= 0 }) ?? true, session.activeAt.map({ $0 >= 0 }) ?? true else { throw PanelFailure.response }
     }
   }
   /// The service publishes on an interval. A board much older than that is not shown.

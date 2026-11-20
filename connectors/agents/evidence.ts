@@ -73,8 +73,21 @@ export function claudeEvidence(
   const at =
     epoch(record.statusUpdatedAt) ?? epoch(record.updatedAt) ?? observedAt;
   const since = epoch(record.statusUpdatedAt);
-  const evidence = (state: StateEvidence["state"], detail: StateDetail) =>
-    ({ state, detail, since, source: "registry", at }) satisfies StateEvidence;
+  const seen = Math.max(
+    epoch(record.statusUpdatedAt) ?? 0,
+    epoch(record.updatedAt) ?? 0,
+  );
+  const evidence = (
+    state: StateEvidence["state"],
+    detail: StateDetail,
+  ): StateEvidence => ({
+    state,
+    detail,
+    since,
+    source: "registry",
+    at,
+    ...(seen ? { alive: seen } : {}),
+  });
   const status = record.status ?? record.state;
   switch (status) {
     case "busy":
@@ -104,6 +117,44 @@ export function claudeEvidence(
 
 export const claudeHome = (system: System) =>
   system.env.CLAUDE_CONFIG_DIR || join(system.home, ".claude");
+
+/**
+ * When a Claude Code session last wrote to its own session file. Only the
+ * file's time is read, never its text. The file is named after the session and
+ * sits in a folder named after the working directory.
+ */
+export function claudeSessionFileTime(
+  system: System,
+  record: Record<string, unknown>,
+): number | null {
+  const { sessionId, cwd } = record;
+  if (typeof sessionId !== "string" || !/^[0-9A-Za-z-]{8,64}$/.test(sessionId))
+    return null;
+  if (typeof cwd !== "string" || !cwd.startsWith("/") || cwd.length > 4096)
+    return null;
+  const stat = system.stat(
+    join(
+      claudeHome(system),
+      "projects",
+      cwd.replace(/[^A-Za-z0-9]/g, "-"),
+      `${sessionId}.jsonl`,
+    ),
+  );
+  return stat?.isFile ? Math.floor(stat.mtimeMs) : null;
+}
+
+/** The record's evidence, with the session file's time as one more sign of life. */
+function claudeObserved(
+  system: System,
+  record: Record<string, unknown>,
+  now: number,
+): StateEvidence {
+  const evidence = claudeEvidence(record, now);
+  const written = claudeSessionFileTime(system, record);
+  return written === null
+    ? evidence
+    : { ...evidence, alive: Math.max(evidence.alive ?? 0, written) };
+}
 
 /** The supported listing. null when the command is missing or its output is not a list. */
 export function claudeListing(
@@ -158,7 +209,7 @@ export function observeClaude(
       continue;
     }
     result.set(pid, {
-      evidence: [claudeEvidence(record, now)],
+      evidence: [claudeObserved(system, record, now)],
       name: cleanName(record.name),
       version: cleanName(record.version)?.slice(0, 40) ?? null,
     });
@@ -171,7 +222,7 @@ export function observeClaude(
       );
       if (record)
         result.set(candidate.process.pid, {
-          evidence: [claudeEvidence(record, now)],
+          evidence: [claudeObserved(system, record, now)],
           name: cleanName(record.name),
         });
     }
@@ -272,6 +323,8 @@ export function piEvidence(
         since,
         source: "transcript",
         at: since ?? mtimeMs,
+        // The file changes with every message, also in the middle of a turn.
+        alive: Math.floor(Math.max(since ?? 0, mtimeMs)),
       }) satisfies StateEvidence;
     if (message.role !== "assistant")
       return evidence("working", "turn_running");
@@ -371,6 +424,8 @@ export function codexEvidence(
         since,
         source: "transcript",
         at: since ?? mtimeMs,
+        // The file changes with every event, also in the middle of a turn.
+        alive: Math.floor(Math.max(since ?? 0, mtimeMs)),
       }) satisfies StateEvidence;
     if (type === "task_started" || type === "turn_started")
       return evidence("working", "turn_running");

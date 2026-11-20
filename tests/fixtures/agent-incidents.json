@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "incidents": [
+    {
+      "version": 1,
+      "id": "a1b2c3d4e5f6",
+      "kind": "failed",
+      "sessionId": "300-abc123",
+      "title": "docs",
+      "agentLabel": "Codex",
+      "since": 1795156140000,
+      "workedMs": 480000,
+      "cause": "gone",
+      "raisedAt": 1795156140000,
+      "text": "docs is gone: its process ended in the middle of its work."
+    },
+    {
+      "version": 1,
+      "id": "b1b2c3d4e5f6",
+      "kind": "waiting",
+      "sessionId": "100-abc123",
+      "title": "deploy fix",
+      "agentLabel": "Claude Code",
+      "since": 1795155900000,
+      "workedMs": null,
+      "cause": null,
+      "raisedAt": 1795156020000,
+      "text": "deploy fix has waited for you for 5m."
+    },
+    {
+      "version": 1,
+      "id": "c1b2c3d4e5f6",
+      "kind": "stalled",
+      "sessionId": "mini_512-abc123",
+      "title": "ios build",
+      "agentLabel": "Claude Code",
+      "host": "mini",
+      "since": 1795155480000,
+      "workedMs": null,
+      "cause": null,
+      "raisedAt": 1795156080000,
+      "text": "ios build on mini has shown no sign of life for 12m."
+    },
+    {
+      "version": 1,
+      "id": "d1b2c3d4e5f6",
+      "kind": "finished",
+      "sessionId": "200-abc123",
+      "title": "site",
+      "agentLabel": "pi",
+      "since": 1795156170000,
+      "workedMs": 720000,
+      "cause": null,
+      "raisedAt": 1795156170000,
+      "text": "site is done after 12m."
+    }
+  ]
+}

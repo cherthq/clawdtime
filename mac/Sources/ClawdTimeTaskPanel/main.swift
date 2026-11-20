@@ -17,6 +17,10 @@ import TaskPanelCore
   private var pollTask: Task<Void, Never>?
   private var board: AgentBoard?
   private var decisions: PendingDecisions?
+  /// What the watcher found: a long wait, a stall, a bad end, finished work.
+  private var incidents: Incidents?
+  /// Finished work that the mascot has already jumped for.
+  private var celebrated: Set<String> = []
   private var awayItems: [NSMenuItem] = []
   private var memoryItems: [NSMenuItem] = []
   private var showRevision = false
@@ -190,6 +194,7 @@ import TaskPanelCore
     pet.onToggleBoard = { [weak self] in self?.toggleBoard(nil) }
     pet.onOpenSession = { [weak self] id in self?.openAgent(id) }
     pet.onDecide = { [weak self] id, decision in self?.decide(id, decision, nil, false) }
+    pet.onDismissIncident = { [weak self] id in self?.dismissIncident(id) }
     pet.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
     pet.onStopCall = { [weak self] in self?.perform(.stopCall) }
     pet.onHide = { [weak self] in self?.closeBoard(); self?.chatPanel.close(); self?.voice.stop(); self?.pet.hide() }
@@ -370,6 +375,8 @@ import TaskPanelCore
           self.board = try? await client.agents()
           // Reading this also tells the agents' hooks that someone is here to answer.
           self.decisions = try? await client.decisions()
+          // The watcher is optional, as the board is: a service without one changes nothing.
+          self.incidents = try? await client.incidents()
           // The chat is read while it is in view, and once at the start.
           if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil {
             if let fresh = try? await client.chat() { self.transcript = fresh }
@@ -391,7 +398,7 @@ import TaskPanelCore
           }
           self.state.pending = self.receipts?.entries ?? []; delay = 1
         } catch {
-          self.state.connected = false; self.board = nil; self.decisions = nil; delay = min(5, delay * 2)
+          self.state.connected = false; self.board = nil; self.decisions = nil; self.incidents = nil; delay = min(5, delay * 2)
         }
         self.render()
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -407,8 +414,13 @@ import TaskPanelCore
     let taskNeedsPerson = task?.decision != nil || task?.canAccept == true
     let sharing = snapshot?.controls.sharingActive == true || snapshot?.controls.callActive == true
     let asked = (decisions?.pending ?? []).filter { $0.holdUntil > now }
+    let found = liveBoard == nil ? [] : (incidents?.incidents ?? [])
     let status = PetStatus.make(board: liveBoard, connected: state.connected, taskNeedsPerson: taskNeedsPerson, sharing: sharing,
-                                quietSeconds: pet.mascot.quietSeconds, now: now, decisions: asked)
+                                quietSeconds: pet.mascot.quietSeconds, now: now, decisions: asked, incidents: found)
+    // Work that is done: the mascot jumps once, when the news first shows.
+    if let id = status.bubble?.incidentId, found.first(where: { $0.id == id })?.kind == "finished", celebrated.insert(id).inserted {
+      pet.mascot.jump()
+    }
     // In a spoken conversation the bubble is the caption: what it heard, what it answered.
     if let said, said.until > Date(), !chatPanel.isOpen {
       pet.status = PetStatus(mood: status.mood, headline: status.headline, detail: status.detail, bubble: said.bubble)
@@ -470,6 +482,15 @@ import TaskPanelCore
       if let fresh = try? await client.chat() { transcript = fresh }
       refreshMenus(); renderChat()
       boardPanel.view.showToast(transcript?.memory == true ? "Memory is on. ClawdTime keeps what you tell it." : "Memory is off. Nothing is kept.")
+    }
+  }
+  /// The person has seen what the watcher found. It leaves every view.
+  private func dismissIncident(_ id: String) {
+    guard let client else { return }
+    Task {
+      _ = try? await client.dismissIncident(id)
+      incidents = try? await client.incidents()
+      render()
     }
   }
   @objc private func toggleAway(_ sender: Any?) {

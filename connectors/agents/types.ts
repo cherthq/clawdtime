@@ -65,6 +65,12 @@ export interface StateEvidence {
   source: StateSource;
   /** When the source last changed (epoch ms). Newer evidence replaces older. */
   at: number;
+  /**
+   * The newest sign of life that the source shows (epoch ms): a status time, or
+   * the last change of the session's own file. A state can be old while the
+   * session still writes. Absent when the source carries no such time.
+   */
+  alive?: number;
 }
 
 const text = (max: number) => z.string().max(max);
@@ -134,6 +140,12 @@ export const agentSessionSchema = z
     state: z.enum(agentStates),
     detail: z.enum(stateDetails),
     since: epoch.nullable(),
+    /**
+     * When the session last showed a sign of life. The watcher needs it to tell
+     * a session that hangs from one that works for a long time. Absent when no
+     * evidence carries a time.
+     */
+    activeAt: epoch.optional(),
     source: z.enum(stateSources),
     startedAt: epoch.nullable(),
     /** Session id of the agent that started this one, when one did. */

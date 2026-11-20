@@ -838,6 +838,45 @@ it("real desktop service serves the board to the panel credential only, and turn
     expect(
       ((await (await request("/desktop/state")).json()) as Shown).task,
     ).toMatchObject({ id: first.task!.id, state: "canceled" });
+    // What the watcher found, under the same credential. This service scans the
+    // real Mac, so the list may hold real incidents: only its shape is checked.
+    const found = await request("/desktop/incidents");
+    expect(found.status).toBe(200);
+    const incidents = (await found.json()) as {
+      version: number;
+      incidents: { id: string; kind: string; text: string }[];
+    };
+    expect(incidents.version).toBe(1);
+    expect(Array.isArray(incidents.incidents)).toBe(true);
+    for (const incident of incidents.incidents) {
+      expect(incident.id).toMatch(/^[0-9a-f]{12}$/);
+      expect(["waiting", "stalled", "failed", "finished"]).toContain(
+        incident.kind,
+      );
+      expect(incident.text.length).toBeGreaterThan(0);
+    }
+    expect(
+      (await request("/desktop/incidents", {}, "x".repeat(64))).status,
+    ).toBe(401);
+    // An incident that is not open is not dismissed, and an id of another shape is refused.
+    expect(
+      await (
+        await post("/desktop/incidents/dismiss", { id: "0123456789ab" })
+      ).json(),
+    ).toEqual({ ok: false });
+    expect(
+      (await post("/desktop/incidents/dismiss", { id: "../watch.json" }))
+        .status,
+    ).toBe(400);
+    expect(
+      (
+        await post(
+          "/desktop/incidents/dismiss",
+          { id: "0123456789ab" },
+          "x".repeat(64),
+        )
+      ).status,
+    ).toBe(401);
     const off = await start("off", ["--agents", "false", "--tucked", "true"]);
     // Only the tucked start passes the switch to the panel.
     expect(panelArguments.map((args) => args.includes("--tucked"))).toEqual([

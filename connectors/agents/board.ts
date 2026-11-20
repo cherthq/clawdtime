@@ -41,6 +41,12 @@ export interface ScanOptions {
 const sessionId = (pid: number, startedAt: number | null) =>
   `${pid}-${Math.floor((startedAt ?? 0) / 1000).toString(36)}`;
 
+/** The newest sign of life in the evidence, never in the future. None: no key at all. */
+const signOfLife = (evidence: { alive?: number }[], now: number) => {
+  const newest = Math.max(0, ...evidence.map((item) => item.alive ?? 0));
+  return newest > 0 ? { activeAt: Math.min(now, Math.floor(newest)) } : {};
+};
+
 const projectName = (cwd: string | null, home: string) =>
   !cwd ? "-" : cwd === home ? "~" : (basename(cwd) || "/").slice(0, 120);
 
@@ -186,6 +192,7 @@ export class BoardScanner {
         state: state.state,
         detail: state.detail,
         since: state.since,
+        ...signOfLife(observation?.evidence ?? [], now),
         source: state.source,
         startedAt: process.startedAt,
         spawnedBy: parent ? sessionId(parent.pid, parent.startedAt) : null,
@@ -218,6 +225,7 @@ export class BoardScanner {
           state: state.state,
           detail: state.detail,
           since: state.since,
+          ...signOfLife([state], now),
           source: state.source,
           startedAt:
             typeof record.startedAt === "number" && record.startedAt > 0

@@ -118,6 +118,36 @@ final class PanelTransportTests: XCTestCase {
       do { _ = try await client.focusAgent("100-abc123"); XCTFail("Invalid focus result accepted") } catch {}
     }
   }
+  func testIncidentsAreReadAndDismissedWithThePanelCredential() async throws {
+    let found = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("../../../tests/fixtures/agent-incidents.json").standardizedFileURL)
+    let server = try FixtureHTTP { request, _ in
+      request.hasPrefix("GET /desktop/incidents ") ? (200, ["Content-Type": "application/json"], found)
+        : (200, ["Content-Type": "application/json"], Data("{\"ok\":true}".utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let incidents = try await client.incidents()
+    XCTAssertEqual(incidents.incidents.map(\.kind), ["failed", "waiting", "stalled", "finished"])
+    XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    let dismissed = try await client.dismissIncident("a1b2c3d4e5f6")
+    XCTAssertTrue(dismissed)
+    XCTAssertTrue(server.requests()[1].hasPrefix("POST /desktop/incidents/dismiss "))
+    // The body is exactly {"id":"a1b2c3d4e5f6"}: 21 bytes.
+    XCTAssertTrue(server.requests()[1].contains("Content-Length: 21\r\n"))
+    // An id of another shape is refused before any request.
+    do { _ = try await client.dismissIncident("../watch.json"); XCTFail("Unsafe id accepted") } catch {}
+    XCTAssertEqual(server.requests().count, 2)
+  }
+  func testAServiceWithNoWatcherAndIncidentsOutsideTheContractAreRejected() async throws {
+    for (status, body) in [(404, "{}"), (200, "{\"version\":2,\"incidents\":[]}"),
+                           (200, "{\"version\":1,\"incidents\":[{\"id\":\"nope\",\"kind\":\"stalled\",\"sessionId\":\"100-abc\",\"title\":\"x\",\"agentLabel\":\"y\",\"since\":1,\"raisedAt\":1,\"text\":\"z\"}]}")] {
+      let server = try FixtureHTTP { _, _ in (status, ["Content-Type": "application/json"], Data(body.utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { _ = try await client.incidents(); XCTFail("Invalid incidents accepted") } catch {}
+    }
+  }
   func testChatAndVoiceUseThePanelCredentialAndRefuseUnsafeNames() async throws {
     let transcript = #"{"version":1,"model":true,"speech":true,"voiceDirectory":"/tmp/voice","messages":[{"role":"user","text":"hi","at":1,"via":"chat"}]}"#
     let server = try FixtureHTTP { request, _ in
