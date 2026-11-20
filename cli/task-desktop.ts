@@ -134,6 +134,16 @@ function childEnvironment(): NodeJS.ProcessEnv {
           "CLAWDTIME_TRANSCRIBE_MODEL",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",
+          // Jobs and applications from the panel's chat: the coding agent, the
+          // terminal, the switch for work in a service with no coding worker,
+          // and the switch that turns both off.
+          "CLAWDTIME_JOB_AGENT",
+          "CLAWDTIME_JOB_TERMINAL",
+          "CLAWDTIME_SIMULATION_JOBS",
+          "CLAWDTIME_DESKTOP_WINDOWS",
+          // A service that a test started must know it: it then opens no
+          // window on the person's screen.
+          "VITEST",
         ].includes(key) || key.startsWith("LC_"),
     ),
   );

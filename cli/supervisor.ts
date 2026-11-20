@@ -65,6 +65,7 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { openApp } from "../connectors/agents/apps.js";
 import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
 import {
   checkTexts,
@@ -518,6 +519,7 @@ export async function supervisorCli(
                 tabTitles(session, titles(session)),
               ),
             jobs: jobsFor(system, root, runner),
+            openApp: (name, url) => openApp(system, name, url, runner),
           },
           key
             ? new OpenAIModel(
@@ -825,6 +827,7 @@ export async function supervisorCli(
             tabTitles(session, titles(session)),
           ),
         jobs: jobsFor(system, root, runner),
+        openApp: (name, url) => openApp(system, name, url, runner),
       },
       deps.model !== undefined
         ? deps.model

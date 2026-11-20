@@ -397,6 +397,17 @@ const executor =
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
+        // Work that no own tool does goes to a new coding session in the
+        // selected project, and an application can open. CLAWDTIME_DESKTOP_WINDOWS=off
+        // turns both off. A service that a test started never opens a window
+        // on the person's screen, whatever else is set.
+        ...(process.env.CLAWDTIME_DESKTOP_WINDOWS !== "off" &&
+        !process.env.VITEST
+          ? {
+              project: projectRoot,
+              jobsForTasks: process.env.CLAWDTIME_SIMULATION_JOBS === "on",
+            }
+          : {}),
         tasks: deskTasks(desktop, desktopSetup.config.token),
         ...(executor ? { execution: executor } : {}),
       })
