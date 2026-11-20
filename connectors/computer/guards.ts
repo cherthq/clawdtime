@@ -269,6 +269,30 @@ function keyRisk(
     return sendRisk;
   if (key === "return" && !modifiers.size && sendsOnReturn(observation.app))
     return sendRisk;
+  // The mail app sends with this one.
+  if (
+    key === "d" &&
+    modifiers.has("cmd") &&
+    modifiers.has("shift") &&
+    observation.app.bundleId.toLowerCase() === "com.apple.mail"
+  )
+    return sendRisk;
+  // Return and Space press the default or the focused button of a window. So
+  // a key can do what a click on "Delete" does. With the focus in a text
+  // field the key goes to the text, and this does not apply.
+  if ((key === "return" || key === "space") && !modifiers.size) {
+    const writing = observation.elements.some(
+      (item) => item.focused && textRoles.has(item.role),
+    );
+    const button = writing
+      ? undefined
+      : observation.elements.find(
+          (item) =>
+            item.enabled && item.role === "AXButton" && danger.test(item.title),
+        );
+    if (button)
+      return `This key can press "${clean(button.title, 40)}", which may be something that cannot be undone, or that speaks for you.`;
+  }
   return null;
 }
 

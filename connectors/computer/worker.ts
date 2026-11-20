@@ -29,6 +29,7 @@ import type {
   DesktopExecutorPort,
 } from "../../src/control/desktop-executor.js";
 import { interpret } from "../agents/call.js";
+import { looksSecret } from "../agents/memory.js";
 import {
   actionSchema,
   check,
@@ -82,6 +83,8 @@ const refusalsText =
   "The planner chose 3 actions in a row that the checks refused, so I stopped.";
 const faultText =
   "Something failed inside the worker, so I stopped. An action may have been sent. Look at the screen, then run: clawdtime computer clear";
+const secretText =
+  "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.";
 const unwrittenText =
   "The record of computer tasks could not be written, so nothing was started.";
 const grantText = {
@@ -495,6 +498,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     const words = clean(text, 600);
     if (question.mode === "free") {
       if (!words) return { message: question.text };
+      // The answer goes to the planner. A credential never does.
+      if (looksSecret(text)) return { message: secretText };
       run.question = null;
       question.settle({ kind: "text", text: words });
       return { message: "Thank you. I go on." };

@@ -318,6 +318,46 @@ describe("an action that needs the person's yes", () => {
     expect(run({ kind: "key", combo: "return" }, view(messages)).risk).toMatch(
       /sends/,
     );
+    // A new line in a message is not a send.
+    expect(
+      run({ kind: "key", combo: "shift+return" }, view(messages)).risk,
+    ).toBeNull();
+    const mail = observation([], {
+      app: { name: "Mail", bundleId: "com.apple.mail", window: "New Message" },
+    });
+    expect(run({ kind: "key", combo: "cmd+shift+d" }, view(mail)).risk).toMatch(
+      /sends/,
+    );
+    expect(run({ kind: "key", combo: "cmd+shift+d" }).risk).toBeNull();
+  });
+  it("asks before Return or Space can press a button that cannot be undone", () => {
+    // A dialog: Cancel and Delete, and no text field has the focus.
+    const dialog = observation([
+      element(1, { title: "Cancel" }),
+      element(2, { title: "Delete" }),
+    ]);
+    for (const combo of ["return", "enter", "space"])
+      expect(run({ kind: "key", combo }, view(dialog)).risk).toBe(
+        'This key can press "Delete", which may be something that cannot be undone, or that speaks for you.',
+      );
+    // Other keys do not press a button.
+    for (const combo of ["escape", "tab", "down", "a"])
+      expect(run({ kind: "key", combo }, view(dialog)).risk).toBeNull();
+    // With the focus in a text field, the key goes to the text.
+    const writing = observation([
+      element(1, { title: "Send" }),
+      element(2, { role: "AXTextArea", title: "Message", focused: true }),
+    ]);
+    expect(
+      run({ kind: "key", combo: "return" }, view(writing)).risk,
+    ).toBeNull();
+    expect(run({ kind: "key", combo: "space" }, view(writing)).risk).toBeNull();
+    // A button that is disabled, or that has a plain name, is not pressed into a question.
+    const plain = observation([
+      element(1, { title: "Delete", enabled: false }),
+      element(2, { title: "OK" }),
+    ]);
+    expect(run({ kind: "key", combo: "return" }, view(plain)).risk).toBeNull();
   });
 });
 

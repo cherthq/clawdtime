@@ -71,16 +71,21 @@ export class PanelHands implements Hands {
     if (this.waiting)
       return Promise.resolve({ seq: this.seq, ok: false, error: "failed" });
     const seq = this.seq++;
+    // A wait takes its own time, and keys go out one after the other: a long
+    // text gets 25 ms more for each character.
+    const own =
+      valid.data.kind === "wait"
+        ? valid.data.ms
+        : valid.data.kind === "type"
+          ? valid.data.text.length * 25
+          : 0;
     return new Promise<HandResult>((resolve, reject) => {
-      const timer = setTimeout(
-        () => {
-          const waiting = this.waiting;
-          if (waiting?.seq !== seq) return;
-          this.waiting = undefined;
-          waiting.reject(new HandsTimeout(waiting.served));
-        },
-        this.timeoutMs + (valid.data.kind === "wait" ? valid.data.ms : 0),
-      );
+      const timer = setTimeout(() => {
+        const waiting = this.waiting;
+        if (waiting?.seq !== seq) return;
+        this.waiting = undefined;
+        waiting.reject(new HandsTimeout(waiting.served));
+      }, this.timeoutMs + own);
       timer.unref();
       this.waiting = {
         seq,

@@ -379,30 +379,80 @@ describe("the person's yes", () => {
     );
   });
 
-  it("is asked before typing in a terminal, and before a key that quits", async () => {
-    const terminal = observation([], { app: terminalApp });
-    const typed = setup([{ kind: "type", text: "rm -rf build" }, done], {
-      screens: [terminal],
-    });
-    await typed.worker.submit("r1", "Clean the build");
-    await typed.waiting();
-    expect(typed.worker.snapshot().message).toMatch(/terminal/);
-    expect(typed.hands.sent).toEqual([]);
-    await typed.worker.answer("yes");
-    await typed.worker.idle();
-    expect(typed.hands.sent).toEqual([{ kind: "type", text: "rm -rf build" }]);
+  const terminal = observation([], { app: terminalApp });
+  const dialog = observation([
+    element(1, { title: "Cancel" }),
+    element(2, { title: "Delete" }),
+  ]);
+  const cases: [string, Observation, Action, RegExp, HandCommand][] = [
+    [
+      "typing in a terminal",
+      terminal,
+      { kind: "type", text: "rm -rf build" },
+      /^Type text\? This goes into a terminal/,
+      { kind: "type", text: "rm -rf build" },
+    ],
+    [
+      "Return in a terminal",
+      terminal,
+      { kind: "key", combo: "return" },
+      /^Press return\? This goes into a terminal/,
+      { kind: "key", combo: "return" },
+    ],
+    [
+      "a key that quits",
+      save,
+      { kind: "key", combo: "cmd+q" },
+      /^Press cmd\+q\? This key combination can quit an app, log out or lock the Mac\./,
+      { kind: "key", combo: "cmd+q" },
+    ],
+    [
+      "a key that logs out",
+      save,
+      { kind: "key", combo: "shift+cmd+q" },
+      /^Press cmd\+shift\+q\?/,
+      { kind: "key", combo: "cmd+shift+q" },
+    ],
+    [
+      "a key that locks",
+      save,
+      { kind: "key", combo: "ctrl+cmd+q" },
+      /^Press cmd\+ctrl\+q\?/,
+      { kind: "key", combo: "cmd+ctrl+q" },
+    ],
+    [
+      "Return that can press Delete",
+      dialog,
+      { kind: "key", combo: "return" },
+      /^Press return\? This key can press "Delete"/,
+      { kind: "key", combo: "return" },
+    ],
+  ];
+  it.each(cases)(
+    "is asked before %s: yes proceeds, no cancels",
+    async (_name, screen, action, question, sent) => {
+      const yes = setup([action, done], { screens: [screen] });
+      await yes.worker.submit("r1", "Do it");
+      await yes.waiting();
+      expect(yes.worker.snapshot().message).toMatch(question);
+      expect(yes.hands.sent).toEqual([]);
+      expect((await yes.worker.answer("yes")).message).toBe("Continuing.");
+      await yes.worker.idle();
+      expect(yes.hands.sent).toEqual([sent]);
+      expect(yes.worker.snapshot().state).toBe("completed");
 
-    const quit = setup([{ kind: "key", combo: "cmd+q" }, done]);
-    await quit.worker.submit("r1", "Close the app");
-    await quit.waiting();
-    expect(quit.worker.snapshot().message).toMatch(/^Press cmd\+q\?/);
-    expect((await quit.worker.answer("no, do not")).message).toMatch(
-      /^Canceled\./,
-    );
-    await quit.worker.idle();
-    expect(quit.hands.sent).toEqual([]);
-    expect(quit.worker.snapshot().state).toBe("canceled");
-  });
+      const no = setup([action, done], { screens: [screen] });
+      await no.worker.submit("r1", "Do it");
+      await no.waiting();
+      expect((await no.worker.answer("no, do not")).message).toMatch(
+        /^Canceled\. I did not do it: /,
+      );
+      await no.worker.idle();
+      expect(no.hands.sent).toEqual([]);
+      expect(no.planner.inputs).toHaveLength(1);
+      expect(no.worker.snapshot().state).toBe("canceled");
+    },
+  );
 
   it("is asked before the same action goes out a third time in a row", async () => {
     const yes = setup([click, click, click, done]);
@@ -933,6 +983,32 @@ describe("questions and endings of the planner", () => {
     const text = readFileSync(journal.file, "utf8");
     expect(text).not.toContain("Shopping or Work");
     expect(text).not.toContain("the shopping one");
+  });
+
+  it("does not pass a credential on to the planner: the person types it on the Mac", async () => {
+    const { worker, waiting, planner } = setup([
+      { kind: "ask", question: "What is the password of the account?" },
+      (input) => {
+        expect(JSON.stringify(input.history)).not.toContain("hunter2-and-more");
+        expect(input.history.at(-1)!.outcome).toBe(
+          "the person answered: I typed it",
+        );
+        return done;
+      },
+    ]);
+    await worker.submit("r1", "Log in");
+    await waiting();
+    expect(
+      (await worker.answer("my password is hunter2-and-more")).message,
+    ).toBe(
+      "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.",
+    );
+    // Nothing went to the planner, and the question still waits.
+    expect(planner.inputs).toHaveLength(1);
+    expect(worker.snapshot().state).toBe("waiting_for_person");
+    await worker.answer("I typed it");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
   });
 
   it("ends as blocked when the planner gives up", async () => {

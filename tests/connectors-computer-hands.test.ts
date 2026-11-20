@@ -104,6 +104,17 @@ describe("the hands that the panel serves", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(70);
   });
 
+  it("gives a long text more time: keys go out one after the other", async () => {
+    const hands = new PanelHands({ first: 1, timeoutMs: 20 });
+    const started = Date.now();
+    // 4 characters at 25 ms each, on top of the limit of 20 ms.
+    const result = await hands
+      .run({ kind: "type", text: "abcd" }, "Type")
+      .catch((error) => error);
+    expect(result).toBeInstanceOf(HandsTimeout);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(110);
+  });
+
   it("takes back a command that the panel has not fetched, and only that", async () => {
     const hands = new PanelHands({ first: 1 });
     const unfetched = hands.run(click, "Click");
