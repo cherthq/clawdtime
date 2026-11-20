@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { ClawdTime } from "../src/attention/service.js";
 import { ConversationService } from "../src/attention/conversation.js";
 import { SetupService } from "../src/pairing/setup.js";
+import { createRuntime } from "../src/runtime.js";
 import { Store } from "../src/storage/store.js";
+import { mediaSessionId } from "../src/transport/native.js";
 import { SimulationTransport } from "../src/transport/simulation.js";
 import type {
   AgentSession,
@@ -431,6 +433,129 @@ describe("agent-owned ordered conversation", () => {
     expect(stored).not.toHaveProperty("text");
     f.store.close();
   });
+  it("keeps an unread answer readable when the hangup arrives as the media failure callback", async () => {
+    const mediaToken = "fixture-media-token-at-least-32-chars";
+    const runtime = createRuntime({
+      CLAWDTIME_MODE: "simulation",
+      CLAWDTIME_DATABASE: ":memory:",
+      CLAWDTIME_MEDIA_TOKEN: mediaToken,
+    });
+    const { service } = runtime;
+    const invite = service.createPairingInvite({
+      memberId: "human",
+      recipient: "fixture",
+      conversationId: "message-thread",
+      lineId: "line",
+      deviceId: "mac",
+      displayId: "display",
+    });
+    const paired = service.claimPairing({
+      token: invite.token,
+      deviceId: "mac",
+      displayId: "display",
+      allowView: true,
+      allowControl: true,
+    });
+    const agent = service.registerSession(paired.token, registration);
+    const request = service.requestAttention(agent.token, {
+      taskId: "task",
+      idempotencyKey: "one-call",
+      reason: "review",
+      question: "Review the disposable fixture.",
+    });
+    await service.drain();
+    service.observeCall(request.id, "connected", true);
+    const answer = runtime.human.turns.receive({
+      eventId: "answer",
+      requestId: request.id,
+      memberId: "human",
+      lineId: "line",
+      conversationId: "message-thread",
+      channel: "text",
+      text: "Use the blue heading.",
+    });
+    const authorization = { authorization: `Bearer ${agent.token}` };
+    const poll = async () =>
+      (await (
+        await runtime.app.request(
+          `/api/attention/${request.id}/conversation/turns`,
+          { headers: authorization },
+        )
+      ).json()) as {
+        request: AttentionRequest;
+        turns: { id: string; state: string; text?: string }[];
+      };
+    // The media service sees the participant leave and reports it before the
+    // worker reports its cleanup.
+    const failure = await runtime.app.request(
+      `/media/${mediaSessionId(request.id)}/failure`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${mediaToken}`,
+        },
+        body: JSON.stringify({
+          reason: "remote_participant_disconnected",
+          category: "room_event",
+        }),
+      },
+    );
+    expect(failure.status).toBe(200);
+    await runtime.tick();
+    service.observeCall(request.id, "disconnected");
+    await runtime.tick();
+    const unread = await poll();
+    expect(unread.request.state).toBe("failed");
+    expect(unread.turns[0]).toMatchObject({
+      id: answer.id,
+      state: "received",
+      delivery: "pending",
+      text: "Use the blue heading.",
+    });
+    const acknowledged = await runtime.app.request(
+      `/api/attention/${request.id}/conversation/ack`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authorization },
+        body: JSON.stringify({ turnId: answer.id }),
+      },
+    );
+    expect(acknowledged.status).toBe(200);
+    await runtime.tick();
+    const delivered = (await poll()).turns[0];
+    expect(delivered).toMatchObject({
+      id: answer.id,
+      state: "canceled",
+      delivery: "acknowledged",
+    });
+    expect(delivered).not.toHaveProperty("text");
+    runtime.store.close();
+  });
+  it.each(["heartbeat loss", "revocation"] as const)(
+    "drops the unread answer on %s after a hangup that arrived as a media failure",
+    async (reason) => {
+      const f = await fixture();
+      const answer = f.receive("answer", "Use the blue heading.");
+      f.service.failCall(f.request.id, "media_failure");
+      f.conversation.prune();
+      expect(
+        f.store.get<{ text?: string }>("conversation_turn", answer.id)?.text,
+      ).toBe("Use the blue heading.");
+      if (reason === "heartbeat loss") {
+        f.advance(20000);
+        f.service.expireSessions();
+      } else f.service.disconnect(f.agent.token);
+      f.conversation.prune();
+      const stored = f.store.get<{ state: string; text?: string }>(
+        "conversation_turn",
+        answer.id,
+      );
+      expect(stored).toMatchObject({ state: "canceled" });
+      expect(stored).not.toHaveProperty("text");
+      f.store.close();
+    },
+  );
   it("requires exact session and qualified voice without substituting for native approval", async () => {
     const f = await fixture(),
       a = f.receive("first");

@@ -1,8 +1,9 @@
 /**
  * Bounded reporting for unexpected failures. A record carries the error class,
  * a provider HTTP status when the message is exactly that fixed form, and stack
- * frames. Error messages are never written: validators and providers can echo
- * configuration, human text, phone numbers or credentials.
+ * frames that end in a line and column position. Error messages are never
+ * written: validators and providers can echo configuration, human text, phone
+ * numbers or credentials.
  */
 export type ReportError = (
   event: "request_failed" | "loop_failed" | "startup_refused",
@@ -13,11 +14,15 @@ export type ReportError = (
 const providerStatus = /^Provider returned HTTP (\d{3})\.$/;
 
 function frames(error: Error) {
-  const stack = error.stack ?? "",
+  // A thrown error can carry a name or a stack that is not a string.
+  const stack = typeof error.stack === "string" ? error.stack : "",
     head = `${error.name}: ${error.message}`;
+  // A frame must end in a line and column position. When the first line of the
+  // stack no longer matches the name and message, a message line that only
+  // starts like a frame is dropped by this rule.
   return (stack.startsWith(head) ? stack.slice(head.length) : stack)
     .split("\n")
-    .filter((line) => /^\s+at /.test(line))
+    .filter((line) => /^\s+at .*:\d+:\d+\)?$/.test(line))
     .slice(0, 5)
     .map((line) => line.trim().slice(0, 300));
 }
@@ -38,7 +43,11 @@ export function createErrorReporter(
     seen = new Map<string, { at: number; repeats: number }>();
   return (event, error, fields = {}) => {
     const known = error instanceof Error,
-      name = known ? error.name.slice(0, 80) : "NonError",
+      name = !known
+        ? "NonError"
+        : typeof error.name === "string"
+          ? error.name.slice(0, 80)
+          : "Error",
       stack = known ? frames(error) : [],
       status = known ? providerStatus.exec(error.message) : null,
       now = clock();

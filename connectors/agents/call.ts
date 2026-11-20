@@ -68,51 +68,130 @@ export function spokenQuestion(
   recalled: string | null = null,
 ) {
   const who = `${agentLabel(request.agent)}${request.cwd ? ` in ${request.cwd.split("/").filter(Boolean).at(-1)}` : ""}`;
-  const what = request.summary.slice(0, 220);
+  const what = request.summary.slice(0, spokenLength);
   const before = recalled
     ? ` You said before: ${recalled.slice(0, 160).replace(/[.!?]+$/, "")}.`
     : "";
   if (request.kind === "question")
     return `${who} asks: ${what} ${request.options.map((option, index) => `${numbers[index]}, ${option}.`).join(" ")}${before} Say the number or the answer.`;
   if (request.kind === "plan")
-    return `${who} has a plan ready.${before} Say approve to start it, or deny.`;
-  return `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} Say approve or deny.`;
+    return callCanApprove(request)
+      ? `${who} has a plan ready.${before} Say approve to start it, or deny.`
+      : `${who} has a plan ready.${before} It is too long to approve here: approve it ${readable(request)}, or say deny.`;
+  return callCanApprove(request)
+    ? `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} Say approve or deny.`
+    : `${who} asks to run ${request.tool === "Bash" ? "the command" : request.tool}: ${what}.${before} That is not all of it, so I cannot approve it here: approve it ${readable(request)}, or say deny.`;
 }
+
+/** How much of a request a call reads aloud. */
+const spokenLength = 220;
+/**
+ * True when a call can take an approval for this request: the person hears
+ * all of it. A request that is not shown whole anywhere, and a command that
+ * is longer than what the call reads, are approved where the person can read
+ * them. A denial is taken on the call in every case.
+ */
+export const callCanApprove = (
+  request: Pick<DecisionRequest, "kind" | "summary" | "answerInTerminal">,
+) =>
+  !request.answerInTerminal &&
+  (request.kind !== "permission" || request.summary.length <= spokenLength);
+/** Where the person can read all of the request. */
+const readable = (request: Pick<DecisionRequest, "answerInTerminal">) =>
+  request.answerInTerminal ? "in its terminal" : "in the panel or its terminal";
 
 const refuse =
   /\b(deny|denied|decline|declined|reject|no|nope|don'?t|do not|stop|cancel|refuse|never)\b/;
 const accept =
   /\b(approve|approved|allow|allowed|yes|yeah|yep|go ahead|do it|okay|ok|sure|proceed|accept|confirm)\b/;
 
+/** A sentence that opens with its refusal is clear, whatever follows it. */
+const opensWithNo =
+  /^(?:no|nope|deny|denied|decline|declined|reject|stop|cancel|refuse|never|don'?t|do not)\b/;
+/** "not" and its short forms turn an approval around. */
+const negated =
+  /\b(?:not|cannot|\w+n't|cant|wont|wouldnt|shouldnt|couldnt|isnt|arent|doesnt|didnt|wasnt|havent|hasnt)\b/;
+/** The words of someone who has not decided, who asks for time, or who only greets. */
+const unsure =
+  /\b(?:maybe|perhaps|probably|possibly|unsure|i think|i guess|i suppose|i don'?t know|i do not know|dunno|no idea|wait|hold on|hang on|(?:one|a) (?:moment|second|sec|minute)|hello|hi|hey)\b/;
+/** Sounds and small words that can stand before the sentence itself. */
+const fillers =
+  /^(?:(?:um+|uh+|er+|hmm+|so|well|and|but|oh|ah|like|now|then|please|okay|ok|yeah|yes|sure|right|alright) )+/;
 /**
- * Reads one spoken sentence as an answer. It returns null when the words are
- * not clear, or say both yes and no: then the call asks again. Silence, noise
- * or an unrelated sentence is never an approval.
+ * A sentence that asks. It opens with a question word, or it turns the verb
+ * and the subject around ("is it", "should I"). Speech often comes with no
+ * question mark, so the mark is not needed. "do it" and "do not" do not ask.
+ */
+const asking =
+  /^(?:is|are|should|can|could|would|does|did|what|which|why|how|who|when|do (?!it\b|not\b))\b|\b(?:is|are|should|can|could|would|does|did) (?:it|i|we|you|that|this|they|he|she|there)\b|\bdo (?:i|we|you|they)\b/;
+const plainWords = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^a-z0-9' ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+/** True when the words ask something: by a question mark, or by any part that is worded as a question. */
+const asks = (spoken: string) =>
+  /[?\uff1f]/.test(spoken) ||
+  spoken
+    .split(/[.,;:!]+/)
+    .some((part) => asking.test(plainWords(part).replace(fillers, "")));
+/** True when what was said stops on a "not": the rest of the sentence may still come. */
+export const endsNegated = (spoken: string) =>
+  new RegExp(`${negated.source}$`).test(plainWords(spoken));
+/** True when the words give no clear answer: they turn around, hesitate or ask. */
+const unclear = (spoken: string, words: string) =>
+  negated.test(words) || unsure.test(words) || asks(spoken);
+
+/**
+ * Reads what the person said as an answer. It returns null when the words are
+ * not clear: then the call or the chat asks again. Silence, noise, an
+ * unrelated sentence, yes and no together, an approval with "not" in the
+ * sentence, a hedge and a question are never an approval. A clear refusal
+ * denies.
  */
 export function interpret(
   spoken: string,
   request: Pick<DecisionRequest, "kind" | "options">,
 ): { decision: "allow" | "deny" | "answer"; text: string | null } | null {
-  const words = spoken
-    .toLowerCase()
-    .replace(/[^a-z0-9' ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const words = plainWords(spoken);
   if (!words) return null;
+  const deny = {
+    decision: "deny" as const,
+    text: spoken.trim().slice(0, 300),
+  };
+  /** A refusal with no approval beside it. It stands when it opens the sentence, or when nothing in the sentence hesitates or asks. */
+  const refused = (said: string) =>
+    refuse.test(said) &&
+    !accept.test(said) &&
+    (opensWithNo.test(said) ||
+      !(unsure.test(said) || asks(spoken) || asking.test(said)));
   if (request.kind === "question") {
+    const labels = request.options.map(plainWords);
+    // The words of one choice and nothing else: that choice, whatever its words are.
+    const marked = (text: string) => /[?\uff1f]/.test(text);
+    const exact = labels.indexOf(words);
+    if (
+      exact >= 0 &&
+      labels.lastIndexOf(words) === exact &&
+      (!marked(spoken) || marked(request.options[exact]!))
+    )
+      return { decision: "answer", text: request.options[exact]! };
     const chosen = new Set<number>();
-    request.options.forEach((option, index) => {
-      const label = option
-        .toLowerCase()
-        .replace(/[^a-z0-9' ]+/g, " ")
-        .trim();
-      if (
-        label &&
-        new RegExp(
-          `\\b${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
-        ).test(words)
-      )
+    // What the person said around the choice.
+    let around = words;
+    labels.forEach((label, index) => {
+      const named = label
+        ? new RegExp(
+            `\\b${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+            "g",
+          )
+        : null;
+      if (named?.test(words)) {
         chosen.add(index);
+        around = around.replace(named, " ");
+      }
       if (
         new RegExp(
           `\\b(${numbers[index]}|${ordinals[index]}|${index + 1})\\b`,
@@ -120,18 +199,27 @@ export function interpret(
       )
         chosen.add(index);
     });
-    if (chosen.size === 1)
-      return { decision: "answer", text: request.options[[...chosen][0]!]! };
-    if (chosen.size === 0 && refuse.test(words))
-      return { decision: "deny", text: spoken.trim().slice(0, 300) };
-    return null;
+    around = around.replace(/\s+/g, " ").trim();
+    if (chosen.size === 0) return refused(around) ? deny : null;
+    if (chosen.size !== 1) return null;
+    const choice = request.options[[...chosen][0]!]!;
+    // A choice inside a refusal, a "not", a hedge or a question is no choice yet.
+    if (
+      refuse.test(around) ||
+      negated.test(around) ||
+      unsure.test(around) ||
+      (marked(spoken) && !marked(choice)) ||
+      asking.test(around.replace(fillers, ""))
+    )
+      return null;
+    return { decision: "answer", text: choice };
   }
   const no = refuse.test(words),
     yes = accept.test(words);
-  if (no === yes) return null;
-  return no
-    ? { decision: "deny", text: spoken.trim().slice(0, 300) }
-    : { decision: "allow", text: null };
+  if (no && yes) return null;
+  if (no) return refused(words) ? deny : null;
+  if (!yes || unclear(spoken, words)) return null;
+  return { decision: "allow", text: null };
 }
 
 const turnSchema = z
@@ -322,6 +410,7 @@ export async function answerByCall(
 } | null> {
   if (options.deadline - options.now() < 20_000) return null;
   let repeats = 0;
+  let held = "";
   const result = await onCall(
     client,
     {
@@ -332,9 +421,27 @@ export async function answerByCall(
     },
     options,
     async ({ turns, say }) => {
-      // The last thing the person said decides. Earlier fragments are context.
-      const last = turns.at(-1)!;
-      const answer = last.text ? interpret(last.text, request) : null;
+      // Fragments of one sentence arrive as several turns: they are read
+      // together. Its last fragment alone could say the opposite.
+      const said = turns
+        .map((turn) => turn.text ?? "")
+        .join(" ")
+        .trim();
+      const read = said ? interpret(`${held} ${said}`.trim(), request) : null;
+      // A denial carries the person's words of this read as its reason.
+      const answer =
+        read?.decision === "deny"
+          ? { ...read, text: said.slice(0, 300) }
+          : read;
+      // A sentence can stop on "not" in one read and go on in the next.
+      held = !answer && endsNegated(said) ? "not" : "";
+      // The person did not hear all of this request: the call takes no approval for it.
+      if (answer?.decision === "allow" && !callCanApprove(request)) {
+        await say(
+          `I cannot approve this one here. Approve it ${readable(request)}, or say deny.`,
+        );
+        return undefined;
+      }
       if (answer) {
         await say(
           answer.decision === "allow"

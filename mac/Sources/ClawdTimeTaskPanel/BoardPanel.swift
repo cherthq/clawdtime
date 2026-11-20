@@ -287,6 +287,9 @@ final class DecisionCardView: NSView {
         controls.addArrangedSubview(choice)
       }
       controls.addArrangedSubview(PillButton("Skip the question", kind: .ghost, small: true, target: self, action: #selector(deny)))
+    } else if request.approvalOnlyInTerminal {
+      // ClawdTime shows only a part of this request: no approval for what the person cannot read in full.
+      controls.addArrangedSubview(PillButton("Deny", kind: .secondary, target: self, action: #selector(deny)))
     } else {
       controls.addArrangedSubview(PillButton(request.kind == "plan" ? "Approve the plan" : "Approve", kind: .accent, target: self, action: #selector(approve)))
       controls.addArrangedSubview(PillButton("Deny", kind: .secondary, target: self, action: #selector(deny)))
@@ -309,7 +312,7 @@ final class DecisionCardView: NSView {
   func update(_ request: PendingDecisions.Request, now: Double) {
     title.stringValue = DecisionText.title(request)
     summary.stringValue = DecisionText.summary(request)
-    hint.stringValue = [DecisionText.history(request), DecisionText.said(request), DecisionText.remaining(request, now: now)].filter { !$0.isEmpty }.joined(separator: "  ·  ")
+    hint.stringValue = [DecisionText.terminalOnly(request), DecisionText.history(request), DecisionText.said(request), DecisionText.remaining(request, now: now)].filter { !$0.isEmpty }.joined(separator: "  ·  ")
   }
   override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
   override func draw(_ dirtyRect: NSRect) {

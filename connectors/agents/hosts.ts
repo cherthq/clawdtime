@@ -12,7 +12,7 @@ import { secureWrite } from "../shared/state.js";
 import { countStates, order } from "./board.js";
 import { requestSchema, type DecisionRequest } from "./decisions.js";
 import type { Runner } from "./focus.js";
-import { cleanInput } from "./input.js";
+import { cleanInput, unbroken } from "./input.js";
 import {
   boardSnapshotSchema,
   hostNameSchema,
@@ -418,6 +418,8 @@ export class RemoteDesk extends Polled<DecisionRequest[]> {
     const request = this.pending().find((item) => item.id === input.id);
     const host = this.book.get(request?.host);
     if (!request || !host) return false;
+    // What the person did not see whole is allowed only in its terminal.
+    if (request.answerInTerminal && input.decision === "allow") return false;
     const text = (input.text ?? "")
       .replace(/\p{C}/gu, " ")
       .trim()
@@ -452,7 +454,7 @@ export async function remoteSend(
   enter: boolean,
   run: Runner,
 ): Promise<{ ok: boolean; route: "remote" | "none" }> {
-  const text = cleanInput(value);
+  const text = cleanInput(enter ? value : unbroken(value));
   if (!text.trim()) return { ok: false, route: "none" };
   const result = await remoteCall(
     host,

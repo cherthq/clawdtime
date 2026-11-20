@@ -14,6 +14,7 @@ import { agentsCli } from "../cli/agents.js";
 import { talkLoop } from "../cli/supervisor.js";
 import {
   ChatLog,
+  credentialMarker,
   OpenAIModel,
   Supervisor,
   type ModelClient,
@@ -262,7 +263,7 @@ describe("the ClawdTime agent", () => {
     const request = ask(desk);
     // The model tries to allow, but the person only asked a question: the code refuses.
     let run = scripted([
-      [call("decide", { request: 1, decision: "allow" })],
+      [call("decide", { request: request.id, decision: "allow" })],
       "I need your yes or no.",
     ]);
     expect(
@@ -277,12 +278,15 @@ describe("the ClawdTime agent", () => {
     );
     expect(desk.take(request.id)).toBeNull();
     // The person says deny, the model asks for allow: refused too.
-    run = scripted([[call("decide", { request: 1, decision: "allow" })], "ok"]);
+    run = scripted([
+      [call("decide", { request: request.id, decision: "allow" })],
+      "ok",
+    ]);
     await new Supervisor(value, run.model).reply([], "deny it", "chat");
     expect(desk.take(request.id)).toBeNull();
     // A clear yes: allowed, and the trove will say it came through the panel.
     run = scripted([
-      [call("decide", { request: 1, decision: "allow" })],
+      [call("decide", { request: request.id, decision: "allow" })],
       "Allowed. It pushes now.",
     ]);
     expect(
@@ -301,15 +305,101 @@ describe("the ClawdTime agent", () => {
     expect(run.seen[1]!.messages.at(-1)!.content).toBe(
       "Allowed. The agent continues.",
     );
-    run = scripted([[call("decide", { request: 9, decision: "allow" })], "ok"]);
+    // A place in the list is not an id, and neither is an id that no request has.
+    const next = ask(desk);
+    for (const id of [1, "1", "0", "zzzz", "00000000"]) {
+      run = scripted([
+        [call("decide", { request: id, decision: "allow" })],
+        "ok",
+      ]);
+      await new Supervisor(value, run.model).reply([], "approve", "chat");
+      expect(run.seen[1]!.messages.at(-1)!.content, String(id)).toBe(
+        "No request that waits has that id. Use an id that status shows.",
+      );
+    }
+    expect(desk.take(next.id)).toBeNull();
+  });
+
+  it("decides one request for each message, by its id, and only the one that the person named", async () => {
+    const { value, desk } = world([session()]);
+    const tests = ask(desk, "npm test");
+    const wipe = ask(desk, "rm -rf /work/app/build");
+    const decide = (id: string, name: string, decision = "allow") =>
+      call("decide", { request: id, decision }, name);
+    const results = (run: ReturnType<typeof scripted>) =>
+      run.seen[1]!.messages.filter((message) => message.role === "tool").map(
+        (message) => message.content,
+      );
+    // The state names each request by its id, not by its place.
+    let run = scripted([[call("status", {})], "Two wait."]);
+    await new Supervisor(value, run.model).reply([], "what waits?", "chat");
+    expect(results(run)[0]).toContain(
+      `- ${tests.id.slice(0, 8)}: claude-code in app asks to run: npm test`,
+    );
+    expect(results(run)[0]).toContain(
+      `- ${wipe.id.slice(0, 8)}: claude-code in app asks to run: rm -rf /work/app/build`,
+    );
+    // Two wait, and the person did not say which one: nothing is decided.
+    run = scripted([[decide(tests.id, "c1")], "Which one?"]);
+    await new Supervisor(value, run.model).reply([], "yes, approve it", "chat");
+    expect(results(run)).toEqual([
+      "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.",
+    ]);
+    // The person named one, and the model gives the other: refused.
+    run = scripted([[decide(wipe.id, "c1")], "ok"]);
     await new Supervisor(value, run.model).reply(
       [],
-      "approve request 9",
+      "approve the npm test one",
       "chat",
     );
-    expect(run.seen[1]!.messages.at(-1)!.content).toBe(
-      "No request has that number.",
+    expect(results(run)[0]).toContain("did not say which one");
+    expect(desk.take(tests.id)).toBeNull();
+    expect(desk.take(wipe.id)).toBeNull();
+    // One message decides one request, also when the model asks twice.
+    run = scripted([
+      [
+        decide(tests.id.slice(0, 8), "c1"),
+        decide(tests.id, "c2"),
+        decide(wipe.id, "c3"),
+      ],
+      "ok",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "approve the npm test one",
+      "chat",
     );
+    expect(results(run)).toEqual([
+      "Allowed. The agent continues.",
+      "One request is decided for each message of the person. Ask them about the next one.",
+      "One request is decided for each message of the person. Ask them about the next one.",
+    ]);
+    expect(desk.take(tests.id)).toMatchObject({ decision: "allow" });
+    expect(desk.take(wipe.id)).toBeNull();
+    // A request that left while the model worked never passes its answer to the next one.
+    const { value: later, desk: second } = world([session()]);
+    const gone = ask(second, "npm test");
+    const stays = ask(second, "rm -rf /work/app/build");
+    run = scripted([[call("status", {})], [decide(gone.id, "c1")], "ok"]);
+    const model: ModelClient = {
+      complete: async (input) => {
+        if (run.seen.length === 1) second.close(gone, null);
+        return run.model.complete(input);
+      },
+    };
+    await new Supervisor(later, model).reply(
+      [],
+      "approve the npm test one",
+      "chat",
+    );
+    expect(run.seen[2]!.messages.at(-1)!.content).toBe(
+      "No request that waits has that id. Use an id that status shows.",
+    );
+    expect(second.take(stays.id)).toBeNull();
+    // One request waits: a clear word is enough, and the id must still be its own.
+    run = scripted([[decide(stays.id, "c1", "deny")], "Denied."]);
+    await new Supervisor(later, run.model).reply([], "no, deny that", "chat");
+    expect(second.take(stays.id)).toMatchObject({ decision: "deny" });
   });
 
   it("types only the person's own words, opens a session, and keeps a note", async () => {
@@ -368,7 +458,8 @@ describe("the ClawdTime agent", () => {
       "Opened docs.",
       "No single session has that name.",
       "Kept in the trove as a critical decision.",
-      "Away mode is on.",
+      // The person said nothing about being away: the model alone changes nothing.
+      "The person did not ask for away mode. Ask them.",
       // The decision kept one step before is found at once.
       "2026-11-20 the person decided: Never push on Friday.",
       "There is no such tool.",
@@ -398,7 +489,126 @@ describe("the ClawdTime agent", () => {
     expect(run.seen[1]!.messages.at(-1)!.content).toBe(
       "2026-11-20 the person decided: Never push on Friday.",
     );
-    expect(desk.away()).toBe(true);
+    expect(desk.away()).toBe(false);
+  });
+
+  it("turns away mode on or off only on the person's own words", async () => {
+    const { value, desk } = world([session()]);
+    const away = async (spoken: string, on: boolean) => {
+      const run = scripted([[call("set_away", { away: on })], "ok"]);
+      await new Supervisor(value, run.model).reply([], spoken, "chat");
+      return run.seen[1]!.messages.at(-1)!.content;
+    };
+    // No word about being away, or only a question about it.
+    for (const words of [
+      "what is going on?",
+      "open docs",
+      "is away mode on?",
+      "am I away",
+    ]) {
+      expect(await away(words, true), words).toBe(
+        "The person did not ask for away mode. Ask them.",
+      );
+      expect(desk.away(), words).toBe(false);
+    }
+    for (const words of [
+      "I am leaving, call me",
+      "turn away mode on",
+      "I'm stepping out",
+      "call me when something waits",
+    ]) {
+      desk.setAway(false);
+      expect(await away(words, true), words).toBe("Away mode is on.");
+      expect(desk.away(), words).toBe(true);
+    }
+    // Off needs its own words. Words for on are not words for off, and the reverse.
+    for (const words of ["I am leaving", "what waits?", "is away mode off?"]) {
+      expect(await away(words, false), words).toBe(
+        "The person did not say that they are back. Ask them.",
+      );
+      expect(desk.away(), words).toBe(true);
+    }
+    for (const words of ["I'm back", "I am here", "turn away mode off"]) {
+      desk.setAway(true);
+      expect(await away(words, false), words).toBe("Away mode is off.");
+      expect(desk.away(), words).toBe(false);
+      expect(await away(words, true), words).toBe(
+        "The person did not ask for away mode. Ask them.",
+      );
+      expect(desk.away(), words).toBe(false);
+    }
+  });
+
+  it("types only whole words that the person gave, on a cue to type, into the session that they named", async () => {
+    const { value, desk, log } = world([
+      session(),
+      session({ id: "2-a", pid: 2, name: "docs", cwd: "/work/docs" }),
+    ]);
+    const result = async (spoken: string, name: string, text: string) => {
+      const run = scripted([
+        [call("type_into_session", { session: name, text })],
+        "ok",
+      ]);
+      await new Supervisor(value, run.model).reply([], spoken, "chat");
+      return run.seen[1]!.messages.at(-1)!.content;
+    };
+    // A part of a word is not a word of the person.
+    expect(
+      await result("tell deploy fix why it waits", "deploy fix", "y"),
+    ).toContain("Only the person's own words are typed");
+    // Words that follow "not" say the opposite of the sentence.
+    expect(
+      await result(
+        "Tell deploy fix: do not delete the release branch",
+        "deploy fix",
+        "delete the release branch",
+      ),
+    ).toContain("Only the person's own words are typed");
+    // No cue to type: a sentence about a session types nothing.
+    expect(
+      await result(
+        "deploy fix should run the tests again",
+        "deploy fix",
+        "run the tests again",
+      ),
+    ).toBe("The person did not ask to type anything into a session. Ask them.");
+    // The model picks another session than the one that the person named.
+    expect(
+      await result(
+        "tell docs to run the tests again",
+        "deploy fix",
+        "run the tests again",
+      ),
+    ).toBe("The person did not name that session. Ask them which session.");
+    expect(log).toEqual([]);
+    expect(
+      await result(
+        "Tell deploy fix: do not delete the release branch",
+        "deploy fix",
+        "do not delete the release branch",
+      ),
+    ).toBe("Typed into deploy fix.");
+    expect(log).toEqual(["send 100-abc: do not delete the release branch"]);
+    // A session with a request on the desk gets an answer, not typed text:
+    // Return in its terminal would answer the prompt that shows there.
+    ask(desk, "npm test");
+    expect(
+      await result(
+        "tell deploy fix to run the tests again",
+        "deploy fix",
+        "run the tests again",
+      ),
+    ).toBe(
+      "deploy fix has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.",
+    );
+    expect(
+      await result(
+        "tell docs to run the tests again",
+        "docs",
+        "run the tests again",
+      ),
+    ).toBe("Typed into docs.");
+    expect(log).toHaveLength(2);
   });
 
   it("works with no language model, and falls back when the model fails", async () => {
@@ -440,6 +650,31 @@ describe("the ClawdTime agent", () => {
       await new Supervisor(value, loop.model).reply([], "status", "chat"),
     ).toContain("too many steps");
     expect(loop.seen).toHaveLength(6);
+  });
+
+  it("with no model, or after a model fault, a question or an unsure word allows nothing", async () => {
+    const broken: ModelClient = {
+      complete: async () => {
+        throw new Error("offline");
+      },
+    };
+    for (const model of [null, broken])
+      for (const words of [
+        "Is it ok to allow this?",
+        "is it ok to allow this",
+        "I'm not sure",
+        "I would not allow that",
+      ]) {
+        const { value, desk } = world([session()]);
+        const request = ask(desk);
+        expect(
+          await new Supervisor(value, model).reply([], words, "chat"),
+          words,
+        ).toBe(
+          "One request waits for your answer: git push origin main. Say approve or deny to answer a request.",
+        );
+        expect(desk.take(request.id), words).toBeNull();
+      }
   });
 
   it("sends the model its tools and history, and reports only a status on failure", async () => {
@@ -560,6 +795,33 @@ describe("chat log and speech", () => {
     ]);
     log.append({ role: "user", text: "x".repeat(5000), at: now, via: "voice" });
     expect(log.recent(1)[0]!.text).toHaveLength(2000);
+  });
+
+  it("keeps a marker in place of a message that holds a credential", () => {
+    const directory = root();
+    const log = new ChatLog(directory);
+    const value = "Zq9".repeat(14).slice(0, 40);
+    log.append({
+      role: "user",
+      text: `remember that my api key is ${value}`,
+      at: now,
+      via: "chat",
+    });
+    log.append({
+      role: "assistant",
+      text: `I will not keep ACME_API_KEY=${value}.`,
+      at: now + 1,
+      via: "chat",
+    });
+    log.append({ role: "user", text: "what waits?", at: now + 2, via: "chat" });
+    expect(log.recent().map((message) => message.text)).toEqual([
+      credentialMarker,
+      credentialMarker,
+      "what waits?",
+    ]);
+    expect(
+      readFileSync(join(directory, "agents", "chat.jsonl"), "utf8"),
+    ).not.toContain(value);
   });
 
   it("turns a recording into words and an answer into sound", async () => {

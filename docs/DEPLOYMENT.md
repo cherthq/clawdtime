@@ -32,7 +32,9 @@ background loop (`loop.state` is `never`, `fresh`, `stale` after 60 seconds with
 a pass, or `failed`), not physical readiness. An unexpected failure writes one JSON
 line to standard error with the error class and stack frames, never its message; a
 failed request also returns a `requestId` that matches its line, and a repeating
-loop failure is written once a minute with a repeat count. Keep the SQLite WAL and unknown effects, never reset them to force progress.
+loop failure is written once a minute with a repeat count. A request body that is
+not valid JSON answers 400 and a body over 32,768 bytes answers 413; both are the
+caller's mistake and write no line. Keep the SQLite WAL and unknown effects, never reset them to force progress.
 
 Use fresh, distinct 32+ character operator/media keys, supplied through the host
 secret store, never Docker build args. `CLAWDTIME_OPERATOR_TOKEN` protects internal

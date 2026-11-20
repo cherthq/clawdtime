@@ -698,6 +698,12 @@ it("real desktop service serves the board to the panel credential only, and turn
     expect(
       (await post("/desktop/decisions/away", { away: "yes" })).status,
     ).toBe(400);
+    // Away mode is not changed with another credential.
+    expect(
+      (await post("/desktop/decisions/away", { away: true }, "x".repeat(64)))
+        .status,
+    ).toBe(401);
+    expect(desk.away()).toBe(false);
     // Text goes only to a session on the current board.
     expect(
       await (
@@ -708,6 +714,16 @@ it("real desktop service serves the board to the panel credential only, and turn
       (await post("/desktop/agents/send", { id: "999999-zz", text: "" }))
         .status,
     ).toBe(400);
+    // Nothing is typed with another credential.
+    expect(
+      (
+        await post(
+          "/desktop/agents/send",
+          { id: "999999-zz", text: "hello" },
+          "x".repeat(64),
+        )
+      ).status,
+    ).toBe(401);
     // The person talks to ClawdTime through the same credential. With no
     // language model key it answers in plain words from the state.
     const chat = await request("/desktop/chat");

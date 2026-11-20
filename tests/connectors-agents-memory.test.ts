@@ -190,6 +190,42 @@ describe("memory", () => {
       expect(looksSecret(text)).toBe(false);
   });
 
+  it("refuses a credential as it is said, as an environment line, and inside an address", () => {
+    const { store, directory } = memory();
+    // Made here, so that no real credential stands in this file.
+    const value = "Zq9".repeat(14).slice(0, 40);
+    for (const text of [
+      "my password is hunter2abc",
+      "remember that my passcode is 482913",
+      `the api key is ${value}`,
+      `our access key is ${value}`,
+      `AWS_SECRET_ACCESS_KEY=${value}`,
+      `export ACME_API_KEY=${value}`,
+      `client_secret=${value}`,
+      `client-secret: ${value}`,
+      `github_pat_${value}`,
+      `sk_live_${value}`,
+      `postgres://app:${value}@db.example/main`,
+      `Authorization: Bearer ${value}`,
+      "password: correcthorse",
+      "db_password=correcthorse",
+    ]) {
+      expect(looksSecret(text), text).toBe(true);
+      expect(() => store.remember({ text })).toThrow("credential");
+    }
+    expect(existsSync(factsFile(directory))).toBe(false);
+    // Talk about these things, with no value, is still kept.
+    for (const text of [
+      "My password is the same on both Macs.",
+      "The api key is in the vault.",
+      "The token is short lived.",
+      "Use the bearer scheme for the service.",
+      "The address is https://example.com/docs:main@v2",
+      "Our secret is to ship small changes.",
+    ])
+      expect(looksSecret(text), text).toBe(false);
+  });
+
   it("finds by words, and respects the threshold, the project and what is current", () => {
     const { store } = memory();
     expect(terms("Pushes pushed pushing push the notes")).toEqual([
