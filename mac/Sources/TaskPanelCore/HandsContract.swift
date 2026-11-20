@@ -308,7 +308,7 @@ public struct HandsNext: Codable, Equatable, Sendable {
 }
 
 /// Why a command did not run.
-public enum HandError: String, Codable, CaseIterable, Sendable {
+public enum HandError: String, Codable, CaseIterable, Error, Sendable {
   case noAccessibility = "no_accessibility"
   case noScreenRecording = "no_screen_recording"
   case stoppedByPerson = "stopped_by_person"
