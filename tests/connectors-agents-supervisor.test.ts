@@ -1277,7 +1277,23 @@ describe("supervisor commands", () => {
     expect(listed).toContain(
       `${second.id.slice(0, 8)}  codex in site  permission: git push origin main`,
     );
-    expect(listed).toMatch(/^1\. .*\n2\. /);
+    // Each line starts with the id. A place in the list is not printed: it is not a name.
+    expect(listed).toMatch(/^[0-9a-f]{8}  .*\n[0-9a-f]{8}  /);
+    // A bare position is refused, and the message shows the ids.
+    for (const place of ["1", "2", "12", "abc"]) {
+      const refusal = await run("approve", place).then(
+        () => "",
+        (error: Error) => error.message,
+      );
+      expect(refusal, place).toContain(
+        "Give the id of the request, or its first four characters or more",
+      );
+      expect(refusal).toContain(`${first.id.slice(0, 8)}  claude-code in app`);
+      expect(refusal).toContain(`${second.id.slice(0, 8)}  codex in site`);
+    }
+    await expect(run("deny")).rejects.toThrow("Give the id of the request");
+    expect(desk.take(first.id)).toBeNull();
+    expect(desk.take(second.id)).toBeNull();
     await run("approve", first.id.slice(0, 8), "--always");
     expect(lines.at(-1)).toBe(
       "Allowed, and remembered for this project. The agent continues.",
@@ -1292,7 +1308,7 @@ describe("supervisor commands", () => {
       decision: "deny",
       text: "Not before review.",
     });
-    await expect(run("approve", "zzzz")).rejects.toThrow("no longer waits");
+    await expect(run("approve", "abcd")).rejects.toThrow("no longer waits");
     await run("away", "on");
     expect(lines.at(-1)).toContain("Away");
     expect(desk.away()).toBe(true);

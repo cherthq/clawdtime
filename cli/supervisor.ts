@@ -149,7 +149,7 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   talk                                 the same by voice: you speak, it speaks back
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
   agents call check                    ask the backend whether a call would work now; no call is placed
-ID is the request's id, its first letters, or its number in the pending list.`;
+ID is the request's id, or its first four characters or more, as \`agents pending\` prints it.`;
 
 function split(args: string[], switches: string[], values: string[]) {
   const flags: Record<string, string> = {};
@@ -176,16 +176,29 @@ function split(args: string[], switches: string[], values: string[]) {
   return { flags, rest };
 }
 
+/** One request as the list prints it: its id first, since the id is its name. */
+const listed = (request: DecisionRequest) =>
+  `${request.id.slice(0, 8)}  ${request.agent} in ${project(request.cwd)}  ${request.kind}: ${cut(request.summary, 90)}`;
+/**
+ * The request with this id, or the one whose id starts with these characters.
+ * A place in the list is not taken: the list changes while a person types, so
+ * a number can mean another request a moment later.
+ */
 function pick(pending: DecisionRequest[], query: string | undefined) {
-  if (!query)
+  const wanted = (query ?? "").toLowerCase();
+  if (!/^[0-9a-f]{4,16}$/.test(wanted))
     throw new Error(
-      "Give the request: its id, or its number from: clawdtime agents pending",
+      [
+        "Give the id of the request, or its first four characters or more.",
+        ...(pending.length
+          ? [
+              "These requests wait:",
+              ...pending.map((item) => `  ${listed(item)}`),
+            ]
+          : ["No request waits now."]),
+      ].join("\n"),
     );
-  if (/^\d{1,3}$/.test(query) && pending[Number(query) - 1])
-    return pending[Number(query) - 1]!;
-  const matches = pending.filter((request) =>
-    request.id.startsWith(query.toLowerCase()),
-  );
+  const matches = pending.filter((request) => request.id.startsWith(wanted));
   if (matches.length === 1) return matches[0]!;
   throw new Error(
     matches.length
@@ -321,15 +334,13 @@ export async function supervisorCli(
             ? "Nothing waits for an answer."
             : "Nothing waits. ClawdTime answers agents only while its panel or `agents watch` runs.",
         );
-      pending.forEach((request, index) => {
+      pending.forEach((request) => {
         const before = trove.suggest(request);
         const hint =
           before.allowed + before.denied
             ? `  (before: allowed ${before.allowed}, denied ${before.denied})`
             : "";
-        print(
-          `${index + 1}. ${request.id.slice(0, 8)}  ${request.agent} in ${project(request.cwd)}  ${request.kind}: ${cut(request.summary, 90)}${hint}`,
-        );
+        print(`${listed(request)}${hint}`);
         request.options.forEach((option, choice) =>
           print(`     ${choice + 1}) ${option}`),
         );

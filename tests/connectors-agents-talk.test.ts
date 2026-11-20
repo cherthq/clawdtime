@@ -262,7 +262,7 @@ describe("the ClawdTime agent", () => {
     const request = ask(desk);
     // The model tries to allow, but the person only asked a question: the code refuses.
     let run = scripted([
-      [call("decide", { request: 1, decision: "allow" })],
+      [call("decide", { request: request.id, decision: "allow" })],
       "I need your yes or no.",
     ]);
     expect(
@@ -277,12 +277,15 @@ describe("the ClawdTime agent", () => {
     );
     expect(desk.take(request.id)).toBeNull();
     // The person says deny, the model asks for allow: refused too.
-    run = scripted([[call("decide", { request: 1, decision: "allow" })], "ok"]);
+    run = scripted([
+      [call("decide", { request: request.id, decision: "allow" })],
+      "ok",
+    ]);
     await new Supervisor(value, run.model).reply([], "deny it", "chat");
     expect(desk.take(request.id)).toBeNull();
     // A clear yes: allowed, and the trove will say it came through the panel.
     run = scripted([
-      [call("decide", { request: 1, decision: "allow" })],
+      [call("decide", { request: request.id, decision: "allow" })],
       "Allowed. It pushes now.",
     ]);
     expect(
@@ -301,15 +304,101 @@ describe("the ClawdTime agent", () => {
     expect(run.seen[1]!.messages.at(-1)!.content).toBe(
       "Allowed. The agent continues.",
     );
-    run = scripted([[call("decide", { request: 9, decision: "allow" })], "ok"]);
+    // A place in the list is not an id, and neither is an id that no request has.
+    const next = ask(desk);
+    for (const id of [1, "1", "0", "zzzz", "00000000"]) {
+      run = scripted([
+        [call("decide", { request: id, decision: "allow" })],
+        "ok",
+      ]);
+      await new Supervisor(value, run.model).reply([], "approve", "chat");
+      expect(run.seen[1]!.messages.at(-1)!.content, String(id)).toBe(
+        "No request that waits has that id. Use an id that status shows.",
+      );
+    }
+    expect(desk.take(next.id)).toBeNull();
+  });
+
+  it("decides one request for each message, by its id, and only the one that the person named", async () => {
+    const { value, desk } = world([session()]);
+    const tests = ask(desk, "npm test");
+    const wipe = ask(desk, "rm -rf /work/app/build");
+    const decide = (id: string, name: string, decision = "allow") =>
+      call("decide", { request: id, decision }, name);
+    const results = (run: ReturnType<typeof scripted>) =>
+      run.seen[1]!.messages.filter((message) => message.role === "tool").map(
+        (message) => message.content,
+      );
+    // The state names each request by its id, not by its place.
+    let run = scripted([[call("status", {})], "Two wait."]);
+    await new Supervisor(value, run.model).reply([], "what waits?", "chat");
+    expect(results(run)[0]).toContain(
+      `- ${tests.id.slice(0, 8)}: claude-code in app asks to run: npm test`,
+    );
+    expect(results(run)[0]).toContain(
+      `- ${wipe.id.slice(0, 8)}: claude-code in app asks to run: rm -rf /work/app/build`,
+    );
+    // Two wait, and the person did not say which one: nothing is decided.
+    run = scripted([[decide(tests.id, "c1")], "Which one?"]);
+    await new Supervisor(value, run.model).reply([], "yes, approve it", "chat");
+    expect(results(run)).toEqual([
+      "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.",
+    ]);
+    // The person named one, and the model gives the other: refused.
+    run = scripted([[decide(wipe.id, "c1")], "ok"]);
     await new Supervisor(value, run.model).reply(
       [],
-      "approve request 9",
+      "approve the npm test one",
       "chat",
     );
-    expect(run.seen[1]!.messages.at(-1)!.content).toBe(
-      "No request has that number.",
+    expect(results(run)[0]).toContain("did not say which one");
+    expect(desk.take(tests.id)).toBeNull();
+    expect(desk.take(wipe.id)).toBeNull();
+    // One message decides one request, also when the model asks twice.
+    run = scripted([
+      [
+        decide(tests.id.slice(0, 8), "c1"),
+        decide(tests.id, "c2"),
+        decide(wipe.id, "c3"),
+      ],
+      "ok",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "approve the npm test one",
+      "chat",
     );
+    expect(results(run)).toEqual([
+      "Allowed. The agent continues.",
+      "One request is decided for each message of the person. Ask them about the next one.",
+      "One request is decided for each message of the person. Ask them about the next one.",
+    ]);
+    expect(desk.take(tests.id)).toMatchObject({ decision: "allow" });
+    expect(desk.take(wipe.id)).toBeNull();
+    // A request that left while the model worked never passes its answer to the next one.
+    const { value: later, desk: second } = world([session()]);
+    const gone = ask(second, "npm test");
+    const stays = ask(second, "rm -rf /work/app/build");
+    run = scripted([[call("status", {})], [decide(gone.id, "c1")], "ok"]);
+    const model: ModelClient = {
+      complete: async (input) => {
+        if (run.seen.length === 1) second.close(gone, null);
+        return run.model.complete(input);
+      },
+    };
+    await new Supervisor(later, model).reply(
+      [],
+      "approve the npm test one",
+      "chat",
+    );
+    expect(run.seen[2]!.messages.at(-1)!.content).toBe(
+      "No request that waits has that id. Use an id that status shows.",
+    );
+    expect(second.take(stays.id)).toBeNull();
+    // One request waits: a clear word is enough, and the id must still be its own.
+    run = scripted([[decide(stays.id, "c1", "deny")], "Denied."]);
+    await new Supervisor(later, run.model).reply([], "no, deny that", "chat");
+    expect(second.take(stays.id)).toMatchObject({ decision: "deny" });
   });
 
   it("types only the person's own words, opens a session, and keeps a note", async () => {

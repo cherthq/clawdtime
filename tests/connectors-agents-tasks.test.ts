@@ -787,7 +787,7 @@ describe("a task by talking, with no language model", () => {
       holdSeconds: 45,
     });
     const run = scripted([
-      [call("decide", { request: 1, decision: "deny" })],
+      [call("decide", { request: waiting.id, decision: "deny" })],
       "Do you mean the task?",
     ]);
     await new Supervisor(both.value, run.model).reply(

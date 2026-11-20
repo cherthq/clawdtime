@@ -19,11 +19,16 @@ answer to the agent. Nothing is typed into its terminal.
 ```sh
 clawdtime agents hooks install --agent claude-code   # once
 clawdtime agents hooks install --agent codex         # once, then /hooks in Codex
-clawdtime agents pending                             # what waits
-clawdtime agents approve 1                           # or: approve 1 --always
-clawdtime agents deny 1 --message "Not before review."
-clawdtime agents answer 1 2                          # the second choice of a question
+clawdtime agents pending                             # what waits, each with its id
+clawdtime agents approve 3f9a1c2e                    # or: approve 3f9a1c2e --always
+clawdtime agents deny 3f9a --message "Not before review."
+clawdtime agents answer 3f9a 2                       # the second choice of a question
 ```
+
+A request is named by its id, or by its first four characters or more, as
+`agents pending` prints it. A place in the list ("approve 1") is refused, and
+the message shows the ids: the list changes while you type, so a number could
+mean another request a moment later.
 
 How it behaves:
 
@@ -275,11 +280,17 @@ What it can do when you ask:
 - Take a task from you, say how it goes, pass your answer to its question,
   and accept or cancel it. See "Give it a task" below.
 
-Two rules are in the code, not in the model's instructions:
+These rules are in the code, not in the model's instructions:
 
 - A request is allowed or denied only when your own last message says so. "What
   does it want?" allows nothing. "Yes, approve it" allows it. The same reading
   of your words is used on a call.
+- One message decides one request. The model names a request by its id, never
+  by its place in a list, so an answer cannot move to another request when the
+  list changes. When more than one request waits, your words must say which
+  one: a word of what it asks, of its project or of its agent that the other
+  requests do not have ("approve the npm test one"). Otherwise nothing is
+  decided, and ClawdTime asks you which one.
 - Text is typed into a terminal only when it is part of what you said.
 
 A critical decision is kept in your words. When the model rewords it with a word

@@ -11,6 +11,7 @@ import {
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { interpret } from "./call.js";
+import { agentLabel } from "./catalog.js";
 import type { DecisionDesk, DecisionRequest } from "./decisions.js";
 import type { CliFact } from "./inventory.js";
 import { factKinds, type FactKind, type Memory } from "./memory.js";
@@ -218,6 +219,7 @@ Use the tools to see the state. Never guess a state, a name or a number.
 Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly connected Codex chat, which uses its own native tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
 Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
+Name a request by its id from status. One message of the person decides one request. When more than one request waits, the person must say which one; if they did not, ask them.
 Text is typed into a session only when the person gave that text.
 You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
 After an action, say what you did in one sentence.`;
@@ -244,8 +246,8 @@ const tools: ToolSpec[] = [
       type: "object",
       properties: {
         request: {
-          type: "integer",
-          description: "Number of the request in status, from 1.",
+          type: "string",
+          description: "The id of the request, as status shows it.",
         },
         decision: { type: "string", enum: ["allow", "deny", "answer"] },
         text: {
@@ -426,6 +428,12 @@ const ownWords = (text: string, spoken: string) => {
 };
 const clean = (value: string, max: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
+/** Words that every sentence can hold. They never name one request among several. */
+const plainWord = new Set(
+  "a an and the it its one ones this that these those to of in on at for with from by or is are be do does please request requests agent agents ask asks run runs first second third last next other approve approved allow allowed yes yeah yep ok okay sure go ahead proceed accept confirm deny denied decline declined reject no nope not stop cancel refuse never".split(
+    " ",
+  ),
+);
 
 // Only direct mailbox-access requests. Pasted email text, coding tasks and
 // explicit instructions to an existing agent continue through their own paths.
@@ -542,11 +550,12 @@ export class Supervisor {
         ? `Requests that wait for an answer: ${pending.length}.`
         : "No request waits for an answer here.",
     );
-    pending.forEach((request, index) =>
+    // Each request has its id. A place in this list is not a name: the list
+    // changes while the person and the model talk.
+    for (const request of pending)
       lines.push(
-        `${index + 1}. ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary.slice(0, 200)}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}`,
-      ),
-    );
+        `- ${request.id.slice(0, 8)}: ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary.slice(0, 200)}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}`,
+      );
     const found = this.world.incidents?.() ?? [];
     if (found.length) {
       lines.push(`The watcher found ${found.length}:`);
@@ -672,30 +681,79 @@ export class Supervisor {
         );
     return found.length === 1 ? found[0]! : null;
   }
+  /** The one waiting request with this id, or with an id that starts with it. */
+  private request(id: string) {
+    const wanted = id.trim().toLowerCase();
+    if (!/^[0-9a-f]{4,16}$/.test(wanted)) return undefined;
+    const found = this.world.desk
+      .pending()
+      .filter((request) => request.id.startsWith(wanted));
+    return found.length === 1 ? found[0] : undefined;
+  }
+  /**
+   * The waiting requests that the person's words name: by a word that only
+   * that request has in what it asks, in its project or in its agent, or by
+   * the first characters of its id.
+   */
+  private named(spoken: string, pending: DecisionRequest[]) {
+    const wordsOf = (request: DecisionRequest) =>
+      new Set(
+        spokenWords(
+          `${request.summary} ${request.cwd?.split("/").filter(Boolean).at(-1) ?? ""} ${request.agent} ${agentLabel(request.agent)}`,
+        ).filter((word) => word.length > 1 && !plainWord.has(word)),
+      );
+    const said = spokenWords(spoken);
+    return pending.filter((request) => {
+      if (said.some((word) => word.length >= 4 && request.id.startsWith(word)))
+        return true;
+      const others = pending
+        .filter((other) => other.id !== request.id)
+        .map(wordsOf);
+      const own = wordsOf(request);
+      return said.some(
+        (word) => own.has(word) && !others.some((other) => other.has(word)),
+      );
+    });
+  }
   private decide(
     request: DecisionRequest | undefined,
     spoken: string,
     via: ChatMessage["via"],
     wanted: { decision: string },
+    turn: Turn,
   ) {
-    if (!request) return "No request has that number.";
+    if (turn.done.has("decide"))
+      return "One request is decided for each message of the person. Ask them about the next one.";
+    if (!request)
+      return "No request that waits has that id. Use an id that status shows.";
     if (this.namesTask(spoken))
       return "The person spoke about the task, not about this request. Use the task tools, or ask them.";
     // The person's own last words must say it. The model alone cannot decide.
     const said = interpret(spoken, request);
     if (!said || said.decision !== wanted.decision)
       return "The person did not clearly say that. Ask them.";
+    // With more than one request, the words must also say which one. The
+    // model alone cannot choose it.
+    const pending = this.world.desk.pending();
+    if (pending.length > 1) {
+      const named = this.named(spoken, pending);
+      if (named.length !== 1 || named[0]!.id !== request.id)
+        return "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.";
+    }
     const ok = this.world.desk.answer(request.id, {
       decision: said.decision,
       text: said.text,
       via: via === "call" ? "call" : "panel",
     });
     if (!ok) return "That request no longer waits here.";
-    return said.decision === "allow"
-      ? "Allowed. The agent continues."
-      : said.decision === "deny"
-        ? "Denied. The agent is told."
-        : `Answered: ${said.text}.`;
+    const done =
+      said.decision === "allow"
+        ? "Allowed. The agent continues."
+        : said.decision === "deny"
+          ? "Denied. The agent is told."
+          : `Answered: ${said.text}.`;
+    turn.done.set("decide", done);
+    return done;
   }
 
   private async delegate(turn: Turn, spoken: string): Promise<string> {
@@ -772,10 +830,11 @@ export class Supervisor {
         return this.cancelTask(turn, spoken);
       case "decide":
         return this.decide(
-          this.world.desk.pending()[Number(args.request) - 1],
+          this.request(String(args.request ?? "")),
           spoken,
           via,
           { decision: String(args.decision) },
+          turn,
         );
       case "open_session": {
         const session = this.session(String(args.session ?? ""));
@@ -921,7 +980,7 @@ export class Supervisor {
     // Any other yes or no belongs to the one agent that waits.
     if (pending.length === 1 && !named) {
       const said = interpret(spoken, pending[0]!);
-      if (said) return this.decide(pending[0], spoken, via, said);
+      if (said) return this.decide(pending[0], spoken, via, said, turn);
     }
     if (tasks) {
       if (task?.canAccept && saysAccept(spoken, pending.length))
