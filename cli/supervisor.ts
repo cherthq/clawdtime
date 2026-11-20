@@ -461,7 +461,7 @@ export async function supervisorCli(
           },
         );
         return print(
-          `The call ended (${result.ended.replace("_", " ")}) after ${result.turns} ${result.turns === 1 ? "turn" : "turns"}.`,
+          `The call ended (${result.ended === "lost" ? "the backend stopped answering" : result.ended.replace("_", " ")}) after ${result.turns} ${result.turns === 1 ? "turn" : "turns"}.`,
         );
       }
       if (action === "disconnect") {

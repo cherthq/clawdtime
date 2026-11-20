@@ -365,9 +365,10 @@ only through `GET /desktop/decisions`, under the private panel credential.
 
 ## Limits
 
-- Away mode needs a paired project and a live backend. The call path is tested
-  against the protocol with a scripted backend; a real call needs your approval
-  for that call.
+- Away mode needs a paired project and a live backend. The three call flows (a
+  decision, a conversation, one sentence from the watcher) are tested against
+  the real backend code with its simulated line, over HTTP. A call on a live
+  line is not placed by a test: it needs your approval for that call.
 - Codex decides its approvals through its hook only after you trust the hook
   with `/hooks`.
 - Tab selection and typing through AppleScript (Terminal, iTerm2, Ghostty 1.4)
@@ -375,8 +376,7 @@ only through `GET /desktop/decisions`, under the private panel credential.
   is run for real.
 - Chat, the guards, the trove and a full voice round trip (speech to text, the
   answer, text to speech) are run for real against the OpenAI API. The
-  microphone in the panel and a conversation on a real FaceTime call are tested
-  with a scripted backend only: the first needs your consent for the
-  microphone, the second your approval for that call.
+  microphone in the panel is not tested: it needs your consent for the
+  microphone.
 - The first time you talk, macOS asks to use the microphone. The request names
   the app that started ClawdTime, for example your terminal.

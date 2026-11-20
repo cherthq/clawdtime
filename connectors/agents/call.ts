@@ -138,9 +138,11 @@ const turnSchema = z
   .object({
     id: z.string().min(1).max(200),
     sequence: z.number().int().nonnegative(),
-    text: z.string().max(4000).optional(),
+    // The backend takes up to 8,000 characters in one turn.
+    text: z.string().max(8000).optional(),
   })
   .passthrough();
+type Turn = z.infer<typeof turnSchema>;
 const ended = [
   "completed",
   "declined",
@@ -152,6 +154,160 @@ const ended = [
   "unknown",
 ];
 
+/** When a call reads, waits and gives up. */
+export interface CallTiming {
+  now: () => number;
+  deadline: number;
+  /** The longest that one read of the conversation may take. */
+  pollMs?: number;
+  /**
+   * The pause between two reads that brought nothing new. The backend answers
+   * a read at once, so without a pause the loop would flood it.
+   */
+  pauseMs?: number;
+  beatMs?: number;
+}
+
+/** What the person said since the last read. Every turn here is delivered. */
+interface Heard {
+  /** Oldest first. */
+  turns: Turn[];
+  /** The call is over already (the person hung up): nothing more can be spoken. */
+  over: boolean;
+  /**
+   * Speaks an answer to the newest turn. False when the backend refused it,
+   * for example because the person spoke again in the meantime.
+   */
+  say(text: string): Promise<boolean>;
+}
+
+/**
+ * One call: place it, then read what the person says, in order, and hand each
+ * batch to `heard`. `heard` returns a value to end the call, or undefined to
+ * go on listening. This keeps to the backend's order of operations: a turn is
+ * acknowledged before it is used, an answer is spoken to the newest turn only,
+ * each handled turn is reported as completed, oldest first, and the
+ * conversation is ended once, also when something throws.
+ */
+async function onCall<T>(
+  client: CallClient,
+  attentionInput: {
+    idempotencyKey: string;
+    reason: "approval" | "decision";
+    question: string;
+  },
+  options: CallTiming,
+  heard: (batch: Heard) => Promise<T | undefined>,
+): Promise<{ value: T } | { ended: "hung_up" | "time" | "lost" }> {
+  const remaining = () => options.deadline - options.now();
+  // No time limit is sent: the backend then uses its own, and the same key
+  // with the same words always names the same call.
+  const { request: attention } = await client.requestAttention({
+    taskId: "clawdtime-supervisor",
+    ...attentionInput,
+  });
+  // The backend stops a session that is silent for 20 seconds.
+  const beat = setInterval(
+    () => void client.heartbeat().catch(() => {}),
+    options.beatMs ?? 5000,
+  );
+  const pauseMs = options.pauseMs ?? Math.min(700, options.pollMs ?? 700);
+  const pause = () =>
+    new Promise<void>((done) => setTimeout(done, Math.max(0, pauseMs)));
+  const operation = (
+    name: "ack" | "progress" | "reply" | "end",
+    body: unknown,
+  ) =>
+    client.conversationOperation(attention.id, name, body).then(
+      () => true,
+      () => false,
+    );
+  let cursor = 0,
+    failures = 0,
+    open = true;
+  try {
+    while (remaining() > 0) {
+      let page: Awaited<ReturnType<CallClient["conversationTurns"]>>;
+      try {
+        page = await client.conversationTurns(
+          attention.id,
+          cursor,
+          Math.max(1, Math.min(options.pollMs ?? 10_000, remaining())),
+        );
+      } catch {
+        // A backend that does not answer: a few tries with a pause, then no more.
+        if (++failures >= 4) return { ended: "lost" };
+        await pause();
+        continue;
+      }
+      const over =
+        ended.includes(page.request?.state ?? "") ||
+        page.conversation?.state === "ended";
+      // In order, and only up to the first turn that cannot be read or
+      // delivered: the backend takes acknowledgements in order.
+      const delivered: Turn[] = [];
+      let stuck = false;
+      for (const raw of page.turns) {
+        const parsed = turnSchema.safeParse(raw);
+        if (!parsed.success) {
+          stuck = true;
+          break;
+        }
+        if (parsed.data.sequence <= cursor) continue;
+        if (!(await operation("ack", { turnId: parsed.data.id }))) {
+          stuck = true;
+          break;
+        }
+        cursor = parsed.data.sequence;
+        delivered.push(parsed.data);
+      }
+      if (delivered.length) {
+        const newest = delivered.at(-1)!;
+        const value = await heard({
+          turns: delivered,
+          over,
+          say: (text) =>
+            over
+              ? Promise.resolve(false)
+              : operation("reply", {
+                  turnId: newest.id,
+                  replyId: `reply-${newest.id}`,
+                  text,
+                  expectedCursor: cursor,
+                }),
+        });
+        // Each of these turns is handled now. The backend wants that said for
+        // each one, oldest first, before a later turn may be completed.
+        if (!over)
+          for (const turn of delivered)
+            await operation("progress", {
+              turnId: turn.id,
+              state: "completed",
+            });
+        if (value !== undefined) {
+          if (!over) await operation("end", {});
+          open = false;
+          return { value };
+        }
+      }
+      if (over) {
+        open = false;
+        return { ended: "hung_up" };
+      }
+      if (stuck) {
+        if (++failures >= 4) return { ended: "lost" };
+      } else failures = 0;
+      // Nothing new, or something to try again: wait before the next read.
+      if (!delivered.length || stuck) await pause();
+    }
+    return { ended: "time" };
+  } finally {
+    clearInterval(beat);
+    // Whatever happened, the call does not stay open on the backend.
+    if (open) await operation("end", {});
+  }
+}
+
 /**
  * Places the call and waits for a clear spoken answer until the deadline.
  * null: nobody answered clearly. The request then stays as it is.
@@ -159,106 +315,48 @@ const ended = [
 export async function answerByCall(
   client: CallClient,
   request: DecisionRequest,
-  options: {
-    now: () => number;
-    deadline: number;
-    pollMs?: number;
-    beatMs?: number;
-    recalled?: string | null;
-  },
+  options: CallTiming & { recalled?: string | null },
 ): Promise<{
   decision: "allow" | "deny" | "answer";
   text: string | null;
 } | null> {
-  const remaining = () => options.deadline - options.now();
-  if (remaining() < 20_000) return null;
-  const { request: attention } = await client.requestAttention({
-    taskId: "clawdtime-supervisor",
-    // The same request never places a second call.
-    idempotencyKey: `decision-${request.id}`,
-    reason: request.kind === "question" ? "decision" : "approval",
-    question: spokenQuestion(request, options.recalled ?? null),
-    timeoutSeconds: Math.max(20, Math.floor(remaining() / 1000)),
-  });
-  // The backend stops a session that is silent for 20 seconds.
-  const beat = setInterval(
-    () => void client.heartbeat().catch(() => {}),
-    options.beatMs ?? 5000,
-  );
-  let cursor = 0,
-    repeats = 0;
-  const say = (turnId: string, text: string) =>
-    client
-      .conversationOperation(attention.id, "reply", {
-        turnId,
-        replyId: `reply-${turnId}`,
-        text,
-        expectedCursor: cursor,
-      })
-      .catch(() => {});
-  try {
-    while (remaining() > 0) {
-      const page = await client.conversationTurns(
-        attention.id,
-        cursor,
-        Math.max(1, Math.min(options.pollMs ?? 10_000, remaining())),
-      );
-      const turns = page.turns
-        .flatMap((raw) => {
-          const parsed = turnSchema.safeParse(raw);
-          return parsed.success ? [parsed.data] : [];
-        })
-        .filter((turn) => turn.sequence > cursor)
-        .sort((left, right) => left.sequence - right.sequence);
-      for (const turn of turns) {
-        cursor = turn.sequence;
-        await client
-          .conversationOperation(attention.id, "ack", { turnId: turn.id })
-          .catch(() => {});
-      }
+  if (options.deadline - options.now() < 20_000) return null;
+  let repeats = 0;
+  const result = await onCall(
+    client,
+    {
+      // The same request never places a second call.
+      idempotencyKey: `decision-${request.id}`,
+      reason: request.kind === "question" ? "decision" : "approval",
+      question: spokenQuestion(request, options.recalled ?? null),
+    },
+    options,
+    async ({ turns, say }) => {
       // The last thing the person said decides. Earlier fragments are context.
-      const last = turns.at(-1);
-      const answer = last?.text ? interpret(last.text, request) : null;
-      if (last && answer) {
+      const last = turns.at(-1)!;
+      const answer = last.text ? interpret(last.text, request) : null;
+      if (answer) {
         await say(
-          last.id,
           answer.decision === "allow"
             ? "Approved. It continues now."
             : answer.decision === "deny"
               ? "Denied. I told it."
               : `Answered: ${answer.text}.`,
         );
-        await client
-          .conversationOperation(attention.id, "progress", {
-            turnId: last.id,
-            state: "completed",
-          })
-          .catch(() => {});
-        await client
-          .conversationOperation(attention.id, "end", {})
-          .catch(() => {});
         return answer;
       }
-      if (last && repeats < 3) {
+      if (repeats < 3) {
         repeats++;
         await say(
-          last.id,
           request.kind === "question"
             ? "Say the number of your choice."
             : "Say approve, or say deny.",
         );
       }
-      if (
-        ended.includes(page.request?.state ?? "") ||
-        page.conversation?.state === "ended"
-      )
-        return null;
-    }
-    await client.conversationOperation(attention.id, "end", {}).catch(() => {});
-    return null;
-  } finally {
-    clearInterval(beat);
-  }
+      return undefined;
+    },
+  );
+  return "value" in result ? result.value : null;
 }
 
 /**
@@ -269,80 +367,27 @@ export async function answerByCall(
 export async function sayByCall(
   client: CallClient,
   sentence: string,
-  options: {
-    now: () => number;
-    deadline: number;
+  options: CallTiming & {
     /** Names this one call, so the same news never places a second one. */
     key: string;
-    pollMs?: number;
-    beatMs?: number;
   },
 ): Promise<"heard" | "ended" | "time"> {
-  const remaining = () => options.deadline - options.now();
-  const { request: attention } = await client.requestAttention({
-    taskId: "clawdtime-supervisor",
-    idempotencyKey: `incident-${options.key}`,
-    reason: "decision",
-    question: `${sentence.slice(0, 300)} Say okay when you have heard this.`,
-    timeoutSeconds: Math.max(20, Math.floor(remaining() / 1000)),
-  });
-  const beat = setInterval(
-    () => void client.heartbeat().catch(() => {}),
-    options.beatMs ?? 5000,
+  const result = await onCall(
+    client,
+    {
+      idempotencyKey: `incident-${options.key}`,
+      reason: "decision",
+      question: `${sentence.slice(0, 300)} Say okay when you have heard this.`,
+    },
+    options,
+    async ({ turns, say }) => {
+      if (!turns.some((turn) => turn.text?.trim())) return undefined;
+      await say("Okay.");
+      return "heard" as const;
+    },
   );
-  let cursor = 0;
-  try {
-    while (remaining() > 0) {
-      const page = await client.conversationTurns(
-        attention.id,
-        cursor,
-        Math.max(1, Math.min(options.pollMs ?? 10_000, remaining())),
-      );
-      const turns = page.turns
-        .flatMap((raw) => {
-          const parsed = turnSchema.safeParse(raw);
-          return parsed.success ? [parsed.data] : [];
-        })
-        .filter((turn) => turn.sequence > cursor)
-        .sort((left, right) => left.sequence - right.sequence);
-      for (const turn of turns) {
-        cursor = turn.sequence;
-        await client
-          .conversationOperation(attention.id, "ack", { turnId: turn.id })
-          .catch(() => {});
-      }
-      const last = turns.findLast((turn) => turn.text?.trim());
-      if (last) {
-        await client
-          .conversationOperation(attention.id, "reply", {
-            turnId: last.id,
-            replyId: `reply-${last.id}`,
-            text: "Okay.",
-            expectedCursor: cursor,
-          })
-          .catch(() => {});
-        await client
-          .conversationOperation(attention.id, "progress", {
-            turnId: last.id,
-            state: "completed",
-          })
-          .catch(() => {});
-        await client
-          .conversationOperation(attention.id, "end", {})
-          .catch(() => {});
-        return "heard";
-      }
-      if (
-        ended.includes(page.request?.state ?? "") ||
-        page.conversation?.state === "ended"
-      )
-        return "ended";
-    }
-    await client.conversationOperation(attention.id, "end", {}).catch(() => {});
-    return "time";
-  } finally {
-    clearInterval(beat);
-  }
+  if ("value" in result) return result.value;
+  return result.ended === "time" ? "time" : "ended";
 }
 
 const linkSchema = z
@@ -413,94 +458,40 @@ const farewell =
 /**
  * A conversation with ClawdTime on a call. Each thing the person says goes to
  * `respond`, and its answer is spoken. It ends when the person says goodbye,
- * hangs up, or the time runs out.
+ * hangs up, or the time runs out. "lost": the backend stopped answering.
  */
 export async function converseByCall(
   client: CallClient,
   respond: (spoken: string) => Promise<string>,
-  options: {
-    now: () => number;
-    deadline: number;
-    greeting: string;
-    pollMs?: number;
-    beatMs?: number;
-    key: string;
-  },
-): Promise<{ turns: number; ended: "goodbye" | "hung_up" | "time" }> {
-  const remaining = () => options.deadline - options.now();
-  const { request: attention } = await client.requestAttention({
-    taskId: "clawdtime-supervisor",
-    idempotencyKey: `talk-${options.key}`,
-    reason: "decision",
-    question: options.greeting,
-    timeoutSeconds: Math.max(20, Math.floor(remaining() / 1000)),
-  });
-  const beat = setInterval(
-    () => void client.heartbeat().catch(() => {}),
-    options.beatMs ?? 5000,
-  );
-  let cursor = 0,
-    count = 0;
-  try {
-    while (remaining() > 0) {
-      const page = await client.conversationTurns(
-        attention.id,
-        cursor,
-        Math.max(1, Math.min(options.pollMs ?? 10_000, remaining())),
-      );
-      const turns = page.turns
-        .flatMap((raw) => {
-          const parsed = turnSchema.safeParse(raw);
-          return parsed.success ? [parsed.data] : [];
-        })
-        .filter((turn) => turn.sequence > cursor)
-        .sort((left, right) => left.sequence - right.sequence);
-      for (const turn of turns) {
-        cursor = turn.sequence;
-        await client
-          .conversationOperation(attention.id, "ack", { turnId: turn.id })
-          .catch(() => {});
-      }
-      const last = turns.at(-1);
+  options: CallTiming & { greeting: string; key: string },
+): Promise<{
+  turns: number;
+  ended: "goodbye" | "hung_up" | "time" | "lost";
+}> {
+  let count = 0;
+  const result = await onCall(
+    client,
+    {
+      idempotencyKey: `talk-${options.key}`,
+      reason: "decision",
+      question: options.greeting,
+    },
+    options,
+    async ({ turns, say }) => {
       // Fragments of one sentence arrive as several turns: they are answered together.
       const spoken = turns
         .map((turn) => turn.text ?? "")
         .join(" ")
         .trim();
-      if (last && spoken) {
-        count++;
-        const bye = farewell.test(spoken.toLowerCase());
-        const answer = bye ? "Goodbye." : await respond(spoken);
-        await client
-          .conversationOperation(attention.id, "reply", {
-            turnId: last.id,
-            replyId: `reply-${last.id}`,
-            text: answer.slice(0, 900),
-            expectedCursor: cursor,
-          })
-          .catch(() => {});
-        await client
-          .conversationOperation(attention.id, "progress", {
-            turnId: last.id,
-            state: "completed",
-          })
-          .catch(() => {});
-        if (bye) {
-          await client
-            .conversationOperation(attention.id, "end", {})
-            .catch(() => {});
-          return { turns: count, ended: "goodbye" };
-        }
-      }
-      if (
-        ended.includes(page.request?.state ?? "") ||
-        page.conversation?.state === "ended"
-      )
-        return { turns: count, ended: "hung_up" };
-    }
-    await client.conversationOperation(attention.id, "end", {}).catch(() => {});
-    return { turns: count, ended: "time" };
-  } finally {
-    clearInterval(beat);
-  }
+      if (!spoken) return undefined;
+      count++;
+      const bye = farewell.test(spoken.toLowerCase());
+      await say((bye ? "Goodbye." : await respond(spoken)).slice(0, 900));
+      return bye ? ("goodbye" as const) : undefined;
+    },
+  );
+  return {
+    turns: count,
+    ended: "value" in result ? result.value : result.ended,
+  };
 }
