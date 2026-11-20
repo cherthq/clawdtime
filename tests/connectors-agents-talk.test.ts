@@ -490,6 +490,78 @@ describe("the ClawdTime agent", () => {
     expect(desk.away()).toBe(true);
   });
 
+  it("types only whole words that the person gave, on a cue to type, into the session that they named", async () => {
+    const { value, desk, log } = world([
+      session(),
+      session({ id: "2-a", pid: 2, name: "docs", cwd: "/work/docs" }),
+    ]);
+    const result = async (spoken: string, name: string, text: string) => {
+      const run = scripted([
+        [call("type_into_session", { session: name, text })],
+        "ok",
+      ]);
+      await new Supervisor(value, run.model).reply([], spoken, "chat");
+      return run.seen[1]!.messages.at(-1)!.content;
+    };
+    // A part of a word is not a word of the person.
+    expect(
+      await result("tell deploy fix why it waits", "deploy fix", "y"),
+    ).toContain("Only the person's own words are typed");
+    // Words that follow "not" say the opposite of the sentence.
+    expect(
+      await result(
+        "Tell deploy fix: do not delete the release branch",
+        "deploy fix",
+        "delete the release branch",
+      ),
+    ).toContain("Only the person's own words are typed");
+    // No cue to type: a sentence about a session types nothing.
+    expect(
+      await result(
+        "deploy fix should run the tests again",
+        "deploy fix",
+        "run the tests again",
+      ),
+    ).toBe("The person did not ask to type anything into a session. Ask them.");
+    // The model picks another session than the one that the person named.
+    expect(
+      await result(
+        "tell docs to run the tests again",
+        "deploy fix",
+        "run the tests again",
+      ),
+    ).toBe("The person did not name that session. Ask them which session.");
+    expect(log).toEqual([]);
+    expect(
+      await result(
+        "Tell deploy fix: do not delete the release branch",
+        "deploy fix",
+        "do not delete the release branch",
+      ),
+    ).toBe("Typed into deploy fix.");
+    expect(log).toEqual(["send 100-abc: do not delete the release branch"]);
+    // A session with a request on the desk gets an answer, not typed text:
+    // Return in its terminal would answer the prompt that shows there.
+    ask(desk, "npm test");
+    expect(
+      await result(
+        "tell deploy fix to run the tests again",
+        "deploy fix",
+        "run the tests again",
+      ),
+    ).toBe(
+      "deploy fix has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.",
+    );
+    expect(
+      await result(
+        "tell docs to run the tests again",
+        "docs",
+        "run the tests again",
+      ),
+    ).toBe("Typed into docs.");
+    expect(log).toHaveLength(2);
+  });
+
   it("works with no language model, and falls back when the model fails", async () => {
     const { value, desk } = world([
       session({ state: "needs_you", detail: "question" }),

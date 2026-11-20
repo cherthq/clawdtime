@@ -438,6 +438,32 @@ const plainWord = new Set(
     " ",
   ),
 );
+/** A sentence that asks ClawdTime to type. Without one of these words nothing is typed. */
+const typeCue = /\b(?:type|tell|send|say|reply|answer)\b/i;
+/**
+ * True when `text` stands in what the person said as whole words, one after
+ * the other. A part of a word is not a word of the person ("y" in "why"), and
+ * words that follow a "not" say the opposite of the sentence.
+ */
+function saidAsWords(text: string, spoken: string) {
+  const all = spoken.toLowerCase();
+  const wanted = text.toLowerCase();
+  const letter = /[\p{L}\p{N}]/u;
+  const open = (character: string | undefined) =>
+    character === undefined || !letter.test(character);
+  for (
+    let at = all.indexOf(wanted);
+    wanted && at >= 0;
+    at = all.indexOf(wanted, at + 1)
+  )
+    if (
+      open(all[at - 1]) &&
+      open(all[at + wanted.length]) &&
+      !/(?:\bnot|\bnever|\bcannot|n['\u2019]t)\s*$/.test(all.slice(0, at))
+    )
+      return true;
+  return false;
+}
 
 // Only direct mailbox-access requests. Pasted email text, coding tasks and
 // explicit instructions to an existing agent continue through their own paths.
@@ -685,6 +711,18 @@ export class Supervisor {
         );
     return found.length === 1 ? found[0]! : null;
   }
+  /** True when a request on the desk comes from this session, or from its agent in its folder. */
+  private waitsOnDesk(session: AgentSession) {
+    if (session.host) return false;
+    return this.world.desk
+      .pending()
+      .some(
+        (request) =>
+          request.agent === session.agent &&
+          ((session.pid !== null && request.pids.includes(session.pid)) ||
+            (session.cwd !== null && session.cwd === request.cwd)),
+      );
+  }
   /** The one waiting request with this id, or with an id that starts with it. */
   private request(id: string) {
     const wanted = id.trim().toLowerCase();
@@ -854,8 +892,17 @@ export class Supervisor {
         const session = this.session(String(args.session ?? ""));
         const text = clean(String(args.text ?? ""), 2000);
         if (!session) return "No single session has that name.";
-        if (!text || !spoken.toLowerCase().includes(text.toLowerCase()))
+        // The person's own last words must ask for it, name the session and
+        // hold the text. The model alone chooses none of the three.
+        if (!typeCue.test(spoken))
+          return "The person did not ask to type anything into a session. Ask them.";
+        if (!saidAsWords(title(session), spoken))
+          return "The person did not name that session. Ask them which session.";
+        if (!saidAsWords(text, spoken))
           return "Only the person's own words are typed. Ask them for the exact text.";
+        // Return in a terminal that shows a prompt answers that prompt.
+        if (this.waitsOnDesk(session))
+          return `${title(session)} has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.`;
         const sent = await this.world.send(session, text);
         return sent.ok
           ? `Typed into ${title(session)}.`

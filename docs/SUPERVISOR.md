@@ -300,7 +300,14 @@ These rules are in the code, not in the model's instructions:
   one: a word of what it asks, of its project or of its agent that the other
   requests do not have ("approve the npm test one"). Otherwise nothing is
   decided, and ClawdTime asks you which one.
-- Text is typed into a terminal only when it is part of what you said.
+- Text is typed into a terminal only when your own last message asks for it
+  ("type", "tell", "send", "say", "reply" or "answer"), names the session, and
+  holds the text as whole words, one after the other ("Tell deploy fix: run the
+  tests again"). A part of a word is never typed, and neither are words that
+  follow a "not" in your sentence.
+- Nothing is typed into a session that has a request on the desk. Return in its
+  terminal would answer the prompt that shows there. ClawdTime says that the
+  request must be answered first.
 
 A critical decision is kept in your words. When the model rewords it with a word
 that you did not say, your own sentence is stored.
