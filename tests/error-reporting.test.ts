@@ -231,4 +231,27 @@ describe("unexpected error reporting", () => {
     expect(JSON.parse(lines[1]!)).toMatchObject({ name: "NonError" });
     expect(lines.join("\n")).not.toContain("PRIVATE");
   });
+
+  it("writes only stack lines that end in a line and column position", () => {
+    const lines: string[] = [];
+    const report = createErrorReporter({ write: (l) => lines.push(l) });
+    // The stack was read before the message or the name changed. Its first
+    // line no longer matches, so the message lines stay in the stack text.
+    const wrapped = new Error(`refused\n    at ${secret}`);
+    void wrapped.stack;
+    wrapped.message = `wrapped: ${wrapped.message}`;
+    report("loop_failed", wrapped);
+    const renamed = new TypeError(`refused\n    at ${secret}`);
+    void renamed.stack;
+    renamed.name = "TypeError [ERR_FIXTURE]";
+    report("startup_refused", renamed);
+    expect(lines).toHaveLength(2);
+    expect(lines.join("\n")).not.toContain("PRIVATE");
+    expect(lines.join("\n")).not.toContain("+1555");
+    for (const line of lines) {
+      const { frames } = JSON.parse(line) as { frames: string[] };
+      expect(frames.length).toBeGreaterThan(0);
+      for (const frame of frames) expect(frame).toMatch(/:\d+:\d+\)?$/);
+    }
+  });
 });
