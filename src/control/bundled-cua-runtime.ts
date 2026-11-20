@@ -10,6 +10,7 @@ import type {
 } from "./desktop-executor.js";
 import {
   CuaInputNotDispatched,
+  CuaSetupRequired,
   bundledCuaConfigSchema,
   cuaPlanSchema,
   type BundledCuaConfig,
@@ -434,7 +435,7 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
           message =
             "The computer task reached its step limit without a verified result.";
       }
-    } catch {
+    } catch (error) {
       const r = this.records.get(id)!;
       state =
         this.dispatching || r.state === "uncertain"
@@ -447,7 +448,9 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
           ? "Computer input or its observation could not be confirmed. It will not be repeated; reconcile the original operation."
           : state === "canceled"
             ? "Computer work stopped. No further actions will run."
-            : "The computer runtime could not continue within its current permissions and observation limits.";
+            : error instanceof CuaSetupRequired
+              ? error.advice
+              : "The computer runtime could not continue within its current permissions and observation limits.";
     } finally {
       clearTimeout(deadline);
       this.approval = undefined;

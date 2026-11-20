@@ -7,6 +7,17 @@ export class CuaInputNotDispatched extends Error {
   }
 }
 
+/**
+ * The runtime cannot start until the person does one setup step. The advice is
+ * a fixed sentence from this code, never text from a tool, a page or a model,
+ * so it is safe to show.
+ */
+export class CuaSetupRequired extends Error {
+  constructor(readonly advice: string) {
+    super("The computer runtime needs a setup step first.");
+  }
+}
+
 export const cuaActionSchema = z.discriminatedUnion("type", [
   z
     .object({

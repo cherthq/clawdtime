@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { chromium, type Browser } from "playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BundledCuaBrowser } from "../connectors/agents/bundled-cua-browser.js";
+import { CuaSetupRequired } from "../src/control/cua-contracts.js";
 import type {
   BundledCuaConfig,
   CuaAction,
@@ -44,6 +45,57 @@ describe("browser configuration boundaries", () => {
           startUrl: "https://user:password@example.test",
         }),
     ).toThrow("without credentials");
+  });
+});
+
+describe("a browser build that is not installed", () => {
+  const config = {
+    startUrl: "http://127.0.0.1:9/",
+    allowedOrigins: ["http://127.0.0.1:9"],
+    headless: true,
+    fixtureGrants: [],
+  };
+  const task = {
+    taskId: "fixture-task",
+    sessionId: "fixture-session",
+    expiresAt: 60_000,
+  };
+  it("is reported as a setup step with the command to run", async () => {
+    const browser = new BundledCuaBrowser(
+      config,
+      async () => {
+        throw Error(
+          "browserType.launch: Executable doesn't exist at /cache/chromium-1/chrome\nLooks like Playwright was just installed or updated.\nPlease run the following command to download new browsers: npx playwright install",
+        );
+      },
+      () => 1,
+    );
+    const failure = await browser
+      .open(task, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CuaSetupRequired);
+    expect((failure as CuaSetupRequired).advice).toBe(
+      "ClawdTime's own browser is not installed. In the ClawdTime folder run: npm run cua:install-browser. Then give the task again.",
+    );
+    // The advice holds no path and no text of the failure.
+    expect((failure as CuaSetupRequired).advice).not.toContain("/cache");
+  });
+  it("leaves any other launch failure as it is", async () => {
+    const browser = new BundledCuaBrowser(
+      config,
+      async () => {
+        throw Error("browserType.launch: Timeout 15000ms exceeded.");
+      },
+      () => 1,
+    );
+    const failure = await browser
+      .open(task, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).not.toBeInstanceOf(CuaSetupRequired);
+    // The general sentence, with no text of the failure itself.
+    expect((failure as Error).message).toBe(
+      "Isolated computer browser could not open. Check the installed browser and configured origin.",
+    );
   });
 });
 

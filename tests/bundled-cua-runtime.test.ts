@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
 import {
+  CuaSetupRequired,
   bundledCuaConfigSchema,
   CuaInputNotDispatched,
   type CuaAction,
@@ -559,6 +560,34 @@ describe("app-owned CUA task engine", () => {
     await f.runtime.waitForIdle();
     expect(f.device.execute).not.toHaveBeenCalled();
     expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("says which setup step is missing, in the runtime's own fixed words, and nothing else for other failures", async () => {
+    const advice =
+      "ClawdTime's own browser is not installed. In the ClawdTime folder run: npm run cua:install-browser. Then give the task again.";
+    const missing = fixture({ allowed: true });
+    missing.device.open.mockImplementation(async () => {
+      throw new CuaSetupRequired(advice);
+    });
+    await missing.runtime.submit("task_1", "Update fixture");
+    await expect(missing.runtime.waitForIdle()).resolves.toBeUndefined();
+    expect(missing.runtime.snapshot()).toMatchObject({
+      state: "blocked",
+      message: advice,
+    });
+    expect(missing.device.execute).not.toHaveBeenCalled();
+    // Any other failure keeps the general sentence: its own text is never shown.
+    const other = fixture({ allowed: true });
+    other.device.open.mockImplementation(async () => {
+      throw Error("private detail of a tool");
+    });
+    await other.runtime.submit("task_1", "Update fixture");
+    await expect(other.runtime.waitForIdle()).resolves.toBeUndefined();
+    expect(other.runtime.snapshot()).toMatchObject({
+      state: "blocked",
+      message:
+        "The computer runtime could not continue within its current permissions and observation limits.",
+    });
   });
 
   it("contains device construction failures without stranding the task flight", async () => {
