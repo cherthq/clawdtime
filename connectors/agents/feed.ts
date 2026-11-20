@@ -6,10 +6,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   ChatLog,
-  OpenAIModel,
   Supervisor,
   type ChatMessage,
   type ModelClient,
+  historyForTurn,
+  supervisorModel,
 } from "./brain.js";
 import type { CliFact } from "./inventory.js";
 import {
@@ -217,10 +218,7 @@ export class BoardFeed implements AgentBoardPort {
       options.model !== undefined
         ? options.model
         : key
-          ? new OpenAIModel(
-              key,
-              process.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-            )
+          ? supervisorModel(process.env, key)
           : null;
     this.speech =
       options.speech !== undefined
@@ -380,7 +378,7 @@ export class BoardFeed implements AgentBoardPort {
     via: ChatMessage["via"] = "chat",
   ): Promise<ChatMessage> {
     const now = this.options.now ?? Date.now;
-    const history = this.log.recent(24);
+    const history = this.log.recent(historyForTurn);
     this.log.append({
       role: "user",
       text: text.slice(0, 2000),

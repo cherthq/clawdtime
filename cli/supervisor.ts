@@ -33,9 +33,10 @@ import {
 } from "../connectors/agents/call.js";
 import {
   ChatLog,
-  OpenAIModel,
   Supervisor,
   type ModelClient,
+  historyForTurn,
+  supervisorModel,
 } from "../connectors/agents/brain.js";
 import { focusSession } from "../connectors/agents/focus.js";
 import { rememberable } from "../connectors/agents/trove.js";
@@ -521,19 +522,14 @@ export async function supervisorCli(
             jobs: jobsFor(system, root, runner),
             openApp: (name, url) => openApp(system, name, url, runner),
           },
-          key
-            ? new OpenAIModel(
-                key,
-                system.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-              )
-            : null,
+          key ? supervisorModel(system.env, key) : null,
         );
         const log = new ChatLog(root);
         print("Calling you. Say goodbye to end the call.");
         const result = await converseByCall(
           await openCall(link, `talk-${system.now().toString(36)}`),
           async (spoken) => {
-            const history = log.recent(24);
+            const history = log.recent(historyForTurn);
             log.append({
               role: "user",
               text: spoken.slice(0, 2000),
@@ -832,15 +828,12 @@ export async function supervisorCli(
       deps.model !== undefined
         ? deps.model
         : key
-          ? new OpenAIModel(
-              key,
-              system.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-            )
+          ? supervisorModel(system.env, key)
           : null,
     );
     const log = new ChatLog(root);
     const turn = async (words: string, via: "chat" | "voice") => {
-      const history = log.recent(24);
+      const history = log.recent(historyForTurn);
       log.append({
         role: "user",
         text: words.slice(0, 2000),
