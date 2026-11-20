@@ -224,6 +224,9 @@ final class PetController: NSObject {
   var boardOpen = false
   private var origin = CGPoint.zero
   private var dockY: CGFloat = 0
+  /// The size that the person chose with the slider, and the window that it gives.
+  private var petScale: Double
+  private var petSize: CGSize
   private var x = Spring(0, response: 0.40, dampingRatio: 0.78), y = Spring(0, response: 0.40, dampingRatio: 0.78)
   private var reveal = Spring(PetLayout.revealResting, response: 0.34, dampingRatio: 0.74)
   private var lean = Spring(0, response: 0.42, dampingRatio: 0.7)
@@ -243,7 +246,10 @@ final class PetController: NSObject {
   var status = PetStatus(mood: .offline, headline: "", detail: "", bubble: nil) { didSet { mascot.mood = status.mood } }
 
   override init() {
-    let size = PetLayout.petSize
+    // No choice yet: the start size, which is smaller than the full size.
+    petScale = PetLayout.scale(UserDefaults.standard.object(forKey: "pet.size") as? Double ?? PetLayout.defaultScale)
+    petSize = PetLayout.size(scale: petScale)
+    let size = petSize
     window = PetWindow.make(size: size)
     mascot = MascotView(frame: NSRect(origin: .zero, size: size))
     closeButton = IconButton(symbol: "xmark", label: "Close ClawdTime. It stays in the menu bar.", diameter: 26, target: nil, action: nil)
@@ -286,6 +292,32 @@ final class PetController: NSObject {
     get { mascot.look }
     set { mascot.look = newValue; defaults.set(newValue.rawValue, forKey: "pet.look"); mascot.jump() }
   }
+  /// The mascot's size as a share of its full size. The choice is kept between starts.
+  /// The mascot's middle stays where it is while it grows or shrinks.
+  var scale: Double {
+    get { petScale }
+    set {
+      petScale = PetLayout.scale(newValue); defaults.set(petScale, forKey: "pet.size")
+      let size = PetLayout.size(scale: petScale), old = petSize
+      guard size != old else { return }
+      petSize = size
+      let screen = visibleFrame
+      origin = PetLayout.resized(origin: origin, from: old, to: size, in: screen)
+      dockY = max(screen.minY + 6, min(dockY + (old.height - size.height) / 2, screen.maxY - size.height - 6))
+      let place = target(in: screen)
+      window.setFrame(CGRect(origin: place, size: size), display: true)
+      gestures.frame = NSRect(origin: .zero, size: size); mascot.frame = gestures.bounds
+      x.snap(to: Double(place.x)); y.snap(to: Double(place.y))
+      body.place(x: Double(place.x), y: Double(place.y)); bodyActive = false
+      layoutControls()
+      if visible { save(); onMoved?() }
+    }
+  }
+  /// Flint with an eye in its window. Off, it is the Chert mark and nothing else.
+  var flintEye: Bool {
+    get { mascot.flintEye }
+    set { mascot.flintEye = newValue; defaults.set(newValue, forKey: "pet.flintEye"); mascot.tap() }
+  }
   /// How the mascot is drawn. The choice is kept between starts.
   var style: MascotStyle {
     get { mascot.style }
@@ -298,10 +330,11 @@ final class PetController: NSObject {
     mascot.look = MascotLook(rawValue: defaults.string(forKey: "pet.look") ?? "") ?? .flat
     // No choice yet, or a style that is no longer there: the Chert mark.
     mascot.style = MascotStyle(rawValue: defaults.string(forKey: "pet.style") ?? "") ?? .flint
+    mascot.flintEye = defaults.bool(forKey: "pet.flintEye")
     let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? visibleFrame
     if defaults.object(forKey: "pet.x") != nil {
-      origin = PetLayout.origin(fraction: CGPoint(x: defaults.double(forKey: "pet.x"), y: defaults.double(forKey: "pet.y")), in: screen)
-    } else { origin = PetLayout.defaultOrigin(in: screen) }
+      origin = PetLayout.origin(fraction: CGPoint(x: defaults.double(forKey: "pet.x"), y: defaults.double(forKey: "pet.y")), in: screen, size: petSize)
+    } else { origin = PetLayout.defaultOrigin(in: screen, size: petSize) }
     dockY = origin.y
     placement = PetSide(rawValue: defaults.string(forKey: "pet.dock") ?? "").map { .docked($0) } ?? .free
     let start = target(in: screen)
@@ -327,12 +360,12 @@ final class PetController: NSObject {
 
   private func target(in screen: CGRect) -> CGPoint {
     switch placement {
-    case .free: return PetLayout.clamp(origin: origin, in: screen)
-    case .docked(let side): return PetLayout.docked(side: side, y: dockY, reveal: reveal.value, in: screen).origin
+    case .free: return PetLayout.clamp(origin: origin, size: petSize, in: screen)
+    case .docked(let side): return PetLayout.docked(side: side, y: dockY, reveal: reveal.value, in: screen, size: petSize).origin
     }
   }
   private func save() {
-    let fraction = PetLayout.fraction(origin: origin, in: visibleFrame)
+    let fraction = PetLayout.fraction(origin: origin, in: visibleFrame, size: petSize)
     defaults.set(Double(fraction.x), forKey: "pet.x"); defaults.set(Double(fraction.y), forKey: "pet.y")
     if case .docked(let side) = placement { defaults.set(side.rawValue, forKey: "pet.dock") } else { defaults.removeObject(forKey: "pet.dock") }
   }
@@ -352,10 +385,10 @@ final class PetController: NSObject {
   func undock() {
     guard isDocked else { return }
     placement = .free
-    origin = PetLayout.clamp(origin: CGPoint(x: origin.x, y: dockY), in: visibleFrame)
+    origin = PetLayout.clamp(origin: CGPoint(x: origin.x, y: dockY), size: petSize, in: visibleFrame)
     // Come back to where it was, but never stay against the edge it was tucked on.
     let screen = visibleFrame
-    origin.x = max(screen.minX + 24, min(origin.x, screen.maxX - PetLayout.petSize.width - 24))
+    origin.x = max(screen.minX + 24, min(origin.x, screen.maxX - petSize.width - 24))
     mascot.tap(); save(); onMoved?()
   }
   @objc private func sideRequested() { dock() }
@@ -380,7 +413,7 @@ final class PetController: NSObject {
   @objc private func stopSharing() { onStopSharing?() }
   @objc private func stopCall() { onStopCall?() }
   @objc private func screensChanged() {
-    origin = PetLayout.clamp(origin: origin, in: visibleFrame); dockY = min(dockY, visibleFrame.maxY - PetLayout.petSize.height - 6)
+    origin = PetLayout.clamp(origin: origin, size: petSize, in: visibleFrame); dockY = min(dockY, visibleFrame.maxY - petSize.height - 6)
   }
 
   /// Stop is a safety control: while something can be stopped the mascot comes out of the edge.
@@ -478,7 +511,7 @@ final class PetController: NSObject {
     if mascot.hovering && !wasHovering && drag == nil && !isDocked && clockTime - lastWave > 8 { mascot.wave(); lastWave = clockTime }
     wasHovering = mascot.hovering
     if bodyActive {
-      let size = PetLayout.petSize
+      let size = petSize
       let bounds = BodyPhysics.Bounds(minX: Double(screen.minX) + 6, minY: Double(screen.minY) + 6,
         maxX: Double(screen.maxX - size.width) - 6, maxY: Double(screen.maxY - size.height) - 6)
       let moved = body.step(step, bounds: bounds, still: Theme.reduceMotion)
@@ -490,7 +523,7 @@ final class PetController: NSObject {
       if !moved.moving && drag == nil {
         // At rest: this is its place from now on.
         bodyActive = false; mascot.motion = BodyPhysics.Frame(); mascot.held = false
-        origin = PetLayout.clamp(origin: next, in: screen); dockY = origin.y; save(); updateSideButton()
+        origin = PetLayout.clamp(origin: next, size: petSize, in: screen); dockY = origin.y; save(); updateSideButton()
       }
     } else if drag == nil {
       let goal = target(in: screen)
@@ -509,7 +542,7 @@ final class PetController: NSObject {
       button.isHidden = shown < 0.02
       button.alphaValue = shown
       let scale = 0.6 + 0.4 * shown
-      let size = PetLayout.petSize, base = index == 0 ? CGFloat(8) : size.width - 34
+      let size = petSize, base = index == 0 ? CGFloat(8) : size.width - 34
       button.frame = NSRect(x: base + 13 * (1 - scale), y: size.height - 34 + 13 * (1 - scale) - 6 * (1 - shown), width: 26 * scale, height: 26 * scale)
     }
 

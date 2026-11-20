@@ -17,17 +17,22 @@ enum MascotCatalog {
     }
   }
   private static var thumbnails: [MascotStyle: NSImage] = [:]
+  private static var plainFlint: NSImage?
   /// A small picture of a style at rest, for the menu. Each one is drawn once.
-  static func thumbnail(_ style: MascotStyle, points: CGFloat = 32) -> NSImage {
-    if let image = thumbnails[style] { return image }
+  static func thumbnail(_ style: MascotStyle, points: CGFloat = 32, flintEye: Bool = true) -> NSImage {
+    // Flint has two pictures: with its eye and as the plain mark.
+    let plain = style == .flint && !flintEye
+    if plain, let image = plainFlint { return image }
+    if !plain, let image = thumbnails[style] { return image }
     let figure = make(style)
+    (figure as? FlintScene)?.showsEye = !plain
     figure.set(mood: .idle)
     var pose = MascotPose()
     // Parts that follow late get time to settle.
     for step in 0..<24 { pose.clock = 1 + Double(step) / 60; figure.apply(pose) }
     let image = figure.snapshot(pixels: points * 3)
     image.size = NSSize(width: points, height: points)
-    thumbnails[style] = image
+    if plain { plainFlint = image } else { thumbnails[style] = image }
     return image
   }
 }

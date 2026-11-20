@@ -25,14 +25,26 @@ each style shows its picture:
 
 | Style | What it is |
 |---|---|
-| Flint | The Chert mark as a living stone: a core of dark flint with one robotic eye in its window, and its flake beside it. A new install starts with it. |
+| Flint | The Chert mark and its flake, and nothing else. Its window is dark at rest and lit in the color of the state otherwise. A new install starts with it. |
 | Pebble | A round stone in the sunset strata, with the white ring in orbit. Friendly. |
 | Core | A dark glass orb with an iris of light and two fine rings. |
 | Neon | A night-city droid head in black chrome, with a visor of LED eyes. |
-| Orb | A metal ball droid with two small robotic eyes and a belt of lamps. |
-| Onyx | A polished black stone with veins of gold and two small robotic eyes. |
-| Flux | A drop of liquid chrome with two small robotic eyes. |
+| Orb | A ball droid, cobalt over deep navy, with two small robotic eyes and a belt of lamps. |
+| Onyx | A black stone with a gold edge, veins of gold, two facets of amethyst and two small robotic eyes. |
+| Flux | A drop of liquid, mint over emerald, with two small robotic eyes. |
 | Iris | A lens: coated glass, an aperture that blinks, a hoop it hangs in. |
+
+The colors in the table are those of the flat look. In the flat look every dark
+part has a pale rim, so a mascot holds on a dark desktop as well as on a light
+one.
+
+The same menu holds two more choices:
+
+- **Size**: a slider from half of the full size to one and a half. The mascot
+  changes size under the slider and keeps its place. A new install starts at
+  0.7 of the full size.
+- **Eye on Flint**: gives the Chert mark one ring eye in its window, which
+  looks at the pointer and blinks. It is off at the start.
 
 The body has weight, in every style:
 

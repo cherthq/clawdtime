@@ -12,6 +12,13 @@ final class MascotView: NSView {
   var look = MascotLook.flat { didSet { if look != oldValue { rebuild() } } }
   /// Changes the drawing. The pose, the mood and the clock carry over.
   var style = MascotStyle.flint { didSet { if style != oldValue { rebuild() } } }
+  /// Flint with an eye in its window. Off, Flint is the Chert mark and nothing else.
+  var flintEye = false { didSet { if flintEye != oldValue { applyFlintEye() } } }
+  private func applyFlintEye() {
+    (flat.figure as? FlintFlat)?.eye = flintEye
+    (solid as? FlintScene)?.showsEye = flintEye
+    lastPose = nil; flat.needsDisplay = true
+  }
   private func rebuild() {
     lastPose = nil
     jelly(stretch: 0, angle: 0)
@@ -25,6 +32,7 @@ final class MascotView: NSView {
       solid = figure; scene.scene = figure.scene; scene.pointOfView = figure.camera
       flat.figure = nil
     }
+    applyFlintEye()
     setAccessibilityLabel("ClawdTime, " + style.title)
   }
   let clock = FrameClock()

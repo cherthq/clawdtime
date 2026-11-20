@@ -410,6 +410,57 @@ final class DesignMotionTests: XCTestCase {
     pose = animator.step(1.0 / 60, still)
     XCTAssertEqual(pose.clock, 0, "a style that moves on its own stops under reduced motion")
   }
+  func testTheSizeSliderStartsSmallAndStaysInItsRange() {
+    // The start size is smaller than the full size, and it is a place on the slider.
+    XCTAssertLessThan(PetLayout.defaultScale, 1)
+    XCTAssertTrue(PetLayout.scaleRange.contains(PetLayout.defaultScale))
+    XCTAssertEqual(PetLayout.size(scale: 1), PetLayout.petSize)
+    XCTAssertEqual(PetLayout.size(scale: PetLayout.defaultScale).width, 104, accuracy: 0.01)
+    // Outside the range, and with no number at all, the size is still a usable one.
+    XCTAssertEqual(PetLayout.size(scale: 0.01), PetLayout.size(scale: 0.5))
+    XCTAssertEqual(PetLayout.size(scale: 40), PetLayout.size(scale: 1.5))
+    XCTAssertEqual(PetLayout.size(scale: .nan), PetLayout.size(scale: PetLayout.defaultScale))
+    XCTAssertEqual(PetLayout.size(scale: -.infinity), PetLayout.size(scale: PetLayout.defaultScale))
+    // Whole points, and always a square.
+    for step in 0...100 {
+      let size = PetLayout.size(scale: 0.5 + Double(step) / 100)
+      XCTAssertEqual(size.width, size.height)
+      XCTAssertEqual(size.width, size.width.rounded())
+    }
+  }
+  func testAChangeOfSizeKeepsTheMiddleAndStaysOnTheScreen() {
+    let screen = CGRect(x: 0, y: 0, width: 1512, height: 944)
+    let full = PetLayout.petSize, small = PetLayout.size(scale: 0.5), large = PetLayout.size(scale: 1.5)
+    let origin = CGPoint(x: 600, y: 400)
+    let shrunk = PetLayout.resized(origin: origin, from: full, to: small, in: screen)
+    XCTAssertEqual(shrunk.x + small.width / 2, origin.x + full.width / 2, accuracy: 0.01)
+    XCTAssertEqual(shrunk.y + small.height / 2, origin.y + full.height / 2, accuracy: 0.01)
+    // There and back is the same place.
+    let back = PetLayout.resized(origin: shrunk, from: small, to: full, in: screen)
+    XCTAssertEqual(back.x, origin.x, accuracy: 0.01); XCTAssertEqual(back.y, origin.y, accuracy: 0.01)
+    // In a corner, a larger mascot moves in and never leaves the screen.
+    let corner = CGPoint(x: screen.maxX - small.width - 6, y: screen.maxY - small.height - 6)
+    let grown = CGRect(origin: PetLayout.resized(origin: corner, from: small, to: large, in: screen), size: large)
+    XCTAssertTrue(screen.contains(grown))
+  }
+  func testEveryPlaceRuleHoldsForASmallAndALargeMascot() {
+    let screen = CGRect(x: 0, y: 0, width: 1512, height: 944)
+    for scale in [0.5, 0.7, 1.0, 1.5] {
+      let size = PetLayout.size(scale: scale)
+      let start = PetLayout.defaultOrigin(in: screen, size: size)
+      XCTAssertTrue(screen.contains(CGRect(origin: start, size: size)), "\(scale)")
+      // A place survives a change of screen, at this size.
+      let fraction = PetLayout.fraction(origin: start, in: screen, size: size)
+      XCTAssertEqual(PetLayout.origin(fraction: fraction, in: screen, size: size).x, start.x, accuracy: 0.5)
+      // Tucked, it shows the same share of its own width.
+      let docked = PetLayout.docked(side: .right, y: 400, reveal: PetLayout.revealResting, in: screen, size: size)
+      XCTAssertEqual(docked.size, size)
+      XCTAssertEqual(screen.maxX - docked.minX, size.width * CGFloat(PetLayout.revealResting), accuracy: 0.01)
+      let left = PetLayout.docked(side: .left, y: 2000, reveal: PetLayout.revealResting, in: screen, size: size)
+      XCTAssertEqual(left.maxX - screen.minX, size.width * CGFloat(PetLayout.revealResting), accuracy: 0.01)
+      XCTAssertLessThanOrEqual(left.maxY, screen.maxY - 6)
+    }
+  }
   func testTheBubbleGoesPastTheBarAndNeverOverIt() {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 900), size = CGSize(width: 207, height: 62)
     // Near the top of the screen the bubble is under the mascot, and so is the bar.

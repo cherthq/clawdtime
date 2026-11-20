@@ -41,6 +41,8 @@ import TaskPanelCore
   private var stopCallItems: [NSMenuItem] = []
   private var styleItems: [NSMenuItem] = []
   private var lookItems: [NSMenuItem] = []
+  private var eyeItems: [NSMenuItem] = []
+  private var sizeSliders: [NSSlider] = []
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // An accessory: no Dock icon and no menu bar takeover. It lives beside the work.
@@ -74,12 +76,19 @@ import TaskPanelCore
       lookItems.append(item)
     }
     styleMenu.addItem(.separator())
+    // The size: a slider from half of the full size to one and a half.
+    styleMenu.addItem(sizeItem())
+    styleMenu.addItem(.separator())
     for style in MascotStyle.allCases {
       let item = styleMenu.addItem(withTitle: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
       if #available(macOS 14.4, *) { item.subtitle = style.summary } else { item.title = style.title + ": " + style.summary }
       item.target = self; item.representedObject = style.rawValue
       styleItems.append(item)
     }
+    styleMenu.addItem(.separator())
+    // Flint is the plain Chert mark. This gives it an eye in its window.
+    let eye = styleMenu.addItem(withTitle: "Eye on Flint", action: #selector(toggleFlintEye(_:)), keyEquivalent: "")
+    eye.target = self; eyeItems.append(eye)
     styles.submenu = styleMenu; menu.addItem(styles)
     let away = menu.addItem(withTitle: "Away: answer by phone", action: #selector(toggleAway(_:)), keyEquivalent: "")
     away.target = self; awayItems.append(away)
@@ -94,6 +103,30 @@ import TaskPanelCore
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit ClawdTime. Work keeps running.", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     menu.autoenablesItems = false
+  }
+  /// A menu row with the size slider. The mascot changes size while the person drags.
+  private func sizeItem() -> NSMenuItem {
+    let item = NSMenuItem()
+    let row = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 30))
+    let label = NSTextField(labelWithString: "Size")
+    label.font = .menuFont(ofSize: 0); label.textColor = .labelColor
+    label.frame = NSRect(x: 22, y: 6, width: 40, height: 18)
+    let slider = NSSlider(value: pet.scale, minValue: PetLayout.scaleRange.lowerBound, maxValue: PetLayout.scaleRange.upperBound,
+      target: self, action: #selector(sizeChanged(_:)))
+    slider.isContinuous = true; slider.controlSize = .small
+    slider.frame = NSRect(x: 64, y: 5, width: 170, height: 20)
+    slider.toolTip = "The size of the mascot"; slider.setAccessibilityLabel("Mascot size")
+    row.addSubview(label); row.addSubview(slider)
+    item.view = row
+    sizeSliders.append(slider)
+    return item
+  }
+  @objc private func sizeChanged(_ sender: NSSlider) {
+    pet.scale = sender.doubleValue
+    for slider in sizeSliders where slider !== sender { slider.doubleValue = pet.scale }
+  }
+  @objc private func toggleFlintEye(_ sender: NSMenuItem) {
+    pet.flintEye.toggle(); refreshMenus()
   }
   private func contextMenu() -> NSMenu {
     let menu = NSMenu(); actions(into: menu); refreshMenus(); return menu
@@ -142,7 +175,7 @@ import TaskPanelCore
     for item in menu.items {
       guard let raw = item.representedObject as? String, let style = MascotStyle(rawValue: raw) else { continue }
       // The picture shows the style in the look that is chosen now.
-      item.image = pet.look == .flat ? MascotCatalog.flatImage(style) : MascotCatalog.thumbnail(style)
+      item.image = pet.look == .flat ? MascotCatalog.flatImage(style, flintEye: pet.flintEye) : MascotCatalog.thumbnail(style, flintEye: pet.flintEye)
     }
   }
   @objc private func chooseLook(_ sender: NSMenuItem) {
@@ -156,6 +189,8 @@ import TaskPanelCore
   private func refreshMenus() {
     for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
     for item in lookItems { item.state = (item.representedObject as? String) == "look:" + pet.look.rawValue ? .on : .off }
+    for item in eyeItems { item.state = pet.flintEye ? .on : .off }
+    for slider in sizeSliders { slider.doubleValue = pet.scale }
     for item in awayItems {
       item.state = decisions?.away == true ? .on : .off
       item.title = decisions?.callReady == false ? "Away: answer by phone (no phone link yet)" : "Away: answer by phone"

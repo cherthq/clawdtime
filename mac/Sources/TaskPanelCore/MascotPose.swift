@@ -24,13 +24,13 @@ public enum MascotStyle: String, CaseIterable, Sendable {
   }
   public var summary: String {
     switch self {
-    case .flint: return "The Chert mark: a cut stone with an eye, and its flake"
+    case .flint: return "The Chert mark, and its flake"
     case .pebble: return "The round stone, friendly"
     case .core: return "A glass orb with an iris of light"
     case .neon: return "A night-city droid in black chrome and neon"
-    case .orb: return "A metal ball droid with two small robotic eyes"
-    case .onyx: return "Black stone with veins of gold light"
-    case .flux: return "Liquid chrome with small robotic eyes"
+    case .orb: return "A ball droid with two small robotic eyes"
+    case .onyx: return "Black stone with veins of gold"
+    case .flux: return "A drop of liquid with small robotic eyes"
     case .iris: return "A lens that watches: glass, steel, an aperture"
     }
   }

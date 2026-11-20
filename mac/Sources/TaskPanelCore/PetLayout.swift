@@ -6,7 +6,23 @@ public enum PetSide: String, Sendable { case left, right }
 /// Where the mascot and the things around it sit on a screen. All of it is plain
 /// geometry in screen coordinates (origin at the bottom left), so it is tested with no window.
 public enum PetLayout {
+  /// The mascot's window at full size. The person scales it with the size slider.
   public static let petSize = CGSize(width: 148, height: 148)
+  /// The size slider: the smallest and the largest share of the full size, and where it starts.
+  public static let scaleRange = 0.5...1.5, defaultScale = 0.7
+  /// A scale that the slider can hold. Anything else, and no number at all, is brought into the range.
+  public static func scale(_ value: Double) -> Double {
+    value.isFinite ? max(scaleRange.lowerBound, min(scaleRange.upperBound, value)) : defaultScale
+  }
+  /// The mascot's window for a scale, in whole points.
+  public static func size(scale value: Double) -> CGSize {
+    let side = (petSize.width * CGFloat(scale(value))).rounded()
+    return CGSize(width: side, height: side)
+  }
+  /// The origin after a change of size: the mascot's middle stays where it is, and it stays on the screen.
+  public static func resized(origin: CGPoint, from old: CGSize, to new: CGSize, in visible: CGRect) -> CGPoint {
+    clamp(origin: CGPoint(x: origin.x + (old.width - new.width) / 2, y: origin.y + (old.height - new.height) / 2), size: new, in: visible)
+  }
   /// How much of the docked mascot shows: at rest, when it wants the person, under the pointer.
   public static let revealResting = 0.40, revealAttention = 0.70, revealHover = 0.88
 
@@ -15,17 +31,17 @@ public enum PetLayout {
             y: max(visible.minY + margin, min(origin.y, visible.maxY - size.height - margin)))
   }
   /// First start: the right edge, below the top quarter, clear of the menu bar and of most window titles.
-  public static func defaultOrigin(in visible: CGRect) -> CGPoint {
-    clamp(origin: CGPoint(x: visible.maxX - petSize.width - 28, y: visible.maxY - petSize.height - visible.height * 0.22), in: visible)
+  public static func defaultOrigin(in visible: CGRect, size: CGSize = petSize) -> CGPoint {
+    clamp(origin: CGPoint(x: visible.maxX - size.width - 28, y: visible.maxY - size.height - visible.height * 0.22), size: size, in: visible)
   }
   /// A position as fractions of the free space, so that it survives a change of screen.
-  public static func fraction(origin: CGPoint, in visible: CGRect) -> CGPoint {
-    let width = max(1, visible.width - petSize.width), height = max(1, visible.height - petSize.height)
+  public static func fraction(origin: CGPoint, in visible: CGRect, size: CGSize = petSize) -> CGPoint {
+    let width = max(1, visible.width - size.width), height = max(1, visible.height - size.height)
     return CGPoint(x: max(0, min(1, (origin.x - visible.minX) / width)), y: max(0, min(1, (origin.y - visible.minY) / height)))
   }
-  public static func origin(fraction: CGPoint, in visible: CGRect) -> CGPoint {
-    clamp(origin: CGPoint(x: visible.minX + fraction.x * (visible.width - petSize.width),
-                          y: visible.minY + fraction.y * (visible.height - petSize.height)), in: visible)
+  public static func origin(fraction: CGPoint, in visible: CGRect, size: CGSize = petSize) -> CGPoint {
+    clamp(origin: CGPoint(x: visible.minX + fraction.x * (visible.width - size.width),
+                          y: visible.minY + fraction.y * (visible.height - size.height)), size: size, in: visible)
   }
   public static func nearestSide(frame: CGRect, in visible: CGRect) -> PetSide {
     frame.midX < visible.midX ? .left : .right
@@ -37,11 +53,11 @@ public enum PetLayout {
     return nil
   }
   /// The docked frame: the mascot hangs over the edge and shows `reveal` of its width.
-  public static func docked(side: PetSide, y: CGFloat, reveal: Double, in visible: CGRect) -> CGRect {
-    let shown = petSize.width * CGFloat(max(0.2, min(1, reveal)))
-    let clampedY = max(visible.minY + 6, min(y, visible.maxY - petSize.height - 6))
-    let x = side == .left ? visible.minX - (petSize.width - shown) : visible.maxX - shown
-    return CGRect(origin: CGPoint(x: x, y: clampedY), size: petSize)
+  public static func docked(side: PetSide, y: CGFloat, reveal: Double, in visible: CGRect, size: CGSize = petSize) -> CGRect {
+    let shown = size.width * CGFloat(max(0.2, min(1, reveal)))
+    let clampedY = max(visible.minY + 6, min(y, visible.maxY - size.height - 6))
+    let x = side == .left ? visible.minX - (size.width - shown) : visible.maxX - shown
+    return CGRect(origin: CGPoint(x: x, y: clampedY), size: size)
   }
   /// The panel opens beside the mascot toward the middle of the screen. `anchor` is the
   /// unit point of the panel that is nearest to the mascot: the panel grows from there.

@@ -12,6 +12,8 @@ final class FlintScene: MascotFigure {
   let camera = Stage.camera()
   private let root = SCNNode(), body = SCNNode(), core = SCNNode(), flake = SCNNode()
   private let eye: RoboEye
+  /// Off, the window holds only its light: the Chert mark and nothing else.
+  var showsEye = true { didSet { eye.node.isHidden = !showsEye } }
   private let windowLight = SCNNode(), spill = SCNNode(), gapLight = SCNNode(), gapLine = SCNNode()
   /// Fine lines of light along the ridges of the core: the fire that is in the flint.
   private let embers = SCNNode()
