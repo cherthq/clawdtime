@@ -16,9 +16,11 @@ permission request from the panel, the mascot's bubble, a command, or a FaceTime
 call when you are away. It keeps each decision in a trove, repeats an answer only
 where you made a rule, types into a session's terminal on request, and reports
 the agent commands you use as a slide deck. You can also talk to it: in a chat
-screen, by voice on the Mac, where it answers aloud, or on a FaceTime call. It
-has a memory for what you tell it about yourself and your work, which is off
-until you turn it on. See the [supervisor guide](docs/SUPERVISOR.md).
+screen, by voice on the Mac, where it answers aloud, or on a FaceTime call. In
+that conversation you can give it a task, ask how the task goes, answer its
+question, and accept or cancel it. It has a memory for what you tell it about
+yourself and your work, which is off until you turn it on. See the
+[supervisor guide](docs/SUPERVISOR.md).
 
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is

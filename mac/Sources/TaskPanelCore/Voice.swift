@@ -7,8 +7,17 @@ public struct ChatTranscript: Codable, Equatable {
     public let text: String
     public let at: Double
     public let via: String
-    public init(role: String, text: String, at: Double, via: String) { self.role = role; self.text = text; self.at = at; self.via = via }
+    /// Answers that the person can pick with one click, when ClawdTime passes on a question. Absent for most messages.
+    public let choices: [String]?
+    public init(role: String, text: String, at: Double, via: String, choices: [String]? = nil) {
+      self.role = role; self.text = text; self.at = at; self.via = via; self.choices = choices
+    }
     public var mine: Bool { role == "user" }
+    /// The choices to show as buttons: only on ClawdTime's own message, at most four short ones.
+    public var offered: [String] {
+      guard !mine, let choices, (1...4).contains(choices.count), choices.allSatisfy({ (1...80).contains($0.count) }) else { return [] }
+      return choices
+    }
   }
   public let version: Int
   /// A language model answers. Without one ClawdTime tells the state and takes a clear yes or no.
@@ -24,7 +33,8 @@ public struct ChatTranscript: Codable, Equatable {
   }
   public func validate() throws {
     guard version == 1, messages.count <= 400, voiceDirectory.hasPrefix("/"), voiceDirectory.count <= 4096,
-      messages.allSatisfy({ ["user", "assistant"].contains($0.role) && $0.text.count <= 2000 && ["chat", "voice", "call"].contains($0.via) })
+      messages.allSatisfy({ ["user", "assistant"].contains($0.role) && $0.text.count <= 2000 && ["chat", "voice", "call"].contains($0.via)
+        && ($0.choices ?? []).count <= 4 && ($0.choices ?? []).allSatisfy { (1...80).contains($0.count) } })
     else { throw PanelFailure.response }
   }
 }

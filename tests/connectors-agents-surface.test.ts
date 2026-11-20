@@ -795,6 +795,49 @@ it("real desktop service serves the board to the panel credential only, and turn
       (await post("/desktop/voice", { recording: "rec-1.wav" }, "x".repeat(64)))
         .status,
     ).toBe(401);
+    // The person gives ClawdTime a task by talking to it. The real task
+    // service records one task, in simulation, with the person's own words.
+    type Shown = {
+      canSubmit: boolean;
+      task: { id: string; goal: string; state: string } | null;
+    };
+    const idle = (await (await request("/desktop/state")).json()) as Shown;
+    expect(idle.task).toBeNull();
+    expect(idle.canSubmit).toBe(true);
+    const talk = async (text: string) =>
+      (
+        (await (await post("/desktop/chat", { text })).json()) as {
+          reply: { text: string };
+        }
+      ).reply.text;
+    // A question about a task starts nothing.
+    await talk("what is the task doing?");
+    expect(
+      ((await (await request("/desktop/state")).json()) as Shown).task,
+    ).toBeNull();
+    expect(await talk("Start a task: add a health check to the demo app")).toBe(
+      "Simulation task recorded. No coding worker was started.",
+    );
+    const first = (await (await request("/desktop/state")).json()) as Shown;
+    expect(first.task).toMatchObject({
+      goal: "add a health check to the demo app",
+      state: "queued",
+    });
+    expect(first.canSubmit).toBe(false);
+    expect(await talk("how is the task?")).toContain(
+      'Your task "add a health check to the demo app" is waiting to run.',
+    );
+    // A second ask does not start a second task: the service keeps the first.
+    expect(await talk("start a task: write the release notes")).toBe(
+      "Finish or reconcile the current task before starting another.",
+    );
+    const still = (await (await request("/desktop/state")).json()) as Shown;
+    expect(still.task).toEqual(first.task);
+    // The person's word cancels it, through the service's own operation.
+    expect(await talk("cancel the task")).toContain("Cancellation requested");
+    expect(
+      ((await (await request("/desktop/state")).json()) as Shown).task,
+    ).toMatchObject({ id: first.task!.id, state: "canceled" });
     const off = await start("off", ["--agents", "false", "--tucked", "true"]);
     // Only the tucked start passes the switch to the panel.
     expect(panelArguments.map((args) => args.includes("--tucked"))).toEqual([

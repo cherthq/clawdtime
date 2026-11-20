@@ -117,6 +117,8 @@ final class ChatView: NSView, SheetContent {
   private var shown: [String] = []
   private var model = ChatModel()
   private static let starters = ["What needs me?", "What is every agent doing?", "Which agent commands are on this Mac?"]
+  /// The answers under the last message, as the buttons show them.
+  private var choices: [String] = []
 
   override init(frame: NSRect) {
     super.init(frame: frame)
@@ -213,7 +215,7 @@ final class ChatView: NSView, SheetContent {
       : model.modelReady ? "It sees every agent, answers for you only when you say so, and remembers." + (model.memory ? " Memory is on." : "")
       : "No language model key: it tells the state and takes a clear approve or deny."
     notice.stringValue = model.notice; noticeRow.isHidden = model.notice.isEmpty
-    var keys = model.messages.suffix(60).map { "\($0.role)|\($0.at)|\($0.via)|\($0.text)" }
+    var keys = model.messages.suffix(60).map { "\($0.role)|\($0.at)|\($0.via)|\($0.text)|\($0.offered.joined(separator: "\u{1F}"))" }
     if let pending = model.pending { keys.append("pending|" + pending); keys.append("thinking") }
     if model.voice == .thinking && model.pending == nil { keys.append("thinking") }
     if keys != shown {
@@ -224,6 +226,18 @@ final class ChatView: NSView, SheetContent {
         if fill { view.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true }
       }
       for message in model.messages.suffix(60) { add(ChatRowView(text: message.text, mine: message.mine, via: message.via), fill: true) }
+      // The question that ClawdTime just passed on comes with its answers as buttons. One click sends that answer.
+      choices = model.pending == nil ? (model.messages.last?.offered ?? []) : []
+      if !choices.isEmpty {
+        let picks = NSStackView(); picks.orientation = .vertical; picks.alignment = .leading; picks.spacing = 6
+        for (index, choice) in choices.enumerated() {
+          let shown = choice.count > 44 ? String(choice.prefix(41)) + "..." : choice
+          let chip = PillButton(shown, kind: .secondary, small: true, target: self, action: #selector(choicePressed(_:)))
+          chip.tag = index; chip.toolTip = choice; chip.setAccessibilityLabel("Answer: " + choice)
+          picks.addArrangedSubview(chip)
+        }
+        add(picks, fill: false)
+      }
       if let pending = model.pending { add(ChatRowView(text: pending, mine: true, via: "chat", faded: true), fill: true) }
       if keys.last == "thinking" { add(ThinkingDotsView(), fill: false) }
       ideas.isHidden = !model.messages.isEmpty || model.pending != nil
@@ -244,6 +258,10 @@ final class ChatView: NSView, SheetContent {
     let text = input.string.trimmingCharacters(in: .whitespacesAndNewlines)
     input.string = ""
     onSend?(text)
+  }
+  @objc private func choicePressed(_ sender: NSControl) {
+    guard choices.indices.contains(sender.tag), model.pending == nil, model.connected else { return }
+    onSend?(choices[sender.tag])
   }
   @objc private func starterPressed(_ sender: NSControl) {
     guard Self.starters.indices.contains(sender.tag), model.pending == nil, model.connected else { return }

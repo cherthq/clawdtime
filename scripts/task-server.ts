@@ -32,6 +32,7 @@ import {
 } from "../src/task-presentation-contracts.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
+import { deskTasks } from "../connectors/agents/tasks.js";
 import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
@@ -302,8 +303,12 @@ const desktop = desktopSetup
 if (calls && desktop) calls.selectedTaskId = () => desktop.selectedTaskId();
 // The panel's board of coding-agent sessions. It scans in its own process, so
 // it cannot delay task, voice or presentation work in this one.
+// The agent that the person talks to reaches the task through the desktop
+// service of this process, with that service's own receipts.
 const agentBoard =
-  desktop && flags.get("--agents") !== "false" ? new BoardFeed() : undefined;
+  desktop && desktopSetup && flags.get("--agents") !== "false"
+    ? new BoardFeed({ tasks: deskTasks(desktop, desktopSetup.config.token) })
+    : undefined;
 agentBoard?.start();
 process.on("exit", () => agentBoard?.close());
 const app = createTaskApp(

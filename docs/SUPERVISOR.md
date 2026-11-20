@@ -158,6 +158,8 @@ What it can do when you ask:
 - Search the trove, and keep a critical decision that you state.
 - Turn away mode on or off.
 - List the agent commands on this Mac and their use.
+- Take a task from you, say how it goes, pass your answer to its question,
+  and accept or cancel it. See "Give it a task" below.
 
 Two rules are in the code, not in the model's instructions:
 
@@ -168,6 +170,43 @@ Two rules are in the code, not in the model's instructions:
 
 A critical decision is kept in your words. When the model rewords it with a word
 that you did not say, your own sentence is stored.
+
+### Give it a task
+
+While the desktop service runs, you can hand ClawdTime a task in the same
+conversation, typed, spoken or on a call. It goes to the same task service as
+the task field of the board, with the same receipts. In simulation the task is
+recorded and stays queued; no coding worker starts.
+
+| You say | What happens |
+|---|---|
+| "Start a task: fix the login test" or "New task: ..." or "I have a job for you: ..." | A task starts. Its goal is your words after "task" or "job". |
+| "How is the task?" | It says where the task is and what it asks. Nothing changes. |
+| One of the offered choices, or your answer in a sentence | Your answer goes to the question that the task asks. |
+| "Accept the result" | The result is accepted, when the task is ready for that. |
+| "Cancel the task" | The task is canceled. |
+
+When the task asks a question with choices, ClawdTime says them, and the chat
+screen shows them as buttons under its message. A click sends that choice as
+your message.
+
+The rules, again in the code:
+
+- A task starts only when your own last message asks for one. The goal is your
+  words. When the model rewords the goal, your own sentence is sent.
+- An answer, accept and cancel go through only when your own last message says
+  so. A question about the task changes nothing.
+- One message never starts two tasks: each turn has its own event id, and the
+  task service acts once for an id. While a task is active the service refuses
+  a second one.
+- A sentence that names the task is about the task. "Cancel the task" never
+  denies an agent that waits for you; a plain "approve" or "deny" still goes to
+  that agent.
+- ClawdTime has no way to stop sharing or to stop a call from a conversation.
+  Those stay on the mascot's bar, the board and the menus.
+
+In a plain terminal with no desktop service (`clawdtime chat` alone) there is no
+task service to reach, and ClawdTime says so.
 
 ### The bar under the mascot
 

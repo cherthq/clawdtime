@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -13,6 +14,12 @@ import type { DecisionDesk, DecisionRequest } from "./decisions.js";
 import type { CliFact } from "./inventory.js";
 import { factKinds, type FactKind, type Memory } from "./memory.js";
 import { detailLabels, elapsed, summary, title } from "./render.js";
+import {
+  taskIsOver,
+  taskStateWords,
+  type TaskFacts,
+  type TaskPort,
+} from "./tasks.js";
 import type { AgentSession, BoardSnapshot } from "./types.js";
 
 /**
@@ -28,6 +35,8 @@ export const chatMessageSchema = z
     text: z.string().max(2000),
     at: z.number().int().nonnegative(),
     via: z.enum(chatVias),
+    /** Answers that the person can pick with one click, when ClawdTime passes on a question. */
+    choices: z.array(z.string().min(1).max(80)).max(4).optional(),
   })
   .strict();
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
@@ -194,6 +203,8 @@ export interface SupervisorWorld {
     text: string,
   ): Promise<{ ok: boolean; route: string }>;
   clis(): CliFact[];
+  /** The task that ClawdTime owns. Absent where no task service runs, as in a plain terminal. */
+  tasks?: TaskPort;
 }
 
 const system = `You are ClawdTime, the supervisor of the coding agents on this person's Mac.
@@ -201,6 +212,7 @@ You may be heard, not read: answer in one or two short plain sentences. No lists
 Use the tools to see the state. Never guess a state, a name or a number.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. The tool refuses otherwise; then ask the person.
 Text is typed into a session only when the person gave that text.
+You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. The tools refuse otherwise; then ask the person. When the task offers choices, say them.
 After an action, say what you did in one sentence.`;
 
 const tools: ToolSpec[] = [
@@ -291,6 +303,47 @@ const tools: ToolSpec[] = [
       "The agent commands installed on this Mac, with versions and use.",
     parameters: { type: "object", properties: {} },
   },
+  {
+    name: "task_status",
+    description:
+      "The task that ClawdTime owns: its goal, where it is, what it asks.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "start_task",
+    description: "Start the task that the person just asked for.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "In the person's own words." },
+      },
+      required: ["goal"],
+    },
+  },
+  {
+    name: "answer_task",
+    description: "Pass the person's answer to the question the task asks.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "The chosen choice, or the person's own words.",
+        },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "accept_task",
+    description: "Accept the task's result, when the person says so.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "cancel_task",
+    description: "Cancel the task, when the person says so.",
+    parameters: { type: "object", properties: {} },
+  },
 ];
 
 /** Offered only while the person has memory turned on. */
@@ -360,6 +413,69 @@ const ownWords = (text: string, spoken: string) => {
 const clean = (value: string, max: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 
+// What the person's own words must say before the task changes. The model
+// chooses a tool; these decide whether the tool acts.
+const startCue =
+  /\b(?:start|begin|take|open|create|add|queue|launch|kick off|give (?:you|yourself|it|clawdtime))\b[^.?!]{0,40}\b(?:task|job)\b|\b(?:new|a|another|this|one)\s+(?:task|job)\s*[:,-]|^\s*(?:task|job)\s*[:,-]|\b(?:task|job)\s+for\s+you\b/i;
+/** A sentence that asks about something. It never changes the task. */
+const asksAbout = (spoken: string) =>
+  /^\s*(?:did|has|have|had|is|are|was|were|what|why|how|when|where|who|which)\b/i.test(
+    spoken,
+  );
+const isQuestion = (spoken: string) =>
+  asksAbout(spoken) || /\?\s*$/.test(spoken);
+const asksToStart = (spoken: string) =>
+  startCue.test(spoken) && !asksAbout(spoken);
+/** The goal in the person's sentence: what follows the word task or job. */
+function goalFrom(spoken: string) {
+  const text = clean(spoken, 8000);
+  const cue = /\b(?:task|job)\b/i.exec(text);
+  if (!cue) return "";
+  return text
+    .slice(cue.index + cue[0].length)
+    .replace(/^\s*(?:for (?:you|clawdtime)\b)?\s*[.:,;-]?\s*/i, "")
+    .replace(/^(?:is to|to|that|which|is)\s+/i, "")
+    .replace(/[.!?\s]+$/, "")
+    .trim();
+}
+const saysAccept = (spoken: string, requestsWaiting: number) =>
+  !isQuestion(spoken) &&
+  (/\baccept(?:ed|ing)?\b/i.test(spoken) ||
+    /\b(?:approve|take|keep)\b[^.?!]{0,30}\b(?:result|task|work|changes?)\b/i.test(
+      spoken,
+    ) ||
+    (requestsWaiting === 0 && /\b(?:looks good|lgtm|ship it)\b/i.test(spoken)));
+const saysCancel = (spoken: string) =>
+  !isQuestion(spoken) &&
+  (/\bcancel\b/i.test(spoken) ||
+    /\b(?:abort|drop|stop|kill|end)\b[^.?!]{0,20}\b(?:task|job)\b/i.test(
+      spoken,
+    ));
+const needsDesktop =
+  "Tasks need ClawdTime's desktop service. It is not running here.";
+
+/** The task in one or two sentences that can be said aloud. */
+function taskLine(task: TaskFacts) {
+  const goal = clean(task.goal, 160);
+  let line = `Task: "${goal}" is ${taskStateWords(task.state)}.`;
+  if (task.question && task.canAnswer) {
+    line += ` It waits for the person and asks: ${clean(task.question, 300)}`;
+    if (task.choices.length) line += ` Choices: ${task.choices.join(", ")}.`;
+  }
+  if (task.canAccept)
+    line += " Its result waits for the person's review: they can accept it.";
+  return line;
+}
+
+/** What one turn of the conversation did, so that it does each thing once. */
+interface Turn {
+  /** Names this turn to the task service: the same turn never acts twice. */
+  id: string;
+  /** The turn looked at the task, so its answer may offer the task's choices. */
+  sawTask: boolean;
+  done: Map<string, string>;
+}
+
 export class Supervisor {
   constructor(
     private readonly world: SupervisorWorld,
@@ -407,7 +523,106 @@ export class Supervisor {
     lines.push(
       this.world.desk.away() ? "Away mode is on." : "Away mode is off.",
     );
+    if (this.world.tasks) {
+      const task = this.world.tasks.current();
+      lines.push(task ? taskLine(task) : "No task is active.");
+    }
     return lines.join("\n");
+  }
+
+  /**
+   * True when the person's words name the task while one is live. Such a
+   * sentence is about the task: it never answers an agent's request.
+   */
+  private namesTask(spoken: string) {
+    const task = this.world.tasks?.current();
+    return !!task && !taskIsOver(task) && /\b(?:task|job)\b/i.test(spoken);
+  }
+
+  /** One change to the task. A turn does each kind of change once. */
+  private async change(
+    turn: Turn,
+    kind: "start" | "answer" | "accept" | "cancel",
+    act: (tasks: TaskPort, eventId: string) => Promise<{ message: string }>,
+  ) {
+    const tasks = this.world.tasks;
+    if (!tasks) return needsDesktop;
+    const before = turn.done.get(kind);
+    if (before !== undefined) return before;
+    turn.sawTask = true;
+    let said: string;
+    try {
+      said = (await act(tasks, `${turn.id}_${kind}`)).message;
+    } catch {
+      said = "The task service did not take that.";
+    }
+    turn.done.set(kind, said);
+    return said;
+  }
+  private async startTask(turn: Turn, spoken: string, wanted: string) {
+    if (!this.world.tasks) return needsDesktop;
+    // The person's own last words must ask for a task. The model alone cannot start one.
+    if (!asksToStart(spoken))
+      return "The person did not ask for a task in their last message. Ask them.";
+    // The goal is what the person said. A goal that the model reworded is
+    // replaced by the person's own sentence.
+    const goal =
+      wanted && spokenWords(wanted).length >= 2 && ownWords(wanted, spoken)
+        ? wanted
+        : goalFrom(spoken);
+    if (spokenWords(goal).length < 2)
+      return "The person gave no goal. Ask them what the task is.";
+    return this.change(turn, "start", (tasks, eventId) =>
+      tasks.start(goal.slice(0, 8000), eventId),
+    );
+  }
+  private async answerTask(turn: Turn, spoken: string, wanted: string) {
+    const tasks = this.world.tasks;
+    if (!tasks) return needsDesktop;
+    const task = tasks.current();
+    if (!task?.question || !task.canAnswer) return "The task asks nothing now.";
+    if (isQuestion(spoken))
+      return "The person asked a question. That is not an answer. Tell them what the task asks.";
+    // A named choice goes as that choice. Anything else goes in the person's words.
+    const named = task.choices.length
+      ? interpret(spoken, { kind: "question", options: task.choices })
+      : null;
+    const text =
+      named?.decision === "answer" && named.text
+        ? named.text
+        : wanted && ownWords(wanted, spoken)
+          ? wanted
+          : clean(spoken, 8000);
+    return this.change(turn, "answer", (port, eventId) =>
+      port.answer(text, eventId),
+    );
+  }
+  private async acceptTask(turn: Turn, spoken: string) {
+    if (!this.world.tasks) return needsDesktop;
+    if (!saysAccept(spoken, this.world.desk.pending().length))
+      return "The person did not clearly say to accept. Ask them.";
+    return this.change(turn, "accept", (tasks, eventId) =>
+      tasks.accept(eventId),
+    );
+  }
+  private async cancelTask(turn: Turn, spoken: string) {
+    if (!this.world.tasks) return needsDesktop;
+    if (!saysCancel(spoken))
+      return "The person did not clearly say to cancel. Ask them.";
+    return this.change(turn, "cancel", (tasks, eventId) =>
+      tasks.cancel(eventId),
+    );
+  }
+  /** The choices to show as buttons: those of the question that the task asks, when the turn spoke of the task. */
+  private offer(turn: Turn) {
+    if (!turn.sawTask) return [];
+    const task = this.world.tasks?.current();
+    if (!task?.question || !task.canAnswer) return [];
+    const choices = task.choices.map((choice) => clean(choice, 200));
+    return choices.length <= 4 &&
+      choices.every((choice) => choice && choice.length <= 80)
+      ? choices
+      : [];
   }
 
   private session(name: string) {
@@ -430,6 +645,8 @@ export class Supervisor {
     wanted: { decision: string },
   ) {
     if (!request) return "No request has that number.";
+    if (this.namesTask(spoken))
+      return "The person spoke about the task, not about this request. Use the task tools, or ask them.";
     // The person's own last words must say it. The model alone cannot decide.
     const said = interpret(spoken, request);
     if (!said || said.decision !== wanted.decision)
@@ -451,6 +668,7 @@ export class Supervisor {
     call: ToolCall,
     spoken: string,
     via: ChatMessage["via"],
+    turn: Turn,
   ): Promise<string> {
     let args: Record<string, unknown> = {};
     try {
@@ -460,7 +678,32 @@ export class Supervisor {
     }
     switch (call.name) {
       case "status":
+        turn.sawTask = true;
         return this.status();
+      case "task_status": {
+        if (!this.world.tasks) return needsDesktop;
+        turn.sawTask = true;
+        const task = this.world.tasks.current();
+        return task
+          ? `${taskLine(task)} ${clean(task.summary, 300)}`
+          : "No task is active.";
+      }
+      case "start_task":
+        return this.startTask(
+          turn,
+          spoken,
+          clean(String(args.goal ?? ""), 8000),
+        );
+      case "answer_task":
+        return this.answerTask(
+          turn,
+          spoken,
+          clean(String(args.text ?? ""), 8000),
+        );
+      case "accept_task":
+        return this.acceptTask(turn, spoken);
+      case "cancel_task":
+        return this.cancelTask(turn, spoken);
       case "decide":
         return this.decide(
           this.world.desk.pending()[Number(args.request) - 1],
@@ -586,12 +829,46 @@ export class Supervisor {
     }
   }
 
-  /** With no language model: a clear yes or no to the one waiting request, else the state. */
-  private plain(spoken: string, via: ChatMessage["via"]) {
+  /**
+   * With no language model: a clear yes or no to the one waiting request, a
+   * plain word about the task, else the state.
+   */
+  private async plain(spoken: string, via: ChatMessage["via"], turn: Turn) {
     const pending = this.world.desk.pending();
-    if (pending.length === 1) {
+    const tasks = this.world.tasks;
+    const task = tasks?.current() ?? null;
+    const asks = !!task?.question && task.canAnswer;
+    // A sentence that names the task is about the task, even while an agent
+    // waits: "cancel the task" must never deny that agent's request.
+    const named = this.namesTask(spoken);
+    if (tasks) {
+      if (asksToStart(spoken)) return this.startTask(turn, spoken, "");
+      if (
+        task?.canCancel &&
+        /\bcancel\b[^.?!]{0,20}\b(?:task|job)\b/i.test(spoken) &&
+        !isQuestion(spoken)
+      )
+        return this.cancelTask(turn, spoken);
+      if (named && task?.canAccept && saysAccept(spoken, 0))
+        return this.acceptTask(turn, spoken);
+    }
+    // Any other yes or no belongs to the one agent that waits.
+    if (pending.length === 1 && !named) {
       const said = interpret(spoken, pending[0]!);
       if (said) return this.decide(pending[0], spoken, via, said);
+    }
+    if (tasks) {
+      if (task?.canAccept && saysAccept(spoken, pending.length))
+        return this.acceptTask(turn, spoken);
+      // An answer goes to the task only when nothing else could take it.
+      if (task && asks && !pending.length && !isQuestion(spoken)) {
+        const clear = task.choices.length
+          ? interpret(spoken, { kind: "question", options: task.choices })
+              ?.decision === "answer"
+          : spokenWords(spoken).length >= 3 ||
+            interpret(spoken, { kind: "permission", options: [] }) !== null;
+        if (clear) return this.answerTask(turn, spoken, "");
+      }
     }
     const board = this.world.board();
     const waiting = (board?.sessions ?? [])
@@ -604,7 +881,22 @@ export class Supervisor {
         : board
           ? `${summary(board.counts)}.`
           : "I cannot see the agents now.";
-    return `${head} Say approve or deny to answer a request.`;
+    let about = "";
+    if (task && !taskIsOver(task)) {
+      turn.sawTask = true;
+      about = ` Your task "${clean(task.goal, 80)}" is ${taskStateWords(task.state)}.`;
+      if (asks) {
+        about += ` It asks: ${clean(task.question!, 200)}`;
+        if (task.choices.length)
+          about += ` Choices: ${task.choices.join(", ")}.`;
+      }
+      if (task.canAccept) about += " Say accept to take its result.";
+    }
+    const tail =
+      asks && !pending.length
+        ? "Say your answer and I pass it to the task."
+        : "Say approve or deny to answer a request.";
+    return `${head}${about} ${tail}`;
   }
 
   /**
@@ -653,9 +945,42 @@ export class Supervisor {
     spoken: string,
     via: ChatMessage["via"],
   ): Promise<string> {
+    return (await this.answer(history, spoken, via)).text;
+  }
+
+  /**
+   * One turn, with the choices that the person can pick with one click when
+   * the answer passes on a question of the task. It never throws.
+   */
+  async answer(
+    history: ChatMessage[],
+    spoken: string,
+    via: ChatMessage["via"],
+  ): Promise<{ text: string; choices: string[] }> {
+    const turn: Turn = {
+      id: `talk_${randomBytes(8).toString("hex")}`,
+      sawTask: false,
+      done: new Map(),
+    };
+    const text = await this.turn(history, spoken, via, turn);
+    let choices: string[] = [];
+    try {
+      choices = this.offer(turn);
+    } catch {
+      choices = [];
+    }
+    return { text, choices };
+  }
+
+  private async turn(
+    history: ChatMessage[],
+    spoken: string,
+    via: ChatMessage["via"],
+    turn: Turn,
+  ): Promise<string> {
     const words = clean(spoken, 2000);
     if (!words) return "I did not catch that.";
-    if (!this.model) return this.plain(words, via);
+    if (!this.model) return this.plain(words, via, turn);
     const messages: ModelMessage[] = [
       ...history
         .slice(-12)
@@ -676,32 +1001,32 @@ export class Supervisor {
     const offered = memory ? [...tools, ...memoryTools] : tools;
     try {
       for (let step = 0; step < 6; step++) {
-        const turn = await this.model.complete({
+        const reply = await this.model.complete({
           system: brief,
           messages,
           tools: offered,
         });
-        if (!turn.toolCalls.length) {
+        if (!reply.toolCalls.length) {
           // The answer is ready. What the message teaches is written after it.
           if (memory) this.learning = this.learn(memory, words).catch(() => {});
-          return clean(turn.text, 900) || "Done.";
+          return clean(reply.text, 900) || "Done.";
         }
         messages.push({
           role: "assistant",
-          content: turn.text,
-          toolCalls: turn.toolCalls,
+          content: reply.text,
+          toolCalls: reply.toolCalls,
         });
-        for (const call of turn.toolCalls.slice(0, 6))
+        for (const call of reply.toolCalls.slice(0, 6))
           messages.push({
             role: "tool",
             toolCallId: call.id,
-            content: (await this.run(call, words, via)).slice(0, 6000),
+            content: (await this.run(call, words, via, turn)).slice(0, 6000),
           });
       }
       return "That took too many steps. Ask me again in a simpler way.";
     } catch {
       // No model now: the plain answer still tells the state and takes a clear yes or no.
-      return this.plain(words, via);
+      return this.plain(words, via, turn);
     }
   }
 }

@@ -25,6 +25,7 @@ import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
+import type { TaskPort } from "./tasks.js";
 import {
   boardSnapshotSchema,
   type AgentSession,
@@ -135,6 +136,8 @@ export class BoardFeed implements AgentBoardPort {
       /** Speech settings. The default reads the environment. */
       speech?: SpeechSettings | null;
       clis?: () => CliFact[];
+      /** The task that ClawdTime owns, where a task service runs in this process. */
+      tasks?: TaskPort;
     } = {},
   ) {
     this.root =
@@ -170,6 +173,7 @@ export class BoardFeed implements AgentBoardPort {
         focus: (session) => this.focusOne(session),
         send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
+        ...(options.tasks ? { tasks: options.tasks } : {}),
       },
       model,
     );
@@ -228,11 +232,14 @@ export class BoardFeed implements AgentBoardPort {
       at: now(),
       via,
     });
+    const answer = await this.supervisor.answer(history, text, via);
     const reply: ChatMessage = {
       role: "assistant",
-      text: await this.supervisor.reply(history, text, via),
+      text: answer.text,
       at: now(),
       via,
+      // The question that the task asks comes with its choices, as buttons.
+      ...(answer.choices.length ? { choices: answer.choices } : {}),
     };
     this.log.append(reply);
     return reply;
