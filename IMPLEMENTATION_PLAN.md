@@ -12,7 +12,11 @@ External-agent connections remain optional. Do not expand phone authority.
 The standalone model-driven browser fixture now passes with an independent saved
 value check and no Codex environment. Native code, adapter tests and packaging
 are implemented, but native physical input/approval qualification remains a gate.
-After PR review, the next step is an isolated native fixture/Stop/approval test,
+PR #7 review adds native focus-preserving approval, exact target proofs,
+allowlisted existing-window activation and a separate local-only helper identity.
+The existing call companion must remain intact, and the local helper refuses
+execution while another known helper is running. After PR review, the next step
+is an isolated native fixture/Stop/approval test,
 then clean installation and a scoped signed-in read-only task. Preserve uncertain
 receipts; operator recovery UX and signed/notarized distribution remain required
 before production. See [runtime scope and evidence](docs/BUNDLED_CUA.md).

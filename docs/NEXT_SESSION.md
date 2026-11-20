@@ -1,4 +1,23 @@
-# Pre-speech freshness failure remains unresolved; backend restored
+# Standalone runtime qualification — November 20, 2026
+
+PR #7 (`bundled-cua-runtime`) is undergoing the user-authorized native test and
+installation. Automated TypeScript validation passes 1,681 tests. Browser
+standalone qualification passed earlier; actual native input has not yet passed.
+Current fixes preserve keyboard focus while approving, distinguish definite
+no-input refusals from uncertain effects, bind changed frames to exact native
+AX targets, and activate only observed existing windows in an explicit app
+allowlist. Native screenshots remain transient.
+
+The package now includes a distinct Local Control helper instead of overwriting
+an installed call companion. It refuses call configuration/APIs and competing
+known helper processes. Keep old service configuration and receipts for rollback;
+only migrate after the native fixture/Stop test. No phone or deployment authority
+is included in this task. See [runtime details](BUNDLED_CUA.md).
+
+The capture investigation below is historical call-workflow evidence and remains
+separate from this standalone desktop qualification.
+
+## Historical pre-speech freshness investigation
 
 ## Local investigation authorized — November 19, 2026
 

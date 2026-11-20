@@ -56,7 +56,7 @@ public final class LocalExecutionStore {
       guard journal.sessions.count <= 10000, journal.actions.count <= 10000,
         journal.sessions.keys.allSatisfy(validID), journal.actions.allSatisfy({ id, receipt in
           id == receipt.id && validID(id) && sessionIds.contains(receipt.leaseId) &&
-            ["dispatching", "submitted", "unknown"].contains(receipt.state)
+            ["dispatching", "submitted", "unknown", "rejected"].contains(receipt.state)
         }) else { throw HelperError(409, "Local journal is invalid.") }
     } catch { close(descriptor); throw error }
     directory = descriptor
@@ -90,7 +90,8 @@ public final class LocalExecutionStore {
   }
   public var unresolvedActions: Int {
     max(failed ? 1 : 0, journal.actions.values.filter {
-      $0.state != "submitted" || $0.evidence != "post_input_frame_available_not_application_verified"
+      ($0.state != "rejected" || $0.evidence != "input_not_dispatched") &&
+        ($0.state != "submitted" || $0.evidence != "post_input_frame_available_not_application_verified")
     }.count)
   }
   public func used(_ id: String) -> Bool { journal.sessions[id] != nil }
@@ -123,12 +124,20 @@ public final class LocalExecutionStore {
       state: "dispatching", updatedAt: now, evidence: "reserved_before_input")
     try persist()
   }
-  public func finish(_ id: String, submitted: Bool, now: Date) throws -> LocalActionReceipt {
+  public func finish(_ id: String, submitted: Bool, now: Date, windowActivation: Bool = false) throws -> LocalActionReceipt {
     guard !failed, var receipt = journal.actions[id], receipt.state == "dispatching" else { throw HelperError(409, "Local receipt cannot transition.") }
     receipt.state = submitted ? "submitted" : "unknown"
-    receipt.evidence = submitted ? "cg_event_posted_not_application_verified" : "input_outcome_unconfirmed"
+    receipt.evidence = submitted ? (windowActivation ? "window_activation_submitted_not_application_verified" : "cg_event_posted_not_application_verified") : "input_outcome_unconfirmed"
     receipt.updatedAt = now; journal.actions[id] = receipt
     try persist(); return receipt
+  }
+  /// Only a final validation failure before the first event may use this state.
+  public func reject(_ id: String, now: Date) throws -> LocalActionReceipt {
+    guard !failed, var receipt = journal.actions[id], receipt.state == "dispatching" else {
+      throw HelperError(409, "Local receipt cannot reject after posting.")
+    }
+    receipt.state = "rejected"; receipt.evidence = "input_not_dispatched"; receipt.updatedAt = now
+    journal.actions[id] = receipt; try persist(); return receipt
   }
   public func observedFrame(leaseId: String, capturedAt: Date) throws {
     var changed = false

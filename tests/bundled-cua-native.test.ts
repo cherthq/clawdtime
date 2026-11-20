@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BundledCuaNative } from "../src/control/bundled-cua-native.js";
-import type { BundledCuaConfig } from "../src/control/cua-contracts.js";
+import {
+  CuaInputNotDispatched,
+  type BundledCuaConfig,
+} from "../src/control/cua-contracts.js";
 
 const config: NonNullable<BundledCuaConfig["native"]> = {
   origin: "http://127.0.0.1:9988",
@@ -54,8 +57,20 @@ function fixture() {
             "x-frame-width": "1280",
             "x-frame-height": "800",
             "x-focus-identity": focus,
+            "x-local-targets": Buffer.from(
+              JSON.stringify({ untrusted: true, targets: [] }),
+            ).toString("base64"),
           },
         });
+      if (path.endsWith("/revalidate")) {
+        const input = JSON.parse(String(init.body));
+        return json({
+          valid: true,
+          proofId: "proof_1",
+          plannedFrameId: input.plannedFrameId,
+          currentFrameId: input.currentFrameId,
+        });
+      }
       if (path.endsWith("/actions")) {
         const input = JSON.parse(String(init.body));
         return json({
@@ -101,7 +116,215 @@ function fixture() {
   };
 }
 
+function windowsFixture() {
+  const f = fixture();
+  const catalog = {
+    untrusted: true,
+    windows: [
+      { id: "window_1", app: "Fixture App", title: "Existing fixture window" },
+    ],
+  };
+  const normal = f.dispatch.getMockImplementation()!;
+  f.dispatch.mockImplementation(async (url, init) => {
+    const response = await normal(url, init);
+    if (url.endsWith("/frame"))
+      response.headers.set(
+        "x-local-windows",
+        Buffer.from(JSON.stringify(catalog)).toString("base64"),
+      );
+    return response;
+  });
+  return { ...f, catalog };
+}
+
 describe("app-owned native helper adapter", () => {
+  it("requires an exact window catalog and proof before activation POST", async () => {
+    const f = windowsFixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    const action = { type: "activate" as const, targetId: "window_1" };
+    expect(await f.native.authorize(action, current)).toBe("confirm");
+    await expect(
+      f.native.execute(
+        { actionId: "without_proof", observationId: current.id, action },
+        f.signal,
+      ),
+    ).rejects.toBeInstanceOf(CuaInputNotDispatched);
+    expect(f.calls("/actions")).toHaveLength(0);
+    expect(await f.native.revalidate(action, planned, current, f.signal)).toBe(
+      true,
+    );
+    await f.native.execute(
+      { actionId: "action_1", observationId: current.id, action },
+      f.signal,
+    );
+    expect(JSON.parse(String(f.calls("/actions")[0]![1]!.body))).toMatchObject({
+      type: "activate",
+      targetId: "window_1",
+      localProofId: "proof_1",
+    });
+  });
+
+  it("does not activate without a helper window catalog", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    const action = { type: "activate" as const, targetId: "window_1" };
+    expect(await f.native.authorize(action, current)).toBe("refused");
+    expect(await f.native.revalidate(action, planned, current, f.signal)).toBe(
+      false,
+    );
+    await expect(
+      f.native.execute(
+        { actionId: "action_1", observationId: current.id, action },
+        f.signal,
+      ),
+    ).rejects.toBeInstanceOf(CuaInputNotDispatched);
+    expect(f.calls("/revalidate")).toHaveLength(0);
+    expect(f.calls("/actions")).toHaveLength(0);
+  });
+
+  it.each(["planned", "current"])(
+    "requires activation window identity in the %s catalog",
+    async (missing) => {
+      const f = windowsFixture();
+      await f.native.open(f.task, f.signal);
+      if (missing === "planned") f.catalog.windows = [];
+      const planned = await f.native.observe(f.signal);
+      f.catalog.windows =
+        missing === "current"
+          ? []
+          : [
+              {
+                id: "window_1",
+                app: "Fixture App",
+                title: "Existing fixture window",
+              },
+            ];
+      f.advance(300);
+      const current = await f.native.observe(f.signal);
+      expect(
+        await f.native.revalidate(
+          { type: "activate", targetId: "window_1" },
+          planned,
+          current,
+          f.signal,
+        ),
+      ).toBe(false);
+      expect(f.calls("/revalidate")).toHaveLength(0);
+      expect(f.calls("/actions")).toHaveLength(0);
+    },
+  );
+
+  it("does not reuse activation proof for a different observed window", async () => {
+    const f = windowsFixture();
+    f.catalog.windows.push({
+      id: "window_2",
+      app: "Fixture App",
+      title: "Another existing window",
+    });
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    expect(
+      await f.native.revalidate(
+        { type: "activate", targetId: "window_1" },
+        planned,
+        current,
+        f.signal,
+      ),
+    ).toBe(true);
+    await expect(
+      f.native.execute(
+        {
+          actionId: "action_1",
+          observationId: current.id,
+          action: { type: "activate", targetId: "window_2" },
+        },
+        f.signal,
+      ),
+    ).rejects.toBeInstanceOf(CuaInputNotDispatched);
+    expect(f.calls("/actions")).toHaveLength(0);
+  });
+
+  it.each([
+    { untrusted: false, windows: [] },
+    {
+      untrusted: true,
+      windows: [{ id: "bad/id", app: "App", title: "Window" }],
+    },
+    {
+      untrusted: true,
+      windows: [
+        { id: "w", app: "App", title: "Window", launchCommand: "invented" },
+      ],
+    },
+    {
+      untrusted: true,
+      windows: Array.from({ length: 21 }, (_, i) => ({
+        id: `w_${i}`,
+        app: "App",
+        title: "Window",
+      })),
+    },
+  ])(
+    "rejects malformed or overbroad native window catalog %j",
+    async (catalog) => {
+      const f = fixture();
+      await f.native.open(f.task, f.signal);
+      const normal = f.dispatch.getMockImplementation()!;
+      f.dispatch.mockImplementation(async (url, init) => {
+        const response = await normal(url, init);
+        if (url.endsWith("/frame"))
+          response.headers.set(
+            "x-local-windows",
+            Buffer.from(JSON.stringify(catalog)).toString("base64"),
+          );
+        return response;
+      });
+      await expect(f.native.observe(f.signal)).rejects.toThrow();
+      expect(f.calls("/actions")).toHaveLength(0);
+    },
+  );
+
+  it("bounds the native window header before decoding it", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const normal = f.dispatch.getMockImplementation()!;
+    f.dispatch.mockImplementation(async (url, init) => {
+      const response = await normal(url, init);
+      if (url.endsWith("/frame"))
+        response.headers.set("x-local-windows", "A".repeat(32769));
+      return response;
+    });
+    await expect(f.native.observe(f.signal)).rejects.toThrow();
+  });
+
+  it("refuses activation after Stop even when its proof was valid", async () => {
+    const f = windowsFixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    const action = { type: "activate" as const, targetId: "window_1" };
+    expect(await f.native.revalidate(action, planned, current, f.signal)).toBe(
+      true,
+    );
+    await f.native.stop();
+    await expect(
+      f.native.execute(
+        { actionId: "action_1", observationId: current.id, action },
+        f.signal,
+      ),
+    ).rejects.toThrow();
+    expect(f.calls("/actions")).toHaveLength(0);
+  });
+
   it("uses authenticated loopback local-task leases without fabricated call identity", async () => {
     const f = fixture();
     await f.native.open(f.task, f.signal);
@@ -179,6 +402,180 @@ describe("app-owned native helper adapter", () => {
     ).toBe("confirm");
   });
 
+  it("binds a native target proof to the exact planned/current frames and action", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    const action = { type: "click" as const, x: 0.5, y: 0.5 };
+    expect(await f.native.revalidate(action, planned, current, f.signal)).toBe(
+      true,
+    );
+    expect(JSON.parse(String(f.calls("/revalidate")[0]![1]!.body))).toEqual({
+      plannedFrameId: planned.id,
+      currentFrameId: current.id,
+      action,
+    });
+    expect(await f.native.authorize(action, current)).toBe("confirm");
+    await f.native.execute(
+      { actionId: "action_1", observationId: current.id, action },
+      f.signal,
+    );
+    expect(JSON.parse(String(f.calls("/actions")[0]![1]!.body))).toMatchObject({
+      frameId: current.id,
+      localProofId: "proof_1",
+    });
+  });
+
+  it.each([
+    { plannedFrameId: "wrong_frame" },
+    { currentFrameId: "wrong_frame" },
+    { proofId: "invalid/proof" },
+    { valid: "true" },
+  ])("rejects an unbound or malformed proof echo: %j", async (mismatch) => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    const normal = f.dispatch.getMockImplementation()!;
+    f.dispatch.mockImplementation(async (url, init) => {
+      const response = await normal(url, init);
+      return url.endsWith("/revalidate")
+        ? json({ ...(await response.json()), ...mismatch })
+        : response;
+    });
+    await expect(
+      f.native.revalidate(
+        { type: "click", x: 0.5, y: 0.5 },
+        planned,
+        current,
+        f.signal,
+      ),
+    ).rejects.toThrow();
+    expect(f.calls("/actions")).toHaveLength(0);
+  });
+
+  it("does not downgrade a valid proof to unproved input for a different action", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    expect(
+      await f.native.revalidate(
+        { type: "click", x: 0.5, y: 0.5 },
+        planned,
+        current,
+        f.signal,
+      ),
+    ).toBe(true);
+    await expect(
+      f.native.execute(
+        {
+          actionId: "action_1",
+          observationId: current.id,
+          action: { type: "click", x: 0.2, y: 0.2 },
+        },
+        f.signal,
+      ),
+    ).rejects.toThrow();
+    expect(f.calls("/actions")).toHaveLength(0);
+  });
+
+  it("replaces an old target proof after a new capture and final revalidation", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const first = await f.native.observe(f.signal);
+    const action = { type: "click" as const, x: 0.5, y: 0.5 };
+    expect(await f.native.revalidate(action, planned, first, f.signal)).toBe(
+      true,
+    );
+    f.advance(300);
+    const final = await f.native.observe(f.signal);
+    const normal = f.dispatch.getMockImplementation()!;
+    f.dispatch.mockImplementation(async (url, init) => {
+      const response = await normal(url, init);
+      return url.endsWith("/revalidate")
+        ? json({ ...(await response.json()), proofId: "proof_final" })
+        : response;
+    });
+    expect(await f.native.revalidate(action, planned, final, f.signal)).toBe(
+      true,
+    );
+    await f.native.execute(
+      { actionId: "action_1", observationId: final.id, action },
+      f.signal,
+    );
+    expect(
+      JSON.parse(String(f.calls("/actions")[0]![1]!.body)).localProofId,
+    ).toBe("proof_final");
+  });
+
+  it("refuses a valid-looking target proof arriving after Stop", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const planned = await f.native.observe(f.signal);
+    f.advance(300);
+    const current = await f.native.observe(f.signal);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const normal = f.dispatch.getMockImplementation()!;
+    f.dispatch.mockImplementation(async (url, init) => {
+      if (url.endsWith("/revalidate")) await held;
+      return normal(url, init);
+    });
+    const proof = f.native.revalidate(
+      { type: "click", x: 0.5, y: 0.5 },
+      planned,
+      current,
+      f.signal,
+    );
+    await f.native.stop();
+    release();
+    await expect(proof).rejects.toThrow();
+    expect(f.calls("/actions")).toHaveLength(0);
+  });
+
+  it.each([
+    { untrusted: false, targets: [] },
+    { untrusted: true, targets: [{ id: "t", role: "button", x: 2, y: 0.5 }] },
+    {
+      untrusted: true,
+      targets: [
+        {
+          id: "t",
+          role: "input",
+          value: "private field value",
+          x: 0.5,
+          y: 0.5,
+        },
+      ],
+    },
+  ])(
+    "rejects unbounded or authority-bearing target catalog data: %j",
+    async (targets) => {
+      const f = fixture();
+      await f.native.open(f.task, f.signal);
+      const normal = f.dispatch.getMockImplementation()!;
+      f.dispatch.mockImplementation(async (url, init) => {
+        const response = await normal(url, init);
+        if (url.endsWith("/frame"))
+          response.headers.set(
+            "x-local-targets",
+            Buffer.from(JSON.stringify(targets)).toString("base64"),
+          );
+        return response;
+      });
+      await expect(f.native.observe(f.signal)).rejects.toThrow();
+    },
+  );
+
   it("refuses absent focus identity and stale captured frames", async () => {
     const f = fixture();
     await f.native.open(f.task, f.signal);
@@ -242,6 +639,89 @@ describe("app-owned native helper adapter", () => {
     await expect(f.native.execute(input, f.signal)).rejects.toThrow();
     expect(f.calls("/actions")).toHaveLength(1);
   });
+
+  it("recognizes the helper's exact authenticated no-dispatch refusal without replay", async () => {
+    const f = fixture();
+    await f.native.open(f.task, f.signal);
+    const frame = await f.native.observe(f.signal);
+    const normal = f.dispatch.getMockImplementation()!;
+    f.dispatch.mockImplementation(async (url, init) =>
+      url.endsWith("/actions")
+        ? json({ code: "input_not_dispatched" }, 409)
+        : normal(url, init),
+    );
+    const input = {
+      actionId: "action_1",
+      observationId: frame.id,
+      action: { type: "click" as const, x: 0.5, y: 0.5 },
+    };
+    await expect(f.native.execute(input, f.signal)).rejects.toBeInstanceOf(
+      CuaInputNotDispatched,
+    );
+    await expect(f.native.execute(input, f.signal)).rejects.toThrow();
+    expect(f.calls("/actions")).toHaveLength(1);
+  });
+
+  it.each([
+    { body: { error: "input_not_dispatched" }, status: 409 },
+    { body: { code: "another_conflict" }, status: 409 },
+    { body: { code: "input_not_dispatched" }, status: 500 },
+  ])(
+    "keeps generic or nonmatching helper failures uncertain: %j",
+    async (failure) => {
+      const f = fixture();
+      await f.native.open(f.task, f.signal);
+      const frame = await f.native.observe(f.signal);
+      const normal = f.dispatch.getMockImplementation()!;
+      f.dispatch.mockImplementation(async (url, init) =>
+        url.endsWith("/actions")
+          ? json(failure.body, failure.status)
+          : normal(url, init),
+      );
+      await expect(
+        f.native.execute(
+          {
+            actionId: "action_1",
+            observationId: frame.id,
+            action: { type: "click", x: 0.5, y: 0.5 },
+          },
+          f.signal,
+        ),
+      ).rejects.not.toBeInstanceOf(CuaInputNotDispatched);
+      expect(f.calls("/actions")).toHaveLength(1);
+    },
+  );
+
+  it.each([false, true])(
+    "requires full binding for a rejected input receipt (mismatch=%s)",
+    async (mismatch) => {
+      const f = fixture();
+      await f.native.open(f.task, f.signal);
+      const frame = await f.native.observe(f.signal);
+      const normal = f.dispatch.getMockImplementation()!;
+      f.dispatch.mockImplementation(async (url, init) => {
+        const response = await normal(url, init);
+        if (!url.endsWith("/actions")) return response;
+        return json({
+          ...(await response.json()),
+          state: "rejected",
+          evidence: "input_not_dispatched",
+          ...(mismatch ? { executorId: "other_executor" } : {}),
+        });
+      });
+      const promise = f.native.execute(
+        {
+          actionId: "action_1",
+          observationId: frame.id,
+          action: { type: "click", x: 0.5, y: 0.5 },
+        },
+        f.signal,
+      );
+      if (mismatch)
+        await expect(promise).rejects.not.toBeInstanceOf(CuaInputNotDispatched);
+      else await expect(promise).rejects.toBeInstanceOf(CuaInputNotDispatched);
+    },
+  );
 
   it.each([
     "id",

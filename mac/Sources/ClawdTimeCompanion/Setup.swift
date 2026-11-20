@@ -8,14 +8,14 @@ extension DeviceApp {
       let window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 620, height: 740),
         styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-      window.title = "ClawdTime Control Panel"
+      window.title = localOnly ? "ClawdTime Local Control" : "ClawdTime Control Panel"
       window.isReleasedWhenClosed = false
       window.center()
       let content = window.contentView!
       let stack = NSStackView()
       stack.orientation = .vertical
       stack.alignment = .leading
-      stack.spacing = 12
+      stack.spacing = 12; stack.detachesHiddenViews = true
       stack.translatesAutoresizingMaskIntoConstraints = false
       content.addSubview(stack)
       NSLayoutConstraint.activate([
@@ -32,9 +32,9 @@ extension DeviceApp {
         field.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         return field
       }
-      _ = text("ClawdTime Control Panel", bold: true)
+      _ = text(localOnly ? "ClawdTime Local Control" : "ClawdTime Control Panel", bold: true)
       _ = text(
-        "Your coding agent owns the conversation. Sharing and computer control have separate permissions."
+        localOnly ? "ClawdTime handles explicitly enabled local computer tasks. Permission, local Enable and action approval remain separate." : "Your coding agent owns the conversation. Sharing and computer control have separate permissions."
       )
       connectionLabel = text("")
       setupStateLabel = text("")
@@ -78,6 +78,7 @@ extension DeviceApp {
       for button in [mute, end, pause] { button.bezelStyle = .rounded; callButtons.addArrangedSubview(button) }
       muteButton = mute; endButton = end; pauseButton = pause
       stack.addArrangedSubview(callButtons)
+      callButtons.isHidden = localOnly; callLabel?.isHidden = localOnly
       let buttons = NSStackView()
       buttons.translatesAutoresizingMaskIntoConstraints = false
       buttons.orientation = .horizontal
@@ -148,12 +149,20 @@ extension DeviceApp {
     connectionLabel?.stringValue = telemetry.map {
       "Connected · \($0.agent == "codex" ? "Codex" : "Claude Code") · \($0.projectLabel ?? "Current project")\n\($0.personLabel ?? "Paired person confirmed") · Current coding chat"
     } ?? "Connection: waiting for current agent and call status. Pairing remains configured on this Mac."
+    if localOnly {
+      connectionLabel?.stringValue = localHelperConflict
+        ? "Local work unavailable: quit the other ClawdTime helper first."
+        : "Standalone local executor · no phone call required"
+    }
     callLabel?.stringValue = "Call: " + (telemetry?.callState ?? "Status unavailable")
     let executionNames = ["working": "Working", "waiting": "Waiting", "pending_approval": "Waiting for native approval", "uncertain": "Action outcome unresolved"]
     let executorNames = ["native": "Agent tools", "clawdtime": "ClawdTime fallback", "none": "No computer-control executor"]
     executionLabel?.stringValue = telemetry.map {
       "\(executorNames[$0.executor] ?? "Unknown executor") · \(executionNames[$0.executionState] ?? "Unknown status")"
     } ?? "Execution: no current status"
+    if localOnly {
+      executionLabel?.stringValue = localPolicy.lease.map { "Local executor \($0.executorId) · task \($0.taskId)" } ?? "No active local task"
+    }
     if localLedger.unresolvedActions > 0 {
       executionLabel?.stringValue += "\n\(localLedger.unresolvedActions) unresolved local action(s) block computer control."
     }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
 import {
   bundledCuaConfigSchema,
+  CuaInputNotDispatched,
   type CuaAction,
   type CuaDevice,
   type CuaObservation,
@@ -27,7 +28,13 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-function fixture(options: { allowed?: boolean; maxSteps?: number } = {}) {
+function fixture(
+  options: {
+    allowed?: boolean;
+    maxSteps?: number;
+    windowCatalog?: boolean;
+  } = {},
+) {
   const store = new Store();
   const vault = new Vault("7".repeat(64));
   let now = 1_000_000;
@@ -40,7 +47,20 @@ function fixture(options: { allowed?: boolean; maxSteps?: number } = {}) {
     height: 600,
     imageDataUrl: "data:image/png;base64,PRIVATE_TRANSIENT_PIXELS",
     fingerprint: `surface_${effects}`,
-    context: "Disposable fixture",
+    context: options.windowCatalog
+      ? JSON.stringify({
+          windows: {
+            untrusted: true,
+            windows: [
+              {
+                id: "window_1",
+                app: "Fixture App",
+                title: "Existing fixture window",
+              },
+            ],
+          },
+        })
+      : "Disposable fixture",
   });
   const device = {
     open: vi.fn<CuaDevice["open"]>(async () => {}),
@@ -178,6 +198,173 @@ describe("app-owned CUA task engine", () => {
       fingerprint: "changed_target",
     }));
     f.runtime.decision(request.id, true);
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("uses trusted target revalidation for changed pixels without bypassing exact approval", async () => {
+    const f = fixture();
+    f.device.observe.mockImplementation(async () => {
+      const frame = f.observation();
+      return { ...frame, fingerprint: `changing_background_${frame.id}` };
+    });
+    const revalidate = vi.fn<NonNullable<CuaDevice["revalidate"]>>(
+      async () => true,
+    );
+    (f.device as CuaDevice).revalidate = revalidate;
+    await f.runtime.submit("task_1", "Update fixture");
+    const request = await pending(f);
+    expect(f.device.execute).not.toHaveBeenCalled();
+    f.runtime.decision(request.id, true);
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().state).toBe("completed");
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+    expect(revalidate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const original = f.planner.plan.mock.calls[0]![0].observation.id;
+    expect(revalidate.mock.calls[0]![1].id).toBe(original);
+    expect(revalidate.mock.calls[1]![1].id).toBe(original);
+    expect(revalidate.mock.calls[1]![2].id).not.toBe(
+      revalidate.mock.calls[0]![2].id,
+    );
+  });
+
+  it("never asks for approval or dispatches when changed-target revalidation is refused", async () => {
+    const f = fixture();
+    f.device.observe.mockImplementation(async () => {
+      const frame = f.observation();
+      return { ...frame, fingerprint: frame.id };
+    });
+    (f.device as CuaDevice).revalidate = vi.fn(async () => false);
+    await f.runtime.submit("task_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().pendingAction).toBeUndefined();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("discards an exact approval if final target revalidation is refused", async () => {
+    const f = fixture();
+    f.device.observe.mockImplementation(async () => {
+      const frame = f.observation();
+      return { ...frame, fingerprint: frame.id };
+    });
+    const revalidate = vi
+      .fn<NonNullable<CuaDevice["revalidate"]>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+    (f.device as CuaDevice).revalidate = revalidate;
+    await f.runtime.submit("task_1", "Update fixture");
+    f.runtime.decision((await pending(f)).id, true);
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("does not accept a target proof arriving after Stop", async () => {
+    const f = fixture({ allowed: true });
+    f.device.observe.mockImplementation(async () => {
+      const frame = f.observation();
+      return { ...frame, fingerprint: frame.id };
+    });
+    const held = gate();
+    const revalidate = vi.fn<NonNullable<CuaDevice["revalidate"]>>(async () => {
+      await held.promise;
+      return true;
+    });
+    (f.device as CuaDevice).revalidate = revalidate;
+    await f.runtime.submit("task_1", "Update fixture");
+    await vi.waitFor(() => expect(revalidate).toHaveBeenCalled());
+    f.runtime.stop();
+    held.release();
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("requires activation proof even when the screen fingerprints are identical", async () => {
+    const f = fixture({ allowed: true });
+    f.planner.plan.mockImplementation(
+      async ({ observation }): Promise<CuaPlan> => ({
+        kind: "action",
+        observationId: observation.id,
+        action: { type: "activate", targetId: "window_1" },
+        description: "Activate existing fixture window",
+      }),
+    );
+    await f.runtime.submit(
+      "task_1",
+      "Bring the existing fixture window forward",
+    );
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(f.runtime.snapshot().pendingAction).toBeUndefined();
+    expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("requires an exact approval and a second proof for activation on unchanged pixels", async () => {
+    const f = fixture({ windowCatalog: true });
+    f.planner.plan.mockImplementation(
+      async ({ observation, previousActions }): Promise<CuaPlan> =>
+        previousActions.length
+          ? {
+              kind: "done",
+              observationId: observation.id,
+              summary: "Existing window is visible",
+            }
+          : {
+              kind: "action",
+              observationId: observation.id,
+              action: { type: "activate", targetId: "window_1" },
+              description: "Activate fixture window",
+            },
+    );
+    const revalidate = vi.fn<NonNullable<CuaDevice["revalidate"]>>(
+      async () => true,
+    );
+    (f.device as CuaDevice).revalidate = revalidate;
+    await f.runtime.submit(
+      "task_1",
+      "Bring the existing fixture window forward",
+    );
+    const request = await pending(f);
+    expect(f.device.execute).not.toHaveBeenCalled();
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(request.description).toContain("Existing fixture window");
+    expect(request.description).toContain("Fixture App");
+    expect(request.description).toContain("window_1");
+    f.runtime.decision(request.id, true);
+    await f.runtime.waitForIdle();
+    expect(revalidate).toHaveBeenCalledTimes(2);
+    expect(f.device.execute).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        action: { type: "activate", targetId: "window_1" },
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(f.runtime.snapshot().state).toBe("completed");
+  });
+
+  it("cannot reuse the pre-approval activation proof when final proof is refused", async () => {
+    const f = fixture({ windowCatalog: true });
+    f.planner.plan.mockImplementation(
+      async ({ observation }): Promise<CuaPlan> => ({
+        kind: "action",
+        observationId: observation.id,
+        action: { type: "activate", targetId: "window_1" },
+        description: "Activate existing fixture window",
+      }),
+    );
+    const revalidate = vi
+      .fn<NonNullable<CuaDevice["revalidate"]>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+    (f.device as CuaDevice).revalidate = revalidate;
+    await f.runtime.submit(
+      "task_1",
+      "Bring the existing fixture window forward",
+    );
+    f.runtime.decision((await pending(f)).id, true);
     await f.runtime.waitForIdle();
     expect(f.device.execute).not.toHaveBeenCalled();
     expect(f.runtime.snapshot().state).not.toBe("completed");
@@ -408,6 +595,60 @@ describe("app-owned CUA task engine", () => {
     await f.runtime.waitForIdle();
     expect(f.device.stop).toHaveBeenCalledTimes(1);
     expect(f.runtime.snapshot().state).not.toBe("completed");
+  });
+
+  it("reports the configured runtime mode without implying a native readiness probe", () => {
+    const f = fixture();
+    expect(f.runtime.snapshot()).toMatchObject({
+      configured: true,
+      mode: "browser",
+      state: "idle",
+    });
+    expect(f.device.open).not.toHaveBeenCalled();
+  });
+
+  it("records definite no-input refusal without replay or permanently fencing new tasks", async () => {
+    const f = fixture({ allowed: true });
+    f.device.execute.mockRejectedValue(new CuaInputNotDispatched());
+    await f.runtime.submit("task_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().state).toBe("blocked");
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+    await f.runtime.submit("task_1", "Update fixture");
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+    await f.runtime.submit("task_2", "A separately requested update");
+    await f.runtime.waitForIdle();
+    expect(f.device.execute).toHaveBeenCalledTimes(2);
+    expect(f.device.execute.mock.calls[1]![0].actionId).not.toBe(
+      f.device.execute.mock.calls[0]![0].actionId,
+    );
+  });
+
+  it("does not interpret a generic error mentioning no input as proof", async () => {
+    const f = fixture({ allowed: true });
+    f.device.execute.mockRejectedValue(Error("409 input_not_dispatched"));
+    await f.runtime.submit("task_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().state).toBe("uncertain");
+    await f.runtime.submit("task_2", "A separately requested update");
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot classify a post-input observation failure as no dispatch", async () => {
+    const f = fixture({ allowed: true });
+    let submitted = false;
+    f.device.execute.mockImplementation(async () => {
+      submitted = true;
+    });
+    f.device.observe.mockImplementation(async () => {
+      if (submitted) throw new CuaInputNotDispatched();
+      return f.observation();
+    });
+    await f.runtime.submit("task_1", "Update fixture");
+    await f.runtime.waitForIdle();
+    expect(f.runtime.snapshot().state).toBe("uncertain");
+    await f.runtime.submit("task_2", "A separately requested update");
+    expect(f.device.execute).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates a submitted identity and rejects changed task text", async () => {

@@ -173,4 +173,33 @@ final class LocalExecutionTests: XCTestCase {
     XCTAssertNoThrow(try LocalInputExclusion.validate(witnessKnown: true, targetOwned: false, coveredByOwnedWindow: false))
   }
 
+  func testDefiniteRejectionIsDurableAndDoesNotFenceLaterWork() throws {
+    let path = try folder()
+    var store: LocalExecutionStore? = try LocalExecutionStore(folder: path)
+    try store!.reserve(lease()); try store!.begin(action(), lease: lease(), now: now)
+    let refused = try store!.reject("action", now: now.addingTimeInterval(0.1))
+    XCTAssertEqual(refused.state, "rejected")
+    XCTAssertEqual(refused.evidence, "input_not_dispatched")
+    XCTAssertEqual(store!.unresolvedActions, 0)
+    store = nil; store = try LocalExecutionStore(folder: path)
+    XCTAssertEqual(try store!.existing(action(), leaseId: "local"), refused)
+    XCTAssertEqual(store!.unresolvedActions, 0)
+    XCTAssertThrowsError(try store!.begin(action(), lease: lease(), now: now), "Rejected ID is never replayed")
+    try store!.begin(action("new"), lease: lease(), now: now)
+    _ = try store!.finish("new", submitted: true, now: now)
+    XCTAssertThrowsError(try store!.reject("new", now: now), "Posted input cannot become definite refusal")
+    XCTAssertEqual(store!.unresolvedActions, 1)
+  }
+
+  func testBoundIdentityIsCheckedSeparatelyFromPredispatchFreshness() throws {
+    let (shared, local) = try policies(); shared.arm()
+    try local.begin(lease(), now: now, available: true, accessibility: true)
+    XCTAssertEqual(try local.boundActionLease(action(), id: "local", now: now, available: true, accessibility: true), lease())
+    XCTAssertThrowsError(try local.validateAction(action(), id: "local", now: now, available: true, accessibility: true))
+    var wrong = action(); wrong.sessionId = "other"
+    XCTAssertThrowsError(try local.boundActionLease(wrong, id: "local", now: now, available: true, accessibility: true))
+    wrong = action(); wrong.policyRevision = 2
+    XCTAssertThrowsError(try local.boundActionLease(wrong, id: "local", now: now, available: true, accessibility: true))
+  }
+
 }

@@ -1,6 +1,19 @@
 import { z } from "zod";
 
+/** Adapter evidence establishes that this attempt posted no native input. */
+export class CuaInputNotDispatched extends Error {
+  constructor() {
+    super("The computer action was refused before input was dispatched.");
+  }
+}
+
 export const cuaActionSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("activate"),
+      targetId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("click"),
@@ -94,6 +107,13 @@ export interface CuaDevice {
     signal: AbortSignal,
   ): Promise<void>;
   observe(signal: AbortSignal): Promise<CuaObservation>;
+  /** Optional native target proof when whole-screen pixels changed; never grants input permission. */
+  revalidate?(
+    action: CuaAction,
+    planned: CuaObservation,
+    current: CuaObservation,
+    signal: AbortSignal,
+  ): Promise<boolean>;
   /** Recheck target identity/freshness at the final dispatch boundary. No automatic retries. */
   execute(
     input: { actionId: string; observationId: string; action: CuaAction },

@@ -9,6 +9,7 @@ import type {
   DesktopExecutionSnapshot,
 } from "./desktop-executor.js";
 import {
+  CuaInputNotDispatched,
   bundledCuaConfigSchema,
   cuaPlanSchema,
   type BundledCuaConfig,
@@ -29,7 +30,7 @@ type State =
 interface ActionReceipt {
   id: string;
   action: CuaAction;
-  state: "reserved" | "submitted" | "observed_after" | "unknown";
+  state: "reserved" | "submitted" | "observed_after" | "unknown" | "rejected";
   fingerprint: string;
 }
 interface TaskRecord {
@@ -47,12 +48,26 @@ interface TaskRecord {
 }
 const terminal = new Set<State>(["completed", "blocked", "canceled"]);
 const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
-const description = (action: CuaAction) =>
-  action.type === "type"
+const description = (action: CuaAction, observation: CuaObservation) => {
+  if (action.type === "activate") {
+    const windows = JSON.parse(observation.context).windows?.windows;
+    const window = Array.isArray(windows)
+      ? windows.find((value) => value.id === action.targetId)
+      : undefined;
+    const clean = (value: unknown, limit: number) =>
+      typeof value === "string"
+        ? value
+            .replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, " ")
+            .slice(0, limit)
+        : "";
+    return `Bring the existing window ${JSON.stringify(clean(window?.title, 160))} in ${JSON.stringify(clean(window?.app, 80))} to the front. Window ID: ${action.targetId}`;
+  }
+  return action.type === "type"
     ? `Type this exact text into the currently focused control: ${action.text}`
     : action.type === "click"
       ? `Click the current surface at ${Math.round(action.x * 100)}% across and ${Math.round(action.y * 100)}% down.`
       : `Scroll the current surface by ${action.deltaY} at ${Math.round(action.x * 100)}%, ${Math.round(action.y * 100)}%.`;
+};
 
 /** App-owned sequential runtime. No Codex chat, daemon, MCP host or queue subprocess. */
 export class BundledCuaRuntime implements DesktopExecutorPort {
@@ -101,11 +116,14 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
     const r = this.latest();
     return {
       configured: true,
+      mode: this.config.mode,
       state: r?.state ?? "idle",
       canStop: !!r && !terminal.has(r.state) && r.state !== "uncertain",
       message:
         r?.message ??
-        "ClawdTime's own computer runtime is ready. It does not depend on a coding chat.",
+        (this.config.mode === "native"
+          ? "Standalone computer control is configured. Enable the local companion to work in your apps; actions still require approval."
+          : "ClawdTime's own browser runtime is configured. It does not depend on a coding chat."),
       ...(r?.pendingAction ? { pendingAction: r.pendingAction } : {}),
     };
   }
@@ -299,8 +317,21 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
           message = verified.summary.slice(0, 1600);
           break;
         }
-        // Never rebind a plan to changed pixels or a changed target.
-        if (fresh.fingerprint !== observed.fingerprint) continue;
+        // Changed pixels require an adapter proof of the original exact target.
+        const matchesPlan = async (current: CuaObservation) =>
+          (plan.action.type !== "activate" &&
+            current.fingerprint === observed.fingerprint) ||
+          (device?.revalidate
+            ? (await device.revalidate(
+                plan.action,
+                observed,
+                current,
+                signal,
+              )) === true
+            : false);
+        const firstMatch = await matchesPlan(fresh);
+        this.guard(id, signal);
+        if (!firstMatch) continue;
         const permission = await device.authorize(plan.action, fresh);
         this.guard(id, signal);
         if (permission !== "allowed" && permission !== "confirm") {
@@ -314,7 +345,7 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
             state: "pending_approval",
             pendingAction: {
               id: actionId,
-              description: description(plan.action),
+              description: description(plan.action, fresh),
             },
             message:
               "Review the exact computer action, then approve or deny it. No input has been sent.",
@@ -335,7 +366,9 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
         this.validObservation(before);
         if (before.id === fresh.id || before.capturedAt < fresh.capturedAt)
           throw Error("cua_cached_observation");
-        if (before.fingerprint !== fresh.fingerprint) {
+        const finalMatch = await matchesPlan(before);
+        this.guard(id, signal);
+        if (!finalMatch) {
           message =
             "The surface changed before input. The old action and approval were discarded.";
           break;
@@ -354,11 +387,13 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
         });
         this.guard(id, signal);
         this.dispatching = true;
+        let submitted = false;
         try {
           await device.execute(
             { actionId, observationId: before.id, action: plan.action },
             signal,
           );
+          submitted = true;
           this.update(id, {
             actions: this.records
               .get(id)!
@@ -380,14 +415,18 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
               ),
           });
           this.dispatching = false;
-        } catch {
+        } catch (error) {
+          const rejected = !submitted && error instanceof CuaInputNotDispatched;
           this.update(id, {
             actions: this.records
               .get(id)!
               .actions.map((a) =>
-                a.id === actionId ? { ...a, state: "unknown" } : a,
+                a.id === actionId
+                  ? { ...a, state: rejected ? "rejected" : "unknown" }
+                  : a,
               ),
           });
+          if (rejected) this.dispatching = false;
           throw Error("cua_input_uncertain");
         }
         previousActions.push(plan.action);

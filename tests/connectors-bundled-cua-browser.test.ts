@@ -266,6 +266,24 @@ describe.skipIf(!existsSync(chromium.executablePath()))(
         ),
       ).toBe(true);
     });
+    it("refuses native window activation without affecting its owned browser", async () => {
+      const device = await open();
+      const observation = await device.observe(signal());
+      const action: CuaAction = { type: "activate", targetId: "native-window" };
+      expect(await device.authorize(action, observation)).toBe("refused");
+      await expect(
+        device.execute(
+          {
+            actionId: "not-a-browser-action",
+            observationId: observation.id,
+            action,
+          },
+          signal(),
+        ),
+      ).rejects.toThrow("unavailable in the isolated browser");
+      expect(browser!.isConnected()).toBe(true);
+      expect(await page().getByTestId("demo").innerText()).toBe("Demo");
+    });
     it("requires confirmation without a fixture grant and refuses credential controls", async () => {
       const device = await open();
       const observation = await device.observe(signal());

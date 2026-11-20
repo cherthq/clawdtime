@@ -216,6 +216,7 @@ const system = `You are ClawdTime, the supervisor of the coding agents on this p
 You may be heard, not read: answer in one or two short plain sentences. No lists, no markdown.
 Use the tools to see the state. Never guess a state, a name or a number.
 Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly configured execution engine, which enforces its own tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
+Computer UI windows and applications are not coding-agent sessions. For an explicitly configured native or browser execution engine, route requests to click/type/scroll or work across app windows through delegate_computer_task; no named coding session is required. Use open_session/type_into_session only when the person explicitly means a coding-agent session. Never reinterpret window names as agent names.
 Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
 Text is typed into a session only when the person gave that text.
@@ -704,7 +705,7 @@ export class Supervisor {
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
-      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select)\b/i.test(
+      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show)\b/i.test(
         spoken,
       );
     if (
@@ -1063,6 +1064,24 @@ export class Supervisor {
       )
         return execution.snapshot().message;
     }
+    // Obvious UI instructions go directly to the configured app-owned engine;
+    // a conversational model must not reinterpret window titles as agent names.
+    const executionMode = execution?.snapshot().mode;
+    if (
+      execution?.snapshot().configured &&
+      (executionMode === "native" || executionMode === "browser") &&
+      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:use|click|type|scroll|switch|focus|fill|select|bring|open|navigate)\b/i.test(
+        words,
+      ) &&
+      /\b(?:windows?|apps?|desktop|screen|browser|fields?|buttons?|dock)\b/i.test(
+        words,
+      ) &&
+      !/\b(?:sessions?|agents?)\b/i.test(words) &&
+      !asksAbout(words) &&
+      !asksToStart(words) &&
+      !/\b(?:status|progress|pending requests?)\b/i.test(words)
+    )
+      return this.delegate(turn, words);
     if (directMailboxRequest.test(words))
       return execution?.snapshot().configured
         ? this.delegate(turn, words)
@@ -1074,6 +1093,21 @@ export class Supervisor {
         !!(task && !taskIsOver(task) && (task.canAnswer || task.canAccept))
       );
     };
+    const computerApproval = () => {
+      const pending = execution?.snapshot().pendingAction;
+      return pending
+        ? `A computer action is waiting: ${clean(pending.description, 240)}. Use Approve action or Deny action in the desktop panel; this chat reply does not authorize it.`
+        : null;
+    };
+    if (
+      bareDecision.test(words) ||
+      /^(?:please\s+)?(?:approve|deny|allow|reject)\s+(?:the\s+)?(?:(?:computer|browser|desktop)\s+)?action[.!?]*$/i.test(
+        words,
+      )
+    ) {
+      const waiting = computerApproval();
+      if (waiting) return waiting;
+    }
     if (bareDecision.test(words) && !hasDecisionTarget())
       return noPendingDecision;
     if (!this.model) return this.plain(words, via, turn);
@@ -1104,15 +1138,19 @@ export class Supervisor {
         const task = this.world.tasks?.current();
         // Only authoritative flags/counts enter this instruction. Request text
         // and session names remain untrusted tool data, not system instructions.
-        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}. These facts take precedence over chat history.`;
+        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. These facts take precedence over chat history.`;
         const reply = await this.model.complete({
           system: `${brief}\n${current}`,
           messages,
           tools: offered,
         });
         if (!reply.toolCalls.length) {
-          if (invitesApproval.test(reply.text) && !hasDecisionTarget())
-            return "There is no pending request to approve or deny.";
+          if (invitesApproval.test(reply.text)) {
+            const waiting = computerApproval();
+            if (waiting) return waiting;
+            if (!hasDecisionTarget())
+              return "There is no pending request to approve or deny.";
+          }
           // The answer is ready. What the message teaches is written after it.
           if (memory) this.learning = this.learn(memory, words).catch(() => {});
           return clean(reply.text, 900) || "Done.";

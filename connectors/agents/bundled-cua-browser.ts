@@ -189,7 +189,7 @@ export class BundledCuaBrowser implements CuaDevice {
     const page = this.ready();
     return page.evaluate((action) => {
       const raw =
-        action && action.type !== "type"
+        action && (action.type === "click" || action.type === "scroll")
           ? document.elementFromPoint(
               Math.min(innerWidth - 1, action.x * innerWidth),
               Math.min(innerHeight - 1, action.y * innerHeight),
@@ -432,6 +432,7 @@ export class BundledCuaBrowser implements CuaDevice {
     observation: CuaObservation,
   ): Promise<"allowed" | "confirm" | "refused"> {
     cuaActionSchema.parse(action);
+    if (action.type === "activate") return "refused";
     this.ready();
     if (
       observation.id !== this.last?.id ||
@@ -461,6 +462,8 @@ export class BundledCuaBrowser implements CuaDevice {
   ) {
     const page = this.ready(signal);
     const action = cuaActionSchema.parse(input.action);
+    if (action.type === "activate")
+      throw Error("Window activation is unavailable in the isolated browser.");
     if (this.attempted.has(input.actionId))
       throw Error("Computer action was already attempted; do not retry.");
     const expected = this.last;

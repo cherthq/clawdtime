@@ -768,10 +768,11 @@ final class SheetController<Content: SheetContent>: NSObject {
       }
     }
   }
-  func close() {
-    guard isOpen else { return }
+  func close(immediately: Bool = false) {
+    guard isOpen || (immediately && window.isVisible) else { return }
     isOpen = false; progress.target = 0
-    if Theme.reduceMotion { progress.snap(); apply() }
+    if immediately { progress.snap(to: 0); window.orderOut(nil); apply() }
+    else if Theme.reduceMotion { progress.snap(); apply() }
     if let outside { NSEvent.removeMonitor(outside); self.outside = nil }
     onClosed?()
   }

@@ -53,6 +53,9 @@ Desktop computer tasks have an opt-in app-owned runtime that works without an
 open Codex chat. It bundles an isolated browser adapter, a local Mac adapter,
 exact-action approvals, result verification and **Stop work**. The standalone
 browser fixture is verified; native Mac input still needs physical qualification.
+Native mode now includes a focus-preserving approval panel and explicit activation
+of allowlisted existing app windows. The standalone package uses a separate
+Local Control helper so it does not overwrite an installed call companion.
 See [bundled runtime setup and limitations](docs/BUNDLED_CUA.md). An
 [existing-chat adapter](docs/DESKTOP_EXECUTOR.md) remains available separately.
 

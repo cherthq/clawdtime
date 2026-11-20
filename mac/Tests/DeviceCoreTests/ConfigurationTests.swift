@@ -67,4 +67,28 @@ final class ConfigurationTests: XCTestCase {
     XCTAssertTrue(loaded.displays[0].controllers.isEmpty)
     XCTAssertFalse(try DevicePolicy(config: loaded).armed)
   }
+  func testLocalOnlyConflictingHelperIsIndependentOfArmedState() {
+    XCTAssertTrue(LocalInputExclusion.conflictingHelper(bundleId: "com.clawdtime.companion", pid: 20, helperPID: 10))
+    XCTAssertTrue(LocalInputExclusion.conflictingHelper(bundleId: "com.clawdtime.local-control", pid: 20, helperPID: 10))
+    XCTAssertFalse(LocalInputExclusion.conflictingHelper(bundleId: "com.clawdtime.local-control", pid: 10, helperPID: 10))
+    XCTAssertFalse(LocalInputExclusion.conflictingHelper(bundleId: "com.clawdtime.task-panel", pid: 20, helperPID: 10))
+    XCTAssertTrue(LocalInputExclusion.isOwned(bundleId: "com.clawdtime.local-control", pid: 20, helperPID: 10))
+  }
+  func testLocalOnlyBundleUsesSeparateFailClosedSetup() throws {
+    let legacy = try configurationURL(arguments: [], applicationSupport: support)
+    try write(legacy, device: "legacy")
+    let local = try configurationURL(arguments: [], applicationSupport: support, localOnly: true)
+    XCTAssertEqual(local, support.appendingPathComponent("ClawdTimeLocalControl/setup/helper.json"))
+    XCTAssertThrowsError(try loadConfiguration(arguments: [], applicationSupport: support, localOnly: true))
+    try write(local, device: "local")
+    let config = try loadConfiguration(arguments: [], applicationSupport: support, localOnly: true)
+    XCTAssertEqual(config.deviceId, "local")
+    XCTAssertFalse(try DevicePolicy(config: config).armed)
+    try write(local, displays: [.init(displayId: 7, viewers: ["member"], controllers: [])])
+    XCTAssertThrowsError(try loadConfiguration(arguments: [], applicationSupport: support, localOnly: true))
+    var remote = config; remote.bind = "100.64.0.2"
+    XCTAssertThrowsError(try validateLocalOnlyConfiguration(remote, localOnly: true))
+    try validateLocalOnlyConfiguration(remote, localOnly: false)
+  }
+
 }

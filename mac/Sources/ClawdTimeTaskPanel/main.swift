@@ -33,6 +33,8 @@ import TaskPanelCore
   private let voice = VoiceController()
   private var transcript: ChatTranscript?
   private var executionControl = ChatExecutionControl()
+  private let nativeExecutionPanel = NativeExecutionPanel()
+  private var nativeSubmissionPending = false
   private var chatPending: String?
   private var chatNotice = ""
   /// The last spoken turn, shown on the mascot while the chat is closed.
@@ -279,6 +281,8 @@ import TaskPanelCore
     chat.onSend = { [weak self] text in self?.sendChat(text) }
     chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
     chat.onStopWork = { [weak self] in self?.stopExecution() }
+    nativeExecutionPanel.onDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
+    nativeExecutionPanel.onStop = { [weak self] in self?.stopExecution() }
     chat.onExecutionDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
     let view = boardPanel.view
@@ -345,8 +349,16 @@ import TaskPanelCore
       executionControl.receive(fresh.execution, readGeneration: generation)
     }
   }
+  private func releaseNativeEditor() {
+    guard NativeExecutionPresentation.releasesEditor(executionControl.execution) else { return }
+    // Release only our UI. AppKit returns focus; no AX activation or target
+    // restoration is attempted. Native capture still verifies the real focus.
+    chatPanel.close(immediately: true)
+    boardPanel.close(immediately: true)
+  }
   private func decideExecution(_ id: String, approve: Bool) {
     guard let client, state.connected, executionControl.beginDecision(id) else { return }
+    releaseNativeEditor()
     renderChat()
     Task {
       let result = try? await client.decideExecution(actionId: id, approve: approve)
@@ -389,6 +401,7 @@ import TaskPanelCore
     model.executionCanDecide = executionControl.canDecide
     model.executionNotice = executionControl.notice
     chatPanel.view.render(model)
+    nativeExecutionPanel.render(model, submissionPending: nativeSubmissionPending, pet: pet.frame, screen: petScreen)
   }
   private func renderTalk() {
     pet.setTalk(on: voice.phase != .off, micOn: voice.micOn, speakerOn: voice.speakerOn, speaking: voice.phase == .speaking, thinking: voice.phase == .thinking)
@@ -397,11 +410,13 @@ import TaskPanelCore
   /// One typed message. The words show at once; the answer follows.
   private func sendChat(_ text: String) {
     guard let client, chatPending == nil else { return }
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    releaseNativeEditor()
     chatPending = text; chatNotice = ""; renderChat()
     Task {
       let reply = try? await client.say(text)
       await readChat(client)
-      chatPending = nil
+      chatPending = nil; nativeSubmissionPending = false
       if reply == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." }
       pet.react(success: reply != nil)
       renderChat()
@@ -413,7 +428,10 @@ import TaskPanelCore
   /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
   private func heard(_ recording: String) async -> URL? {
     guard let client else { return nil }
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    releaseNativeEditor(); renderChat()
     let result = try? await client.hear(recording)
+    nativeSubmissionPending = false
     await readChat(client)
     if result == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." } else if result?.reply != nil { chatNotice = "" }
     if let result, let reply = result.reply {
@@ -472,7 +490,7 @@ import TaskPanelCore
           // The watcher is optional, as the board is: a service without one changes nothing.
           self.incidents = try? await client.incidents()
           // The chat is read while it is in view, and once at the start.
-          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil {
+          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil || self.executionControl.execution?.mode == "native" {
             await self.readChat(client)
           }
           self.render(); self.renderChat()

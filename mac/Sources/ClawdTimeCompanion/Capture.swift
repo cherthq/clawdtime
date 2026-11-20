@@ -143,7 +143,17 @@ struct CapturedFrame {
   try localInputTarget(hit)
 }
 
-@MainActor func postInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws {
+@MainActor struct NativeInputBatch {
+  let events: [CGEvent]
+  var activation: LocalWindowWitness? = nil
+  func post() throws {
+    if let activation { try LocalWindowCapture.activate(activation) }
+    else { for event in events { event.post(tap: .cghidEventTap) } }
+  }
+}
+
+@MainActor func prepareInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws -> NativeInputBatch {
+  guard ["click", "type", "scroll"].contains(action.type) else { throw HelperError(400, "This native batch does not support window activation.") }
   guard AXIsProcessTrusted(), !IsSecureEventInputEnabled(), CGDisplayIsActive(displayId) != 0 else {
     throw HelperError(403, "Accessibility, active display and non-secure input are required.")
   }
@@ -153,6 +163,7 @@ struct CapturedFrame {
     }
   }
   let bounds = CGDisplayBounds(displayId)
+  var events = [CGEvent]()
   if action.type == "type" {
     // Keyboard input goes to the focused UI element. Reject elements on a
     // different display instead of assuming the selected screen has focus.
@@ -208,8 +219,7 @@ struct CapturedFrame {
       }
       down.flags = []
       up.flags = []
-      down.post(tap: .cghidEventTap)
-      up.post(tap: .cghidEventTap)
+      events.append(contentsOf: [down, up])
     }
   } else {
     let point = CGPoint(
@@ -227,8 +237,7 @@ struct CapturedFrame {
       else { throw HelperError(503, "Unable to create mouse event.") }
       down.flags = []
       up.flags = []
-      down.post(tap: .cghidEventTap)
-      up.post(tap: .cghidEventTap)
+      events.append(contentsOf: [down, up])
     } else {
       guard
         let event = CGEvent(
@@ -237,7 +246,13 @@ struct CapturedFrame {
       else { throw HelperError(503, "Unable to create scroll event.") }
       event.location = point
       event.flags = []
-      event.post(tap: .cghidEventTap)
+      events.append(event)
     }
   }
+  return NativeInputBatch(events: events)
+}
+
+
+@MainActor func postInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws {
+  try prepareInput(action, displayId: displayId, localFocus: localFocus, requireLocalFocus: requireLocalFocus).post()
 }

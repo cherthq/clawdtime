@@ -23,7 +23,10 @@ public struct DisplayPermission: Codable {
 public struct LocalExecutorPermission: Codable, Equatable {
   public var executorId: String
   public var displayId: UInt32
-  public init(executorId: String, displayId: UInt32) { self.executorId = executorId; self.displayId = displayId }
+  public var allowedApplications: [String]?
+  public init(executorId: String, displayId: UInt32, allowedApplications: [String]? = nil) {
+    self.executorId = executorId; self.displayId = displayId; self.allowedApplications = allowedApplications
+  }
 }
 public struct HelperConfig: Codable {
   public var deviceId: String
@@ -53,7 +56,7 @@ public struct HelperConfig: Codable {
     let locals = localExecutors ?? []
     guard locals.count <= 32, locals.isEmpty || bind == "127.0.0.1",
       Set(locals.map { "\($0.executorId):\($0.displayId)" }).count == locals.count,
-      locals.allSatisfy({ validID($0.executorId) && $0.displayId > 0 }) else {
+      locals.allSatisfy({ validID($0.executorId) && $0.displayId > 0 && LocalWindowPolicy.validApplications($0.allowedApplications ?? []) }) else {
       throw HelperError(400, "Local executors require explicit unique display bindings and loopback.")
     }
     guard validID(deviceId), secret.utf8.count >= 32, port > 0,
@@ -137,6 +140,8 @@ public struct FrameStamp {
 public struct InputAction: Codable {
   public var id: String
   public var frameId: String
+  public var localProofId: String?
+  public var targetId: String?
   public var type: String
   public var x: Double?
   public var y: Double?
@@ -148,10 +153,10 @@ public struct InputAction: Codable {
   public init(
     id: String, frameId: String, type: String, x: Double? = nil, y: Double? = nil,
     text: String? = nil, deltaY: Int32? = nil, executorEpoch: Int? = nil,
-    policyRevision: Int? = nil, sessionId: String? = nil
+    policyRevision: Int? = nil, sessionId: String? = nil, localProofId: String? = nil, targetId: String? = nil
   ) {
     self.id = id
-    self.frameId = frameId
+    self.frameId = frameId; self.localProofId = localProofId; self.targetId = targetId
     self.type = type
     self.x = x
     self.y = y
@@ -162,11 +167,16 @@ public struct InputAction: Codable {
     self.sessionId = sessionId
   }
   public func validate() throws {
-    guard validID(id), validID(frameId) else { throw HelperError(400, "Invalid action identity.") }
+    guard validID(id), validID(frameId), localProofId.map(validID) ?? true else { throw HelperError(400, "Invalid action identity.") }
     let point =
       x.map { $0.isFinite && (0...1).contains($0) } == true
       && y.map { $0.isFinite && (0...1).contains($0) } == true
+    guard type == "activate" || targetId == nil else { throw HelperError(400, "Target ID is only valid for local window activation.") }
     switch type {
+    case "activate":
+      guard let targetId, validID(targetId), x == nil, y == nil, text == nil, deltaY == nil else {
+        throw HelperError(400, "Activation requires only an observed window target ID.")
+      }
     case "click":
       guard point && text == nil && deltaY == nil else {
         throw HelperError(400, "Click needs normalized x and y.")
@@ -348,6 +358,7 @@ public final class DevicePolicy {
       throw HelperError(409, "Input protocol does not match this lease.")
     }
     try action.validate()
+    guard action.type != "activate", action.localProofId == nil else { throw HelperError(403, "Local window actions are not available to call leases.") }
     guard let frame, frame.id == action.frameId, frame.leaseId == leaseId,
       frame.displayId == lease.displayId, now.timeIntervalSince(frame.capturedAt) >= 0,
       now.timeIntervalSince(frame.capturedAt) <= 2

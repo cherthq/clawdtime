@@ -10,7 +10,7 @@ existing Mac companion; it does not bundle Agent-S.
 
 The desktop supervisor submits the user's task to an encrypted task ledger. A
 task owns one browser or local Mac lease. The runtime observes, asks the model for
-one click/type/scroll plan, checks permission and fresh target identity, reserves
+one click/type/scroll/existing-window activation plan, checks permission and fresh target identity, reserves
 an action receipt, submits once, and observes again. A separate model verification
 on a fresh observation must confirm the goal before completion. Receipt submission
 alone never proves success. Limits are 30 actions and 15 minutes at most; defaults
@@ -32,8 +32,10 @@ and exclusive ownership. It shares the existing ownership slot with call control
 and cannot take over a live call. Each action requires approval. Captures exclude
 known ClawdTime control windows; input into or through those windows is refused
 to prevent the agent approving its own actions. Native permission prompts, login
-and arbitrary terminal execution are not automated. Native physical qualification
-is still outstanding, including the focus change caused by clicking approval.
+and arbitrary terminal execution are not automated. Native physical qualification is still outstanding. Native approvals now use a
+non-key panel so reviewing an action does not steal the target’s keyboard focus.
+Known refusals before input are recorded as rejected; effects with an unknown
+outcome remain fenced and are never replayed.
 
 ## Protected configuration
 
@@ -74,7 +76,11 @@ planning a migration; do not overwrite them or switch an active owner.
 
 For native mode, replace `browser` with `native` containing `origin` (exact
 `http://127.0.0.1:PORT`), protected helper `token`, `deviceId`, `executorId` and
-numeric `displayId`. The helper's `localExecutors` allowlist must match. See
+numeric `displayId`. The helper's `localExecutors` allowlist must match. Optional
+`allowedApplications` contains up to 20 exact bundle IDs whose existing standard
+windows can be brought forward. Empty or omitted disables window activation. It
+does not grant input approval or permission to launch apps, unhide them, restore
+minimized windows, operate permission controls, or run terminal commands. See
 [local execution](../mac/README.md) for the helper's configuration and policy.
 Native mode is for controlled qualification until physical acceptance passes.
 
@@ -82,8 +88,12 @@ Native mode is for controlled qualification until physical acceptance passes.
 
 The panel shows the pending action with **Approve action** and **Deny action**.
 Approval binds one action ID, not the whole task or future actions. Changed
-pixels, focus, target identity, policy or expired authority refuse dispatch even
-after approval. **Stop work** is independent of chat and model inference. It
+pixels require a fresh proof of the original exact native target; unsupported
+image, web, or virtualized surfaces refuse this semantic proof. Focus, target
+identity, policy or expired authority refuse dispatch even after approval. Window
+activation always requires a one-use proof bound to the same observed existing
+window, process lifetime, display, lease and action. App/window titles are
+untrusted display text, never instructions. **Stop work** is independent of chat and model inference. It
 aborts planning, stops capture/input and closes the owned surface. Already
 submitted effects may remain uncertain; Stop does not fabricate a rollback.
 
@@ -100,7 +110,11 @@ The runtime is not a sandbox against malicious processes running as the same use
 
 `npm run cua:package` creates `artifacts/ClawdTime-runtime` without installing or
 launching it. The local artifact contains Node, compiled service/CLI, production
-dependencies, pinned Chromium, companion and panel apps. The launcher pins the
+dependencies, pinned Chromium, local-control companion and panel apps.
+The local helper has its own `com.clawdtime.local-control` identity and refuses
+call/display configuration. It does not replace an existing call companion. Each
+helper owns its own lease state: do not enable both for native input concurrently.
+A new local helper identity can require its own macOS permission grants. The launcher pins the
 bundled browser path. Configuration, credentials, profiles and user state are
 excluded. Existing output directories are never overwritten. Native apps are
 ad-hoc signed; this is not a notarized public installer. Use a protected launcher
@@ -124,3 +138,10 @@ run. No personal inbox, native desktop input, call, deployment or installed-runt
 migration was performed. Native physical acceptance, authenticated account setup,
 operator recovery UX, distribution signing/notarization and clean-install testing
 remain production gates. Phone continuous-sharing qualification is separate.
+
+
+PR #7 native follow-up validation passes 1,681 TypeScript tests and 173 Swift
+tests. Independent reviewers covered the target/window proofs, preserved native
+preflight guards, local-only helper identity and competing-helper refusal. The
+remaining physical gate is a two-app activation/type/save/Stop test; automated
+success does not qualify desktop input or installation.

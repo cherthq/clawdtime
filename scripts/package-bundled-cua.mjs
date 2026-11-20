@@ -48,7 +48,11 @@ if (!existsSync(npm))
   throw Error("Use a Node installation with its matching npm CLI.");
 run(process.execPath, [npm, "run", "build"]);
 run("bash", ["mac/scripts/package.sh"], {
-  env: { ...process.env, CLAWDTIME_SIGNING_IDENTITY: "-" },
+  env: {
+    ...process.env,
+    CLAWDTIME_SIGNING_IDENTITY: "-",
+    CLAWDTIME_LOCAL_ONLY: "1",
+  },
 });
 run("bash", ["mac/scripts/package-task-panel.sh"]);
 let browserDirectory = dirname(chromium.executablePath());
@@ -110,7 +114,7 @@ for (const name of ["chromium", "chromium-headless-shell", "ffmpeg"]) {
   });
   copied.push(candidates[0]);
 }
-for (const app of ["ClawdTime Companion.app", "ClawdTime Task Panel.app"])
+for (const app of ["ClawdTime Local Control.app", "ClawdTime Task Panel.app"])
   cpSync(join(root, "mac/build", app), join(output, app), { recursive: true });
 writeFileSync(
   join(output, "Start ClawdTime.command"),

@@ -501,3 +501,59 @@ and **Deny action**. Both send one decision for that action ID; an unconfirmed
 response is reconciled by reads, not replayed. **Stop work** remains a separate
 control while approval or chat/voice requests are pending. Its wording describes
 a cooperative stop: an action already underway may finish.
+
+For a service reporting `execution.mode: "native"`, submitting chat/voice work
+withdraws only ClawdTime's editable chat/board windows before dispatch. A separate
+non-key, non-main native panel shows work status, exact pending action decisions,
+and Stop. It never activates or restores another application. Browser mode and
+older services keep their existing editor behavior. Reopening an editor or any
+other genuine focus change still invalidates the native target proof; the helper
+never substitutes the former target. This UI handoff requires packaged physical
+qualification and does not itself prove that target focus was restored.
+
+Native target validation and event construction now run before the durable
+input reservation and again at the final dispatch boundary. A definite refusal
+before reservation returns HTTP 409 with fixed `code: "input_not_dispatched"`
+only after exact binding and prior-receipt checks. A final pre-post validation
+failure records `state: "rejected", evidence: "input_not_dispatched"`. These
+outcomes do not create an unresolved-input fence, but the rejected action ID is
+not replayable. After event posting begins, lost responses or persistence failure
+remain uncertain; they cannot become a definite refusal.
+
+
+### Separate local-only helper bundle
+
+`CLAWDTIME_LOCAL_ONLY=1 CLAWDTIME_SIGNING_IDENTITY=- bash mac/scripts/package.sh`
+creates `mac/build/ClawdTime Local Control.app` with bundle identity
+`com.clawdtime.local-control`. The default command still creates the Companion
+bundle. Packaging does not install, launch, arm, or grant macOS permissions.
+The separate identity requires its own Screen Recording/Accessibility qualification.
+
+Local Control loads only an explicit private `--config` or
+`~/Library/Application Support/ClawdTimeLocalControl/setup/helper.json`, with the
+same owner-only file checks. It requires loopback and an empty `displays` list,
+rejects call-helper HTTP APIs, and keeps receipts in its separate support folder.
+It refuses Enable/session admission and reports `available: false` while another
+Companion or Local Control process runs. Reappearance of such a helper retires
+local work on the periodic check and at request/input/capture boundaries. Stop
+and receipt reconciliation remain available. This prevents concurrent use with
+an independently installed call helper; it does not upgrade that helper.
+
+### Bound native targets and existing-window activation
+
+Local frames expose bounded untrusted `X-Local-Targets` control centers. The helper
+retains up to eight transient catalogs and can issue a one-use proof through
+`POST /local/v1/sessions/:id/revalidate` for an exact original/current frame pair
+and action. Complete supported AX window semantics, process lifetime, geometry,
+actual hit/focus witnesses and selection are rechecked before input; unsupported
+or incomplete trees refuse proof. Screens and AX values are not journaled.
+
+`localExecutors[].allowedApplications` optionally lists up to 20 exact application
+bundle IDs. Its default is empty. Only those existing ordinary windows may appear
+in the bounded untrusted `X-Local-Windows` catalog (`id`, `app`, `title`). The
+`activate` action takes an observed `targetId` and always requires a one-use proof;
+it cannot launch an app, unhide/minimize-restore it, or target a shell/security UI.
+It retains Accessibility, non-secure-input and active-display gates, including
+both pre-reservation and final preflight. AXRaise/application activation is a
+submitted effect, not proof of the requested UI result; a fresh observation is
+still required. Physical cross-window behavior remains a separate qualification.

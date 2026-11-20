@@ -20,6 +20,7 @@ struct HelperStatus: Codable {
 
 @MainActor final class DeviceApp: NSObject, NSApplicationDelegate {
   let config: HelperConfig
+  let localOnly: Bool
   let policy: DevicePolicy
   let localPolicy: LocalExecutionPolicy
   let localLedger: LocalExecutionStore
@@ -36,6 +37,8 @@ struct HelperStatus: Codable {
   var lastFrameRequest = Date.distantPast
   var frameBounds: CGRect?
   var localFrameFocus: LocalFocusWitness?
+  let localTargetProofs = LocalTargetProofs<LocalTargetSnapshot>()
+  var localTargetGeneration = -1
   var setupWindow: NSWindow?
   var setupStateLabel: NSTextField?
   var setupScreenLabel: NSTextField?
@@ -49,8 +52,9 @@ struct HelperStatus: Codable {
   var endButton: NSButton?
   var pauseButton: NSButton?
   var lastSetupRefresh = Date.distantPast
-  init(config: HelperConfig, ledgerURL: URL) throws {
-    self.config = config
+  init(config: HelperConfig, ledgerURL: URL, localOnly: Bool = false) throws {
+    try validateLocalOnlyConfiguration(config, localOnly: localOnly)
+    self.config = config; self.localOnly = localOnly
     self.ledger = try ReceiptStore(url: ledgerURL)
     self.preferences = try ControlPreferenceStore(
       url: ledgerURL.deletingLastPathComponent().appendingPathComponent("control-policy.json"),
@@ -107,7 +111,10 @@ struct HelperStatus: Codable {
       Task { @MainActor in
         guard let self else { return }
         _ = try? self.policy.check(now: Date(), sessionAvailable: self.session.available)
-        _ = try? self.localPolicy.check(now: Date(), available: self.session.available)
+        _ = try? self.localPolicy.check(now: Date(), available: self.localExecutionAvailable)
+        if self.localTargetGeneration != self.localPolicy.generation || self.localPolicy.lease == nil {
+          self.localTargetProofs.clear(); self.localTargetGeneration = self.localPolicy.generation
+        }
         self.updateIndicator()
       }
     }
@@ -134,6 +141,10 @@ struct HelperStatus: Codable {
     return true
   }
   @objc func arm() {
+    guard !localHelperConflict else {
+      showError("Quit the other ClawdTime helper before enabling local work.")
+      return
+    }
     session.forcedUnavailable = false
     guard session.available else {
       showError("Unlock this Mac's active user session first.")
@@ -145,6 +156,7 @@ struct HelperStatus: Codable {
   @objc func stop() {
     localPolicy.stop()
     localFrameFocus = nil
+    localTargetProofs.clear()
     policy.stop(disarm: true)
     updateIndicator()
   }
@@ -244,8 +256,12 @@ struct HelperStatus: Codable {
       guard authenticated(request.headers["authorization"] ?? "", secret: config.secret) else {
         throw HelperError(401, "Authentication required.")
       }
-      _ = try? localPolicy.check(now: Date(), available: session.available)
+      _ = try? localPolicy.check(now: Date(), available: localExecutionAvailable)
+      if localTargetGeneration != localPolicy.generation || localPolicy.lease == nil {
+        localTargetProofs.clear(); localTargetGeneration = localPolicy.generation
+      }
       if request.path.hasPrefix("/local/v1/") { return try await handleLocal(request) }
+      guard !localOnly else { throw HelperError(403, "Call-helper APIs are unavailable in Local Control.") }
       let parts = request.path.split(separator: "/").map(String.init)
       if request.method == "GET", request.path == "/v1/status" {
         return try .json(
@@ -392,7 +408,9 @@ struct HelperStatus: Codable {
     umask(0o077)
     do {
       let args = CommandLine.arguments
+      let localOnly = Bundle.main.bundleIdentifier == "com.clawdtime.local-control"
       let reconciliationMode = args.contains("--reconcile-legacy-receipts")
+      guard !localOnly || !reconciliationMode else { throw HelperError(403, "Local Control does not reconcile call-helper receipts.") }
       if reconciliationMode && (args.contains("--list-displays") || args.contains("--check-config")) {
         throw HelperError(400, "Reconciliation cannot be combined with another helper mode.")
       }
@@ -416,12 +434,12 @@ struct HelperStatus: Codable {
       }
       let applicationSupport = FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      let config = try loadConfiguration(arguments: args, applicationSupport: applicationSupport)
+      let config = try loadConfiguration(arguments: args, applicationSupport: applicationSupport, localOnly: localOnly)
       if args.contains("--check-config") {
         print("Configuration is valid. No listener, capture or input was started.")
         return
       }
-      let base = applicationSupport.appendingPathComponent("ClawdTimeCompanion", isDirectory: true).appendingPathComponent(
+      let base = applicationSupport.appendingPathComponent(localOnly ? "ClawdTimeLocalControl" : "ClawdTimeCompanion", isDirectory: true).appendingPathComponent(
           config.deviceId, isDirectory: true)
       if reconciliationMode {
         let switches: Set<String> = ["--reconcile-legacy-receipts", "--dry-run"]
@@ -450,7 +468,7 @@ struct HelperStatus: Codable {
         return
       }
       let delegate = try DeviceApp(
-        config: config, ledgerURL: base.appendingPathComponent("action-receipts.json"))
+        config: config, ledgerURL: base.appendingPathComponent("action-receipts.json"), localOnly: localOnly)
       let app = NSApplication.shared
       app.delegate = delegate
       app.run()

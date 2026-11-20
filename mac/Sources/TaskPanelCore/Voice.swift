@@ -57,11 +57,13 @@ public struct ChatExecution: Codable, Equatable {
   public let state: String
   public let canStop: Bool
   public let message: String
+  public let mode: String?
   public let pendingAction: ChatPendingAction?
-  public init(configured: Bool, state: String, canStop: Bool, message: String, pendingAction: ChatPendingAction? = nil) {
-    self.configured = configured; self.state = state; self.canStop = canStop; self.message = message; self.pendingAction = pendingAction
+  public init(configured: Bool, state: String, canStop: Bool, message: String, pendingAction: ChatPendingAction? = nil, mode: String? = nil) {
+    self.configured = configured; self.state = state; self.canStop = canStop; self.message = message; self.pendingAction = pendingAction; self.mode = mode
   }
   public func validate() throws {
+    guard mode == nil || ["native", "browser"].contains(mode!) else { throw PanelFailure.response }
     try pendingAction?.validate()
     guard pendingAction == nil || configured else { throw PanelFailure.response }
     guard (1...80).contains(state.count), !state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -179,5 +181,15 @@ public struct VoiceActivity: Equatable, Sendable {
     quiet = level < 0.20 ? quiet + seconds : 0
     // A pause of a little more than a second ends the sentence. So does half a minute of talk.
     return quiet >= 1.1 || total > 30 ? .ended : .none
+  }
+}
+
+/// UI-only handoff policy: withdrawing our editor never activates another app.
+public enum NativeExecutionPresentation {
+  public static func releasesEditor(_ execution: ChatExecution?) -> Bool {
+    execution?.configured == true && execution?.mode == "native"
+  }
+  public static func visible(_ execution: ChatExecution?, submissionPending: Bool, stopping: Bool) -> Bool {
+    releasesEditor(execution) && (submissionPending || stopping || execution?.canStop == true || execution?.pendingAction != nil)
   }
 }

@@ -6,6 +6,7 @@ import type { Vault } from "../storage/security.js";
 
 export interface DesktopExecutionSnapshot {
   configured: boolean;
+  mode?: "native" | "browser";
   state: string;
   canStop: boolean;
   message: string;

@@ -80,12 +80,16 @@ public final class LocalExecutionPolicy {
     }
     frame = value
   }
-  public func validateAction(_ action: InputAction, id: String, now: Date, available: Bool, accessibility: Bool) throws -> LocalExecutionLease {
+  public func boundActionLease(_ action: InputAction, id: String, now: Date, available: Bool, accessibility: Bool) throws -> LocalExecutionLease {
     let lease = try require(id, now: now, available: available)
     try authorize(lease, now: now, accessibility: accessibility)
     try action.validate()
     guard action.sessionId == lease.sessionId, action.executorEpoch == lease.executorEpoch,
       action.policyRevision == lease.policyRevision else { throw HelperError(409, "Action belongs to another local owner.") }
+    return lease
+  }
+  public func validateAction(_ action: InputAction, id: String, now: Date, available: Bool, accessibility: Bool) throws -> LocalExecutionLease {
+    let lease = try boundActionLease(action, id: id, now: now, available: available, accessibility: accessibility)
     guard let frame, frame.id == action.frameId, frame.leaseId == id, frame.displayId == lease.displayId,
       (0...2).contains(now.timeIntervalSince(frame.capturedAt)) else {
       throw HelperError(409, "Local input needs the current frame captured within two seconds.")

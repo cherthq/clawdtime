@@ -112,4 +112,21 @@ final class ChatExecutionTests: XCTestCase {
     XCTAssertThrowsError(try ChatExecution(configured: false, state: "off", canStop: false, message: "Off", pendingAction: value.pendingAction).validate())
   }
 
+  func testNativeHandoffIsExplicitAndKeepsStatusUntilWorkEnds() throws {
+    let native = ChatExecution(configured: true, state: "idle", canStop: false, message: "Ready", mode: "native")
+    let browser = ChatExecution(configured: true, state: "idle", canStop: false, message: "Ready", mode: "browser")
+    try native.validate(); try browser.validate()
+    XCTAssertTrue(NativeExecutionPresentation.releasesEditor(native))
+    XCTAssertFalse(NativeExecutionPresentation.releasesEditor(browser))
+    XCTAssertFalse(NativeExecutionPresentation.releasesEditor(working), "Old services retain their current editor behavior")
+    XCTAssertTrue(NativeExecutionPresentation.visible(native, submissionPending: true, stopping: false))
+    XCTAssertFalse(NativeExecutionPresentation.visible(native, submissionPending: false, stopping: false))
+    XCTAssertTrue(NativeExecutionPresentation.visible(native, submissionPending: false, stopping: true))
+    let pending = ChatExecution(configured: true, state: "approval", canStop: true, message: "Review",
+      pendingAction: .init(id: "exact", description: "Click the shown button"), mode: "native")
+    XCTAssertTrue(NativeExecutionPresentation.visible(pending, submissionPending: false, stopping: false))
+    XCTAssertEqual(try JSONDecoder().decode(ChatExecution.self, from: JSONEncoder().encode(pending)), pending)
+    XCTAssertThrowsError(try ChatExecution(configured: true, state: "idle", canStop: false, message: "Ready", mode: "remote").validate())
+  }
+
 }
