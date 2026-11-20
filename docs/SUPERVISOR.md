@@ -423,6 +423,30 @@ a tunnel and get its link, find something out: all of these are jobs.
 
 - The job is your own sentence. The language model chooses the tool. It does
   not choose the words.
+- Name the agent and it gets the job: "open Claude and build a landing page",
+  "use Codex to fix the tests", "fix the tests with Codex". "Not with Codex"
+  gives the job to the other one. With no agent in the sentence, the agent of
+  `CLAWDTIME_JOB_AGENT` takes it. "Open Claude and build ..." starts at once,
+  also while sessions of that agent run. "Tell Claude to ..." and "open my
+  Claude session and ..." can mean a session that runs, so ClawdTime works out
+  which one you mean.
+- A sentence with a "don't" in it can be a limit of the work ("build a landing
+  page, don't use a framework") or a refusal ("don't, I changed my mind"). No
+  program can tell these apart safely. So such a sentence starts nothing:
+  ClawdTime asks one question that names the work, and starts it only when
+  your next message is a plain yes, on the same channel, within five minutes.
+  "Okay" or "sure" alone is not a yes. Any other answer starts nothing; say
+  the work again to start it.
+- While that question is open, no answer of yours decides a request of an
+  agent. When a request arrives then, ClawdTime says what it is, and only
+  "approve" or "deny" decides it. A request whose text looks like a password
+  or a key is not said: read it in the agent's terminal.
+- A job can read what you said before it, from a file in its folder, so "fix
+  that one" has a meaning there. Only your own messages go into that file,
+  never an answer of ClawdTime. When your sentence points back ("that one",
+  "it", "again") and the job before it finished in the last 30 minutes, the
+  new job also gets the path of that job's answer. An answer that holds a
+  password or a key is not passed on.
 - The job is written to a file and is never part of a shell command. No spoken
   word can become one. The start script holds only paths that ClawdTime made.
   The job reaches the agent as one argument: other users of this Mac can see
@@ -462,7 +486,9 @@ clawdtime jobs --json    # the same as data
 | `CLAWDTIME_JOB_TERMINAL` | `Terminal`                | The application that opens the window |
 
 The files of a job are in `agents/jobs/` in the state folder, for their owner
-only: the request, the start script and the answer.
+only: the request, the start script, the answer, and what you said before the
+request (`context.txt`). Work that waits for your yes is in `offer.json` there,
+for five minutes at most.
 
 ### The bar under the mascot
 
@@ -480,12 +506,13 @@ Speech and the language model use the OpenAI API. Set `CLAWDTIME_OPENAI_API_KEY`
 service, `clawdtime chat` or `clawdtime talk`. Never put the key in an argument
 or a file of the repository.
 
-| Variable                     | Default                  | Use                                  |
-| ---------------------------- | ------------------------ | ------------------------------------ |
-| `CLAWDTIME_SUPERVISOR_MODEL` | `gpt-4.1-mini`           | Chooses tools and writes the answers |
-| `CLAWDTIME_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Turns your speech into text          |
-| `CLAWDTIME_SPEAK_MODEL`      | `gpt-4o-mini-tts`        | Speaks the answer                    |
-| `CLAWDTIME_VOICE`            | `alloy`                  | The voice                            |
+| Variable                         | Default                  | Use                                                                                |
+| -------------------------------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| `CLAWDTIME_SUPERVISOR_MODEL`     | `gpt-4.1-mini`           | Chooses tools and writes the answers                                               |
+| `CLAWDTIME_SUPERVISOR_REASONING` | not set                  | The reasoning effort that this model gets. Some models take tools only with `none` |
+| `CLAWDTIME_TRANSCRIBE_MODEL`     | `gpt-4o-mini-transcribe` | Turns your speech into text                                                        |
+| `CLAWDTIME_SPEAK_MODEL`          | `gpt-4o-mini-tts`        | Speaks the answer                                                                  |
+| `CLAWDTIME_VOICE`                | `alloy`                  | The voice                                                                          |
 
 With no key ClawdTime still answers in text: it tells the state from the board,
 and it takes a clear "approve" or "deny" when exactly one request waits. Voice

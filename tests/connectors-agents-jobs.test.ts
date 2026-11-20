@@ -54,7 +54,7 @@ describe("a job for a coding session", () => {
       "Open a tunnel for port 3000 and give me the link; $(rm -rf ~) `whoami` 'x'";
     expect(await jobs.start(job)).toEqual({
       ok: true,
-      said: "I started a new session for that job in a terminal window. I will have its answer when it is done.",
+      said: "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.",
     });
     const folder = join(directory, "agents", "jobs");
     const [id] = readdirSync(folder);
