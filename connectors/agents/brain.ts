@@ -899,11 +899,13 @@ export class Supervisor {
       }
       if (task.canAccept) about += " Say accept to take its result.";
     }
-    const tail =
-      asks && !pending.length
-        ? "Say your answer and I pass it to the task."
-        : "Say approve or deny to answer a request.";
-    return `${head}${about} ${tail}`;
+    // It invites an answer only when something here can take one.
+    const tail = pending.length
+      ? " Say approve or deny to answer a request."
+      : asks
+        ? " Say your answer and I pass it to the task."
+        : "";
+    return `${head}${about}${tail}`;
   }
 
   /**

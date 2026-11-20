@@ -658,16 +658,14 @@ describe("a task by talking, with no language model", () => {
     expect(tasks.task()!.goal).toBe("fix the flaky test");
     // The state sentence names the task. A question starts nothing.
     expect(await agent.reply([], "what is the task doing?", "chat")).toBe(
-      '1 working. Your task "fix the flaky test" is waiting to run. Say approve or deny to answer a request.',
+      '1 working. Your task "fix the flaky test" is waiting to run.',
     );
     expect(tasks.calls).toHaveLength(2);
     // With no task service, the old sentence is unchanged and an ask is refused in words.
     const bare = plain();
-    expect(await bare.agent.reply([], "status", "chat")).toBe(
-      "1 working. Say approve or deny to answer a request.",
-    );
+    expect(await bare.agent.reply([], "status", "chat")).toBe("1 working.");
     expect(await bare.agent.reply([], "task: fix the flaky test", "chat")).toBe(
-      "1 working. Say approve or deny to answer a request.",
+      "1 working.",
     );
   });
 
@@ -820,16 +818,14 @@ describe("a task by talking, with no language model", () => {
     });
     const first = plain(review.port);
     expect(await first.agent.reply([], "is it done?", "chat")).toBe(
-      '1 working. Your task "fix the login test" is ready for your review. Say accept to take its result. Say approve or deny to answer a request.',
+      '1 working. Your task "fix the login test" is ready for your review. Say accept to take its result.',
     );
     expect(await first.agent.reply([], "accept", "chat")).toBe(
       "Result accepted. Nothing was deployed.",
     );
     expect(review.calls.map((item) => item.kind)).toEqual(["accept"]);
     // An accepted task is over: the state sentence no longer names it.
-    expect(await first.agent.reply([], "status", "chat")).toBe(
-      "1 working. Say approve or deny to answer a request.",
-    );
+    expect(await first.agent.reply([], "status", "chat")).toBe("1 working.");
     const running = fakeTasks({ goal: "fix the login test" });
     const second = plain(running.port);
     await second.agent.reply([], "cancel", "chat");

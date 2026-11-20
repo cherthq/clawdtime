@@ -311,7 +311,7 @@ describe("the ClawdTime agent", () => {
     const plain = new Supervisor(value, null);
     expect(plain.ready).toBe(false);
     expect(await plain.reply([], "what is going on", "chat")).toBe(
-      "deploy fix needs you. Say approve or deny to answer a request.",
+      "deploy fix needs you.",
     );
     const request = ask(desk, "npm test");
     expect(await plain.reply([], "hmm", "chat")).toBe(
@@ -336,7 +336,7 @@ describe("the ClawdTime agent", () => {
         "status?",
         "chat",
       ),
-    ).toBe("1 working. Say approve or deny to answer a request.");
+    ).toBe("1 working.");
     // A model that never stops calling tools is cut off.
     const loop = scripted([[call("status", {})]]);
     expect(
@@ -596,7 +596,11 @@ describe("chat log and speech", () => {
       reply: null,
       audio: null,
     });
-    expect((await silent.say("status")).text).toContain("Say approve or deny");
+    // With no model it answers from the state, and it invites an answer only
+    // when a request waits: here nothing does.
+    expect((await silent.say("status")).text).toBe(
+      "I cannot see the agents now.",
+    );
   });
 });
 
