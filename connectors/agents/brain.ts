@@ -828,6 +828,35 @@ const asksAtTheEnd = (text: string) =>
   /[,;]\s*(?:(?:would|could|will|does|is|can|should)\s+(?:that|this|it)\b|(?:can|could|would|will)\s+you\s+(?:do|make|manage|handle)\s+(?:that|this|it)\b|(?:what|how)\s+do\s+you\s+think\b|do\s+you\s+think\b)[^.!]*$/i.test(
     text,
   );
+/** Praise or thanks that opens a message, with what separates it from the rest. */
+const praise =
+  /^(?:thanks|thank you|thx|cheers|great(?:\s+(?:job|work))?|nice(?:\s+(?:job|work|one))?|perfect|awesome|good\s+(?:job|work)|well done)\b[\s,.!]*/i;
+const workVerb =
+  "(?:build|make|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|move|run|deploy|test|check|find|install|upgrade|clean|set|put|try|use|do)";
+/**
+ * After the praise, the message goes on with an instruction. A verb alone is
+ * not enough: "build passed" and "fix works" open with a noun that looks like
+ * one. So the verb follows a word that leads into an instruction ("now",
+ * "then", "next", "please", "can you"), or it has an object word after it
+ * ("fix the header", "do it again").
+ */
+const instructsAfterPraise = (rest: string) =>
+  // The instruction can come after more words of the praise: "good work on
+  // the header, now fix the footer". So each part of the rest is read.
+  rest
+    .split(/[,.;!]\s*/)
+    .map((part) => part.trim())
+    .some(
+      (part) =>
+        new RegExp(
+          `^(?:(?:now|then|next|also|please|and then|and now|can you|could you|would you)[\\s,]+)+${workVerb}\\b`,
+          "i",
+        ).test(part) ||
+        new RegExp(
+          `^${workVerb}\\s+(?:the|a|an|it|that|this|these|those|my|our|all|some|every|another|\\d)\\b`,
+          "i",
+        ).test(part),
+    );
 /**
  * The person's own words ask for something to be done. This is the code's
  * gate before a new session starts, whatever the model chose. A question, a
@@ -837,8 +866,19 @@ const asksAtTheEnd = (text: string) =>
  * `dont` reads the sentence as if its "don't" were not there: that tells
  * whether a "don't" is all that stands between the sentence and work.
  */
-function asksForWork(spoken: string, allow: { dont?: boolean } = {}) {
+function asksForWork(spoken: string, allow: { dont?: boolean } = {}): boolean {
   const text = spoken.trim();
+  // Praise or thanks alone asks for nothing. "Nice, now add a dark mode to
+  // it" goes on with an instruction: what follows the praise is then read as
+  // a message of its own, with every check below.
+  let rest = text;
+  for (let turn = 0; turn < 3 && praise.test(rest); turn++)
+    rest = rest.replace(praise, "");
+  if (rest !== text)
+    return (
+      (instructsAfterPraise(rest) || agentWork(rest) !== null) &&
+      asksForWork(rest, allow)
+    );
   const polite =
     /^(?:(?:okay|ok|yes|yeah|sure|so|well|hey|please)[,.!]?\s+)*(?:can|could|would|will)\s+(?:you|u)\b/i.test(
       text,
@@ -851,9 +891,7 @@ function asksForWork(spoken: string, allow: { dont?: boolean } = {}) {
     !(/\?\s*$/.test(text) && !polite) &&
     !(allow.dont ? takeBackPhrase.test(text) : takesBack(text)) &&
     !asksAtTheEnd(text) &&
-    !/^(?:thanks|thank you|thx|cheers|great|nice|perfect|awesome|good job|well done)\b/i.test(
-      text,
-    ) &&
+    !praise.test(text) &&
     !/^(?:tell|give|show)\s+me\b[^.?!]{0,40}\b(?:status|state|progress|update)\b/i.test(
       text,
     ) &&
@@ -1097,7 +1135,7 @@ export function earlierSaid(history: ChatMessage[]): string[] {
  */
 const asksAboutState = (text: string) =>
   isQuestion(text) &&
-  /\b(?:status|sessions?|agents?|working|idle|waiting|waits|running|busy|finished|progress|everyone|everybody|up to|doing)\b/i.test(
+  /\b(?:status|sessions?|agents?|working|idle|waiting|waits|running|busy|finished|done|ready|completed?|progress|everyone|everybody|up to|doing)\b/i.test(
     text,
   );
 /** One job in a sentence that can be said aloud. */

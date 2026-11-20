@@ -472,6 +472,8 @@ a tunnel and get its link, find something out: all of these are jobs.
 - A question, a thank-you, a request for the state, a sentence that takes work
   back ("never mind", "do not"), a bare yes or no, and one or two words start
   no job. One message starts one job. At most four jobs run at one time.
+  Praise alone starts nothing, and praise that goes on with an instruction
+  starts it: "nice, now add a dark mode to it".
 - While an agent's request waits for your answer, a sentence starts no work
   unless it names a task or a job. "Yes, update the config" answers the
   request and does nothing else.

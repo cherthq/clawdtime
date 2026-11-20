@@ -1663,6 +1663,95 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("praise, and praise that goes on with work", () => {
+  it.each([
+    "nice, now add a dark mode to it",
+    "thanks, now run the tests again",
+    "perfect. Deploy the preview site.",
+    "great, and then fix the header",
+    "awesome, can you make the page blue",
+    "nice, can you add a dark mode?",
+    "great job, now fix the header",
+    "nice, thanks, now add a dark mode",
+    "perfect. Next, add a footer",
+    "great, open claude and build a landing page",
+    "nice work. Now do the same for the docs page",
+    // The instruction comes after more words of the praise.
+    "good work on the header, now fix the footer",
+    "thank you so much, now add a footer",
+  ])("starts the work for %j", async (sentence) => {
+    const { world, jobs, windows } = mac();
+    await new Supervisor(world, wantsJob().model).reply([], sentence, "chat");
+    expect(windows).toHaveLength(1);
+    // The job is the person's whole sentence.
+    expect(jobs.recent()[0]!.job).toBe(sentence);
+  });
+
+  it.each([
+    "nice",
+    "thanks a lot",
+    "great job on the page",
+    "nice work, that is what I wanted",
+    "perfect, looks good to me",
+    "awesome, the page is fast now",
+    "thanks, that is all for now",
+    "well done on the tests",
+    // A noun that looks like a verb.
+    "Nice, build passed",
+    "Great, fix works",
+    "Thanks, deploy went through",
+    "good job, test passed",
+    "awesome, run finished",
+    "nice, update looks good",
+    "thanks, install worked",
+    "perfect, use of colors is good",
+    "nice, change of plans",
+    "nice try",
+    "great, check",
+    // A question with no question mark.
+    "Thanks, do we need to restart the server",
+    "Thanks. Do you know why it failed",
+    // A remark, and sarcasm.
+    "thanks, do take care",
+    "great, so do I",
+    "thanks, try not to break it next time",
+    "great, do whatever you want",
+    // Praise does not undo a refusal or a question.
+    "nice, but do not add a dark mode",
+    "great, now should we add a dark mode?",
+    "thanks, never mind the dark mode",
+    "nice, now add a dark mode, never mind",
+  ])("starts nothing for %j", async (sentence) => {
+    const { world, windows, jobs } = mac();
+    await new Supervisor(world, wantsJob().model).reply([], sentence, "chat");
+    expect(windows).toHaveLength(0);
+    expect(jobs.offered()).toBeNull();
+  });
+
+  it("asks first when the work after the praise has a don't in it", async () => {
+    const { world, windows } = mac();
+    const sentence = "nice, now add a dark mode, don't change the colors";
+    expect(
+      await new Supervisor(world, wantsJob().model).reply([], sentence, "chat"),
+    ).toBe(offerQuestionFor(sentence));
+    expect(windows).toHaveLength(0);
+  });
+
+  it("starts nothing before the model for a message that opens with praise", async () => {
+    for (const sentence of [
+      "nice, now add a dark mode to it",
+      "great, open claude and build a landing page",
+      "perfect. Build a landing page.",
+    ]) {
+      const { world, windows } = mac();
+      const { model, seen } = scripted(["Okay."]);
+      await new Supervisor(world, model).reply([], sentence, "chat");
+      expect(seen).toHaveLength(1);
+      expect(windows).toHaveLength(0);
+    }
+  });
+});
+
 describe("a question about the state", () => {
   it("is answered from the state that the code reads first, in one answer of the model", async () => {
     const { world } = mac([
@@ -1679,6 +1768,8 @@ describe("a question about the state", () => {
       "what's everyone up to right now?",
       "how many sessions are working?",
       "anything waiting on me?",
+      "the payments one, is it done?",
+      "is the deploy fix ready?",
     ]) {
       const { model, seen } = scripted(["Two work."]);
       expect(
