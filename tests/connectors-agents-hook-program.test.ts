@@ -105,4 +105,66 @@ describe("the hook as a program", () => {
     expect(left(folder, "pending")).toEqual([]);
     expect(left(folder, "answers")).toEqual([]);
   }, 60_000);
+
+  it("hands over an answer of any size before it ends", async () => {
+    const folder = home();
+    // The answer to a question carries the question's own input back. This one
+    // is far larger than what one write to a pipe takes.
+    const detail = "detail ".repeat(20_000);
+    const result = await runHook(
+      folder,
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "AskUserQuestion",
+        tool_input: {
+          questions: [
+            {
+              question: "Which one?",
+              options: [
+                { label: "Red", description: detail },
+                { label: "Blue", description: detail },
+              ],
+            },
+          ],
+        },
+        session_id: "session-2",
+        cwd: "/work/app",
+      },
+      async (desk) => {
+        // Someone attends the desk, and answers as soon as the request is there.
+        const beat = setInterval(() => desk.attend(), 200);
+        try {
+          desk.attend();
+          for (let tries = 0; tries < 400; tries++) {
+            const waiting = desk.pending()[0];
+            if (waiting) {
+              desk.answer(waiting.id, {
+                decision: "answer",
+                text: "Blue",
+                via: "panel",
+              });
+              return;
+            }
+            await new Promise((done) => setTimeout(done, 50));
+          }
+        } finally {
+          clearInterval(beat);
+        }
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.length).toBeGreaterThan(2 * detail.length);
+    const output = JSON.parse(result.out) as {
+      hookSpecificOutput: {
+        permissionDecision: string;
+        updatedInput: { answers: Record<string, string> };
+      };
+    };
+    expect(output.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(output.hookSpecificOutput.updatedInput.answers).toEqual({
+      "Which one?": "Blue",
+    });
+    expect(left(folder, "pending")).toEqual([]);
+    expect(left(folder, "answers")).toEqual([]);
+  }, 60_000);
 });

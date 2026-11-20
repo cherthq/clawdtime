@@ -40,6 +40,18 @@ function run(command: string, args: string[]) {
   return result.status === 0 ? result.stdout : "";
 }
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+/**
+ * Hands the answer to the agent, and is done only when all of it is written.
+ * The program ends right after this, and an end during the write would cut a
+ * long answer: the agent would then read a broken one.
+ */
+const say = (text: string | null) =>
+  new Promise<void>((done) => {
+    if (!text) return done();
+    process.stdout.write(text, () => done());
+  });
+// An agent that closed its end takes no answer. That is not a fault of the hook.
+process.stdout.on("error", () => process.exit(0));
 
 /**
  * Reads the status that Claude Code keeps for its own process. The process is
@@ -112,9 +124,7 @@ async function handle(raw: string) {
       remember: false,
       at: Date.now(),
     });
-    process.stdout.write(
-      hookOutput(input, request, { decision: "allow", text: null }) ?? "",
-    );
+    await say(hookOutput(input, request, { decision: "allow", text: null }));
     return;
   }
 
@@ -159,7 +169,7 @@ async function handle(raw: string) {
     at: Date.now(),
     pids,
   });
-  process.stdout.write(hookOutput(input, request, answer) ?? "");
+  await say(hookOutput(input, request, answer));
 }
 
 const chunks: Buffer[] = [];
