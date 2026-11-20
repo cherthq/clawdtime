@@ -45,6 +45,20 @@ handset rehearsals. This is a local implementation checkpoint, not a completed
 phone-acceptance gate. No call, line handoff, deployment, capture or permission
 grant occurs when launching the standalone panel.
 
+## Agent board
+
+The panel lists every coding-agent session on this Mac above the task area:
+Claude Code, Codex, pi and other command-line agents, with the ones that wait for
+you first. A click on a row brings that session's terminal to the front. The
+board only reads state. It sends nothing to a session, and it is separate from
+the task, its receipts and the Stop controls. When a session waits for you and
+the task does not, the toolbar line shows the count, and so does the mascot.
+
+The task service keeps the board in a separate scanner process and serves it on
+`GET /desktop/agents` to the private panel credential. `--agents false` turns
+the board off. `--tucked true` opens the panel as the mascot without taking
+focus. See the [agent board guide](AGENT_BOARD.md).
+
 ## Build and open
 
 Requires Node 24+, the repository's installed dependencies, macOS 14+, Swift,

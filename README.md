@@ -4,6 +4,11 @@ Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DE
 documents the runnable local task workflow, explicit Codex setup and current
 handset acceptance limits. The broader product vision below includes later work.
 
+Agent board: the desktop panel and `clawdtime agents` list every coding-agent
+session on this Mac (Claude Code, Codex, pi and more), show which ones wait for
+you, and bring a session's terminal forward. It reads state only and never sends
+input to a session. See the [agent board guide](docs/AGENT_BOARD.md).
+
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is
 requested, replace it mid-call when its first fresh frame is ready; do not blank

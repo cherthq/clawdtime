@@ -1066,6 +1066,16 @@ unchanged when a distinct verified capture device receives explicit export
 authority. Synthetic authority tests establish these boundaries, not handset
 presentation acceptance.
 
+## Agent board commands
+
+`clawdtime agents` lists every coding-agent session on this Mac with its state
+(needs you, working, idle, unknown) and its terminal. `agents watch` is the live
+view, `agents focus ID|NAME` brings a session's terminal forward, `agents --json`
+prints the snapshot contract, and `agents doctor` states how exactly each agent's
+state is known. `agents hooks install --agent codex` adds the hook that reports
+Codex approval prompts. The commands read state only. They need no pairing, no
+connection file and no backend. See the [agent board guide](AGENT_BOARD.md).
+
 ## Independent task desktop launcher
 
 Build the native panel before launching it:
