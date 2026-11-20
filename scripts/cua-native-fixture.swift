@@ -19,7 +19,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
     submenu.addItem(withTitle: "Quit fixture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     NSApp.mainMenu = menu
     let frame = NSScreen.screens[0].visibleFrame
-    if name == "Alpha" && !CommandLine.arguments.contains("--passive") {
+    if name == "Alpha" && (!CommandLine.arguments.contains("--passive") || CommandLine.arguments.contains("--backdrop")) {
       let background = NSWindow(contentRect:NSScreen.screens[0].frame,styleMask:.borderless,backing:.buffered,defer:false)
       background.backgroundColor = .white
       background.isReleasedWhenClosed = false

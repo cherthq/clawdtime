@@ -32,7 +32,7 @@ and exclusive ownership. It shares the existing ownership slot with call control
 and cannot take over a live call. Each action requires approval. Captures exclude
 known ClawdTime control windows; input into or through those windows is refused
 to prevent the agent approving its own actions. Native permission prompts, login
-and arbitrary terminal execution are not automated. Native physical qualification is still outstanding. Native approvals now use a
+and arbitrary terminal execution are not automated. The native core flow has passed the bounded two-app qualification described below. Native approvals now use a
 non-key panel so reviewing an action does not steal the target’s keyboard focus.
 Known refusals before input are recorded as rejected; effects with an unknown
 outcome remain fenced and are never replayed.
@@ -82,7 +82,7 @@ windows can be brought forward. Empty or omitted disables window activation. It
 does not grant input approval or permission to launch apps, unhide them, restore
 minimized windows, operate permission controls, or run terminal commands. See
 [local execution](../mac/README.md) for the helper's configuration and policy.
-Native mode is for controlled qualification until physical acceptance passes.
+Native mode is an internal pilot with bounded physical acceptance on one Mac.
 
 ## Approval, Stop and recovery
 
@@ -118,7 +118,7 @@ A new local helper identity can require its own macOS permission grants. The lau
 bundled browser path. Configuration, credentials, profiles and user state are
 excluded. Existing output directories are never overwritten. Native apps are
 ad-hoc signed; this is not a notarized public installer. Use a protected launcher
-and explicit state/project/panel settings for a later approved installation.
+and explicit state/project/panel settings for each installation.
 
 `npm run cua:qualify -- MODEL` runs a paid-model test against a disposable localhost
 fixture using only exact fixture grants. It launches a separate compiled service
@@ -130,27 +130,28 @@ and cleanup; native tests use fake HTTP and Swift policy/transport tests.
 November 20 qualification with `gpt-4.1-mini` completed the isolated note/save
 task and independently observed the exact saved value. The packaged Node/Chromium
 artifact repeated that pass with a system-only PATH; its compiled CLI passed an
-isolated startup/readiness check with a no-UI panel and confirmed cleanup. Final
+isolated startup/readiness check with a no-UI panel and confirmed cleanup. At that stage,
 validation passed 1,630 TypeScript tests and 158 Swift tests. An earlier run proposed an
 action outside its exact fixture grants and stopped for approval; the grants
 were not broadened. Visible-control grounding was improved before the successful
-run. No personal inbox, native desktop input, call, deployment or installed-runtime
-migration was performed. Native physical acceptance, authenticated account setup,
+run. That initial browser-only stage performed no personal inbox access, native
+desktop input, call, deployment or installed-runtime migration. Broader native
+application acceptance, authenticated account setup,
 operator recovery UX, distribution signing/notarization and clean-install testing
 remain production gates. Phone continuous-sharing qualification is separate.
 
-PR #7 native follow-up validation passes 1,681 TypeScript tests and 175 Swift
+The intermediate native follow-up passed 1,681 TypeScript tests and 175 Swift
 tests. Independent reviewers covered the target/window proofs, preserved native
 preflight guards, local-only helper identity and competing-helper refusal. The
-remaining physical gate is a two-app activation/type/save/Stop test; automated
-success does not qualify desktop input or installation.
+physical gate at that stage was a two-app activation/type/save/Stop test; automated
+success alone does not qualify desktop input or installation.
 
 The first physical attempt stopped before native input because the fixture apps
 had no Launch Services timestamp and exposed an empty AXWindows list. Native
 witnesses now use a real kernel process-start tuple when necessary, and combine
 actual AXWindows/MainWindow/FocusedWindow references with bounded type/PID checks.
 A read-only probe of the exact source finds and revalidates both fixtures. Local
-Stop was observed, but activation/type/save acceptance is still pending.
+Stop was observed; activation/type/save acceptance had not yet passed.
 
 The next native attempt surfaced both windows and independently exercised Stop
 while an action awaited approval, but the small planner model repeatedly switched
@@ -168,3 +169,36 @@ model verification. GPT-4.1 mini failed this check at a typing action;
 seconds. This matches its documented visual/computer-use role, but establishes
 only this fixture result, not general reliability or native physical acceptance.
 See [the official model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-terra).
+
+### Native physical acceptance and local installation
+
+On November 20 the packaged runtime, using GPT-6.1 Terra and explicit reasoning
+effort none, activated Alpha, typed `alpha ready`, clicked Save, activated Beta,
+typed `beta ready`, and clicked Save. The runtime separately verified completion;
+the coordinator observed both native result labels and independently read the two
+synthetic saved-value files. A subsequent pending-action Stop left both values
+unchanged and added zero native action receipts. This proves the bounded two-app
+flow; it does not establish arbitrary application, login or account workflows.
+
+The successful run used exact disposable-fixture decisions through the normal
+authenticated operator approval endpoint. Human approval buttons were exercised
+in earlier activation attempts. A delayed human decision was safely refused when
+the original observation expired; improve that UX without weakening fresh-target
+checks. No personal app was modified, and no phone call or deployment occurred.
+
+The authorized local installation preserves the existing project, worker checks,
+hooks, protected credentials, history and encrypted receipts. The attached-chat
+executor configuration was moved to a private rollback directory, and the
+standalone config now selects native mode. The versioned artifact supplies Node,
+compiled service and local helper. Installed readiness confirms both macOS
+permissions, local Enable, idle ownership and zero unresolved actions. Reopening
+reattaches to the same service. The original call companion is untouched and
+stopped while local control runs; do not start competing native owners.
+
+The launcher resolves its version symlink before starting compiled JavaScript.
+The CLI also recognizes real-path-equivalent entry points, with a subprocess
+regression for a symlinked installation root. Screens remain transient; acceptance
+metadata and rollback paths are private installation records, not tracked user
+data. The generic package manifest does not certify another Mac's physical setup.
+
+Final source validation passes 1,694 TypeScript tests and 175 Swift tests.

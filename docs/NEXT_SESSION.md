@@ -1,20 +1,23 @@
-# Standalone runtime qualification — November 20, 2026
+# Standalone runtime installed — November 20, 2026
 
-PR #7 (`bundled-cua-runtime`) is undergoing the user-authorized native test and
-installation. Automated TypeScript validation passes 1,692 tests. Browser
-standalone qualification passed earlier; native activation and pending-action Stop have been observed, but typing/save
-acceptance has not yet passed. A synthetic two-window planner check passes with
-GPT-6.1 Terra and reasoning effort none; GPT-4.1 mini failed the same check.
-Current fixes preserve keyboard focus while approving, distinguish definite
-no-input refusals from uncertain effects, bind changed frames to exact native
-AX targets, and activate only observed existing windows in an explicit app
-allowlist. Native screenshots remain transient.
+PR #7 (`bundled-cua-runtime`) now has a physically verified native core flow and
+an authorized local standalone installation. GPT-6.1 Terra with reasoning effort
+none activated two disposable apps, typed and saved the exact notes, and verified
+both results. Native UI and independent saved files agreed. Stop canceled a
+pending click with no additional native action. The final successful typing/save
+run used exact fixture approvals through the authenticated operator endpoint;
+human approval buttons were also exercised during earlier activation attempts.
 
-The package now includes a distinct Local Control helper instead of overwriting
-an installed call companion. It refuses call configuration/APIs and competing
-known helper processes. Keep old service configuration and receipts for rollback;
-only migrate after the native fixture/Stop test. No phone or deployment authority
-is included in this task. See [runtime details](BUNDLED_CUA.md).
+The local supervisor uses the packaged Node/service and independent Local Control
+helper. Project, checks, hooks, credentials, histories and old configurations were
+preserved; reopening reuses the same service. The original call companion is
+preserved but stopped while local control runs. No live calls or deployments were
+performed. Do not enable competing helpers or delete receipts to recover unknowns.
+
+Next: broader app/account tasks, approval UX under delayed decisions, operator
+reconciliation and distribution signing/notarization. The package is not a claim
+of arbitrary-app support or public production readiness. See
+[runtime details and acceptance scope](BUNDLED_CUA.md).
 
 The capture investigation below is historical call-workflow evidence and remains
 separate from this standalone desktop qualification.
