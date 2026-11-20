@@ -22,9 +22,14 @@ import { agentLabel } from "./catalog.js";
 import { DecisionDesk, type DecisionRequest } from "./decisions.js";
 import { focusSession, realRunner, type Runner } from "./focus.js";
 import { stateRoot } from "./hooks.js";
+import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
-import { boardSnapshotSchema, type BoardSnapshot } from "./types.js";
+import {
+  boardSnapshotSchema,
+  type AgentSession,
+  type BoardSnapshot,
+} from "./types.js";
 
 /** What the panel routes need from the board. */
 export interface AgentBoardPort {
@@ -32,12 +37,13 @@ export interface AgentBoardPort {
   snapshot(): BoardSnapshot | null;
   focus(id: string): ReturnType<typeof focusSession>;
   decisions(): DecisionsView;
+  /** A request of a remote Mac is answered over ssh, so that answer is a promise. */
   answer(input: {
     id: string;
     decision: "allow" | "deny" | "answer";
     text?: string | null;
     remember?: boolean;
-  }): boolean;
+  }): boolean | Promise<boolean>;
   setAway(away: boolean): void;
   send(id: string, text: string, enter: boolean): ReturnType<typeof sendText>;
   chat(): ChatView;
@@ -85,6 +91,8 @@ export interface DecisionsView {
     deniedBefore: number;
     /** The person can make a rule from this answer. */
     canRemember: boolean;
+    /** The remote Mac whose agent asks. Absent for an agent on this Mac. */
+    host?: string;
   }[];
 }
 
@@ -126,6 +134,12 @@ export class BoardFeed implements AgentBoardPort {
     this.root =
       options.root ?? stateRoot({ env: process.env, home: homedir() });
     this.desk = new DecisionDesk(this.root, options.now ?? Date.now);
+    this.book = new HostBook(this.root);
+    this.remoteDesk = new RemoteDesk({
+      book: this.book,
+      run: options.runner ?? realRunner,
+      now: options.now ?? Date.now,
+    });
     this.log = new ChatLog(this.root);
     const key =
       process.env.CLAWDTIME_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
@@ -147,21 +161,33 @@ export class BoardFeed implements AgentBoardPort {
         now: options.now ?? Date.now,
         board: () => this.snapshot(),
         desk: this.desk,
-        focus: (session) =>
-          focusSession(session, this.options.runner ?? realRunner),
-        send: (session, text) =>
-          sendText(
-            session,
-            text,
-            { enter: true },
-            this.options.runner ?? realRunner,
-          ),
+        focus: (session) => this.focusOne(session),
+        send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
       },
       model,
     );
   }
   private readonly root: string;
+  private readonly book: HostBook;
+  private readonly remoteDesk: RemoteDesk;
+  /** A session of this Mac comes forward here. One of a remote Mac opens in a new window over ssh. */
+  private async focusOne(session: AgentSession) {
+    const run = this.options.runner ?? realRunner;
+    if (!session.host) return focusSession(session, run);
+    const host = this.book.get(session.host);
+    return host
+      ? focusRemote(host, session, run, this.root)
+      : { ok: false, precision: "none" as const };
+  }
+  private async sendOne(session: AgentSession, text: string, enter: boolean) {
+    const run = this.options.runner ?? realRunner;
+    if (!session.host) return sendText(session, text, { enter }, run);
+    const host = this.book.get(session.host);
+    return host
+      ? remoteSend(host, session, text, enter, run)
+      : { ok: false, route: "none" as const };
+  }
   private readonly log: ChatLog;
   private readonly supervisor: Supervisor;
   private readonly speech: SpeechSettings | null;
@@ -301,7 +327,7 @@ export class BoardFeed implements AgentBoardPort {
   async focus(id: string) {
     const session = this.snapshot()?.sessions.find((item) => item.id === id);
     if (!session) return { ok: false, precision: "none" as const };
-    return focusSession(session, this.options.runner ?? realRunner);
+    return this.focusOne(session);
   }
 
   /**
@@ -315,13 +341,21 @@ export class BoardFeed implements AgentBoardPort {
     const link = this.options.call ? true : loadCallLink(this.root) !== null;
     const pending = this.desk.pending();
     if (away && link) for (const request of pending) this.escalate(request);
+    // The remote Macs are asked in the background. This read shows what they
+    // last said, and their hooks learn there that someone attends here.
+    void this.remoteDesk.poll();
+    const all: (DecisionRequest & { host?: string })[] = [
+      ...pending,
+      ...this.remoteDesk.pending(),
+    ];
     return {
       version: 1,
       away,
       callReady: link,
-      pending: pending.map((request) => {
+      pending: all.map((request) => {
+        const host = request.host;
         const sameAgent = sessions.filter(
-          (session) => session.agent === request.agent,
+          (session) => session.agent === request.agent && session.host === host,
         );
         const inFolder = sameAgent.filter(
           (session) => session.cwd !== null && session.cwd === request.cwd,
@@ -330,8 +364,12 @@ export class BoardFeed implements AgentBoardPort {
           sameAgent.find(
             (item) => item.pid !== null && request.pids.includes(item.pid),
           ) ?? (inFolder.length === 1 ? inFolder[0] : undefined);
-        const before = this.desk.trove.suggest(request);
+        // The trove of a remote Mac stays on that Mac: no counts for its requests here.
+        const before = host
+          ? { allowed: 0, denied: 0 }
+          : this.desk.trove.suggest(request);
         return {
+          ...(host ? { host } : {}),
           id: request.id,
           agent: request.agent,
           agentLabel: agentLabel(request.agent),
@@ -383,6 +421,8 @@ export class BoardFeed implements AgentBoardPort {
     text?: string | null;
     remember?: boolean;
   }) {
+    if (this.remoteDesk.pending().some((request) => request.id === input.id))
+      return this.remoteDesk.answer(input);
     return this.desk.answer(input.id, { ...input, via: "panel" });
   }
   setAway(away: boolean) {
@@ -391,12 +431,7 @@ export class BoardFeed implements AgentBoardPort {
   async send(id: string, text: string, enter: boolean) {
     const session = this.snapshot()?.sessions.find((item) => item.id === id);
     if (!session) return { ok: false, route: "none" as const };
-    return sendText(
-      session,
-      text,
-      { enter },
-      this.options.runner ?? realRunner,
-    );
+    return this.sendOne(session, text, enter);
   }
 
   close() {

@@ -7,7 +7,14 @@ import type { AgentSession } from "./types.js";
  * given on a call. tmux needs no permission; a terminal application asks macOS
  * for Automation permission once.
  */
-export type InputRoute = "tmux" | "ghostty" | "terminal" | "iterm" | "none";
+export type InputRoute =
+  | "tmux"
+  | "ghostty"
+  | "terminal"
+  | "iterm"
+  /** Through ClawdTime on the remote Mac that runs the session. */
+  | "remote"
+  | "none";
 
 const scripts = {
   ghostty: `on run argv
@@ -63,6 +70,8 @@ export function cleanInput(value: string) {
 
 export function inputRoute(session: AgentSession): InputRoute {
   const { terminal } = session;
+  // A session of a remote Mac is typed into by ClawdTime on that Mac, not here.
+  if (session.host) return "none";
   if (session.mode !== "interactive" || terminal.remote) return "none";
   if (terminal.tmux) return "tmux";
   if (!terminal.tty) return "none";

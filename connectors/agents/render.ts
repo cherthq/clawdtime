@@ -49,11 +49,19 @@ export function elapsed(since: number | null, now: number) {
 
 export function where(session: AgentSession) {
   const { terminal } = session;
-  if (session.mode === "background") return "background";
-  if (terminal.remote) return `remote ${terminal.tty ?? ""}`.trim();
   const tmux = terminal.tmux
     ? `tmux ${terminal.tmux.session}:${terminal.tmux.window}.${terminal.tmux.pane}`
     : null;
+  // A session of a remote Mac: the Mac first, then its place on that Mac.
+  if (session.host)
+    return [
+      `on ${session.host}`,
+      session.mode === "background" ? "background" : (tmux ?? terminal.tty),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  if (session.mode === "background") return "background";
+  if (terminal.remote) return `remote ${terminal.tty ?? ""}`.trim();
   return (
     [terminal.app, tmux ?? terminal.tty].filter(Boolean).join(" · ") || "-"
   );

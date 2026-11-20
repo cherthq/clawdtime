@@ -369,6 +369,8 @@ final class BoardView: NSView, SheetContent {
   private var showAll = false
   private var moreButton: PillButton!
   private let emptyNote = Theme.label("Start a coding agent in a terminal and it appears here.", font: Theme.sans(12.5), color: .labelSecondary, lines: 2)
+  /// Names a remote Mac that does not answer, so its silence is not read as "no agents".
+  private let hostsNote = Theme.label("", font: Theme.sans(12), color: .warning, lines: 3)
   // Requests of agents that can be answered here
   private let decisionStack = NSStackView()
   private var shownDecisions: [String] = []
@@ -442,8 +444,9 @@ final class BoardView: NSView, SheetContent {
     pills.orientation = .horizontal; pills.spacing = 6; pills.detachesHiddenViews = true
     for pill in [waitingPill, workingPill, idlePill] { pills.addArrangedSubview(pill) }
     rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 0
-    let agents = NSStackView(); vertical(agents, [pills, rows, emptyNote, moreButton], spacing: 8)
-    fill([rows, emptyNote], in: agents)
+    let agents = NSStackView(); vertical(agents, [pills, rows, emptyNote, hostsNote, moreButton], spacing: 8)
+    fill([rows, emptyNote, hostsNote], in: agents)
+    hostsNote.isHidden = true
 
     checks.orientation = .vertical; checks.alignment = .leading; checks.spacing = 6
     choices.orientation = .vertical; choices.alignment = .leading; choices.spacing = 6
@@ -598,11 +601,13 @@ final class BoardView: NSView, SheetContent {
       }
       rows.isHidden = ids.isEmpty
       emptyNote.isHidden = !board.sessions.isEmpty
+      let silent = AgentBoardText.hostsNote(board)
+      hostsNote.stringValue = silent; hostsNote.isHidden = silent.isEmpty
       let hidden = visible.hidden
       moreButton.isHidden = hidden == 0 && !showAll
       moreButton.title = showAll ? "Show fewer" : "Show \(hidden) more idle"
     } else {
-      pills.isHidden = true; rows.isHidden = true; moreButton.isHidden = true; emptyNote.isHidden = true; shownIds = []
+      pills.isHidden = true; rows.isHidden = true; moreButton.isHidden = true; emptyNote.isHidden = true; hostsNote.isHidden = true; shownIds = []
       rows.arrangedSubviews.forEach { rows.removeArrangedSubview($0); $0.removeFromSuperview() }
     }
 

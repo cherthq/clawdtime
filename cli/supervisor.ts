@@ -50,6 +50,11 @@ import {
   plannedInstalled,
   stateRoot,
 } from "../connectors/agents/hooks.js";
+import {
+  boardWithRemotes,
+  HostBook,
+  remoteSend,
+} from "../connectors/agents/hosts.js";
 import { sendText } from "../connectors/agents/input.js";
 import { inventory, type CliFact } from "../connectors/agents/inventory.js";
 import { readProcesses } from "../connectors/agents/processes.js";
@@ -124,7 +129,7 @@ export async function talkLoop(io: {
 }
 
 export const supervisorHelp = `Answer agents, and what ClawdTime remembers
-  agents pending [--json]              requests that wait for an answer from ClawdTime
+  agents pending [--json] [--attend]   requests that wait for an answer from ClawdTime
   agents approve ID [--always]         allow it. --always also makes a rule for this project
   agents deny ID [--message TEXT]      refuse it, with a reason for the agent
   agents answer ID TEXT                answer a question (TEXT, or the number of a choice)
@@ -145,6 +150,11 @@ function split(args: string[], switches: string[], values: string[]) {
   const rest: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
+    // "--" ends the options: what follows is text, even when it starts with a dash.
+    if (arg === "--") {
+      rest.push(...args.slice(index + 1));
+      break;
+    }
     if (!arg.startsWith("--")) {
       rest.push(arg);
       continue;
@@ -286,7 +296,10 @@ export async function supervisorCli(
 
   if (group === "agents") {
     if (command === "pending") {
-      const { flags } = split(args.slice(1), ["json"], []);
+      const { flags } = split(args.slice(1), ["json", "attend"], []);
+      // --attend: another Mac reads this list over ssh for a person who is at
+      // that Mac. The hooks here then hold for an answer, as with the panel.
+      if (flags.attend) desk.attend();
       const pending = desk.pending();
       if (flags.json)
         return print(
@@ -468,25 +481,36 @@ export async function supervisorCli(
       const { flags, rest } = split(args.slice(1), ["no-enter"], []);
       if (rest.length < 2)
         throw new Error("Use: clawdtime agents send SESSION TEXT");
+      const book = new HostBook(root);
+      const local = new BoardScanner(system, { includeHeadless: true }).scan();
+      // The id of this Mac's own session needs no call to another Mac.
       const session = deps.findSession(
-        new BoardScanner(system, { includeHeadless: true }).scan(),
+        local.sessions.some((item) => item.id === rest[0])
+          ? local
+          : await boardWithRemotes(local, book, runner, () => system.now()),
         rest[0]!,
       );
-      const result = await sendText(
-        session,
-        rest.slice(1).join(" "),
-        { enter: flags["no-enter"] !== "true" },
-        runner,
-      );
+      const enter = flags["no-enter"] !== "true";
+      const text = rest.slice(1).join(" ");
+      const remote = book.get(session.host);
+      const result = remote
+        ? await remoteSend(remote, session, text, enter, runner)
+        : await sendText(session, text, { enter }, runner);
       if (!result.ok) {
         process.exitCode = 2;
         return print(
-          result.route === "none"
-            ? `${title(session)} runs in a terminal that cannot take text from here. Run the agent in tmux, or use Ghostty 1.4 or later, Terminal or iTerm2.`
-            : `The text did not reach ${title(session)}.`,
+          remote
+            ? `The text did not reach ${title(session)} on ${remote.name}. ClawdTime there types into tmux, Ghostty 1.4 or later, Terminal or iTerm2.`
+            : result.route === "none"
+              ? `${title(session)} runs in a terminal that cannot take text from here. Run the agent in tmux, or use Ghostty 1.4 or later, Terminal or iTerm2.`
+              : `The text did not reach ${title(session)}.`,
         );
       }
-      return print(`Typed into ${title(session)} through ${result.route}.`);
+      return print(
+        remote
+          ? `Typed into ${title(session)} on ${remote.name}.`
+          : `Typed into ${title(session)} through ${result.route}.`,
+      );
     }
     throw new Error("Unknown command. Run: clawdtime agents help");
   }

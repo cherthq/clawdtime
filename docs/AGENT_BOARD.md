@@ -92,10 +92,77 @@ the next hook event arrives.
 | Ghostty 1.4 or later      | The exact tab                                                      |
 | Ghostty before 1.4, other | The application. You choose the tab                                |
 | Remote (ssh) session      | Nothing: its terminal is not on this Mac                           |
+| A session of a remote Mac | A new window here: see [Remote Macs](#remote-macs)                 |
 
 tmux needs no permission. Selecting a tab uses AppleScript: macOS asks once for
 Automation permission for that terminal. Without the permission the application
 still comes forward.
+
+## Remote Macs
+
+One Mac can supervise the agents on other Macs, for example a Mac mini that runs
+agents all day. This Mac runs ClawdTime's own command on the other Mac over ssh
+and reads what it prints. ClawdTime installs nothing there and keeps no
+connection open.
+
+The other Mac needs three things, and you set them up once:
+
+- The `clawdtime` command, the same version as on this Mac.
+- ssh from this Mac that works with no password prompt (a key, and a known host
+  key). Check it: `ssh TARGET true` must return at once. ClawdTime never types
+  a password: it runs ssh in batch mode, so a Mac that asks for one fails fast.
+- For answers: the hooks on that Mac
+  (`clawdtime agents hooks install --agent claude-code` there).
+
+```
+clawdtime hosts add mini anish@mini.local
+clawdtime hosts check mini
+clawdtime hosts list
+clawdtime hosts remove mini
+```
+
+`mini` is your own short name for the Mac. The ssh target is a host alias from
+`~/.ssh/config` or `user@host`. For a port, a key file or a jump host, make an
+alias in `~/.ssh/config`. When `clawdtime` is not on that Mac's login path,
+give its place: `clawdtime hosts add mini TARGET --command /full/path/clawdtime`.
+
+What then happens:
+
+- The board (in the panel and in `clawdtime agents`) lists that Mac's sessions
+  with "on mini". `clawdtime agents --host mini` shows that Mac only, and
+  `--local` shows this Mac only.
+- Each remote Mac is asked every 9 seconds, with at most 6 seconds for an
+  answer and never two calls at once. A Mac that does not answer never delays
+  this Mac's board. Its last answer stays for 30 seconds, then its sessions
+  leave the board and the board names the Mac that does not answer, with the
+  reason.
+- A request of an agent on that Mac shows in the panel with the name of its
+  Mac. While the panel is open, this Mac reads that Mac's list every 4 seconds,
+  which also tells the hooks there that someone attends. Your answer goes back
+  as `clawdtime agents approve|deny|answer` on that Mac. A rule that you make
+  with it is kept in that Mac's trove.
+- Text that you send to a session there is typed by ClawdTime on that Mac.
+- A click on a session there opens a new terminal window on this Mac. For a
+  session in tmux, the window is attached to its tmux pane over ssh. For a
+  session outside tmux, the window is a shell on that Mac: a running program
+  cannot be moved into a new window.
+
+Every word that goes to the other Mac is quoted as one shell argument, and the
+ssh target and the command are checked when you add the Mac, so a session name
+or a message cannot become a command.
+
+Limits of this part:
+
+- It is tested with a recorded command runner, and the quoting with a local
+  shell. It has not been run against a real remote Mac yet.
+- `clawdtime agents pending`, `approve`, `deny`, `answer`, `watch` and the chat
+  with ClawdTime answer for this Mac only. Answer a remote request in the
+  panel, or run the command on that Mac over ssh.
+- Away mode calls you for requests of this Mac only.
+- The two Macs must agree on the time. A clock that is seconds off shows a
+  request for a shorter or a longer time than it has.
+- Each call is a new ssh connection. Connection sharing in your
+  `~/.ssh/config` (`ControlMaster auto`, `ControlPersist`) makes it faster.
 
 ## Privacy
 
@@ -155,5 +222,6 @@ found, placed and focused.
 - Tab selection in Terminal, iTerm2 and Ghostty 1.4 is covered by tests with a
   recorded command runner. It has not been run against those applications. The
   tmux path and the application path are run for real.
-- The board covers this Mac and this user. Sessions in containers, on other
-  hosts, or under another user are not listed.
+- The board covers this Mac and this user, and the Macs that you add with
+  `clawdtime hosts`. Sessions in containers or under another user are not
+  listed.

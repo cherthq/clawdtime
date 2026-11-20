@@ -314,7 +314,7 @@ export class Supervisor {
     );
     for (const session of (board?.sessions ?? []).slice(0, 30))
       lines.push(
-        `- ${title(session)} (${session.agentLabel}): ${detailLabels[session.detail]}${session.since ? ` for ${elapsed(session.since, now)}` : ""}`,
+        `- ${title(session)} (${session.agentLabel}${session.host ? ` on the Mac ${session.host}` : ""}): ${detailLabels[session.detail]}${session.since ? ` for ${elapsed(session.since, now)}` : ""}`,
       );
     lines.push(
       pending.length

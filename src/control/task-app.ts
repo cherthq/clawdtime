@@ -26,7 +26,7 @@ export interface AgentBoardPort {
     decision: "allow" | "deny" | "answer";
     text?: string | null;
     remember?: boolean;
-  }): boolean;
+  }): boolean | Promise<boolean>;
   setAway(away: boolean): void;
   send(
     id: string,
@@ -53,13 +53,13 @@ const decisionAnswerSchema = z
 const awaySchema = z.object({ away: z.boolean() }).strict();
 const agentSendSchema = z
   .object({
-    id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,40}$/),
+    id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,63}$/),
     text: z.string().min(1).max(4000),
     enter: z.boolean().optional(),
   })
   .strict();
 const agentFocusSchema = z
-  .object({ id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,40}$/) })
+  .object({ id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,63}$/) })
   .strict();
 
 export function createTaskApp(
@@ -178,8 +178,11 @@ export function createTaskApp(
       });
       app.post("/desktop/decisions/answer", async (c) => {
         desktop.authorizePanel(credential(c));
+        // An agent on a remote Mac gets its answer over ssh, so this can take a moment.
         return c.json({
-          ok: agents.answer(decisionAnswerSchema.parse(await c.req.json())),
+          ok: await agents.answer(
+            decisionAnswerSchema.parse(await c.req.json()),
+          ),
         });
       });
       app.post("/desktop/decisions/away", async (c) => {

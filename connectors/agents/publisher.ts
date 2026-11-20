@@ -1,6 +1,9 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BoardScanner } from "./board.js";
+import { realRunner } from "./focus.js";
+import { stateRoot } from "./hooks.js";
+import { HostBook, RemoteBoards } from "./hosts.js";
 import { realSystem } from "./system.js";
 
 /**
@@ -42,7 +45,15 @@ if (
     Number.isInteger(requested) && requested >= 1000 && requested <= 60_000
       ? requested
       : 3000;
-  const scanner = new BoardScanner(realSystem());
+  const system = realSystem();
+  const scanner = new BoardScanner(system);
+  // Remote Macs answer on their own slower rhythm. A scan never waits for one:
+  // it only merges the last good answer of each.
+  const remotes = new RemoteBoards({
+    book: new HostBook(stateRoot(system)),
+    run: realRunner,
+    now: () => Date.now(),
+  });
   const parent = process.ppid;
   let open = true;
   process.stdout.on("error", () => {
@@ -52,7 +63,10 @@ if (
     process.on(signal, () => process.exit(0));
   void runPublisher({
     intervalMs,
-    scan: (interval) => scanner.scan(interval),
+    scan: (interval) => {
+      void remotes.poll();
+      return remotes.merge(scanner.scan(interval));
+    },
     write: (line) => {
       if (open) process.stdout.write(line);
       return open;

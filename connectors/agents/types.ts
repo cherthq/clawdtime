@@ -106,10 +106,22 @@ export type SessionMode = (typeof sessionModes)[number];
 export const focusPrecisions = ["tab", "pane", "app", "none"] as const;
 export type FocusPrecision = (typeof focusPrecisions)[number];
 
+/**
+ * The short name of a remote Mac in the host book. It cannot start with "bg-":
+ * a session id of this Mac that holds an underscore always does, so the id of
+ * a remote session (HOST_ID) can never be the id of a session of this Mac.
+ */
+export const hostNameSchema = z
+  .string()
+  .regex(/^(?!bg(?:-|$))(?!local$)[a-z0-9][a-z0-9-]{0,15}$/);
+
 export const agentSessionSchema = z
   .object({
-    /** Stable for the life of the session: pid plus its start second. */
-    id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,40}$/),
+    /**
+     * Stable for the life of the session: pid plus its start second. A session
+     * of a remote Mac has that Mac's id after the host name: HOST_ID.
+     */
+    id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,63}$/),
     /** null for a session that has no terminal process, such as a background one. */
     pid: z.number().int().positive().nullable(),
     agent: z.enum(agentKinds),
@@ -125,12 +137,33 @@ export const agentSessionSchema = z
     source: z.enum(stateSources),
     startedAt: epoch.nullable(),
     /** Session id of the agent that started this one, when one did. */
-    spawnedBy: z.string().max(40).nullable(),
+    spawnedBy: z.string().max(64).nullable(),
     terminal: terminalSchema,
     focus: z.enum(focusPrecisions),
+    /**
+     * The remote Mac that runs this session. Absent for a session of this Mac.
+     * With a host, `pid`, `cwd` and `terminal` describe that Mac, not this one,
+     * and `focus` says what a click can open from here: its tmux pane ("pane")
+     * or only a shell on that Mac ("app").
+     */
+    host: hostNameSchema.optional(),
   })
   .strict();
 export type AgentSession = z.infer<typeof agentSessionSchema>;
+
+/** Whether a remote Mac answered the last time it was asked. */
+export const hostStatusSchema = z
+  .object({
+    name: hostNameSchema,
+    ok: z.boolean(),
+    /** Its sessions on the board now. */
+    sessions: z.number().int().nonnegative(),
+    checkedAt: epoch.nullable(),
+    /** Why it did not answer, in words for the person. Empty when it did. */
+    message: text(200),
+  })
+  .strict();
+export type HostStatus = z.infer<typeof hostStatusSchema>;
 
 export const boardSnapshotSchema = z
   .object({
@@ -147,6 +180,8 @@ export const boardSnapshotSchema = z
       })
       .strict(),
     sessions: z.array(agentSessionSchema).max(500),
+    /** The remote Macs in the host book. Absent when there are none. */
+    hosts: z.array(hostStatusSchema).max(16).optional(),
   })
   .strict();
 export type BoardSnapshot = z.infer<typeof boardSnapshotSchema>;

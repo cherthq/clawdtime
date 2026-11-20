@@ -95,7 +95,7 @@ final class PanelTransportTests: XCTestCase {
     try await server.start(); defer { server.close() }
     let client = PanelClient(configuration: config(server.port)); defer { client.close() }
     let result = try await client.agents()
-    XCTAssertEqual(result.sessions.count, 5)
+    XCTAssertEqual(result.sessions.count, 6)
     XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
     let focus = try await client.focusAgent("100-abc123")
     XCTAssertEqual(focus, AgentFocusResult(ok: true, precision: "tab"))

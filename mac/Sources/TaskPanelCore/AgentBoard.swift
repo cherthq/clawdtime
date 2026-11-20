@@ -46,31 +46,57 @@ public struct AgentBoard: Codable, Equatable {
     public let since: Double?
     public let focus: String
     public let terminal: Terminal
+    /// The remote Mac that runs this session. Nil for a session of this Mac. With a
+    /// host, the terminal is on that Mac, and a click opens a new window over ssh.
+    public let host: String?
     public init(id: String, agentLabel: String, name: String?, project: String, mode: String, state: State,
-                detail: String, since: Double?, focus: String, terminal: Terminal) {
+                detail: String, since: Double?, focus: String, terminal: Terminal, host: String? = nil) {
       self.id = id; self.agentLabel = agentLabel; self.name = name; self.project = project; self.mode = mode
       self.state = state; self.detail = detail; self.since = since; self.focus = focus; self.terminal = terminal
+      self.host = host
     }
     public var canFocus: Bool { ["tab", "pane", "app"].contains(focus) }
+  }
+  /// Whether a remote Mac answered the last time the service asked it.
+  public struct Host: Codable, Equatable {
+    public let name: String
+    public let ok: Bool
+    public let sessions: Int
+    public let checkedAt: Double?
+    public let message: String
+    public init(name: String, ok: Bool, sessions: Int, checkedAt: Double?, message: String) {
+      self.name = name; self.ok = ok; self.sessions = sessions; self.checkedAt = checkedAt; self.message = message
+    }
   }
   public let version: Int
   public let generatedAt: Double
   public let intervalMs: Double?
   public let counts: Counts
   public let sessions: [Session]
-  public init(version: Int, generatedAt: Double, intervalMs: Double?, counts: Counts, sessions: [Session]) {
+  /// The remote Macs that this Mac supervises. Nil when there are none.
+  public let hosts: [Host]?
+  public init(version: Int, generatedAt: Double, intervalMs: Double?, counts: Counts, sessions: [Session], hosts: [Host]? = nil) {
     self.version = version; self.generatedAt = generatedAt; self.intervalMs = intervalMs
-    self.counts = counts; self.sessions = sessions
+    self.counts = counts; self.sessions = sessions; self.hosts = hosts
   }
 
+  /// A session of a remote Mac has that Mac's id after the host name, so an id is longer than a local one.
   public static func identity(_ value: String) -> Bool {
-    value.range(of: "^[0-9a-z][0-9a-z_-]{1,40}$", options: .regularExpression) != nil
+    value.range(of: "^[0-9a-z][0-9a-z_-]{1,63}$", options: .regularExpression) != nil
+  }
+  public static func hostName(_ value: String) -> Bool {
+    value.range(of: "^[a-z0-9][a-z0-9-]{0,15}$", options: .regularExpression) != nil
   }
   public func validate() throws {
     guard version == 1, generatedAt >= 0, sessions.count <= 500,
       [counts.needsYou, counts.working, counts.idle, counts.unknown].allSatisfy({ (0...500).contains($0) }),
-      intervalMs.map({ $0 > 0 && $0 <= 600_000 }) ?? true else { throw PanelFailure.response }
+      intervalMs.map({ $0 > 0 && $0 <= 600_000 }) ?? true, (hosts?.count ?? 0) <= 16 else { throw PanelFailure.response }
+    for host in hosts ?? [] {
+      guard Self.hostName(host.name), host.sessions >= 0, host.message.count <= 200,
+        host.checkedAt.map({ $0 >= 0 }) ?? true else { throw PanelFailure.response }
+    }
     for session in sessions {
+      guard session.host.map(Self.hostName) ?? true else { throw PanelFailure.response }
       guard Self.identity(session.id), session.agentLabel.count <= 40, (session.name?.count ?? 0) <= 80,
         session.project.count <= 120, session.detail.count <= 40, session.mode.count <= 20,
         session.focus.count <= 10, (session.terminal.app?.count ?? 0) <= 120,
@@ -89,13 +115,15 @@ public struct AgentFocusResult: Codable, Equatable {
   public let precision: String
   public init(ok: Bool, precision: String) { self.ok = ok; self.precision = precision }
   public func validate() throws {
-    guard ["pane", "tab", "app", "none"].contains(precision), ok == (precision != "none") else { throw PanelFailure.response }
+    guard ["pane", "tab", "app", "remote_pane", "remote_mac", "none"].contains(precision), ok == (precision != "none") else { throw PanelFailure.response }
   }
   public var message: String {
     switch precision {
     case "pane": return "Opened its tmux pane."
     case "tab": return "Opened its terminal tab."
     case "app": return "Brought its terminal forward. Choose the tab there."
+    case "remote_pane": return "Opened its tmux pane on that Mac, in a new window."
+    case "remote_mac": return "Opened a shell on that Mac. The session is not in tmux, so its own terminal stays there."
     default: return "That session has no terminal on this Mac."
     }
   }
@@ -142,6 +170,14 @@ public enum AgentBoardText {
     }
   }
   public static func place(_ session: AgentBoard.Session) -> String {
+    // A session of a remote Mac: the Mac first, then its tmux pane there. The
+    // terminal application of that Mac says nothing useful here.
+    if let host = session.host {
+      let name = "on " + clean(host, limit: 16)
+      if session.mode == "background" { return name + " · background" }
+      guard let tmux = session.terminal.tmux else { return name }
+      return name + " · tmux \(clean(tmux.session, limit: 24)):\(tmux.window).\(tmux.pane)"
+    }
     if session.mode == "background" { return "background" }
     if session.terminal.remote { return "remote" }
     let app = clean(session.terminal.app ?? "", limit: 24)
@@ -167,6 +203,14 @@ public enum AgentBoardText {
     return String(format: "%dd %02dh", hours / 24, hours % 24)
   }
   public static func focusHint(_ session: AgentBoard.Session) -> String {
+    if let host = session.host {
+      let name = clean(host, limit: 16)
+      switch session.focus {
+      case "pane": return "Open its tmux pane on \(name), in a new window"
+      case "app": return "Open a shell on \(name), in a new window"
+      default: return "Nothing on \(name) to open from here"
+      }
+    }
     switch session.focus {
     case "pane": return "Open its tmux pane"
     case "tab": return "Open its terminal tab"
@@ -183,6 +227,14 @@ public enum AgentBoardText {
   public static func toolbar(stage: String, taskNeedsPerson: Bool, counts: AgentBoard.Counts?) -> (text: String, attention: Bool) {
     guard let counts, counts.needsYou > 0, !taskNeedsPerson else { return (stage, taskNeedsPerson) }
     return ("\(counts.needsYou) \(counts.needsYou == 1 ? "agent needs" : "agents need") you", true)
+  }
+  /// One line for the remote Macs that do not answer, so that their silence is not read as "no agents". Empty when all answer.
+  public static func hostsNote(_ board: AgentBoard) -> String {
+    let silent = (board.hosts ?? []).filter { !$0.ok }
+    guard let first = silent.first else { return "" }
+    let reason = clean(first.message, limit: 120)
+    if silent.count == 1 { return clean(first.name, limit: 16) + " does not answer" + (reason.isEmpty ? "." : ". " + reason) }
+    return silent.map { clean($0.name, limit: 16) }.joined(separator: ", ") + " do not answer. See: clawdtime hosts check NAME"
   }
   /// Sessions that need the person and sessions at work always show. Quiet ones are capped.
   public static func rows(_ board: AgentBoard, quietLimit: Int = 4) -> (shown: [AgentBoard.Session], hidden: Int) {
@@ -211,11 +263,14 @@ public struct PendingDecisions: Codable, Equatable {
     public let allowedBefore: Int
     public let deniedBefore: Int
     public let canRemember: Bool
+    /// The remote Mac whose agent asks. Nil for an agent on this Mac.
+    public let host: String?
     public init(id: String, agentLabel: String, kind: String, tool: String, summary: String, options: [String], project: String,
-                session: String?, sessionId: String?, createdAt: Double, holdUntil: Double, allowedBefore: Int, deniedBefore: Int, canRemember: Bool) {
+                session: String?, sessionId: String?, createdAt: Double, holdUntil: Double, allowedBefore: Int, deniedBefore: Int, canRemember: Bool,
+                host: String? = nil) {
       self.id = id; self.agentLabel = agentLabel; self.kind = kind; self.tool = tool; self.summary = summary; self.options = options
       self.project = project; self.session = session; self.sessionId = sessionId; self.createdAt = createdAt; self.holdUntil = holdUntil
-      self.allowedBefore = allowedBefore; self.deniedBefore = deniedBefore; self.canRemember = canRemember
+      self.allowedBefore = allowedBefore; self.deniedBefore = deniedBefore; self.canRemember = canRemember; self.host = host
     }
     public var isQuestion: Bool { kind == "question" }
   }
@@ -234,6 +289,7 @@ public struct PendingDecisions: Codable, Equatable {
         request.tool.count <= 80, request.agentLabel.count <= 40, request.project.count <= 4096, request.options.count <= 8,
         request.options.allSatisfy({ $0.count <= 200 }), (request.session?.count ?? 0) <= 200,
         request.allowedBefore >= 0, request.deniedBefore >= 0, request.holdUntil >= request.createdAt,
+        request.host.map(AgentBoard.hostName) ?? true,
         !request.isQuestion || !request.options.isEmpty else { throw PanelFailure.response }
     }
   }
@@ -243,10 +299,12 @@ public struct DecisionAnswerResult: Codable, Equatable { public let ok: Bool }
 public enum DecisionText {
   /// The session by its name, or the agent and its project.
   public static func who(_ request: PendingDecisions.Request) -> String {
+    // An agent on a remote Mac is named with its Mac, so two Macs with the same project stay apart.
+    let place = request.host.map { " on " + AgentBoardText.clean($0, limit: 16) } ?? ""
     let session = AgentBoardText.clean(request.session ?? "", limit: 40)
-    if !session.isEmpty { return session }
+    if !session.isEmpty { return session + place }
     let project = AgentBoardText.clean(request.project, limit: 30)
-    return project.isEmpty ? AgentBoardText.clean(request.agentLabel, limit: 40) : AgentBoardText.clean(request.agentLabel, limit: 40) + " in " + project
+    return (project.isEmpty ? AgentBoardText.clean(request.agentLabel, limit: 40) : AgentBoardText.clean(request.agentLabel, limit: 40) + " in " + project) + place
   }
   public static func title(_ request: PendingDecisions.Request) -> String {
     switch request.kind {

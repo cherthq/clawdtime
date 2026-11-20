@@ -25,6 +25,12 @@ import {
   removeHookPlan,
 } from "../connectors/agents/hooks.js";
 import { supervisorCli, supervisorHelp } from "./supervisor.js";
+import { hostsCli } from "./hosts.js";
+import {
+  boardWithRemotes,
+  focusRemote,
+  HostBook,
+} from "../connectors/agents/hosts.js";
 import type { ModelClient } from "../connectors/agents/brain.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
@@ -36,8 +42,9 @@ import type {
   BoardSnapshot,
 } from "../connectors/agents/types.js";
 
-const help = `clawdtime agents: every coding-agent session on this Mac
+const help = `clawdtime agents: every coding-agent session on this Mac, and on the Macs in: clawdtime hosts
   agents [--json] [--all]            list sessions: needs you, working, idle
+  agents --local | --host NAME       this Mac only, or one remote Mac only
   agents watch [--interval SECONDS]  live board; arrows or j/k, Enter focuses, q quits
   agents focus ID|NAME               bring that session's terminal to the front
   agents doctor                      how exactly each agent's state is known here
@@ -109,8 +116,35 @@ const precisionText = {
   pane: "its tmux pane",
   tab: "its terminal tab",
   app: "its terminal application; choose the tab there",
+  remote_pane: "its tmux pane on that Mac, in a new window",
+  remote_mac:
+    "a shell on that Mac, in a new window; the session is not in tmux, so its own terminal cannot be opened from here",
   none: "nothing",
 } as const;
+
+/** This Mac's board, with the board of each remote Mac in the host book. */
+async function fullBoard(
+  system: System,
+  runner: Runner,
+  options: { includeHeadless: boolean; local?: boolean; host?: string },
+) {
+  const local = new BoardScanner(system, {
+    includeHeadless: options.includeHeadless,
+  }).scan();
+  if (options.local) return local;
+  const book = new HostBook(stateRoot(system));
+  if (options.host !== undefined && !book.get(options.host))
+    throw new Error(
+      `No remote Mac is named "${options.host}". See: clawdtime hosts list`,
+    );
+  return boardWithRemotes(
+    local,
+    book,
+    runner,
+    () => system.now(),
+    options.host,
+  );
+}
 
 function hookScriptPath() {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -308,6 +342,8 @@ export async function agentsCli(
   const system = dependencies.system ?? realSystem();
   const runner = dependencies.runner ?? realRunner;
   const print = dependencies.print ?? console.log;
+  if (args[0] === "--hosts")
+    return hostsCli(args.slice(1), { system, runner, print });
   if (args[0] === "--supervisor")
     return supervisorCli(args[1] ?? "", args.slice(2), {
       system,
@@ -324,20 +360,28 @@ export async function agentsCli(
     const { values, positional } = flags(rest, {
       json: "switch",
       all: "switch",
+      local: "switch",
+      host: "value",
     });
     if (positional.length)
       throw new Error("Unknown command. Run: clawdtime agents help");
-    const snapshot = new BoardScanner(system, {
+    const snapshot = await fullBoard(system, runner, {
       includeHeadless: values.all === "true",
-    }).scan();
+      local: values.local === "true",
+      host: values.host,
+    });
     if (values.json === "true") return print(JSON.stringify(snapshot, null, 2));
-    return print(
+    print(
       renderBoard(snapshot, {
         color: dependencies.isTTY ?? !!process.stdout.isTTY,
         width: dependencies.columns ?? process.stdout.columns ?? 100,
         now: system.now(),
       }),
     );
+    // A remote Mac that does not answer is named, so its silence is not read as "no agents".
+    for (const host of snapshot.hosts ?? [])
+      if (!host.ok) print(`${host.name} did not answer. ${host.message}`);
+    return;
   }
   if (command === "watch") {
     const { values } = flags(rest, { interval: "value", all: "switch" });
@@ -356,13 +400,20 @@ export async function agentsCli(
     if (positional.length !== 1)
       throw new Error("Give one session: clawdtime agents focus ID|NAME");
     const session: AgentSession = findSession(
-      new BoardScanner(system, { includeHeadless: true }).scan(),
+      await fullBoard(system, runner, { includeHeadless: true }),
       positional[0]!,
     );
-    const result = await focusSession(session, runner);
+    const remote = new HostBook(stateRoot(system)).get(session.host);
+    const result = remote
+      ? await focusRemote(remote, session, runner, stateRoot(system))
+      : await focusSession(session, runner);
     if (!result.ok) {
       process.exitCode = 2;
-      return print(`${title(session)} has no terminal on this Mac to focus.`);
+      return print(
+        session.host
+          ? `${title(session)} on ${session.host} has no terminal to open from here.`
+          : `${title(session)} has no terminal on this Mac to focus.`,
+      );
     }
     return print(
       `Focused ${title(session)}: ${precisionText[result.precision]}.`,

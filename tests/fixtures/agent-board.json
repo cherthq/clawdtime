@@ -2,7 +2,7 @@
   "version": 1,
   "generatedAt": 1795156200000,
   "intervalMs": 3000,
-  "counts": { "needs_you": 1, "working": 2, "idle": 1, "unknown": 1 },
+  "counts": { "needs_you": 1, "working": 3, "idle": 1, "unknown": 1 },
   "sessions": [
     {
       "id": "100-abc123",
@@ -87,6 +87,39 @@
       "focus": "none"
     },
     {
+      "id": "mini_512-abc123",
+      "pid": 512,
+      "agent": "codex",
+      "agentLabel": "Codex",
+      "agentVersion": "0.169.0",
+      "name": "migrations",
+      "project": "api",
+      "cwd": "/Users/builder/api",
+      "mode": "interactive",
+      "state": "working",
+      "detail": "turn_running",
+      "since": 1795156000000,
+      "source": "transcript",
+      "startedAt": 1795152600000,
+      "spawnedBy": null,
+      "terminal": {
+        "tty": "ttys002",
+        "app": "Terminal",
+        "appPath": "/System/Applications/Utilities/Terminal.app",
+        "tmux": {
+          "session": "agents",
+          "window": 0,
+          "pane": 1,
+          "paneId": "%3",
+          "socketArgs": [],
+          "clientTty": null
+        },
+        "remote": false
+      },
+      "focus": "pane",
+      "host": "mini"
+    },
+    {
       "id": "200-abc123",
       "pid": 200,
       "agent": "codex",
@@ -135,6 +168,22 @@
         "remote": false
       },
       "focus": "app"
+    }
+  ],
+  "hosts": [
+    {
+      "name": "mini",
+      "ok": true,
+      "sessions": 1,
+      "checkedAt": 1795156195000,
+      "message": ""
+    },
+    {
+      "name": "studio",
+      "ok": false,
+      "sessions": 0,
+      "checkedAt": 1795156194000,
+      "message": "ssh could not connect. It must work with no password prompt: ssh studio true"
     }
   ]
 }

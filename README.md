@@ -7,7 +7,9 @@ handset acceptance limits. The broader product vision below includes later work.
 Agent board: the desktop panel and `clawdtime agents` list every coding-agent
 session on this Mac (Claude Code, Codex, pi and more), show which ones wait for
 you, and bring a session's terminal forward. It reads state only and never sends
-input to a session. See the [agent board guide](docs/AGENT_BOARD.md).
+input to a session. `clawdtime hosts add NAME SSH_TARGET` adds the sessions of
+another Mac, such as a Mac mini, over ssh. See the
+[agent board guide](docs/AGENT_BOARD.md).
 
 Supervisor: ClawdTime can also answer an agent for you. Approve or deny a
 permission request from the panel, the mascot's bubble, a command, or a FaceTime

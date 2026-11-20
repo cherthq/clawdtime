@@ -360,15 +360,29 @@ describe("contract fixture", () => {
       "needs_you",
       "working",
       "working",
+      "working",
       "idle",
       "unknown",
     ]);
     expect(parsed.counts).toEqual({
       needs_you: 1,
-      working: 2,
+      working: 3,
       idle: 1,
       unknown: 1,
     });
+    // One session runs on a remote Mac, and one remote Mac does not answer.
+    expect(parsed.sessions.map((item) => item.host ?? null)).toEqual([
+      null,
+      null,
+      null,
+      "mini",
+      null,
+      null,
+    ]);
+    expect(parsed.hosts?.map((host) => [host.name, host.ok])).toEqual([
+      ["mini", true],
+      ["studio", false],
+    ]);
   });
 });
 

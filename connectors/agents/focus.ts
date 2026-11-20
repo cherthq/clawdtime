@@ -80,8 +80,12 @@ scripts.iTerm = scripts.iTerm2!;
 
 export interface FocusResult {
   ok: boolean;
-  /** How exactly focus landed: the pane, the tab, only the application, or nothing. */
-  precision: FocusPrecision;
+  /**
+   * How exactly focus landed: the pane, the tab, only the application, or
+   * nothing. For a session of a remote Mac: a new window on its tmux pane
+   * (remote_pane), or a new window with a shell on that Mac (remote_mac).
+   */
+  precision: FocusPrecision | "remote_pane" | "remote_mac";
 }
 
 /**
@@ -95,7 +99,8 @@ export async function focusSession(
   tmuxBinary = "tmux",
 ): Promise<FocusResult> {
   const { terminal } = session;
-  if (session.focus === "none" || terminal.remote)
+  // A session of a remote Mac has no window here: see focusRemote in hosts.ts.
+  if (session.focus === "none" || terminal.remote || session.host)
     return { ok: false, precision: "none" };
   let pane = false;
   let hostTty = terminal.tty;
@@ -126,7 +131,7 @@ export async function focusSession(
   if (!tab && terminal.appPath)
     app =
       (await run("/usr/bin/open", ["-a", terminal.appPath], 5000)).status === 0;
-  const precision: FocusPrecision = pane
+  const precision: FocusResult["precision"] = pane
     ? "pane"
     : tab
       ? "tab"
