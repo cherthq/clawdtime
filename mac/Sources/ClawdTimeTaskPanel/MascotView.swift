@@ -19,18 +19,20 @@ final class MascotView: NSView {
     (solid as? FlintScene)?.showsEye = flintEye
     lastPose = nil; flat.needsDisplay = true
   }
+  /// What is on the screen now. A style with no lit figure is flat in both looks.
+  private var drawsFlat: Bool { look == .flat || !style.hasSolid }
   private func rebuild() {
     lastPose = nil
     jelly(stretch: 0, angle: 0)
-    flat.isHidden = look != .flat; scene.isHidden = look == .flat; deskShadow.isHidden = look == .flat
-    if look == .flat {
-      flat.figure = MascotCatalog.flat(style); flat.mood = mood
-      solid = nil; scene.scene = nil
-    } else {
-      let figure = MascotCatalog.make(style)
+    let figure = drawsFlat ? nil : MascotCatalog.make(style)
+    flat.isHidden = figure != nil; scene.isHidden = figure == nil; deskShadow.isHidden = figure == nil
+    if let figure {
       figure.set(mood: mood)
       solid = figure; scene.scene = figure.scene; scene.pointOfView = figure.camera
       flat.figure = nil
+    } else {
+      flat.figure = MascotCatalog.flat(style); flat.mood = mood
+      solid = nil; scene.scene = nil
     }
     applyFlintEye()
     setAccessibilityLabel("ClawdTime, " + style.title)
@@ -102,7 +104,7 @@ final class MascotView: NSView {
   private func jelly(stretch: Double, angle: Double) {
     guard abs(stretch - shownStretch) > 0.001 || (stretch == 0 && shownStretch != 0) else { return }
     shownStretch = stretch
-    guard let layer = (look == .flat ? flat : scene).layer else { return }
+    guard let layer = (solid == nil ? flat : scene).layer else { return }
     let box = bounds
     var transform = CGAffineTransform.identity
     if stretch > 0.001 {
@@ -171,7 +173,7 @@ final class MascotView: NSView {
     input.gait = motion.gait; input.gaitPhase = motion.gaitPhase; input.held = held
     var pose = animator.step(step, input)
     pose.roll += lean
-    if pose != lastPose, look == .flat {
+    if pose != lastPose, solid == nil {
       flat.pose = pose; lastPose = pose
     } else if pose != lastPose {
       solid?.apply(pose); lastPose = pose

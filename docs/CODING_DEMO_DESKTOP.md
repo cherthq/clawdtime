@@ -17,26 +17,33 @@ under the SIL Open Font License.
 The mascot is drawn in code, so it is sharp at every size. It has two looks, and
 the person picks one in the mascot's menu. Flat is the default: each mascot is a
 few solid shapes with one edge around them, in the language of the Chert mark,
-with no light, shadow or reflection. 3D is the same mascot as a lit figure. In
-both, the eyes follow the pointer and blink, and the light is the status: warm
-at rest, blue while agents work, amber when something waits for the person, red
-while the screen is shared. The person picks a style in the same menu, where
-each style shows its picture:
+with no light, shadow or reflection. 3D is the same mascot as a lit figure. The
+light is the status: warm or pale at rest, blue while agents work, amber when
+something waits for the person, red while the screen is shared. The person picks
+a style in the same menu, where each style shows its picture:
 
 | Style | What it is |
 |---|---|
 | Flint | The Chert mark and its flake, and nothing else. Its window is dark at rest and lit in the color of the state otherwise. A new install starts with it. |
+| Jet | A round black pebble with two bar eyes. |
+| Jade | A green slab with two bar eyes. |
+| Lapis | A blue wedge with five sides, cut like the large piece of the mark. |
+| Amber | A drop of amber with two dark bar eyes. |
+| Garnet | A wine-red peak with two bar eyes. |
+| Amethyst | A violet flake with four sides, cut like the small piece of the mark. |
 | Pebble | A round stone in the sunset strata, with the white ring in orbit. Friendly. |
 | Core | A dark glass orb with an iris of light and two fine rings. |
 | Neon | A night-city droid head in black chrome, with a visor of LED eyes. |
-| Orb | A ball droid, cobalt over deep navy, with two small robotic eyes and a belt of lamps. |
-| Onyx | A black stone with a gold edge, veins of gold, two facets of amethyst and two small robotic eyes. |
-| Flux | A drop of liquid, mint over emerald, with two small robotic eyes. |
 | Iris | A lens: coated glass, an aperture that blinks, a hoop it hangs in. |
 
-The colors in the table are those of the flat look. In the flat look every dark
-part has a pale rim, so a mascot holds on a dark desktop as well as on a light
-one.
+Jet, Jade, Lapis, Amber, Garnet and Amethyst are the plain stones: one solid
+shape and two eyes. The rim around a plain stone is its state, and its pale eyes
+take the same color. The eyes look at the pointer, shut to a line, bow when the
+stone is pleased and beat with a voice. A plain stone is flat in both looks, so
+the menu greys 3D while one is chosen.
+
+In the flat look every dark part has a pale rim, so a mascot holds on a dark
+desktop as well as on a light one.
 
 The same menu holds two more choices:
 

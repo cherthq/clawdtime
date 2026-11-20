@@ -397,9 +397,9 @@ final class DesignMotionTests: XCTestCase {
     XCTAssertEqual(animator.preferredFramesPerSecond(loud), 60)
   }
   func testEveryMascotStyleHasANameAndTheClockStopsUnderReducedMotion() {
-    XCTAssertEqual(MascotStyle.allCases.map(\.rawValue), ["flint", "pebble", "core", "neon", "orb", "onyx", "flux", "iris"])
+    XCTAssertEqual(MascotStyle.allCases.map(\.rawValue), ["flint", "jet", "jade", "lapis", "amber", "garnet", "amethyst", "pebble", "core", "neon", "iris"])
     XCTAssertEqual(MascotStyle.allCases.first, .flint, "a new install starts with the Chert mark")
-    XCTAssertEqual(Set(MascotStyle.allCases.map(\.title)).count, 8)
+    XCTAssertEqual(Set(MascotStyle.allCases.map(\.title)).count, 11)
     XCTAssertTrue(MascotStyle.allCases.allSatisfy { !$0.summary.isEmpty && $0.summary.count < 60 })
     var animator = MascotAnimator(seed: 2)
     var moving = MascotInput(mood: .working), still = MascotInput(mood: .working)
@@ -409,6 +409,13 @@ final class DesignMotionTests: XCTestCase {
     XCTAssertEqual(pose.clock, 0.5, accuracy: 0.001); XCTAssertEqual(pose.voice, 0.5)
     pose = animator.step(1.0 / 60, still)
     XCTAssertEqual(pose.clock, 0, "a style that moves on its own stops under reduced motion")
+  }
+  func testThePlainStonesAreFlatOnlyAndARemovedStyleNoLongerReads() {
+    // The six plain stones are one flat shape each: they have no lit figure.
+    XCTAssertEqual(MascotStyle.allCases.filter { !$0.hasSolid }, [.jet, .jade, .lapis, .amber, .garnet, .amethyst])
+    XCTAssertTrue(MascotStyle.flint.hasSolid)
+    // A style that was removed no longer reads, so a kept choice of it falls back to the mark.
+    for old in ["orb", "onyx", "flux"] { XCTAssertNil(MascotStyle(rawValue: old)) }
   }
   func testTheSizeSliderStartsSmallAndStaysInItsRange() {
     // The start size is smaller than the full size, and it is a place on the slider.

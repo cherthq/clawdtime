@@ -7,31 +7,45 @@ public enum MascotMood: String, CaseIterable, Sendable {
 
 /// How the mascot is drawn. Every style reads the same poses, so each one blinks,
 /// looks, jumps, runs with a drag and shows the state in its own way. Flint, the
-/// Chert mark, is the one a new install starts with.
+/// Chert mark, is the one a new install starts with. The six plain stones after
+/// it are flat only.
 public enum MascotStyle: String, CaseIterable, Sendable {
-  case flint, pebble, core, neon, orb, onyx, flux, iris
+  case flint, jet, jade, lapis, amber, garnet, amethyst, pebble, core, neon, iris
   public var title: String {
     switch self {
     case .flint: return "Flint"
+    case .jet: return "Jet"
+    case .jade: return "Jade"
+    case .lapis: return "Lapis"
+    case .amber: return "Amber"
+    case .garnet: return "Garnet"
+    case .amethyst: return "Amethyst"
     case .pebble: return "Pebble"
     case .core: return "Core"
     case .neon: return "Neon"
-    case .orb: return "Orb"
-    case .onyx: return "Onyx"
-    case .flux: return "Flux"
     case .iris: return "Iris"
     }
   }
   public var summary: String {
     switch self {
     case .flint: return "The Chert mark, and its flake"
+    case .jet: return "A round black pebble"
+    case .jade: return "A green slab"
+    case .lapis: return "A blue wedge, cut like the mark"
+    case .amber: return "A drop of amber"
+    case .garnet: return "A wine-red peak"
+    case .amethyst: return "A violet flake"
     case .pebble: return "The round stone, friendly"
     case .core: return "A glass orb with an iris of light"
     case .neon: return "A night-city droid in black chrome and neon"
-    case .orb: return "A ball droid with two small robotic eyes"
-    case .onyx: return "Black stone with veins of gold"
-    case .flux: return "A drop of liquid with small robotic eyes"
     case .iris: return "A lens that watches: glass, steel, an aperture"
+    }
+  }
+  /// The style also has a lit 3D figure. A plain stone is one flat shape and has none.
+  public var hasSolid: Bool {
+    switch self {
+    case .flint, .pebble, .core, .neon, .iris: return true
+    case .jet, .jade, .lapis, .amber, .garnet, .amethyst: return false
     }
   }
 }

@@ -4,16 +4,15 @@ import TaskPanelCore
 
 /// Which drawing belongs to which style.
 enum MascotCatalog {
-  static func make(_ style: MascotStyle) -> MascotFigure {
+  /// The lit 3D figure of a style. A plain stone has none.
+  static func make(_ style: MascotStyle) -> MascotFigure? {
     switch style {
     case .flint: return FlintScene()
     case .pebble: return MascotScene()
     case .core: return CoreScene()
     case .neon: return NeonScene()
-    case .orb: return OrbScene()
-    case .onyx: return OnyxScene()
-    case .flux: return FluxScene()
     case .iris: return IrisScene()
+    case .jet, .jade, .lapis, .amber, .garnet, .amethyst: return nil
     }
   }
   private static var thumbnails: [MascotStyle: NSImage] = [:]
@@ -24,7 +23,8 @@ enum MascotCatalog {
     let plain = style == .flint && !flintEye
     if plain, let image = plainFlint { return image }
     if !plain, let image = thumbnails[style] { return image }
-    let figure = make(style)
+    // A style with no lit figure shows its flat picture.
+    guard let figure = make(style) else { return flatImage(style, points: points) }
     (figure as? FlintScene)?.showsEye = !plain
     figure.set(mood: .idle)
     var pose = MascotPose()

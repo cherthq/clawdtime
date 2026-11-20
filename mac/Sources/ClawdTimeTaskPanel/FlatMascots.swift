@@ -134,10 +134,8 @@ extension MascotCatalog {
     case .pebble: return PebbleFlat()
     case .core: return CoreFlat()
     case .neon: return NeonFlat()
-    case .orb: return OrbFlat()
-    case .onyx: return OnyxFlat()
-    case .flux: return FluxFlat()
     case .iris: return IrisFlat()
+    case .jet, .jade, .lapis, .amber, .garnet, .amethyst: return StoneFlat(style)
     }
   }
   /// A flat figure at rest as a picture, for the menu.
@@ -227,6 +225,92 @@ final class FlintFlat: FlatFigure {
         line.addLine(to: Flat.point(from.x + CGFloat(cos(angle) * size), from.y + CGFloat(sin(angle) * size)))
         Flat.stroke(c, line, k % 2 == 0 ? Flat.orange : light, 2.8)
       }
+    }
+    c.restoreGState()
+  }
+}
+
+/// The plain stones: one solid shape with two bar eyes, and nothing else. Each
+/// outline is a facet in the language of the Chert mark: a pebble, a slab, a
+/// wedge, a drop, a peak, a flake. The rim around a stone is its state: pale at
+/// rest, and in the color of the state otherwise.
+final class StoneFlat: FlatFigure {
+  struct Cut {
+    /// The outline: a polygon whose corners are rounded by `radius`, or a smooth path.
+    var points: [CGPoint] = []
+    var radius: CGFloat = 0
+    var path: CGPath?
+    let body: UInt32
+    /// Pale eyes take the color of the state. Dark eyes, on a light stone, stay dark.
+    var darkEyes = false
+    /// The middle of the face.
+    let face: CGPoint
+  }
+  static func cut(_ style: MascotStyle) -> Cut {
+    switch style {
+    case .jade:
+      return Cut(points: [Flat.point(50, 48), Flat.point(146, 38), Flat.point(160, 146), Flat.point(44, 160)], radius: 28, body: 0x157A5C, face: Flat.point(101, 98))
+    case .lapis:
+      // Five sides, as the large piece of the mark.
+      return Cut(points: [Flat.point(92, 30), Flat.point(158, 66), Flat.point(150, 164), Flat.point(54, 170), Flat.point(34, 88)], radius: 22, body: 0x2A4BB0, face: Flat.point(97, 104))
+    case .amber:
+      let drop = CGMutablePath()
+      drop.move(to: Flat.point(118, 26))
+      drop.addCurve(to: Flat.point(168, 120), control1: Flat.point(136, 52), control2: Flat.point(168, 86))
+      drop.addCurve(to: Flat.point(100, 174), control1: Flat.point(168, 152), control2: Flat.point(138, 174))
+      drop.addCurve(to: Flat.point(32, 120), control1: Flat.point(62, 174), control2: Flat.point(32, 152))
+      drop.addCurve(to: Flat.point(92, 50), control1: Flat.point(32, 84), control2: Flat.point(70, 62))
+      drop.addCurve(to: Flat.point(118, 26), control1: Flat.point(104, 44), control2: Flat.point(112, 36))
+      drop.closeSubpath()
+      return Cut(path: drop, body: 0xE3A32F, darkEyes: true, face: Flat.point(100, 122))
+    case .garnet:
+      return Cut(points: [Flat.point(100, 22), Flat.point(178, 166), Flat.point(22, 166)], radius: 26, body: 0x8E2440, face: Flat.point(100, 124))
+    case .amethyst:
+      // Four sides, as the small piece of the mark.
+      return Cut(points: [Flat.point(104, 22), Flat.point(166, 78), Flat.point(112, 180), Flat.point(40, 86)], radius: 20, body: 0x5A3AA6, face: Flat.point(104, 92))
+    default:
+      // Jet, and any style that has no cut of its own.
+      return Cut(path: Flat.oval(100, 108, 66, 62), body: 0x1C1A16, face: Flat.point(100, 104))
+    }
+  }
+  private let cut: Cut
+  private var follow = Follow()
+  init(_ style: MascotStyle) { cut = Self.cut(style) }
+  func draw(_ pose: MascotPose, mood: MascotMood, in c: CGContext) {
+    follow.step(pose, trail: -pose.travel * pose.gait * 0.32, rise: pose.air * 5)
+    let state = Flat.state(mood, idle: 0xF7F5EF)
+    c.saveGState()
+    Flat.place(c, pose)
+    // The stone: the rim in the color of the state, the ink edge, the body.
+    let shape = cut.path ?? Flat.polygon(Flat.inset(cut.points, by: cut.radius))
+    let round = cut.path == nil ? 2 * cut.radius : 0
+    func layer(_ color: CGColor, grown: CGFloat) {
+      c.setFillColor(color); c.setStrokeColor(color); c.setLineWidth(round + 2 * grown); c.setLineJoin(.round)
+      c.addPath(shape); c.drawPath(using: round + grown > 0 ? .fillStroke : .fill)
+    }
+    layer(state, grown: 8.5); layer(Flat.ink, grown: 3.5)
+    layer(Flat.color(mood == .offline ? 0x77736C : cut.body), grown: 0)
+    // The eyes: two bars. They look, lean into the way the stone is carried, shut to a line, and bow when it is pleased.
+    let color = cut.darkEyes ? Flat.ink : mood == .offline ? Flat.color(0xD8D4CB) : state
+    let open = CGFloat(max(0, min(1.25, pose.eyeOpen)))
+    let lookX = CGFloat(pose.pupilX) * 6 + CGFloat(pose.yaw) * 8, lookY = -CGFloat(pose.pupilY) * 5 - CGFloat(follow.rise.value)
+    // A voice makes the bars beat.
+    let beat = pose.voice > 0.03 ? 1 + 0.3 * CGFloat(pose.voice) * CGFloat(sin(pose.clock * 15)) : 1
+    for side in [CGFloat(-1), 1] {
+      c.saveGState()
+      c.translateBy(x: cut.face.x + side * 20 + lookX, y: cut.face.y + lookY); c.rotate(by: CGFloat(follow.trail.value))
+      if open < 0.2 {
+        let line = CGMutablePath(); line.move(to: Flat.point(-10, 0)); line.addLine(to: Flat.point(10, 0))
+        Flat.stroke(c, line, color, 6)
+      } else if pose.squint > 0.5 {
+        let bow = CGMutablePath()
+        bow.addArc(center: Flat.point(0, 7), radius: 11, startAngle: .pi * 1.1, endAngle: .pi * 1.9, clockwise: false)
+        Flat.stroke(c, bow, color, 6.5)
+      } else {
+        let wide: CGFloat = 16, tall = max(7, 38 * min(1.15, open) * beat), corner = min(wide, tall) / 2
+        Flat.fill(c, CGPath(roundedRect: CGRect(x: -wide / 2, y: -tall / 2, width: wide, height: tall), cornerWidth: corner, cornerHeight: corner, transform: nil), color)
+      }
+      c.restoreGState()
     }
     c.restoreGState()
   }
@@ -394,136 +478,6 @@ final class NeonFlat: FlatFigure {
       c.setFillColor(light); c.fill(CGRect(x: 80 + CGFloat(k) * 8, y: 141 - level, width: 5, height: level))
     }
     c.restoreGState()
-  }
-}
-
-/// Orb: a two-tone ball, cobalt over deep navy, with a visor, two ring eyes and a belt of lamps.
-final class OrbFlat: FlatFigure {
-  private var follow = Follow()
-  func draw(_ pose: MascotPose, mood: MascotMood, in c: CGContext) {
-    follow.step(pose, trail: -pose.travel * pose.gait * 12, rise: pose.air * 12)
-    let light = Flat.state(mood, idle: 0x7FE3FF)
-    // The hover ring stays low in a jump and trails when the ball is carried.
-    let ring = Flat.oval(100 + CGFloat(follow.trail.value), 178 + CGFloat(follow.rise.value) * 0.4, 38, 9)
-    Flat.stroke(c, ring, Flat.ink, 7); Flat.stroke(c, ring, light, 3)
-    c.saveGState()
-    Flat.place(c, pose, base: 158)
-    for x in [CGFloat(38), 162] { Flat.disc(c, x, 98, 14, Flat.paper) }
-    Flat.disc(c, 100, 96, 66.5, Flat.paper)
-    for x in [CGFloat(38), 162] { Flat.disc(c, x, 98, 11, Flat.ink); Flat.disc(c, x, 98, 5 + 2 * CGFloat(pose.glow), light) }
-    Flat.disc(c, 100, 96, 63.5, Flat.ink)
-    c.saveGState(); c.addPath(Flat.oval(100, 96, 60, 60)); c.clip()
-    c.setFillColor(Flat.color(mood == .offline ? 0x9A9EA6 : 0x3D6DFF)); c.fill(CGRect(x: 30, y: 30, width: 140, height: 80))
-    c.setFillColor(Flat.color(mood == .offline ? 0x33363E : 0x17256B)); c.fill(CGRect(x: 30, y: 110, width: 140, height: 60))
-    c.setFillColor(Flat.color(0x080C24)); c.fill(CGRect(x: 30, y: 109, width: 140, height: 12))
-    // One bright lamp runs around the belt at the speed of the work; a voice lights them all by level.
-    let lamps = 13, lead = Int((pose.sparkAngle / (2 * .pi) * Double(lamps)).rounded(.down)) % lamps
-    for k in 0..<lamps {
-      let bright = pose.voice > 0.03 ? Double(k) / Double(lamps) < pose.voice : k == lead
-      c.setFillColor(bright ? light : Flat.color(0x33438F)); c.fill(CGRect(x: 44 + CGFloat(k) * 9, y: 113, width: 5, height: 4))
-    }
-    c.restoreGState()
-    let turn = CGFloat(pose.yaw) * 8
-    let visor = CGPath(roundedRect: CGRect(x: 60 + turn, y: 62, width: 80, height: 36), cornerWidth: 18, cornerHeight: 18, transform: nil)
-    Flat.fill(c, visor, Flat.color(0x080C24)); Flat.stroke(c, visor, Flat.paper, 2.5)
-    Flat.eye(c, 82 + turn, 80, color: light, r: 8.5, pose: pose); Flat.eye(c, 118 + turn, 80, color: light, r: 8.5, pose: pose)
-    Flat.fill(c, CGPath(roundedRect: CGRect(x: 94, y: 34, width: 12, height: 6), cornerWidth: 3, cornerHeight: 3, transform: nil), Flat.orange)
-    c.restoreGState()
-  }
-}
-
-/// Onyx: a black stone with a gold edge, gold cracks, two facets of amethyst, gold-rimmed ring eyes and a halo.
-final class OnyxFlat: FlatFigure {
-  private var follow = Follow()
-  private static let cracks: [[CGPoint]] = [
-    [Flat.point(78, 52), Flat.point(96, 66), Flat.point(118, 62), Flat.point(132, 76), Flat.point(150, 74)],
-    [Flat.point(132, 76), Flat.point(138, 96), Flat.point(158, 108)],
-    [Flat.point(38, 118), Flat.point(62, 126), Flat.point(74, 144), Flat.point(68, 160)],
-    [Flat.point(74, 144), Flat.point(96, 152)], [Flat.point(118, 62), Flat.point(122, 48)],
-  ]
-  /// The cracks cut the stone into facets. Two of them are amethyst.
-  private static let facets: [(points: [CGPoint], hex: UInt32)] = [
-    ([Flat.point(122, 40), Flat.point(118, 62), Flat.point(132, 76), Flat.point(138, 96), Flat.point(158, 108), Flat.point(180, 112), Flat.point(180, 40)], 0x5B2D9E),
-    ([Flat.point(20, 112), Flat.point(38, 118), Flat.point(62, 126), Flat.point(74, 144), Flat.point(68, 160), Flat.point(60, 176), Flat.point(20, 176)], 0x3B1F78),
-  ]
-  func draw(_ pose: MascotPose, mood: MascotMood, in c: CGContext) {
-    follow.step(pose, trail: -pose.travel * pose.gait * 14, rise: pose.air * 12)
-    let light = Flat.state(mood), gold = Flat.color(mood == .offline ? 0x8A857D : 0xFFC02E)
-    c.saveGState()
-    Flat.place(c, pose)
-    // The halo floats above, trails like a hat in the wind, and tips for a greeting.
-    c.saveGState()
-    c.translateBy(x: 104 + CGFloat(follow.trail.value), y: 34 - CGFloat(follow.rise.value))
-    c.rotate(by: CGFloat(follow.trail.value) * 0.02 + CGFloat(pose.wave * 0.35 * sin(pose.clock * 2 * .pi * 3)) + CGFloat(pose.ringWobble))
-    Flat.band(c, Flat.oval(0, 0, 38, 8), gold, 5, cap: .butt)
-    let angle = pose.sparkAngle
-    Flat.disc(c, 38 * CGFloat(cos(angle)), 8 * CGFloat(sin(angle)), 6.5, Flat.ink); Flat.disc(c, 38 * CGFloat(cos(angle)), 8 * CGFloat(sin(angle)), 4.5, light)
-    c.restoreGState()
-    let stone = Flat.oval(100, 108, 68, 58)
-    // A pale rim, then the gold edge, then the stone.
-    Flat.stroke(c, stone, Flat.paper, 14); Flat.stroke(c, stone, gold, 9); Flat.fill(c, stone, Flat.color(0x0C0D12))
-    c.saveGState(); c.addPath(Flat.oval(100, 108, 64.5, 54.5)); c.clip()
-    if mood != .offline { for facet in Self.facets { Flat.fill(c, Flat.polygon(facet.points), Flat.color(facet.hex)) } }
-    for line in Self.cracks {
-      let path = CGMutablePath(); path.addLines(between: line)
-      Flat.stroke(c, path, gold, 3.2 + 1.6 * CGFloat(pose.voice))
-    }
-    c.restoreGState()
-    let turn = CGFloat(pose.yaw) * 8
-    Flat.eye(c, 80 + turn, 100, color: light, r: 8.5, pose: pose, rim: gold, socket: Flat.color(0x000000))
-    Flat.eye(c, 120 + turn, 100, color: light, r: 8.5, pose: pose, rim: gold, socket: Flat.color(0x000000))
-    c.restoreGState()
-  }
-}
-
-/// Flux: a drop in two tones, mint over emerald. The line where they meet is its liquid: it tips and sloshes.
-final class FluxFlat: FlatFigure {
-  private var follow = Follow()
-  private static let drop: CGPath = {
-    let p = CGMutablePath()
-    p.move(to: Flat.point(112, 30))
-    p.addCurve(to: Flat.point(170, 116), control1: Flat.point(128, 44), control2: Flat.point(170, 76))
-    p.addCurve(to: Flat.point(100, 170), control1: Flat.point(170, 150), control2: Flat.point(140, 170))
-    p.addCurve(to: Flat.point(30, 116), control1: Flat.point(60, 170), control2: Flat.point(30, 150))
-    p.addCurve(to: Flat.point(86, 50), control1: Flat.point(30, 82), control2: Flat.point(62, 62))
-    p.addCurve(to: Flat.point(112, 30), control1: Flat.point(98, 44), control2: Flat.point(106, 38))
-    p.closeSubpath(); return p
-  }()
-  func draw(_ pose: MascotPose, mood: MascotMood, in c: CGContext) {
-    follow.step(pose, trail: pose.travel * pose.gait * 0.34, rise: pose.air * 10)
-    let light = Flat.state(mood)
-    c.saveGState()
-    Flat.place(c, pose)
-    Flat.rim(c, Self.drop)
-    Flat.stroke(c, Self.drop, Flat.ink, 7); Flat.fill(c, Self.drop, Flat.ink)
-    c.saveGState(); c.addPath(Self.drop); c.clip()
-    c.setFillColor(Flat.color(mood == .offline ? 0x9A9EA6 : 0x52E8B4)); c.fill(CGRect(x: 0, y: 0, width: 200, height: 200))
-    // The dark liquid: its surface tips against the way of travel and rocks back, and it breathes.
-    c.saveGState()
-    c.translateBy(x: 100, y: 114 + CGFloat(sin(pose.clock * 1.3)) * 1.6 + CGFloat(follow.rise.value))
-    c.rotate(by: CGFloat(follow.trail.value))
-    c.setFillColor(Flat.color(mood == .offline ? 0x2A2F45 : 0x0A6B58)); c.fill(CGRect(x: -140, y: 0, width: 280, height: 140))
-    c.setFillColor(light); c.fill(CGRect(x: -140, y: -3, width: 280, height: 5))
-    c.restoreGState()
-    c.setFillColor(Flat.paper)
-    c.addPath(CGPath(roundedRect: CGRect(x: 58, y: 72, width: 16, height: 9), cornerWidth: 2, cornerHeight: 2, transform: nil))
-    c.addPath(CGPath(roundedRect: CGRect(x: 77, y: 66, width: 12, height: 8), cornerWidth: 2, cornerHeight: 2, transform: nil)); c.fillPath()
-    c.restoreGState()
-    let turn = CGFloat(pose.yaw) * 8, steel = Flat.color(mood == .offline ? 0x5E6788 : 0x0E8F74), socket = Flat.color(0x06261F)
-    Flat.eye(c, 82 + turn, 100, color: light, r: 8.5, pose: pose, rim: steel, socket: socket)
-    Flat.eye(c, 122 + turn, 100, color: light, r: 8.5, pose: pose, rim: steel, socket: socket)
-    if pose.voice > 0.05 { Flat.fill(c, Flat.oval(102 + turn, 134, 6 + 3 * CGFloat(pose.voice), 2 + 6 * CGFloat(pose.voice)), Flat.paper) } else {
-      let mouth = CGMutablePath(); mouth.move(to: Flat.point(94 + turn, 132))
-      mouth.addQuadCurve(to: Flat.point(110 + turn, 132), control: Flat.point(102 + turn, 132 + 10 * CGFloat(max(0, min(1, pose.smile)))))
-      Flat.stroke(c, mouth, Flat.paper, 3.5)
-    }
-    c.restoreGState()
-    // Two droplets circle it, a little behind when it is carried.
-    for (lag, r, hex) in [(0.0, CGFloat(6), UInt32(0xF7F5EF)), (0.5, 2.8, 0x52E8B4)] {
-      let angle = pose.sparkAngle - lag
-      let x = 100 + 86 * CGFloat(cos(angle)) - CGFloat(follow.trail.value) * 30, y = 112 + 52 * CGFloat(sin(angle)) - CGFloat(pose.bob + pose.lift) * 43.5
-      Flat.disc(c, x, y, r + 3, Flat.ink); Flat.disc(c, x, y, r, Flat.color(hex))
-    }
   }
 }
 
