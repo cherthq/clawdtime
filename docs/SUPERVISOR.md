@@ -296,6 +296,9 @@ What it can do when you ask:
   session" below.
 - Make a session's terminal window fill the screen, put it back, or change its
   text size.
+- Open an application, or a web address in it: "open Chrome", "go to
+  example.com in Chrome". It opens at once. Your own words must name the
+  application and give the site of the address.
 - Hand any other work to a new coding session and say its answer when it is
   done. See "Give it a job" below.
 - Type your words into a session's terminal.
@@ -439,6 +442,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
 - When the coding agent is not installed, the job ends at once and says so.
+
+Jobs and applications work in `clawdtime chat` and in the chat of the desktop
+panel. In the panel, a task that you ask for goes to the task service. When
+that service runs with no coding worker, the task is only written down. Start
+the desktop service with `CLAWDTIME_SIMULATION_JOBS=on` to send such a task to
+a job. `CLAWDTIME_DESKTOP_WINDOWS=off` turns jobs and applications off in the
+panel's chat.
 
 ```sh
 clawdtime jobs           # the jobs and their answers
