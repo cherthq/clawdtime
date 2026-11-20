@@ -9,6 +9,13 @@ session on this Mac (Claude Code, Codex, pi and more), show which ones wait for
 you, and bring a session's terminal forward. It reads state only and never sends
 input to a session. See the [agent board guide](docs/AGENT_BOARD.md).
 
+Supervisor: ClawdTime can also answer an agent for you. Approve or deny a
+permission request from the panel, the mascot's bubble, a command, or a FaceTime
+call when you are away. It keeps each decision in a trove, repeats an answer only
+where you made a rule, types into a session's terminal on request, and reports
+the agent commands you use as a slide deck. See the
+[supervisor guide](docs/SUPERVISOR.md).
+
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is
 requested, replace it mid-call when its first fresh frame is ready; do not blank

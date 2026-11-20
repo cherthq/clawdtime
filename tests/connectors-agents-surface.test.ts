@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { agentsCli, findSession } from "../cli/agents.js";
 import { desktopCli } from "../cli/task-desktop.js";
+import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { focusSession, type Runner } from "../connectors/agents/focus.js";
 import { runPublisher } from "../connectors/agents/publisher.js";
@@ -553,6 +554,9 @@ it("real desktop service serves the board to the panel credential only, and turn
       });
     return request;
   };
+  const stateFolder = join(temporary, "clawdtime-state");
+  const previousState = process.env.CLAWDTIME_CONFIG_HOME;
+  process.env.CLAWDTIME_CONFIG_HOME = stateFolder;
   try {
     const request = await start("on", []);
     // The first scan runs in the publisher process, so the board is not there at once.
@@ -580,6 +584,109 @@ it("real desktop service serves the board to the panel credential only, and turn
     expect(await missed.json()).toEqual({ ok: false, precision: "none" });
     expect((await focus({ id: "../etc" })).status).toBe(400);
     expect((await focus({ id: "999999-zz", extra: 1 })).status).toBe(400);
+    // What agents ask, and the person's answers, through the same panel credential.
+    const post = (path: string, body: unknown, credential?: string) =>
+      request(path, { method: "POST", body: JSON.stringify(body) }, credential);
+    const empty = await request("/desktop/decisions");
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toEqual({
+      version: 1,
+      away: false,
+      callReady: false,
+      pending: [],
+    });
+    expect(
+      (await request("/desktop/decisions", {}, "x".repeat(64))).status,
+    ).toBe(401);
+    // Reading it told the hooks that someone attends.
+    const desk = new DecisionDesk(stateFolder);
+    expect(desk.attended()).toBe(true);
+    const asked = desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: {
+        kind: "permission",
+        tool: "Bash",
+        summary: "npm test",
+        options: [],
+      },
+      holdSeconds: 45,
+    });
+    const shown = (await (await request("/desktop/decisions")).json()) as {
+      pending: { id: string; summary: string; canRemember: boolean }[];
+    };
+    expect(shown.pending).toMatchObject([
+      { id: asked.id, summary: "npm test", canRemember: true },
+    ]);
+    expect(
+      (
+        await post(
+          "/desktop/decisions/answer",
+          { id: asked.id, decision: "allow" },
+          "x".repeat(64),
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      await (
+        await post("/desktop/decisions/answer", {
+          id: asked.id,
+          decision: "allow",
+          remember: true,
+        })
+      ).json(),
+    ).toEqual({ ok: true });
+    expect(desk.take(asked.id)).toMatchObject({
+      decision: "allow",
+      via: "panel",
+      remember: true,
+    });
+    expect(
+      await (
+        await post("/desktop/decisions/answer", {
+          id: "0123456789abcdef",
+          decision: "deny",
+        })
+      ).json(),
+    ).toEqual({ ok: false });
+    expect(
+      (
+        await post("/desktop/decisions/answer", {
+          id: "../x",
+          decision: "allow",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post("/desktop/decisions/answer", {
+          id: asked.id,
+          decision: "maybe",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      await (await post("/desktop/decisions/away", { away: true })).json(),
+    ).toEqual({ away: true });
+    expect(desk.away()).toBe(true);
+    expect(
+      await (await post("/desktop/decisions/away", { away: false })).json(),
+    ).toEqual({ away: false });
+    expect(
+      (await post("/desktop/decisions/away", { away: "yes" })).status,
+    ).toBe(400);
+    // Text goes only to a session on the current board.
+    expect(
+      await (
+        await post("/desktop/agents/send", { id: "999999-zz", text: "hello" })
+      ).json(),
+    ).toEqual({ ok: false, route: "none" });
+    expect(
+      (await post("/desktop/agents/send", { id: "999999-zz", text: "" }))
+        .status,
+    ).toBe(400);
     const off = await start("off", ["--agents", "false", "--tucked", "true"]);
     // Only the tucked start passes the switch to the panel.
     expect(panelArguments.map((args) => args.includes("--tucked"))).toEqual([
@@ -590,6 +697,8 @@ it("real desktop service serves the board to the panel credential only, and turn
     expect((await off("/desktop/agents")).status).toBe(404);
     expect((await off("/desktop/state")).status).toBe(200);
   } finally {
+    if (previousState === undefined) delete process.env.CLAWDTIME_CONFIG_HOME;
+    else process.env.CLAWDTIME_CONFIG_HOME = previousState;
     await Promise.all(children.map(closeOwned));
     rmSync(temporary, { recursive: true, force: true });
   }

@@ -1,0 +1,154 @@
+# Supervisor
+
+ClawdTime supervises the coding agents on this Mac. The [agent board](AGENT_BOARD.md)
+shows them. This page is about what ClawdTime can do for you: answer an agent,
+remember your decisions, reach you by phone, type into a terminal, report on the
+agent commands you use, and work with the browser.
+
+Every action here starts with you: a click, a command, or your voice on a call.
+The one exception is a standing rule, and only you can make one.
+
+## Answer an agent without its terminal
+
+An agent that needs permission, asks a question, or has a plan to approve puts a
+request on the desk. You answer it in the panel, on the mascot's bubble, in
+`agents watch`, with a command, or on a call. The agent's own hook hands your
+answer to the agent. Nothing is typed into its terminal.
+
+```sh
+clawdtime agents hooks install --agent claude-code   # once
+clawdtime agents hooks install --agent codex         # once, then /hooks in Codex
+clawdtime agents pending                             # what waits
+clawdtime agents approve 1                           # or: approve 1 --always
+clawdtime agents deny 1 --message "Not before review."
+clawdtime agents answer 1 2                          # the second choice of a question
+```
+
+How it behaves:
+
+- A hook waits only while someone attends the desk: the panel, or `agents watch`.
+  With nobody there it says nothing, and the agent works exactly as it does with
+  no hook.
+- Claude Code shows its own prompt at the same time. You can still answer in the
+  terminal. The first answer wins, and a request that the terminal answered
+  leaves the desk at once.
+- A request waits 45 seconds on the desk. After that only the terminal answers.
+  In away mode it waits up to 9 minutes.
+- Supported: Claude Code permission requests, single-choice questions and plans;
+  Codex approval requests. A question with several parts stays in the terminal.
+
+| Agent       | Permission | Question | Plan | Notes                                       |
+| ----------- | ---------- | -------- | ---- | ------------------------------------------- |
+| Claude Code | yes        | yes      | yes  | Settings change applies to running sessions |
+| Codex       | yes        | no       | no   | Codex runs a hook only after `/hooks` trust |
+
+## The trove: decisions as a playbook
+
+Each answer you give through ClawdTime is kept: who asked, in which project,
+what, what you answered, and through which channel. The trove then:
+
+- shows what you answered before to the same kind of request in the same
+  project ("You allowed this 3 times here");
+- repeats an answer only where you made a rule (`--always`, or **Always in this
+  project** in the panel). A rule allows one request pattern for one agent in one
+  project. It never crosses projects, and it never denies;
+- keeps the critical decisions you write down.
+
+```sh
+clawdtime trove                      # the last decisions
+clawdtime trove search push codex    # every word must match
+clawdtime trove note "Never push to main without a review."
+clawdtime trove rules                # standing rules
+clawdtime trove forget RULE          # remove one
+clawdtime trove playbook --out playbook.md
+```
+
+A request is grouped by a narrow key: a shell command by its program and its
+first plain word (`git push`, `npm test`), every other tool by its name. A
+command with pipes, lists or substitutions gets the bare key `Bash`, and the bare
+key cannot become a rule. An answer given in the terminal is not in the trove,
+because ClawdTime does not see which answer it was.
+
+## Away: answer by phone
+
+Away mode turns a waiting request into a FaceTime call through the ClawdTime
+backend and its Chert line. The call says who asks and what, for example "Claude
+Code in app asks to run the command: npm test. Say approve or deny." Your spoken
+answer goes to the agent through the same desk as a click.
+
+```sh
+clawdtime setup --agent claude-code --project PATH ...   # the existing pairing
+clawdtime agents call connect --agent claude-code --project PATH
+clawdtime agents away on
+```
+
+- Only clear words count. "Approve", "yes", "go ahead" allow. "Deny", "no",
+  "stop" deny, and your words become the reason for the agent. Unclear words, both
+  at once, silence or other sound never approve: the call asks again, up to three
+  times.
+- One request places one call. An unanswered call leaves the request for the
+  panel and the terminal.
+- The supervisor claims no screen and no input for the call. It only talks.
+
+## Terminal use
+
+```sh
+clawdtime agents send SESSION "run the tests again"
+```
+
+This types the text into that session's terminal and presses Return. It works
+for a session in tmux, in Terminal, in iTerm2, and in Ghostty 1.4 or later.
+Control characters are removed, so the text cannot carry an escape sequence. A
+session in another terminal is refused with the reason.
+
+## Agent commands, use, and slides
+
+```sh
+clawdtime clis                 # installed agent commands, versions, sessions, last use
+clawdtime report --open        # the same as a slide deck in the browser
+```
+
+Use is counted from the names and times of session files: Claude Code, Codex, pi
+and dexter. No transcript is read. The deck is one file with no network: the
+state now, each session, the agent commands and their use, the trove, the
+playbook, and what to do next. Arrow keys move through it, and it prints.
+
+## Browser use
+
+```sh
+clawdtime browser tabs         # every tab of the browsers that run
+clawdtime browser open URL     # only http and https
+clawdtime browser focus 3      # bring that tab forward
+clawdtime browser text         # the visible text of the front page
+```
+
+Chrome, Safari, Arc, Brave and Edge. macOS asks once for permission to control
+each browser. Reading page text also needs the browser's "Allow JavaScript from
+Apple Events" setting. Work inside a page, such as filling a form, stays with an
+agent that has a browser tool; ClawdTime supervises that agent.
+
+## What is stored
+
+Owner-only files under `~/.local/share/clawdtime/` (`CLAWDTIME_CONFIG_HOME`
+moves it):
+
+- `agents/decisions/pending/` and `answers/`: one small file for each request
+  while it waits. It holds the request text, cut to 600 characters, so that you
+  can see what you answer. Both files go when the hook is done.
+- `trove/decisions.jsonl`, `trove/rules.json`, `trove/notes.jsonl`: the trove.
+- `agents/decisions/call.json`: the link to a pairing for away mode. The pairing
+  credential stays in its own connection file.
+
+The board snapshot still holds no request text. Request text reaches the panel
+only through `GET /desktop/decisions`, under the private panel credential.
+
+## Limits
+
+- Away mode needs a paired project and a live backend. The call path is tested
+  against the protocol with a scripted backend; a real call needs your approval
+  for that call.
+- Codex decides its approvals through its hook only after you trust the hook
+  with `/hooks`.
+- Tab selection and typing through AppleScript (Terminal, iTerm2, Ghostty 1.4)
+  and the browser commands are tested with a recorded command runner. tmux input
+  is run for real.

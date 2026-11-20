@@ -487,9 +487,9 @@ describe("Codex hooks file", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
       hooks: { Stop: [other] },
     });
-    await expect(
-      run("hooks", "install", "--agent", "claude-code"),
-    ).rejects.toThrow("Only Codex");
+    await expect(run("hooks", "install", "--agent", "pi")).rejects.toThrow(
+      "two agents",
+    );
     await expect(
       agentsCli(["hooks", "install", "--agent", "codex"], {
         system: fakeSystem({ now, env: { CODEX_HOME: codexHome } }),

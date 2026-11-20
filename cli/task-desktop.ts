@@ -124,6 +124,8 @@ function childEnvironment(): NodeJS.ProcessEnv {
           "TMPDIR",
           "LANG",
           "CODEX_HOME",
+          // Where the agent desk and the trove live, when the person moved them.
+          "CLAWDTIME_CONFIG_HOME",
         ].includes(key) || key.startsWith("LC_"),
     ),
   );

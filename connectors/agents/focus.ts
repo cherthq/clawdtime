@@ -13,7 +13,7 @@ export const realRunner: Runner = (command, args, timeoutMs) =>
     execFile(
       command,
       args,
-      { timeout: timeoutMs, maxBuffer: 65_536, encoding: "utf8" },
+      { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, encoding: "utf8" },
       (error, stdout) =>
         resolve({
           status: error

@@ -22,7 +22,8 @@ public final class PanelClient {
   public func close() { session.invalidateAndCancel() }
   private func request(path: String, body: Data? = nil) async throws -> Data {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
-      path == "/desktop/agents" || path == "/desktop/agents/focus" ||
+      path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
+      path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -67,6 +68,25 @@ public final class PanelClient {
     let result = try JSONDecoder().decode(AgentFocusResult.self, from: await request(path: "/desktop/agents/focus", body: body))
     try result.validate()
     return result
+  }
+  /// What agents ask the person now. Reading it also tells their hooks that someone is here.
+  public func decisions() async throws -> PendingDecisions {
+    let result = try JSONDecoder().decode(PendingDecisions.self, from: await request(path: "/desktop/decisions"))
+    try result.validate()
+    return result
+  }
+  /// The person's answer to one request: allow, deny, or the text of a choice.
+  public func answerDecision(_ id: String, decision: String, text: String? = nil, remember: Bool = false) async throws -> Bool {
+    guard PendingDecisions.identity(id), ["allow", "deny", "answer"].contains(decision), (text?.count ?? 0) <= 600 else { throw PanelFailure.configuration }
+    var body: [String: Any] = ["id": id, "decision": decision, "remember": remember]
+    if let text { body["text"] = text }
+    let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    return try JSONDecoder().decode(DecisionAnswerResult.self, from: await request(path: "/desktop/decisions/answer", body: data)).ok
+  }
+  /// Away: requests wait for a phone call.
+  public func setAway(_ away: Bool) async throws {
+    let data = try JSONSerialization.data(withJSONObject: ["away": away], options: [.sortedKeys])
+    _ = try await request(path: "/desktop/decisions/away", body: data)
   }
   public func submit(_ payload: Data, eventId: String, action: PanelAction) async throws -> PanelOperation {
     // Exactly one POST. Redirects and network failures never trigger a replay.

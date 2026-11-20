@@ -19,7 +19,37 @@ export interface AgentBoardPort {
   /** The latest snapshot, or null when none is fresh. */
   snapshot(): unknown | null;
   focus(id: string): Promise<{ ok: boolean; precision: string }>;
+  /** The requests of agents that wait for the person's answer. */
+  decisions(): unknown;
+  answer(input: {
+    id: string;
+    decision: "allow" | "deny" | "answer";
+    text?: string | null;
+    remember?: boolean;
+  }): boolean;
+  setAway(away: boolean): void;
+  send(
+    id: string,
+    text: string,
+    enter: boolean,
+  ): Promise<{ ok: boolean; route: string }>;
 }
+const decisionAnswerSchema = z
+  .object({
+    id: z.string().regex(/^[0-9a-f]{16}$/),
+    decision: z.enum(["allow", "deny", "answer"]),
+    text: z.string().max(600).nullable().optional(),
+    remember: z.boolean().optional(),
+  })
+  .strict();
+const awaySchema = z.object({ away: z.boolean() }).strict();
+const agentSendSchema = z
+  .object({
+    id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,40}$/),
+    text: z.string().min(1).max(4000),
+    enter: z.boolean().optional(),
+  })
+  .strict();
 const agentFocusSchema = z
   .object({ id: z.string().regex(/^[0-9a-z][0-9a-z_-]{1,40}$/) })
   .strict();
@@ -131,6 +161,31 @@ export function createTaskApp(
         const { id } = agentFocusSchema.parse(await c.req.json());
         const { ok, precision } = await agents.focus(id);
         return c.json({ ok, precision });
+      });
+      // What agents ask the person, and the person's answers. Reading this also
+      // tells the agents' hooks that someone is here to answer.
+      app.get("/desktop/decisions", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.decisions());
+      });
+      app.post("/desktop/decisions/answer", async (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json({
+          ok: agents.answer(decisionAnswerSchema.parse(await c.req.json())),
+        });
+      });
+      app.post("/desktop/decisions/away", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { away } = awaySchema.parse(await c.req.json());
+        agents.setAway(away);
+        return c.json({ away });
+      });
+      // Types the person's own words into one session's terminal.
+      app.post("/desktop/agents/send", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id, text, enter } = agentSendSchema.parse(await c.req.json());
+        const { ok, route } = await agents.send(id, text, enter !== false);
+        return c.json({ ok, route });
       });
     }
   }

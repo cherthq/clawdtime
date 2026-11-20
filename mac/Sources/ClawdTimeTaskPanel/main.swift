@@ -16,6 +16,8 @@ import TaskPanelCore
   private var state = PanelState()
   private var pollTask: Task<Void, Never>?
   private var board: AgentBoard?
+  private var decisions: PendingDecisions?
+  private var awayItems: [NSMenuItem] = []
   private var showRevision = false
   private var lastTaskId: String?
   private var startTucked = false
@@ -54,6 +56,8 @@ import TaskPanelCore
       styleItems.append(item)
     }
     styles.submenu = styleMenu; menu.addItem(styles)
+    let away = menu.addItem(withTitle: "Away: answer by phone", action: #selector(toggleAway(_:)), keyEquivalent: "")
+    away.target = self; awayItems.append(away)
     menu.addItem(.separator())
     let sharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
     sharing.target = self; stopSharingItems.append(sharing)
@@ -100,6 +104,10 @@ import TaskPanelCore
   }
   private func refreshMenus() {
     for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
+    for item in awayItems {
+      item.state = decisions?.away == true ? .on : .off
+      item.title = decisions?.callReady == false ? "Away: answer by phone (no phone link yet)" : "Away: answer by phone"
+    }
     for item in stopSharingItems { item.isEnabled = state.allows(.stopSharing) }
     for item in stopCallItems { item.isEnabled = state.allows(.stopCall) }
   }
@@ -146,6 +154,7 @@ import TaskPanelCore
   private func wire() {
     pet.onToggleBoard = { [weak self] in self?.toggleBoard(nil) }
     pet.onOpenSession = { [weak self] id in self?.openAgent(id) }
+    pet.onDecide = { [weak self] id, decision in self?.decide(id, decision, nil, false) }
     pet.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
     pet.onStopCall = { [weak self] in self?.perform(.stopCall) }
     pet.onHide = { [weak self] in self?.closeBoard(); self?.pet.hide() }
@@ -159,6 +168,7 @@ import TaskPanelCore
     boardPanel.onClosed = { [weak self] in self?.pet.boardOpen = false }
     let view = boardPanel.view
     view.onOpenSession = { [weak self] id in self?.openAgent(id) }
+    view.onDecide = { [weak self] id, decision, text, remember in self?.decide(id, decision, text, remember) }
     view.onSubmit = { [weak self] text in self?.perform(.submit, text: text) }
     view.onAnswer = { [weak self] text in self?.perform(.decide, text: text) }
     view.onAccept = { [weak self] in self?.perform(.accept) }
@@ -215,6 +225,8 @@ import TaskPanelCore
           self.state.pending = self.receipts?.entries ?? []
           // The board is optional. A service without one never affects the task state.
           self.board = try? await client.agents()
+          // Reading this also tells the agents' hooks that someone is here to answer.
+          self.decisions = try? await client.decisions()
           self.render()
           let waiting = self.state.pending.filter(\.unresolved).map(\.eventId)
           let found = await withTaskGroup(of: PanelOperation?.self) { group in
@@ -232,7 +244,7 @@ import TaskPanelCore
           }
           self.state.pending = self.receipts?.entries ?? []; delay = 1
         } catch {
-          self.state.connected = false; self.board = nil; delay = min(5, delay * 2)
+          self.state.connected = false; self.board = nil; self.decisions = nil; delay = min(5, delay * 2)
         }
         self.render()
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -247,15 +259,16 @@ import TaskPanelCore
     if task?.id != lastTaskId { showRevision = false; lastTaskId = task?.id; localNotice = "" }
     let taskNeedsPerson = task?.decision != nil || task?.canAccept == true
     let sharing = snapshot?.controls.sharingActive == true || snapshot?.controls.callActive == true
+    let asked = (decisions?.pending ?? []).filter { $0.holdUntil > now }
     let status = PetStatus.make(board: liveBoard, connected: state.connected, taskNeedsPerson: taskNeedsPerson, sharing: sharing,
-                                quietSeconds: pet.mascot.quietSeconds, now: now)
+                                quietSeconds: pet.mascot.quietSeconds, now: now, decisions: asked)
     pet.status = status
     // Stop is always one click away: on the mascot, in the board and in every menu.
     pet.setStop(sharing: state.allows(.stopSharing), call: state.allows(.stopCall))
     refreshMenus()
 
     var model = BoardModel()
-    model.status = status; model.board = liveBoard; model.now = now
+    model.status = status; model.board = liveBoard; model.now = now; model.decisions = asked
     model.projectPath = configuration?.projectRoot ?? ""
     model.modeText = snapshot?.worker == "simulation" ? "Simulation · tasks stay queued" : state.connected ? "Codex · independently checked" : "Connecting"
     model.stage = state.stage; model.task = task
@@ -286,6 +299,29 @@ import TaskPanelCore
   @objc private func stopSharing(_ sender: Any?) { perform(.stopSharing) }
   @objc private func stopCall(_ sender: Any?) { perform(.stopCall) }
 
+  /// The person's answer to an agent. The agent's hook hands it over; the trove keeps it.
+  private func decide(_ id: String, _ decision: String, _ text: String?, _ remember: Bool) {
+    guard let client else { return }
+    Task {
+      let ok = (try? await client.answerDecision(id, decision: decision, text: text, remember: remember)) == true
+      pet.react(success: ok)
+      boardPanel.view.showToast(!ok ? "That request no longer waits here. Answer it in its terminal."
+        : decision == "allow" ? (remember ? "Allowed, and remembered for this project." : "Allowed. It continues.")
+        : decision == "deny" ? "Denied. It is told." : "Answered. It continues.")
+      decisions = try? await client.decisions()
+      render()
+    }
+  }
+  @objc private func toggleAway(_ sender: Any?) {
+    guard let client else { return }
+    let next = !(decisions?.away ?? false)
+    Task {
+      try? await client.setAway(next)
+      decisions = try? await client.decisions()
+      refreshMenus()
+      boardPanel.view.showToast(next ? "Away. Requests wait for an answer by phone." : "Here. Requests are answered on this Mac.")
+    }
+  }
   /// Brings one session's terminal forward. This is not a task operation: it has no
   /// receipt and it is safe to repeat.
   private func openAgent(_ id: String) {

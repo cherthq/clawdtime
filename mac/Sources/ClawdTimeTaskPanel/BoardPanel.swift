@@ -17,6 +17,8 @@ struct BoardModel {
   var allowStopSharing = false, allowStopCall = false
   var sharingActive = false
   var callStatus = ""
+  /// What agents ask the person now. Each can be answered right here.
+  var decisions: [PendingDecisions.Request] = []
 }
 
 private final class FlippedView: NSView { override var isFlipped: Bool { true } }
@@ -249,9 +251,82 @@ private final class NoticeView: NSView {
   }
 }
 
+/// One request of an agent, with its answer one click away. The agent's own hook
+/// hands the answer to the agent; nothing is typed into its terminal.
+final class DecisionCardView: NSView {
+  let requestId: String
+  /// decision, text, remember
+  var onDecide: ((String, String?, Bool) -> Void)?
+  private let title = Theme.label("", font: Theme.sans(13, weight: 600), lines: 2)
+  private let summary = Theme.label("", font: Theme.mono(12), lines: 4)
+  private let hint = Theme.label("", font: Theme.sans(11.5), color: .warning, lines: 2)
+  private let options: [String]
+  private var remember = false
+  private var rememberButton: PillButton?
+
+  init(request: PendingDecisions.Request, now: Double) {
+    requestId = request.id; options = request.options
+    super.init(frame: .zero)
+    let box = NSView(); box.wantsLayer = true; box.layer?.cornerRadius = 8
+    box.addSubview(summary); summary.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([summary.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 9), summary.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -9),
+      summary.topAnchor.constraint(equalTo: box.topAnchor, constant: 7), summary.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -7)])
+    summaryBox = box
+    let controls = NSStackView(); controls.orientation = request.isQuestion ? .vertical : .horizontal
+    controls.alignment = request.isQuestion ? .leading : .centerY; controls.spacing = 8
+    if request.isQuestion {
+      for (index, option) in request.options.enumerated() {
+        let choice = PillButton(option, kind: .secondary, target: self, action: #selector(choose(_:))); choice.tag = index
+        controls.addArrangedSubview(choice)
+      }
+      controls.addArrangedSubview(PillButton("Skip the question", kind: .ghost, small: true, target: self, action: #selector(deny)))
+    } else {
+      controls.addArrangedSubview(PillButton(request.kind == "plan" ? "Approve the plan" : "Approve", kind: .accent, target: self, action: #selector(approve)))
+      controls.addArrangedSubview(PillButton("Deny", kind: .secondary, target: self, action: #selector(deny)))
+      if request.canRemember {
+        let toggle = PillButton("Always in this project", kind: .ghost, small: true, target: self, action: #selector(toggleRemember))
+        toggle.toolTip = "Also make a rule: the same request in this project is allowed with no question."
+        rememberButton = toggle; controls.addArrangedSubview(toggle)
+      }
+    }
+    let stack = NSStackView(views: [title, box, controls, hint]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
+    addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12), stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+      stack.topAnchor.constraint(equalTo: topAnchor, constant: 12), stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+      box.widthAnchor.constraint(equalTo: stack.widthAnchor), title.widthAnchor.constraint(equalTo: stack.widthAnchor), hint.widthAnchor.constraint(equalTo: stack.widthAnchor)])
+    setAccessibilityElement(false)
+    update(request, now: now)
+  }
+  required init?(coder: NSCoder) { fatalError("Unavailable") }
+  private var summaryBox: NSView!
+  func update(_ request: PendingDecisions.Request, now: Double) {
+    title.stringValue = DecisionText.title(request)
+    summary.stringValue = DecisionText.summary(request)
+    hint.stringValue = [DecisionText.history(request), DecisionText.remaining(request, now: now)].filter { !$0.isEmpty }.joined(separator: "  ·  ")
+  }
+  override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
+  override func draw(_ dirtyRect: NSRect) {
+    Theme.color(.warningTint).setFill(); NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14).fill()
+    effectiveAppearance.performAsCurrentDrawingAppearance { summaryBox.layer?.backgroundColor = Theme.color(.raised).cgColor }
+  }
+  @objc private func approve() { onDecide?("allow", nil, remember) }
+  @objc private func deny() { onDecide?("deny", nil, false) }
+  @objc private func choose(_ sender: NSControl) {
+    guard options.indices.contains(sender.tag) else { return }
+    onDecide?("answer", options[sender.tag], false)
+  }
+  @objc private func toggleRemember() {
+    remember.toggle()
+    rememberButton?.kind = remember ? .secondary : .ghost
+    rememberButton?.title = remember ? "Always in this project: on" : "Always in this project"
+  }
+}
+
 /// The card: a headline that says the most urgent thing, the sessions, and the task.
 final class BoardView: NSView {
   var onOpenSession: ((String) -> Void)?
+  /// request id, decision, text, remember
+  var onDecide: ((String, String, String?, Bool) -> Void)?
   var onSubmit: ((String) -> Void)?
   var onAnswer: ((String) -> Void)?
   var onAccept: (() -> Void)?
@@ -287,6 +362,9 @@ final class BoardView: NSView {
   private var showAll = false
   private var moreButton: PillButton!
   private let emptyNote = Theme.label("Start a coding agent in a terminal and it appears here.", font: Theme.sans(12.5), color: .labelSecondary, lines: 2)
+  // Requests of agents that can be answered here
+  private let decisionStack = NSStackView()
+  private var shownDecisions: [String] = []
   // Stop and notices
   private let stopBar = NSStackView()
   private let stopLabel = Theme.label("", font: Theme.sans(12.5, weight: 600), color: .danger)
@@ -379,8 +457,9 @@ final class BoardView: NSView {
     let task = NSStackView(); vertical(task, [taskHead, progressBlock, composeBlock, decisionBlock, reviewBlock, footerRow], spacing: 10)
     fill([taskHead, progressBlock, composeBlock, decisionBlock, footerRow], in: task)
 
-    vertical(stack, [stopBar, notice, agents, rule, task], spacing: 14)
-    fill([stopBar, notice, agents, rule, task], in: stack)
+    decisionStack.orientation = .vertical; decisionStack.alignment = .leading; decisionStack.spacing = 8
+    vertical(stack, [stopBar, decisionStack, notice, agents, rule, task], spacing: 14)
+    fill([stopBar, decisionStack, notice, agents, rule, task], in: stack)
     agentsBlock = agents; taskBlock = task; ruleView = rule
     scroll.wantsLayer = true
     // The scroll view's layer runs top to bottom: the fade is at the end, the bottom.
@@ -470,6 +549,21 @@ final class BoardView: NSView {
     stopSharing.isHidden = !model.allowStopSharing && !model.sharingActive
     stopCall.isHidden = !model.allowStopCall
     notice.label.stringValue = model.notice; notice.isHidden = model.notice.isEmpty
+
+    let asked = Array(model.decisions.prefix(3))
+    if asked.map(\.id) == shownDecisions {
+      for (view, request) in zip(decisionStack.arrangedSubviews, asked) { (view as? DecisionCardView)?.update(request, now: model.now) }
+    } else {
+      decisionStack.arrangedSubviews.forEach { decisionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
+      for request in asked {
+        let card = DecisionCardView(request: request, now: model.now)
+        card.onDecide = { [weak self] decision, text, remember in self?.onDecide?(request.id, decision, text, remember) }
+        decisionStack.addArrangedSubview(card)
+        card.widthAnchor.constraint(equalTo: decisionStack.widthAnchor).isActive = true
+      }
+      shownDecisions = asked.map(\.id)
+    }
+    decisionStack.isHidden = asked.isEmpty
 
     if let board = model.board {
       let counts = board.counts

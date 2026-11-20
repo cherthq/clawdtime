@@ -12,19 +12,21 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { BoardScanner } from "../connectors/agents/board.js";
 import { catalog } from "../connectors/agents/catalog.js";
-import { codexHome } from "../connectors/agents/evidence.js";
+import { claudeHome, codexHome } from "../connectors/agents/evidence.js";
 import {
   focusSession,
   realRunner,
   type Runner,
 } from "../connectors/agents/focus.js";
 import {
-  codexHookEvents,
-  hookCommand,
-  installHooks,
-  installedHookEvents,
-  uninstallHooks,
+  applyHookPlan,
+  hookPlan,
+  plannedInstalled,
+  removeHookPlan,
 } from "../connectors/agents/hooks.js";
+import { supervisorCli, supervisorHelp } from "./supervisor.js";
+import { DecisionDesk } from "../connectors/agents/decisions.js";
+import { stateRoot } from "../connectors/agents/hooks.js";
 import { renderBoard, title } from "../connectors/agents/render.js";
 import { realSystem, type System } from "../connectors/agents/system.js";
 import type {
@@ -38,9 +40,11 @@ const help = `clawdtime agents: every coding-agent session on this Mac
   agents watch [--interval SECONDS]  live board; arrows or j/k, Enter focuses, q quits
   agents focus ID|NAME               bring that session's terminal to the front
   agents doctor                      how exactly each agent's state is known here
-  agents hooks status|install|uninstall --agent codex
+  agents hooks status|install|uninstall --agent claude-code|codex
 --all also lists one-shot runs that have no person at a terminal.
-The board reads state only. It never sends keys or text to a session.`;
+Listing and focus only read. Nothing is sent to a session unless you ask for it below.
+
+${supervisorHelp}`;
 
 export interface AgentsDependencies {
   system?: System;
@@ -151,21 +155,27 @@ function doctor(
       system.run("/usr/bin/which", [entry.names[0]!]).status === 0;
     if (!installed && !running.has(entry.kind)) continue;
     let source = stateSources[entry.kind];
-    if (entry.kind === "codex") {
-      const command = hookCommand(process.execPath, hookScript, "codex");
-      let events: readonly string[] = [];
+    if (entry.kind === "codex" || entry.kind === "claude-code") {
+      const plan = hookPlan(entry.kind, process.execPath, hookScript);
+      let ready = false;
       try {
-        events = installedHookEvents(
-          readRegular(codexHooksFile(system)),
-          command,
-        );
+        const file =
+          entry.kind === "codex"
+            ? codexHooksFile(system)
+            : join(claudeHome(system), "settings.json");
+        ready =
+          plannedInstalled(readRegular(file), plan).length === plan.length;
       } catch {
-        // An unreadable hooks file counts as no hook.
+        // A hooks file that cannot be read counts as no hook.
       }
-      source =
-        events.length === codexHookEvents.length
-          ? "exact with the hook: working, approval prompt, idle. Codex runs a hook only after you trust it with /hooks."
-          : "turn state, read from the session file. An approval prompt shows as working until the hook is added: clawdtime agents hooks install --agent codex";
+      if (entry.kind === "codex")
+        source = ready
+          ? "exact with the hooks: working, approval prompt, idle. ClawdTime can answer an approval. Codex runs a hook only after you trust it with /hooks."
+          : "turn state, read from the session file. An approval prompt shows as working until the hooks are added: clawdtime agents hooks install --agent codex";
+      else
+        source += ready
+          ? " ClawdTime can answer its permission prompts, questions and plans."
+          : " To answer its prompts from ClawdTime: clawdtime agents hooks install --agent claude-code";
     }
     print(
       `  ${entry.label.padEnd(13)} ${source ?? "found and focused. No state reader yet, so the state shows as unknown."}`,
@@ -193,6 +203,7 @@ async function watch(
   scanner: BoardScanner,
   intervalMs: number,
   runner: Runner,
+  desk: DecisionDesk,
 ) {
   const output = process.stdout;
   const input = process.stdin;
@@ -203,6 +214,9 @@ async function watch(
   let snapshot = scanner.scan(intervalMs);
   let selectedId = snapshot.sessions[0]?.id;
   let message = "";
+  // While this view runs, someone attends: agents' hooks wait here for an answer.
+  desk.attend();
+  let waiting = desk.pending();
   const index = () =>
     Math.max(
       0,
@@ -215,8 +229,16 @@ async function watch(
       now: Date.now(),
       selected: index(),
     });
+    const asks = waiting
+      .slice(0, 5)
+      .map(
+        (request, index) =>
+          `\u001b[33;1m${index + 1}. ${request.agent} asks ${request.kind === "question" ? "" : "to run "}${request.summary.replace(/\p{C}/gu, " ").slice(0, 90)}\u001b[0m`,
+      )
+      .join("\n");
+    const keys = waiting.length ? "a approves the first · d denies it · " : "";
     output.write(
-      `\u001b[H\u001b[2J${board}\n\n\u001b[2m↑↓ or j/k move · Enter focuses · q quits\u001b[0m${message ? `\n${message}` : ""}\n`,
+      `\u001b[H\u001b[2J${board}\n${asks ? `\n${asks}\n` : ""}\n\u001b[2m${keys}↑↓ or j/k move · Enter focuses · q quits\u001b[0m${message ? `\n${message}` : ""}\n`,
     );
   };
   const move = (step: number) => {
@@ -227,6 +249,8 @@ async function watch(
   await new Promise<void>((done) => {
     const timer = setInterval(() => {
       snapshot = scanner.scan(intervalMs);
+      desk.attend();
+      waiting = desk.pending();
       draw();
     }, intervalMs);
     const finish = () => {
@@ -242,6 +266,19 @@ async function watch(
     input.on("data", (key: Buffer) => {
       const value = key.toString("utf8");
       if (value === "q" || value === "\u0003") return finish();
+      if ((value === "a" || value === "d") && waiting[0]) {
+        const ok = desk.answer(waiting[0].id, {
+          decision: value === "a" ? "allow" : "deny",
+          via: "cli",
+        });
+        message = ok
+          ? value === "a"
+            ? "Allowed. The agent continues."
+            : "Denied. The agent is told."
+          : "That request no longer waits.";
+        waiting = desk.pending();
+        return draw();
+      }
       if (value === "k" || value === "\u001b[A") return move(-1);
       if (value === "j" || value === "\u001b[B") return move(1);
       if (value === "\r" || value === "\n") {
@@ -268,6 +305,14 @@ export async function agentsCli(
   const system = dependencies.system ?? realSystem();
   const runner = dependencies.runner ?? realRunner;
   const print = dependencies.print ?? console.log;
+  if (args[0] === "--supervisor")
+    return supervisorCli(args[1] ?? "", args.slice(2), {
+      system,
+      runner,
+      print,
+      hookScript: dependencies.hookScript ?? hookScriptPath(),
+      findSession,
+    });
   const command = args[0] && !args[0].startsWith("--") ? args[0] : "list";
   const rest = command === args[0] ? args.slice(1) : args;
   if (command === "help") return print(help);
@@ -299,6 +344,7 @@ export async function agentsCli(
       new BoardScanner(system, { includeHeadless: values.all === "true" }),
       Math.round(seconds * 1000),
       runner,
+      new DecisionDesk(stateRoot(system), () => system.now()),
     );
   }
   if (command === "focus") {
@@ -319,6 +365,18 @@ export async function agentsCli(
     );
   }
   const hookScript = dependencies.hookScript ?? hookScriptPath();
+  if (
+    ["pending", "approve", "deny", "answer", "send", "away", "call"].includes(
+      command,
+    )
+  )
+    return supervisorCli("agents", [command, ...rest], {
+      system,
+      runner,
+      print,
+      hookScript,
+      findSession,
+    });
   if (command === "doctor") return doctor(system, hookScript, print);
   if (command === "hooks") {
     const { values, positional } = flags(rest, { agent: "value" });
@@ -328,23 +386,33 @@ export async function agentsCli(
       !["status", "install", "uninstall"].includes(action!)
     )
       throw new Error(
-        "Use: clawdtime agents hooks status|install|uninstall --agent codex",
+        "Use: clawdtime agents hooks status|install|uninstall --agent claude-code|codex",
       );
-    if (values.agent !== "codex")
+    const agent = values.agent;
+    if (agent !== "codex" && agent !== "claude-code")
       throw new Error(
-        "Only Codex needs a hook: --agent codex. Claude Code reports its own state.",
+        "Hooks exist for two agents: --agent claude-code or --agent codex.",
       );
-    const file = codexHooksFile(system);
-    const command = hookCommand(process.execPath, hookScript, "codex");
+    const file =
+      agent === "codex"
+        ? codexHooksFile(system)
+        : join(claudeHome(system), "settings.json");
+    const plan = hookPlan(agent, process.execPath, hookScript);
     const current = readRegular(file);
+    const trust =
+      agent === "codex"
+        ? "Codex runs a new hook only after you trust it: open Codex and run /hooks once."
+        : "Claude Code reads the change at once, in sessions that already run too.";
     if (action === "status") {
-      const events = installedHookEvents(current, command);
+      const installed = plannedInstalled(current, plan).length;
       return print(
-        events.length === codexHookEvents.length
-          ? `Installed in ${file}. Codex runs it after you trust it: open Codex and run /hooks.`
-          : events.length
-            ? `Partly installed in ${file} (${events.length} of ${codexHookEvents.length} events). Run install again.`
-            : `Not installed. An approval prompt in Codex shows as working.`,
+        installed === plan.length
+          ? `Installed in ${file}. ${trust}`
+          : installed
+            ? `Partly installed in ${file} (${installed} of ${plan.length} hooks). Run install again.`
+            : agent === "codex"
+              ? "Not installed. A Codex approval prompt shows as working, and ClawdTime cannot answer it."
+              : "Not installed. ClawdTime sees Claude Code but cannot answer its prompts.",
       );
     }
     if (action === "install") {
@@ -352,16 +420,16 @@ export async function agentsCli(
         throw new Error(
           "Run npm run build first: the hook runs the built file.",
         );
-      writeAtomic(file, installHooks(current, command));
+      writeAtomic(file, applyHookPlan(current, plan));
       return print(
-        `Added ${codexHookEvents.length} hook events to ${file}. Other hooks are unchanged.\nNext: open Codex and run /hooks once to review and trust them. Codex skips them until then.`,
+        `Added ${plan.length} hooks to ${file}. Everything else in it is unchanged.\n${trust}\nA hook only acts while ClawdTime runs. With no answer in time the agent asks in its own terminal, as before.`,
       );
     }
     if (current === undefined)
       return print("No hooks file. Nothing to remove.");
-    writeAtomic(file, uninstallHooks(current, command));
+    writeAtomic(file, removeHookPlan(current, plan));
     return print(
-      `Removed the ClawdTime hook from ${file}. Other hooks are unchanged.`,
+      `Removed the ClawdTime hooks from ${file}. Everything else in it is unchanged.`,
     );
   }
   throw new Error("Unknown command. Run: clawdtime agents help");

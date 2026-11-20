@@ -360,3 +360,113 @@ export function uninstallHooks(text: string, command: string) {
   }
   return `${JSON.stringify({ ...root, hooks }, null, 2)}\n`;
 }
+
+// ------------------------------------------------------- hook plans, any agent
+
+export interface PlannedHook {
+  event: string;
+  matcher?: string;
+  command: string;
+  /** Seconds. A hook that waits for the person needs a long limit. */
+  timeout: number;
+  /** Background hooks only report state. A hook that decides must not be one. */
+  async: boolean;
+}
+
+/** The second word of the command line turns the receiver into the decision hook. */
+export const decideCommand = (node: string, script: string, agent: AgentKind) =>
+  `${hookCommand(node, script, agent)} decide`;
+
+/**
+ * The hooks one agent gets. Claude Code reports its own state, so it only gets
+ * the hooks that let the desk answer it. Codex also gets the state hooks.
+ */
+export function hookPlan(
+  agent: "claude-code" | "codex",
+  node: string,
+  script: string,
+): PlannedHook[] {
+  const decide = decideCommand(node, script, agent);
+  if (agent === "claude-code")
+    return [
+      {
+        event: "PermissionRequest",
+        command: decide,
+        timeout: 570,
+        async: false,
+      },
+      {
+        event: "PreToolUse",
+        matcher: "AskUserQuestion|ExitPlanMode",
+        command: decide,
+        timeout: 570,
+        async: false,
+      },
+    ];
+  const report = hookCommand(node, script, agent);
+  return codexHookEvents.map((event) =>
+    event === "PermissionRequest"
+      ? { event, command: decide, timeout: 570, async: false }
+      : { event, command: report, timeout: 5, async: true },
+  );
+}
+
+const plannedGroup = (hook: PlannedHook) => ({
+  ...(hook.matcher ? { matcher: hook.matcher } : {}),
+  hooks: [
+    {
+      type: "command",
+      command: hook.command,
+      timeout: hook.timeout,
+      ...(hook.async ? { async: true } : {}),
+    },
+  ],
+});
+
+/** The planned hooks that the file already holds, by event. */
+export function plannedInstalled(
+  text: string | undefined,
+  plan: PlannedHook[],
+) {
+  const hooks = record(parseHooksFile(text).hooks) ?? {};
+  return plan.filter((hook) => {
+    const groups = hooks[hook.event];
+    return (
+      Array.isArray(groups) &&
+      groups.some((group) => isOwnGroup(group, hook.command))
+    );
+  });
+}
+
+/** Adds each planned hook once. Every other key, event and group stays as it is. */
+export function applyHookPlan(text: string | undefined, plan: PlannedHook[]) {
+  const root = parseHooksFile(text);
+  const hooks = { ...(record(root.hooks) ?? {}) };
+  for (const hook of plan) {
+    const existing = hooks[hook.event];
+    if (existing !== undefined && !Array.isArray(existing))
+      throw new Error(
+        "The hooks file has an unexpected shape. It is unchanged.",
+      );
+    const groups = existing ?? [];
+    if (groups.some((group) => isOwnGroup(group, hook.command))) continue;
+    hooks[hook.event] = [...groups, plannedGroup(hook)];
+  }
+  return `${JSON.stringify({ ...root, hooks }, null, 2)}\n`;
+}
+
+/** Removes only the groups that hold exactly one of the plan's commands. */
+export function removeHookPlan(text: string, plan: PlannedHook[]) {
+  const root = parseHooksFile(text);
+  const hooks = { ...(record(root.hooks) ?? {}) };
+  const commands = new Set(plan.map((hook) => hook.command));
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = groups.filter(
+      (group) => ![...commands].some((command) => isOwnGroup(group, command)),
+    );
+    if (kept.length) hooks[event] = kept;
+    else delete hooks[event];
+  }
+  return `${JSON.stringify({ ...root, hooks }, null, 2)}\n`;
+}

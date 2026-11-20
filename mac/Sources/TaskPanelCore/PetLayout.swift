@@ -92,8 +92,10 @@ public struct PetStatus: Equatable, Sendable {
     public let detail: String
     /// The one session to bring forward on a click. Nil opens the panel.
     public let sessionId: String?
-    public init(key: String, title: String, detail: String, sessionId: String?) {
-      self.key = key; self.title = title; self.detail = detail; self.sessionId = sessionId
+    /// A request that the person can allow or deny right on the bubble.
+    public let decisionId: String?
+    public init(key: String, title: String, detail: String, sessionId: String?, decisionId: String? = nil) {
+      self.key = key; self.title = title; self.detail = detail; self.sessionId = sessionId; self.decisionId = decisionId
     }
   }
   public let mood: MascotMood
@@ -105,7 +107,7 @@ public struct PetStatus: Equatable, Sendable {
   }
 
   public static func make(board: AgentBoard?, connected: Bool, taskNeedsPerson: Bool, sharing: Bool,
-                          quietSeconds: Double, now: Double) -> PetStatus {
+                          quietSeconds: Double, now: Double, decisions: [PendingDecisions.Request] = []) -> PetStatus {
     let sessions = board?.sessions ?? []
     let waiting = sessions.filter { $0.state == .needsYou }
     let working = board?.counts.working ?? 0
@@ -116,7 +118,13 @@ public struct PetStatus: Equatable, Sendable {
     func agents(_ count: Int, _ one: String, _ many: String) -> String { count == 1 ? "1 agent \(one)" : "\(count) agents \(many)" }
 
     var bubble: Bubble?
-    if taskNeedsPerson {
+    if let request = decisions.first {
+      // A request that can be answered here comes before everything else.
+      let more = decisions.count > 1 ? "  +\(decisions.count - 1) more" : ""
+      bubble = Bubble(key: "decision:" + request.id, title: DecisionText.title(request) + more,
+        detail: AgentBoardText.clean(request.summary, limit: 120), sessionId: nil,
+        decisionId: request.isQuestion || request.kind == "plan" ? nil : request.id)
+    } else if taskNeedsPerson {
       bubble = Bubble(key: "task", title: "Your task needs an answer", detail: "Open the board to answer.", sessionId: nil)
     } else if waiting.count == 1, let session = waiting.first {
       let time = AgentBoardText.elapsed(since: session.since, now: now)
@@ -132,6 +140,10 @@ public struct PetStatus: Equatable, Sendable {
     let mood: MascotMood, headline: String
     if !connected { mood = .offline; headline = "Not connected" }
     else if sharing { mood = .sharing; headline = "Sharing your screen" }
+    else if !decisions.isEmpty {
+      mood = .attention
+      headline = decisions.count == 1 ? "1 request waits for your answer" : "\(decisions.count) requests wait for your answer"
+    }
     else if taskNeedsPerson { mood = .attention; headline = "Your task needs an answer" }
     else if !waiting.isEmpty { mood = .attention; headline = agents(waiting.count, "needs you", "need you") }
     else if working > 0 { mood = .working; headline = agents(working, "at work", "at work") }

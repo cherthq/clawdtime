@@ -286,4 +286,52 @@ final class DesignMotionTests: XCTestCase {
     // A session with no terminal on this Mac cannot be opened from the bubble.
     XCTAssertNil(status([session("bg-1", .needsYou, focus: "none")]).bubble?.sessionId)
   }
+
+  // MARK: answers to agents
+
+  func decision(_ id: String = "0123456789abcdef", kind: String = "permission", tool: String = "Bash", summary: String = "npm test",
+                options: [String] = [], session: String? = "deploy fix", allowed: Int = 0, denied: Int = 0, hold: Double = 1_045_000) -> PendingDecisions.Request {
+    .init(id: id, agentLabel: "Claude Code", kind: kind, tool: tool, summary: summary, options: options, project: "app", session: session,
+          sessionId: nil, createdAt: 1_000_000, holdUntil: hold, allowedBefore: allowed, deniedBefore: denied, canRemember: true)
+  }
+  func testDecisionsDecodeTheServiceContractAndRejectWhatIsOutsideIt() throws {
+    let json = #"{"version":1,"away":false,"callReady":true,"pending":[{"id":"0123456789abcdef","agent":"claude-code","agentLabel":"Claude Code","kind":"permission","tool":"Bash","summary":"npm test","options":[],"project":"app","session":null,"sessionId":null,"createdAt":1000,"holdUntil":46000,"allowedBefore":2,"deniedBefore":0,"canRemember":true}]}"#
+    let decoded = try JSONDecoder().decode(PendingDecisions.self, from: Data(json.utf8))
+    try decoded.validate()
+    XCTAssertEqual(decoded.pending.count, 1); XCTAssertTrue(decoded.callReady); XCTAssertFalse(decoded.away)
+    XCTAssertNoThrow(try PendingDecisions(version: 1, away: false, callReady: false, pending: [decision()]).validate())
+    for bad in [decision("../x"), decision(kind: "other"), decision(summary: String(repeating: "x", count: 601)),
+                decision(kind: "question"), decision(hold: 10)] {
+      XCTAssertThrowsError(try PendingDecisions(version: 1, away: false, callReady: false, pending: [bad]).validate())
+    }
+    XCTAssertThrowsError(try PendingDecisions(version: 2, away: false, callReady: false, pending: []).validate())
+  }
+  func testDecisionTextSaysWhoAsksWhatAndWhatWasAnsweredBefore() {
+    XCTAssertEqual(DecisionText.title(decision()), "deploy fix asks to run")
+    XCTAssertEqual(DecisionText.title(decision(session: nil)), "Claude Code in app asks to run")
+    XCTAssertEqual(DecisionText.title(decision(tool: "Edit")), "deploy fix asks to use Edit")
+    XCTAssertEqual(DecisionText.title(decision(kind: "question", options: ["A"])), "deploy fix asks")
+    XCTAssertEqual(DecisionText.title(decision(kind: "plan")), "deploy fix has a plan ready")
+    XCTAssertEqual(DecisionText.summary(decision(summary: "rm \u{1B}[2J -rf x")), "rm [2J -rf x")
+    XCTAssertEqual(DecisionText.history(decision()), "")
+    XCTAssertEqual(DecisionText.history(decision(allowed: 1)), "You allowed this once here.")
+    XCTAssertEqual(DecisionText.history(decision(allowed: 3)), "You allowed this 3 times here.")
+    XCTAssertEqual(DecisionText.history(decision(denied: 2)), "You denied this 2 times here.")
+    XCTAssertEqual(DecisionText.history(decision(allowed: 2, denied: 1)), "Here before: allowed 2 times, denied once.")
+    XCTAssertEqual(DecisionText.remaining(decision(), now: 1_013_000), "32 s left to answer here")
+    XCTAssertEqual(DecisionText.remaining(decision(), now: 2_000_000), "0 s left to answer here")
+    XCTAssertEqual(DecisionText.remaining(decision(hold: 1_540_000), now: 1_000_000), "9 min left to answer here")
+  }
+  func testARequestThatCanBeAnsweredHereComesFirst() {
+    let waiting = [session("1-a", .needsYou, name: "deploy fix")]
+    let one = PetStatus.make(board: board(waiting), connected: true, taskNeedsPerson: true, sharing: false, quietSeconds: 0, now: 1_120_000, decisions: [decision()])
+    XCTAssertEqual(one.mood, .attention); XCTAssertEqual(one.headline, "1 request waits for your answer")
+    XCTAssertEqual(one.bubble, .init(key: "decision:0123456789abcdef", title: "deploy fix asks to run", detail: "npm test", sessionId: nil, decisionId: "0123456789abcdef"))
+    let two = PetStatus.make(board: nil, connected: true, taskNeedsPerson: false, sharing: false, quietSeconds: 0, now: 0,
+                             decisions: [decision(kind: "question", options: ["Red", "Blue"]), decision("fedcba9876543210")])
+    XCTAssertEqual(two.headline, "2 requests wait for your answer")
+    XCTAssertEqual(two.bubble?.title, "deploy fix asks  +1 more")
+    // A question has choices: it is answered on the board, not with two buttons on the bubble.
+    XCTAssertNil(two.bubble?.decisionId)
+  }
 }

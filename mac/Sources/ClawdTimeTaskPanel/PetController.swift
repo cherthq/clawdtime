@@ -35,27 +35,37 @@ final class BubbleView: NSView {
   var below = false { didSet { needsDisplay = true; needsLayout = true } }
   var onClick: (() -> Void)?
   var onDismiss: (() -> Void)?
+  var onApprove: (() -> Void)?
+  var onDeny: (() -> Void)?
+  /// A request that can be answered here gets Approve and Deny on the bubble itself.
+  var showsActions = false { didSet { if showsActions != oldValue { approve.isHidden = !showsActions; deny.isHidden = !showsActions; needsLayout = true } } }
+  private lazy var approve = PillButton("Approve", kind: .accent, small: true, target: self, action: #selector(approved))
+  private lazy var deny = PillButton("Deny", kind: .secondary, small: true, target: self, action: #selector(denied))
   private let dismiss = IconButton(symbol: "xmark", label: "Dismiss", diameter: 18, target: nil, action: nil)
   private var pressing = false { didSet { needsDisplay = true } }
   static let tailHeight: CGFloat = 7
   override init(frame: NSRect) {
     super.init(frame: frame)
     wantsLayer = true
-    addSubview(title); addSubview(detail); addSubview(dismiss)
+    addSubview(title); addSubview(detail); addSubview(dismiss); addSubview(approve); addSubview(deny)
+    approve.isHidden = true; deny.isHidden = true
     dismiss.target = self; dismiss.action = #selector(dismissed)
     setAccessibilityElement(true); setAccessibilityRole(.button)
   }
   required init?(coder: NSCoder) { fatalError("Unavailable") }
   func fit() -> NSSize {
     let width = min(292, max(168, max(title.intrinsicContentSize.width, detail.intrinsicContentSize.width) + 58))
-    return NSSize(width: ceil(width), height: 54 + Self.tailHeight)
+    return NSSize(width: ceil(max(width, showsActions ? 208 : 0)), height: 54 + (showsActions ? 36 : 0) + Self.tailHeight)
   }
   override func layout() {
     super.layout()
-    let base = below ? 0 : Self.tailHeight
+    let base = (below ? 0 : Self.tailHeight) + (showsActions ? 36 : 0)
     title.frame = NSRect(x: 14, y: base + 27, width: bounds.width - 46, height: 18)
     detail.frame = NSRect(x: 14, y: base + 9, width: bounds.width - 28, height: 16)
     dismiss.frame = NSRect(x: bounds.width - 26, y: base + 28, width: 18, height: 18)
+    let row = base - 30
+    approve.frame = NSRect(x: 12, y: row, width: approve.intrinsicContentSize.width, height: 26)
+    deny.frame = NSRect(x: approve.frame.maxX + 8, y: row, width: deny.intrinsicContentSize.width, height: 26)
     setAccessibilityLabel(title.stringValue + ". " + detail.stringValue)
   }
   override func draw(_ dirtyRect: NSRect) {
@@ -80,6 +90,8 @@ final class BubbleView: NSView {
   }
   override func accessibilityPerformPress() -> Bool { onClick?(); return true }
   @objc private func dismissed() { onDismiss?() }
+  @objc private func approved() { onApprove?() }
+  @objc private func denied() { onDeny?() }
 }
 
 /// Stop sharing and Stop call, always one click away while either can be stopped.
@@ -120,6 +132,8 @@ final class PetController: NSObject {
 
   var onToggleBoard: (() -> Void)?
   var onOpenSession: ((String) -> Void)?
+  /// request id, "allow" or "deny"
+  var onDecide: ((String, String) -> Void)?
   var onStopSharing: (() -> Void)?
   var onStopCall: (() -> Void)?
   var onHide: (() -> Void)?
@@ -168,6 +182,8 @@ final class PetController: NSObject {
     bubbleWindow.contentView = bubble; bubbleWindow.hasShadow = true
     bubble.onClick = { [weak self] in self?.bubbleClicked() }
     bubble.onDismiss = { [weak self] in self?.dismissedBubble = self?.shownBubble?.key }
+    bubble.onApprove = { [weak self] in self?.decided("allow") }
+    bubble.onDeny = { [weak self] in self?.decided("deny") }
     controls = ControlsView(target: self, stopSharing: #selector(stopSharing), stopCall: #selector(stopCall))
     controlsWindow.contentView = controls; controlsWindow.hasShadow = true
     mascot.afterFrame = { [weak self] step in self?.frame(step) }
@@ -306,6 +322,11 @@ final class PetController: NSObject {
     } else if isDocked { undock() }
     else { mascot.tap(); onToggleBoard?() }
   }
+  private func decided(_ decision: String) {
+    guard let shown = shownBubble, let request = shown.decisionId else { return }
+    dismissedBubble = shown.key
+    onDecide?(request, decision)
+  }
   private func bubbleClicked() {
     guard let shown = shownBubble else { return }
     dismissedBubble = shown.key
@@ -363,7 +384,8 @@ final class PetController: NSObject {
     if let news, news != shownBubble {
       shownBubble = news
       bubble.title.stringValue = news.title; bubble.detail.stringValue = news.detail
-      bubble.toolTip = news.sessionId == nil ? "Open the board" : "Open this session's terminal"
+      bubble.showsActions = news.decisionId != nil
+      bubble.toolTip = news.decisionId != nil ? "Answer here, or click to open the board" : news.sessionId == nil ? "Open the board" : "Open this session's terminal"
     }
     bubbleShown.target = news == nil ? 0 : 1
     bubbleShown.step(step)

@@ -192,3 +192,86 @@ public enum AgentBoardText {
     return (active + kept, quiet.count - kept.count)
   }
 }
+
+/// What agents ask the person right now, as the task service reports it. The person
+/// answers here, and the agent's own hook hands the answer to the agent.
+public struct PendingDecisions: Codable, Equatable {
+  public struct Request: Codable, Equatable {
+    public let id: String
+    public let agentLabel: String
+    public let kind: String
+    public let tool: String
+    public let summary: String
+    public let options: [String]
+    public let project: String
+    public let session: String?
+    public let sessionId: String?
+    public let createdAt: Double
+    public let holdUntil: Double
+    public let allowedBefore: Int
+    public let deniedBefore: Int
+    public let canRemember: Bool
+    public init(id: String, agentLabel: String, kind: String, tool: String, summary: String, options: [String], project: String,
+                session: String?, sessionId: String?, createdAt: Double, holdUntil: Double, allowedBefore: Int, deniedBefore: Int, canRemember: Bool) {
+      self.id = id; self.agentLabel = agentLabel; self.kind = kind; self.tool = tool; self.summary = summary; self.options = options
+      self.project = project; self.session = session; self.sessionId = sessionId; self.createdAt = createdAt; self.holdUntil = holdUntil
+      self.allowedBefore = allowedBefore; self.deniedBefore = deniedBefore; self.canRemember = canRemember
+    }
+    public var isQuestion: Bool { kind == "question" }
+  }
+  public let version: Int
+  public let away: Bool
+  public let callReady: Bool
+  public let pending: [Request]
+  public init(version: Int, away: Bool, callReady: Bool, pending: [Request]) {
+    self.version = version; self.away = away; self.callReady = callReady; self.pending = pending
+  }
+  public static func identity(_ value: String) -> Bool { value.range(of: "^[0-9a-f]{16}$", options: .regularExpression) != nil }
+  public func validate() throws {
+    guard version == 1, pending.count <= 200 else { throw PanelFailure.response }
+    for request in pending {
+      guard Self.identity(request.id), ["permission", "question", "plan"].contains(request.kind), request.summary.count <= 600,
+        request.tool.count <= 80, request.agentLabel.count <= 40, request.project.count <= 4096, request.options.count <= 8,
+        request.options.allSatisfy({ $0.count <= 200 }), (request.session?.count ?? 0) <= 200,
+        request.allowedBefore >= 0, request.deniedBefore >= 0, request.holdUntil >= request.createdAt,
+        !request.isQuestion || !request.options.isEmpty else { throw PanelFailure.response }
+    }
+  }
+}
+public struct DecisionAnswerResult: Codable, Equatable { public let ok: Bool }
+
+public enum DecisionText {
+  /// The session by its name, or the agent and its project.
+  public static func who(_ request: PendingDecisions.Request) -> String {
+    let session = AgentBoardText.clean(request.session ?? "", limit: 40)
+    if !session.isEmpty { return session }
+    let project = AgentBoardText.clean(request.project, limit: 30)
+    return project.isEmpty ? AgentBoardText.clean(request.agentLabel, limit: 40) : AgentBoardText.clean(request.agentLabel, limit: 40) + " in " + project
+  }
+  public static func title(_ request: PendingDecisions.Request) -> String {
+    switch request.kind {
+    case "question": return who(request) + " asks"
+    case "plan": return who(request) + " has a plan ready"
+    default:
+      let shell = ["bash", "shell", "exec", "exec_command", "local_shell"].contains(request.tool.lowercased())
+      return who(request) + (shell ? " asks to run" : " asks to use " + AgentBoardText.clean(request.tool, limit: 40))
+    }
+  }
+  public static func summary(_ request: PendingDecisions.Request) -> String { AgentBoardText.clean(request.summary, limit: 600) }
+  /// What the person answered before to the same request in this project.
+  public static func history(_ request: PendingDecisions.Request) -> String {
+    func times(_ count: Int) -> String { count == 1 ? "once" : "\(count) times" }
+    switch (request.allowedBefore, request.deniedBefore) {
+    case (0, 0): return ""
+    case (let allowed, 0): return "You allowed this \(times(allowed)) here."
+    case (0, let denied): return "You denied this \(times(denied)) here."
+    case (let allowed, let denied): return "Here before: allowed \(times(allowed)), denied \(times(denied))."
+    }
+  }
+  /// How long the answer still works from here. After that the agent's terminal is the only place.
+  public static func remaining(_ request: PendingDecisions.Request, now: Double = Date().timeIntervalSince1970 * 1000) -> String {
+    let seconds = max(0, Int((request.holdUntil - now) / 1000))
+    if seconds >= 90 { return "\((seconds + 30) / 60) min left to answer here" }
+    return "\(seconds) s left to answer here"
+  }
+}

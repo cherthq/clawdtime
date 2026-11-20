@@ -4,8 +4,9 @@ The agent board shows every coding-agent session on this Mac in one place: which
 sessions wait for you, which ones work, and which ones are idle. One click, or
 one command, brings the terminal of a session to the front.
 
-The board is read-only. It reads state. It never sends keys or text to a
-session, never answers a prompt, and never changes an agent's approval policy.
+The board itself only reads. Listing sessions and opening a terminal send
+nothing to an agent. Answering an agent, typing into a terminal and calls are
+separate actions that you start; see the [supervisor guide](SUPERVISOR.md).
 
 ## Use it
 
