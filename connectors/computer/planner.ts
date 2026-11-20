@@ -1,5 +1,6 @@
 /**
- * Computer use: a planner on the OpenAI chat completions API.
+ * Computer use: a planner on the chat completions application programming
+ * interface (API) of OpenAI.
  *
  * The planner is the replaceable part. This one gives a language model the
  * goal, its own last steps, the useful elements of the screen and the image,

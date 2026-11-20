@@ -131,7 +131,7 @@ export const dangerWords = [
 // "logout", "log-out". An apostrophe also stands for the curved one.
 const danger = new RegExp(
   `\\b(?:${dangerWords
-    .map((word) => word.replace(/ /g, "[\\s-]*").replace(/'/g, "['’]?"))
+    .map((word) => word.replace(/ /g, "[\\s-]*").replace(/'/g, "['\u2019]?"))
     .join("|")})\\b`,
   "i",
 );
