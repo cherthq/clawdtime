@@ -1648,6 +1648,10 @@ describe("the conversation goes with the work", () => {
     expect(seen[0]!.system).toContain("Keep the thread");
     expect(seen[0]!.system).toContain("Act first");
     expect(seen[0]!.system).toContain("never repeat a tool's sentence");
+    // "Then ask it" is no dead end: the model says the sentence that sends the question.
+    expect(seen[0]!.system).toContain(
+      'Say "tell <session name>: <the words>" and I type it.',
+    );
     expect(seen[0]!.system).toContain(
       "jobs that you started in the last 24 hours=0; newest job has its answer=false; sessions by agent: none;",
     );
