@@ -22,6 +22,7 @@ public final class PanelClient {
   public func close() { session.invalidateAndCancel() }
   private func request(path: String, body: Data? = nil) async throws -> Data {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
+      path == "/desktop/agents" || path == "/desktop/agents/focus" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -51,6 +52,20 @@ public final class PanelClient {
     let result = try JSONDecoder().decode(PanelOperation.self, from: await request(path: "/desktop/operations/" + eventId))
     try result.validate()
     guard result.eventId == eventId else { throw PanelFailure.response }
+    return result
+  }
+  /// The board of coding-agent sessions. A service with no board answers with an error.
+  public func agents() async throws -> AgentBoard {
+    let result = try JSONDecoder().decode(AgentBoard.self, from: await request(path: "/desktop/agents"))
+    try result.validate()
+    return result
+  }
+  /// Brings one session's terminal forward. It sends nothing to the session.
+  public func focusAgent(_ id: String) async throws -> AgentFocusResult {
+    guard AgentBoard.identity(id) else { throw PanelFailure.configuration }
+    let body = try JSONSerialization.data(withJSONObject: ["id": id], options: [.sortedKeys])
+    let result = try JSONDecoder().decode(AgentFocusResult.self, from: await request(path: "/desktop/agents/focus", body: body))
+    try result.validate()
     return result
   }
   public func submit(_ payload: Data, eventId: String, action: PanelAction) async throws -> PanelOperation {

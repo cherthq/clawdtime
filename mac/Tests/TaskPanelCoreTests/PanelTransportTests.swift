@@ -85,4 +85,37 @@ final class PanelTransportTests: XCTestCase {
     do { _ = try await client.submit(Data("{}".utf8), eventId: "other", action: .submit); XCTFail("Wrong action accepted") } catch {}
     XCTAssertEqual(server.requests().count, 2)
   }
+  func testAgentBoardIsReadWithThePanelCredentialAndAnErrorMeansNoBoard() async throws {
+    let board = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("../../../tests/fixtures/agent-board.json").standardizedFileURL)
+    let server = try FixtureHTTP { request, _ in
+      request.hasPrefix("GET /desktop/agents ") ? (200, ["Content-Type": "application/json"], board)
+        : (200, ["Content-Type": "application/json"], Data("{\"ok\":true,\"precision\":\"tab\"}".utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let result = try await client.agents()
+    XCTAssertEqual(result.sessions.count, 5)
+    XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    let focus = try await client.focusAgent("100-abc123")
+    XCTAssertEqual(focus, AgentFocusResult(ok: true, precision: "tab"))
+    XCTAssertTrue(server.requests()[1].hasPrefix("POST /desktop/agents/focus "))
+    // The fixture reads the request head. The body is exactly {"id":"100-abc123"}: 19 bytes.
+    XCTAssertTrue(server.requests()[1].contains("Content-Length: 19\r\n"))
+    XCTAssertTrue(server.requests()[1].contains("Content-Type: application/json\r\n"))
+    // An id that could change the path or the body is refused before any request.
+    do { _ = try await client.focusAgent("../state"); XCTFail("Unsafe id accepted") } catch {}
+    XCTAssertEqual(server.requests().count, 2)
+  }
+  func testServiceWithoutABoardAndInvalidBoardsAreRejected() async throws {
+    for (status, body) in [(503, "{\"error\":\"Agent board unavailable.\"}"), (404, "{}"),
+                           (200, "{\"version\":2,\"generatedAt\":1,\"intervalMs\":3000,\"counts\":{\"needs_you\":0,\"working\":0,\"idle\":0,\"unknown\":0},\"sessions\":[]}"),
+                           (200, "{\"ok\":true,\"precision\":\"none\"}")] {
+      let server = try FixtureHTTP { _, _ in (status, ["Content-Type": "application/json"], Data(body.utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { _ = try await client.agents(); XCTFail("Invalid board accepted") } catch {}
+      do { _ = try await client.focusAgent("100-abc123"); XCTFail("Invalid focus result accepted") } catch {}
+    }
+  }
 }

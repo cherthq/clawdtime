@@ -100,6 +100,12 @@ final class Composer: NSTextView {
   private var stopCallButton: NSButton!
   private var showRevision = false
   private var lastTaskId: String?
+  private var startTucked = false
+  private let agentBoard = AgentBoardView()
+  private var agentsCard: NSView!
+  private var board: AgentBoard?
+  private var agentMessage = ""
+  private var agentMessageGeneration = 0
 
   static func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular,
                     color: NSColor = .labelColor) -> NSTextField {
@@ -154,9 +160,9 @@ final class Composer: NSTextView {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     configureMenus()
-    let args = CommandLine.arguments
-    if let index = args.firstIndex(of: "--config"), args.count == index + 2, args[index + 1].hasPrefix("/") {
-      load(URL(fileURLWithPath: args[index + 1]))
+    if let launch = PanelLaunch(arguments: CommandLine.arguments) {
+      startTucked = launch.tucked
+      load(URL(fileURLWithPath: launch.configPath))
     } else {
       showStartupFailure(.configuration)
     }
@@ -205,14 +211,19 @@ final class Composer: NSTextView {
       let store: PanelReceiptStore
       do { store = try PanelReceiptStore(directory: config.receiptDirectory, binding: binding) }
       catch PanelFailure.alreadyOpen {
-        DistributedNotificationCenter.default().postNotificationName(name, object: nil, userInfo: nil, deliverImmediately: true)
+        // A tucked start asks for no attention, so it does not raise the open panel.
+        if !startTucked {
+          DistributedNotificationCenter.default().postNotificationName(name, object: nil, userInfo: nil, deliverImmediately: true)
+        }
         showStartupFailure(.alreadyOpen); return
       }
       reopenName = name
       DistributedNotificationCenter.default().addObserver(self, selector: #selector(showPanel), name: name, object: nil, suspensionBehavior: .deliverImmediately)
       self.configuration = config; self.configPath = path.standardizedFileURL
       receipts = store; client = PanelClient(configuration: config); state.pending = store.entries
-      buildWindow(); render(); showPanel(nil); beginPolling()
+      buildWindow(); render()
+      if startTucked { requestDisplay(.badge, animated: false) } else { showPanel(nil) }
+      beginPolling()
     } catch let failure as PanelFailure { showStartupFailure(failure) }
       catch { showStartupFailure(.configuration) }
   }
@@ -312,7 +323,9 @@ final class Composer: NSTextView {
     let reviewButtons = stack([acceptButton, reviseButton], vertical: false); reviewButtons.distribution = .fillEqually
     reviewCard = card([Self.label("Your review", size: 13, weight: .semibold),
       Self.label("Accept the verified result, or ask for a revision.", size: 12, color: .secondaryLabelColor), reviewButtons])
-    let all = stack([project, notice, taskCard, progress, decisionCard, reviewCard, callLabel], spacing: 18)
+    agentsCard = card([agentBoard]); agentsCard.isHidden = true
+    agentBoard.onOpen = { [weak self] id in self?.openAgent(id) }
+    let all = stack([project, notice, agentsCard, taskCard, progress, decisionCard, reviewCard, callLabel], spacing: 18)
     document.addSubview(all); all.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([all.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 22),
       all.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -22),
@@ -478,6 +491,8 @@ final class Composer: NSTextView {
           self.state.receive(snapshot, readGeneration: readGeneration)
           for operation in snapshot.operations { try self.receipts?.observe(operation) }
           self.state.pending = self.receipts?.entries ?? []
+          // The board is optional. A service without one never affects the task state.
+          self.board = try? await client.agents()
           self.render()
           let waiting = self.state.pending.filter(\.unresolved).map(\.eventId)
           let found = await withTaskGroup(of: PanelOperation?.self) { group in
@@ -495,7 +510,7 @@ final class Composer: NSTextView {
           }
           self.state.pending = self.receipts?.entries ?? []; delay = 1
         } catch {
-          self.state.connected = false; delay = min(5, delay * 2)
+          self.state.connected = false; self.board = nil; delay = min(5, delay * 2)
         }
         self.render()
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -509,7 +524,16 @@ final class Composer: NSTextView {
     projectPath.stringValue = configuration?.projectRoot ?? ""; projectPath.toolTip = projectPath.stringValue
     modeLabel.stringValue = snapshot?.worker == "simulation" ? "Simulation · tasks stay queued" : (state.connected ? "Codex · independently checked" : "Connecting to your task service…")
     stage.stringValue = state.stage
-    compactState.stringValue = state.stage; compactState.toolTip = state.stage
+    let now = Date().timeIntervalSince1970 * 1000
+    let liveBoard = board.flatMap { $0.isFresh(now: now) ? $0 : nil }
+    let taskNeedsPerson = task?.decision != nil || task?.canAccept == true
+    let line = AgentBoardText.toolbar(stage: state.stage, taskNeedsPerson: taskNeedsPerson, counts: liveBoard?.counts)
+    compactState.stringValue = line.text
+    compactState.textColor = line.attention ? NSColor(calibratedRed: 0.78, green: 0.38, blue: 0.0, alpha: 1) : .labelColor
+    compactState.toolTip = liveBoard.map { state.stage + " · Agents: " + AgentBoardText.summary($0.counts) } ?? state.stage
+    agentsCard.isHidden = liveBoard == nil
+    if let liveBoard { agentBoard.show(liveBoard, now: now, message: agentMessage) }
+    badgeView?.attention = liveBoard?.counts.needsYou ?? 0
     let sharing = snapshot?.controls.sharingActive == true
     let sharingPending = state.pending.contains { $0.unresolved && $0.action == .stopSharing } ||
       (snapshot?.operations.contains { !$0.resolved && $0.action == .stopSharing } ?? false)
@@ -596,6 +620,22 @@ final class Composer: NSTextView {
         self.notice.stringValue = "The task changed. Review its current state before canceling."; self.notice.isHidden = false; return
       }
       self.perform(.cancel)
+    }
+  }
+  /// Brings one session's terminal forward. This is not a task operation: it has no
+  /// receipt and it is safe to repeat.
+  private func openAgent(_ id: String) {
+    guard let client else { return }
+    agentMessageGeneration += 1
+    let generation = agentMessageGeneration
+    Task {
+      let result = try? await client.focusAgent(id)
+      guard generation == agentMessageGeneration else { return }
+      agentMessage = result?.message ?? "The task service did not answer. Nothing was opened."
+      render()
+      try? await Task.sleep(nanoseconds: 4_000_000_000)
+      guard generation == agentMessageGeneration else { return }
+      agentMessage = ""; render()
     }
   }
   private func perform(_ action: PanelAction, text: String = "") {
