@@ -1231,14 +1231,33 @@ first-failure phase/reason and frame counters for future investigation. The fail
 its cause; a later success cannot erase it. Unit tests and a brief smoke are not
 substitutes for extended local qualification and handset acceptance.
 
-
 The instrumented diagnostic isolated `refused_geometry` in the native helper,
 1,957 ms after start (8 source frames, 22 renders), with cleanup confirmed.
 A subsequent metadata-only check found a synthetic window at x=-1,554 outside
-the only active display (0,0,1512,982). The fixture now chooses the AppKit screen
+the only active display (0,0,1512,982). The fixture chooses the AppKit screen
 matching `CGMainDisplayID` and joins active spaces; no production window, geometry,
-permission or freshness check was changed. A metadata-only run then resolved both
+permission or freshness check was changed. Subsequent attempts showed that this
+alone did not keep the fixture on-screen reliably. A metadata-only run then resolved both
 exact targets within the active display, with `captureStarted:false` and confirmed
 fixture cleanup. `--resolve-only` provides this setup check without capture.
 The helper also reports `captureActive` in local status so review handoff can
 check idle capture and drain capability even for runs completed by older helpers.
+
+The final stationary fixture attempt used one accessory app with two normal-layer
+windows and AppKit's `canJoinAllApplications`/`stationary` collection behavior.
+It still failed native `refused_geometry` at 7,579 ms after 36 source frames and
+107 rendered frames. The exact window passed initial resolution but failed the
+unchanged geometry guard later. Helper and fixture shutdown/join were confirmed;
+no pixels were persisted or exported, and no audio or remote call was produced. This does not establish a screenshot
+latency defect or justify switching the capture implementation. Local extended
+qualification remains failed because the fixture's geometry was not admissible
+throughout the run; a fresh instrumented investigation must distinguish actual
+window movement, desktop transitions and inconsistent native window metadata.
+The previous failures and interrupted attempt remain part of the evidence.
+
+Next local qualification prerequisite: keep both exact synthetic fixture windows
+wholly within the active display for the entire four-minute run, without desktop,
+app-set or display transitions that move them out of bounds. Resolve both exact
+targets first, use a fresh grant, and retain the existing geometry/freshness gates.
+The script fails and joins its children if that prerequisite stops holding. Do not
+propose a handset visual test until this extended local qualification passes.

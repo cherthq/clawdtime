@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from qualify_task_capture import main
+from qualify_task_capture import main, failure_reason
 
 
 class Process:
@@ -32,6 +32,11 @@ class Process:
 
 
 class QualificationSetupTests(unittest.IsolatedAsyncioTestCase):
+    def test_failure_report_does_not_serialize_arbitrary_exceptions(self):
+        self.assertEqual(failure_reason(RuntimeError('synthetic private text')),
+                         'capture_qualification_failed')
+        self.assertEqual(failure_reason(RuntimeError('local_frame_stale')), 'local_frame_stale')
+
     async def run_probe(self, resolvers):
         fixture = Process()
         output = io.StringIO()

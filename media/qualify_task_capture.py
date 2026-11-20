@@ -2,7 +2,7 @@
 
 Requires an idle executor, explicit local test authorization, the built capture
 helper and the compiled mac/scripts/task-capture-fixture.swift executable. This creates
-only temporary synthetic fixture apps; it never enumerates unrelated windows.
+only temporary synthetic fixture apps; it never selects or captures unrelated windows.
 """
 import argparse
 import asyncio
@@ -16,6 +16,22 @@ import time
 import uuid
 
 from task_presentation import NativeWindowSource, PresentationJournal, TaskPresentationRuntime, target as validate_target
+
+
+FIXTURE_REFUSALS = frozenset(('window_outside_single_display', 'display_binding_ambiguous',
+    'exact_window_not_found', 'exact_window_ambiguous', 'metadata_resolution_refused',
+    'process_identity_unavailable', 'unlocked_console_required', 'screen_permission_required',
+    'private_query_invalid', 'window_metadata_unavailable', 'exact_target_changed_or_geometry_refused'))
+PROBE_REASONS = frozenset(('qualification_source_closed', 'qualification_generation_changed',
+    'local_output_unavailable', 'local_frame_stale', 'synthetic_frame_ticks_not_observed'))
+
+
+def failure_reason(error):
+    message = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], str) else ''
+    if type(error) is RuntimeError and (message in PROBE_REASONS
+            or message in {'fixture_target_' + value for value in FIXTURE_REFUSALS}):
+        return message
+    return 'capture_qualification_failed'
 
 
 class QualificationSource(NativeWindowSource):
@@ -197,7 +213,7 @@ async def main(helper, fixture_binary, seconds, stream=False, resolve_only=False
                 result.update(passed=True, switches=switches, maxSourceAgeMs=round(max_age),
                               contentChanges=content_changes, **runtime.counts)
         except Exception as error:
-            result['reason'] = watchdog_failure or (str(error) if type(error) is RuntimeError else 'capture_qualification_failed')
+            result['reason'] = watchdog_failure or failure_reason(error)
             if runtime:
                 runtime.diagnostics.fail(error)
                 result['firstFailure'] = runtime.diagnostics.snapshot()['failure']

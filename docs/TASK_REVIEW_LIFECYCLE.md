@@ -118,6 +118,29 @@ Never restore a stale database or cursor to make an old binary start.
 
 ## Validation boundaries
 
+`npm run check` passed with 1,859 tests in 97 files, typechecking and production
+build. Swift passed 181 tests; the full media suite passed 382 tests, with four
+focused probe tests also passing on the final diagnostic code (three overlap
+with the full suite). Gateway passed 29 and installer tests passed 21.
+Independent connector and lifecycle review findings were addressed.
+
+The local capture probe was actually attempted on disposable synthetic windows,
+with no room/export/audio/input and no persisted pixels. One brief smoke passed;
+an earlier extended attempt was interrupted and remains inconclusive. Subsequent
+instrumented attempts failed the unchanged geometry guard. The latest attempt
+stopped at native elapsed 7,579 ms with `refused_geometry`, after 36 source frames
+and 107 rendered frames. Helper and fixture cleanup were confirmed. Read-only
+geometry inspection also observed a fixture window outside the active display.
+No screenshot-latency repair or four-minute local capture pass is established.
+The next local test needs two stable exact fixture windows wholly inside the
+active display for the full four-minute run. Keep the one-second freshness and
+geometry guards intact; no handset test is prepared for dispatch from this result.
+
+The runtime package was built locally without installation. The first development
+package records its dirty source state accurately; use the final commit-pinned
+candidate documented in the delivery report for a future reviewed installation.
+All protected installed settings and the unknown historical run remain unchanged.
+
 The simulated lifecycle uses the real supervisor, task engine, Codex adapter,
 verifier boundary and callback orchestrator with isolated synthetic protocol and
 call ports. Virtual time advances beyond 180 seconds before completion. Regression
