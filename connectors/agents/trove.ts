@@ -6,8 +6,9 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { secureWrite } from "../shared/state.js";
 import { agentKinds, type AgentKind } from "./types.js";
@@ -111,19 +112,31 @@ function readLines<T>(file: string, schema: z.ZodType<T>, limit: number): T[] {
 }
 
 const quiet = /^[A-Za-z0-9][A-Za-z0-9_.:@=+-]{0,39}$/;
+/** How much of a request the person is shown. The rest is cut. */
+export const shownLength = 600;
 /**
  * The key of a request. A shell command is grouped by its program and its
  * first plain word ("git push", "npm test"); every other tool by its name.
  * Paths and options are left out, so they never widen a rule by accident.
+ *
+ * `command` is the raw command, before any change of its spaces and before
+ * any cut. A key that names a command stands for what the person saw. So the
+ * bare tool name stays, and no rule matches it, when the person did not see
+ * the whole command as the shell reads it.
  */
-export function requestPattern(tool: string, summary: string) {
+export function requestPattern(tool: string, command: string) {
   const name = tool.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 60) || "tool";
   if (!/^(bash|shell|exec|exec_command|local_shell)$/i.test(name)) return name;
+  // A line break starts a new command, and the person is shown one line.
+  if (/[\p{C}\u2028\u2029]/u.test(command.replaceAll("\t", " "))) return "Bash";
+  // A command that is longer than what is shown can hide anything in its end.
+  if (command.length > shownLength) return "Bash";
   // Only a single plain command gets a narrow key. Anything with shell
   // syntax (pipes, lists, substitutions) keeps the bare tool name.
-  if (/[;&|`$><(){}\n\\]/.test(summary)) return "Bash";
-  const words = summary.trim().split(/\s+/).slice(0, 3);
-  const program = basename(words[0] ?? "");
+  if (/[;&|`$><(){}\\]/.test(command)) return "Bash";
+  const words = command.trim().split(/\s+/).slice(0, 3);
+  // A program with a slash is a file of that place, not the command of that name.
+  const program = words[0] ?? "";
   if (!quiet.test(program)) return "Bash";
   const second = words[1];
   return second && quiet.test(second) && !second.startsWith("-")
@@ -135,7 +148,49 @@ export interface RequestFacts {
   agent: AgentKind;
   cwd: string | null;
   pattern: string;
+  /** The file that a file tool asks for, as the agent gave it. */
+  path?: string | null;
 }
+
+/** Tools that change or read one file. Their rule holds only inside the project folder. */
+const fileTools = /^(edit|multiedit|write|notebookedit|read|apply_patch)$/i;
+/** The real place of a path: links are followed for the part of it that exists. */
+function settled(path: string): string {
+  const rest: string[] = [];
+  let head = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...rest);
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return join(head, ...rest);
+      rest.unshift(basename(head));
+      head = parent;
+    }
+  }
+}
+function inside(folder: string, path: string) {
+  const root = settled(folder);
+  const target = settled(resolve(folder, path));
+  return (
+    target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
+  );
+}
+/** A key that can be a rule: never the bare name of the shell tool, never a program alone. */
+const keyed = (pattern: string) =>
+  pattern !== "Bash" && !/^Bash:\S+$/.test(pattern);
+/** A request with a file is covered only when that file is inside the project folder. */
+const coversPath = (request: RequestFacts) =>
+  request.path === null || request.path === undefined
+    ? !fileTools.test(request.pattern)
+    : request.cwd !== null && inside(request.cwd, request.path);
+/**
+ * True when the person can make a rule from this request, and when a rule can
+ * answer it: it has a project folder, its key names one command with its first
+ * word, and a file that it asks for is inside the project folder.
+ */
+export const rememberable = (request: RequestFacts) =>
+  !!request.cwd && keyed(request.pattern) && coversPath(request);
 
 export class Trove {
   private readonly directory: string;
@@ -213,9 +268,13 @@ export class Trove {
   addRule(request: RequestFacts, note: string, at: number): TroveRule {
     if (!request.cwd)
       throw new Error("A rule needs the project folder of the request.");
-    if (request.pattern === "Bash")
+    if (!keyed(request.pattern))
       throw new Error(
         "This command is too broad for a rule. Answer it each time.",
+      );
+    if (!coversPath(request))
+      throw new Error(
+        "A rule for a file holds only inside the project folder. This request is outside the project folder.",
       );
     const existing = this.rules();
     const same = existing.find(
@@ -246,7 +305,7 @@ export class Trove {
     return true;
   }
   matchRule(request: RequestFacts): TroveRule | null {
-    if (!request.cwd || request.pattern === "Bash") return null;
+    if (!rememberable(request)) return null;
     return (
       this.rules().find(
         (rule) =>

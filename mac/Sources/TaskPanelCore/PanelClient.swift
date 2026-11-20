@@ -23,7 +23,7 @@ public final class PanelClient {
   private func request(path: String, body: Data? = nil, patient: Bool = false) async throws -> Data {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
-      path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/voice" || path == "/desktop/memory" ||
+      path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
@@ -122,6 +122,13 @@ public final class PanelClient {
       from: await request(path: "/desktop/execution/stop", body: Data("{}".utf8)))
     try result.execution.validate()
     return result.execution
+  }
+  public func decideExecution(actionId: String, approve: Bool) async throws -> ChatExecution {
+    guard actionId.range(of: "^[A-Za-z0-9_-]{1,160}$", options: .regularExpression) != nil else { throw PanelFailure.configuration }
+    let body = try JSONSerialization.data(withJSONObject: ["actionId": actionId, "approve": approve], options: [.sortedKeys])
+    let result = try JSONDecoder().decode(ChatExecutionReply.self,
+      from: await request(path: "/desktop/execution/decision", body: body))
+    try result.execution.validate(); return result.execution
   }
   /// One typed message. The answer can take as long as the language model takes.
   public func say(_ text: String) async throws -> ChatTranscript.Message {

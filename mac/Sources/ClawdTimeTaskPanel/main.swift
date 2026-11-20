@@ -33,6 +33,8 @@ import TaskPanelCore
   private let voice = VoiceController()
   private var transcript: ChatTranscript?
   private var executionControl = ChatExecutionControl()
+  private let nativeExecutionPanel = NativeExecutionPanel()
+  private var nativeSubmissionPending = false
   private var chatPending: String?
   private var chatNotice = ""
   /// The last spoken turn, shown on the mascot while the chat is closed.
@@ -41,7 +43,6 @@ import TaskPanelCore
   private var stopSharingItems: [NSMenuItem] = []
   private var stopCallItems: [NSMenuItem] = []
   private var styleItems: [NSMenuItem] = []
-  private var lookItems: [NSMenuItem] = []
   private var eyeItems: [NSMenuItem] = []
   private var sizeSliders: [NSSlider] = []
 
@@ -70,15 +71,8 @@ import TaskPanelCore
     let styleMenu = NSMenu(title: "Mascot")
     // Each style shows its picture. The pictures are drawn when the menu first opens.
     styleMenu.delegate = self
-    // The 3D look is greyed for a style that has no lit figure.
+    // The menu does not enable or disable its rows by itself, so the size row, which has no action, stays enabled.
     styleMenu.autoenablesItems = false
-    // The look comes first: flat shapes, or the lit 3D figure.
-    for look in MascotLook.allCases {
-      let item = styleMenu.addItem(withTitle: look.title, action: #selector(chooseLook(_:)), keyEquivalent: "")
-      item.target = self; item.representedObject = "look:" + look.rawValue
-      lookItems.append(item)
-    }
-    styleMenu.addItem(.separator())
     // The size: a slider from half of the full size to one and a half.
     styleMenu.addItem(sizeItem())
     styleMenu.addItem(.separator())
@@ -177,13 +171,8 @@ import TaskPanelCore
   func menuWillOpen(_ menu: NSMenu) {
     for item in menu.items {
       guard let raw = item.representedObject as? String, let style = MascotStyle(rawValue: raw) else { continue }
-      // The picture shows the style in the look that is chosen now.
-      item.image = pet.look == .flat || !style.hasSolid ? MascotCatalog.flatImage(style, flintEye: pet.flintEye) : MascotCatalog.thumbnail(style, flintEye: pet.flintEye)
+      item.image = MascotCatalog.flatImage(style, flintEye: pet.flintEye)
     }
-  }
-  @objc private func chooseLook(_ sender: NSMenuItem) {
-    guard let raw = sender.representedObject as? String, let look = MascotLook(rawValue: String(raw.dropFirst(5))) else { return }
-    pet.look = look; refreshMenus()
   }
   @objc private func chooseStyle(_ sender: NSMenuItem) {
     guard let raw = sender.representedObject as? String, let style = MascotStyle(rawValue: raw) else { return }
@@ -191,13 +180,6 @@ import TaskPanelCore
   }
   private func refreshMenus() {
     for item in styleItems { item.state = (item.representedObject as? String) == pet.style.rawValue ? .on : .off }
-    for item in lookItems {
-      let solid = (item.representedObject as? String) == "look:" + MascotLook.solid.rawValue
-      // A plain stone is flat in both looks: it shows as flat, and 3D is greyed.
-      let shown = pet.style.hasSolid ? pet.look : .flat
-      item.state = (item.representedObject as? String) == "look:" + shown.rawValue ? .on : .off
-      item.isEnabled = !solid || pet.style.hasSolid
-    }
     for item in eyeItems { item.state = pet.flintEye ? .on : .off }
     for slider in sizeSliders { slider.doubleValue = pet.scale }
     for item in awayItems {
@@ -279,6 +261,9 @@ import TaskPanelCore
     chat.onSend = { [weak self] text in self?.sendChat(text) }
     chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
     chat.onStopWork = { [weak self] in self?.stopExecution() }
+    nativeExecutionPanel.onDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
+    nativeExecutionPanel.onStop = { [weak self] in self?.stopExecution() }
+    chat.onExecutionDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
     let view = boardPanel.view
     view.onOpenSession = { [weak self] id in self?.openAgent(id) }
@@ -344,6 +329,24 @@ import TaskPanelCore
       executionControl.receive(fresh.execution, readGeneration: generation)
     }
   }
+  private func releaseNativeEditor() {
+    guard NativeExecutionPresentation.releasesEditor(executionControl.execution) else { return }
+    // Release only our UI. AppKit returns focus; no AX activation or target
+    // restoration is attempted. Native capture still verifies the real focus.
+    chatPanel.close(immediately: true)
+    boardPanel.close(immediately: true)
+  }
+  private func decideExecution(_ id: String, approve: Bool) {
+    guard let client, state.connected, executionControl.beginDecision(id) else { return }
+    releaseNativeEditor()
+    renderChat()
+    Task {
+      let result = try? await client.decideExecution(actionId: id, approve: approve)
+      executionControl.finishDecision(id, value: result)
+      renderChat()
+      await readChat(client); renderChat()
+    }
+  }
   private func stopExecution() {
     guard let client, state.connected, executionControl.beginStop() else { return }
     renderChat()
@@ -375,8 +378,10 @@ import TaskPanelCore
     model.execution = executionControl.execution
     model.executionStopping = executionControl.stopping
     model.executionCanStop = executionControl.canStop
+    model.executionCanDecide = executionControl.canDecide
     model.executionNotice = executionControl.notice
     chatPanel.view.render(model)
+    nativeExecutionPanel.render(model, submissionPending: nativeSubmissionPending, pet: pet.frame, screen: petScreen)
   }
   private func renderTalk() {
     pet.setTalk(on: voice.phase != .off, micOn: voice.micOn, speakerOn: voice.speakerOn, speaking: voice.phase == .speaking, thinking: voice.phase == .thinking)
@@ -385,11 +390,13 @@ import TaskPanelCore
   /// One typed message. The words show at once; the answer follows.
   private func sendChat(_ text: String) {
     guard let client, chatPending == nil else { return }
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    releaseNativeEditor()
     chatPending = text; chatNotice = ""; renderChat()
     Task {
       let reply = try? await client.say(text)
       await readChat(client)
-      chatPending = nil
+      chatPending = nil; nativeSubmissionPending = false
       if reply == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." }
       pet.react(success: reply != nil)
       renderChat()
@@ -401,7 +408,10 @@ import TaskPanelCore
   /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
   private func heard(_ recording: String) async -> URL? {
     guard let client else { return nil }
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    releaseNativeEditor(); renderChat()
     let result = try? await client.hear(recording)
+    nativeSubmissionPending = false
     await readChat(client)
     if result == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." } else if result?.reply != nil { chatNotice = "" }
     if let result, let reply = result.reply {
@@ -460,7 +470,7 @@ import TaskPanelCore
           // The watcher is optional, as the board is: a service without one changes nothing.
           self.incidents = try? await client.incidents()
           // The chat is read while it is in view, and once at the start.
-          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil {
+          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil || self.executionControl.execution?.mode == "native" {
             await self.readChat(client)
           }
           self.render(); self.renderChat()

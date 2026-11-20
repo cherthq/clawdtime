@@ -27,7 +27,7 @@ public struct HTTPRequest {
     let lines = header.components(separatedBy: "\r\n")
     let start = lines[0].split(separator: " ")
     guard start.count == 3, start[2] == "HTTP/1.1",
-      ["GET", "POST", "DELETE"].contains(String(start[0])), start[1].hasPrefix("/v1/"),
+      ["GET", "POST", "DELETE"].contains(String(start[0])), (start[1].hasPrefix("/v1/") || start[1].hasPrefix("/local/v1/")),
       !start[1].contains("?"), !start[1].contains("%")
     else { throw HelperError(400, "Invalid request line.") }
     var headers = [String: String]()

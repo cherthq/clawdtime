@@ -74,6 +74,13 @@ of host tools that do not expose it.
 
 ## Product decision
 
+**November 20 implementation update:** the recommended app-owned runtime is now
+implemented as a separate opt-in mode. Its independent browser fixture passed;
+native physical acceptance remains pending. See [BUNDLED_CUA.md](BUNDLED_CUA.md)
+for setup, packaging, approvals and recovery limits. The connection described
+above remains an optional adapter; it cannot coexist with bundled mode in the
+same task service.
+
 **Recommendation: bundle a persistent execution runtime into ClawdTime, while
 keeping external-agent connections optional.** The product promise is that work
 continues without an existing Codex chat staying active. The observed wake gap

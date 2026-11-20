@@ -49,10 +49,17 @@ every session and tells you when one has waited for you too long, hangs, ended
 badly or is done. See the
 [supervisor guide](docs/SUPERVISOR.md).
 
-Desktop computer tasks can now be handed to an explicitly connected existing
-Codex chat, with result receipts and a **Stop work** control. The active-chat
-browser path has been physically tested; automatic wake of an idle chat has not.
-See [execution setup and the bundled-CUA recommendation](docs/DESKTOP_EXECUTOR.md).
+Desktop computer tasks have an opt-in app-owned runtime that works without an
+open Codex chat. It bundles an isolated browser adapter, a local Mac adapter,
+exact-action approvals, result verification and **Stop work**. The standalone
+browser fixture and a native two-app activation/type/save/Stop flow are verified
+on the qualification Mac. This is bounded internal acceptance, not a claim that
+every application or computer is supported.
+Native mode now includes a focus-preserving approval panel and explicit activation
+of allowlisted existing app windows. The standalone package uses a separate
+Local Control helper so it does not overwrite an installed call companion.
+See [bundled runtime setup and limitations](docs/BUNDLED_CUA.md). An
+[existing-chat adapter](docs/DESKTOP_EXECUTOR.md) remains available separately.
 
 During an authorized visual call, keep the current prepared window shared through
 spoken requests, coding, verification and acceptance. If another prepared view is
@@ -68,7 +75,10 @@ for scope and the remaining handset continuity test.
 
 Long-running work should continue without depending on an existing Codex chat staying active.
 
-Agent-S provides fallback computer use; the presentation layer renders walkthrough zooms. Shared-screen actions retain explicit permissions, exclusive control, fresh-screen checks, and visible Stop controls.
+The opt-in app-owned runtime uses a replaceable model planner, isolated Chromium
+and the Mac companion. Agent-S remains a candidate, not an installed dependency.
+The presentation layer renders walkthrough zooms. Shared-screen actions retain
+explicit permissions, exclusive control, fresh-screen checks and visible Stop.
 
 ### Model Choice: lets try Grok first.
 

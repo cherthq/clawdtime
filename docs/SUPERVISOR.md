@@ -19,22 +19,41 @@ answer to the agent. Nothing is typed into its terminal.
 ```sh
 clawdtime agents hooks install --agent claude-code   # once
 clawdtime agents hooks install --agent codex         # once, then /hooks in Codex
-clawdtime agents pending                             # what waits
-clawdtime agents approve 1                           # or: approve 1 --always
-clawdtime agents deny 1 --message "Not before review."
-clawdtime agents answer 1 2                          # the second choice of a question
+clawdtime agents pending                             # what waits, each with its id
+clawdtime agents approve 3f9a1c2e                    # or: approve 3f9a1c2e --always
+clawdtime agents deny 3f9a --message "Not before review."
+clawdtime agents answer 3f9a 2                       # the second choice of a question
 ```
+
+A request is named by its id, or by its first four characters or more, as
+`agents pending` prints it. A place in the list ("approve 1") is refused, and
+the message shows the ids: the list changes while you type, so a number could
+mean another request a moment later.
 
 How it behaves:
 
 - A hook waits only while someone attends the desk: the panel, or `agents watch`.
   With nobody there it says nothing, and the agent works exactly as it does with
   no hook.
-- Claude Code shows its own prompt at the same time. You can still answer in the
-  terminal. The first answer wins, and a request that the terminal answered
-  leaves the desk at once.
+- For a permission request, Claude Code shows its own prompt at the same time.
+  You can still answer in the terminal. The first answer wins, and a request
+  that the terminal answered leaves the desk at once.
+- A question or a plan is different. Its hook runs before the dialog, and the
+  agent waits for the hook. So the dialog of a question or a plan shows in the
+  terminal only after the hold: 45 seconds at the desk, 9 minutes in away mode.
+  An answer in ClawdTime ends the hold at once and stands in for the dialog.
+  With nobody at the desk there is no hold, and the dialog shows at once.
 - A request waits 45 seconds on the desk. After that only the terminal answers.
   In away mode it waits up to 9 minutes.
+- A request that you cannot see whole is allowed only in its terminal. ClawdTime
+  shows 600 characters of a request, on one line. A request with more text, or a
+  command with a line break, is marked (`answerInTerminal` in
+  `GET /desktop/decisions`). The panel, a command, the chat and a call all refuse
+  to allow it, and say that its terminal shows it whole. You can still deny it
+  from ClawdTime. A plan is marked only when it is longer than what is shown.
+- A call reads 220 characters of a command. A longer command is approved in the
+  panel or in its terminal, not on the call. The live view `agents watch` shows
+  90 characters, and takes an approval only for a request that fits.
 - Supported: Claude Code permission requests, single-choice questions and plans;
   Codex approval requests. A question with several parts stays in the terminal.
 
@@ -65,10 +84,27 @@ clawdtime trove playbook --out playbook.md
 ```
 
 A request is grouped by a narrow key: a shell command by its program and its
-first plain word (`git push`, `npm test`), every other tool by its name. A
-command with pipes, lists or substitutions gets the bare key `Bash`, and the bare
-key cannot become a rule. An answer given in the terminal is not in the trove,
-because ClawdTime does not see which answer it was.
+first plain word (`git push`, `npm test`), every other tool by its name. The key
+is made from the command as the agent sent it, before it is cut for the screen.
+
+A rule never covers more than the command that you saw:
+
+- A command with pipes, lists or substitutions, a command with a line break, a
+  command longer than the 600 characters that you are shown, and a command whose
+  program is a path (`./git status`) all get the bare key `Bash`. The bare key
+  cannot become a rule and no rule matches it.
+- A key that is the program alone (`rm` from `rm build/tmp.txt`, `ls` from
+  `ls -la`) counts your past answers, but it cannot become a rule: it would
+  cover every use of that program.
+- A rule for a file tool (Edit, MultiEdit, Write, NotebookEdit, Read) covers
+  only a file inside the rule's project folder, also when a link leads out of
+  it. A request for a file outside the folder cannot be remembered.
+
+The panel offers **Always in this project** only where a rule can be made, and
+`approve ID --always` says so when it cannot.
+
+An answer given in the terminal is not in the trove, because ClawdTime does not
+see which answer it was.
 
 ## Memory
 
@@ -98,7 +134,12 @@ How it works:
   until it changes.
 - A fact can belong to one project. It never shows for another project.
 - A credential is never kept. Text that holds a key, a token or a password with
-  its value is refused.
+  its value is refused: the usual key shapes, a name with a value
+  (`CLIENT_SECRET=...`, `db-password: ...`), an address with a password in it,
+  and the same as you say it ("my password is ..."). A message that holds one
+  is also not written to the chat file: a short marker stands in its place.
+  The check reads shapes. A password that is one short plain word in a sentence
+  looks like any other word, so do not tell ClawdTime a password.
 - With memory on, ClawdTime starts each conversation from a small summary: at
   most ten lasting lines and six recent ones. It can search the rest by words.
   No model and no index is used to search.
@@ -142,9 +183,16 @@ for each check, and says whether a phone would ring: in live mode it does, in
 simulation or standby it does not.
 
 - Only clear words count. "Approve", "yes", "go ahead" allow. "Deny", "no",
-  "stop" deny, and your words become the reason for the agent. Unclear words, both
-  at once, silence or other sound never approve: the call asks again, up to three
-  times.
+  "stop" deny, and your words become the reason for the agent. Nothing else
+  approves, and the call asks again, up to three times. That holds for unclear
+  words, yes and no together, silence or other sound, an approval with "not" in
+  the sentence ("I would not allow that"), a hedge ("not sure", "maybe", "I
+  think"), words that ask for time ("wait", "hold on") and a question ("is it
+  safe to allow", with or without a question mark). A sentence that opens with
+  its refusal ("No, why would it do that?") still denies.
+- What you say in one go is read together, so a sentence that arrives in parts
+  is one sentence. The same reading is used in the chat, with or without a
+  language model.
 - One request places one call. An unanswered call leaves the request for the
   panel and the terminal.
 - Away mode needs no panel. With a phone link, the desktop service attends the
@@ -251,12 +299,29 @@ What it can do when you ask:
 - Take a task from you, say how it goes, pass your answer to its question,
   and accept or cancel it. See "Give it a task" below.
 
-Two rules are in the code, not in the model's instructions:
+These rules are in the code, not in the model's instructions:
 
 - A request is allowed or denied only when your own last message says so. "What
   does it want?" allows nothing. "Yes, approve it" allows it. The same reading
   of your words is used on a call.
-- Text is typed into a terminal only when it is part of what you said.
+- One message decides one request. The model names a request by its id, never
+  by its place in a list, so an answer cannot move to another request when the
+  list changes. When more than one request waits, your words must say which
+  one: a word of what it asks, of its project or of its agent that the other
+  requests do not have ("approve the npm test one"). Otherwise nothing is
+  decided, and ClawdTime asks you which one.
+- Text is typed into a terminal only when your own last message asks for it
+  ("type", "tell", "send", "say", "reply" or "answer"), names the session, and
+  holds the text as whole words, one after the other ("Tell deploy fix: run the
+  tests again"). A part of a word is never typed, and neither are words that
+  follow a "not" in your sentence.
+- Nothing is typed into a session that has a request on the desk. Return in its
+  terminal would answer the prompt that shows there. ClawdTime says that the
+  request must be answered first.
+- Away mode changes only on your own words, because it holds agents for minutes
+  and places calls. "Away", "leaving", "stepping out" or "call me" turn it on.
+  "Back" or "I am here" turn it off, and so does "away mode off". A question
+  about away mode changes nothing.
 
 A critical decision is kept in your words. When the model rewords it with a word
 that you did not say, your own sentence is stored.
@@ -342,6 +407,9 @@ for a session in tmux, in Terminal, in iTerm2, and in Ghostty 1.4 or later.
 Control characters are removed, so the text cannot carry an escape sequence. A
 session in another terminal is refused with the reason.
 
+With `--no-enter` the text stays on the line and nothing sends it: line breaks
+in the text become spaces, because a line break in a terminal sends the line.
+
 ## Agent commands, use, and slides
 
 ```sh
@@ -380,7 +448,8 @@ moves it):
 - `agents/decisions/call.json`: the link to a pairing for away mode. The pairing
   credential stays in its own connection file.
 - `agents/chat.jsonl`: the conversation with ClawdTime, 2,000 characters for
-  each message at most.
+  each message at most. A message that holds a credential is kept as a marker
+  only.
 - `memory/settings.json` and `memory/facts.json`: whether memory is on, and the
   facts, 400 characters for each at most and 2,000 facts at most. Nothing is
   written there while memory is off.

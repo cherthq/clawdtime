@@ -11,6 +11,7 @@ import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
 import type { TaskDesktopCalls } from "./task-desktop-calls.js";
 import type { DesktopExecutor } from "./desktop-executor.js";
+import type { BundledCuaRuntime } from "./bundled-cua-runtime.js";
 
 /**
  * The agent board as the panel routes see it. The board is built in a separate
@@ -81,7 +82,7 @@ export function createTaskApp(
   desktop?: TaskDesktopService,
   calls?: TaskDesktopCalls,
   agents?: AgentBoardPort,
-  executor?: DesktopExecutor,
+  executor?: DesktopExecutor | BundledCuaRuntime,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -164,9 +165,24 @@ export function createTaskApp(
         desktop.authorizePanel(credential(c));
         return c.json({ execution: executor.stop() });
       });
-      app.post("/executor/command", async (c) =>
-        c.json(executor.command(credential(c), await c.req.json())),
-      );
+      if ("command" in executor)
+        app.post("/executor/command", async (c) =>
+          c.json(executor.command(credential(c), await c.req.json())),
+        );
+      if ("decision" in executor)
+        app.post("/desktop/execution/decision", async (c) => {
+          desktop.authorizePanel(credential(c));
+          const input = z
+            .object({
+              actionId: z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/),
+              approve: z.boolean(),
+            })
+            .strict()
+            .parse(await c.req.json());
+          return c.json({
+            execution: executor.decision(input.actionId, input.approve),
+          });
+        });
     }
     app.get("/desktop/state", (c) => c.json(desktop.snapshot(credential(c))));
     app.get("/desktop/operations/:eventId", (c) =>

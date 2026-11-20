@@ -20,21 +20,30 @@ public struct DisplayPermission: Codable {
     self.controllers = controllers
   }
 }
+public struct LocalExecutorPermission: Codable, Equatable {
+  public var executorId: String
+  public var displayId: UInt32
+  public var allowedApplications: [String]?
+  public init(executorId: String, displayId: UInt32, allowedApplications: [String]? = nil) {
+    self.executorId = executorId; self.displayId = displayId; self.allowedApplications = allowedApplications
+  }
+}
 public struct HelperConfig: Codable {
   public var deviceId: String
   public var bind: String
   public var port: UInt16
   public var secret: String
   public var displays: [DisplayPermission]
+  public var localExecutors: [LocalExecutorPermission]?
   public init(
     deviceId: String, bind: String = "127.0.0.1", port: UInt16 = 4213, secret: String,
-    displays: [DisplayPermission]
+    displays: [DisplayPermission], localExecutors: [LocalExecutorPermission]? = nil
   ) {
     self.deviceId = deviceId
     self.bind = bind
     self.port = port
     self.secret = secret
-    self.displays = displays
+    self.displays = displays; self.localExecutors = localExecutors
   }
   public func validate() throws {
     let octets = bind.split(separator: ".").compactMap { UInt8($0) }
@@ -43,6 +52,12 @@ public struct HelperConfig: Codable {
       && octets.map(String.init).joined(separator: ".") == bind
     guard bind == "127.0.0.1" || tailnet else {
       throw HelperError(400, "Bind only to loopback or an explicit Tailscale IPv4 address.")
+    }
+    let locals = localExecutors ?? []
+    guard locals.count <= 32, locals.isEmpty || bind == "127.0.0.1",
+      Set(locals.map { "\($0.executorId):\($0.displayId)" }).count == locals.count,
+      locals.allSatisfy({ validID($0.executorId) && $0.displayId > 0 && LocalWindowPolicy.validApplications($0.allowedApplications ?? []) }) else {
+      throw HelperError(400, "Local executors require explicit unique display bindings and loopback.")
     }
     guard validID(deviceId), secret.utf8.count >= 32, port > 0,
       Set(displays.map(\.displayId)).count == displays.count,
@@ -125,6 +140,8 @@ public struct FrameStamp {
 public struct InputAction: Codable {
   public var id: String
   public var frameId: String
+  public var localProofId: String?
+  public var targetId: String?
   public var type: String
   public var x: Double?
   public var y: Double?
@@ -136,10 +153,10 @@ public struct InputAction: Codable {
   public init(
     id: String, frameId: String, type: String, x: Double? = nil, y: Double? = nil,
     text: String? = nil, deltaY: Int32? = nil, executorEpoch: Int? = nil,
-    policyRevision: Int? = nil, sessionId: String? = nil
+    policyRevision: Int? = nil, sessionId: String? = nil, localProofId: String? = nil, targetId: String? = nil
   ) {
     self.id = id
-    self.frameId = frameId
+    self.frameId = frameId; self.localProofId = localProofId; self.targetId = targetId
     self.type = type
     self.x = x
     self.y = y
@@ -150,11 +167,16 @@ public struct InputAction: Codable {
     self.sessionId = sessionId
   }
   public func validate() throws {
-    guard validID(id), validID(frameId) else { throw HelperError(400, "Invalid action identity.") }
+    guard validID(id), validID(frameId), localProofId.map(validID) ?? true else { throw HelperError(400, "Invalid action identity.") }
     let point =
       x.map { $0.isFinite && (0...1).contains($0) } == true
       && y.map { $0.isFinite && (0...1).contains($0) } == true
+    guard type == "activate" || targetId == nil else { throw HelperError(400, "Target ID is only valid for local window activation.") }
     switch type {
+    case "activate":
+      guard let targetId, validID(targetId), x == nil, y == nil, text == nil, deltaY == nil else {
+        throw HelperError(400, "Activation requires only an observed window target ID.")
+      }
     case "click":
       guard point && text == nil && deltaY == nil else {
         throw HelperError(400, "Click needs normalized x and y.")
@@ -180,6 +202,7 @@ public final class DevicePolicy {
   public private(set) var armed = false
   public private(set) var lease: Lease?
   public private(set) var frame: FrameStamp?
+  public private(set) var localSessionOwner: String?
   public private(set) var generation = 0
   private var retired = Set<String>()
   public init(config: HelperConfig, preferences: ControlPreferences? = nil) throws {
@@ -198,9 +221,19 @@ public final class DevicePolicy {
     preferences = next
   }
   public func arm() { armed = true }
+  public func claimLocal(_ id: String) throws {
+    guard lease == nil, localSessionOwner == nil || localSessionOwner == id else {
+      throw HelperError(409, "Another execution owner is active.")
+    }
+    localSessionOwner = id
+  }
+  public func releaseLocal(_ id: String) {
+    if localSessionOwner == id { localSessionOwner = nil; generation += 1 }
+  }
   public func stop(disarm: Bool = false) {
     if let lease { retired.insert(lease.id) }
     lease = nil
+    localSessionOwner = nil
     frame = nil
     generation += 1
     if disarm { armed = false }
@@ -258,6 +291,7 @@ public final class DevicePolicy {
   {
     try check(now: now, sessionAvailable: sessionAvailable)
     try authorize(proposed, now: now, accessibility: accessibility)
+    guard localSessionOwner == nil else { throw HelperError(409, "A local executor owns the screen.") }
     guard !retired.contains(proposed.id) else {
       throw HelperError(409, "A stopped lease cannot be resumed.")
     }
@@ -324,6 +358,7 @@ public final class DevicePolicy {
       throw HelperError(409, "Input protocol does not match this lease.")
     }
     try action.validate()
+    guard action.type != "activate", action.localProofId == nil else { throw HelperError(403, "Local window actions are not available to call leases.") }
     guard let frame, frame.id == action.frameId, frame.leaseId == leaseId,
       frame.displayId == lease.displayId, now.timeIntervalSince(frame.capturedAt) >= 0,
       now.timeIntervalSince(frame.capturedAt) <= 2

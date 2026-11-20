@@ -118,6 +118,7 @@ function childEnvironment(): NodeJS.ProcessEnv {
         [
           "HOME",
           "PATH",
+          "PLAYWRIGHT_BROWSERS_PATH",
           "USER",
           "LOGNAME",
           "SHELL",
@@ -323,10 +324,16 @@ export async function desktopCli(
     writeFileSync(launch, JSON.stringify({ pid: process.pid }));
     const attach = existsSync(ownerPath);
     if (!attach) {
+      // Installed artifacts contain dist JavaScript and production dependencies only.
+      // A source checkout keeps the TS loader; never require tsx in the artifact.
+      const compiledService = join(root, "scripts/task-server.js");
+      const sourceService = join(root, "scripts/task-server.ts");
+      const entry =
+        existsSync(compiledService) && !existsSync(sourceService)
+          ? [compiledService]
+          : ["--import", "tsx", sourceService];
       const serviceArgs = [
-        "--import",
-        "tsx",
-        join(root, "scripts/task-server.ts"),
+        ...entry,
         "--state",
         state,
         "--project",
@@ -466,10 +473,22 @@ export async function desktopCli(
   }
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+function isMainEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    // Node resolves a symlinked entry module to its real path, while argv keeps
+    // the installer's stable symlink. Compare identities, not lexical paths.
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    // Importing from a test/embedding process with a missing argv path is not a launch.
+    return false;
+  }
+}
+
+if (isMainEntry()) {
   desktopCli(process.argv.slice(2)).catch(() => {
     console.error(
       "Desktop launch refused or unconfirmed. Preserve private state and ownership locks; check the explicit project, private configuration, service readiness and native panel build.",

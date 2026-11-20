@@ -433,3 +433,136 @@ from submitted cancellation. Parent Stop still terminates that exact child.
 `stream_start`, `stream_wait`, and `stream_stop` profiling phases expose this path.
 These bounds and lifecycle tests are not proof of native startup latency or a
 repair; real exact-window qualification is required before changing the default.
+
+## App-owned local desktop execution
+
+The companion also supports an explicitly configured local task executor. This
+path has task/session/executor identities, **no call or paired-member identity**,
+and requires no media server or voice provider. It is implemented and covered by
+policy/receipt tests; packaged native capture/input and approval-focus behavior
+still require physical qualification. Building this code does not install it,
+request macOS permissions, enable capture, or grant input.
+
+An owner-only helper configuration may add:
+
+```json
+"localExecutors": [{ "executorId": "app-runtime", "displayId": 123456 }]
+```
+
+This is a separate display/control opt-in. It is accepted only with loopback
+binding. Existing configurations without it retain the call-helper behavior.
+Screen Recording, Accessibility, an unlocked active console session, a local
+control policy other than View only, and **Enable locally** are still required.
+The local and call paths share one execution slot and all unresolved receipt
+stores block new control. Local Stop, policy change, display change, sleep, lock,
+and session loss revoke local work too; wake/unlock does not resume it.
+
+All routes require the existing private helper bearer; requests never arm the
+helper or prompt for macOS permissions:
+
+| Route | Result |
+| --- | --- |
+| `GET /local/v1/status` | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
+| `POST /local/v1/sessions` | Reserve a new exact local lease. |
+| `POST /local/v1/sessions/:id/renew` | Change only expiration, at most 30 seconds from the helper clock. |
+| `GET /local/v1/sessions/:id/frame` | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`. |
+| `POST /local/v1/sessions/:id/actions` | Reserve and submit one bounded action; return its durable receipt. |
+| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry. |
+| `POST /local/v1/sessions/:id/stop` | Idempotently stop that previously reserved lease; never stop a different current owner. |
+
+A lease is `{id,deviceId,sessionId,taskId,executorId,executorEpoch,policyRevision,
+displayId,expiresAt}`. Expiration is ISO 8601; responses use the helper's existing
+whole-second ISO serialization. Renewal cannot change any identity, epoch,
+policy, or display. Used lease IDs are durably retained and cannot be resumed
+after restart. Input uses the existing click/type/scroll body, additionally
+requiring `sessionId`, `executorEpoch`, and `policyRevision` to match the lease.
+There are no new shell, clipboard, arbitrary-key, or application-launch actions.
+
+Only local-mode screenshots omit the cursor and the explicitly identified
+ClawdTime companion/panel apps (including the existing supervisor bundle).
+The native input path refuses typing into those apps and refuses click/scroll
+points covered by their on-screen windows, even if AX hit testing reports an
+underlying app. It requires a non-ClawdTime AX target witness; unavailable
+identity fails closed. Focus identity is checked before/after capture and before
+input, with exact focused-element equality for typing. An approval click that
+changes focus can therefore require a fresh observation and plan; it is never
+hidden or bypassed. Unsigned/unidentified app behavior remains a qualification
+constraint, not an automatic name-based exclusion.
+
+Local receipts live in the helper's private `local-execution` journal. They store
+identity, a payload hash, state, timestamps and fixed evidence, never typed text
+or pixels. Dispatch is fsynced before native input; restart changes unfinished
+dispatch to unknown. A submitted receipt means events were posted, not UI
+success. Only a subsequent fresh frame records observation availability; unknown
+outcomes remain blocking and are never replayed under another action ID.
+
+The chat panel optionally displays an exact pending action with **Approve action**
+and **Deny action**. Both send one decision for that action ID; an unconfirmed
+response is reconciled by reads, not replayed. **Stop work** remains a separate
+control while approval or chat/voice requests are pending. Its wording describes
+a cooperative stop: an action already underway may finish.
+
+For a service reporting `execution.mode: "native"`, submitting chat/voice work
+withdraws only ClawdTime's editable chat/board windows before dispatch. A separate
+non-key, non-main native panel shows work status, exact pending action decisions,
+and Stop. It never activates or restores another application. Browser mode and
+older services keep their existing editor behavior. Reopening an editor or any
+other genuine focus change still invalidates the native target proof; the helper
+never substitutes the former target. This UI handoff requires packaged physical
+qualification and does not itself prove that target focus was restored.
+
+Native target validation and event construction now run before the durable
+input reservation and again at the final dispatch boundary. A definite refusal
+before reservation returns HTTP 409 with fixed `code: "input_not_dispatched"`
+only after exact binding and prior-receipt checks. A final pre-post validation
+failure records `state: "rejected", evidence: "input_not_dispatched"`. These
+outcomes do not create an unresolved-input fence, but the rejected action ID is
+not replayable. After event posting begins, lost responses or persistence failure
+remain uncertain; they cannot become a definite refusal.
+
+
+### Separate local-only helper bundle
+
+`CLAWDTIME_LOCAL_ONLY=1 CLAWDTIME_SIGNING_IDENTITY=- bash mac/scripts/package.sh`
+creates `mac/build/ClawdTime Local Control.app` with bundle identity
+`com.clawdtime.local-control`. The default command still creates the Companion
+bundle. Packaging does not install, launch, arm, or grant macOS permissions.
+The separate identity requires its own Screen Recording/Accessibility qualification.
+
+Local Control loads only an explicit private `--config` or
+`~/Library/Application Support/ClawdTimeLocalControl/setup/helper.json`, with the
+same owner-only file checks. It requires loopback and an empty `displays` list,
+rejects call-helper HTTP APIs, and keeps receipts in its separate support folder.
+It refuses Enable/session admission and reports `available: false` while another
+Companion or Local Control process runs. Reappearance of such a helper retires
+local work on the periodic check and at request/input/capture boundaries. Stop
+and receipt reconciliation remain available. This prevents concurrent use with
+an independently installed call helper; it does not upgrade that helper.
+
+### Bound native targets and existing-window activation
+
+Local frames expose bounded untrusted `X-Local-Targets` control centers. The helper
+retains up to eight transient catalogs and can issue a one-use proof through
+`POST /local/v1/sessions/:id/revalidate` for an exact original/current frame pair
+and action. Complete supported AX window semantics, process lifetime, geometry,
+actual hit/focus witnesses and selection are rechecked before input; unsupported
+or incomplete trees refuse proof. Screens and AX values are not journaled.
+
+`localExecutors[].allowedApplications` optionally lists up to 20 exact application
+bundle IDs. Its default is empty. Only those existing ordinary windows may appear
+in the bounded untrusted `X-Local-Windows` catalog (`id`, `app`, `title`). The
+`activate` action takes an observed `targetId` and always requires a one-use proof;
+it cannot launch an app, unhide/minimize-restore it, or target a shell/security UI.
+It retains Accessibility, non-secure-input and active-display gates, including
+both pre-reservation and final preflight. AXRaise/application activation is a
+submitted effect, not proof of the requested UI result; a fresh observation is
+still required. Physical cross-window behavior remains a separate qualification.
+
+Directly spawned applications may lack a Launch Services launch date. Local
+witnesses then use the kernel's exact PID/start-time tuple; missing or invalid
+lifetime evidence still refuses. The bounded window catalog combines actual
+`AXWindows`, `AXMainWindow` and `AXFocusedWindow` references, deduplicates them,
+and checks each owning PID. An empty `AXWindows` array is not replaced by a
+fabricated window ID. Activation revalidation uses the same current membership
+and unchanged geometry/title/document checks. On-screen control discovery still
+requires its original on-screen CG window and complete AX semantic witness.

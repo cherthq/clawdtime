@@ -1,5 +1,28 @@
 # ClawdTime implementation status
 
+## November 20, 2026 — app-owned CUA runtime (PR candidate)
+
+Implemented an opt-in runtime owned by the desktop service, independent of an
+open coding chat. It includes isolated Chromium, a separate native local-task
+lease adapter, one-action planning, exact action approvals, encrypted receipts,
+fresh target checks, independent result verification and Stop. Browser input is
+confirmation-gated except exact configured loopback fixture effects. Native input
+is confirmation-gated and remains physically unqualified. Unknown input/cleanup
+or restart outcomes block new work without replay; an operator reconciliation UX
+is still needed. See [scope and setup](BUNDLED_CUA.md).
+
+The model-driven standalone browser fixture passed with no Codex environment,
+queue or chat tools. A separate fixture witness confirmed the exact saved value.
+The packaged Node/Chromium artifact repeated that pass with a system-only PATH,
+and its real compiled CLI passed isolated cold-start/readiness and cleanup.
+Final TypeScript checks/build and all 1,630 tests in 92 files passed.
+Swift build and 158 tests passed, including local ownership/recovery and panel
+transport. Review fixed own-control-window input, focus identity, late Stop,
+browser target drift and compiled-launch concerns. Native permissions, live
+input/approval interaction and signed-in account tasks are not accepted by these
+tests. This work does not change the installed service, live backend or phone
+qualification. PR review precedes any merge or installation.
+
 ## November 20, 2026 — desktop execution connection
 
 An opt-in pinned-chat bridge connects supervisor requests to existing native

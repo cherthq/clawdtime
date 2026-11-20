@@ -1,5 +1,30 @@
 # ClawdTime: approved implementation and migration plan
 
+## App-owned CUA implementation — November 20, 2026
+
+User approved bundling the execution runtime so computer tasks do not depend on
+an open chat, with a PR before merge or installation. Implement a bounded
+observe/plan/permission/input/verify loop with encrypted receipts, no blind replay,
+visible Stop and one owner. Browser mode owns isolated Chromium; native mode uses
+an explicitly enabled local-task companion lease, never a fabricated call.
+External-agent connections remain optional. Do not expand phone authority.
+
+The standalone model-driven browser fixture passes with an independent saved
+value check and no Codex environment. PR #7 adds native focus-preserving approval,
+exact target proofs, allowlisted existing-window activation and a separate
+local-only helper identity. The existing call companion remains intact; local
+control refuses execution while another known helper is running.
+
+On November 20, native qualification activated two disposable apps, typed and
+saved both exact notes, and verified the outcomes through both native UI and
+independent fixture files. Stop canceled a pending action with zero additional
+native inputs. The tested standalone runtime is installed locally with protected
+configuration, preserved project/hooks/history, rollback copies and successful
+cold-start/reopen readiness. No phone or deployment qualification is implied.
+Broader app/account workflows, human approval UX under longer delays, operator
+recovery UX and signed/notarized distribution remain production gates. See
+[runtime scope and evidence](docs/BUNDLED_CUA.md).
+
 ## Desktop execution connection — November 20, 2026
 
 The authorized desktop-supervisor connection now delegates exact computer tasks

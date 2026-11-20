@@ -71,8 +71,21 @@ export function createApp(
     options.origin,
     ...(options.compatibleOrigins ?? []),
   ]);
-  app.use("*", bodyLimit({ maxSize: 32_768 }));
+  // A body that is too large or is not JSON is the caller's mistake. It gets
+  // its own status and is not reported as an unexpected failure.
+  app.use(
+    "*",
+    bodyLimit({
+      maxSize: 32_768,
+      onError: (c) => c.json({ error: "Request body is too large." }, 413),
+    }),
+  );
   app.use("*", async (c, next) => {
+    const json = c.req.json.bind(c.req);
+    c.req.json = () =>
+      json().catch(() => {
+        throw new DomainError(400, "Request body must be valid JSON.");
+      });
     c.header("Cache-Control", "no-store");
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Content-Type-Options", "nosniff");

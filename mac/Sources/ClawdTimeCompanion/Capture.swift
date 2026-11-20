@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon
+import CryptoKit
 import DeviceCore
 import ScreenCaptureKit
 
@@ -29,7 +30,7 @@ struct CapturedFrame {
       DisplayInfo(id: $0, width: CGDisplayPixelsWide($0), height: CGDisplayPixelsHigh($0))
     }
   }
-  func capture(_ displayId: UInt32) async throws -> CapturedFrame {
+  func capture(_ displayId: UInt32, localExecution: Bool = false) async throws -> CapturedFrame {
     guard !busy else { throw HelperError(409, "A frame is already being captured.") }
     guard CGPreflightScreenCaptureAccess() else {
       throw HelperError(403, "Screen Recording permission is missing.")
@@ -45,9 +46,17 @@ struct CapturedFrame {
     let config = SCStreamConfiguration()
     config.width = max(1, Int(Double(display.width) * scale))
     config.height = max(1, Int(Double(display.height) * scale))
-    config.showsCursor = true
+    config.showsCursor = !localExecution
     config.capturesAudio = false
-    let filter = SCContentFilter(display: display, excludingWindows: [])
+    let filter: SCContentFilter
+    if localExecution {
+      // Only our explicitly identified packaged UI is omitted; target apps and
+      // their changes remain visible. No name-based or arbitrary exclusions.
+      let own = content.applications.filter {
+        LocalInputExclusion.isOwned(bundleId: $0.bundleIdentifier, pid: $0.processID, helperPID: ProcessInfo.processInfo.processIdentifier)
+      }
+      filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+    } else { filter = SCContentFilter(display: display, excludingWindows: []) }
     let image = try await SCScreenshotManager.captureImage(
       contentFilter: filter, configuration: config)
     let bitmap = NSBitmapImageRep(cgImage: image)
@@ -72,11 +81,89 @@ struct CapturedFrame {
   }
 }
 
-@MainActor func postInput(_ action: InputAction, displayId: UInt32) throws {
+/// The exact focused AX element is held only in memory. Its opaque digest lets
+/// the planner detect focus changes; type additionally checks AX equality here.
+@MainActor struct LocalFocusWitness {
+  let element: AXUIElement
+  let process: ProcessLifetimeIdentity
+  let digest: String
+  static func current() -> LocalFocusWitness? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+      let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+    let element = raw as! AXUIElement
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(element, &pid) == .success,
+      let app = NSRunningApplication(processIdentifier: pid), let bundle = app.bundleIdentifier,
+      let identity = ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970) else { return nil }
+    let material = identity.stableMaterial + "|" + String(CFHash(element))
+    let digest = SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+    return LocalFocusWitness(element: element, process: identity, digest: digest)
+  }
+  static func same(_ left: LocalFocusWitness?, _ right: LocalFocusWitness?) -> Bool {
+    switch (left, right) {
+    case (nil, nil): return true
+    case let (left?, right?): return left.process == right.process && CFEqual(left.element, right.element)
+    default: return false
+    }
+  }
+}
+
+@MainActor private func localInputTarget(_ element: AXUIElement) throws {
+  var pid: pid_t = 0
+  let found = AXUIElementGetPid(element, &pid) == .success
+  let app = found ? NSRunningApplication(processIdentifier: pid) : nil
+  try LocalInputExclusion.validate(witnessKnown: app?.bundleIdentifier != nil,
+    targetOwned: LocalInputExclusion.isOwned(bundleId: app?.bundleIdentifier, pid: pid,
+      helperPID: ProcessInfo.processInfo.processIdentifier), coveredByOwnedWindow: false)
+}
+
+@MainActor private func localPointTarget(_ point: CGPoint) throws {
+  // Refuse our overlays even if AX hit testing happens to return the underlying
+  // app. Bounds are WindowServer metadata and are never sent to the model.
+  guard let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else {
+    throw HelperError(409, "Cannot verify local input overlays.")
+  }
+  var covered = false
+  for window in windows {
+    guard let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else {
+      throw HelperError(409, "Cannot verify local window ownership.")
+    }
+    let app = NSRunningApplication(processIdentifier: pid)
+    if LocalInputExclusion.isOwned(bundleId: app?.bundleIdentifier, pid: pid, helperPID: ProcessInfo.processInfo.processIdentifier) {
+      guard let raw = window[kCGWindowBounds as String] as? [String: Any],
+        let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary) else { throw HelperError(409, "Cannot verify local overlay bounds.") }
+      if (window[kCGWindowAlpha as String] as? Double ?? 1) > 0, bounds.contains(point) { covered = true }
+    }
+  }
+  try LocalInputExclusion.validate(witnessKnown: true, targetOwned: false, coveredByOwnedWindow: covered)
+  var hit: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+    let hit else { throw HelperError(409, "Cannot verify the local input target.") }
+  try localInputTarget(hit)
+}
+
+@MainActor struct NativeInputBatch {
+  let events: [CGEvent]
+  var activation: LocalWindowWitness? = nil
+  func post() throws {
+    if let activation { try LocalWindowCapture.activate(activation) }
+    else { for event in events { event.post(tap: .cghidEventTap) } }
+  }
+}
+
+@MainActor func prepareInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws -> NativeInputBatch {
+  guard ["click", "type", "scroll"].contains(action.type) else { throw HelperError(400, "This native batch does not support window activation.") }
   guard AXIsProcessTrusted(), !IsSecureEventInputEnabled(), CGDisplayIsActive(displayId) != 0 else {
     throw HelperError(403, "Accessibility, active display and non-secure input are required.")
   }
+  if requireLocalFocus {
+    guard LocalFocusWitness.same(localFocus, LocalFocusWitness.current()), action.type != "type" || localFocus != nil else {
+      throw HelperError(409, "Focused target changed; observe again before input.")
+    }
+  }
   let bounds = CGDisplayBounds(displayId)
+  var events = [CGEvent]()
   if action.type == "type" {
     // Keyboard input goes to the focused UI element. Reject elements on a
     // different display instead of assuming the selected screen has focus.
@@ -90,6 +177,12 @@ struct CapturedFrame {
       throw HelperError(409, "Invalid focused element.")
     }
     let element = focused as! AXUIElement
+    if requireLocalFocus {
+      try localInputTarget(element)
+      guard let localFocus, CFEqual(localFocus.element, element) else {
+        throw HelperError(409, "Focused input element changed before typing.")
+      }
+    }
     var position: CFTypeRef?
     var size: CFTypeRef?
     guard
@@ -126,13 +219,13 @@ struct CapturedFrame {
       }
       down.flags = []
       up.flags = []
-      down.post(tap: .cghidEventTap)
-      up.post(tap: .cghidEventTap)
+      events.append(contentsOf: [down, up])
     }
   } else {
     let point = CGPoint(
       x: bounds.minX + CGFloat(action.x!) * max(0, bounds.width - 1),
       y: bounds.minY + CGFloat(action.y!) * max(0, bounds.height - 1))
+    if requireLocalFocus { try localPointTarget(point) }
     if action.type == "click" {
       guard
         let down = CGEvent(
@@ -144,8 +237,7 @@ struct CapturedFrame {
       else { throw HelperError(503, "Unable to create mouse event.") }
       down.flags = []
       up.flags = []
-      down.post(tap: .cghidEventTap)
-      up.post(tap: .cghidEventTap)
+      events.append(contentsOf: [down, up])
     } else {
       guard
         let event = CGEvent(
@@ -154,7 +246,13 @@ struct CapturedFrame {
       else { throw HelperError(503, "Unable to create scroll event.") }
       event.location = point
       event.flags = []
-      event.post(tap: .cghidEventTap)
+      events.append(event)
     }
   }
+  return NativeInputBatch(events: events)
+}
+
+
+@MainActor func postInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws {
+  try prepareInput(action, displayId: displayId, localFocus: localFocus, requireLocalFocus: requireLocalFocus).post()
 }

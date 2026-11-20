@@ -240,8 +240,10 @@ export class ConversationService {
   }
   /**
    * A hangup closes authority, not delivery: a turn the live originating session
-   * has not acknowledged yet is still the human's answer. Lost heartbeat and
-   * revocation stop the session, so nothing remains that may read the turn.
+   * has not acknowledged yet is still the human's answer. The hangup is seen as
+   * a worker event (`disconnected`) or, when the media service reports the
+   * departed participant first, as a media failure (`failed`). Lost heartbeat
+   * and revocation stop the session, so nothing remains that may read the turn.
    */
   private awaitingDelivery(turn: ConversationTurn, request: AttentionRequest) {
     const session = this.service.store.get<AgentSession>(
@@ -249,7 +251,7 @@ export class ConversationService {
       turn.sessionId,
     );
     return (
-      request.state === "disconnected" &&
+      (request.state === "disconnected" || request.state === "failed") &&
       turn.delivery === "pending" &&
       !!session &&
       session.state !== "stopped"

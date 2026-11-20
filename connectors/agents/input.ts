@@ -68,6 +68,12 @@ export function cleanInput(value: string) {
     .slice(0, 4000);
 }
 
+/**
+ * Text that must stay on the line, with no Return after it: its line breaks
+ * become spaces. In a terminal a line break sends the line.
+ */
+export const unbroken = (value: string) => value.replace(/\s*[\r\n]+\s*/g, " ");
+
 export function inputRoute(session: AgentSession): InputRoute {
   const { terminal } = session;
   // A session of a remote Mac is typed into by ClawdTime on that Mac, not here.
@@ -90,7 +96,7 @@ export async function sendText(
   tmuxBinary = "tmux",
 ): Promise<{ ok: boolean; route: InputRoute }> {
   const route = inputRoute(session);
-  const text = cleanInput(value);
+  const text = cleanInput(options.enter ? value : unbroken(value));
   if (route === "none" || !text.trim()) return { ok: false, route };
   const { terminal } = session;
   if (route === "tmux" && terminal.tmux) {

@@ -11,9 +11,19 @@ import {
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { interpret } from "./call.js";
-import type { DecisionDesk, DecisionRequest } from "./decisions.js";
+import { agentLabel } from "./catalog.js";
+import {
+  answerInTerminalText,
+  type DecisionDesk,
+  type DecisionRequest,
+} from "./decisions.js";
 import type { CliFact } from "./inventory.js";
-import { factKinds, type FactKind, type Memory } from "./memory.js";
+import {
+  factKinds,
+  looksSecret,
+  type FactKind,
+  type Memory,
+} from "./memory.js";
 import { detailLabels, elapsed, summary, title } from "./render.js";
 import {
   taskIsOver,
@@ -42,6 +52,10 @@ export const chatMessageSchema = z
   .strict();
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
+/** What the chat file holds in place of a message that carried a credential. */
+export const credentialMarker =
+  "[A message that held a credential. Its text is not kept.]";
+
 /** The conversation, kept in one owner-only file so the chat screen shows it after a restart. */
 export class ChatLog {
   private readonly file: string;
@@ -51,9 +65,13 @@ export class ChatLog {
   append(message: ChatMessage) {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     if (existsSync(this.file) && !lstatSync(this.file).isFile()) return;
+    // A credential is never kept, here as in memory: a marker stands in its place.
+    const text = looksSecret(message.text)
+      ? credentialMarker
+      : message.text.slice(0, 2000);
     appendFileSync(
       this.file,
-      `${JSON.stringify(chatMessageSchema.parse({ ...message, text: message.text.slice(0, 2000) }))}\n`,
+      `${JSON.stringify(chatMessageSchema.parse({ ...message, text }))}\n`,
       { mode: 0o600 },
     );
     chmodSync(this.file, 0o600);
@@ -206,7 +224,7 @@ export interface SupervisorWorld {
   clis(): CliFact[];
   /** The task that ClawdTime owns. Absent where no task service runs, as in a plain terminal. */
   tasks?: TaskPort;
-  /** Explicitly connected existing Codex chat; queueing is not execution. */
+  /** Explicitly configured execution engine; submission is not verified completion. */
   execution?: DesktopExecutorPort;
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
@@ -215,9 +233,11 @@ export interface SupervisorWorld {
 const system = `You are ClawdTime, the supervisor of the coding agents on this person's Mac.
 You may be heard, not read: answer in one or two short plain sentences. No lists, no markdown.
 Use the tools to see the state. Never guess a state, a name or a number.
-Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly connected Codex chat, which uses its own native tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
+Your tools are the complete capability list. You have no direct mailbox or email-service integration. If delegate_computer_task is available, you can hand the person's exact action request to their explicitly configured execution engine, which enforces its own tools and permissions. This does not guarantee browser access or success. Queued or uncertain delivery is never completed work. Never delegate status questions, approvals, or coding tasks that belong to start_task. No call or deployment permission is inherited by delegation. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
+Computer UI windows and applications are not coding-agent sessions. For an explicitly configured native or browser execution engine, route requests to click/type/scroll or work across app windows through delegate_computer_task; no named coding session is required. Use open_session/type_into_session only when the person explicitly means a coding-agent session. Never reinterpret window names as agent names.
 Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
+Name a request by its id from status. One message of the person decides one request. When more than one request waits, the person must say which one; if they did not, ask them.
 Text is typed into a session only when the person gave that text.
 You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
 After an action, say what you did in one sentence.`;
@@ -225,7 +245,7 @@ After an action, say what you did in one sentence.`;
 const executionTool: ToolSpec = {
   name: "delegate_computer_task",
   description:
-    "Hand the person's exact latest computer/browser action request to their connected Codex chat. This queues work; it does not perform or verify it. No arguments or rewritten instructions.",
+    "Hand the person's exact latest computer/browser action request to their configured execution engine. Submission does not establish completion. No arguments or rewritten instructions.",
   parameters: { type: "object", properties: {}, additionalProperties: false },
 };
 
@@ -244,8 +264,8 @@ const tools: ToolSpec[] = [
       type: "object",
       properties: {
         request: {
-          type: "integer",
-          description: "Number of the request in status, from 1.",
+          type: "string",
+          description: "The id of the request, as status shows it.",
         },
         decision: { type: "string", enum: ["allow", "deny", "answer"] },
         text: {
@@ -426,11 +446,49 @@ const ownWords = (text: string, spoken: string) => {
 };
 const clean = (value: string, max: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
+/** Words that every sentence can hold. They never name one request among several. */
+const plainWord = new Set(
+  "a an and the it its one ones this that these those to of in on at for with from by or is are be do does please request requests agent agents ask asks run runs first second third last next other approve approved allow allowed yes yeah yep ok okay sure go ahead proceed accept confirm deny denied decline declined reject no nope not stop cancel refuse never".split(
+    " ",
+  ),
+);
+/** A sentence that asks ClawdTime to type. Without one of these words nothing is typed. */
+const typeCue = /\b(?:type|tell|send|say|reply|answer)\b/i;
+/**
+ * True when `text` stands in what the person said as whole words, one after
+ * the other. A part of a word is not a word of the person ("y" in "why"), and
+ * words that follow a "not" say the opposite of the sentence.
+ */
+function saidAsWords(text: string, spoken: string) {
+  const all = spoken.toLowerCase();
+  const wanted = text.toLowerCase();
+  const letter = /[\p{L}\p{N}]/u;
+  const open = (character: string | undefined) =>
+    character === undefined || !letter.test(character);
+  for (
+    let at = all.indexOf(wanted);
+    wanted && at >= 0;
+    at = all.indexOf(wanted, at + 1)
+  )
+    if (
+      open(all[at - 1]) &&
+      open(all[at + wanted.length]) &&
+      !/(?:\bnot|\bnever|\bcannot|n['\u2019]t)\s*$/.test(all.slice(0, at))
+    )
+      return true;
+  return false;
+}
 
 // Only direct mailbox-access requests. Pasted email text, coding tasks and
 // explicit instructions to an existing agent continue through their own paths.
 const directMailboxRequest =
   /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search)(?:\s+and\s+(?:check|read|summari[sz]e|review|search))?\s+(?:(?:my|our|the)\s+)?(?:e-?mails?|inbox|gmail|outlook)(?:\s+(?:please|today|from today|from yesterday|for me))?[.!?]*$/i;
+// A bounded current instruction can name its UI location before the imperative.
+// This does not match status questions, quotations or instructions to an agent.
+const contextualUiRequest = (spoken: string) =>
+  /^(?:in|on|within)\s+(?:the\s+)?[^,.!?\n]{0,100}?\b(?:windows?|apps?|desktop|screen|browser)\b[^,.!?\n]{0,60}?(?:,\s*|\s+)(?:please\s+)?(?:click|type|scroll|switch|focus|fill|select|open|use)\b/i.test(
+    spoken,
+  );
 const mailboxUnavailable =
   "I cannot access your inbox because ClawdTime has no email integration. You can paste email text here for a summary; approval will not connect your mailbox.";
 const bareDecision =
@@ -478,6 +536,19 @@ const saysCancel = (spoken: string) =>
     /\b(?:abort|drop|stop|kill|end)\b[^.?!]{0,20}\b(?:task|job)\b/i.test(
       spoken,
     ));
+/** The person says that they are here again, or that away mode must end. A question about it changes nothing. */
+const saysBack = (spoken: string) =>
+  !isQuestion(spoken) &&
+  !/^\s*am\b/i.test(spoken) &&
+  (/\b(?:back|i am here|i'm here|im here)\b/i.test(spoken) ||
+    (/\baway\b/i.test(spoken) &&
+      /\b(?:off|stop|end|disable|no longer|not)\b/i.test(spoken)));
+/** The person says that they leave, or asks for a call. Words for the end of away mode are not words for its start. */
+const saysAway = (spoken: string) =>
+  !isQuestion(spoken) &&
+  !/^\s*am\b/i.test(spoken) &&
+  /\b(?:away|leaving|stepping out|call me)\b/i.test(spoken) &&
+  !saysBack(spoken);
 const needsDesktop =
   "Tasks need ClawdTime's desktop service. It is not running here.";
 
@@ -542,11 +613,12 @@ export class Supervisor {
         ? `Requests that wait for an answer: ${pending.length}.`
         : "No request waits for an answer here.",
     );
-    pending.forEach((request, index) =>
+    // Each request has its id. A place in this list is not a name: the list
+    // changes while the person and the model talk.
+    for (const request of pending)
       lines.push(
-        `${index + 1}. ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary.slice(0, 200)}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}`,
-      ),
-    );
+        `- ${request.id.slice(0, 8)}: ${request.agent} in ${request.cwd?.split("/").filter(Boolean).at(-1) ?? "?"} ${request.kind === "question" ? "asks" : "asks to run"}: ${request.summary}${request.options.length ? ` Choices: ${request.options.join(", ")}.` : ""}${request.answerInTerminal ? " (This is not all of it: it can be allowed only in its own terminal. It can be denied here.)" : ""}`,
+      );
     const found = this.world.incidents?.() ?? [];
     if (found.length) {
       lines.push(`The watcher found ${found.length}:`);
@@ -672,30 +744,94 @@ export class Supervisor {
         );
     return found.length === 1 ? found[0]! : null;
   }
+  /** True when a request on the desk comes from this session, or from its agent in its folder. */
+  private waitsOnDesk(session: AgentSession) {
+    if (session.host) return false;
+    return this.world.desk
+      .pending()
+      .some(
+        (request) =>
+          request.agent === session.agent &&
+          ((session.pid !== null && request.pids.includes(session.pid)) ||
+            (session.cwd !== null && session.cwd === request.cwd)),
+      );
+  }
+  /** The one waiting request with this id, or with an id that starts with it. */
+  private request(id: string) {
+    const wanted = id.trim().toLowerCase();
+    if (!/^[0-9a-f]{4,16}$/.test(wanted)) return undefined;
+    const found = this.world.desk
+      .pending()
+      .filter((request) => request.id.startsWith(wanted));
+    return found.length === 1 ? found[0] : undefined;
+  }
+  /**
+   * The waiting requests that the person's words name: by a word that only
+   * that request has in what it asks, in its project or in its agent, or by
+   * the first characters of its id.
+   */
+  private named(spoken: string, pending: DecisionRequest[]) {
+    const wordsOf = (request: DecisionRequest) =>
+      new Set(
+        spokenWords(
+          `${request.summary} ${request.cwd?.split("/").filter(Boolean).at(-1) ?? ""} ${request.agent} ${agentLabel(request.agent)}`,
+        ).filter((word) => word.length > 1 && !plainWord.has(word)),
+      );
+    const said = spokenWords(spoken);
+    return pending.filter((request) => {
+      if (said.some((word) => word.length >= 4 && request.id.startsWith(word)))
+        return true;
+      const others = pending
+        .filter((other) => other.id !== request.id)
+        .map(wordsOf);
+      const own = wordsOf(request);
+      return said.some(
+        (word) => own.has(word) && !others.some((other) => other.has(word)),
+      );
+    });
+  }
   private decide(
     request: DecisionRequest | undefined,
     spoken: string,
     via: ChatMessage["via"],
     wanted: { decision: string },
+    turn: Turn,
   ) {
-    if (!request) return "No request has that number.";
+    if (turn.done.has("decide"))
+      return "One request is decided for each message of the person. Ask them about the next one.";
+    if (!request)
+      return "No request that waits has that id. Use an id that status shows.";
     if (this.namesTask(spoken))
       return "The person spoke about the task, not about this request. Use the task tools, or ask them.";
     // The person's own last words must say it. The model alone cannot decide.
     const said = interpret(spoken, request);
     if (!said || said.decision !== wanted.decision)
       return "The person did not clearly say that. Ask them.";
+    // With more than one request, the words must also say which one. The
+    // model alone cannot choose it.
+    const pending = this.world.desk.pending();
+    if (pending.length > 1) {
+      const named = this.named(spoken, pending);
+      if (named.length !== 1 || named[0]!.id !== request.id)
+        return "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.";
+    }
+    // What the person could not see whole is allowed only in its terminal.
+    if (said.decision === "allow" && request.answerInTerminal)
+      return answerInTerminalText;
     const ok = this.world.desk.answer(request.id, {
       decision: said.decision,
       text: said.text,
       via: via === "call" ? "call" : "panel",
     });
     if (!ok) return "That request no longer waits here.";
-    return said.decision === "allow"
-      ? "Allowed. The agent continues."
-      : said.decision === "deny"
-        ? "Denied. The agent is told."
-        : `Answered: ${said.text}.`;
+    const done =
+      said.decision === "allow"
+        ? "Allowed. The agent continues."
+        : said.decision === "deny"
+          ? "Denied. The agent is told."
+          : `Answered: ${said.text}.`;
+    turn.done.set("decide", done);
+    return done;
   }
 
   private async delegate(turn: Turn, spoken: string): Promise<string> {
@@ -704,7 +840,8 @@ export class Supervisor {
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
-      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select)\b/i.test(
+      contextualUiRequest(spoken) ||
+      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show)\b/i.test(
         spoken,
       );
     if (
@@ -772,10 +909,11 @@ export class Supervisor {
         return this.cancelTask(turn, spoken);
       case "decide":
         return this.decide(
-          this.world.desk.pending()[Number(args.request) - 1],
+          this.request(String(args.request ?? "")),
           spoken,
           via,
           { decision: String(args.decision) },
+          turn,
         );
       case "open_session": {
         const session = this.session(String(args.session ?? ""));
@@ -788,8 +926,17 @@ export class Supervisor {
         const session = this.session(String(args.session ?? ""));
         const text = clean(String(args.text ?? ""), 2000);
         if (!session) return "No single session has that name.";
-        if (!text || !spoken.toLowerCase().includes(text.toLowerCase()))
+        // The person's own last words must ask for it, name the session and
+        // hold the text. The model alone chooses none of the three.
+        if (!typeCue.test(spoken))
+          return "The person did not ask to type anything into a session. Ask them.";
+        if (!saidAsWords(title(session), spoken))
+          return "The person did not name that session. Ask them which session.";
+        if (!saidAsWords(text, spoken))
           return "Only the person's own words are typed. Ask them for the exact text.";
+        // Return in a terminal that shows a prompt answers that prompt.
+        if (this.waitsOnDesk(session))
+          return `${title(session)} has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.`;
         const sent = await this.world.send(session, text);
         return sent.ok
           ? `Typed into ${title(session)}.`
@@ -877,9 +1024,17 @@ export class Supervisor {
             : "Memory could not be changed.";
         }
       }
-      case "set_away":
-        this.world.desk.setAway(args.away === true);
-        return args.away === true ? "Away mode is on." : "Away mode is off.";
+      case "set_away": {
+        // Away mode holds agents for minutes and places phone calls. The
+        // person's own last words turn it on or off, not the model alone.
+        const on = args.away === true;
+        if (on && !saysAway(spoken))
+          return "The person did not ask for away mode. Ask them.";
+        if (!on && !saysBack(spoken))
+          return "The person did not say that they are back. Ask them.";
+        this.world.desk.setAway(on);
+        return on ? "Away mode is on." : "Away mode is off.";
+      }
       case "agent_commands":
         return (
           this.world
@@ -921,7 +1076,7 @@ export class Supervisor {
     // Any other yes or no belongs to the one agent that waits.
     if (pending.length === 1 && !named) {
       const said = interpret(spoken, pending[0]!);
-      if (said) return this.decide(pending[0], spoken, via, said);
+      if (said) return this.decide(pending[0], spoken, via, said, turn);
     }
     if (tasks) {
       if (task?.canAccept && saysAccept(spoken, pending.length))
@@ -941,7 +1096,7 @@ export class Supervisor {
       .filter((session) => session.state === "needs_you")
       .map((session) => title(session));
     const head = pending.length
-      ? `${pending.length === 1 ? "One request waits" : `${pending.length} requests wait`} for your answer: ${pending[0]!.summary.slice(0, 120)}.`
+      ? `${pending.length === 1 ? "One request waits" : `${pending.length} requests wait`} for your answer: ${pending[0]!.summary}.`
       : waiting.length
         ? `${waiting.slice(0, 3).join(", ")} ${waiting.length === 1 ? "needs" : "need"} you.`
         : board
@@ -1063,6 +1218,25 @@ export class Supervisor {
       )
         return execution.snapshot().message;
     }
+    // Obvious UI instructions go directly to the configured app-owned engine;
+    // a conversational model must not reinterpret window titles as agent names.
+    const executionMode = execution?.snapshot().mode;
+    if (
+      execution?.snapshot().configured &&
+      (executionMode === "native" || executionMode === "browser") &&
+      (contextualUiRequest(words) ||
+        /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:use|click|type|scroll|switch|focus|fill|select|bring|open|navigate)\b/i.test(
+          words,
+        )) &&
+      /\b(?:windows?|apps?|desktop|screen|browser|fields?|buttons?|dock)\b/i.test(
+        words,
+      ) &&
+      !/\b(?:sessions?|agents?)\b/i.test(words) &&
+      !asksAbout(words) &&
+      !asksToStart(words) &&
+      !/\b(?:status|progress|pending requests?)\b/i.test(words)
+    )
+      return this.delegate(turn, words);
     if (directMailboxRequest.test(words))
       return execution?.snapshot().configured
         ? this.delegate(turn, words)
@@ -1074,6 +1248,21 @@ export class Supervisor {
         !!(task && !taskIsOver(task) && (task.canAnswer || task.canAccept))
       );
     };
+    const computerApproval = () => {
+      const pending = execution?.snapshot().pendingAction;
+      return pending
+        ? `A computer action is waiting: ${clean(pending.description, 240)}. Use Approve action or Deny action in the desktop panel; this chat reply does not authorize it.`
+        : null;
+    };
+    if (
+      bareDecision.test(words) ||
+      /^(?:please\s+)?(?:approve|deny|allow|reject)\s+(?:the\s+)?(?:(?:computer|browser|desktop)\s+)?action[.!?]*$/i.test(
+        words,
+      )
+    ) {
+      const waiting = computerApproval();
+      if (waiting) return waiting;
+    }
     if (bareDecision.test(words) && !hasDecisionTarget())
       return noPendingDecision;
     if (!this.model) return this.plain(words, via, turn);
@@ -1104,15 +1293,19 @@ export class Supervisor {
         const task = this.world.tasks?.current();
         // Only authoritative flags/counts enter this instruction. Request text
         // and session names remain untrusted tool data, not system instructions.
-        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}. These facts take precedence over chat history.`;
+        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. These facts take precedence over chat history.`;
         const reply = await this.model.complete({
           system: `${brief}\n${current}`,
           messages,
           tools: offered,
         });
         if (!reply.toolCalls.length) {
-          if (invitesApproval.test(reply.text) && !hasDecisionTarget())
-            return "There is no pending request to approve or deny.";
+          if (invitesApproval.test(reply.text)) {
+            const waiting = computerApproval();
+            if (waiting) return waiting;
+            if (!hasDecisionTarget())
+              return "There is no pending request to approve or deny.";
+          }
           // The answer is ready. What the message teaches is written after it.
           if (memory) this.learning = this.learn(memory, words).catch(() => {});
           return clean(reply.text, 900) || "Done.";

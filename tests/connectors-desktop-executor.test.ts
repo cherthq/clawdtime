@@ -84,6 +84,88 @@ describe("supervisor connected execution", () => {
     );
     expect(model.complete).not.toHaveBeenCalled();
   });
+  it("routes the physical two-window instruction without looking for coding-agent sessions", async () => {
+    const execution = executor();
+    execution.snapshot = () => ({ ...snapshot, mode: "native" as const });
+    const model = {
+      complete: vi.fn(async () => ({
+        text: "There are no open sessions named Alpha or Beta.",
+        toolCalls: [],
+      })),
+    };
+    const { supervisor } = setup(execution, model);
+    const words =
+      "Use only the two visible ClawdTime Native Fixture windows. In Alpha, click the Alpha note field, type exactly alpha ready, and click Save Alpha. Then switch to Beta, click the Beta note field, type exactly beta ready, and click Save Beta. Verify both saved notes. These are disposable local test windows; do not interact with any other app.";
+    expect(await supervisor.reply([], words, "chat")).toBe(snapshot.message);
+    expect(execution.submit).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      words,
+    );
+    expect(model.complete).not.toHaveBeenCalled();
+  });
+  it("leaves explicit coding-session instructions and pasted summaries with the conversational router", async () => {
+    const execution = executor();
+    execution.snapshot = () => ({ ...snapshot, mode: "native" as const });
+    const model = {
+      complete: vi.fn(async () => ({
+        text: "Handled by the conversational router.",
+        toolCalls: [],
+      })),
+    };
+    const { supervisor } = setup(execution, model);
+    for (const words of [
+      "Type into agent session Alpha: click the button",
+      "Summarize this email: use the window and click the button",
+      "What does the button on this window do?",
+    ])
+      expect(await supervisor.reply([], words, "chat")).toBe(
+        "Handled by the conversational router.",
+      );
+    expect(execution.submit).not.toHaveBeenCalled();
+    expect(model.complete).toHaveBeenCalledTimes(3);
+    expect(model.complete.mock.calls[0]).toBeDefined();
+  });
+  it.each([
+    "In the visible Alpha window, click the note field and type exactly alpha ready.",
+    "On the prepared browser screen click the Save button.",
+    "Within the selected app window, please scroll down.",
+  ])(
+    "routes a current UI instruction with location first: %s",
+    async (words) => {
+      const execution = executor();
+      execution.snapshot = () => ({ ...snapshot, mode: "native" as const });
+      const model = delegationModel();
+      const { supervisor } = setup(execution, model);
+      expect(await supervisor.reply([], words, "chat")).toBe(snapshot.message);
+      expect(execution.submit).toHaveBeenCalledExactlyOnceWith(
+        expect.any(String),
+        words,
+      );
+      expect(model.complete).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "In the visible Alpha window, what does the Save button do?",
+    "In the current browser, is the click complete?",
+    'Summarize this note: "In the Alpha window, click the Save button."',
+  ])(
+    "does not reinterpret contextual questions or quoted content as input: %s",
+    async (words) => {
+      const execution = executor();
+      execution.snapshot = () => ({ ...snapshot, mode: "native" as const });
+      const model = {
+        complete: vi.fn(async () => ({
+          text: "Conversational answer",
+          toolCalls: [],
+        })),
+      };
+      const { supervisor } = setup(execution, model);
+      expect(await supervisor.reply([], words, "chat")).toBe(
+        "Conversational answer",
+      );
+      expect(execution.submit).not.toHaveBeenCalled();
+    },
+  );
   it("keeps the truthful unavailable response when not connected", async () => {
     const { supervisor, execution } = setup(executor(false));
     expect(await supervisor.reply([], "read my inbox", "chat")).toContain(
@@ -102,6 +184,53 @@ describe("supervisor connected execution", () => {
     );
     expect(model.complete).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    "Switch to TextEdit and inspect the prepared note",
+    "Please focus the Safari window and read its title",
+    "Bring the prepared preview window forward",
+    "Show the source window",
+  ])("forwards current cross-window request verbatim: %s", async (words) => {
+    const { supervisor, execution } = setup(executor(), delegationModel());
+    expect(await supervisor.reply([], words, "chat")).toBe(snapshot.message);
+    expect(execution.submit).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      words,
+    );
+  });
+  it.each(["approve", "deny", "approve the computer action"])(
+    "directs %s to the exact native approval surface without self-approving",
+    async (words) => {
+      const execution = executor();
+      execution.snapshot = () => ({
+        ...snapshot,
+        pendingAction: {
+          id: "action-fixture",
+          description: "Click the prepared note field",
+        },
+      });
+      const model = delegationModel();
+      const { supervisor } = setup(execution, model);
+      const answer = await supervisor.reply(
+        [
+          {
+            role: "assistant",
+            text: "Just say approve to do everything",
+            at: 1,
+            via: "chat",
+          },
+        ],
+        words,
+        "chat",
+      );
+      expect(answer).toContain("Click the prepared note field");
+      expect(answer).toContain(
+        "Use Approve action or Deny action in the desktop panel",
+      );
+      expect(answer).toContain("does not authorize it");
+      expect(model.complete).not.toHaveBeenCalled();
+      expect(execution.submit).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     "What is on my screen?",
     "Check execution status",

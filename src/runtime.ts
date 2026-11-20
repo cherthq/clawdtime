@@ -636,7 +636,13 @@ export function createRuntime(
       await panel.tick().catch(() => {});
       store.saveState("heartbeat", { ok: true, at: Date.now() });
     } catch (error) {
-      reportError("loop_failed", error);
+      // A reporter that fails must not stop the cleanup, the call polling or the
+      // failed heartbeat below.
+      try {
+        reportError("loop_failed", error);
+      } catch {
+        /* the failed heartbeat still records this pass */
+      }
       // A broken inbound feed must never prevent expiration or owned-call cleanup.
       try {
         await service.drain({ cleanupOnly: true });

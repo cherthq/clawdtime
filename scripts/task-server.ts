@@ -34,6 +34,11 @@ import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
+import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
+import { BundledCuaNative } from "../src/control/bundled-cua-native.js";
+import { bundledCuaConfigSchema } from "../src/control/cua-contracts.js";
+import { BundledCuaBrowser } from "../connectors/agents/bundled-cua-browser.js";
+import { openAiBundledCuaPlanner } from "../connectors/agents/bundled-cua-planner.js";
 import {
   DesktopExecutor,
   desktopExecutorConfigSchema,
@@ -337,22 +342,58 @@ if (
   ].includes(executorConfig.token)
 )
   throw Error("Desktop execution needs a separate credential.");
-const executor = executorConfig
-  ? new DesktopExecutor(
+const bundledPath = join(directory, "bundled-cua.json");
+const bundledConfig =
+  desktop && existsSync(bundledPath)
+    ? bundledCuaConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(bundledPath).toString("utf8")),
+      )
+    : undefined;
+if (
+  bundledConfig &&
+  (executorConfig || calls || presentation || flags.get("--agents") === "false")
+)
+  throw Error(
+    "Select exactly one desktop executor, with no phone/presentation actors.",
+  );
+const bundled = bundledConfig
+  ? new BundledCuaRuntime(
       store,
       vault,
-      executorConfig,
-      (id) =>
-        queueDesktopRequest(
-          executorConfig.binary,
-          executorConfig.threadId,
-          id,
-          executorConfig.clientPath,
-          executorPath,
-        ),
+      bundledConfig,
+      openAiBundledCuaPlanner({
+        apiKey:
+          process.env.CLAWDTIME_OPENAI_API_KEY ??
+          process.env.OPENAI_API_KEY ??
+          "",
+        model: bundledConfig.model,
+        reasoningEffort: bundledConfig.reasoningEffort,
+      }),
+      () =>
+        bundledConfig.mode === "browser"
+          ? new BundledCuaBrowser(bundledConfig.browser!)
+          : new BundledCuaNative(bundledConfig.native!),
       (text) => agentBoard?.appendExecutionResult(text),
     )
   : undefined;
+const executor =
+  bundled ??
+  (executorConfig
+    ? new DesktopExecutor(
+        store,
+        vault,
+        executorConfig,
+        (id) =>
+          queueDesktopRequest(
+            executorConfig.binary,
+            executorConfig.threadId,
+            id,
+            executorConfig.clientPath,
+            executorPath,
+          ),
+        (text) => agentBoard?.appendExecutionResult(text),
+      )
+    : undefined);
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -386,7 +427,7 @@ const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
       desktopSetup.descriptor,
     );
   console.log(
-    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${calls ? "Desktop calls configured but dormant; each exact prepared result requires fresh operator authorization." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${bundled ? "App-owned computer runtime configured; task input and exact action permissions remain required. No phone." : calls ? "Desktop calls configured but dormant; each exact prepared result requires fresh operator authorization." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
   );
 });
 let shuttingDown = false;
@@ -397,6 +438,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     if (presentationWatch) clearInterval(presentationWatch);
     agentBoard?.close();
     void (async () => {
+      await bundled?.close();
       await calls?.close();
       await presentation?.close();
       await engine?.close();

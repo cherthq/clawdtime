@@ -93,6 +93,21 @@ final class PanelTransportTests: XCTestCase {
     }
   }
 
+  func testExecutionDecisionUsesExactActionAndNeverRetriesFailure() async throws {
+    let server = try FixtureHTTP { _, _ in (503, [:], Data()) }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    do { _ = try await client.decideExecution(actionId: "action_1", approve: false); XCTFail("Failure accepted") } catch {}
+    let requests = server.requests()
+    XCTAssertEqual(requests.count, 1)
+    XCTAssertTrue(requests[0].hasPrefix("POST /desktop/execution/decision "))
+    XCTAssertTrue(requests[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    let body = try JSONSerialization.data(withJSONObject: ["actionId": "action_1", "approve": false], options: [.sortedKeys])
+    XCTAssertTrue(requests[0].contains("Content-Length: \(body.count)\r\n"))
+    do { _ = try await client.decideExecution(actionId: "../other", approve: true); XCTFail("Unsafe identity") } catch {}
+    XCTAssertEqual(server.requests().count, 1)
+  }
+
   func testHTTPRedirectIsNotFollowedOrSentCredentialsAgain() async throws {
     let server = try FixtureHTTP { _, port in (302, ["Location": "http://127.0.0.1:\(port)/redirect-target"], Data()) }
     try await server.start(); defer { server.close() }
