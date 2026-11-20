@@ -516,6 +516,19 @@ const saysCancel = (spoken: string) =>
     /\b(?:abort|drop|stop|kill|end)\b[^.?!]{0,20}\b(?:task|job)\b/i.test(
       spoken,
     ));
+/** The person says that they are here again, or that away mode must end. A question about it changes nothing. */
+const saysBack = (spoken: string) =>
+  !isQuestion(spoken) &&
+  !/^\s*am\b/i.test(spoken) &&
+  (/\b(?:back|i am here|i'm here|im here)\b/i.test(spoken) ||
+    (/\baway\b/i.test(spoken) &&
+      /\b(?:off|stop|end|disable|no longer|not)\b/i.test(spoken)));
+/** The person says that they leave, or asks for a call. Words for the end of away mode are not words for its start. */
+const saysAway = (spoken: string) =>
+  !isQuestion(spoken) &&
+  !/^\s*am\b/i.test(spoken) &&
+  /\b(?:away|leaving|stepping out|call me)\b/i.test(spoken) &&
+  !saysBack(spoken);
 const needsDesktop =
   "Tasks need ClawdTime's desktop service. It is not running here.";
 
@@ -990,9 +1003,17 @@ export class Supervisor {
             : "Memory could not be changed.";
         }
       }
-      case "set_away":
-        this.world.desk.setAway(args.away === true);
-        return args.away === true ? "Away mode is on." : "Away mode is off.";
+      case "set_away": {
+        // Away mode holds agents for minutes and places phone calls. The
+        // person's own last words turn it on or off, not the model alone.
+        const on = args.away === true;
+        if (on && !saysAway(spoken))
+          return "The person did not ask for away mode. Ask them.";
+        if (!on && !saysBack(spoken))
+          return "The person did not say that they are back. Ask them.";
+        this.world.desk.setAway(on);
+        return on ? "Away mode is on." : "Away mode is off.";
+      }
       case "agent_commands":
         return (
           this.world

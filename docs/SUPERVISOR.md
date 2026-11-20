@@ -308,6 +308,10 @@ These rules are in the code, not in the model's instructions:
 - Nothing is typed into a session that has a request on the desk. Return in its
   terminal would answer the prompt that shows there. ClawdTime says that the
   request must be answered first.
+- Away mode changes only on your own words, because it holds agents for minutes
+  and places calls. "Away", "leaving", "stepping out" or "call me" turn it on.
+  "Back" or "I am here" turn it off, and so does "away mode off". A question
+  about away mode changes nothing.
 
 A critical decision is kept in your words. When the model rewords it with a word
 that you did not say, your own sentence is stored.

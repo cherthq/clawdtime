@@ -457,7 +457,8 @@ describe("the ClawdTime agent", () => {
       "Opened docs.",
       "No single session has that name.",
       "Kept in the trove as a critical decision.",
-      "Away mode is on.",
+      // The person said nothing about being away: the model alone changes nothing.
+      "The person did not ask for away mode. Ask them.",
       // The decision kept one step before is found at once.
       "2026-11-20 the person decided: Never push on Friday.",
       "There is no such tool.",
@@ -487,7 +488,54 @@ describe("the ClawdTime agent", () => {
     expect(run.seen[1]!.messages.at(-1)!.content).toBe(
       "2026-11-20 the person decided: Never push on Friday.",
     );
-    expect(desk.away()).toBe(true);
+    expect(desk.away()).toBe(false);
+  });
+
+  it("turns away mode on or off only on the person's own words", async () => {
+    const { value, desk } = world([session()]);
+    const away = async (spoken: string, on: boolean) => {
+      const run = scripted([[call("set_away", { away: on })], "ok"]);
+      await new Supervisor(value, run.model).reply([], spoken, "chat");
+      return run.seen[1]!.messages.at(-1)!.content;
+    };
+    // No word about being away, or only a question about it.
+    for (const words of [
+      "what is going on?",
+      "open docs",
+      "is away mode on?",
+      "am I away",
+    ]) {
+      expect(await away(words, true), words).toBe(
+        "The person did not ask for away mode. Ask them.",
+      );
+      expect(desk.away(), words).toBe(false);
+    }
+    for (const words of [
+      "I am leaving, call me",
+      "turn away mode on",
+      "I'm stepping out",
+      "call me when something waits",
+    ]) {
+      desk.setAway(false);
+      expect(await away(words, true), words).toBe("Away mode is on.");
+      expect(desk.away(), words).toBe(true);
+    }
+    // Off needs its own words. Words for on are not words for off, and the reverse.
+    for (const words of ["I am leaving", "what waits?", "is away mode off?"]) {
+      expect(await away(words, false), words).toBe(
+        "The person did not say that they are back. Ask them.",
+      );
+      expect(desk.away(), words).toBe(true);
+    }
+    for (const words of ["I'm back", "I am here", "turn away mode off"]) {
+      desk.setAway(true);
+      expect(await away(words, false), words).toBe("Away mode is off.");
+      expect(desk.away(), words).toBe(false);
+      expect(await away(words, true), words).toBe(
+        "The person did not ask for away mode. Ask them.",
+      );
+      expect(desk.away(), words).toBe(false);
+    }
   });
 
   it("types only whole words that the person gave, on a cue to type, into the session that they named", async () => {
