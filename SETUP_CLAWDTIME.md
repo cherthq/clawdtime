@@ -204,10 +204,16 @@ Run it in the folder that new coding sessions must work in.
 
 What to know:
 
-- Only your own number is answered. A text counts only when its sender ends
-  with the last four digits of `CLAWDTIME_OWNER_PHONE`, and answers go only to
-  that number. The service gives no more than those four digits, so the phone
-  list of your project is the real guard: keep it to your own phone.
+- A text counts when it comes from a phone that is joined to your project and
+  whose number ends with the last four digits of `CLAWDTIME_OWNER_PHONE`.
+  Answers go only to that number. The service gives no more of a sender than
+  those four digits, so the phone list of your project is the real guard: keep
+  it to your own phone.
+- For a second check that ClawdTime holds itself, set `CLAWDTIME_TEXT_WORD` to
+  a private word of four letters or more. A text then counts only when it
+  starts with that word, and a text without it gets no answer.
+- One `clawdtime texts run` answers the texts on a Mac. A second one does not
+  start.
 - One text gets one answer, also after a restart. A text that is more than ten
   minutes old when ClawdTime first sees it is not run.
 - On the free trial, ClawdTime can text you only within 24 hours of your last

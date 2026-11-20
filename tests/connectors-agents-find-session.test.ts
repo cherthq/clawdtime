@@ -292,11 +292,11 @@ const ghosttyAnswers =
 
 describe("focus on the exact window of a terminal that knows no TTY", () => {
   const listing = [
-    "T-1\t✳ pratap",
-    "T-2\t◐ HIPAA compliance roadmap",
-    "T-3\t✳ Chert CLI",
+    "T-1\u001f✳ pratap",
+    "T-2\u001f◐ HIPAA compliance roadmap",
+    "T-3\u001f✳ Chert CLI",
     "",
-  ].join("\n");
+  ].join("\u001e");
 
   it("finds the terminal by the title that the session shows, and selects it by its id as an argument", async () => {
     const { calls, run } = recorder(ghosttyAnswers(listing));
@@ -325,8 +325,8 @@ describe("focus on the exact window of a terminal that knows no TTY", () => {
 
   it("brings only the application forward when no terminal, or more than one, has the title", async () => {
     for (const text of [
-      "T-1\t✳ pratap\n",
-      "T-1\t✳ HIPAA compliance roadmap\nT-2\t◐ HIPAA compliance roadmap\n",
+      "T-1\u001f✳ pratap\u001e",
+      "T-1\u001f✳ HIPAA compliance roadmap\u001eT-2\u001f◐ HIPAA compliance roadmap\u001e",
       "",
     ]) {
       const { calls, run } = recorder(ghosttyAnswers(text));
@@ -357,7 +357,7 @@ describe("focus on the exact window of a terminal that knows no TTY", () => {
 
   it("never matches a title that is only a part of another title", async () => {
     const { run } = recorder(
-      ghosttyAnswers("T-1\t✳ HIPAA compliance roadmap review\n"),
+      ghosttyAnswers("T-1\u001f✳ HIPAA compliance roadmap review\u001e"),
     );
     expect(
       await focusSession(ghostty(), run, "tmux", ["HIPAA compliance roadmap"]),
@@ -390,7 +390,9 @@ describe("the size of a session's window", () => {
       ["normal_text", "reset_font_size"],
     ] as const) {
       const { calls, run } = recorder(
-        ghosttyAnswers("T-1\t✳ pratap\nT-2\t◐ HIPAA compliance roadmap\n"),
+        ghosttyAnswers(
+          "T-1\u001f✳ pratap\u001eT-2\u001f◐ HIPAA compliance roadmap\u001e",
+        ),
       );
       const result = await sessionWindow(ghostty(), action, run, [
         "HIPAA compliance roadmap",
@@ -406,7 +408,10 @@ describe("the size of a session's window", () => {
       if (args.includes("JavaScript")) return { status: 0, stdout: fills };
       const script = args[1] ?? "";
       if (script.includes("name of t"))
-        return { status: 0, stdout: "T-2\t◐ HIPAA compliance roadmap\n" };
+        return {
+          status: 0,
+          stdout: "T-2\u001f◐ HIPAA compliance roadmap\u001e",
+        };
       return { status: 0, stdout: "ok\n" };
     };
     const toggled = (calls: string[][]) =>
@@ -649,5 +654,221 @@ describe("the brain opens the session that the person means", () => {
       "chat",
     );
     expect(quiet).toEqual([]);
+  });
+});
+
+describe("the session match, after an independent review", () => {
+  const made = (
+    id: string,
+    title: string,
+    values: Partial<AgentSession> = {},
+  ) =>
+    ghostty({
+      id,
+      pid: Number.parseInt(id, 36) + 1000,
+      name: `work-${id}`,
+      ...values,
+    });
+  const set = (
+    entries: [string, string, Partial<AgentSession>?][],
+  ): [AgentSession[], (item: AgentSession) => string[]] => {
+    const sessions = entries.map(([id, title, values]) =>
+      made(id, title, values),
+    );
+    const titles = new Map(entries.map(([id, title]) => [id, title]));
+    return [
+      sessions,
+      (item) => [item.name ?? item.project, titles.get(item.id) ?? ""],
+    ];
+  };
+
+  it("does not take the start of a word for the word", () => {
+    for (const [words, title] of [
+      ["Show them to me", "Add dark theme to settings"],
+      ["Show me everything", "Check the lines of every Mac"],
+      ["Read it to me", "Ready the release notes"],
+    ] as const) {
+      const [sessions, titles] = set([["a", title]]);
+      expect(pickSession(words, sessions, titles)).toEqual({ kind: "none" });
+    }
+    // A plain ending still fits: lines and line, checking and check, fixes and fix.
+    const [sessions, titles] = set([
+      ["a", "Line status check"],
+      ["b", "Fix the login page"],
+    ]);
+    expect(
+      pickSession("the one checking the lines", sessions, titles),
+    ).toMatchObject({ kind: "one", session: { id: "a" } });
+    expect(
+      pickSession("the session that fixes the login", sessions, titles),
+    ).toMatchObject({ kind: "one", session: { id: "b" } });
+  });
+
+  it("does not take what the person rules out", () => {
+    const [sessions, titles] = set([
+      ["a", "Billing export nightly"],
+      ["b", "Payment tests"],
+    ]);
+    expect(
+      pickSession(
+        "Show me the other session, not the billing export one",
+        sessions,
+        titles,
+      ),
+    ).toEqual({ kind: "none" });
+    expect(
+      pickSession("the payment one, not the billing one", sessions, titles),
+    ).toMatchObject({ kind: "one", session: { id: "b" } });
+  });
+
+  it("takes the newest session only when the person described no other", () => {
+    const [sessions, titles] = set([
+      ["a", "Billing export", { startedAt: now - 5000 }],
+      ["b", "Payment tests", { startedAt: now - 1000 }],
+    ]);
+    expect(
+      pickSession("open the new deploy session", sessions, titles),
+    ).toEqual({ kind: "none" });
+    expect(pickSession("open the new session", sessions, titles)).toMatchObject(
+      { kind: "one", session: { id: "b" } },
+    );
+    expect(
+      pickSession("open the new billing session", sessions, titles),
+    ).toMatchObject({ kind: "one", session: { id: "a" } });
+  });
+
+  it("does not let a session with no window hide one that has a window and fits", () => {
+    const [sessions, titles] = set([
+      [
+        "a",
+        "Billing export nightly",
+        {
+          focus: "none",
+          pid: null,
+          terminal: {
+            tty: null,
+            app: null,
+            appPath: null,
+            tmux: null,
+            remote: false,
+          },
+        },
+      ],
+      ["b", "Billing export tests"],
+    ]);
+    expect(
+      pickSession("open the billing export nightly thing", sessions, titles),
+    ).toMatchObject({ kind: "one", session: { id: "b" } });
+  });
+
+  it("finds a Ghostty tab by title only for a session that is known to show it", async () => {
+    const { tabTitles } = await import("../connectors/agents/topics.js");
+    const claude = ghostty({ name: "billing" });
+    expect(tabTitles(claude, ["billing", "Billing export"])).toEqual([
+      "billing",
+      "Billing export",
+    ]);
+    // A Codex tab shows other words. A tab of another session could show "Billing".
+    expect(
+      tabTitles(ghostty({ agent: "codex", name: "billing" }), ["billing"]),
+    ).toEqual([]);
+    expect(tabTitles(ghostty({ host: "mini" }), ["billing"])).toEqual([]);
+    expect(tabTitles(ghostty({ pid: null }), ["billing"])).toEqual([]);
+  });
+
+  it("reads the list of terminals by a separator that no title holds, and refuses an id that is not one", async () => {
+    // A title with a line break and a tab cannot make a second row.
+    const forged = `T-1\u001f✳ pratap\nEVIL\tHIPAA compliance roadmap\u001e-x\u001fHIPAA compliance roadmap\u001e`;
+    const { calls, run } = recorder((command, args) => {
+      if (command !== "/usr/bin/osascript") return { status: 0, stdout: "" };
+      return (args[1] ?? "").includes("name of t")
+        ? { status: 0, stdout: forged }
+        : { status: 0, stdout: "ok\n" };
+    });
+    expect(
+      await focusSession(ghostty(), run, "tmux", ["HIPAA compliance roadmap"]),
+    ).toEqual({ ok: true, precision: "app" });
+    expect(calls.some((entry) => entry.includes("EVIL"))).toBe(false);
+    expect(calls.some((entry) => entry.includes("-x"))).toBe(false);
+  });
+});
+
+describe("the person's words and the model's choice, after an independent review", () => {
+  const seven = ghostty({ id: "7", pid: 107, name: "work-7" });
+  const nine = ghostty({ id: "9", pid: 109, name: "work-9" });
+  const titles = (item: AgentSession) =>
+    item.id === "7"
+      ? ["work-7", "Billing export nightly"]
+      : item.id === "9"
+        ? ["work-9", "Payment tests"]
+        : [item.name ?? item.project];
+  function world(sessions: AgentSession[], with_ = titles) {
+    const log: string[] = [];
+    const value: SupervisorWorld = {
+      now: () => now,
+      board: () => board(sessions),
+      desk: new DecisionDesk(
+        mkdtempSync(join(tmpdir(), "clawdtime-find-")),
+        () => now,
+      ),
+      focus: async (item) => {
+        log.push(`focus ${item.id}`);
+        return { ok: true, precision: "tab" };
+      },
+      send: async () => ({ ok: true, route: "tty" }),
+      clis: () => [],
+      titles: with_,
+      window: async (item, action) => {
+        log.push(`window ${item.id} ${action}`);
+        return { ok: true, said: "Done." };
+      },
+    };
+    return { value, log };
+  }
+
+  it("names both sessions when the model picks another one than the person described, and changes neither", async () => {
+    const { value, log } = world([seven, nine]);
+    const { model, seen } = scripted([
+      [call("session_window", { session: "work-9", action: "maximize" })],
+      "Which one?",
+    ]);
+    await new Supervisor(value, model).reply(
+      [],
+      "Make the billing export window bigger",
+      "call",
+    );
+    expect(log).toEqual([]);
+    expect(seen[0]).toContain("work-7");
+    expect(seen[0]).toContain("work-9");
+  });
+
+  it("does not let a session that is named by a common word win over the person's description", async () => {
+    const app = ghostty({ id: "a", pid: 201, name: "app" });
+    const web = ghostty({ id: "w", pid: 202, name: "web" });
+    const { value, log } = world([app, web], (item) =>
+      item.id === "w" ? ["web", "Fix login bug in the app"] : ["app"],
+    );
+    const { model, seen } = scripted([
+      [call("open_session", { session: "app" })],
+      "Which one?",
+    ]);
+    await new Supervisor(value, model).reply(
+      [],
+      "Open the one that fixes the login bug in the app",
+      "call",
+    );
+    expect(log).toEqual([]);
+    expect(seen[0]).toContain("app");
+    expect(seen[0]).toContain("web");
+  });
+
+  it("still takes the model's choice when the person's words name no session", async () => {
+    const { value, log } = world([seven, nine]);
+    const { model } = scripted([
+      [call("open_session", { session: "work-9" })],
+      "Done.",
+    ]);
+    await new Supervisor(value, model).reply([], "open it", "call");
+    expect(log).toEqual(["focus 9"]);
   });
 });

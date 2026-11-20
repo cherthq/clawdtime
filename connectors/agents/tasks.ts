@@ -31,12 +31,19 @@ export interface TaskPort {
   answer(text: string, eventId: string): Promise<TaskResult>;
   accept(eventId: string): Promise<TaskResult>;
   cancel(eventId: string): Promise<TaskResult>;
+  /**
+   * True when the task service runs with no coding worker: a task there is
+   * recorded and nothing works on it. Absent: not known.
+   */
+  simulated?(): boolean;
 }
 
 /** The part of the desktop task service that this door uses. */
 export interface DesktopTasks {
   snapshot(credential: string): {
     canSubmit: boolean;
+    /** Who works on a task: "simulation" means that nobody does. */
+    worker?: string;
     task: {
       id: string;
       runId: string;
@@ -142,5 +149,6 @@ export function deskTasks(desktop: DesktopTasks, credential: string): TaskPort {
     answer: (text, eventId) => bound("decide", eventId, { instruction: text }),
     accept: (eventId) => bound("accept", eventId),
     cancel: (eventId) => bound("cancel", eventId),
+    simulated: () => view()?.worker === "simulation",
   };
 }

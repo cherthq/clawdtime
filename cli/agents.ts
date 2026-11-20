@@ -45,7 +45,7 @@ import {
   type Incident,
 } from "../connectors/agents/watch.js";
 import { realSystem, type System } from "../connectors/agents/system.js";
-import { sessionTitles } from "../connectors/agents/topics.js";
+import { sessionTitles, tabTitles } from "../connectors/agents/topics.js";
 import type {
   AgentKind,
   AgentSession,
@@ -364,7 +364,7 @@ async function watch(
           session,
           runner,
           "tmux",
-          sessionTitles(system, session),
+          tabTitles(session, sessionTitles(system, session)),
         ).then((result) => {
           message = result.ok
             ? `Focused ${precisionText[result.precision]}.`
@@ -522,7 +522,7 @@ export async function agentsCli(
           session,
           runner,
           "tmux",
-          sessionTitles(system, session),
+          tabTitles(session, sessionTitles(system, session)),
         );
     if (!result.ok) {
       process.exitCode = 2;

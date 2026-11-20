@@ -25,9 +25,11 @@ import { focusSession, realRunner, type Runner } from "./focus.js";
 import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
+import { openApp } from "./apps.js";
+import { Jobs } from "./jobs.js";
 import { title } from "./render.js";
 import { realSystem, type System } from "./system.js";
-import { titleReader } from "./topics.js";
+import { tabTitles, titleReader } from "./topics.js";
 import { sessionWindow } from "./windows.js";
 import { rememberable } from "./trove.js";
 import type { TaskPort } from "./tasks.js";
@@ -181,9 +183,18 @@ export class BoardFeed implements AgentBoardPort {
       exists?: (pid: number) => boolean;
       /** Reads the title that a session shows in its terminal. Tests script it. */
       system?: System;
+      /**
+       * The folder that a new coding session works in. With it, work that no
+       * own tool does goes to a job, and an application can open. Absent, as
+       * in a test: neither exists.
+       */
+      project?: string;
+      /** Where the task service has no coding worker, hand a task to a job. Off by default. */
+      jobsForTasks?: boolean;
     } = {},
   ) {
-    this.titles = titleReader(options.system ?? realSystem());
+    const files = options.system ?? realSystem();
+    this.titles = titleReader(files);
     this.root =
       options.root ?? stateRoot({ env: process.env, home: homedir() });
     this.desk = new DecisionDesk(this.root, options.now ?? Date.now);
@@ -223,6 +234,23 @@ export class BoardFeed implements AgentBoardPort {
         focus: (session) => this.focusOne(session),
         send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
+        ...(options.project
+          ? {
+              jobsForTasks: options.jobsForTasks === true,
+              jobs: new Jobs(this.root, {
+                project: options.project,
+                now: options.now ?? Date.now,
+                run: options.runner ?? realRunner,
+                agent:
+                  process.env.CLAWDTIME_JOB_AGENT === "codex"
+                    ? "codex"
+                    : "claude",
+                terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
+              }),
+              openApp: (name: string | null, url: URL | null) =>
+                openApp(files, name, url, options.runner ?? realRunner),
+            }
+          : {}),
         // A session of a remote Mac shows its title there: only its name is known here.
         titles: (session) =>
           session.host ? [title(session)] : this.titles(session),
@@ -231,7 +259,7 @@ export class BoardFeed implements AgentBoardPort {
             session,
             action,
             options.runner ?? realRunner,
-            this.titles(session),
+            tabTitles(session, this.titles(session)),
           ),
         ...(options.tasks ? { tasks: options.tasks } : {}),
         ...(options.execution ? { execution: options.execution } : {}),
@@ -294,7 +322,12 @@ export class BoardFeed implements AgentBoardPort {
   private async focusOne(session: AgentSession) {
     const run = this.options.runner ?? realRunner;
     if (!session.host)
-      return focusSession(session, run, "tmux", this.titles(session));
+      return focusSession(
+        session,
+        run,
+        "tmux",
+        tabTitles(session, this.titles(session)),
+      );
     const host = this.book.get(session.host);
     return host
       ? focusRemote(host, session, run, this.root)

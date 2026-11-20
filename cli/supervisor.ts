@@ -65,13 +65,14 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { openApp } from "../connectors/agents/apps.js";
 import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
 import {
   checkTexts,
   TextChannel,
   textSettings,
 } from "../connectors/agents/texts.js";
-import { titleReader } from "../connectors/agents/topics.js";
+import { tabTitles, titleReader } from "../connectors/agents/topics.js";
 import { sessionWindow } from "../connectors/agents/windows.js";
 import type {
   AgentSession,
@@ -500,14 +501,25 @@ export async function supervisorCli(
             board,
             desk,
             focus: (session) =>
-              focusSession(session, runner, "tmux", titles(session)),
+              focusSession(
+                session,
+                runner,
+                "tmux",
+                tabTitles(session, titles(session)),
+              ),
             send: (session, text) =>
               sendText(session, text, { enter: true }, runner),
             clis: () => inventory(system, board()),
             titles,
             window: (session, action) =>
-              sessionWindow(session, action, runner, titles(session)),
+              sessionWindow(
+                session,
+                action,
+                runner,
+                tabTitles(session, titles(session)),
+              ),
             jobs: jobsFor(system, root, runner),
+            openApp: (name, url) => openApp(system, name, url, runner),
           },
           key
             ? new OpenAIModel(
@@ -797,14 +809,25 @@ export async function supervisorCli(
         board,
         desk,
         focus: (session) =>
-          focusSession(session, runner, "tmux", titles(session)),
+          focusSession(
+            session,
+            runner,
+            "tmux",
+            tabTitles(session, titles(session)),
+          ),
         send: (session, text) =>
           sendText(session, text, { enter: true }, runner),
         clis: () => inventory(system, board()),
         titles,
         window: (session, action) =>
-          sessionWindow(session, action, runner, titles(session)),
+          sessionWindow(
+            session,
+            action,
+            runner,
+            tabTitles(session, titles(session)),
+          ),
         jobs: jobsFor(system, root, runner),
+        openApp: (name, url) => openApp(system, name, url, runner),
       },
       deps.model !== undefined
         ? deps.model
@@ -860,7 +883,9 @@ export async function supervisorCli(
         print(
           "No language model key is set: I tell the state and take a clear approve or deny.",
         );
-      print("Listening for your text messages. Ctrl+C stops it.");
+      print(
+        `Listening for your text messages. Ctrl+C stops it.\nA text counts when it comes from a phone that is joined to your project and whose number ends with the last four digits of yours${found.settings.word ? ", and when it starts with your word" : ""}. Keep the phone list of the project to your own phone.`,
+      );
       const stop = new AbortController();
       process.once("SIGINT", () => stop.abort());
       process.once("SIGTERM", () => stop.abort());
@@ -868,6 +893,12 @@ export async function supervisorCli(
       if (ended === "refused") {
         process.exitCode = 3;
         print("The project API key was refused. The channel stopped.");
+      }
+      if (ended === "busy") {
+        process.exitCode = 4;
+        print(
+          "Another clawdtime texts run already answers these texts on this Mac. This one did not start.",
+        );
       }
       return supervisor.learning;
     }

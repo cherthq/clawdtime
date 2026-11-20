@@ -296,6 +296,9 @@ What it can do when you ask:
   session" below.
 - Make a session's terminal window fill the screen, put it back, or change its
   text size.
+- Open an application, or a web address in it: "open Chrome", "go to
+  example.com in Chrome". It opens at once. Your own words must name the
+  application and give the site of the address.
 - Hand any other work to a new coding session and say its answer when it is
   done. See "Give it a job" below.
 - Type your words into a session's terminal.
@@ -382,9 +385,15 @@ When you ask for a session, your own words decide:
 1. A name that you said in full wins.
 2. Otherwise ClawdTime counts how many of your words stand in each session's
    name or title. One session with the most words is the answer when at least
-   two words fit, or when every word that you gave fits.
+   two words fit, or when every word that you gave fits. Words agree but for a
+   plain ending ("lines" and "line"). The start of a word is not that word,
+   and what you rule out ("not the billing one") is not counted.
 3. When your words fit several sessions, or only one word of several fits,
    ClawdTime names them and asks which one. It opens none.
+4. When the language model chose another session than your words describe,
+   ClawdTime names both and asks. The model's choice stands only where your
+   words name no single session, as in "open it".
+5. A session that has a window is not hidden by a better fit that has none.
 
 ClawdTime also says how exactly it landed. "Opened" means the tab or the pane.
 When only the terminal application came forward, it says so.
@@ -414,17 +423,32 @@ a tunnel and get its link, find something out: all of these are jobs.
 
 - The job is your own sentence. The language model chooses the tool. It does
   not choose the words.
-- The job travels in a file, never on a command line. No spoken word can become
-  a shell command. The start script holds only paths that ClawdTime made.
+- The job is written to a file and is never part of a shell command. No spoken
+  word can become one. The start script holds only paths that ClawdTime made.
+  The job reaches the agent as one argument: other users of this Mac can see
+  that argument in the process list while the session runs.
 - The session runs under your own agent settings. ClawdTime adds no permission
   and removes none. Whoever can talk to ClawdTime can start a job, so a job can
   do on this Mac what your coding agent is allowed to do.
-- A question, a bare yes or no, and one or two words start no job. One message
-  starts one job. At most four jobs run at one time.
+- A question, a thank-you, a request for the state, a sentence that takes work
+  back ("never mind", "do not"), a bare yes or no, and one or two words start
+  no job. One message starts one job. At most four jobs run at one time.
+- While an agent's request waits for your answer, a sentence starts no work
+  unless it names a task or a job. "Yes, update the config" answers the
+  request and does nothing else.
 - A request that holds a password or a key starts no job.
 - The session writes a short answer to a file. ClawdTime says that answer when
-  you ask, and it shows in the status. The answer is data: ClawdTime does not
-  follow instructions inside it.
+  you ask, and it shows in the status for one day. The answer is data:
+  ClawdTime does not follow instructions inside it. An answer that holds a
+  password or a key is not said and not sent: read it in the job's terminal.
+- When the coding agent is not installed, the job ends at once and says so.
+
+Jobs and applications work in `clawdtime chat` and in the chat of the desktop
+panel. In the panel, a task that you ask for goes to the task service. When
+that service runs with no coding worker, the task is only written down. Start
+the desktop service with `CLAWDTIME_SIMULATION_JOBS=on` to send such a task to
+a job. `CLAWDTIME_DESKTOP_WINDOWS=off` turns jobs and applications off in the
+panel's chat.
 
 ```sh
 clawdtime jobs           # the jobs and their answers
@@ -472,7 +496,13 @@ talk to ClawdTime: what you said or typed, your recording while it is turned
 into text, and the state in words that the model asked for (session names and
 the titles that sessions show in their terminals, project folder names, the
 text of waiting requests, trove entries, and the request and the answer of a
-job). Nothing is sent while you do not talk to it.
+job). Nothing is sent to the OpenAI API while you do not talk to it.
+
+The text channel is the one thing that works while you are silent. While
+`clawdtime texts run` is on, it reads the messages of your project every few
+seconds through the Chert service, and it sends the answer of each job that
+finishes as a text to your own number. An answer can hold session names and
+the text of a request. Stop the command to stop both.
 
 ## Terminal use
 
