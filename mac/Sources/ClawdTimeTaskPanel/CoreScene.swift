@@ -22,6 +22,10 @@ final class CoreScene: MascotFigure {
   private let light = SCNMaterial(), faint = SCNMaterial(), bright = SCNMaterial()
   private let wire = SCNMaterial(), haloMaterial = SCNMaterial(), auraMaterial = SCNMaterial(), pingMaterial = SCNMaterial()
   private var mood = MascotMood.idle
+  // The two rings are loose: they trail when the orb is carried and open in a jump.
+  private var trail = Spring(0, response: 0.38, dampingRatio: 0.40)
+  private var spread = Spring(0, response: 0.26, dampingRatio: 0.46)
+  private var lastClock = 0.0
 
   /// A flat band between two radii, from `start` over `sweep` degrees.
   private static func band(inner: CGFloat, outer: CGFloat, start: CGFloat, sweep: CGFloat) -> NSBezierPath {
@@ -155,7 +159,8 @@ final class CoreScene: MascotFigure {
     shell.eulerAngles = SCNVector3(0, 0, pose.roll)
 
     // The iris looks where the eyes of the stone would look.
-    look.eulerAngles = SCNVector3(-(pose.pupilY * 0.34) + pose.pitch * 0.6, pose.pupilX * 0.42 + pose.yaw * 0.6, 0)
+    // Carried, the iris looks where the orb goes.
+    look.eulerAngles = SCNVector3(-(pose.pupilY * 0.34) + pose.pitch * 0.6, pose.pupilX * 0.42 + pose.yaw * 0.6 + pose.travel * pose.gait * 0.22, 0)
     let open = max(0, min(1.3, pose.eyeOpen))
     let aperture = 0.30 + 0.70 * min(1, open) + 0.10 * max(0, open - 1)
     iris.scale = SCNVector3(aperture, aperture * (1 - 0.35 * pose.squint), 1)
@@ -168,9 +173,16 @@ final class CoreScene: MascotFigure {
     pupil.scale = SCNVector3(0.8 + 0.5 * glow, 0.8 + 0.5 * glow, 0.3)
     pupilHalo.opacity = lit * (0.35 + 0.65 * glow)
 
-    ringA.scale = SCNVector3(pose.scale, pose.scale, pose.scale); ringB.scale = ringA.scale
-    ringA.eulerAngles = SCNVector3(1.18 + pose.ringWobble, pose.sparkAngle * 0.5, -0.32 + pose.roll * 0.5)
-    ringB.eulerAngles = SCNVector3(0.42 - pose.ringWobble, -pose.sparkAngle * 0.31, 0.9 + pose.roll * 0.5)
+    let dt = max(0, min(0.1, pose.clock - lastClock)); lastClock = pose.clock
+    trail.target = -pose.travel * pose.gait * 0.5; trail.step(dt)
+    spread.target = pose.air * 0.16; spread.step(dt)
+    // A greeting: the outer ring tips from side to side.
+    let tip = pose.wave * 0.4 * sin(pose.clock * 2 * .pi * 3)
+    let apart = CGFloat(pose.scale * (1 + spread.value))
+    ringA.scale = SCNVector3(apart, apart, apart); ringB.scale = ringA.scale
+    ringA.position = SCNVector3(trail.value * 0.45, 0, 0); ringB.position = SCNVector3(trail.value * 0.7, 0, 0)
+    ringA.eulerAngles = SCNVector3(1.18 + pose.ringWobble + 0.12 * pose.stride * pose.gait, pose.sparkAngle * 0.5, -0.32 + pose.roll * 0.5 + trail.value * 0.8)
+    ringB.eulerAngles = SCNVector3(0.42 - pose.ringWobble, -pose.sparkAngle * 0.31, 0.9 + pose.roll * 0.5 + trail.value * 1.1 + tip)
     spark.position = SCNVector3(1.46 * cos(pose.sparkAngle * 1.7), 0, 1.46 * sin(pose.sparkAngle * 1.7))
     spark.scale = SCNVector3(0.7 + 0.5 * glow, 0.7 + 0.5 * glow, 0.7 + 0.5 * glow)
     sparkHalo.opacity = 0.2 + 0.6 * glow

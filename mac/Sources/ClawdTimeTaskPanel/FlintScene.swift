@@ -33,6 +33,13 @@ final class FlintScene: MascotFigure {
   private var alert = Spring(0, response: 0.3, dampingRatio: 0.55)
   private var rest = Spring(0, response: 0.7, dampingRatio: 0.9)
   private var curious = Spring(0, response: 0.3, dampingRatio: 0.5)
+  // The flake is the hand and the tail of the stone: it streams behind when the
+  // stone is carried, lifts away in a jump, clings when a hand holds the stone.
+  private var carry = Spring(0, response: 0.34, dampingRatio: 0.34)
+  private var flight = Spring(0, response: 0.20, dampingRatio: 0.42)
+  private var cling = Spring(0, response: 0.22, dampingRatio: 0.6)
+  private var lastAir = 0.0, lastWave = 0.0, lastSquash = 1.0, lastHeld = false
+  private var waveStart = -10.0, heldStart = -10.0, lastThrow = -10.0
 
   // MARK: the mark
 
@@ -374,6 +381,7 @@ final class FlintScene: MascotFigure {
   /// A few sparks leave the gap. They fly up and out, fall, and fade.
   private func throwSparks(_ count: Int, power: Double, at clock: Double) {
     strikes += 1
+    lastThrow = clock
     for index in 0..<count {
       let seed = strikes * 31 + index * 7
       let angle = 0.35 + unit(seed) * 2.5
@@ -399,9 +407,17 @@ final class FlintScene: MascotFigure {
     body.scale = SCNVector3(pose.scale * wide, pose.scale * give, pose.scale * wide)
     body.eulerAngles = SCNVector3(pose.pitch * 0.7, pose.yaw * 0.8, pose.roll)
 
-    // The eye in the window.
+    // The eye in the window. Carried, it looks the way it travels. Picked up, it
+    // opens wide and looks hard at the hand for a moment.
     let happy = max(pose.squint, max(0, pose.smile - 0.35) * 0.45)
-    eye.apply(open: pose.eyeOpen, squint: happy, lookX: pose.pupilX * 0.85, lookY: pose.pupilY * 0.85, glow: pose.glow)
+    if pose.held && !lastHeld { heldStart = pose.clock }
+    lastHeld = pose.held
+    let startled = pose.held && moving && pose.clock - heldStart < 0.45
+    let carrying = min(1, pose.gait * 1.6)
+    var lookX = pose.pupilX * 0.85 * (1 - carrying) + pose.travel * 0.95 * carrying
+    var lookY = pose.pupilY * 0.85 * (1 - carrying) + 0.12 * carrying
+    if startled { lookX = max(-1, min(1, pose.pupilX * 1.3)); lookY = max(-1, min(1, pose.pupilY * 1.3)) }
+    eye.apply(open: startled ? max(pose.eyeOpen, 1.28) : pose.eyeOpen, squint: happy, lookX: lookX, lookY: lookY, glow: pose.glow)
     let glow = CGFloat(max(0, min(1, pose.glow))), voice = CGFloat(max(0, min(1, pose.voice)))
     let lit = CGFloat(max(0, min(1, pose.eyeOpen * 2)))
     windowLight.opacity = (0.16 + 0.5 * glow + 0.25 * voice) * (0.35 + 0.65 * lit)
@@ -413,17 +429,27 @@ final class FlintScene: MascotFigure {
     rest.target = mood == .asleep || mood == .offline ? 1 : mood == .sleepy ? 0.4 : 0
     curious.target = max(0, min(1, (pose.scale - 1) / 0.05))
     lagYaw.target = pose.yaw; lagPitch.target = pose.pitch; lagRise.target = pose.bob + pose.lift
+    // Above zero the flake is on the side that trails; below zero it leads and the wind pins it back.
+    carry.target = -pose.travel * pose.gait
+    flight.target = pose.air
+    cling.target = pose.held ? 1 - min(1, pose.gait * 2.5) : 0
     if moving {
+      // A greeting starts: the flake counts its three waves from here.
+      if pose.wave > 0.02 && lastWave <= 0.02 { waveStart = pose.clock }
+      // The landing of a jump: the flake snaps back at the core and one small spark jumps.
+      if lastAir > 0.08 && pose.air < 0.02 && pose.clock - lastThrow > 0.2 { strike.velocity -= 2.8; throwSparks(1, power: 0.8, at: pose.clock + 0.03) }
+      // A hard knock, as on the edge of the screen: flint on stone.
+      if lastSquash - pose.squash > 0.04 && pose.clock - lastThrow > 0.35 && pose.air < 0.02 { throwSparks(2, power: 0.9, at: pose.clock) }
       // A click: the flake snaps against the core and sparks fly.
       if pose.squint > 0.4 && lastSquint <= 0.4 { strike.velocity -= 5.2; throwSparks(8, power: 1.5, at: pose.clock + 0.04) }
       let tick = Int(pose.clock / 3.4)
       if mood == .attention && tick != lastTick { throwSparks(3, power: 0.9, at: pose.clock) }
       lastTick = tick
-      for keyPath in [\FlintScene.work, \.alert, \.rest, \.curious, \.lagYaw, \.lagPitch, \.lagRise, \.strike] { self[keyPath: keyPath].step(dt) }
+      for keyPath in [\FlintScene.work, \.alert, \.rest, \.curious, \.lagYaw, \.lagPitch, \.lagRise, \.strike, \.carry, \.flight, \.cling] { self[keyPath: keyPath].step(dt) }
     } else {
-      for keyPath in [\FlintScene.work, \.alert, \.rest, \.curious, \.lagYaw, \.lagPitch, \.lagRise, \.strike] { self[keyPath: keyPath].snap() }
+      for keyPath in [\FlintScene.work, \.alert, \.rest, \.curious, \.lagYaw, \.lagPitch, \.lagRise, \.strike, \.carry, \.flight, \.cling] { self[keyPath: keyPath].snap() }
     }
-    lastSquint = pose.squint
+    lastSquint = pose.squint; lastAir = pose.air; lastWave = pose.wave; lastSquash = pose.squash
 
     let working = CGFloat(work.value), needs = CGFloat(alert.value), asleep = CGFloat(rest.value), tilt = CGFloat(curious.value)
     let clock = CGFloat(pose.clock)
@@ -431,16 +457,30 @@ final class FlintScene: MascotFigure {
     let own = sin(clock * 1.9) * 0.035 * (1 - asleep)
     let tremble = sin(clock * 38) * 0.012 * needs
     let late = CGFloat(lagRise.value - (pose.bob + pose.lift))
+    // Carried: on the trailing side it streams out on a longer leash with its tip
+    // turned back, and on the leading side the wind pins it back over the shoulder
+    // of the core. It bobs with each step. When the stone stops it swings past and settles.
+    let trail = CGFloat(max(0, carry.value)), lead = CGFloat(max(0, -carry.value))
+    let gait = CGFloat(pose.gait), step = CGFloat(pose.stride) * gait
+    // In a jump it lifts away from the core. Held still, it clings to it.
+    let up = CGFloat(max(0, flight.value)), near = CGFloat(max(0, cling.value))
+    // A greeting: it rises clear of the core and waves three times, turning about a point low on itself, as a hand turns at the wrist.
+    let hello = CGFloat(pose.wave)
+    let waving = hello * (-0.18 + 0.66 * sin(CGFloat(pose.clock - waveStart) * 2 * .pi * 3.2))
+    let wrist: CGFloat = 0.45
     flake.position = SCNVector3(
-      CGFloat(Self.flakeCenter.x) + CGFloat(strike.value) - asleep * 0.10 + tilt * 0.05 + tremble,
-      CGFloat(Self.flakeCenter.y) + late * 0.9 + own + needs * 0.17 - asleep * 0.12,
-      working * 0.05 + tilt * 0.06)
+      CGFloat(Self.flakeCenter.x) + CGFloat(strike.value) - asleep * 0.10 + tilt * 0.05 + tremble
+        + 0.22 * trail - 0.12 * lead - 0.11 * near + 0.16 * up + 0.22 * hello + wrist * sin(waving),
+      CGFloat(Self.flakeCenter.y) + late * 0.9 + own + needs * 0.17 - asleep * 0.12
+        - 0.05 * trail + 0.17 * lead + 0.10 * step + 0.18 * up + 0.34 * hello - wrist * (1 - cos(waving)),
+      working * 0.05 + tilt * 0.06 + 0.05 * hello)
     // While agents work it turns in its own plane, with the speed of the work, as a loader does.
     let spin = working * CGFloat(pose.sparkAngle)
     flake.eulerAngles = SCNVector3(
       CGFloat(lagPitch.value - pose.pitch) * 0.9,
       CGFloat(lagYaw.value - pose.yaw) * 0.9,
-      tilt * 0.26 - needs * 0.16 + asleep * 0.30 + CGFloat(pose.ringWobble) * 1.4 - spin)
+      tilt * 0.26 - needs * 0.16 * (1 - hello) + asleep * 0.30 + CGFloat(pose.ringWobble) * 1.4 - spin
+        + 0.80 * trail + 0.72 * lead + 0.20 * step - 0.28 * up + waving)
 
     // The gap glows with a voice and flickers when the person is needed.
     let flicker = 0.75 + 0.25 * sin(clock * 18)

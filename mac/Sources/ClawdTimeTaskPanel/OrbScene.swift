@@ -3,9 +3,10 @@ import SceneKit
 import TaskPanelCore
 import simd
 
-/// Orb: a ball droid. A titanium dome sits over a graphite bowl, with a belt of
-/// dark glass and a line of light between them. Two small robotic eyes are the
-/// face. It hovers over a thin ring, and it shows the state in its light.
+/// Orb: a ball droid. A titanium dome sits over a graphite ball that turns in its
+/// socket, with a belt of dark glass and a line of light between them. Two small
+/// robotic eyes are the face. It hovers over a thin ring and shows the state in
+/// its light. Carried, it rolls into its way and its ring and its bead trail behind.
 final class OrbScene: MascotFigure {
   let scene = SCNScene()
   let camera = Stage.camera()
@@ -13,13 +14,16 @@ final class OrbScene: MascotFigure {
   private let root = SCNNode()
   /// Turns to look: the dome, the eyes, the ears and the belt.
   private let body = SCNNode()
-  /// The lower shell. It follows a turn of the dome late.
+  /// The lower ball. It follows a turn of the dome late, and it rolls when the droid travels.
   private let bowl = SCNNode()
   private var eyes: [RoboEye] = []
   private var caps: [SCNNode] = []
+  private var ears: [(node: SCNNode, out: SIMD3<Float>, turn: simd_quatf)] = []
   private var earRings: [SCNNode] = []
+  private let flashBand = SCNNode()
   private var bars: [SCNNode] = []
-  private let hoverLine = SCNNode()
+  private let hoverLine = SCNNode(), ripple = SCNNode()
+  private let rippleLight = Finish.light()
   private let hover = SCNNode(), underGlow = SCNNode()
   private let orbit = SCNNode(), mote = SCNNode(), moteHalo = SCNNode()
   private let strip = SCNNode(), crown = SCNNode()
@@ -27,6 +31,7 @@ final class OrbScene: MascotFigure {
   private let dome = SCNMaterial(), shell = SCNMaterial(), steel = SCNMaterial()
   private let stripLight = SCNMaterial(), lamp = Finish.light(), earLight = Finish.light(), hoverLight = Finish.light()
   private let moteLight = Finish.light(), moteGlow = Finish.halo(), glow = Finish.halo()
+  private var flashLight = SCNMaterial()
 
   private let spun = OrbScene.spunImage()
   private var mood = MascotMood.idle
@@ -38,11 +43,23 @@ final class OrbScene: MascotFigure {
   private var ringSway = Spring(0, response: 0.5, dampingRatio: 0.45)
   private var kick = Spring(0, response: 0.36, dampingRatio: 0.32)
   private var sink = Spring(0, response: 0.9, dampingRatio: 1)
+  /// How far the lower ball has rolled, in radians. At rest it settles on a whole turn.
+  private var rolled = Spring(0, response: 0.7, dampingRatio: 0.5)
+  /// What trails: the ring and the bead hang back from the way of travel and swing past on a stop.
+  private var trail = Spring(0, response: 0.52, dampingRatio: 0.36)
+  /// The ring rings once when the ball lands on it.
+  private var ringPulse = Spring(0, response: 0.26, dampingRatio: 0.28)
+  private var spin = 0.0, flash = 0.0, waveClock = 0.0
+  /// Seconds since the last landing. A ring of light leaves the hover ring and fades.
+  private var rippleAge = 10.0
+  private var lastAir = 0.0, lastWave = 0.0, lastHeld = false
 
   private static let radius: CGFloat = 1.15
-  /// Degrees of latitude where the dome ends and where the bowl begins. The belt is between them.
-  private static let domeEdge = -9.0, bowlEdge = -19.0
-  private static let center: CGFloat = 0.22
+  /// Degrees of latitude where the dome ends and where the socket ends. The belt is between them.
+  private static let domeEdge = -9.0, bowlEdge = -24.0
+  /// The lower ball is a little smaller than the dome, so it turns freely inside it.
+  private static let ballScale = 0.965, socketScale = 0.972
+  private static let center: CGFloat = 0.10
   private static let eyeAim = SIMD3<Float>(0.33, 0.30, 1)
   private static let eyeRadius: CGFloat = 0.2
   /// The ears sit a little forward of the sides, so their rings show from the front.
@@ -137,22 +154,39 @@ final class OrbScene: MascotFigure {
       context.restoreGState()
     }
   }
-  /// The bowl: graphite, with one seam and two rows of vent slots.
-  private static func bowlImage() -> CGImage {
-    let w = 2048, h = 448
+  /// The lower ball, all the way around: graphite, with seams, rows of vent slots and a few ports.
+  /// The marks show that it turns when the droid travels.
+  private static func ballImage() -> CGImage {
+    let w = 2048, h = 1024
     return MascotScene.image(width: w, height: h) { context in
-      let chart = Chart(context: context, width: CGFloat(w), height: CGFloat(h), low: -90, high: CGFloat(bowlEdge))
+      let chart = Chart(context: context, width: CGFloat(w), height: CGFloat(h), low: -90, high: 90)
       context.setFillColor(MascotScene.color(0x3B3E46).cgColor); context.fill(CGRect(x: 0, y: 0, width: w, height: h))
-      context.setFillColor(MascotScene.color(0x30333A).cgColor); context.fill(CGRect(x: 0, y: 0, width: CGFloat(w), height: chart.y(-54)))
-      chart.groove(chart.line((-180, -54), (180, -54)), dark: 0x141518)
-      for side in [CGFloat(-1), 1] {
-        for index in 0..<9 {
-          let longitude = side * (26 + CGFloat(index) * 6)
-          let slot = chart.box(longitude - 1.1, longitude + 1.1, -44, -29, corner: 1.1)
-          chart.wrapped { context.addPath(slot); context.setFillColor(MascotScene.color(0x0E0F12).cgColor); context.fillPath() }
+      // Two darker caps and a lighter band between them.
+      context.setFillColor(MascotScene.color(0x30333A).cgColor)
+      context.fill(CGRect(x: 0, y: 0, width: CGFloat(w), height: chart.y(-54)))
+      context.fill(CGRect(x: 0, y: chart.y(54), width: CGFloat(w), height: CGFloat(h)))
+      for latitude in [CGFloat(-54), 0, 54] { chart.groove(chart.line((-180, latitude), (180, latitude)), dark: 0x141518) }
+      for longitude in [CGFloat(earLongitude), CGFloat(-earLongitude), 180] { chart.groove(chart.line((longitude, -54), (longitude, 54)), dark: 0x141518) }
+      // Vent slots: two rows low and two rows high, on both sides of the front and of the back.
+      for (south, north) in [(CGFloat(-44), CGFloat(-29)), (29, 44)] {
+        for middle in [CGFloat(0), 180] {
+          for side in [CGFloat(-1), 1] {
+            for index in 0..<9 {
+              let longitude = middle + side * (26 + CGFloat(index) * 6)
+              let slot = chart.box(longitude - 1.1, longitude + 1.1, south, north, corner: 1.1)
+              chart.wrapped { context.addPath(slot); context.setFillColor(MascotScene.color(0x0E0F12).cgColor); context.fillPath() }
+            }
+          }
         }
       }
-      for longitude in [CGFloat(earLongitude), CGFloat(-earLongitude), 180] { chart.groove(chart.line((longitude, -54), (longitude, CGFloat(bowlEdge))), dark: 0x141518) }
+      // Ports on the middle band: steel rings, and one in orange, so a turn is easy to see.
+      for (index, longitude) in [CGFloat(0), 60, 120, 180, -120, -60].enumerated() {
+        let ring = chart.disc(longitude, 14, degrees: 5.2), hole = chart.disc(longitude, 14, degrees: 3.6)
+        chart.wrapped {
+          context.addPath(ring); context.setFillColor(MascotScene.color(index == 3 ? 0xFF8040 : 0xAEB3BB).cgColor); context.fillPath()
+          context.addPath(hole); context.setFillColor(MascotScene.color(0x101114).cgColor); context.fillPath()
+        }
+      }
     }
   }
   /// The light that runs around the belt: a row of small lamps, dim, with one bright point and its tail.
@@ -212,7 +246,7 @@ final class OrbScene: MascotFigure {
     let r = Self.radius
 
     // A lamp shows one face only. Seen through itself when it dims, it would show two tones.
-    for material in [lamp, earLight, hoverLight, moteLight] { material.isDoubleSided = false }
+    for material in [lamp, earLight, hoverLight, moteLight, rippleLight] { material.isDoubleSided = false }
 
     // The soft light under it sits behind everything.
     underGlow.geometry = SCNPlane(width: 2.6, height: 1.3); underGlow.geometry?.firstMaterial = glow
@@ -229,28 +263,30 @@ final class OrbScene: MascotFigure {
     top.firstMaterial = dome
     body.addChildNode(SCNNode(geometry: top))
     shell.lightingModel = .physicallyBased
-    shell.diffuse.contents = Self.bowlImage()
+    shell.diffuse.contents = Self.ballImage()
     shell.metalness.contents = 0.85; shell.roughness.contents = 0.42
-    let low = Sculpt.lathe(Self.arc(from: -90, to: Self.bowlEdge, steps: 44), around: 128)
+    // A whole ball, a little smaller than the dome. Only its lower part shows under the socket.
+    let low = Sculpt.lathe(Self.arc(from: -90, to: 90, steps: 80, scale: Self.ballScale), around: 128)
     low.firstMaterial = shell
     bowl.geometry = low
     body.addChildNode(bowl)
 
     // The belt: dark glass set back between two steel lips, with a line of light in it.
     let glass = Finish.solid(0x07080B, roughness: 0.08, coat: 1, coatRoughness: 0.04)
-    let channel = Sculpt.lathe(Self.arc(from: Self.bowlEdge - 1, to: Self.domeEdge + 1, steps: 8, scale: 0.972), around: 128)
+    let channel = Sculpt.lathe(Self.arc(from: Self.bowlEdge - 0.5, to: Self.domeEdge + 1, steps: 10, scale: Self.socketScale), around: 128)
     channel.firstMaterial = glass
     body.addChildNode(SCNNode(geometry: channel))
     steel.lightingModel = .physicallyBased
     steel.diffuse.contents = MascotScene.color(0xDDE0E5); steel.metalness.contents = 1; steel.roughness.contents = 0.24
-    for edge in [Self.domeEdge, Self.bowlEdge] {
+    // One lip under the dome, one at the end of the socket where the ball comes out.
+    for (edge, scale) in [(Self.domeEdge, 1.0), (Self.bowlEdge, Self.socketScale)] {
       let latitude = edge * .pi / 180
-      let lip = SCNTorus(ringRadius: r * CGFloat(cos(latitude)) + 0.003, pipeRadius: 0.019)
+      let lip = SCNTorus(ringRadius: r * CGFloat(scale * cos(latitude)) + 0.004, pipeRadius: 0.019)
       lip.ringSegmentCount = 128; lip.pipeSegmentCount = 12; lip.firstMaterial = steel
-      let node = SCNNode(geometry: lip); node.position = SCNVector3(0, r * CGFloat(sin(latitude)), 0)
+      let node = SCNNode(geometry: lip); node.position = SCNVector3(0, r * CGFloat(scale * sin(latitude)), 0)
       body.addChildNode(node)
     }
-    let middle = (Self.domeEdge + Self.bowlEdge) / 2 * .pi / 180
+    let middle = -14.5 * Double.pi / 180
     let beltRadius = Double(r) * cos(middle) * 0.99, beltHeight = Double(r) * sin(middle)
     stripLight.lightingModel = .constant
     stripLight.diffuse.contents = Self.cometImage(); stripLight.diffuse.wrapS = .repeat
@@ -259,6 +295,13 @@ final class OrbScene: MascotFigure {
     band.firstMaterial = stripLight
     strip.geometry = band
     body.addChildNode(strip)
+    // The same belt, all lit at once: a flash when a hand takes the droid.
+    let flare = Finish.light(); flare.blendMode = .add; flare.writesToDepthBuffer = false
+    flashLight = flare
+    let wide = Sculpt.lathe([(r: beltRadius + 0.002, y: beltHeight - 0.03), (r: beltRadius + 0.002, y: beltHeight + 0.03)], around: 128)
+    wide.firstMaterial = flare
+    flashBand.geometry = wide; flashBand.opacity = 0
+    body.addChildNode(flashBand)
 
     // Eyes: two small pods on the plate, turned to face out from the middle of the ball.
     let pod = Finish.solid(0x15171B, roughness: 0.3, metalness: 0.9)
@@ -311,6 +354,10 @@ final class OrbScene: MascotFigure {
       let base = Sculpt.lathe([(r: 0.275, y: -0.12), (r: 0.275, y: 0.035), (r: 0.275, y: 0.035), (r: 0.245, y: 0.075), (r: 0.245, y: 0.075), (r: 0, y: 0.075)], around: 64)
       base.firstMaterial = graphite
       ear.addChildNode(SCNNode(geometry: base))
+      // A steel stalk inside the ball. It shows only when the ear comes out to wave.
+      let stalk = SCNCylinder(radius: 0.055, height: 0.42); stalk.radialSegmentCount = 24; stalk.firstMaterial = steel
+      let stalkNode = SCNNode(geometry: stalk); stalkNode.position = SCNVector3(0, -0.31, 0)
+      ear.addChildNode(stalkNode)
       let ring = SCNTorus(ringRadius: 0.2, pipeRadius: 0.0105); ring.ringSegmentCount = 64; ring.firstMaterial = earLight
       let ringNode = SCNNode(geometry: ring); ringNode.position = SCNVector3(0, 0.077, 0)
       ear.addChildNode(ringNode); earRings.append(ringNode)
@@ -324,9 +371,11 @@ final class OrbScene: MascotFigure {
       cap.addChildNode(markNode)
       ear.addChildNode(cap); caps.append(cap)
       let outward = simd_normalize(Self.surface(longitude: Double(side) * Self.earLongitude, latitude: 3.5))
-      ear.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: outward)
+      let turn = simd_quatf(from: SIMD3(0, 1, 0), to: outward)
+      ear.simdOrientation = turn
       ear.simdPosition = outward * Float(r - 0.055)
       body.addChildNode(ear)
+      ears.append((ear, outward, turn))
     }
 
     // The hover ring: a thin dark ring with a line of light, tipped a little toward the viewer.
@@ -336,6 +385,9 @@ final class OrbScene: MascotFigure {
     let inner = SCNTorus(ringRadius: 0.66, pipeRadius: 0.012); inner.ringSegmentCount = 96; inner.firstMaterial = hoverLight
     hoverLine.geometry = inner; hoverLine.position = SCNVector3(0, 0.026, 0)
     hover.addChildNode(hoverLine)
+    let wave = SCNTorus(ringRadius: 0.66, pipeRadius: 0.013); wave.ringSegmentCount = 96; wave.firstMaterial = rippleLight
+    ripple.geometry = wave; ripple.opacity = 0
+    hover.addChildNode(ripple)
     root.addChildNode(hover)
 
     // One small light in orbit.
@@ -380,8 +432,9 @@ final class OrbScene: MascotFigure {
     }
     let color = MascotScene.color(tint)
     for eye in eyes { eye.set(tint: color) }
-    stripLight.multiply.contents = color
+    stripLight.multiply.contents = color; flashLight.diffuse.contents = color
     lamp.diffuse.contents = color; earLight.diffuse.contents = color; hoverLight.diffuse.contents = color
+    rippleLight.diffuse.contents = color
     moteLight.diffuse.contents = color.blended(withFraction: 0.45, of: .white) ?? color
     moteGlow.multiply.contents = color; glow.multiply.contents = color
     // With no service the shell is dull and grey.
@@ -396,45 +449,80 @@ final class OrbScene: MascotFigure {
     let dt = lastClock.map { max(0, min(0.1, pose.clock - $0)) } ?? 0
     lastClock = pose.clock
     let awake = mood != .asleep && mood != .offline
-    let light = CGFloat(max(0, min(1, max(pose.glow, pose.voice))))
     let live: CGFloat = mood == .offline ? 0 : 1
+    /// The speed along the way: below 0 to the left, above 0 to the right.
+    let way = pose.travel * min(1, pose.gait)
 
-    // A click: the lids go happy and the ball rocks once.
-    if dt > 0, lastSquint < 0.3, pose.squint >= 0.3 { kick.velocity += 4.2 }
-    lastSquint = pose.squint
+    if dt > 0 {
+      // A click: the lids go happy and the ball rocks once.
+      if lastSquint < 0.3, pose.squint >= 0.3 { kick.velocity += 3.4 }
+      // A hand takes it: the whole belt flashes once.
+      if pose.held, !lastHeld { flash = 1 }
+      // It lands: the ring jumps up to meet it and rings once.
+      if lastAir > 0.04, pose.air <= 0.04 { ringPulse.velocity += 9; ringLift.velocity += 1.6; flash = max(flash, 0.55); rippleAge = 0 }
+      if lastWave <= 0.02, pose.wave > 0.02 { waveClock = 0 }
+    }
+    lastSquint = pose.squint; lastHeld = pose.held; lastAir = pose.air; lastWave = pose.wave
+
     // At rest it tilts a little, as if curious. All of it stops when the clock stops.
-    let curious = mood == .idle || mood == .sharing ? 1.0 : mood == .working ? 0.35 : 0
+    let calm = 1 - min(1, pose.gait * 4)
+    let curious = (mood == .idle || mood == .sharing ? 1.0 : mood == .working ? 0.35 : 0) * calm
     let tilt = curious * (0.05 * sin(pose.clock * 0.63) + 0.025 * sin(pose.clock * 1.9 + 1.3))
     let glance = curious * 0.05 * sin(pose.clock * 0.41 + 0.6)
     let height = pose.bob + pose.lift
     bowlYaw.target = pose.yaw + glance
-    ringLift.target = height
+    // Off the ground the ring stays low, so the gap under the ball opens.
+    ringLift.target = pose.air > 0.04 ? pose.bob + pose.lift * 0.1 : height
     ringTilt.target = pose.roll + tilt
     ringSway.target = pose.yaw
     sink.target = awake ? 0 : 1
+    trail.target = -way
     if dt > 0 {
       bowlYaw.step(dt); ringLift.step(dt); ringTilt.step(dt); ringSway.step(dt); kick.step(dt); sink.step(dt)
+      trail.step(dt); ringPulse.step(dt)
+      if pose.gait > 0.02 {
+        // A ball that goes to the right turns clockwise. It keeps its speed for the moment it stops.
+        let speed = -way * 9
+        rolled.value += speed * dt; rolled.velocity = speed; rolled.target = rolled.value
+      } else {
+        // At rest it rolls on to the nearest whole turn, so its marks come home.
+        rolled.target = (rolled.value / (2 * .pi)).rounded() * 2 * .pi
+        rolled.step(dt)
+      }
+      spin += way * 15 * dt
+      flash = max(0, flash - dt / 0.42)
+      waveClock += dt; rippleAge += dt
     } else {
       bowlYaw.snap(); ringLift.snap(); ringTilt.snap(); ringSway.snap(); kick.snap(to: 0); sink.snap()
+      trail.snap(); ringPulse.snap(to: 0); rolled.snap(); flash = 0; rippleAge = 10
     }
+    let light = CGFloat(max(0, min(1, max(max(pose.glow, pose.voice), flash))))
+    let drag = max(-1.2, min(1.2, trail.value))
 
     let rest = CGFloat(sink.value)
-    root.position = SCNVector3(0, CGFloat(height) - 0.11 * rest, 0)
+    // Metal does not flatten much. A crouch shows as a dip: the ball drops toward its ring.
+    let dip = CGFloat(max(0, 1 - pose.squash)) * 0.62
+    root.position = SCNVector3(0, CGFloat(height) - 0.11 * rest - dip, 0)
     root.scale = SCNVector3(pose.scale, pose.scale, pose.scale)
     // Metal gives only a little under a press.
     let give = 1 + (pose.squash - 1) * 0.22
     let wide = 1 / sqrt(max(0.3, give))
     body.scale = SCNVector3(wide, give, wide)
     body.eulerAngles = SCNVector3(pose.pitch, pose.yaw + glance, pose.roll + tilt + kick.value * 0.16)
-    bowl.eulerAngles.y = CGFloat(bowlYaw.value - (pose.yaw + glance))
+    // The lower ball: late in a turn of the dome, and rolling under it when the droid travels.
+    bowl.simdOrientation = simd_quatf(angle: Float(rolled.value), axis: SIMD3(0, 0, 1))
+      * simd_quatf(angle: Float(bowlYaw.value - (pose.yaw + glance)), axis: SIMD3(0, 1, 0))
 
-    // The eyes. A smile lifts the lower lids a little; a voice does not.
+    // The eyes. A smile lifts the lower lids a little; a voice does not. In the air they are wide.
     let cheer = max(0, min(0.5, (pose.smile - 0.45) * 0.9)) * (1 - pose.voice)
+    let open = pose.eyeOpen > 0.3 ? pose.eyeOpen + 0.22 * pose.air : pose.eyeOpen
+    // Carried, the eyes look the way it goes.
+    let ahead = pose.travel * min(1, pose.gait * 1.6 + (pose.held ? 0.3 : 0)) * 0.55
     // Each pod faces a little out and up. The look is turned back by a part of that, so both
     // eyes look at the same thing and a ring never slides out of its glass.
     for (index, eye) in eyes.enumerated() {
       let side = index == 0 ? -1.0 : 1.0
-      eye.apply(open: pose.eyeOpen, squint: max(pose.squint, cheer), lookX: max(-1, min(1, pose.pupilX * 0.6 - side * 0.38)),
+      eye.apply(open: open, squint: max(pose.squint, cheer, pose.wave * 0.45), lookX: max(-1, min(1, pose.pupilX * 0.6 + ahead - side * 0.38)),
                 lookY: max(-1, min(1, pose.pupilY * 0.6 - 0.3)), glow: Double(light * live))
     }
 
@@ -442,36 +530,67 @@ final class OrbScene: MascotFigure {
     for (index, bar) in bars.enumerated() {
       let away = Double(abs(index - 3))
       let shimmer = 0.5 + 0.5 * sin(pose.clock * 21 + Double(index) * 1.9)
-      let level = max(0, min(1, (pose.voice * (0.75 + 0.5 * shimmer) - away * 0.17) * 3))
+      let level = max(flash, max(0, min(1, (pose.voice * (0.75 + 0.5 * shimmer) - away * 0.17) * 3)))
       bar.opacity = live * (0.16 + 0.84 * CGFloat(level))
       bar.scale = SCNVector3(1 + 0.25 * CGFloat(level), 0.55 + 0.8 * CGFloat(level), 0.4)
     }
 
-    // The belt: the bright point runs around it at the speed of the work.
-    stripLight.diffuse.contentsTransform = SCNMatrix4MakeTranslation(CGFloat(pose.sparkAngle / (2 * .pi)), 0, 0)
+    // The belt: the bright point runs around it at the speed of the work, and faster with the droid's own speed.
+    stripLight.diffuse.contentsTransform = SCNMatrix4MakeTranslation(CGFloat((pose.sparkAngle + spin * 0.5) / (2 * .pi)), 0, 0)
     // At rest the belt breathes slowly.
     let breath = CGFloat(awake ? 0.9 + 0.1 * sin(pose.clock * 1.5) : 1)
     strip.opacity = live * (0.35 + 0.65 * light) * breath
-    for (index, cap) in caps.enumerated() { cap.eulerAngles.y = CGFloat(pose.sparkAngle) * (index == 0 ? 1 : -1) }
-    for ring in earRings { ring.opacity = live * (0.3 + 0.7 * light) }
+    flashBand.opacity = live * CGFloat(flash) * 0.85
+
+    // The ears. Their caps spin with the work and with the speed. Each step lights one, then the other.
+    // In a greeting the right one comes out, turns its face to the person and rocks three times, as a hand that waves.
+    let beat = waveClock * 2 * .pi * 3.15
+    for (index, ear) in ears.enumerated() {
+      let side: Float = index == 0 ? -1 : 1
+      caps[index].eulerAngles.y = CGFloat(pose.sparkAngle + spin) * CGFloat(-side)
+      let step = max(0, pose.stride * Double(side)) * pose.gait
+      let greet = index == 1 ? Float(pose.wave) : 0
+      earRings[index].opacity = live * min(1, 0.3 + 0.7 * light + 0.6 * CGFloat(step) + CGFloat(greet))
+      let forward = simd_quatf(angle: -side * 0.42 * greet, axis: SIMD3(0, 1, 0))
+      let reach = Float(Self.radius) - 0.055 + 0.3 * greet * Float(0.78 + 0.22 * (0.5 - 0.5 * cos(beat)))
+      ear.node.simdPosition = forward.act(ear.out) * reach
+      let rock = simd_quatf(angle: 0.5 * greet * Float(sin(beat)), axis: SIMD3(0, 0, 1))
+      ear.node.simdOrientation = rock * simd_quatf(angle: -side * 0.95 * greet, axis: SIMD3(0, 1, 0)) * ear.turn
+    }
     crown.opacity = live * (0.3 + 0.7 * light)
 
-    // The hover ring follows the ball late, and leans against its turn.
-    hover.position = SCNVector3(-CGFloat(ringSway.value - pose.yaw) * 0.5, Self.center - 1.6 + CGFloat(ringLift.value - height) * 0.9 + 0.06 * rest, 0)
-    hover.eulerAngles = SCNVector3(0.3 + pose.ringWobble, 0, CGFloat(ringTilt.value) * 0.8 + pose.ringWobble * 0.6)
-    hoverLine.opacity = live * (0.3 + 0.7 * light)
+    // The hover ring follows the ball late. It trails behind the way of travel, leans with it,
+    // and swings past when the droid stops. Each step rocks it a little.
+    let ringY = Self.center - 1.6 + CGFloat(ringLift.value - height) + 0.06 * rest + dip * 0.55
+    hover.position = SCNVector3(CGFloat(drag) * 0.4 - CGFloat(ringSway.value - pose.yaw) * 0.4, ringY, 0)
+    let lean = max(-0.5, min(0.5, ringTilt.value * 0.6)) - drag * 0.42 + pose.stride * pose.gait * 0.1
+    hover.eulerAngles = SCNVector3(0.3 + pose.ringWobble, 0, CGFloat(lean) + pose.ringWobble * 0.6)
+    let ring = 1 + 0.16 * CGFloat(ringPulse.value)
+    hover.scale = SCNVector3(ring, ring, ring)
+    hoverLine.opacity = live * min(1, 0.3 + 0.7 * light + abs(CGFloat(ringPulse.value)) * 0.8)
+    // At a landing a ring of light leaves the hover ring, grows and fades.
+    let spread = CGFloat(min(1, rippleAge / 0.5))
+    ripple.scale = SCNVector3(1 + 1.05 * spread * (2 - spread), 1, 1 + 1.05 * spread * (2 - spread))
+    ripple.opacity = live * (1 - spread) * 0.9
     underGlow.opacity = live * (0.10 + 0.34 * light) * (1 - 0.6 * rest)
+    underGlow.position.x = CGFloat(drag) * 0.25
 
-    // The light in orbit.
+    // The light in orbit. When the droid travels, the bead is pulled out of its orbit and streams behind.
     orbit.eulerAngles = SCNVector3(0.42 + pose.ringWobble, 0, -0.24 + pose.ringWobble * 0.8)
     // One turn of the orbit for one turn of the belt light, so nothing jumps when the angle starts again.
     let turn = pose.sparkAngle + 2.2
     let reach = 1.62 - 0.12 * Double(rest)
-    mote.position = SCNVector3(reach * cos(turn), 0, reach * sin(turn))
+    let stream = min(1, abs(drag) * 1.25)
+    let behind = drag < 0 ? -1.0 : 1.0
+    let home = SIMD3<Double>(reach * cos(turn), 0, reach * sin(turn))
+    let tail = SIMD3<Double>(behind * (1.42 + 0.08 * sin(pose.clock * 9)), 0.28 + 0.1 * sin(pose.clock * 13), 0.3)
+    let place = home + (tail - home) * (stream * 0.9)
+    mote.position = SCNVector3(place.x, place.y, place.z)
     mote.scale = SCNVector3(0.7 + 0.5 * light, 0.7 + 0.5 * light, 0.7 + 0.5 * light)
     // The bead stays solid: its size and its glow carry the brightness.
     mote.opacity = live
     moteHalo.opacity = 0.2 + 0.6 * light
+    moteHalo.scale = SCNVector3(1 + 1.4 * CGFloat(stream), 1, 1)
 
     if pose.sheen >= 0 {
       // A band of light goes down the dome.

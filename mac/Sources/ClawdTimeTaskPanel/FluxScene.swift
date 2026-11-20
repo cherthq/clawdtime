@@ -6,12 +6,15 @@ import simd
 /// Flux: a living drop of liquid chrome. The metal moves in slow swells and
 /// mirrors a room. Where it mirrors the horizon it glows in the state color.
 /// Two small robotic eyes ride the surface, and one bright droplet in orbit is the status light.
+/// It has weight: carried, its mass hangs back and sloshes past the middle on a
+/// stop. In a jump it pulls long, lands wide and throws one droplet. To greet,
+/// it raises an arm of liquid and waves it.
 final class FluxScene: MascotFigure {
   let scene = SCNScene()
   let camera = Stage.camera()
   private let root = SCNNode(), body = SCNNode()
-  private let orbit = SCNNode()
   private let lead = SCNNode(), leadHalo = SCNNode(), bead = SCNNode(), mote = SCNNode()
+  private let spit = SCNNode(), arm = SCNNode(), hand = SCNNode()
   private let chrome = SCNMaterial()
   private let beadChrome = Finish.solid(0xEEF0F5, roughness: 0.05, metalness: 1)
   private let leadChrome = Finish.solid(0xEEF0F5, roughness: 0.05, metalness: 1), haloMaterial = Finish.halo()
@@ -58,6 +61,22 @@ final class FluxScene: MascotFigure {
   private var eyePoints: [Int] = []
   private var eyeGlows: [SCNNode] = []
   private let eyeGlow = Finish.halo()
+
+  // The weight of the drop. The mass hangs back from the way it travels and,
+  // on a stop, goes past the middle and back before it settles.
+  private var slosh = Spring(0, response: 0.46, dampingRatio: 0.16)
+  private var stepFlow = 0.0
+  /// The base flares out at a landing and rings.
+  private var splat = Spring(0, response: 0.26, dampingRatio: 0.30)
+  /// The dent under a hand that takes hold of the top.
+  private var pinch = Spring(0, response: 0.5, dampingRatio: 1)
+  private var wasHeld = false, lastAir = 0.0, peakLift = 0.0, lastWave = 0.0
+  /// Seconds since the last landing and since the last greeting began, and how hard the landing was.
+  private var landAge = 9.0, waveAge = 9.0, landStrength = 0.0
+  /// Each droplet hangs behind the drop on its own slower spring, so they stream in a line and catch up late.
+  private var chase = [Spring(0, response: 0.46, dampingRatio: 0.5), Spring(0, response: 0.64, dampingRatio: 0.5), Spring(0, response: 0.82, dampingRatio: 0.5)]
+  private var places = [SIMD3<Float>](repeating: SIMD3<Float>(0, 0, 0), count: 3)
+  private var armPoint = 0
 
   private static func unit(azimuth: Double, elevation: Double) -> (Float, Float, Float) {
     let a = azimuth * .pi / 180, e = elevation * .pi / 180
@@ -218,15 +237,28 @@ final class FluxScene: MascotFigure {
     leadHalo.geometry = SCNPlane(width: 1.15, height: 1.15); leadHalo.geometry?.firstMaterial = haloMaterial
     leadHalo.constraints = [SCNBillboardConstraint()]
     // The glow is beside the droplet, not inside it, so it stays round when the droplet stretches.
-    orbit.addChildNode(leadHalo)
-    orbit.addChildNode(lead)
+    root.addChildNode(leadHalo)
+    root.addChildNode(lead)
     let small = SCNSphere(radius: 0.085); small.segmentCount = 32; small.firstMaterial = beadChrome
     bead.geometry = small
-    orbit.addChildNode(bead)
+    root.addChildNode(bead)
     let tiny = SCNSphere(radius: 0.055); tiny.segmentCount = 24; tiny.firstMaterial = beadChrome
     mote.geometry = tiny
-    orbit.addChildNode(mote)
-    root.addChildNode(orbit)
+    root.addChildNode(mote)
+    // The droplet that jumps off at a landing, and the arm that waves. Both are hidden until they are needed.
+    let drop = SCNSphere(radius: 0.095); drop.segmentCount = 28; drop.firstMaterial = beadChrome
+    spit.geometry = drop; spit.isHidden = true
+    root.addChildNode(spit)
+    let palm = SCNSphere(radius: 0.215); palm.segmentCount = 40; palm.firstMaterial = beadChrome
+    hand.geometry = palm
+    arm.isHidden = true; hand.isHidden = true
+    body.addChildNode(arm); body.addChildNode(hand)
+    let shoulder = simd_normalize(SIMD3<Float>(0.76, 0.40, 0.56))
+    var nearest = Float(-2)
+    for point in 0..<points {
+      let match = directionTable[point * 3] * shoulder.x + directionTable[point * 3 + 1] * shoulder.y + directionTable[point * 3 + 2] * shoulder.z
+      if match > nearest { nearest = match; armPoint = point }
+    }
 
     // One hard light for the wet glint. The room does the rest.
     scene.rootNode.addChildNode(Stage.light(.directional, 0xFFFFFF, 900, angles: SCNVector3(-0.7, -0.5, 0)))
@@ -356,19 +388,35 @@ final class FluxScene: MascotFigure {
   private func shape(_ pose: MascotPose) {
     let row = Self.across + 1, rings = Self.up + 1
     let f = Float(flow)
-    let calm = Float(1 - 0.5 * max(0, min(1, puddle.value))) * Float(1 - 0.85 * max(0, min(1, dull.value)))
+    let flat = Float(max(0, min(1, puddle.value)))
+    let calm = (1 - 0.5 * flat) * Float(1 - 0.85 * max(0, min(1, dull.value)))
     let swell = 0.034 * calm
     let working = Float(max(0, work.value)), spiky = Float(max(-0.2, spikes.value))
     let voice = Float(max(0, min(1, pose.voice)))
     let ringOn = pose.sheen >= 0
     let ringAt = Float(pose.sheen) * 2.7, ringHeight = Float(0.055 * sin(max(0, pose.sheen) * .pi))
-    // The tip: a soft peak that leans with the sway.
-    var nx = Float(0.10 + swayX.value), ny = Float(1), nz = Float(0.04 + swayZ.value)
+    // Carried: the mass is on the side it came from, and a wave runs back through the surface with each step.
+    let mass = Float(max(-1.4, min(1.4, slosh.value)))
+    let behind: Float = mass >= 0 ? 1 : -1
+    let pace = Float(max(0, min(1, pose.gait))), step = Float(max(-1, min(1, pose.stride))), run = Float(stepFlow)
+    // In the air it pulls long. At the landing its base flares out and a ring runs up from the ground.
+    let air = Float(max(0, min(1, pose.air)))
+    let spread = Float(max(-0.5, min(1.2, splat.value)))
+    let landing = landAge < 0.55
+    let landAt = Float(landAge / 0.55) * 2.7, landHeight = Float(0.085 * landStrength * max(0, 1 - landAge / 0.55))
+    // A hand at the top presses a dent in it.
+    let dent = Float(max(0, min(1, pinch.value)))
+    // The root of the arm swells a little before the arm leaves it.
+    let reach = Float(max(0, min(1, pose.wave)))
+    let shoulder = (directionTable[armPoint * 3], directionTable[armPoint * 3 + 1], directionTable[armPoint * 3 + 2])
+    // The tip: a soft peak that leans with the sway and trails behind the mass.
+    var nx = Float(0.10 + swayX.value) + 0.85 * mass, ny = Float(1), nz = Float(0.04 + swayZ.value)
     let nl = (nx * nx + ny * ny + nz * nz).squareRoot(); nx /= nl; ny /= nl; nz /= nl
-    let tip = Float(0.20 * (1 - max(0, min(1, puddle.value)))) + 0.12 * max(0, spiky) + 0.02 * working * sinf(f * 3.1)
+    let tip = (0.20 * (1 - flat) + 0.12 * max(0, spiky) + 0.02 * working * sinf(f * 3.1) + 0.10 * air) * (1 - 0.85 * dent)
     let wobble = Float(max(-0.3, min(0.3, jelly.value - pose.squash))) * 0.9
     let drip = Float(max(-0.08, min(0.3, (pose.lift + pose.bob) - trail.value))) * 1.6
-    let hx = Self.half.x, hy = Self.half.y, hz = Self.half.z
+    let hx = Self.half.x * (1 + 0.09 * abs(mass) - 0.07 * air), hy = Self.half.y * (1 + 0.11 * air - 0.05 * abs(mass)), hz = Self.half.z * (1 - 0.07 * air)
+    let lean = 0.36 * mass
     let spikePulse = 0.24 + 0.035 * sinf(f * 6.5)
     buffer.withUnsafeMutableBufferPointer { out in
       let directions = UnsafeBufferPointer(start: directionTable, count: row * rings * 3)
@@ -383,18 +431,34 @@ final class FluxScene: MascotFigure {
         if voice > 0.02 { r += voice * (0.025 + 0.016 * sinf(9 * fromFront[v] - f * 12)) }
         if abs(spiky) > 0.01 { r += spiky * (spikeMask[v] * spikePulse - 0.03) }
         if ringOn { let q = (fromFront[v] - ringAt) / 0.24; r += ringHeight * expf(-q * q) }
+        // The mass bulges on the side it hangs to.
+        r *= 1 + 0.17 * mass * x
+        if pace > 0.01 {
+          // A wave runs back through the surface, and the low sides swell in turn with each step.
+          r += pace * (0.040 * sinf(5.2 * x * behind - run) + 0.06 * step * x * max(0, -y))
+        }
+        if dent > 0.01 { r -= dent * 0.20 * expf(-(1 - y) * 8) }
+        if landing { let q = (acosf(max(-1, min(1, -y))) - landAt) / 0.24; r += landHeight * expf(-q * q) }
+        if reach > 0.01 {
+          let near = x * shoulder.0 + y * shoulder.1 + z * shoulder.2
+          if near > 0.4 { r += reach * 0.20 * expf(-(1 - near) * 9) }
+        }
         let toward = x * nx + y * ny + z * nz
         if toward > 0.4 { r += tip * expf(-(1 - toward) * 30) }
         var px = x * r * hx, py = y * r * hy, pz = z * r * hz
         if y < 0 {
-          // A drop sits wide and flat at its base, and its base hangs behind a hop.
+          // A drop sits wide and flat at its base. The base hangs behind a hop, narrows in the air and flares at a landing.
           let low = y * y
-          px *= 1 + 0.10 * low; pz *= 1 + 0.10 * low
+          let flare = 1 + 0.10 * low + 0.30 * spread * low - 0.14 * air * low
+          px *= flare; pz *= flare
           py *= 1 - 0.13 * low
           py -= drip * low
         }
-        let lean = 1 + wobble * y
-        px *= lean; pz *= lean
+        let ring = 1 + wobble * y
+        px *= ring; pz *= ring
+        // The top hangs back from the way it travels.
+        let high = (y + 1) * 0.5
+        px += lean * high * high
         out[v * 6] = px; out[v * 6 + 1] = py; out[v * 6 + 2] = pz
       }
       // Normals from the neighbors on the grid.
@@ -428,6 +492,49 @@ final class FluxScene: MascotFigure {
     body.geometry = geometry
   }
 
+  /// The place and the outward direction of the surface at one point of the grid.
+  private func surface(_ point: Int) -> (place: SIMD3<Float>, out: SIMD3<Float>) {
+    buffer.withUnsafeBufferPointer { mesh in
+      let at = point * 6
+      return (SIMD3<Float>(mesh[at], mesh[at + 1], mesh[at + 2]), simd_normalize(SIMD3<Float>(mesh[at + 3], mesh[at + 4], mesh[at + 5])))
+    }
+  }
+
+  /// The arm of liquid: it rises from the shoulder with `raise`, bends as it
+  /// swings, narrows to a neck and ends in a round drop for a hand.
+  private func wave(_ raise: Double) {
+    guard raise > 0.02 else {
+      if !arm.isHidden { arm.isHidden = true; hand.isHidden = true; arm.geometry = nil }
+      return
+    }
+    let base = surface(armPoint)
+    // Three swings for each greeting. The far end is late, so the arm bends against its swing.
+    let turn = Float(waveAge * 2 * .pi * 3.0)
+    let swing = 0.16 + 0.55 * sinf(turn), late = -0.55 * cosf(turn)
+    let along = simd_quatf(angle: swing, axis: SIMD3<Float>(0, 0, 1)).act(simd_normalize(base.out + SIMD3<Float>(-0.1, 0.8, 0)))
+    let across = simd_normalize(simd_cross(SIMD3<Float>(0, 0, 1), along))
+    let grown = Float(pow(raise, 0.75))
+    let length = 0.56 * grown
+    var line: [SCNVector3] = []
+    var end = base.place
+    for piece in 0...12 {
+      let part = Float(piece) / 12
+      end = base.place - base.out * 0.22 + along * ((length + 0.22) * part) + across * (late * 0.30 * length * part * part)
+      line.append(SCNVector3(end))
+    }
+    // Wide where it leaves the drop, a neck in the middle, wider again into the hand.
+    let tube = Sculpt.tube(line, sides: 18) { part in
+      let neck = 0.135 + 0.04 * pow(max(0, part - 0.7) / 0.3, 2)
+      return Double(grown) * (neck + 0.24 * pow(1 - part, 2.2))
+    }
+    tube.firstMaterial = beadChrome
+    arm.geometry = tube
+    hand.simdPosition = end
+    let size = 0.35 + 0.65 * grown
+    hand.simdScale = SIMD3<Float>(size, size, size)
+    arm.isHidden = false; hand.isHidden = false
+  }
+
   func apply(_ pose: MascotPose) {
     // Time for the parts that move on their own. When the clock stands still, so do they.
     let dt = lastClock.map { max(0, min(0.1, pose.clock - $0)) } ?? 0
@@ -440,10 +547,30 @@ final class FluxScene: MascotFigure {
     swayZ.target = pose.pitch * 0.7
     jelly.target = pose.squash
     trail.target = pose.lift + pose.bob
+    // The mass hangs to the side it came from. With no travel it wants the middle again.
+    let pull = -pose.travel * (0.5 + 0.5 * pose.gait)
+    slosh.target = pull
+    for index in 0..<3 { chase[index].target = pull }
+    // A hand takes hold: the top dents at once, then eases to a shallow dent for as long as it holds.
+    if pose.held && !wasHeld && dt > 0 { pinch.value = 1; pinch.velocity = 0 }
+    wasHeld = pose.held
+    pinch.target = pose.held ? 0.26 : 0
+    // A landing: the base flares out, a ring runs up, and after a real jump one droplet leaves.
+    if pose.air > 0.02 { peakLift = max(peakLift, pose.lift) }
+    if lastAir > 0.02 && pose.air <= 0.02 && dt > 0 {
+      landStrength = max(0.35, min(1, peakLift / 0.44)); landAge = 0; peakLift = 0
+      splat.velocity += 5.5 * landStrength
+    }
+    lastAir = pose.air
+    if pose.wave > 0.01 && lastWave <= 0.01 { waveAge = 0 }
+    lastWave = pose.wave
     if dt > 0 {
-      for keyPath in [\FluxScene.work, \.spikes, \.puddle, \.dull, \.swayX, \.swayZ, \.jelly, \.trail] { self[keyPath: keyPath].step(dt) }
+      for keyPath in [\FluxScene.work, \.spikes, \.puddle, \.dull, \.swayX, \.swayZ, \.jelly, \.trail, \.slosh, \.splat, \.pinch] { self[keyPath: keyPath].step(dt) }
+      for index in 0..<3 { chase[index].step(dt) }
       let speed = mood == .offline ? 0 : mood == .asleep ? 0.35 : mood == .working ? 1.7 : mood == .attention ? 1.4 : 1
       flow += dt * speed
+      if pose.gait > 0.02 { stepFlow += dt * (5 + 9 * pose.gait) }
+      landAge += dt; waveAge += dt
       var turn = pose.sparkAngle - lastSpark
       if turn < -Double.pi { turn += 2 * .pi } else if turn > Double.pi { turn -= 2 * .pi }
       sparkSpeed += (turn / dt - sparkSpeed) * min(1, dt * 8)
@@ -453,7 +580,9 @@ final class FluxScene: MascotFigure {
     } else {
       stateShown = stateTarget
       // No time passes: the state still shows, with no motion of its own.
-      for keyPath in [\FluxScene.work, \.spikes, \.puddle, \.dull, \.swayX, \.swayZ, \.jelly, \.trail] { self[keyPath: keyPath].snap() }
+      for keyPath in [\FluxScene.work, \.spikes, \.puddle, \.dull, \.swayX, \.swayZ, \.jelly, \.trail, \.slosh, \.pinch] { self[keyPath: keyPath].snap() }
+      for index in 0..<3 { chase[index].snap() }
+      splat.snap(to: 0); landAge = 9
     }
     lastSpark = pose.sparkAngle
 
@@ -479,20 +608,22 @@ final class FluxScene: MascotFigure {
     chrome.setValue(NSValue(scnVector3: SCNVector3(stateShown.0 * lit, stateShown.1 * lit, stateShown.2 * lit)), forKey: "stateColor")
 
     // The eyes take their place and their turn from the surface under them.
-    buffer.withUnsafeBufferPointer { mesh in
-      for (index, eye) in eyes.enumerated() {
-        let at = eyePoints[index] * 6
-        let place = SIMD3<Float>(mesh[at], mesh[at + 1], mesh[at + 2])
-        let out = simd_normalize(SIMD3<Float>(mesh[at + 3], mesh[at + 4], mesh[at + 5]))
-        eye.node.simdPosition = place + out * Float(Self.eyeRadius) * 0.42
-        eye.node.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 0, 1), to: out)
-        // Each pod faces a little outward with the surface. The pupil turns back in, so both eyes look the same way.
-        let inward = index == 0 ? 0.5 : -0.5
-        let light = pose.glow * (1 - 0.6 * grey)
-        eye.apply(open: pose.eyeOpen, squint: pose.squint, lookX: max(-1, min(1, pose.pupilX * 0.8 + inward)), lookY: pose.pupilY, glow: light)
-        eyeGlows[index].opacity = CGFloat((0.06 + 0.20 * light) * max(0, min(1, (pose.eyeOpen - 0.08) * 5)))
-      }
+    // Carried, they look the way it travels. In a hand, the lids go wide.
+    let carried = abs(pose.travel) > 0.05 ? min(1, pose.gait * 2.5) : 0
+    let way = pose.travel >= 0 ? 0.9 : -0.9
+    let look = pose.pupilX * 0.8 * (1 - carried) + way * carried
+    let open = pose.eyeOpen * (1 + 0.22 * max(0, min(1, pinch.value)))
+    for (index, eye) in eyes.enumerated() {
+      let under = surface(eyePoints[index])
+      eye.node.simdPosition = under.place + under.out * Float(Self.eyeRadius) * 0.42
+      eye.node.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 0, 1), to: under.out)
+      // Each pod faces a little outward with the surface. The pupil turns back in, so both eyes look the same way.
+      let inward = index == 0 ? 0.5 : -0.5
+      let light = pose.glow * (1 - 0.6 * grey)
+      eye.apply(open: open, squint: pose.squint, lookX: max(-1, min(1, look + inward)), lookY: pose.pupilY * (1 - 0.6 * carried), glow: light)
+      eyeGlows[index].opacity = CGFloat((0.06 + 0.20 * light) * max(0, min(1, (open - 0.08) * 5)))
     }
+    wave(pose.wave)
 
     // The mouth and the glint are drawn again only when they change.
     let key = [pose.smile * 30, pose.voice * 24, pose.sheen * 90].map { Int($0.rounded()) }
@@ -501,30 +632,51 @@ final class FluxScene: MascotFigure {
       chrome.emission.contents = face(pose)
     }
 
-    // The droplets: the lead one carries the state, two of plain metal follow their own paths.
+    // The droplets. At rest they turn around the drop on a tilted ring, and the
+    // lead one carries the state. Carried, each hangs behind on its own spring:
+    // they stream in a line and come back to the ring one after the other.
     let glow = CGFloat(pose.glow)
-    orbit.scale = SCNVector3(pose.scale, pose.scale, pose.scale)
-    orbit.eulerAngles = SCNVector3(0.36 + pose.ringWobble, 0, -0.30 + pose.roll * 0.5 + pose.ringWobble * 0.6)
-    let radius = 1.74, angle = pose.sparkAngle
-    lead.position = SCNVector3(radius * cos(angle), 0, radius * sin(angle))
-    // A droplet stretches along its path when it is fast.
-    let stretch = 1 + min(0.45, abs(sparkSpeed) * 0.07)
-    lead.eulerAngles.y = -angle
-    lead.scale = SCNVector3((0.8 + 0.4 * glow) / sqrt(stretch), (0.8 + 0.4 * glow) / sqrt(stretch), (0.8 + 0.4 * glow) * stretch)
-    leadHalo.position = lead.position
+    let tilt = simd_quatf(angle: Float(0.36 + pose.ringWobble), axis: SIMD3<Float>(1, 0, 0)) * simd_quatf(angle: Float(-0.30 + pose.roll * 0.5 + pose.ringWobble * 0.6), axis: SIMD3<Float>(0, 0, 1))
+    let radius = Float(1.74), size = Float(pose.scale)
+    let quick = Float(max(0, min(1, (abs(sparkSpeed) - 1.2) / 2)))
+    let spacing = Float(0.42 + min(0.3, abs(sparkSpeed) * 0.05))
+    for (index, node) in [lead, bead, mote].enumerated() {
+      let angle = Float(pose.sparkAngle) - spacing * Float(index) * (index == 2 ? 0.9 : 1)
+      var place = tilt.act(SIMD3<Float>(radius * cosf(angle), 0, radius * sinf(angle))) * size
+      let hang = Float(chase[index].value)
+      let stream = max(0, min(1, (abs(hang) - 0.05) / 0.45))
+      let eased = stream * stream * (3 - 2 * stream)
+      let line = SIMD3<Float>((hang >= 0 ? 1 : -1) * (1.30 + 0.22 * Float(index)), 0.30 - 0.22 * Float(index) + 0.05 * sinf(Float(pose.clock) * 8 + Float(index) * 2), 0.3)
+      place += (line - place) * eased
+      // A droplet stretches along its way when it is fast.
+      var long = Float(1)
+      if dt > 0 {
+        let moved = place - places[index]
+        let fast = simd_length(moved) / Float(dt)
+        long = 1 + min(0.45, fast * 0.07)
+        if fast > 0.05 { node.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 0, 1), to: simd_normalize(moved)) }
+      }
+      places[index] = place
+      node.simdPosition = place
+      let full: Float = index == 0 ? Float(0.8 + 0.4 * glow) : index == 1 ? 1 : max(quick, eased)
+      node.simdScale = SIMD3<Float>(full / long.squareRoot(), full / long.squareRoot(), full * long)
+      if index == 2 { node.isHidden = full < 0.05 }
+    }
+    leadHalo.simdPosition = places[0]
     leadHalo.scale = SCNVector3(0.8 + 0.4 * glow, 0.8 + 0.4 * glow, 0.8 + 0.4 * glow)
     leadHalo.opacity = 0.25 + 0.75 * glow
     leadChrome.emission.intensity = 0.16 + 0.5 * glow
-    let behind = angle - 0.42 - min(0.3, abs(sparkSpeed) * 0.05)
-    bead.position = SCNVector3(radius * cos(behind), 0, radius * sin(behind))
-    bead.eulerAngles.y = -behind
-    bead.scale = SCNVector3(1 / sqrt(stretch), 1 / sqrt(stretch), stretch)
-    // A third, smaller one joins the tail only when they are fast.
-    let quick = max(0, min(1, (abs(sparkSpeed) - 1.2) / 2))
-    let last = behind - 0.34 - min(0.3, abs(sparkSpeed) * 0.05)
-    mote.position = SCNVector3(radius * cos(last), 0, radius * sin(last))
-    mote.eulerAngles.y = -last
-    mote.scale = SCNVector3(quick / sqrt(stretch), quick / sqrt(stretch), quick * stretch)
-    mote.isHidden = quick < 0.05
+
+    // After a real jump one small droplet leaves the crown, rises, and falls back in.
+    let flight = Float(landAge)
+    if landStrength > 0.8 && flight > 0.02 && flight < 0.63 {
+      let grow = min(1, flight / 0.06) * min(1, (0.63 - flight) / 0.07)
+      let speedY = 3.3 - 11.2 * flight
+      spit.simdPosition = SIMD3<Float>(0.14 + 0.62 * flight, 0.98 + 3.3 * flight - 5.6 * flight * flight, 0.42) * size
+      spit.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 0, 1), to: simd_normalize(SIMD3<Float>(0.62, speedY, 0)))
+      let long = 1 + min(0.5, abs(speedY) * 0.12)
+      spit.simdScale = SIMD3<Float>(grow / long.squareRoot(), grow / long.squareRoot(), grow * long)
+      spit.isHidden = false
+    } else if !spit.isHidden { spit.isHidden = true }
   }
 }

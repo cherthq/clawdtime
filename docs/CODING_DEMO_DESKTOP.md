@@ -14,15 +14,36 @@ dark mode, Fraunces for the headline, Instrument Sans for the interface and
 JetBrains Mono for times and paths. The three typefaces ship inside the app
 under the SIL Open Font License.
 
-The mascot is the Chert mark in three dimensions: a stone in the sunset strata of
-the mark, the white ring in orbit around it, and a spark that rides the ring. It
-is built in code, so it is sharp at every size. Its eyes follow the pointer and
-blink. The spark is the status light: cream at rest, blue and fast while agents
-work, amber when something waits for the person, red while the screen is shared.
-A sheen crosses the stone on a click, as in the command-line intro.
+The mascot is real 3D, built in code, so it is sharp at every size. Its eyes
+follow the pointer and blink, and its light is the status: warm at rest, blue
+while agents work, amber when something waits for the person, red while the
+screen is shared. The person picks a style in the mascot's menu, where each
+style shows its picture:
 
-- Click the mascot: it presses, springs back, and the board opens out of it.
-  Click again or click anywhere else to close the board.
+| Style | What it is |
+|---|---|
+| Flint | The Chert mark as a living stone: a core of dark flint with one robotic eye in its window, and its flake beside it. A new install starts with it. |
+| Pebble | A round stone in the sunset strata, with the white ring in orbit. Friendly. |
+| Core | A dark glass orb with an iris of light and two fine rings. |
+| Neon | A night-city droid head in black chrome, with a visor of LED eyes. |
+| Orb | A metal ball droid with two small robotic eyes and a belt of lamps. |
+| Onyx | A polished black stone with veins of gold and two small robotic eyes. |
+| Flux | A drop of liquid chrome with two small robotic eyes. |
+| Iris | A lens: coated glass, an aperture that blinks, a hoop it hangs in. |
+
+The body has weight, in every style:
+
+- Drag it: it follows the hand on a short spring, swings under the hand, turns
+  to face the way it goes, stretches with its speed and runs with a cadence.
+- Let go while it moves: it flies on, slows, and bounces off the edge of the
+  screen. Let go against the left or right edge: it tucks there.
+- Click it: a real jump, with a crouch, the flight and a landing that rings.
+- Point at it after a while: it waves.
+- Loose parts act the motion out: a ring or a halo trails and tips, a flake
+  waves, liquid sloshes.
+
+- Click the mascot: it jumps, and the board opens out of it. Click again or
+  click anywhere else to close the board.
 - Point at the mascot: two buttons appear. **Close** hides it; it stays in the
   menu bar. **Side** tucks it against the nearer screen edge, where it keeps
   watching. A drag that ends against the left or right edge also tucks it.
@@ -31,7 +52,8 @@ A sheen crosses the stone on a click, as in the command-line intro.
 - When an agent or the task waits for the person and the board is closed, the
   mascot hops and a bubble says what waits. A click on the bubble opens that
   session's terminal, or the board when more than one thing waits.
-- Drag the mascot anywhere. Its place is kept between starts.
+- Drag or throw the mascot anywhere. Where it comes to rest is kept between
+  starts.
 
 The board's headline says the most urgent thing in words, for example "1 agent
 needs you" or "All quiet". A task that waits for an answer comes before the
@@ -53,7 +75,8 @@ starts sharing. There is no new sharing toggle or permission change.
 
 Motion uses springs: a press sinks in 90 ms and releases with a slight overshoot,
 and the board is 95 percent open within 220 ms. macOS Reduce Motion removes
-drift, hops, scaling and the sheen; states then change at once.
+drift, hops, scaling, the sheen and all of the body's physics: the mascot then
+goes exactly where the hand puts it, and states change at once.
 
 The app is an accessory: it has no Dock icon and never takes focus when it
 starts or when the board opens. The board becomes the key window only when the

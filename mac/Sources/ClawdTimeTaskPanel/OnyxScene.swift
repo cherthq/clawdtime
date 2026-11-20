@@ -7,6 +7,12 @@ import simd
 /// carry the light of the state, two small robotic eyes in pods of gold are set
 /// into it, and a thin halo of gold floats over it. It is the adult sibling of
 /// Pebble: calm, with no cartoon mouth. It shows a voice as one fine line of light.
+///
+/// Its parts act out the motion of the body. Carried or thrown, the halo trails
+/// behind and tips back like a hat in the wind, its point of light streams behind
+/// it, and the veins flare on the leading side. In a jump the stone throws the
+/// halo up; it lags above, drops back and wobbles, and the veins flash at the
+/// landing. In a wave the halo is raised and tipped three times, as a hat is.
 final class OnyxScene: MascotFigure {
   let scene = SCNScene()
   let camera = Stage.camera()
@@ -22,6 +28,14 @@ final class OnyxScene: MascotFigure {
   private let spark = SCNNode(), sparkGlow = SCNNode()
   private var tail: [SCNNode] = []
   private var lastSpark = 0.6, sparkSpeed = 0.0
+  // The motion of the body, as the parts of the stone remember it.
+  private let windShell = SCNNode()
+  private let windMaterial = SCNMaterial()
+  /// What the wind shell shows now: 1 the leading side to the right, -1 to the left, 2 every vein (a landing).
+  private var windShown = 0
+  private var stream = 0.0, flash = 0.0, lastAir = 0.0, lastFloor = 0.0, wavePhase = 0.0
+  private var landings = 0
+  private var wasHeld = false
   private let aura = SCNNode()
   private let stone = SCNMaterial()
   private let sheenMaterial = SCNMaterial()
@@ -37,10 +51,10 @@ final class OnyxScene: MascotFigure {
   private var sheenStep = -1
   private var lastClock = 0.0
   // The halo follows the stone late.
-  private var haloX = Spring(0, response: 0.50, dampingRatio: 0.50)
-  private var haloY = Spring(0, response: 0.42, dampingRatio: 0.46)
-  private var haloTilt = Spring(0.34, response: 0.60, dampingRatio: 0.40)
-  private var haloLean = Spring(-0.18, response: 0.60, dampingRatio: 0.40)
+  private var haloX = Spring(0, response: 0.52, dampingRatio: 0.36)
+  private var haloY = Spring(0, response: 0.46, dampingRatio: 0.40)
+  private var haloTilt = Spring(0.34, response: 0.56, dampingRatio: 0.34)
+  private var haloLean = Spring(-0.18, response: 0.56, dampingRatio: 0.30)
   /// How far each eye faces outward and upward on the stone, in the units of its look.
   private let toeIn: Double, toeDown: Double
 
@@ -237,6 +251,18 @@ final class OnyxScene: MascotFigure {
   }
   /// The veins in white gold with a little even light: what the sheen shows where its band is.
   private static let flare: CGImage = glow(MascotScene.color(0xFFEFCB), wash: 0.20)
+  /// The veins as the wind of travel lights them: bright on the leading side, dark behind.
+  private static func wind(right: Bool) -> CGImage {
+    let size = 384
+    return MascotScene.image(width: size, height: size) { context in
+      context.draw(glow(MascotScene.color(0xFFEFCB), wash: 0.13), in: CGRect(x: 0, y: 0, width: size, height: size))
+      context.setBlendMode(.multiply)
+      let fade = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+        colors: [NSColor.black.cgColor, NSColor(white: 0.25, alpha: 1).cgColor, NSColor.white.cgColor] as CFArray, locations: [0, 0.45, 1])!
+      let from = CGFloat(size) * (right ? 0.12 : 0.88), to = CGFloat(size) * (right ? 0.96 : 0.04)
+      context.drawLinearGradient(fade, start: CGPoint(x: from, y: 0), end: CGPoint(x: to, y: 0), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+    }
+  }
   /// One step of the sheen: a slanted band of light that goes from the crown to the base.
   private static func sheen(_ progress: Double) -> CGImage {
     let size = 384
@@ -336,6 +362,15 @@ final class OnyxScene: MascotFigure {
     sheenShell.renderingOrder = 5
     form.addChildNode(sheenShell)
 
+    // The wind of travel: the veins on the leading side light up while the stone is carried or thrown.
+    windMaterial.lightingModel = .constant
+    windMaterial.blendMode = .add; windMaterial.writesToDepthBuffer = false
+    windShell.geometry = Sculpt.blob(half: Self.half, vertical: Self.vertical, around: Self.around, across: 96, up: 64, taper: Self.taper)
+    windShell.geometry?.firstMaterial = windMaterial
+    windShell.scale = SCNVector3(1.005, 1.005, 1.005); windShell.isHidden = true
+    windShell.renderingOrder = 4
+    form.addChildNode(windShell)
+
     faceMaterial.lightingModel = .constant
     faceMaterial.blendMode = .add; faceMaterial.writesToDepthBuffer = false
     face.geometry = Self.facePatch(); face.geometry?.firstMaterial = faceMaterial
@@ -383,7 +418,7 @@ final class OnyxScene: MascotFigure {
     haloPivot.addChildNode(spark)
     // When the point runs, it draws a short tail behind it on the ring.
     for index in 0..<7 {
-      let bead = SCNNode(geometry: SCNSphere(radius: 0.040 - 0.004 * CGFloat(index)))
+      let bead = SCNNode(geometry: SCNSphere(radius: 0.046 - 0.0045 * CGFloat(index)))
       bead.geometry?.firstMaterial = sparkMaterial; bead.opacity = 0
       haloPivot.addChildNode(bead); tail.append(bead)
     }
@@ -442,21 +477,42 @@ final class OnyxScene: MascotFigure {
     body.eulerAngles = SCNVector3(pose.pitch, pose.yaw, pose.roll)
     body.position = SCNVector3(0, Self.bodyY + (give - 1) * Self.half.y * 0.6, 0)
 
+    // What the body does: how fast it is carried and which way, a landing, a wave.
+    let carry = max(0, min(1, pose.gait)), way = max(-1, min(1, pose.travel))
+    stream = dt > 0 ? stream + (carry - stream) * min(1, dt * 7) : carry
+    if dt > 0, lastAir > 0.25, pose.air < 0.05 {
+      // It lands: the veins flash once and the halo is shaken.
+      flash = 1; landings += 1
+      haloY.velocity -= 1.6; haloTilt.velocity += 3.6; haloLean.velocity += landings % 2 == 0 ? 3.2 : -3.2
+    }
+    lastAir = pose.air
+    flash = dt > 0 ? flash * exp(-dt / 0.30) : 0
+    // Picked up: the halo starts, as the eyes do.
+    if dt > 0, pose.held, !wasHeld { haloY.velocity += 1.8; haloTilt.velocity += 1.6 }
+    wasHeld = pose.held
+    wavePhase = pose.wave > 0.01 ? wavePhase + dt * 2 * .pi * 3 : 0
+    // Three tips of the hat, each one up and back.
+    let tip = pose.wave * max(0, sin(wavePhase))
+
     // The veins breathe. They wait with a slow, strong pulse, and they flare with a voice.
     let glow = max(0, min(1, pose.glow))
     let breath = mood == .attention ? 0.72 + 0.28 * sin(pose.clock * 2.3)
       : mood == .working ? 0.84 + 0.2 * sin(pose.clock * 5.2) : 1 + 0.12 * sin(pose.clock * 1.7)
     let dull = mood == .offline ? 0.25 : 1.0
-    stone.emission.intensity = CGFloat(min(2.0, ((0.06 + 0.62 * glow) * breath + 0.7 * pose.voice) * dull))
-    aura.opacity = CGFloat((0.14 + 0.24 * glow + 0.12 * pose.voice) * dull)
+    stone.emission.intensity = CGFloat(min(3.0, ((0.06 + 0.62 * glow) * breath + 0.7 * pose.voice + 2.3 * flash + 0.5 * stream) * dull))
+    aura.opacity = CGFloat(min(1, (0.14 + 0.24 * glow + 0.12 * pose.voice + 0.45 * flash + 0.10 * stream) * dull))
     aura.scale = SCNVector3(pose.scale, pose.scale, 1)
 
     // The eyes look, blink and narrow. Each one faces a little outward on the stone, so
     // its look is turned back in: both eyes meet the person's.
+    // Carried, they look along the way of travel. In a wave they smile.
+    let carried = max(stream, pose.held ? 0.35 : 0)
+    let lookX = pose.pupilX * (1 - carried) + way * carried
     for (index, eye) in eyes.enumerated() {
       let side = index == 0 ? -1.0 : 1.0
-      eye.apply(open: pose.eyeOpen, squint: max(pose.squint, max(0, pose.smile - 0.6) * 0.6),
-                lookX: pose.pupilX - side * toeIn, lookY: pose.pupilY - toeDown, glow: glow * dull)
+      // At speed they narrow a little against the wind.
+      eye.apply(open: pose.eyeOpen, squint: max(pose.squint, max(0, pose.smile - 0.6) * 0.6, pose.wave * 0.85, stream * 0.3),
+                lookX: lookX - side * toeIn, lookY: pose.pupilY * (1 - 0.5 * carried) - toeDown, glow: min(1, glow + 0.5 * flash) * dull)
     }
     // The line of the voice is drawn again only when the voice has changed.
     let speaking = pose.voice > 0.03
@@ -472,37 +528,83 @@ final class OnyxScene: MascotFigure {
       sheenShell.opacity = CGFloat(min(1, sin(pose.sheen * .pi) * 1.6))
     } else if !sheenShell.isHidden { sheenShell.isHidden = true; sheenStep = -1 }
 
+    // Carried or thrown: the veins on the leading side light up, and flicker with each
+    // step. At a landing every vein flashes once.
+    let gust = stream * (1.25 + 0.25 * pose.stride)
+    if flash > 0.04, flash * 1.3 >= gust {
+      if windShown != 2 { windShown = 2; windMaterial.diffuse.contents = Self.flare }
+      windShell.isHidden = false
+      windShell.opacity = CGFloat(min(1, flash * 1.3 * dull))
+    } else if stream > 0.02 {
+      let side = way >= 0 ? 1 : -1
+      if windShown != side { windShown = side; windMaterial.diffuse.contents = Self.wind(right: side > 0) }
+      windShell.isHidden = false
+      windShell.opacity = CGFloat(min(1, gust * dull))
+    } else if !windShell.isHidden { windShell.isHidden = true }
+
     // The halo rides over the crown and follows it late. In sleep it sinks toward
     // the crown and slips to one side.
     let rest = mood == .asleep ? 1.0 : mood == .sleepy ? 0.4 : 0.0
     let reach = (Self.half.y * give + 0.30 - 0.15 * rest) * pose.scale
-    haloX.target = -sin(pose.roll) * reach + Self.lean * Self.half.y * pose.scale
+    // Carried, it trails behind and tips back like a hat in the wind, and it flutters
+    // with each step. In the air it floats a little higher.
+    haloX.target = -sin(pose.roll) * reach + Self.lean * Self.half.y * pose.scale - way * carry * 0.56 * pose.scale
     haloY.target = pose.bob + pose.lift + Double(body.position.y) + cos(pose.roll) * cos(pose.pitch) * reach
-    haloTilt.target = 0.34 + pose.pitch * 0.8 + pose.ringWobble + 0.08 * rest
-    haloLean.target = -0.18 + pose.roll * 0.9 - pose.yaw * 0.25 + pose.ringWobble * 0.6 - 0.16 * rest
+      + (0.10 * carry + 0.04 * carry * pose.stride + 0.22 * pose.air) * pose.scale
+    // Before a jump the stone crouches, and the halo tips forward with it.
+    let crouch = max(0, 1 - pose.squash)
+    haloTilt.target = 0.34 + pose.pitch * 0.8 + pose.ringWobble + 0.08 * rest + 0.12 * carry + 0.18 * pose.air + 1.1 * crouch
+    haloLean.target = -0.18 + pose.roll * 0.9 - pose.yaw * 0.25 + pose.ringWobble * 0.6 - 0.16 * rest + way * carry * 0.72 + carry * pose.stride * 0.14
     if dt > 0 { haloX.step(dt); haloY.step(dt); haloTilt.step(dt); haloLean.step(dt) }
     else { haloX.snap(); haloY.snap(); haloTilt.snap(); haloLean.snap() }
-    // The stone never passes through its halo: a quick hop pushes the ring up.
+    // The stone never passes through its halo. A jump throws the ring up: it keeps
+    // the speed of the crown, flies on above it, and the spring brings it back.
     let floor = pose.bob + pose.lift + Double(body.position.y) + (Self.half.y * give + 0.20 - 0.12 * rest) * pose.scale
-    if haloY.value < floor { haloY.value = floor; haloY.velocity = max(haloY.velocity, 0) }
-    haloPivot.position = SCNVector3(haloX.value, haloY.value, sin(pose.pitch) * reach)
-    haloPivot.eulerAngles = SCNVector3(haloTilt.value, 0, haloLean.value)
+    let push = dt > 0 ? (floor - lastFloor) / dt : 0
+    lastFloor = floor
+    if haloY.value < floor { haloY.value = floor; haloY.velocity = max(haloY.velocity, min(push * 1.15, 5)) }
+    // A wave raises the halo and tips it, as a hat is raised.
+    let leaning = haloLean.value + 0.66 * tip
+    // It stays inside the view: at the top of the highest jump, and at the side in a hard throw.
+    let extent = Self.ringRadius * min(1, (pow(sin(haloTilt.value), 2) + pow(sin(leaning), 2)).squareRoot()) + 0.04
+    let ceiling = 2.24 - extent * pose.scale
+    if haloY.value > ceiling { haloY.value = ceiling; haloY.velocity = min(haloY.velocity, 0) }
+    let side = 2.22 - (Self.ringRadius + 0.04) * pose.scale
+    if abs(haloX.value) > side { haloX.value = haloX.value < 0 ? -side : side; haloX.velocity = 0 }
+    haloPivot.position = SCNVector3(max(-side, min(side, haloX.value + 0.16 * tip * pose.scale)), min(ceiling, haloY.value + 0.26 * tip * pose.scale), sin(pose.pitch) * reach)
+    haloPivot.eulerAngles = SCNVector3(haloTilt.value, 0, leaning)
     haloPivot.scale = SCNVector3(pose.scale, pose.scale, pose.scale)
-    spark.position = SCNVector3(Self.ringRadius * cos(pose.sparkAngle), 0, Self.ringRadius * sin(pose.sparkAngle))
-    // The speed of the point, from one frame to the next. With no clock there is no speed and no tail.
+
+    // The point of light. Carried, it goes to the trailing side of the ring and its
+    // tail streams out behind it. At rest the tail follows it around the ring when it runs.
+    var angle = pose.sparkAngle
+    if stream > 0.01 {
+      var arc = (way >= 0 ? Double.pi : 0) - angle
+      arc = arc - (arc / (2 * .pi)).rounded() * 2 * .pi
+      angle += arc * min(1, stream * 1.4)
+    }
+    spark.position = SCNVector3(Self.ringRadius * cos(angle), 0, Self.ringRadius * sin(angle))
     var turned = pose.sparkAngle - lastSpark
     if turned < -Double.pi { turned += 2 * Double.pi } else if turned > Double.pi { turned -= 2 * Double.pi }
     lastSpark = pose.sparkAngle
     sparkSpeed = dt > 0 ? sparkSpeed + (abs(turned) / dt - sparkSpeed) * min(1, dt * 6) : 0
-    let gap = min(0.11, sparkSpeed * 0.022), shown = max(0, min(1, (sparkSpeed - 0.9) / 2.2))
+    let gap = min(0.11, sparkSpeed * 0.022), shown = max(0, min(1, (sparkSpeed - 0.9) / 2.2)) * (1 - stream)
+    let back = way >= 0 ? -1.0 : 1.0
     for (index, bead) in tail.enumerated() {
-      let angle = pose.sparkAngle - gap * Double(index + 1)
-      bead.position = SCNVector3(Self.ringRadius * cos(angle), 0, Self.ringRadius * sin(angle))
-      bead.opacity = CGFloat(shown * (1 - Double(index) / 7) * 0.75 * dull)
+      let step = Double(index + 1), around = angle - gap * step
+      let onRing = SIMD3(Self.ringRadius * cos(around), 0, Self.ringRadius * sin(around))
+      // Streaming: a line behind the point that waves a little, as a ribbon does.
+      let behind = SIMD3(Self.ringRadius * cos(angle) + back * (0.10 + 0.08 * carry) * step,
+                         0.014 * step * sin(pose.clock * 17 - step * 0.9) + 0.012 * step, Self.ringRadius * sin(angle))
+      let place = onRing + (behind - onRing) * stream
+      bead.position = SCNVector3(place.x, place.y, place.z)
+      bead.opacity = CGFloat(max(shown * (1 - Double(index) / 7) * 0.75, stream * (1 - Double(index) / 8) * 0.9) * dull)
     }
-    let bright = CGFloat(0.7 + 0.5 * glow)
+    let bright = CGFloat(0.7 + 0.5 * glow + 0.35 * stream)
     spark.scale = SCNVector3(bright, bright, bright)
-    sparkGlow.opacity = CGFloat((0.25 + 0.75 * glow) * dull)
+    // Streaming, its glow is long, as the head of a comet.
+    sparkGlow.scale = SCNVector3(1 + 1.5 * stream, 1 + 0.2 * stream, 1)
+    sparkGlow.opacity = CGFloat(min(1, 0.25 + 0.75 * glow + 0.4 * stream) * dull)
     ringMaterial.emission.intensity = CGFloat((0.30 + 0.30 * glow) * dull)
   }
 }

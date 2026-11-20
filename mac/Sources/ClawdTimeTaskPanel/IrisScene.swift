@@ -6,11 +6,19 @@ import TaskPanelCore
 /// titanium, a front element of coated glass, and behind it aperture blades
 /// that open on a well of light. A blink closes the blades and the lid, a look
 /// moves the inner group, and the focus scale turns while agents work.
+///
+/// The lens hangs in a gimbal of two rings. The outer hoop is what a hand holds:
+/// it swings under the hand and turns into the way of travel at once. The lens is
+/// heavy: it swings behind on its pivots, rocks with each step, and swings past
+/// level and back when the hoop stops.
 final class IrisScene: MascotFigure {
   let scene = SCNScene()
   /// A little closer than the other styles, with the same frame: the layers of the lens shift more against each other.
   let camera = Stage.camera(fieldOfView: 30, distance: 8.7, height: 0.02)
-  private let root = SCNNode(), yoke = SCNNode(), lens = SCNNode(), focus = SCNNode(), group = SCNNode()
+  private let root = SCNNode(), lens = SCNNode(), focus = SCNNode(), group = SCNNode()
+  /// The gimbal: the hoop turns as a whole, the cradle turns in it about the upright pivots, the lens tips in the cradle.
+  /// Each ring's metal sits in its own node, so a press can flex the ring and not what hangs in it.
+  private let hoop = SCNNode(), hoopBand = SCNNode(), cradle = SCNNode(), cradleBand = SCNNode()
   private var blades: [SCNNode] = []
   private let topLid = SCNNode(), bottomLid = SCNNode()
   private let sensor = SCNNode(), core = SCNNode(), well = SCNNode(), spill = SCNNode(), aura = SCNNode()
@@ -26,14 +34,25 @@ final class IrisScene: MascotFigure {
   private var mood = MascotMood.idle
   private var lastClock: Double?
   private var lastSpark: Double?
-  private var turn = 0.0
-  private var yokeYaw = Spring(0, response: 0.42, dampingRatio: 0.5)
-  private var yokeRoll = Spring(0, response: 0.5, dampingRatio: 0.45)
+  private var focusTurn = 0.0
+  private var lastTravel = 0.0, lastAir = 0.0, lastWave = 0.0, waveStart = -10.0, wasHeld = false
+  /// The hoop is light: it turns into the way of travel almost at once.
+  private var hoopYaw = Spring(0, response: 0.20, dampingRatio: 0.8)
+  /// The lens is heavy. Side to side on the upright pivots: it swings a few passes before it settles.
+  private var swing = Spring(0, response: 0.62, dampingRatio: 0.2)
+  /// Up and down on the side pivots.
+  private var tilt = Spring(0, response: 0.34, dampingRatio: 0.32)
+  /// Around its own axis: the hoop swings under the hand, the lens follows late and less.
+  private var level = Spring(0, response: 0.6, dampingRatio: 0.45)
+  /// The blades at a landing: half shut at once, then open again.
+  private var flinch = Spring(0, response: 0.30, dampingRatio: 0.55)
+  /// A hand takes hold: the aperture opens wide for a moment.
+  private var grab = Spring(0, response: 0.45, dampingRatio: 0.8)
   private var hunt = Spring(0, response: 0.5, dampingRatio: 1)
 
   private static let bladeCount = 9, lampCount = 32
   /// The lens is drawn a little larger than it is built, to fill its frame.
-  private static let size = 1.07
+  private static let size = 1.0
   /// The hole at the bottom of the baffle, the height of the lids' hinges, and the depths of the layers.
   private static let throat = 0.56, hinge = 0.67
   private static let glassBase = 0.335, lidDepth = 0.104, bladeDepth = 0.03
@@ -269,7 +288,7 @@ final class IrisScene: MascotFigure {
       context.fillEllipse(in: CGRect(x: 88, y: 143, width: 18, height: 18))
       context.restoreGState()
       box(CGRect(x: 52, y: 120, width: 7, height: 56), 0xDDE8FF, 0.7, soft: 5)
-      box(CGRect(x: 44, y: 216, width: 170, height: 16), 0xFFFFFF, 0.55, soft: 9)
+      box(CGRect(x: 44, y: 216, width: 170, height: 16), 0xFFFFFF, 0.42, soft: 9)
       // Two strips behind the lens draw its edges out of a dark ground.
       box(CGRect(x: 310, y: 100, width: 14, height: 96), 0xBFD0FF, 1, soft: 8)
       box(CGRect(x: 452, y: 100, width: 14, height: 96), 0xFFD9B8, 1, soft: 8)
@@ -286,7 +305,9 @@ final class IrisScene: MascotFigure {
     aura.geometry = SCNPlane(width: 4.6, height: 4.6); aura.geometry?.firstMaterial = auraMaterial
     aura.position = SCNVector3(0, 0, -1.2)
     root.addChildNode(aura)
-    root.addChildNode(yoke); root.addChildNode(lens)
+    root.addChildNode(hoop)
+    hoop.addChildNode(hoopBand); hoop.addChildNode(cradle)
+    cradle.addChildNode(cradleBand); cradle.addChildNode(lens)
 
     let matte = Finish.solid(0x08090B, roughness: 0.85)
     let gunmetal = Finish.solid(0x50535B, roughness: 0.42, metalness: 0.9)
@@ -393,29 +414,41 @@ final class IrisScene: MascotFigure {
       lens.addChildNode(node); lens.addChildNode(glow); lamps.append(node); lampGlows.append(glow)
     }
 
-    // The yoke: a machined hoop that the lens hangs in, with its two pivots and a tally light.
-    _ = Self.part(Self.turned([(1.590, -0.028), (1.610, -0.028), (1.610, -0.028), (1.626, -0.012), (1.626, -0.012), (1.626, 0.012), (1.626, 0.012), (1.610, 0.028),
-      (1.610, 0.028), (1.590, 0.028), (1.590, 0.028), (1.574, 0.012), (1.574, 0.012), (1.574, -0.012), (1.574, -0.012), (1.590, -0.028)], around: 160), titanium, in: yoke)
-    for side in [-1.0, 1.0] {
-      // The pin reaches well into the barrel, so it stays joined when a press flexes the hoop.
-      let pin = SCNNode(geometry: SCNCylinder(radius: 0.03, height: 0.40)); pin.geometry?.firstMaterial = gunmetal
-      pin.eulerAngles.z = .pi / 2; pin.position = SCNVector3(side * 1.41, 0, 0)
-      let boss = SCNNode(geometry: SCNCylinder(radius: 0.085, height: 0.075)); boss.geometry?.firstMaterial = anodised
-      (boss.geometry as? SCNCylinder)?.radialSegmentCount = 40
-      boss.eulerAngles.x = .pi / 2; boss.position = SCNVector3(side * 1.60, 0, 0.012)
-      let cap = SCNNode(geometry: SCNCylinder(radius: 0.04, height: 0.09)); cap.geometry?.firstMaterial = titanium
-      cap.eulerAngles.x = .pi / 2; cap.position = SCNVector3(side * 1.60, 0, 0.016)
-      for node in [pin, boss, cap] { yoke.addChildNode(node) }
+    // The gimbal. The outer hoop carries the upright pivots and the tally light.
+    func ring(_ middle: Double, _ half: Double, _ thick: Double, _ material: SCNMaterial, in parent: SCNNode) {
+      let cut = half * 0.55, low = thick * 0.45
+      _ = Self.part(Self.turned([(middle - half + cut, -thick), (middle + half - cut, -thick), (middle + half - cut, -thick), (middle + half, -low), (middle + half, -low),
+        (middle + half, low), (middle + half, low), (middle + half - cut, thick), (middle + half - cut, thick), (middle - half + cut, thick), (middle - half + cut, thick),
+        (middle - half, low), (middle - half, low), (middle - half, -low), (middle - half, -low), (middle - half + cut, -thick)], around: 160), material, in: parent)
     }
+    /// A pivot: a pin along `axis`, a boss on the ring and a bright cap.
+    func pivot(at place: SCNVector3, pinFrom start: Double, to end: Double, upright: Bool, in parent: SCNNode) {
+      let pin = SCNNode(geometry: SCNCylinder(radius: 0.027, height: CGFloat(abs(end - start)))); pin.geometry?.firstMaterial = gunmetal
+      let sign: Double = (upright ? Double(place.y) : Double(place.x)) < 0 ? -1 : 1, middle = sign * (start + end) / 2
+      if upright { pin.position = SCNVector3(0, middle, 0) } else { pin.eulerAngles.z = .pi / 2; pin.position = SCNVector3(middle, 0, 0) }
+      let boss = SCNNode(geometry: SCNCylinder(radius: 0.066, height: 0.066)); boss.geometry?.firstMaterial = anodised
+      (boss.geometry as? SCNCylinder)?.radialSegmentCount = 40
+      boss.eulerAngles.x = .pi / 2; boss.position = SCNVector3(place.x, place.y, 0.008)
+      let cap = SCNNode(geometry: SCNCylinder(radius: 0.032, height: 0.08)); cap.geometry?.firstMaterial = titanium
+      cap.eulerAngles.x = .pi / 2; cap.position = SCNVector3(place.x, place.y, 0.012)
+      for node in [pin, boss, cap] { parent.addChildNode(node) }
+    }
+    let far = 1.56, near = 1.43
+    ring(far, 0.025, 0.027, titanium, in: hoopBand)
+    for side in [-1.0, 1.0] { pivot(at: SCNVector3(0, side * far, 0), pinFrom: near + 0.01, to: far - 0.015, upright: true, in: hoopBand) }
+    // The cradle: the inner ring. The lens tips in it on the two side pivots, which reach well into the barrel.
+    let steel = Finish.solid(0xA6A198, roughness: 0.30, metalness: 1)
+    ring(near, 0.020, 0.022, steel, in: cradleBand)
+    for side in [-1.0, 1.0] { pivot(at: SCNVector3(side * near, 0, 0), pinFrom: 1.20, to: near - 0.012, upright: false, in: cradleBand) }
     let house = SCNNode(geometry: SCNCylinder(radius: 0.075, height: 0.08)); house.geometry?.firstMaterial = anodised
     (house.geometry as? SCNCylinder)?.radialSegmentCount = 40
     let place = 0.52
-    house.eulerAngles.x = .pi / 2; house.position = SCNVector3(1.60 * sin(place), 1.60 * cos(place), 0.014)
+    house.eulerAngles.x = .pi / 2; house.position = SCNVector3(far * sin(place), far * cos(place), 0.014)
     let bulb = SCNSphere(radius: 0.05); bulb.firstMaterial = tallyMaterial
-    tally.geometry = bulb; tally.scale = SCNVector3(1, 1, 0.6); tally.position = SCNVector3(1.60 * sin(place), 1.60 * cos(place), 0.055)
+    tally.geometry = bulb; tally.scale = SCNVector3(1, 1, 0.6); tally.position = SCNVector3(far * sin(place), far * cos(place), 0.055)
     tallyGlow.geometry = SCNPlane(width: 0.6, height: 0.6); tallyGlow.geometry?.firstMaterial = tallyGlowMaterial
-    tallyGlow.position = SCNVector3(1.60 * sin(place), 1.60 * cos(place), 0.08); tallyGlow.renderingOrder = 21
-    for node in [house, tally, tallyGlow] { yoke.addChildNode(node) }
+    tallyGlow.position = SCNVector3(far * sin(place), far * cos(place), 0.08); tallyGlow.renderingOrder = 21
+    for node in [house, tally, tallyGlow] { hoopBand.addChildNode(node) }
 
     for node in [Stage.light(.ambient, 0xE8ECFF, 160),
                  Stage.light(.directional, 0xFFF7EE, 900, angles: SCNVector3(-0.75, -0.55, 0)),
@@ -455,38 +488,84 @@ final class IrisScene: MascotFigure {
     lastClock = pose.clock
     let lit = mood == .offline ? 0.0 : 1.0, glow = max(0, min(1, pose.glow))
 
+    let travel = max(-1, min(1, pose.travel)), gait = max(0, min(1, pose.gait))
+    let air = max(0, min(1, pose.air)), wave = max(0, min(1, pose.wave))
+
+    // What the pointer asks of the eye. The pose also turns the body into its way of
+    // travel, by half a radian at full speed: that part belongs to the hoop.
+    let turn = 0.4 * travel
+    let asked = pose.yaw * 0.8 - turn
     // It never looks quite straight ahead: it rests a little turned, and it scans slowly.
-    // When it follows the pointer, that turn takes over.
-    let free = max(0, 1 - (abs(pose.yaw) + abs(pose.pitch)) / 0.3)
-    let yaw = pose.yaw * 0.8 + free * (-0.16 + 0.07 * sin(pose.clock * 0.45))
-    let pitch = pose.pitch * 0.9 + free * (-0.07 + 0.04 * sin(pose.clock * 0.33 + 1.3))
-    yokeYaw.target = yaw; yokeRoll.target = pose.roll; hunt.target = mood == .working ? 1 : 0
-    if dt > 0 { yokeYaw.step(dt); yokeRoll.step(dt); hunt.step(dt) } else { yokeYaw.snap(); yokeRoll.snap(); hunt.snap() }
+    // When it follows the pointer or is carried, that takes over.
+    let free = max(0, 1 - (abs(asked) + abs(pose.pitch)) / 0.3) * (1 - gait)
+    let aimYaw = asked + free * (-0.16 + 0.07 * sin(pose.clock * 0.45))
+    let aimPitch = pose.pitch * 0.9 + free * (-0.07 + 0.04 * sin(pose.clock * 0.33 + 1.3))
+
+    // What just happened: a greeting begins, the body lands, a hand takes hold.
+    if wave > 0.001 && lastWave <= 0.001 { waveStart = pose.clock }
+    let waved = pose.clock - waveStart
+    if dt > 0 && lastAir > 0.05 && air <= 0.001 { flinch.value = 0.55 }
+    if pose.held && !wasHeld { grab.value = 1 }
+    lastWave = wave; lastAir = air; wasHeld = pose.held
+
+    // The hoop leads. The lens hangs back from a start, swings on after a stop, and rocks with each step.
+    hoopYaw.target = 0.3 * aimYaw + 1.1 * turn
+    swing.target = -0.35 * travel + 0.12 * gait * pose.stride
+    tilt.target = -0.38 * air + 0.06 * gait * (2 * abs(pose.stride) - 1)
+    level.target = 0.5 * pose.roll
+    hunt.target = mood == .working ? 1 : 0
+    flinch.target = 0; grab.target = 0
+    if dt > 0 {
+      // A change of speed pushes the heavy lens the other way: it hangs back from a
+      // start and swings on past level after a stop. A sudden turn, as at the edge
+      // of the screen, also makes the blades wince.
+      swing.velocity -= (travel - lastTravel) * 6
+      if abs(travel - lastTravel) > 0.18 { flinch.value = max(flinch.value, 0.4) }
+      hoopYaw.step(dt); swing.step(dt); tilt.step(dt); level.step(dt); hunt.step(dt); flinch.step(dt); grab.step(dt)
+    } else {
+      hoopYaw.snap(); swing.snap(); tilt.snap(); level.snap(); hunt.snap(); flinch.snap(); grab.snap()
+    }
+    lastTravel = travel
 
     root.position = SCNVector3(0, pose.bob + pose.lift, 0)
-    root.scale = SCNVector3(Self.size, Self.size, Self.size)
-    // Metal and glass give only a little. The hoop gives more.
+    let size = Self.size * pose.scale
+    root.scale = SCNVector3(size, size, size)
+    let hoopPitch = aimPitch * 0.25, hoopRoll = pose.roll + pose.ringWobble * 1.2
+    hoop.eulerAngles = SCNVector3(hoopPitch, hoopYaw.value, hoopRoll)
+    // A greeting: the lens nods from side to side three times.
+    let nod = 0.32 * wave * sin(2 * .pi * 3 * waved)
+    // The upright pivots turn freely: the hoop's turn does not carry the lens with it.
+    let side = max(-1.15, min(1.15, aimYaw + swing.value + nod - hoopYaw.value))
+    cradle.eulerAngles = SCNVector3(0, side, 0)
+    let tip = max(-0.7, min(0.7, aimPitch + tilt.value - hoopPitch))
+    lens.eulerAngles = SCNVector3(tip, 0, level.value - hoopRoll)
+    // Where the lens points in the end, for the light in its glass.
+    let yaw = hoopYaw.value + side, pitch = hoopPitch + tip
+    // Metal and glass give only a little. The rings give more.
     let give = 1 + (pose.squash - 1) * 0.3, wide = 1 / max(0.3, give).squareRoot()
-    lens.scale = SCNVector3(pose.scale * wide, pose.scale * give, pose.scale * wide)
-    lens.eulerAngles = SCNVector3(pitch, yaw, pose.roll * 0.85)
-    let flex = 1 + (pose.squash - 1) * 0.55
-    yoke.scale = SCNVector3(pose.scale / max(0.3, flex).squareRoot(), pose.scale * flex, pose.scale)
-    yoke.eulerAngles = SCNVector3(pitch * 0.25, yokeYaw.value, yokeRoll.value + pose.ringWobble * 1.2)
+    lens.scale = SCNVector3(wide, give, wide)
+    let flex = 1 + (pose.squash - 1) * 0.55, bend = 1 + (pose.squash - 1) * 0.42
+    hoopBand.scale = SCNVector3(1 / max(0.3, flex).squareRoot(), flex, 1)
+    cradleBand.scale = SCNVector3(1 / max(0.3, bend).squareRoot(), bend, 1)
 
     // The focus ring: it creeps at rest, and hunts back and forth while agents work.
+    // Carried or thrown, it spins with the speed, the way a ring spins when it is brushed.
     if let last = lastSpark {
       var delta = pose.sparkAngle - last
       if delta < -Double.pi { delta += 2 * .pi } else if delta > .pi { delta -= 2 * .pi }
-      turn += delta * 0.22
-    } else { turn = pose.sparkAngle * 0.22 }
+      focusTurn += delta * 0.22
+    } else { focusTurn = pose.sparkAngle * 0.22 }
     lastSpark = pose.sparkAngle
-    focus.eulerAngles.z = -(turn + hunt.value * 0.5 * sin(pose.sparkAngle))
+    focusTurn += travel * 9 * dt
+    focus.eulerAngles.z = -(focusTurn + hunt.value * 0.5 * sin(pose.sparkAngle))
 
     // The aperture: the blades swing in as the eye closes.
     let open = max(0, min(1.3, pose.eyeOpen))
     let squint = max(0, min(1, pose.squint)), smile = max(0, min(1, pose.smile))
     let breath = 1 + 0.035 * sin(pose.clock * 1.3)
-    let reach = min(0.47, (0.015 + 0.345 * min(1, open) + 0.34 * max(0, open - 1)) * breath + 0.07 * squint)
+    // Off the ground and in a hand it opens wide. At a landing the blades snap half shut and open again.
+    let extra = 0.07 * squint + 0.10 * air + 0.06 * max(0, grab.value) + (pose.held ? 0.03 : 0)
+    let reach = min(0.47, (0.015 + 0.345 * min(1, open) + 0.34 * max(0, open - 1)) * breath + extra) * max(0.35, min(1.08, 1 - flinch.value))
     let twist = (1 - reach / 0.46) * 0.55
     for (index, blade) in blades.enumerated() {
       let angle = 2 * Double.pi * Double(index) / Double(Self.bladeCount) + twist
@@ -506,7 +585,8 @@ final class IrisScene: MascotFigure {
 
     // The inner group looks where the eyes of the stone would look.
     // In a smile the light rides up into the arch that the lower lid leaves.
-    let aim = (x: pose.pupilX * 0.19, y: pose.pupilY * 0.15 * (1 - squint) + 0.27 * squint)
+    // Carried, the eye looks along its way: the body swings behind, the gaze leads.
+    let aim = (x: max(-0.21, min(0.21, pose.pupilX * 0.19 + 0.17 * travel)), y: pose.pupilY * 0.15 * (1 - squint) + 0.27 * squint)
     group.position = SCNVector3(aim.x, aim.y, 0)
     group.eulerAngles = SCNVector3(-pose.pupilY * 0.10, pose.pupilX * 0.12, 0)
     sensor.opacity = lit * (0.30 + 0.70 * glow)
@@ -530,7 +610,9 @@ final class IrisScene: MascotFigure {
       let height = abs(atan2(sin(angle - .pi), cos(angle - .pi))) / .pi
       let level = voice * (0.80 + 0.20 * sin(pose.clock * 19 + Double(index % 2) * 1.3))
       let meter = voice > 0.02 ? max(0, min(1, (level - height) * 9 + 0.5)) : 0
-      let bright = CGFloat(lit * max(chase * (1 - min(1, voice * 2)), meter))
+      // A greeting: one bright point runs once around the ring.
+      let run = wave > 0.001 ? pow(max(0, cos(angle - 2 * .pi * min(1, max(0, waved / 0.95)))), 6) * min(1, wave * 3) : 0
+      let bright = CGFloat(lit * max(chase * (1 - min(1, voice * 2)) * (1 - min(1, wave * 3)), meter, run))
       lamp.opacity = bright; lampGlows[index].opacity = bright * 0.8
     }
     tally.opacity = CGFloat(lit * (0.35 + 0.65 * glow)); tallyGlow.opacity = CGFloat(lit * (0.15 + 0.75 * glow))

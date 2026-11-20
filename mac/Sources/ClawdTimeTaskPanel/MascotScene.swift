@@ -39,6 +39,10 @@ final class MascotScene: MascotFigure {
   private let haloMaterial = SCNMaterial()
   private let ringMaterial = SCNMaterial()
   private var mood = MascotMood.idle
+  // The ring is loose around the stone: it trails when the stone is carried and lags in a jump.
+  private var trail = Spring(0, response: 0.36, dampingRatio: 0.42)
+  private var drop = Spring(0, response: 0.28, dampingRatio: 0.48)
+  private var lastClock = 0.0
 
   // The stone: a superellipsoid, wider than it is tall, a little narrower at the top.
   private static let half = (x: 1.14, y: 1.02, z: 0.98)
@@ -295,14 +299,22 @@ final class MascotScene: MascotFigure {
       let white = NSColor(srgbRed: 1, green: 0.984, blue: 0.957, alpha: 1).blended(withFraction: closed, of: Self.color(0x2A1B2E)) ?? .white
       whites[index].diffuse.contents = white; whites[index].emission.contents = white
       whites[index].emission.intensity = 0.18 * (1 - closed)
-      pupils[index].position.x = pose.pupilX * 0.088
+      // Carried, it looks where it goes.
+      pupils[index].position.x = max(-0.088, min(0.088, pose.pupilX * 0.088 + pose.travel * pose.gait * 0.06))
       pupils[index].position.y = pose.pupilY * 0.125
       pupils[index].opacity = CGFloat(max(0, min(1, (pose.eyeOpen - 0.12) / 0.2)))
     }
     setSmile(pose.smile)
 
+    let dt = max(0, min(0.1, pose.clock - lastClock)); lastClock = pose.clock
+    trail.target = -pose.travel * pose.gait * 0.42; trail.step(dt)
+    drop.target = -pose.air * 0.30; drop.step(dt)
+    // A greeting: the ring tips from side to side, like a hat that is raised.
+    let tip = pose.wave * 0.34 * sin(pose.clock * 2 * .pi * 3)
     ringPivot.scale = SCNVector3(pose.scale, pose.scale, pose.scale)
-    ringPivot.eulerAngles = SCNVector3(0.36 + pose.ringWobble, 0, -0.30 + pose.roll * 0.5 + pose.ringWobble * 0.6)
+    ringPivot.position = SCNVector3(trail.value * 0.55, drop.value, 0)
+    ringPivot.eulerAngles = SCNVector3(0.36 + pose.ringWobble + 0.10 * pose.stride * pose.gait, 0,
+      -0.30 + pose.roll * 0.5 + pose.ringWobble * 0.6 + trail.value * 0.9 + tip)
     spark.position = SCNVector3(Self.ringRadius * cos(pose.sparkAngle), 0, Self.ringRadius * sin(pose.sparkAngle))
     let glow = CGFloat(pose.glow)
     spark.scale = SCNVector3(0.75 + 0.45 * glow, 0.75 + 0.45 * glow, 0.75 + 0.45 * glow)
