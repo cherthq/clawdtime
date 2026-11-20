@@ -513,6 +513,27 @@ describe("the person's yes", () => {
     expect((await worker.answer("yes")).message).toBe(stoppedText);
     expect(hands.sent).toEqual([]);
   });
+
+  it("is not taken after the time limit: a late yes sends nothing", async () => {
+    const { worker, hands, waiting, clock, journal, said } = setup(
+      [click, done],
+      { screens: [send] },
+    );
+    await worker.submit("r1", "Send the mail");
+    await waiting();
+    clock.now += 15 * 60_000;
+    expect((await worker.answer("yes")).message).toBe(
+      "I stopped at the time limit of 15 minutes. The task is not finished.",
+    );
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot()).toMatchObject({
+      state: "blocked",
+      canStop: false,
+    });
+    expect(journal.get("r1")).toMatchObject({ reason: "time_limit" });
+    expect(said.at(-1)).toMatch(/time limit of 15 minutes/);
+  });
 });
 
 describe("a secure field", () => {
@@ -924,6 +945,21 @@ describe("what the planner may not do", () => {
       message:
         "I stopped at the time limit of 15 minutes. The task is not finished.",
     });
+  });
+
+  it("the time limit ends a request whose planner never answers", async () => {
+    const { worker, hands, journal } = setup(
+      [() => new Promise<Action>(() => {})],
+      { maxMs: 30 },
+    );
+    await worker.submit("r1", "Think forever");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("blocked");
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "time_limit",
+    });
+    expect(hands.sent).toEqual([]);
   });
 
   it("a planner that fails twice in a row ends the request, with nothing sent", async () => {

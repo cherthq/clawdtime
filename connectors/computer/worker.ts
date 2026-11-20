@@ -659,8 +659,9 @@ export class ComputerWorker implements DesktopExecutorPort {
           run.fresh = run.observation !== null;
         }
         let planned: Awaited<ReturnType<Planner["next"]>> | null;
+        let late: NodeJS.Timeout | undefined;
         try {
-          // Stop does not wait for the planner.
+          // Neither Stop nor the time limit waits for the planner.
           planned = await Promise.race([
             this.planner.next({
               goal: run.goal,
@@ -669,6 +670,13 @@ export class ComputerWorker implements DesktopExecutorPort {
               page: run.page,
             }),
             run.halted,
+            new Promise<null>((resolve) => {
+              late = setTimeout(
+                () => resolve(null),
+                Math.max(0, run.deadline - this.now()) + 10,
+              );
+              late.unref();
+            }),
           ]);
         } catch {
           // What the planner threw can hold what was sent to it: it is not passed on.
@@ -676,8 +684,13 @@ export class ComputerWorker implements DesktopExecutorPort {
           if (++run.plannerFailures >= 2)
             return this.finish(run, "blocked", "planner_failed", plannerText);
           continue;
+        } finally {
+          clearTimeout(late);
         }
-        if (this.halted(run) || !planned) return;
+        if (this.halted(run)) return;
+        // No answer and no Stop: the time ran out while the planner chose.
+        if (!planned)
+          return this.finish(run, "blocked", "time_limit", this.timeText);
         run.plannerFailures = 0;
         run.step++;
         await this.act(
