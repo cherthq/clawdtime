@@ -65,10 +65,27 @@ clawdtime trove playbook --out playbook.md
 ```
 
 A request is grouped by a narrow key: a shell command by its program and its
-first plain word (`git push`, `npm test`), every other tool by its name. A
-command with pipes, lists or substitutions gets the bare key `Bash`, and the bare
-key cannot become a rule. An answer given in the terminal is not in the trove,
-because ClawdTime does not see which answer it was.
+first plain word (`git push`, `npm test`), every other tool by its name. The key
+is made from the command as the agent sent it, before it is cut for the screen.
+
+A rule never covers more than the command that you saw:
+
+- A command with pipes, lists or substitutions, a command with a line break, a
+  command longer than the 600 characters that you are shown, and a command whose
+  program is a path (`./git status`) all get the bare key `Bash`. The bare key
+  cannot become a rule and no rule matches it.
+- A key that is the program alone (`rm` from `rm build/tmp.txt`, `ls` from
+  `ls -la`) counts your past answers, but it cannot become a rule: it would
+  cover every use of that program.
+- A rule for a file tool (Edit, MultiEdit, Write, NotebookEdit, Read) covers
+  only a file inside the rule's project folder, also when a link leads out of
+  it. A request for a file outside the folder cannot be remembered.
+
+The panel offers **Always in this project** only where a rule can be made, and
+`approve ID --always` says so when it cannot.
+
+An answer given in the terminal is not in the trove, because ClawdTime does not
+see which answer it was.
 
 ## Memory
 

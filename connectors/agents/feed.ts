@@ -26,6 +26,7 @@ import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { title } from "./render.js";
+import { rememberable } from "./trove.js";
 import type { TaskPort } from "./tasks.js";
 import {
   incidentSentence,
@@ -537,10 +538,7 @@ export class BoardFeed implements AgentBoardPort {
           holdUntil: request.holdUntil,
           allowedBefore: before.allowed,
           deniedBefore: before.denied,
-          canRemember:
-            request.kind === "permission" &&
-            request.cwd !== null &&
-            request.pattern !== "Bash",
+          canRemember: request.kind === "permission" && rememberable(request),
           recalled: this.desk.recalled(request),
         };
       }),

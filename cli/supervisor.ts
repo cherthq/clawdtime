@@ -37,6 +37,7 @@ import {
   type ModelClient,
 } from "../connectors/agents/brain.js";
 import { focusSession } from "../connectors/agents/focus.js";
+import { rememberable } from "../connectors/agents/trove.js";
 import {
   speak,
   speechSettings,
@@ -371,7 +372,11 @@ export async function supervisorCli(
       }
       return print(
         command === "approve"
-          ? `Allowed${flags.always ? ", and remembered for this project" : ""}. The agent continues.`
+          ? !flags.always
+            ? "Allowed. The agent continues."
+            : request.kind === "permission" && rememberable(request)
+              ? "Allowed, and remembered for this project. The agent continues."
+              : "Allowed this once. A rule cannot cover this request, so nothing is remembered. The agent continues."
           : command === "deny"
             ? "Denied. The agent is told."
             : "Answered. The agent continues.",

@@ -88,7 +88,9 @@ async function handle(raw: string) {
   const facts = {
     agent,
     cwd,
-    pattern: requestPattern(described.tool, described.summary),
+    pattern:
+      described.pattern ?? requestPattern(described.tool, described.summary),
+    path: described.path ?? null,
   };
 
   // A rule the person made answers at once. Nothing else is ever answered for them.

@@ -15,6 +15,7 @@ import {
   decisionValues,
   decisionVias,
   requestPattern,
+  shownLength,
   Trove,
   type TroveEntry,
 } from "./trove.js";
@@ -45,6 +46,8 @@ export const requestSchema = z
     tool: text(80),
     summary: text(600),
     pattern: text(160),
+    /** The file that a file tool asks for, as the agent gave it. A rule checks it. */
+    path: text(4096).nullable().optional(),
     /** The choices of a question. Empty for a permission. */
     options: z.array(text(200)).max(8),
     createdAt: z.number().int().nonnegative(),
@@ -93,6 +96,10 @@ export interface Described {
   tool: string;
   summary: string;
   options: string[];
+  /** The key of the request, made from its raw text. Absent: it is made from the summary. */
+  pattern?: string;
+  /** The file that a file tool asks for, as the agent gave it. */
+  path?: string | null;
 }
 
 /**
@@ -110,21 +117,30 @@ export function describeRequest(
     const command = Array.isArray(toolInput.command)
       ? toolInput.command.filter((part) => typeof part === "string").join(" ")
       : toolInput.command;
+    const file =
+      toolInput.file_path ?? toolInput.path ?? toolInput.notebook_path;
+    // A path that is too long to keep cannot be checked by a rule: the agent asks by itself.
+    if (typeof file === "string" && file.length > 4096) return null;
     const summary =
-      clip(command, 600) ||
-      clip(
-        toolInput.file_path ?? toolInput.path ?? toolInput.notebook_path,
-        600,
-      ) ||
+      clip(command, shownLength) ||
+      clip(file, shownLength) ||
       clip(
         toolInput.url ??
           toolInput.query ??
           toolInput.description ??
           toolInput.prompt,
-        600,
+        shownLength,
       ) ||
       tool;
-    return { kind: "permission", tool, summary, options: [] };
+    return {
+      kind: "permission",
+      tool,
+      summary,
+      options: [],
+      // The key comes from the raw command, before its spaces change and before the cut.
+      pattern: requestPattern(tool, typeof command === "string" ? command : ""),
+      path: typeof file === "string" && file ? file : null,
+    };
   }
   if (input.hook_event_name !== "PreToolUse") return null;
   if (tool === "AskUserQuestion") {
@@ -137,16 +153,26 @@ export function describeRequest(
       .map((option) => clip(record(option)?.label, 200))
       .filter(Boolean)
       .slice(0, 8);
-    const question = clip(only.question, 600);
+    const question = clip(only.question, shownLength);
     if (!question || !options.length) return null;
-    return { kind: "question", tool, summary: question, options };
+    return {
+      kind: "question",
+      tool,
+      summary: question,
+      options,
+      pattern: requestPattern(tool, ""),
+      path: null,
+    };
   }
   if (tool === "ExitPlanMode")
     return {
       kind: "plan",
       tool,
-      summary: clip(toolInput.plan, 600) || "A plan is ready for review.",
+      summary:
+        clip(toolInput.plan, shownLength) || "A plan is ready for review.",
       options: [],
+      pattern: requestPattern(tool, ""),
+      path: null,
     };
   return null;
 }
@@ -316,7 +342,10 @@ export class DecisionDesk {
       kind: facts.described.kind,
       tool: facts.described.tool,
       summary: facts.described.summary,
-      pattern: requestPattern(facts.described.tool, facts.described.summary),
+      pattern:
+        facts.described.pattern ??
+        requestPattern(facts.described.tool, facts.described.summary),
+      path: facts.described.path ?? null,
       options: facts.described.options,
       createdAt: at,
       holdUntil: at + Math.round(facts.holdSeconds * 1000),

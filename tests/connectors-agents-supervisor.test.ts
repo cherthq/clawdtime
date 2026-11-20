@@ -1,8 +1,11 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,7 +50,11 @@ import {
 } from "../connectors/agents/input.js";
 import { inventory } from "../connectors/agents/inventory.js";
 import { headline, renderDeck } from "../connectors/agents/report.js";
-import { requestPattern, Trove } from "../connectors/agents/trove.js";
+import {
+  rememberable,
+  requestPattern,
+  Trove,
+} from "../connectors/agents/trove.js";
 import type {
   AgentSession,
   BoardSnapshot,
@@ -122,6 +129,8 @@ describe("what an agent asks", () => {
       tool: "Bash",
       summary: "npm test -- --watch",
       options: [],
+      pattern: "Bash:npm test",
+      path: null,
     });
     expect(
       describeRequest({
@@ -165,6 +174,8 @@ describe("what an agent asks", () => {
       tool: "AskUserQuestion",
       summary: "Which framework?",
       options: ["React", "Vue"],
+      pattern: "AskUserQuestion",
+      path: null,
     });
     // Several questions, or several choices at once, stay in the terminal.
     expect(
@@ -507,9 +518,7 @@ describe("trove", () => {
     expect(requestPattern("Bash", "git push origin main")).toBe(
       "Bash:git push",
     );
-    expect(requestPattern("Bash", "/usr/local/bin/make deploy")).toBe(
-      "Bash:make deploy",
-    );
+    expect(requestPattern("Bash", "make deploy")).toBe("Bash:make deploy");
     expect(requestPattern("Bash", "ls -la")).toBe("Bash:ls");
     expect(requestPattern("shell", "cargo build")).toBe("Bash:cargo build");
     // Anything with shell syntax keeps the bare key, and the bare key takes no rule.
@@ -527,6 +536,137 @@ describe("trove", () => {
       "mcp__github__create_issue",
     );
     expect(requestPattern("", "x")).toBe("tool");
+  });
+
+  it("a standing rule never covers more than the command that the person saw", () => {
+    const key = (command: string) =>
+      describeRequest(permission(command))!.pattern;
+    expect(key("git status")).toBe("Bash:git status");
+    // The key comes from the raw command: a line break, a cut, or a program
+    // with a slash keeps the bare tool name, which no rule matches.
+    for (const command of [
+      "git status\nrm -rf /work/app/x",
+      "git status\r\nrm -rf /work/app/x",
+      `git status ${"a".repeat(600)}; rm -rf /work/app/x`,
+      `git status ${"a".repeat(600)}`,
+      "/tmp/other/git status",
+      "./git status",
+    ])
+      expect(key(command), command).toBe("Bash");
+    // The parts of a command list are joined, and a break in a part counts.
+    expect(
+      describeRequest({
+        hook_event_name: "PermissionRequest",
+        tool_name: "shell",
+        tool_input: { command: ["git", "status\nrm -rf x"] },
+      })!.pattern,
+    ).toBe("Bash");
+
+    const trove = new Trove(root());
+    const facts = { agent: "claude-code" as const, cwd: "/work/app" };
+    // A key that is the program alone groups past answers, and is never a rule.
+    for (const command of [
+      "rm build/tmp.txt",
+      "bash ./build.sh",
+      "ls -la",
+      "ls",
+    ]) {
+      const pattern = key(command)!;
+      expect(pattern, command).toMatch(/^Bash:\S+$/);
+      expect(rememberable({ ...facts, pattern }), command).toBe(false);
+      expect(() => trove.addRule({ ...facts, pattern }, "", now)).toThrow(
+        "too broad",
+      );
+    }
+    expect(rememberable({ ...facts, pattern: "Bash:git status" })).toBe(true);
+    expect(rememberable({ ...facts, pattern: "Bash" })).toBe(false);
+    expect(rememberable({ ...facts, cwd: null, pattern: "Bash:a b" })).toBe(
+      false,
+    );
+    // A rule of that kind that an earlier version wrote answers nothing.
+    const old = root();
+    mkdirSync(join(old, "trove"));
+    writeFileSync(
+      join(old, "trove", "rules.json"),
+      JSON.stringify([
+        {
+          version: 1,
+          id: "00000001",
+          agent: "claude-code",
+          cwd: "/work/app",
+          pattern: "Bash:rm",
+          decision: "allow",
+          createdAt: now,
+          note: "",
+        },
+      ]),
+    );
+    expect(new Trove(old).rules()).toHaveLength(1);
+    expect(new Trove(old).matchRule({ ...facts, pattern: "Bash:rm" })).toBe(
+      null,
+    );
+  });
+
+  it("a rule for a file tool covers only a path inside its project folder", () => {
+    const edit = (path: unknown) =>
+      describeRequest({
+        hook_event_name: "PermissionRequest",
+        tool_name: "Edit",
+        tool_input: { file_path: path },
+      })!;
+    expect(edit("/work/app/src/a.ts")).toMatchObject({
+      pattern: "Edit",
+      path: "/work/app/src/a.ts",
+    });
+    expect(describeRequest(permission("npm test"))!.path).toBeNull();
+    const trove = new Trove(root());
+    const facts = {
+      agent: "claude-code" as const,
+      cwd: "/work/app",
+      pattern: "Edit",
+    };
+    // A rule is not made from a file outside the folder, or with no file.
+    expect(() =>
+      trove.addRule({ ...facts, path: "/Users/me/.zshrc" }, "", now),
+    ).toThrow("outside the project folder");
+    expect(() => trove.addRule(facts, "", now)).toThrow(
+      "outside the project folder",
+    );
+    expect(rememberable({ ...facts, path: "/Users/me/.zshrc" })).toBe(false);
+    const rule = trove.addRule(
+      { ...facts, path: "/work/app/src/a.ts" },
+      "",
+      now,
+    );
+    for (const path of ["/work/app/src/b.ts", "src/b.ts", "/work/app"])
+      expect(trove.matchRule({ ...facts, path })?.id, path).toBe(rule.id);
+    for (const path of [
+      "/Users/me/.zshrc",
+      "/work/app/../other/a.ts",
+      "../other/a.ts",
+      "/work/application/a.ts",
+      null,
+      undefined,
+    ])
+      expect(trove.matchRule({ ...facts, path }), String(path)).toBeNull();
+    // A link inside the folder that leads out of it is outside.
+    const project = join(realpathSync(root()), "project");
+    const outside = realpathSync(root());
+    mkdirSync(project);
+    symlinkSync(outside, join(project, "link"));
+    const linked = new Trove(root());
+    const here = { ...facts, cwd: project };
+    linked.addRule({ ...here, path: join(project, "a.ts") }, "", now);
+    expect(
+      linked.matchRule({ ...here, path: join(project, "new", "b.ts") }),
+    ).not.toBeNull();
+    expect(
+      linked.matchRule({ ...here, path: join(project, "link", "secret") }),
+    ).toBeNull();
+    // Any other tool is keyed by its name, as before.
+    expect(
+      rememberable({ ...facts, pattern: "mcp__github__create_issue" }),
+    ).toBe(true);
   });
 
   it("suggests from past answers, keeps rules to one project, and refuses a broad rule", () => {
