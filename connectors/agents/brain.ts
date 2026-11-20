@@ -18,7 +18,12 @@ import {
   type DecisionRequest,
 } from "./decisions.js";
 import type { CliFact } from "./inventory.js";
-import { factKinds, type FactKind, type Memory } from "./memory.js";
+import {
+  factKinds,
+  looksSecret,
+  type FactKind,
+  type Memory,
+} from "./memory.js";
 import { detailLabels, elapsed, summary, title } from "./render.js";
 import {
   taskIsOver,
@@ -47,6 +52,10 @@ export const chatMessageSchema = z
   .strict();
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
+/** What the chat file holds in place of a message that carried a credential. */
+export const credentialMarker =
+  "[A message that held a credential. Its text is not kept.]";
+
 /** The conversation, kept in one owner-only file so the chat screen shows it after a restart. */
 export class ChatLog {
   private readonly file: string;
@@ -56,9 +65,13 @@ export class ChatLog {
   append(message: ChatMessage) {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     if (existsSync(this.file) && !lstatSync(this.file).isFile()) return;
+    // A credential is never kept, here as in memory: a marker stands in its place.
+    const text = looksSecret(message.text)
+      ? credentialMarker
+      : message.text.slice(0, 2000);
     appendFileSync(
       this.file,
-      `${JSON.stringify(chatMessageSchema.parse({ ...message, text: message.text.slice(0, 2000) }))}\n`,
+      `${JSON.stringify(chatMessageSchema.parse({ ...message, text }))}\n`,
       { mode: 0o600 },
     );
     chmodSync(this.file, 0o600);

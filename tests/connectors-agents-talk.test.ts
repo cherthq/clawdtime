@@ -14,6 +14,7 @@ import { agentsCli } from "../cli/agents.js";
 import { talkLoop } from "../cli/supervisor.js";
 import {
   ChatLog,
+  credentialMarker,
   OpenAIModel,
   Supervisor,
   type ModelClient,
@@ -794,6 +795,33 @@ describe("chat log and speech", () => {
     ]);
     log.append({ role: "user", text: "x".repeat(5000), at: now, via: "voice" });
     expect(log.recent(1)[0]!.text).toHaveLength(2000);
+  });
+
+  it("keeps a marker in place of a message that holds a credential", () => {
+    const directory = root();
+    const log = new ChatLog(directory);
+    const value = "Zq9".repeat(14).slice(0, 40);
+    log.append({
+      role: "user",
+      text: `remember that my api key is ${value}`,
+      at: now,
+      via: "chat",
+    });
+    log.append({
+      role: "assistant",
+      text: `I will not keep ACME_API_KEY=${value}.`,
+      at: now + 1,
+      via: "chat",
+    });
+    log.append({ role: "user", text: "what waits?", at: now + 2, via: "chat" });
+    expect(log.recent().map((message) => message.text)).toEqual([
+      credentialMarker,
+      credentialMarker,
+      "what waits?",
+    ]);
+    expect(
+      readFileSync(join(directory, "agents", "chat.jsonl"), "utf8"),
+    ).not.toContain(value);
   });
 
   it("turns a recording into words and an answer into sound", async () => {

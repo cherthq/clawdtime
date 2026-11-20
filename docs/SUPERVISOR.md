@@ -129,7 +129,12 @@ How it works:
   until it changes.
 - A fact can belong to one project. It never shows for another project.
 - A credential is never kept. Text that holds a key, a token or a password with
-  its value is refused.
+  its value is refused: the usual key shapes, a name with a value
+  (`CLIENT_SECRET=...`, `db-password: ...`), an address with a password in it,
+  and the same as you say it ("my password is ..."). A message that holds one
+  is also not written to the chat file: a short marker stands in its place.
+  The check reads shapes. A password that is one short plain word in a sentence
+  looks like any other word, so do not tell ClawdTime a password.
 - With memory on, ClawdTime starts each conversation from a small summary: at
   most ten lasting lines and six recent ones. It can search the rest by words.
   No model and no index is used to search.
@@ -435,7 +440,8 @@ moves it):
 - `agents/decisions/call.json`: the link to a pairing for away mode. The pairing
   credential stays in its own connection file.
 - `agents/chat.jsonl`: the conversation with ClawdTime, 2,000 characters for
-  each message at most.
+  each message at most. A message that holds a credential is kept as a marker
+  only.
 - `memory/settings.json` and `memory/facts.json`: whether memory is on, and the
   facts, 400 characters for each at most and 2,000 facts at most. Nothing is
   written there while memory is off.

@@ -39,15 +39,39 @@ export type MemoryFact = z.infer<typeof factSchema>;
 
 const day = 86_400_000;
 const maximumFacts = 2000;
+/** Something that reads as a value, not as a plain word: it has a digit, or it is long. */
+const valued = String.raw`(?:(?=\S*\d)\S{6,}|\S{16,})`;
+/** A name that holds a word for a secret, such as CLIENT_SECRET or db-password. An underscore is a part of the name. */
+const named = (words: string) =>
+  String.raw`(?<![A-Za-z0-9])[A-Za-z0-9_.-]*(?:${words})[A-Za-z0-9_.-]*`;
 const secretShapes = [
   /\bsk-[A-Za-z0-9_-]{16,}/,
+  /\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}/,
   /\bAKIA[0-9A-Z]{12,}/,
+  /\bAIza[0-9A-Za-z_-]{30,}/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/,
   /\bxox[abeprs]-[A-Za-z0-9-]{10,}/,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./,
+  // An address that carries a password: scheme://user:password@host.
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]{3,}@/i,
+  /\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/i,
   // A name of a secret with a value after it. A plain word after it is not a value.
-  /\b(api[_-]?key|secret|token|passwd|password|bearer)\b\s*[:=]\s*(?:(?=\S*\d)\S{6,}|\S{16,})/i,
+  new RegExp(
+    String.raw`${named("api[_-]?key|secret|token|passwd|password|passphrase|credential|private[_-]?key|access[_-]?key|bearer")}\s*[:=]\s*${valued}`,
+    "i",
+  ),
+  // After a password, any word of some length is its value.
+  new RegExp(
+    String.raw`${named("passwd|password|passphrase")}\s*[:=]\s*\S{6,}`,
+    "i",
+  ),
+  // The same as a person says it: "my password is ...", "the api key is ...".
+  new RegExp(
+    String.raw`\b(?:password|passwd|passphrase|passcode|pin|api[ _-]?key|secret[ _-]?key|access[ _-]?key|private[ _-]?key|token|secret)\s+(?:is|was)\s+${valued}`,
+    "i",
+  ),
 ];
 /** True for text that holds something shaped like a credential. */
 export const looksSecret = (text: string) =>
