@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Runner } from "../connectors/agents/focus.js";
 import {
   AppleEventsBrowser,
   browserErrors,
@@ -122,6 +123,21 @@ describe("the browser driver: the commands that run", () => {
     expect(port).toBeInstanceOf(AppleEventsBrowser);
     expect(new AppleEventsBrowser().session).not.toBe(
       new AppleEventsBrowser().session,
+    );
+  });
+
+  it("takes the command runner of the other connectors, which carries no error text", async () => {
+    const runner: Runner = async (_command, args) => ({
+      status: 0,
+      stdout:
+        args[1] === probeScript
+          ? `front ${chrome.id}\n`
+          : `${marked(-1743, "Not authorized to send Apple events to Google Chrome.")}\n`,
+    });
+    const browser = new AppleEventsBrowser(runner, fakeClock().clock);
+    // A failure of the browser comes back as printed text, so it is still known.
+    expect((await browser.doctor()).reason).toMatch(
+      /^macOS has not allowed the automation of Google Chrome/,
     );
   });
 
