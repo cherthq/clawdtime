@@ -14,13 +14,12 @@ dark mode, Fraunces for the headline, Instrument Sans for the interface and
 JetBrains Mono for times and paths. The three typefaces ship inside the app
 under the SIL Open Font License.
 
-The mascot is drawn in code, so it is sharp at every size. It has two looks, and
-the person picks one in the mascot's menu. Flat is the default: each mascot is a
-few solid shapes with one edge around them, in the language of the Chert mark,
-with no light, shadow or reflection. 3D is the same mascot as a lit figure. The
-light is the status: warm or pale at rest, blue while agents work, amber when
-something waits for the person, red while the screen is shared. The person picks
-a style in the same menu, where each style shows its picture:
+The mascot is drawn in code, so it is sharp at every size. It is flat: each
+mascot is a few solid shapes with one edge around them, in the language of the
+Chert mark, with no light, shadow or reflection. One color is the status: warm
+or pale at rest, blue while agents work, amber when something waits for the
+person, red while the screen is shared. The person picks a style in the mascot's
+menu, where each style shows its picture:
 
 | Style    | What it is                                                                                                                                            |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -39,11 +38,10 @@ a style in the same menu, where each style shows its picture:
 Jet, Jade, Lapis, Amber, Garnet and Amethyst are the plain stones: one solid
 shape and two eyes. The rim around a plain stone is its state, and its pale eyes
 take the same color. The eyes look at the pointer, shut to a line, bow when the
-stone is pleased and beat with a voice. A plain stone is flat in both looks, so
-the menu greys 3D while one is chosen.
+stone is pleased and beat with a voice.
 
-In the flat look every dark part has a pale rim, so a mascot holds on a dark
-desktop as well as on a light one.
+Every dark part has a pale rim, so a mascot holds on a dark desktop as well as
+on a light one.
 
 The same menu holds two more choices:
 

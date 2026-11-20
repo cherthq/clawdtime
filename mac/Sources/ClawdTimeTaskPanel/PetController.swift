@@ -287,11 +287,6 @@ final class PetController: NSObject {
 
   private var visibleFrame: CGRect { (window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900) }
 
-  /// Flat shapes or the 3D figure. The choice is kept between starts.
-  var look: MascotLook {
-    get { mascot.look }
-    set { mascot.look = newValue; defaults.set(newValue.rawValue, forKey: "pet.look"); mascot.jump() }
-  }
   /// The mascot's size as a share of its full size. The choice is kept between starts.
   /// The mascot's middle stays where it is while it grows or shrinks.
   var scale: Double {
@@ -327,7 +322,6 @@ final class PetController: NSObject {
   func show() {
     guard !visible else { return }
     visible = true
-    mascot.look = MascotLook(rawValue: defaults.string(forKey: "pet.look") ?? "") ?? .flat
     // No choice yet, or a style that is no longer there: the Chert mark.
     mascot.style = MascotStyle(rawValue: defaults.string(forKey: "pet.style") ?? "") ?? .flint
     mascot.flintEye = defaults.bool(forKey: "pet.flintEye")

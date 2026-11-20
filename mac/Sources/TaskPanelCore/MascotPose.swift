@@ -7,8 +7,8 @@ public enum MascotMood: String, CaseIterable, Sendable {
 
 /// How the mascot is drawn. Every style reads the same poses, so each one blinks,
 /// looks, jumps, runs with a drag and shows the state in its own way. Flint, the
-/// Chert mark, is the one a new install starts with. The six plain stones after
-/// it are flat only.
+/// Chert mark, is the one a new install starts with. The six after it are the
+/// plain stones: one solid shape with two eyes.
 public enum MascotStyle: String, CaseIterable, Sendable {
   case flint, jet, jade, lapis, amber, garnet, amethyst, pebble, core, neon, iris
   public var title: String {
@@ -39,13 +39,6 @@ public enum MascotStyle: String, CaseIterable, Sendable {
     case .core: return "A glass orb with an iris of light"
     case .neon: return "A night-city droid in black chrome and neon"
     case .iris: return "A lens that watches: glass, steel, an aperture"
-    }
-  }
-  /// The style also has a lit 3D figure. A plain stone is one flat shape and has none.
-  public var hasSolid: Bool {
-    switch self {
-    case .flint, .pebble, .core, .neon, .iris: return true
-    case .jet, .jade, .lapis, .amber, .garnet, .amethyst: return false
     }
   }
 }

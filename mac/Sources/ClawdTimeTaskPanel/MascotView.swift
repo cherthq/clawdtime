@@ -1,50 +1,27 @@
 import AppKit
-import SceneKit
 import TaskPanelCore
 
-/// The live mascot and the clock that moves it. It is drawn flat, as solid shapes,
-/// or as the lit 3D figure: the pose, the mood and the body's physics are the same.
+/// The live mascot and the clock that moves it. It is drawn flat, as solid shapes.
 final class MascotView: NSView {
-  /// The lit 3D figure. It is built only when the person chooses that look.
-  private var solid: MascotFigure?
   private let flat = FlatMascotView()
-  /// Flat shapes, or the 3D figure.
-  var look = MascotLook.flat { didSet { if look != oldValue { rebuild() } } }
   /// Changes the drawing. The pose, the mood and the clock carry over.
   var style = MascotStyle.flint { didSet { if style != oldValue { rebuild() } } }
   /// Flint with an eye in its window. Off, Flint is the Chert mark and nothing else.
   var flintEye = false { didSet { if flintEye != oldValue { applyFlintEye() } } }
   private func applyFlintEye() {
     (flat.figure as? FlintFlat)?.eye = flintEye
-    (solid as? FlintScene)?.showsEye = flintEye
     lastPose = nil; flat.needsDisplay = true
   }
-  /// What is on the screen now. A style with no lit figure is flat in both looks.
-  private var drawsFlat: Bool { look == .flat || !style.hasSolid }
   private func rebuild() {
     lastPose = nil
     jelly(stretch: 0, angle: 0)
-    let figure = drawsFlat ? nil : MascotCatalog.make(style)
-    flat.isHidden = figure != nil; scene.isHidden = figure == nil; deskShadow.isHidden = figure == nil
-    if let figure {
-      figure.set(mood: mood)
-      solid = figure; scene.scene = figure.scene; scene.pointOfView = figure.camera
-      flat.figure = nil
-    } else {
-      flat.figure = MascotCatalog.flat(style); flat.mood = mood
-      solid = nil; scene.scene = nil
-    }
+    flat.figure = MascotCatalog.flat(style); flat.mood = mood
     applyFlintEye()
     setAccessibilityLabel("ClawdTime, " + style.title)
   }
   let clock = FrameClock()
-  private let scene = SCNView()
-  private let deskShadow = CALayer()
-  /// Fades the last points at each edge to nothing, so a glow that reaches the
-  /// edge of the window ends softly and never shows the window's square.
-  private let feather = CALayer()
   private var animator = MascotAnimator(seed: UInt64(Date().timeIntervalSince1970 * 1000) & 0xFFFF_FFFF)
-  var mood = MascotMood.idle { didSet { if mood != oldValue { solid?.set(mood: mood); flat.mood = mood; lastPose = nil } } }
+  var mood = MascotMood.idle { didSet { if mood != oldValue { flat.mood = mood; lastPose = nil } } }
   var hovering = false
   var pressed = false
   var dragVelocity = CGVector.zero
@@ -68,19 +45,6 @@ final class MascotView: NSView {
   override init(frame: NSRect) {
     super.init(frame: frame)
     wantsLayer = true
-    deskShadow.contents = Self.shadowImage()
-    deskShadow.opacity = 0.9
-    layer?.addSublayer(deskShadow)
-    scene.backgroundColor = .clear
-    scene.antialiasingMode = .multisampling4X
-    scene.rendersContinuously = false; scene.isPlaying = false
-    scene.allowsCameraControl = false; scene.autoenablesDefaultLighting = false
-    scene.autoresizingMask = [.width, .height]; scene.frame = bounds
-    addSubview(scene)
-    scene.wantsLayer = true
-    feather.contents = Self.featherImage()
-    feather.contentsCenter = CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.2)
-    scene.layer?.mask = feather
     flat.wantsLayer = true; flat.layerContentsRedrawPolicy = .onSetNeedsDisplay
     flat.autoresizingMask = [.width, .height]; flat.frame = bounds
     addSubview(flat)
@@ -91,20 +55,13 @@ final class MascotView: NSView {
   // The stone never takes the click itself: the window's content view owns the gesture.
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-  override func layout() {
-    super.layout()
-    CATransaction.begin(); CATransaction.setDisableActions(true)
-    feather.frame = scene.bounds
-    feather.contentsScale = window?.backingScaleFactor ?? 2
-    CATransaction.commit()
-  }
   private var shownStretch = 0.0
   /// The whole figure grows longer along its way and thinner across it, and keeps
   /// its area: the stretch of a soft body at speed. It works for every style.
   private func jelly(stretch: Double, angle: Double) {
     guard abs(stretch - shownStretch) > 0.001 || (stretch == 0 && shownStretch != 0) else { return }
     shownStretch = stretch
-    guard let layer = (solid == nil ? flat : scene).layer else { return }
+    guard let layer = flat.layer else { return }
     let box = bounds
     var transform = CGAffineTransform.identity
     if stretch > 0.001 {
@@ -116,28 +73,6 @@ final class MascotView: NSView {
     CATransaction.begin(); CATransaction.setDisableActions(true)
     layer.setAffineTransform(transform)
     CATransaction.commit()
-  }
-  /// Solid in the middle, clear at the edges, with a soft step of about ten points between.
-  private static func featherImage() -> CGImage {
-    let size = 96, inset: CGFloat = 13
-    let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
-      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    // The blurred copy of the shape gives the soft step; the shape itself keeps the middle solid.
-    context.setShadow(offset: .zero, blur: 9, color: NSColor.black.cgColor)
-    context.setFillColor(NSColor.black.cgColor)
-    let box = CGRect(x: inset, y: inset, width: CGFloat(size) - inset * 2, height: CGFloat(size) - inset * 2)
-    context.addPath(CGPath(roundedRect: box, cornerWidth: 12, cornerHeight: 12, transform: nil)); context.fillPath()
-    return context.makeImage()!
-  }
-  private static func shadowImage() -> CGImage {
-    let context = CGContext(data: nil, width: 128, height: 32, bitsPerComponent: 8, bytesPerRow: 0,
-      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-      colors: [NSColor.black.withAlphaComponent(0.34).cgColor, NSColor.black.withAlphaComponent(0.12).cgColor, NSColor.black.withAlphaComponent(0).cgColor] as CFArray,
-      locations: [0, 0.5, 1])!
-    context.scaleBy(x: 1, y: 0.25)
-    context.drawRadialGradient(gradient, startCenter: CGPoint(x: 64, y: 64), startRadius: 0, endCenter: CGPoint(x: 64, y: 64), endRadius: 64, options: [])
-    return context.makeImage()!
   }
 
   func start() {
@@ -173,18 +108,7 @@ final class MascotView: NSView {
     input.gait = motion.gait; input.gaitPhase = motion.gaitPhase; input.held = held
     var pose = animator.step(step, input)
     pose.roll += lean
-    if pose != lastPose, solid == nil {
-      flat.pose = pose; lastPose = pose
-    } else if pose != lastPose {
-      solid?.apply(pose); lastPose = pose
-      // The shadow stays on the desk: it shrinks and fades as the stone rises.
-      let height = CGFloat(max(0, pose.bob + pose.lift + 0.05))
-      let width = bounds.width * 0.46 * (1 - min(0.4, height * 0.7)) * CGFloat(pose.scale)
-      CATransaction.begin(); CATransaction.setDisableActions(true)
-      deskShadow.frame = CGRect(x: bounds.midX - width / 2, y: bounds.height * 0.155, width: width, height: width * 0.25)
-      deskShadow.opacity = Float(max(0.25, 0.95 - height * 1.6))
-      CATransaction.commit()
-    }
+    if pose != lastPose { flat.pose = pose; lastPose = pose }
     jelly(stretch: Theme.reduceMotion ? 0 : motion.stretch, angle: motion.stretchAngle)
     clock.framesPerSecond = boost ? 120 : animator.preferredFramesPerSecond(input)
     afterFrame?(step)

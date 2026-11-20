@@ -1,18 +1,12 @@
 import AppKit
 import TaskPanelCore
 
-/// The flat look. Each mascot is a few solid shapes with one edge around them,
-/// drawn in a box of 200 by 200 with the origin at the top left. There is no
-/// light, no shadow and no reflection: the life is in the pose and in the
+/// The mascots are flat. Each one is a few solid shapes with one edge around
+/// them, drawn in a box of 200 by 200 with the origin at the top left. There is
+/// no light, no shadow and no reflection: the life is in the pose and in the
 /// body's physics.
 protocol FlatFigure: AnyObject {
   func draw(_ pose: MascotPose, mood: MascotMood, in context: CGContext)
-}
-
-/// How the mascot is drawn: flat shapes, or the lit 3D figure.
-enum MascotLook: String, CaseIterable {
-  case flat, solid
-  var title: String { self == .flat ? "Flat" : "3D" }
 }
 
 /// The shapes and colors that every flat figure shares.
@@ -126,8 +120,8 @@ enum Flat {
   static func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
 }
 
-/// Which flat drawing belongs to which style.
-extension MascotCatalog {
+/// Which drawing belongs to which style.
+enum MascotCatalog {
   static func flat(_ style: MascotStyle) -> FlatFigure {
     switch style {
     case .flint: return FlintFlat()
