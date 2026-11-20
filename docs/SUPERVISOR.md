@@ -153,9 +153,10 @@ simulation or standby it does not.
 - The phone is one line, so calls go one at a time, the oldest request first.
   An agent that waits comes before news: an incident is told only when no
   request waits for its call.
-- A call that could not be placed (the line was busy, or the backend did not
-  answer) is tried again after 8 seconds, then 16, then every 30 seconds, for as
-  long as the agent waits.
+- A failed or unconfirmed call is not automatically retried. A missing backend
+  response can mean that a call was already dispatched. The request stays
+  available in the panel and terminal; reconcile the original call outcome
+  before authorizing another attempt.
 - The supervisor claims no screen and no input for the call. It only talks.
 
 ## Watcher

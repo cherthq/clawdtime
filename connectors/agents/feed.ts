@@ -121,9 +121,6 @@ const maximumLine = 2 * 1024 * 1024;
  * Runs the publisher as a child and keeps its latest valid snapshot. A child
  * that ends is started again after a delay that grows to one minute.
  */
-/** The longest pause before a call that could not be placed is tried again. */
-const longestCallPauseMs = 30_000;
-
 export class BoardFeed implements AgentBoardPort {
   private child: ChildProcess | undefined;
   private latest: BoardSnapshot | undefined;
@@ -134,15 +131,8 @@ export class BoardFeed implements AgentBoardPort {
   private awayTimer: NodeJS.Timeout | undefined;
   private delayMs = 2000;
   readonly desk: DecisionDesk;
-  /**
-   * The calls for requests. `done`: the call was placed, so there is no second
-   * one. Otherwise `tries` counts the calls that could not be placed, and
-   * `retryAt` is when the next try may start.
-   */
-  private readonly calling = new Map<
-    string,
-    { tries: number; retryAt: number; done: boolean }
-  >();
+  /** Requests already attempted, including calls whose outcome is unknown. */
+  private readonly calling = new Set<string>();
   /** Calls for requests that are in flight now. */
   private flights = 0;
   /** A call that tells an incident is in flight now. */
@@ -158,20 +148,13 @@ export class BoardFeed implements AgentBoardPort {
       /** The state folder of the desk and the trove. */
       root?: string;
       /**
-       * Places the call for one request. The default uses the linked pairing.
-       * It rejects when the call could not be placed, and resolves with null
-       * when it was placed and the person gave no answer. `attempt` counts the
-       * tries for this request from 0.
+       * Places the call for one request. A rejection does not prove that no
+       * dial happened. Neither rejection nor an unanswered call is retried.
        */
-      call?: (
-        request: DecisionRequest,
-        attempt: number,
-      ) => Promise<{
+      call?: (request: DecisionRequest) => Promise<{
         decision: "allow" | "deny" | "answer";
         text: string | null;
       } | null>;
-      /** The pause before a call that could not be placed is tried again. It doubles each time, up to 30 seconds. */
-      retryMs?: number;
       /** The language model. The default is OpenAI when a key is in the environment. */
       model?: ModelClient | null;
       /** Speech settings. The default reads the environment. */
@@ -248,11 +231,7 @@ export class BoardFeed implements AgentBoardPort {
     if (this.telling || this.flights > 0 || !this.desk.away()) return;
     if (!this.options.notify && loadCallLink(this.root) === null) return;
     // An agent that waits comes before news: its request gets the line first.
-    if (
-      this.desk
-        .pending()
-        .some((request) => this.calling.get(request.id)?.done !== true)
-    )
+    if (this.desk.pending().some((request) => !this.calling.has(request.id)))
       return;
     const allowed = this.watchStore.rules().callOn;
     const incident = this.watcher
@@ -556,49 +535,33 @@ export class BoardFeed implements AgentBoardPort {
     // One phone line: one call at a time. A second request, and a request
     // that arrives while a call tells an incident, waits for the next turn.
     if (this.flights > 0 || this.telling) return;
-    const now = this.options.now ?? Date.now;
-    const state = this.calling.get(request.id) ?? {
-      tries: 0,
-      retryAt: 0,
-      done: false,
-    };
-    if (state.done || now() < state.retryAt) return;
-    this.calling.set(request.id, state);
+    if (this.calling.has(request.id)) return;
+    this.calling.add(request.id);
     this.flights++;
-    const attempt = state.tries;
+    const now = this.options.now ?? Date.now;
     const place =
       this.options.call ??
-      (async (item: DecisionRequest, attempt: number) => {
+      (async (item: DecisionRequest) => {
         const link = loadCallLink(this.root);
         if (!link) return null;
-        // A session that ended cannot be opened again, so each try has its own name.
-        const key = attempt === 0 ? item.id : `${item.id}-r${attempt}`;
-        return answerByCall(await openCall(link, key), item, {
+        // Keep the same identity even across service restarts. A lost response
+        // is not permission to mint a new session or attention request.
+        return answerByCall(await openCall(link, item.id), item, {
           now,
           deadline: item.holdUntil - 5000,
           recalled: this.desk.recalled(item),
-          key,
         });
       });
-    void place(request, attempt)
+    void Promise.resolve()
+      .then(() => place(request))
       .then((answer) => {
-        // The call was placed. With no answer the request stays for the panel
-        // and the terminal: the same request never rings twice.
-        state.done = true;
         if (answer) this.desk.answer(request.id, { ...answer, via: "call" });
       })
       .catch(() => {
-        // The call could not be placed: the line was busy, or the backend did
-        // not answer. The agent still waits, so try again after a pause.
-        // It keeps trying for as long as the request is held: the hook
-        // waits up to nine minutes, and a busy line frees within that time.
-        state.tries++;
-        state.retryAt =
-          now() +
-          Math.min(
-            longestCallPauseMs,
-            (this.options.retryMs ?? 8000) * 2 ** (state.tries - 1),
-          );
+        // Dispatch may have committed before its response was lost. Preserve
+        // the attempt and leave the request for the panel or terminal. Even a
+        // busy-line error is not automatically retried without authoritative
+        // proof that dispatch never occurred.
       })
       .finally(() => {
         this.flights--;

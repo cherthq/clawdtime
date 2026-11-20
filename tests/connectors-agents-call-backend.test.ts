@@ -437,6 +437,42 @@ describe("a decision by phone, against the real backend in simulation", () => {
     expect(line.refused).toEqual([]);
   });
 
+  it("reopening after a committed dial loses its response reuses the original call", async () => {
+    const line = await backend();
+    const request = ask(new DecisionDesk(root()));
+    const client = await openCall(line.link, request.id);
+    await expect(
+      answerByCall(
+        {
+          requestAttention: async (input) => {
+            await client.requestAttention(input);
+            throw new Error("Response lost after dispatch committed");
+          },
+          conversationTurns: (id, after, timeoutMs) =>
+            client.conversationTurns(id, after, timeoutMs),
+          conversationOperation: (id, operation, body) =>
+            client.conversationOperation(id, operation, body),
+          heartbeat: () => client.heartbeat(),
+        },
+        request,
+        timing(),
+      ),
+    ).rejects.toThrow("Response lost after dispatch committed");
+    expect(line.transport.calls).toHaveLength(1);
+    const original = line.request().id;
+    // A reopened supervisor retains the request identity instead of adding a retry suffix.
+    const reopened = await openCall(line.link, request.id);
+    const answer = answerByCall(reopened, request, timing());
+    await pause(30);
+    expect(line.request().id).toBe(original);
+    expect(line.transport.calls).toHaveLength(1);
+    line.speak("approve");
+    expect(await answer).toEqual({ decision: "allow", text: null });
+    expect(line.transport.calls).toHaveLength(1);
+    expect(line.request().state).toBe("completed");
+    expect(line.refused).toEqual([]);
+  });
+
   it("gives up cleanly when the backend stops answering, and leaves no open call behind", async () => {
     const line = await backend();
     const request = ask(new DecisionDesk(root()));

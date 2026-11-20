@@ -2399,3 +2399,28 @@ After moving the private harness/tests to their persistent protected paths and
 selecting the V6 reader, all five offline owner-harness tests passed again in
 13.037s. The lead asked only for prepared-window visibility to run the local
 candidate; no additional call or deployment was requested at this checkpoint.
+
+## November 20, 2026 — integrate supervisor PRs and preserve uncertain calls
+
+The user requested merging every open PR into main. PR #5 at `48d1c3c`
+contains the original heads of #2, #3 and #4; integration uses a merge commit,
+preserving all original commit identities and their ancestry. The supervisor
+adds the agent board, decision desk, opt-in memory, chat/voice interfaces,
+watcher, remote-host support and native mascot interface. It also incorporates
+unread-answer retention, pre-dispatch line release and error reporting.
+
+Integration review found that away-mode call failures could allocate a new
+session and attention key automatically, including after a lost response whose
+dispatch outcome was unknown. The integration repair removes automatic retries
+and keeps the original request/session identity. Failed, uncertain and unanswered
+requests remain available for a local answer. Serial calling and background
+supervision remain supported. The supervisor guide now describes this boundary.
+
+Independent review passed. Full `npm run check` passed 1,507 tests across 84
+files, typechecking and build; `swift test` passed 137 tests. These are local
+checks, not physical call qualification. An additional real-backend simulation
+regression passed in the 15-test call suite: after dispatch commits and its
+response is lost, reopening with the original identity returns the same call
+and completes without a second dial (1,508 tests total after adding this case).
+No live call or deployment command was
+performed. Existing continuous-sharing qualification remains outstanding.

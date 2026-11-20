@@ -854,6 +854,7 @@ describe("the watcher in the service", () => {
     // The news waits: the request has not had its call yet.
     expect(told).toEqual([]);
     feed.superviseAway();
+    await tick();
     expect(asked).toEqual([waiting.id]);
     // While that call runs, the news still waits.
     scan(start + 9000, [one]);

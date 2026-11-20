@@ -315,11 +315,7 @@ async function onCall<T>(
 export async function answerByCall(
   client: CallClient,
   request: DecisionRequest,
-  options: CallTiming & {
-    recalled?: string | null;
-    /** Names this try of the call. The default is the request's id. */
-    key?: string;
-  },
+  options: CallTiming & { recalled?: string | null },
 ): Promise<{
   decision: "allow" | "deny" | "answer";
   text: string | null;
@@ -330,7 +326,7 @@ export async function answerByCall(
     client,
     {
       // The same request never places a second call.
-      idempotencyKey: `decision-${options.key ?? request.id}`,
+      idempotencyKey: `decision-${request.id}`,
       reason: request.kind === "question" ? "decision" : "approval",
       question: spokenQuestion(request, options.recalled ?? null),
     },
