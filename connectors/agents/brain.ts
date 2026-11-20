@@ -567,44 +567,79 @@ const asksAbout = (spoken: string) =>
   );
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
-/** A direct software-work instruction is already a task request, not an approval prompt. */
-function directCodingGoal(spoken: string): string | null {
+/** What comes before an instruction in speech: a filler, a greeting, a polite opening. */
+const opening =
+  /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime)[,.!]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to)\s+)+/i;
+const softwareNoun =
+  /\b(?:landing\s+page|web\s*site|web\s*page|web\s*app|application|app|dashboard|feature|component|code|function|endpoint|API|test|tests|bug|bugs|config(?:uration)?|script|scripts|documentation|README)\b/i;
+/**
+ * The person's sentence when it is an instruction to do software work, or
+ * null. Three readers use it:
+ * - "plain": what may start work before the model. A plain instruction only.
+ * - "polite": what may answer a task that waits, before the model. Also a
+ *   polite request that ends as a question ("Could you make the page blue?").
+ * - "asked": a start or an answer that the model asked for. The model already
+ *   chose; this only confirms that the person's words are an instruction.
+ */
+function codingGoal(
+  spoken: string,
+  reader: "plain" | "polite" | "asked",
+): string | null {
   const text = clean(spoken, 8000);
-  const request = text
-    .replace(/^(?:yes|okay|ok|sure)[,!]?\s+/i, "")
-    .replace(
-      /^(?:please\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?/i,
-      "",
-    );
+  const request = text.replace(opening, "");
   // Deliberately anchored: discussion, hypotheticals, negation and quoted examples
   // must not start work. UI click/type/open commands use the execution engine.
-  if (
-    !/^(?:build|make|create|develop|implement|fix|repair|refactor|debug|add|update|write|design)\s+/i.test(
+  const verb =
+    /^(?:build|make|create|develop|implement|fix|repair|refactor|debug|add|update|write|design)\s+(\S+)/i.exec(
       request,
-    )
-  )
-    return null;
+    );
+  if (!verb) return null;
+  const object = verb[1]!.replace(/[^\p{L}]/gu, "").toLowerCase();
+  // "Make no changes", "fix nothing": no work is asked for.
+  if (["no", "nothing", "none"].includes(object)) return null;
   const firstSentence = request.split(/[.!?]/, 1)[0]!;
-  if (
-    !/\b(?:landing\s+page|web\s*site|web\s*page|web\s*app|application|app|dashboard|feature|component|code|function|endpoint|API|test|tests|bug|bugs|config(?:uration)?|script|scripts|documentation|README)\b/i.test(
-      firstSentence,
-    )
-  )
+  if (!softwareNoun.test(firstSentence)) return null;
+  if (/\b(?:for example|hypothetical|hypothetically)\b/i.test(request))
     return null;
+  // The person takes it back or delays it, or reports what another person said.
   if (
-    /\b(?:example|hypothetical|hypothetically)\b|\b(?:but\s+)?(?:do\s+not|don't|don’t|not\s+yet)\s+(?:start|begin|proceed)\b/i.test(
+    /\b(?:never\s*mind|actually,? no|no,? wait|scratch that|forget it|hold off|not now|not yet|until i say)\b|\b(?:do\s+not|don't|don\u2019t)\s+(?:start|begin|proceed|do)\b|\b(?:he|she|they|someone|somebody)\s+said\b/i.test(
       request,
     )
   )
     return null;
+  if (reader !== "asked") {
+    // Before the model a question starts nothing. A task that waits takes a
+    // polite request, which opens with "can you" or a like form.
+    const polite =
+      reader === "polite" &&
+      /^(?:please\s+)?(?:can|could|would|will)\s+(?:you|u)\b/i.test(
+        text.replace(
+          /^(?:(?:okay|ok|yes|yeah|sure|so|well|hey)[,.!]?\s+)+/i,
+          "",
+        ),
+      );
+    if (text.includes("?") && !polite) return null;
+    // "Update me", "add up": a request for the state, not for work.
+    if (["me", "us", "up"].includes(object)) return null;
+    // Work on a phone, in mail or in a chat application is not a software task.
+    if (
+      /\b(?:call|phone|e-?mail|mail|message|slack|note|reminder|calendar|meeting)\b/i.test(
+        firstSentence,
+      )
+    )
+      return null;
+  }
   // Keep the complete original request, including later constraints such as
   // "Don't deploy it yet." No model-selected substring can discard them.
   return text;
 }
+/** A direct software-work instruction is already a task request, not an approval prompt. */
+const directCodingGoal = (spoken: string) => codingGoal(spoken, "plain");
 const asksToStart = (spoken: string) =>
-  (startCue.test(spoken) || directCodingGoal(spoken) !== null) &&
+  (startCue.test(spoken) || codingGoal(spoken, "asked") !== null) &&
   !asksAbout(spoken) &&
-  !/^(?:please\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:do\s+not|don't|don’t|not|never|stop|cancel)\b/i.test(
+  !/^(?:please\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:do\s+not|don't|don\u2019t|not|never|stop|cancel)\b/i.test(
     spoken.trim(),
   );
 /** The goal in the person's sentence: what follows the word task or job. */
@@ -764,6 +799,15 @@ export class Supervisor {
     return !!task && !taskIsOver(task) && /\b(?:task|job)\b/i.test(spoken);
   }
 
+  /** True when the words name a session, or speak of an agent or a session: they are for the model to route. */
+  private forSession(words: string) {
+    return (
+      /\b(?:agents?|sessions?)\b/i.test(words) ||
+      (this.world.board()?.sessions ?? []).some((session) =>
+        saidAsWords(title(session), words),
+      )
+    );
+  }
   /** One change to the task. A turn does each kind of change once. */
   private async change(
     turn: Turn,
@@ -794,7 +838,7 @@ export class Supervisor {
       return "The person did not ask for a task in their last message. Ask them.";
     // The goal is what the person said. A goal that the model reworded is
     // replaced by the person's own sentence.
-    const direct = directCodingGoal(spoken);
+    const direct = codingGoal(spoken, "asked");
     const goal =
       direct ??
       (wanted && spokenWords(wanted).length >= 2 && ownWords(wanted, spoken)
@@ -814,12 +858,21 @@ export class Supervisor {
     if (!tasks) return needsDesktop;
     const task = tasks.current();
     if (!task?.question || !task.canAnswer) return "The task asks nothing now.";
-    if (isQuestion(spoken) && directCodingGoal(spoken) === null)
+    if (isQuestion(spoken) && codingGoal(spoken, "polite") === null)
       return "The person asked a question. That is not an answer. Tell them what the task asks.";
     // A named choice goes as that choice. Anything else goes in the person's words.
-    const named = task.choices.length
-      ? interpret(spoken, { kind: "question", options: task.choices })
-      : null;
+    // An instruction is not a choice: "update the README first" does not pick
+    // the first choice. It counts as a choice only when it is exactly one.
+    const sameWords = (a: string, b: string) =>
+      spokenWords(a).join(" ") === spokenWords(b).join(" ");
+    const exact = task.choices.find((choice) => sameWords(choice, spoken));
+    const named = !task.choices.length
+      ? null
+      : codingGoal(spoken, "asked") !== null
+        ? exact
+          ? { decision: "answer" as const, text: exact }
+          : null
+        : interpret(spoken, { kind: "question", options: task.choices });
     const text =
       named?.decision === "answer" && named.text
         ? named.text
@@ -1299,7 +1352,11 @@ export class Supervisor {
     // waits: "cancel the task" must never deny that agent's request.
     const named = this.namesTask(spoken);
     if (tasks) {
-      if (asksToStart(spoken)) return this.startTask(turn, spoken, "");
+      // "Start a task: ..." names the task and keeps its place. A bare
+      // instruction starts a task only when no agent request waits: with one
+      // waiting, "Yes, update the config" is the answer to that request.
+      if (asksToStart(spoken) && (startCue.test(spoken) || !pending.length))
+        return this.startTask(turn, spoken, "");
       if (
         task?.canCancel &&
         /\bcancel\b[^.?!]{0,20}\b(?:task|job)\b/i.test(spoken) &&
@@ -1442,19 +1499,26 @@ export class Supervisor {
     // Dispatch an explicit software-work request before conversational generation
     // can invent another confirmation round. The task service still enforces one
     // active task and records the exact event once; its refusal is returned as-is.
-    const directGoal = directCodingGoal(spoken);
-    if (directGoal) {
-      const current = this.world.tasks?.current();
+    // It acts before the model only where nothing else can own the sentence:
+    // a task service runs, no agent request and no computer action waits for an
+    // answer, and the words are not for a session.
+    const current = this.world.tasks?.current();
+    const taskWaits =
+      !!current &&
+      !taskIsOver(current) &&
+      current.canAnswer &&
+      !!current.question;
+    const directGoal = codingGoal(spoken, taskWaits ? "polite" : "plain");
+    if (
+      directGoal &&
+      this.world.desk.pending().length === 0 &&
+      !this.world.execution?.snapshot().pendingAction &&
+      !this.forSession(words)
+    ) {
       // When the current task asks for a choice or revision, an imperative such
       // as "Make the landing page blue" answers that task. Do not reinterpret
       // it as a second job and strand the waiting worker behind a start refusal.
-      if (
-        current &&
-        !taskIsOver(current) &&
-        current.canAnswer &&
-        current.question
-      )
-        return this.answerTask(turn, directGoal, directGoal);
+      if (taskWaits) return this.answerTask(turn, directGoal, directGoal);
       return this.startTask(turn, directGoal, "");
     }
     const execution = this.world.execution;
