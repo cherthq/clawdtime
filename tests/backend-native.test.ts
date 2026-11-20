@@ -983,6 +983,99 @@ describe("native protocol integration without live traffic", () => {
       expect(f.requests.every((r) => r.method === "GET")).toBe(true);
     },
   );
+  it("releases the line when the line guard refuses the call, with no external request", async () => {
+    const f = fixture(),
+      mediaId = mediaSessionId(f.attention.id);
+    // The pairing was made before its recipient left the tester allowlist.
+    Object.assign(f.transport, {
+      config: { ...config, testerAllowlist: ["+15550009999"] },
+    });
+    await f.app.drain();
+    expect(f.requests).toHaveLength(0);
+    expect(f.store.effects("unknown")).toHaveLength(0);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("failed");
+    expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+    expect(f.store.get("media", mediaId)).toBeUndefined();
+    Object.assign(f.transport, { config });
+    const next = f.app.requestAttention(f.agent.token, {
+      taskId: "task",
+      idempotencyKey: "twice",
+      reason: "decision",
+      question: "Second fixture question",
+    });
+    await f.app.drain();
+    expect(f.store.get<AttentionRequest>("attention", next.id)?.state).toBe(
+      "ringing",
+    );
+  });
+  it("releases the line when the event boundary is missing after the read-only preflight, with no dispatching request", async () => {
+    const f = fixture(),
+      mediaId = mediaSessionId(f.attention.id),
+      ready = (
+        f.transport as unknown as {
+          requireReady: (pairing: Pairing, kind: "call") => Promise<void>;
+        }
+      ).requireReady.bind(f.transport);
+    Object.assign(f.transport, {
+      requireReady: async (pairing: Pairing, kind: "call") => {
+        await ready(pairing, kind);
+        // The verified boundary is gone after the preflight has passed.
+        f.store.saveState(`messages:${logicalLineId}`, null);
+      },
+    });
+    await f.app.drain();
+    // The preflight only reads. Nothing that dispatches was sent.
+    expect(f.requests.length).toBeGreaterThan(0);
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    expect(f.store.effects("unknown")).toHaveLength(0);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("failed");
+    expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+    expect(f.store.get("media", mediaId)).toBeUndefined();
+  });
+  it.each(["preparing", "prepared", "closed"] as const)(
+    "releases the line when an earlier attempt left a %s media record, which proves that no dial was sent",
+    async (state) => {
+      const f = fixture(),
+        mediaId = mediaSessionId(f.attention.id);
+      f.store.put("media", { id: mediaId, requestId: f.attention.id, state });
+      await f.app.drain();
+      expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(f.store.effects("unknown")).toHaveLength(0);
+      expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+      expect(
+        f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+      ).toBe("failed");
+      expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+      // A session that may still be open waits for the read-only status read.
+      expect(f.store.get<{ state: string }>("media", mediaId)?.state).toBe(
+        state === "closed" ? "closed" : "unknown",
+      );
+    },
+  );
+  it.each(["dialing", "unknown"] as const)(
+    "keeps the line reserved when an earlier attempt left a %s media record, because a dial may have been sent",
+    async (state) => {
+      const f = fixture(),
+        mediaId = mediaSessionId(f.attention.id);
+      f.store.put("media", { id: mediaId, requestId: f.attention.id, state });
+      await f.app.drain();
+      expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("unknown");
+      expect(
+        f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+      ).toBe("unknown");
+      expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("unknown");
+      expect(f.store.get<{ state: string }>("media", mediaId)?.state).toBe(
+        state,
+      );
+    },
+  );
   it("keeps the line reserved when the dial was sent and its response was lost", async () => {
     const f = fixture(),
       original = f.transport.calls.bind(f.transport);

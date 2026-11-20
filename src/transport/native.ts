@@ -660,18 +660,41 @@ export class NativeTransport implements Transport {
     }
   }
   async call(attention: AttentionRequest, pairing: Pairing, effectId: string) {
-    this.guard(pairing);
+    const id = mediaSessionId(attention.id);
+    // Nothing that dispatches has been sent yet. When no earlier attempt left a
+    // media record, a refusal here is certain: the call never started.
+    const refusal = (error: DomainError) =>
+      this.store.get<MediaRecord>("media", id)
+        ? error
+        : new NotDispatched(error.message);
+    try {
+      this.guard(pairing);
+    } catch (error) {
+      throw error instanceof DomainError ? refusal(error) : error;
+    }
     await this.requireReady(pairing, "call");
     if (!this.messages.cursor())
-      throw new DomainError(
-        409,
-        "Verified native event boundary is required before dialing.",
+      throw refusal(
+        new DomainError(
+          409,
+          "Verified native event boundary is required before dialing.",
+        ),
       );
-    const id = mediaSessionId(attention.id),
-      old = this.store.get<MediaRecord>("media", id);
+    const old = this.store.get<MediaRecord>("media", id);
     if (old) {
       if (old.requestId === attention.id && old.providerCallId)
         return { callId: old.providerCallId, accepted: true };
+      // A record that stopped before the dial proves that no dial was sent. Its
+      // media session may still be open, so a status read settles the record.
+      if (
+        old.requestId === attention.id &&
+        ["preparing", "prepared", "closed"].includes(old.state)
+      ) {
+        if (old.state !== "closed")
+          this.store.put("media", { ...old, state: "unknown" });
+        throw new NotDispatched("An earlier attempt stopped before the dial.");
+      }
+      // Any other record may hide a dial that was sent: the outcome stays unknown.
       throw new DomainError(
         409,
         "Existing media/call outcome requires reconciliation.",

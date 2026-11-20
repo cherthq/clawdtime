@@ -198,6 +198,14 @@ as `failed` and the local call as `ended`, so the line is free for the next
 request. Nothing is retried: the agent must make a new request with a new
 idempotency key. Any failure at or after the allocation request stays unknown.
 
+The same applies to a refusal before any dispatching request: the line guard
+refuses before any request at all, and the event boundary check refuses after
+the read-only preflight. Both raise `NotDispatched` when no earlier attempt left
+a media record. An earlier media record in state `preparing`, `prepared` or
+`closed` without a provider call ID proves that no dial was sent, so it also
+raises `NotDispatched`. Any other earlier media record may hide a dial that was
+sent, so that outcome stays unknown and the line stays reserved.
+
 The media record of such a call is `closed` when the close succeeds, and also
 when the media service answers 404, because it then never created the session.
 When the close fails in transit, the line is still released and the media record
