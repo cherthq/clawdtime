@@ -1,6 +1,7 @@
 import AppKit
 import SceneKit
 import TaskPanelCore
+import simd
 
 /// The shell of Neon's head: a box with round corners, narrower at the jaw.
 /// Plates, the visor and the small parts all take their place from it.
@@ -121,6 +122,7 @@ final class NeonScene: MascotFigure {
   private var bars: [SCNNode] = []
   private var earHalos: [SCNNode] = []
   private var whip: [SCNNode] = []
+  private let greetHalo = SCNNode()
 
   private let chrome = Finish.solid(0x30333D, roughness: 0.2, metalness: 1, coat: 0.7, coatRoughness: 0.06)
   private let gunmetal = Finish.solid(0x1B1D24, roughness: 0.34, metalness: 0.9, coat: 0.3)
@@ -146,6 +148,16 @@ final class NeonScene: MascotFigure {
   private var followRoll = Spring(0, response: 0.42, dampingRatio: 0.34)
   private var followRise = Spring(0, response: 0.40, dampingRatio: 0.36)
   private var followScale = Spring(1, response: 0.46, dampingRatio: 0.38)
+  /// The way it is carried, as the antennas feel it: they sweep back, and swing past on a stop.
+  private var sweep = Spring(0, response: 0.36, dampingRatio: 0.26)
+  /// The same for the heavier parts that hang under and behind the head.
+  private var trail = Spring(0, response: 0.5, dampingRatio: 0.34)
+  /// How far it is off the ground, as the loose parts feel it.
+  private var drop = Spring(0, response: 0.28, dampingRatio: 0.3)
+  private var burstClock = -10.0, burstLength = 0.0
+  private var waveClock = -10.0
+  private var lastAir = 0.0, peakAir = 0.0, lastWave = 0.0
+  private var lastHeld = false
 
   private let faceWidth = 512
   private let faceHeight: Int
@@ -467,6 +479,14 @@ final class NeonScene: MascotFigure {
       let mark = Self.slab([(0.136, 0.85), (0.268, 0.85), (0.275, 0.9), (0.152, 0.9)], mirror: mirror, depth: 0.07, rubber)
       let edge = Self.slab([(0.168, 0.47), (0.2, 0.47), (0.262, 0.83), (0.232, 0.83)], mirror: mirror, depth: 0.068, lamp)
       for node in [fin, tip, mark, edge] { blade.addChildNode(node) }
+      if mirror {
+        // The blade that greets carries a light at its tip, lit only while it waves.
+        greetHalo.geometry = SCNPlane(width: 1.0, height: 1.0); greetHalo.geometry?.firstMaterial = lampHalo
+        greetHalo.position = SCNVector3(-0.285, 1.08, 0.08)
+        greetHalo.constraints = [SCNBillboardConstraint()]
+        greetHalo.opacity = 0
+        blade.addChildNode(greetHalo)
+      }
       head.addChildNode(blade); blades.append(blade)
     }
 
@@ -574,13 +594,18 @@ final class NeonScene: MascotFigure {
   }
   /// How strong the glitch is now, where its band is, and how far the band is pushed.
   private func glitch(_ clock: Double, moving: Bool) -> (amount: Double, band: Double, shift: Double) {
-    guard moving, mood != .asleep else { return (0, 0, 0) }
+    guard moving else { return (0, 0, 0) }
     var amount = 0.0
     let since = clock - changeClock
     if since >= 0 && since < 0.34 { amount = 1 - since / 0.34 }
-    let period = mood == .attention ? 1.9 : mood == .offline ? 1.4 : 6.7
-    let phase = clock.truncatingRemainder(dividingBy: period)
-    if phase < 0.17 { amount = max(amount, 0.75 * (1 - phase / 0.17)) }
+    // A hand that takes it, and a landing: one short burst each.
+    let burst = clock - burstClock
+    if burst >= 0 && burst < burstLength { amount = max(amount, 1 - burst / burstLength) }
+    if mood != .asleep {
+      let period = mood == .attention ? 1.9 : mood == .offline ? 1.4 : 6.7
+      let phase = clock.truncatingRemainder(dividingBy: period)
+      if phase < 0.17 { amount = max(amount, 0.75 * (1 - phase / 0.17)) }
+    }
     guard amount > 0 else { return (0, 0, 0) }
     // It moves in steps, as a bad signal does.
     let step = (clock * 24).rounded(.down)
@@ -634,7 +659,7 @@ final class NeonScene: MascotFigure {
     context.restoreGState()
   }
 
-  private func drawFace(_ pose: MascotPose, glitch: (amount: Double, band: Double, shift: Double)) -> CGImage {
+  private func drawFace(_ pose: MascotPose, gaze: Double, glitch: (amount: Double, band: Double, shift: Double)) -> CGImage {
     let width = faceWidth, height = faceHeight
     let tint = self.tint, mood = self.mood
     return MascotScene.image(width: width, height: height) { context in
@@ -661,10 +686,11 @@ final class NeonScene: MascotFigure {
 
       // Eyes.
       let open = CGFloat(max(0.05, min(1.3, pose.eyeOpen)))
-      let happy = CGFloat(max(0, min(1, pose.squint)))
-      let hard: CGFloat = mood == .attention ? 0 : mood == .working ? 0.75 : mood == .sleepy || mood == .asleep ? 0.2 : 0.55
+      // A greeting pleases it as a click does. In a hand its eyes are wide and plain.
+      let happy = CGFloat(max(0, min(1, max(pose.squint, pose.wave))))
+      let hard: CGFloat = mood == .attention || pose.held ? 0 : mood == .working ? 0.75 : mood == .sleepy || mood == .asleep ? 0.2 : 0.55
       let eyeWidth = h * 0.72, eyeHeight = h * 0.5
-      let middle = CGPoint(x: w / 2 + CGFloat(pose.pupilX) * h * 0.24, y: h * 0.58 + CGFloat(pose.pupilY) * h * 0.1)
+      let middle = CGPoint(x: w / 2 + CGFloat(gaze) * h * 0.24, y: h * 0.58 + CGFloat(pose.pupilY) * h * 0.1)
       let apart = h * 0.7
       func eyes(shift: CGFloat, color: NSColor, glow: Bool) {
         for side in [CGFloat(-1), 1] {
@@ -804,6 +830,31 @@ final class NeonScene: MascotFigure {
     let lateYaw = CGFloat(pose.yaw - followYaw.value), lateRoll = CGFloat(pose.roll - followRoll.value)
     let lateRise = CGFloat(pose.bob + pose.lift - followRise.value)
 
+    // What the body does: it is carried, it is in the air, a hand takes it, it greets.
+    let gait = max(0, min(1, pose.gait)), way = max(-1, min(1, pose.travel)), air = max(0, min(1, pose.air))
+    sweep.target = way * gait; trail.target = way * gait; drop.target = air
+    if moving {
+      sweep.step(dt); trail.step(dt); drop.step(dt)
+      if pose.held && !lastHeld { burstClock = pose.clock; burstLength = 0.26 }
+      if air <= 0.001 && lastAir > 0.001 && peakAir > 0.3 {
+        // It lands: a short glitch, and the loose parts are thrown up.
+        burstClock = pose.clock; burstLength = 0.2
+        drop.velocity -= 5
+      }
+      if pose.wave > 0.02 && lastWave <= 0.02 { waveClock = pose.clock }
+    } else { sweep.snap(); trail.snap(); drop.snap() }
+    peakAir = air > 0.001 ? max(peakAir, air) : 0
+    lastAir = air; lastHeld = pose.held; lastWave = pose.wave
+    let swept = CGFloat(sweep.value), behind = CGFloat(trail.value), fallen = CGFloat(drop.value)
+    let flick = CGFloat(pose.stride * gait)
+    // Back and down: in the air by as much as the jump is high, so the tips stay in the frame.
+    let fold = CGFloat(air) * 0.85 + (fallen - CGFloat(air)) * 0.8 + CGFloat(gait) * 0.1 + abs(flick) * 0.06
+    let splay = max(0, -fallen)
+    let greeting = CGFloat(max(0, min(1, pose.wave)))
+    // The swing of the greeting stays a moment at each end, as a hand does.
+    let swing = sin((pose.clock - waveClock) * 2 * Double.pi * 3.0)
+    let beat = CGFloat((swing < 0 ? -1 : 1) * pow(abs(swing), 0.6))
+
     let now = glitch(pose.clock, moving: moving)
     let jolt = CGFloat(now.amount * now.shift) * 0.03
 
@@ -816,27 +867,51 @@ final class NeonScene: MascotFigure {
     head.eulerAngles = SCNVector3(CGFloat(pose.pitch), CGFloat(pose.yaw), CGFloat(pose.roll))
     head.position = SCNVector3(jolt, (give - 1) * 0.7, 0)
 
-    // The antennas whip after the head.
+    // The antennas whip after the head. Carried, they sweep back against the way
+    // and flick with each step. In the air they fold back, and spring up at the landing.
+    greetHalo.opacity = greeting * 0.95
+    let facing = head.simdOrientation
     for (index, blade) in blades.enumerated() {
       let side: CGFloat = index == 0 ? -1 : 1
-      blade.eulerAngles = SCNVector3(lateRise * 1.5, -lateYaw * 0.8, -side * 0.06 - lateRoll * 1.5 - lateYaw * 0.5)
+      // Carried, both tips trail. The blade on the side it comes from folds back,
+      // as an ear does, and the other leans in over the head: so both stay in the frame.
+      let inward = swept * side > 0
+      var lean = -side * 0.06 - lateRoll * 1.5 + lateYaw * 0.3 + swept * (inward ? 0.6 : 0.14) + flick * 0.16 - side * splay
+      var back = lateRise * 1.5 + fold + abs(swept) * (inward ? 0.2 : 0.85)
+      if index == 0 {
+        // One blade greets: it comes forward and swings in over the head three times, in step with the body.
+        lean += greeting * (-0.3 + 0.3 * beat)
+        back -= greeting * 0.3
+      }
+      // Never far out to the side, also when the head itself tips: the tip stays inside the view.
+      lean = side > 0 ? max(lean, -0.3 - CGFloat(pose.roll)) : min(lean, 0.3 - CGFloat(pose.roll))
+      // The lean is a turn in the plane of the screen and the fold a turn into its
+      // depth, whatever way the head faces: so a head that turns does not throw a tip out of the view.
+      let turn = simd_quatf(angle: Float(-back), axis: simd_float3(1, 0, 0)) * simd_quatf(angle: Float(lean), axis: simd_float3(0, 0, 1))
+      blade.simdOrientation = facing.inverse * turn * facing * simd_quatf(angle: Float(-lateYaw * 0.8), axis: simd_float3(0, 1, 0))
     }
 
     for (index, joint) in whip.enumerated() {
       let bend = CGFloat(index + 1) * 0.9
-      joint.eulerAngles = SCNVector3(lateRise * bend * 1.2 + (index == 0 ? -0.1 : 0), 0, (index == 0 ? -0.2 : 0) - (lateRoll * 1.3 + lateYaw * 0.9) * bend)
+      let back = lateRise * bend * 1.2 + (index == 0 ? 0.1 : 0) + fold * 0.45
+      let lean = (index == 0 ? -0.2 : 0) - (lateRoll * 1.3 - lateYaw * 0.4) * bend + (swept * 0.34 + flick * 0.12) * CGFloat(index + 1)
+      joint.eulerAngles = SCNVector3(-back, 0, lean)
     }
 
     // The collar trails the head, tips with it and spreads under a press.
-    collar.position = SCNVector3(-lateYaw * 0.3 + CGFloat(pose.yaw) * 0.12, CGFloat(Self.collarHeight) - lateRise * 0.6 + (1 - give) * 0.2, 0)
-    collar.eulerAngles = SCNVector3(CGFloat(pose.pitch) * 0.4 + 0.26, 0, CGFloat(pose.roll) * 0.6 - lateRoll * 0.8 + CGFloat(pose.ringWobble) * 0.6)
+    // Carried, it hangs behind and banks into the way. In the air it drops away, and catches up at the landing.
+    collar.position = SCNVector3(-lateYaw * 0.3 + CGFloat(pose.yaw) * 0.12 - behind * 0.5,
+      CGFloat(Self.collarHeight) - lateRise * 0.6 + (1 - give) * 0.2 - fallen * 0.42, 0)
+    collar.eulerAngles = SCNVector3(CGFloat(pose.pitch) * 0.4 + 0.26, 0, CGFloat(pose.roll) * 0.6 - lateRoll * 0.8 + CGFloat(pose.ringWobble) * 0.6 - behind * 0.38)
     collar.scale = SCNVector3(size * wide * 0.88, size * 0.88, size * wide * 0.88)
     spin.eulerAngles.y = CGFloat(pose.sparkAngle) * 0.35
 
     // The marks turn slowly; the pointer rides them, and its speed is the state.
     let late = CGFloat(followScale.value)
     hud.scale = SCNVector3(late, late, 1)
-    hud.eulerAngles = SCNVector3(0.1 + CGFloat(pose.ringWobble) * 1.4, -lateYaw * 0.5, CGFloat(pose.roll) * 0.5 - lateRoll * 0.6)
+    hud.eulerAngles = SCNVector3(0.1 + CGFloat(pose.ringWobble) * 1.4, -lateYaw * 0.5 - behind * 0.5, CGFloat(pose.roll) * 0.5 - lateRoll * 0.6 + behind * 0.16)
+    // The marks stay behind the head: to the side when it is carried, below when it jumps out of them.
+    hud.position = SCNVector3(-behind * 0.34, 0.02 - CGFloat(pose.lift) * 0.75 / Self.size - lateRise * 0.3, -0.7)
     ticks.eulerAngles.z = CGFloat(pose.sparkAngle) * 0.12
     let turn = CGFloat(pose.sparkAngle)
     marker.position = SCNVector3((Self.hudRadius + 0.12) * cos(turn), (Self.hudRadius + 0.12) * sin(turn), 0)
@@ -852,10 +927,12 @@ final class NeonScene: MascotFigure {
     marker.scale = SCNVector3(0.8 + 0.5 * glow, 0.8 + 0.5 * glow, 1)
     for halo in earHalos { halo.opacity = 0.12 + 0.3 * glow }
     lamp.diffuse.intensity = 0.45 + 0.55 * glow
-    thrust.opacity = 0.2 + 0.45 * glow + CGFloat(pose.lift) * 1.2
-    thrust.position.y = CGFloat(Self.collarHeight) - 0.05 - lateRise * 0.6
-    thrust.scale = SCNVector3(size * (1 + CGFloat(pose.lift) * 1.5), size * (1 + CGFloat(pose.lift) * 2.5), 1)
-    thrustCore.scale = SCNVector3(0.8 + 0.3 * glow, 0.45 + CGFloat(pose.lift) * 1.2, 0.8 + 0.3 * glow)
+    // The light under it burns harder in a jump and at a run, and stretches out behind.
+    thrust.opacity = 0.2 + 0.45 * glow + CGFloat(pose.lift) * 1.2 + CGFloat(gait) * 0.3
+    thrust.position = SCNVector3(collar.position.x - behind * 0.4, CGFloat(Self.collarHeight) - 0.05 - lateRise * 0.6 - fallen * 0.42, 0.3)
+    thrust.scale = SCNVector3(size * (1 + CGFloat(pose.lift) * 1.5 + abs(behind) * 0.9), size * (1 + CGFloat(pose.lift) * 2.5), 1)
+    thrust.eulerAngles.z = behind * 0.3
+    thrustCore.scale = SCNVector3(0.8 + 0.3 * glow, 0.45 + CGFloat(pose.lift) * 1.2 + CGFloat(gait) * 0.5, 0.8 + 0.3 * glow)
 
     // Small signs of a live signal: the line that rolls down the glass, a
     // flicker in the light under the head, and the marks that close in when it needs the person.
@@ -891,12 +968,15 @@ final class NeonScene: MascotFigure {
     func step(_ value: Double, _ parts: Double) -> Int { Int((value * parts).rounded()) }
     let lively = voice > 0.03 || mood == .working
     let blinking = mood == .attention || mood == .sharing
-    let key = [step(pose.eyeOpen, 40), step(pose.squint, 20), step(pose.pupilX, 40), step(pose.pupilY, 30), step(pose.smile, 12),
+    // Carried, the eyes look along the way it goes.
+    let gaze = pose.pupilX + (way - pose.pupilX) * min(1, gait * 2.5)
+    let key = [step(pose.eyeOpen, 40), step(pose.squint, 20), step(gaze, 40), step(pose.pupilY, 30), step(pose.smile, 12),
+      step(pose.wave, 10), pose.held ? 1 : 0,
       step(voice, 20), lively ? step(pose.clock, 30) : 0, blinking ? step(pose.clock * 2.2, 5) : 0, step(pose.sheen, 40),
       step(now.amount, 3), now.amount > 0 ? step(pose.clock, 24) : 0, step(pose.sparkAngle, 5), step(pose.glow, 3)]
     if key != faceKey {
       faceKey = key
-      glass.emission.contents = drawFace(pose, glitch: now)
+      glass.emission.contents = drawFace(pose, gaze: gaze, glitch: now)
     }
   }
 }
