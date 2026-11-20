@@ -32,6 +32,13 @@ public struct ChatTranscript: Codable, Equatable {
     self.version = version; self.model = model; self.speech = speech; self.voiceDirectory = voiceDirectory; self.messages = messages
     self.memory = memory; self.execution = execution
   }
+  /// True when the transcript already holds what the person just sent. The service writes the person's message
+  /// down before it answers, so the message that is still being answered must not be drawn a second time.
+  public static func holdsPending(_ messages: [Message], pending: String?) -> Bool {
+    guard let pending, let last = messages.last, last.mine else { return false }
+    let plain: (String) -> String = { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    return plain(last.text) == plain(pending)
+  }
   public func validate() throws {
     try execution?.validate()
     guard version == 1, messages.count <= 400, voiceDirectory.hasPrefix("/"), voiceDirectory.count <= 4096,
