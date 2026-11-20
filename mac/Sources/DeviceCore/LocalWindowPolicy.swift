@@ -23,10 +23,12 @@ public enum LocalWindowPolicy {
 
   private static let denied: Set<String> = ["com.apple.Terminal", "com.googlecode.iterm2", "com.apple.systempreferences",
     "com.apple.keychainaccess", "com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.AuthenticationServicesUI",
-    "com.apple.ScreenSharing", "com.clawdtime.local-control", "com.clawdtime.companion", "com.clawdtime.task-panel", "com.clawdtime.supervisor.anish"]
+    "com.apple.ScreenSharing"]
   public static func validApplications(_ applications: [String]) -> Bool {
     applications.count <= 20 && Set(applications).count == applications.count && applications.allSatisfy {
+      // No app of ClawdTime itself can be allowed: local input never drives the product's own windows.
       $0.range(of: "^[A-Za-z0-9][A-Za-z0-9.-]{2,159}$", options: .regularExpression) != nil && !denied.contains($0)
+        && !LocalInputExclusion.inNamespace($0)
     }
   }
   public static func allowed(_ bundle: String, applications: [String]) -> Bool {

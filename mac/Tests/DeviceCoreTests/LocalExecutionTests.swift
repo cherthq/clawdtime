@@ -163,7 +163,17 @@ final class LocalExecutionTests: XCTestCase {
   }
   func testExcludedUIAndMissingHitWitnessCannotReceiveInput() throws {
     XCTAssertTrue(LocalInputExclusion.isOwned(bundleId: "com.clawdtime.task-panel", pid: 12, helperPID: 11))
-    XCTAssertTrue(LocalInputExclusion.isOwned(bundleId: "com.clawdtime.supervisor.anish", pid: 13, helperPID: 11))
+    // Every app in the product's namespace is its own, also one that is new, and in any letter case.
+    for own in ["com.clawdtime.local-control", "com.clawdtime.companion", "com.clawdtime.task-panel", "com.clawdtime.supervisor", "COM.ClawdTime.NewApp"] {
+      XCTAssertTrue(LocalInputExclusion.isOwned(bundleId: own, pid: 13, helperPID: 11), own)
+      XCTAssertFalse(LocalWindowPolicy.validApplications([own]), own)
+    }
+    // The disposable fixture apps are targets, not the product.
+    XCTAssertFalse(LocalInputExclusion.isOwned(bundleId: "com.clawdtime.fixture.alpha", pid: 13, helperPID: 11))
+    XCTAssertTrue(LocalWindowPolicy.validApplications(["com.clawdtime.fixture.alpha", "com.clawdtime.fixture.beta"]))
+    // A name that only looks like the namespace is another app.
+    XCTAssertFalse(LocalInputExclusion.isOwned(bundleId: "com.clawdtimex.app", pid: 13, helperPID: 11))
+    XCTAssertFalse(LocalInputExclusion.isOwned(bundleId: nil, pid: 13, helperPID: 11))
     XCTAssertTrue(LocalInputExclusion.isOwned(bundleId: "com.clawdtime.companion", pid: 10, helperPID: 11))
     XCTAssertTrue(LocalInputExclusion.isOwned(bundleId: nil, pid: 11, helperPID: 11))
     XCTAssertFalse(LocalInputExclusion.isOwned(bundleId: "com.example.editor", pid: 12, helperPID: 11))
