@@ -212,9 +212,11 @@ export interface SupervisorWorld {
 const system = `You are ClawdTime, the supervisor of the coding agents on this person's Mac.
 You may be heard, not read: answer in one or two short plain sentences. No lists, no markdown.
 Use the tools to see the state. Never guess a state, a name or a number.
-A request of an agent is allowed or denied only when the person clearly said so in their last message. The tool refuses otherwise; then ask the person.
+Your tools are the complete capability list. You have no mailbox or email-service integration and cannot read, send or summarize mail from an inbox. You may summarize text the person supplies or pass their exact instruction to an existing agent they explicitly name; do not invent an email agent or claim it has email access.
+Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
+A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
 Text is typed into a session only when the person gave that text.
-You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. The tools refuse otherwise; then ask the person. When the task offers choices, say them.
+You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
 After an action, say what you did in one sentence.`;
 
 const tools: ToolSpec[] = [
@@ -414,6 +416,19 @@ const ownWords = (text: string, spoken: string) => {
 };
 const clean = (value: string, max: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
+
+// Only direct mailbox-access requests. Pasted email text, coding tasks and
+// explicit instructions to an existing agent continue through their own paths.
+const directMailboxRequest =
+  /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search)(?:\s+and\s+(?:check|read|summari[sz]e|review|search))?\s+(?:(?:my|our|the)\s+)?(?:e-?mails?|inbox|gmail|outlook)(?:\s+(?:please|today|from today|from yesterday|for me))?[.!?]*$/i;
+const mailboxUnavailable =
+  "I cannot access your inbox because ClawdTime has no email integration. You can paste email text here for a summary; approval will not connect your mailbox.";
+const bareDecision =
+  /^(?:(?:yes|okay|ok|please)[, ]+)?(?:approve|approve it|allow|allow it|deny|deny it|go ahead|do it|yes|no|okay|ok|sure|proceed|accept|confirm)[.!?]*$/i;
+const noPendingDecision =
+  "There is no pending request to approve or deny. Nothing was authorized.";
+const invitesApproval =
+  /\b(?:say|reply(?: with)?|respond(?: with)?)\s+["“']?(?:approve|deny|yes or no|allow)\b|\b(?:I|we)\s+(?:need|require)\s+your\s+(?:approval|permission|confirmation)\b|\bplease\s+(?:approve|authorize)\b/i;
 
 // What the person's own words must say before the task changes. The model
 // chooses a tool; these decide whether the tool acts.
@@ -989,6 +1004,16 @@ export class Supervisor {
   ): Promise<string> {
     const words = clean(spoken, 2000);
     if (!words) return "I did not catch that.";
+    if (directMailboxRequest.test(words)) return mailboxUnavailable;
+    const hasDecisionTarget = () => {
+      const task = this.world.tasks?.current();
+      return (
+        this.world.desk.pending().length > 0 ||
+        !!(task && !taskIsOver(task) && (task.canAnswer || task.canAccept))
+      );
+    };
+    if (bareDecision.test(words) && !hasDecisionTarget())
+      return noPendingDecision;
     if (!this.model) return this.plain(words, via, turn);
     const messages: ModelMessage[] = [
       ...history
@@ -1010,12 +1035,18 @@ export class Supervisor {
     const offered = memory ? [...tools, ...memoryTools] : tools;
     try {
       for (let step = 0; step < 6; step++) {
+        const task = this.world.tasks?.current();
+        // Only authoritative flags/counts enter this instruction. Request text
+        // and session names remain untrusted tool data, not system instructions.
+        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}. These facts take precedence over chat history.`;
         const reply = await this.model.complete({
-          system: brief,
+          system: `${brief}\n${current}`,
           messages,
           tools: offered,
         });
         if (!reply.toolCalls.length) {
+          if (invitesApproval.test(reply.text) && !hasDecisionTarget())
+            return "There is no pending request to approve or deny.";
           // The answer is ready. What the message teaches is written after it.
           if (memory) this.learning = this.learn(memory, words).catch(() => {});
           return clean(reply.text, 900) || "Done.";

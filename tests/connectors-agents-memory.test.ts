@@ -538,12 +538,21 @@ describe("memory and the ClawdTime agent", () => {
       kind: "episode",
       expiresAt: start + 5 * day,
     });
-    // A short message, such as a plain yes, asks nothing more of the model.
-    run = scripted(["Allowed."]);
+    // A short conversational message asks nothing more of the model.
+    run = scripted(["You're welcome."]);
     supervisor = new Supervisor(value, run.model);
-    await supervisor.reply([], "yes approve it", "chat");
+    await supervisor.reply([], "thanks for that", "chat");
     await supervisor.learning;
     expect(run.seen).toHaveLength(1);
+    // Approval without a pending request is handled locally and teaches nothing.
+    run = scripted(["Allowed."]);
+    supervisor = new Supervisor(value, run.model);
+    expect(await supervisor.reply([], "yes approve it", "chat")).toContain(
+      "no pending request",
+    );
+    await supervisor.learning;
+    expect(run.seen).toHaveLength(0);
+    expect(desk.memory.facts()).toHaveLength(4);
     // The second question fails, or answers with no list, or with a broken one.
     for (const second of [
       new Error("offline"),

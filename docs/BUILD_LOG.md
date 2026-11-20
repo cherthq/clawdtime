@@ -2424,3 +2424,24 @@ response is lost, reopening with the original identity returns the same call
 and completes without a second dial (1,508 tests total after adding this case).
 No live call or deployment command was
 performed. Existing continuous-sharing qualification remains outstanding.
+
+## November 20, 2026 — correct unsupported mailbox approval replies
+
+The user showed a supervisor conversation that asked for approval to summarize
+an inbox, then admitted there was no email agent after receiving approval. No
+mailbox integration exists. Direct mailbox-access requests now report that
+limitation before consulting the model; pasted email content and explicitly
+requested coding/agent instructions retain their existing paths.
+
+Bare approval language with no current request or answerable/reviewable task
+cannot revive an invented request from chat history. Each model step receives
+fresh pending-request/task flags, and an approval invitation without a current
+target is suppressed. These guards address the reported flow; they are not
+exhaustive natural-language intent verification. No email integration or new
+external permissions were added.
+
+Validation: independent review passed; `npm run check` passed typechecking,
+1,515 tests across 84 files, and build. Regression coverage includes stale
+approval history, a model inventing an approval, supplied email text, explicit
+agent forwarding, email-feature coding tasks, and unchanged memory on an
+approval with no pending target. Native/media source was unchanged.

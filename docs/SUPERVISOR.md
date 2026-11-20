@@ -221,6 +221,13 @@ reply and no command. It runs inside the desktop service; with no service,
 
 ## Talk to ClawdTime
 
+The supervisor has no mailbox or email-provider integration. It cannot read or
+summarize your inbox, and an approval cannot add that capability. It can help
+with email text you provide, or pass your explicit words to an existing agent;
+that agent's own tools and permissions determine what it can do. Approval
+prompts must refer to an actual waiting request, not a capability the supervisor
+imagines it could acquire.
+
 ClawdTime is also an agent that you can talk to. It sees what the board sees and
 acts through the same desk and trove. There are three ways, and they share one
 conversation:

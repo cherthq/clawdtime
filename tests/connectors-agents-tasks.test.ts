@@ -190,6 +190,23 @@ const asking: Partial<TaskFacts> = {
 };
 
 describe("a task by talking, with a language model", () => {
+  it("still starts a coding task to implement an email feature", async () => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    const run = scripted([
+      [call("start_task", { goal: "implement an email summary feature" })],
+      "The coding task was recorded.",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "Start a task: implement an email summary feature",
+      "chat",
+    );
+    expect(tasks.calls.map(({ kind, text }) => ({ kind, text }))).toEqual([
+      { kind: "start", text: "implement an email summary feature" },
+    ]);
+  });
+
   it("starts a task only when the person's last words ask for one, with the person's words", async () => {
     const tasks = fakeTasks();
     const { value } = world(tasks.port);

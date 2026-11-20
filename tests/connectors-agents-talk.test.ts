@@ -133,6 +133,99 @@ const ask = (desk: DecisionDesk, command = "git push origin main") =>
   });
 
 describe("the ClawdTime agent", () => {
+  it.each([
+    "can u check and summarize my emails?",
+    "Can you check my emails?",
+    "please read my inbox",
+  ])("does not invent an approval or email agent for %s", async (spoken) => {
+    const { value, desk, log } = world([session()]);
+    const { model, seen } = scripted([
+      "I need your approval to read your emails; please say approve or deny.",
+    ]);
+    const answer = await new Supervisor(value, model).reply([], spoken, "chat");
+    expect(answer).toContain("no email integration");
+    expect(answer).toContain("paste email text");
+    expect(seen).toEqual([]);
+    expect(desk.pending()).toEqual([]);
+    expect(log).toEqual([]);
+  });
+
+  it("ignores a stale invented approval when no request or task can take it", async () => {
+    const { value, desk, log } = world([
+      session({ state: "needs_you", detail: "permission_prompt" }),
+    ]);
+    const { model, seen } = scripted([
+      [call("decide", { request: 1, decision: "allow" })],
+      "Approved. I will read your email.",
+    ]);
+    const answer = await new Supervisor(value, model).reply(
+      [
+        {
+          role: "assistant",
+          text: "Say approve and I can read your inbox.",
+          at: now,
+          via: "chat",
+        },
+      ],
+      "yes approve it",
+      "chat",
+    );
+    expect(answer).toBe(
+      "There is no pending request to approve or deny. Nothing was authorized.",
+    );
+    expect(seen).toEqual([]);
+    expect(desk.pending()).toEqual([]);
+    expect(log).toEqual([]);
+  });
+
+  it("grounds model replies in current requests and rejects a phantom approval invitation", async () => {
+    const { value, log } = world([]);
+    const { model, seen } = scripted([
+      "I need your approval to retrieve the account information. Please approve.",
+    ]);
+    const answer = await new Supervisor(value, model).reply(
+      [],
+      "Can you get my account information?",
+      "chat",
+    );
+    expect(answer).toContain("no pending request");
+    expect(seen[0]!.system).toContain("pending desk requests=0");
+    expect(seen[0]!.system).toContain(
+      "Approval cannot add a missing capability",
+    );
+    expect(log).toEqual([]);
+  });
+
+  it("still summarizes supplied email text and forwards explicit instructions to a named agent", async () => {
+    const { value, log } = world([session()]);
+    let run = scripted(["The meeting moved to Tuesday."]);
+    expect(
+      await new Supervisor(value, run.model).reply(
+        [],
+        "Summarize this email: The meeting is now on Tuesday.",
+        "chat",
+      ),
+    ).toBe("The meeting moved to Tuesday.");
+    expect(run.seen).toHaveLength(1);
+    run = scripted([
+      [
+        call("type_into_session", {
+          session: "deploy fix",
+          text: "summarize my emails",
+        }),
+      ],
+      "Passed your instruction to deploy fix.",
+    ]);
+    expect(
+      await new Supervisor(value, run.model).reply(
+        [],
+        "Tell deploy fix: summarize my emails",
+        "chat",
+      ),
+    ).toBe("Passed your instruction to deploy fix.");
+    expect(log).toEqual(["send 100-abc: summarize my emails"]);
+  });
+
   it("looks at the state through its tool and answers in words", async () => {
     const { value } = world([
       session(),
@@ -209,7 +302,11 @@ describe("the ClawdTime agent", () => {
       "Allowed. The agent continues.",
     );
     run = scripted([[call("decide", { request: 9, decision: "allow" })], "ok"]);
-    await new Supervisor(value, run.model).reply([], "approve", "chat");
+    await new Supervisor(value, run.model).reply(
+      [],
+      "approve request 9",
+      "chat",
+    );
     expect(run.seen[1]!.messages.at(-1)!.content).toBe(
       "No request has that number.",
     );
