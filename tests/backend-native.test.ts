@@ -887,6 +887,102 @@ describe("native protocol integration without live traffic", () => {
       "ringing",
     );
   });
+  it("records the media session as closed when the close answers 404 for a session that was never created", async () => {
+    const f = fixture(),
+      original = f.transport.media.bind(f.transport);
+    f.transport.media = async (path, body) => {
+      if (path === "/sessions") throw new Error("Provider returned HTTP 503.");
+      // The media service answers 404 to a close for a session it never created.
+      if (path.endsWith("/close"))
+        throw new Error("Provider returned HTTP 404.");
+      return original(path, body);
+    };
+    await f.app.drain();
+    const mediaId = mediaSessionId(f.attention.id);
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+    expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+    expect(f.store.get<{ state: string }>("media", mediaId)).toMatchObject({
+      state: "closed",
+      outcome: "failed",
+    });
+    // The agent can release itself: no owned media session stays uncertain.
+    expect(
+      f.app.acknowledgeTerminal(
+        f.agent.token,
+        f.attention.id,
+        f.agent.session.controlEpoch,
+      ).acknowledgement,
+    ).toMatchObject({ state: "failed", humanApproval: false });
+  });
+  it.each([
+    [
+      "answers 404",
+      "closed",
+      (_id: string): Record<string, unknown> => {
+        throw new Error("Provider returned HTTP 404.");
+      },
+    ],
+    [
+      "reports the session closed",
+      "closed",
+      (id: string): Record<string, unknown> => ({
+        id,
+        alive: false,
+        state: "closed",
+      }),
+    ],
+    [
+      "reports the session alive",
+      "unknown",
+      (id: string): Record<string, unknown> => ({
+        id,
+        alive: true,
+        state: "prepared",
+      }),
+    ],
+    [
+      "cannot be reached",
+      "unknown",
+      (_id: string): Record<string, unknown> => {
+        throw new Error("fetch failed");
+      },
+    ],
+  ] as const)(
+    "after a media close that failed in transit, a status read that %s leaves the record %s",
+    async (_name, expected, status) => {
+      const f = fixture(),
+        original = f.transport.media.bind(f.transport),
+        mediaId = mediaSessionId(f.attention.id),
+        reads: { path: string; body: unknown }[] = [];
+      let dispatched = false;
+      f.transport.media = async (path, body) => {
+        if (dispatched) reads.push({ path, body });
+        if (path === "/sessions" || path === `/sessions/${mediaId}/close`)
+          throw new Error("fetch failed");
+        if (path === `/sessions/${mediaId}`) return status(mediaId);
+        return original(path, body);
+      };
+      await f.app.drain();
+      dispatched = true;
+      // The line is free at once; only the media record waits.
+      expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("failed");
+      expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+      expect(f.store.get<{ state: string }>("media", mediaId)?.state).toBe(
+        "unknown",
+      );
+      await f.transport.pollCalls((id, state, qualified) =>
+        f.app.observeCall(id, state, qualified),
+      );
+      expect(f.store.get<{ state: string }>("media", mediaId)?.state).toBe(
+        expected,
+      );
+      // Reconciliation only reads. The close is never sent again.
+      expect(reads).toEqual([
+        { path: `/sessions/${mediaId}`, body: undefined },
+      ]);
+      expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    },
+  );
   it("keeps the line reserved when the dial was sent and its response was lost", async () => {
     const f = fixture(),
       original = f.transport.calls.bind(f.transport);

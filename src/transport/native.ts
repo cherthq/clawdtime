@@ -111,6 +111,9 @@ const credentialsSchema = z.object({
 });
 export const mediaSessionId = (requestId: string) =>
   `ct_${hash(requestId).slice(0, 40)}`;
+/** The media service answers 404 for a session that it does not hold. */
+const mediaNotFound = (error: unknown) =>
+  error instanceof Error && error.message === "Provider returned HTTP 404.";
 export class NativeTransport implements Transport {
   readonly mode = "live" as const;
   readonly messages: NativeMessages;
@@ -754,9 +757,10 @@ export class NativeTransport implements Transport {
       }
       // No dial left this process, so the call outcome is certain: it never
       // started. Only the prepared media session may remain, and it holds no line.
+      // A 404 means that the media service never created it, so nothing is open.
       const closed = await this.media(`/sessions/${id}/close`, {}).then(
         () => true,
-        () => false,
+        mediaNotFound,
       );
       this.store.put(
         "media",
@@ -1447,8 +1451,38 @@ export class NativeTransport implements Transport {
           }
         }
       }
+      await this.reconcileUndialedMedia();
     } finally {
       this.polling = false;
+    }
+  }
+  /** A media session whose call was refused before the dial holds no call and no
+   * line. When its close failed in transit, only a status read may settle the
+   * record: the media service does not hold the session, or reports it closed.
+   * The close is never sent again. */
+  private async reconcileUndialedMedia() {
+    for (const session of this.store
+      .all<MediaRecord>("media")
+      .filter(
+        (s) =>
+          s.state === "unknown" &&
+          !s.providerCallId &&
+          this.store.effect(`${s.requestId}:call`)?.state === "failed",
+      )) {
+      const closed = await this.media(`/sessions/${session.id}`).then(
+        (status) =>
+          status.id === session.id &&
+          status.alive === false &&
+          status.state === "closed",
+        mediaNotFound,
+      );
+      if (closed)
+        this.store.put<MediaRecord>("media", {
+          id: session.id,
+          requestId: session.requestId,
+          state: "closed",
+          outcome: "failed",
+        });
     }
   }
 }

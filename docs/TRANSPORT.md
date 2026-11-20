@@ -198,6 +198,15 @@ as `failed` and the local call as `ended`, so the line is free for the next
 request. Nothing is retried: the agent must make a new request with a new
 idempotency key. Any failure at or after the allocation request stays unknown.
 
+The media record of such a call is `closed` when the close succeeds, and also
+when the media service answers 404, because it then never created the session.
+When the close fails in transit, the line is still released and the media record
+stays `unknown`. `NativeTransport.pollCalls()` then reads the status of that
+media session and records `closed` when the media service answers 404 or reports
+the session closed. The close is never sent again. Any other status, such as a
+session that the media service reports as interrupted, leaves the record
+`unknown`.
+
 Unknown text-operation receipts retain their original operation origin. The
 source adapter does not establish a read-only lookup contract for that API, so
 ClawdTime cannot automatically clear them. Operator recovery must obtain exact
