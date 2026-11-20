@@ -95,7 +95,7 @@ struct CapturedFrame {
     var pid: pid_t = 0
     guard AXUIElementGetPid(element, &pid) == .success,
       let app = NSRunningApplication(processIdentifier: pid), let bundle = app.bundleIdentifier,
-      let identity = ProcessLifetimeIdentity.resolve(pid: pid, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970) else { return nil }
+      let identity = ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970) else { return nil }
     let material = identity.stableMaterial + "|" + String(CFHash(element))
     let digest = SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
     return LocalFocusWitness(element: element, process: identity, digest: digest)

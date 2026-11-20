@@ -42,7 +42,7 @@ private struct WindowRefusal: Error {}
     guard !app.isTerminated, !app.isHidden, let bundle = app.bundleIdentifier, bundle.utf8.count <= 80,
       LocalWindowPolicy.allowed(bundle, applications: applications),
       !LocalInputExclusion.isOwned(bundleId: bundle, pid: app.processIdentifier, helperPID: ProcessInfo.processInfo.processIdentifier) else { return nil }
-    return ProcessLifetimeIdentity.resolve(pid: app.processIdentifier, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970)
+    return ProcessLifetimeIdentity.resolveLive(pid: app.processIdentifier, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970)
   }
   private static func inspect(_ window: AXUIElement, app: NSRunningApplication, applications: [String], display: CGRect) throws -> LocalWindowWitness {
     guard AXUIElementSetMessagingTimeout(window, 0.04) == .success,
@@ -76,9 +76,7 @@ private struct WindowRefusal: Error {}
     var result = [LocalWindowWitness]()
     for app in NSWorkspace.shared.runningApplications where identity(app, applications: applications) != nil {
       if result.count >= 20 || ProcessInfo.processInfo.systemUptime >= deadline { break }
-      let element = AXUIElementCreateApplication(app.processIdentifier)
-      guard AXUIElementSetMessagingTimeout(element, 0.04) == .success,
-        let raw = try? read(element, "AXWindows"), let windows = raw as? [AXUIElement], windows.count <= 32 else { continue }
+      guard let windows = try? LocalApplicationWindows.read(pid: app.processIdentifier) else { continue }
       for window in windows {
         if result.count >= 20 || ProcessInfo.processInfo.systemUptime >= deadline { break }
         if let witness = try? inspect(window, app: app, applications: applications, display: display) { result.append(witness) }
@@ -93,9 +91,7 @@ private struct WindowRefusal: Error {}
   static func validate(_ witness: LocalWindowWitness, displayId: UInt32, applications: [String]) -> Bool {
     guard let app = NSRunningApplication(processIdentifier: witness.process.pid),
       identity(app, applications: applications) == witness.process else { return false }
-    let element = AXUIElementCreateApplication(app.processIdentifier)
-    guard AXUIElementSetMessagingTimeout(element, 0.04) == .success,
-      let raw = try? read(element, "AXWindows"), let windows = raw as? [AXUIElement], windows.count <= 32,
+    guard let windows = try? LocalApplicationWindows.read(pid: app.processIdentifier),
       windows.contains(where: { CFEqual($0, witness.window) }),
       let current = try? inspect(witness.window, app: app, applications: applications, display: CGDisplayBounds(displayId)) else { return false }
     return same(witness, current)

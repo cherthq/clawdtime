@@ -140,8 +140,15 @@ operator recovery UX, distribution signing/notarization and clean-install testin
 remain production gates. Phone continuous-sharing qualification is separate.
 
 
-PR #7 native follow-up validation passes 1,681 TypeScript tests and 173 Swift
+PR #7 native follow-up validation passes 1,681 TypeScript tests and 175 Swift
 tests. Independent reviewers covered the target/window proofs, preserved native
 preflight guards, local-only helper identity and competing-helper refusal. The
 remaining physical gate is a two-app activation/type/save/Stop test; automated
 success does not qualify desktop input or installation.
+
+The first physical attempt stopped before native input because the fixture apps
+had no Launch Services timestamp and exposed an empty AXWindows list. Native
+witnesses now use a real kernel process-start tuple when necessary, and combine
+actual AXWindows/MainWindow/FocusedWindow references with bounded type/PID checks.
+A read-only probe of the exact source finds and revalidates both fixtures. Local
+Stop was observed, but activation/type/save acceptance is still pending.

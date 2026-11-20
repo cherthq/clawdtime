@@ -157,7 +157,7 @@ private func digest(_ value: String) -> String {
   private static func process(_ pid: pid_t) -> ProcessLifetimeIdentity? {
     guard let app = NSRunningApplication(processIdentifier: pid), let bundle = app.bundleIdentifier,
       !LocalInputExclusion.isOwned(bundleId: bundle, pid: pid, helperPID: ProcessInfo.processInfo.processIdentifier) else { return nil }
-    return ProcessLifetimeIdentity.resolve(pid: pid, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970)
+    return ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: bundle, launchTime: app.launchDate?.timeIntervalSince1970)
   }
   private static func hit(_ point: CGPoint) -> AXUIElement? {
     var element: AXUIElement?
@@ -183,9 +183,7 @@ private func digest(_ value: String) -> String {
       let key = identity.stableMaterial + String(describing: cgRect)
       guard visited.insert(key).inserted else { continue }
       do {
-        let app = AXUIElementCreateApplication(pid)
-        guard AXUIElementSetMessagingTimeout(app, 0.04) == .success,
-          let raw = try read(app, "AXWindows") as? [AXUIElement] else { continue }
+        let raw = try LocalApplicationWindows.read(pid: pid)
         let windows = raw.filter { (try? rect($0)) == cgRect }
         guard windows.count == 1 else { continue }
         let window = windows[0]

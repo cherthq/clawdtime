@@ -19,7 +19,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
     submenu.addItem(withTitle: "Quit fixture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     NSApp.mainMenu = menu
     let frame = NSScreen.screens[0].visibleFrame
-    if name == "Alpha" {
+    if name == "Alpha" && !CommandLine.arguments.contains("--passive") {
       let background = NSWindow(contentRect:NSScreen.screens[0].frame,styleMask:.borderless,backing:.buffered,defer:false)
       background.backgroundColor = .white
       background.isReleasedWhenClosed = false
@@ -51,9 +51,10 @@ final class Fixture: NSObject, NSApplicationDelegate {
     content.addSubview(save)
     result = label("No note saved",y:50,size:26)
     persist("")
-    window.makeKeyAndOrderFront(nil)
+    if CommandLine.arguments.contains("--passive") { window.orderBack(nil) }
+    else { window.makeKeyAndOrderFront(nil) }
     window.setFrameOrigin(NSPoint(x:left,y:frame.minY+160))
-    NSApp.activate(ignoringOtherApps:true)
+    if !CommandLine.arguments.contains("--passive") { NSApp.activate(ignoringOtherApps:true) }
   }
   func persist(_ value: String) {
     let data = try! JSONSerialization.data(withJSONObject:["fixture":name,"saved":value])

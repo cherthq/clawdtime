@@ -3,6 +3,18 @@ import Foundation
 /// Activation is narrower than screenshot access: only explicitly configured
 /// ordinary applications, never launch, minimize reversal, security UI or shells.
 public enum LocalWindowPolicy {
+  public static func windowCandidates<T>(listed: [T], main: T?, focused: T?, expectedPID: Int32,
+      owner: (T) -> Int32?, same: (T, T) -> Bool) throws -> [T] {
+    guard expectedPID > 0, listed.count <= 32 else { throw HelperError(409, "Application window catalog exceeds its bound.") }
+    var result = [T]()
+    for value in listed + [main, focused].compactMap({ $0 }) {
+      guard owner(value) == expectedPID else { throw HelperError(409, "Application window owner changed.") }
+      if !result.contains(where: { same($0, value) }) { result.append(value) }
+      guard result.count <= 32 else { throw HelperError(409, "Application window catalog exceeds its bound.") }
+    }
+    return result
+  }
+
   public static func requireNativeActivation(accessibility: Bool, secureInput: Bool, displayActive: Bool) throws {
     guard accessibility, !secureInput, displayActive else {
       throw HelperError(403, "Accessibility, an active display and non-secure input are required.")

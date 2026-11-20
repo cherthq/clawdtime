@@ -4,6 +4,16 @@ import XCTest
 @testable import DeviceCore
 
 final class TaskCapturePolicyTests: XCTestCase {
+  func testLiveKernelLifetimeFallbackIsStableWithoutLaunchServicesDate() throws {
+    let pid = ProcessInfo.processInfo.processIdentifier
+    let first = try XCTUnwrap(ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: "com.example.fixture", launchTime: nil))
+    XCTAssertEqual(first.source, "kernel_start")
+    XCTAssertEqual(first, ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: "com.example.fixture", launchTime: nil))
+    XCTAssertNil(ProcessLifetimeIdentity.resolveLive(pid: -1, bundleId: "com.example.fixture", launchTime: nil))
+    XCTAssertNil(ProcessLifetimeIdentity.resolveLive(pid: Int32.max, bundleId: "com.example.fixture", launchTime: nil))
+    XCTAssertNil(ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: "com.example.fixture", launchTime: .nan))
+    XCTAssertEqual(ProcessLifetimeIdentity.resolveLive(pid: pid, bundleId: "com.example.fixture", launchTime: 123)?.source, "launch_date")
+  }
   func testExactTargetAndExpiryCannotWidenToAnotherWindow() throws {
     let target = try JSONDecoder().decode(TaskCaptureTarget.self, from: Data("""
       {"appId":"com.example.fixture","windowId":"101","ownerPid":123,"displayId":1,

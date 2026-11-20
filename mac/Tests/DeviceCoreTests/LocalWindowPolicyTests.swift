@@ -4,6 +4,22 @@ import XCTest
 
 final class LocalWindowPolicyTests: XCTestCase {
   let applications = ["com.clawdtime.fixture.alpha", "com.clawdtime.fixture.beta"]
+  func testBoundedRealWindowReferenceUnionHandlesEmptyListAndDeduplicates() throws {
+    XCTAssertEqual(try LocalWindowPolicy.windowCandidates(listed: [Int](), main: 10, focused: 10,
+      expectedPID: 7, owner: { _ in 7 }, same: ==), [10])
+    XCTAssertEqual(try LocalWindowPolicy.windowCandidates(listed: [10, 11], main: 10, focused: 12,
+      expectedPID: 7, owner: { _ in 7 }, same: ==), [10, 11, 12])
+    XCTAssertEqual(try LocalWindowPolicy.windowCandidates(listed: [Int](), main: nil, focused: nil,
+      expectedPID: 7, owner: { _ in 7 }, same: ==), [])
+    XCTAssertThrowsError(try LocalWindowPolicy.windowCandidates(listed: [10], main: 11, focused: nil,
+      expectedPID: 7, owner: { (value: Int) -> Int32? in value == 10 ? 7 : 8 }, same: ==))
+    XCTAssertThrowsError(try LocalWindowPolicy.windowCandidates(listed: [10], main: nil, focused: nil,
+      expectedPID: 7, owner: { _ in nil }, same: ==))
+    XCTAssertThrowsError(try LocalWindowPolicy.windowCandidates(listed: Array(0..<32), main: 32, focused: nil,
+      expectedPID: 7, owner: { _ in 7 }, same: ==))
+    XCTAssertThrowsError(try LocalWindowPolicy.windowCandidates(listed: Array(repeating: 10, count: 33), main: nil, focused: nil,
+      expectedPID: 7, owner: { _ in 7 }, same: ==))
+  }
   func testActivationRetainsNativeSecurityPreconditions() throws {
     try LocalWindowPolicy.requireNativeActivation(accessibility: true, secureInput: false, displayActive: true)
     XCTAssertThrowsError(try LocalWindowPolicy.requireNativeActivation(accessibility: false, secureInput: false, displayActive: true))
