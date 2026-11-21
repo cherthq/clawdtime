@@ -68,6 +68,7 @@ import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { openApp } from "../connectors/agents/apps.js";
 import { browse } from "../connectors/agents/browsing.js";
+import { showOnCall, ViewStore } from "../connectors/agents/view.js";
 import { lookAtScreen } from "../connectors/agents/eyes.js";
 import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
 import {
@@ -163,6 +164,7 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   chat [TEXT]                          talk to ClawdTime in text: it answers and can act
   talk                                 the same by voice: you speak, it speaks back
   jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
+  view [--json] | view clear           what the video of a call shows: one window, or the whole screen
   texts run | check                    answer your text messages on your Chert line (check sends nothing)
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
   agents call check                    ask the backend whether a call would work now; no call is placed
@@ -345,6 +347,23 @@ export async function supervisorCli(
   const trove = desk.trove;
   const command = args[0] ?? "";
 
+  if (group === "view") {
+    // What the video of a call shows: one window, or the whole screen. The line agent reads it.
+    const store = new ViewStore(root, () => system.now());
+    if (command === "clear") {
+      store.set(null);
+      return print("The call shows the whole screen.");
+    }
+    const { flags } = split(args, ["json"], []);
+    const now = store.get();
+    if (flags.json) return print(JSON.stringify(now));
+    return print(
+      now.view
+        ? `The call shows one window: ${Math.round(now.view.w * 100)} by ${Math.round(now.view.h * 100)} percent of the screen.`
+        : "The call shows the whole screen.",
+    );
+  }
+
   if (group === "jobs") {
     const { flags } = split(args, ["json"], []);
     const list = jobsFor(system, root, runner).recent(20);
@@ -523,6 +542,15 @@ export async function supervisorCli(
               ),
             jobs: jobsFor(system, root, runner),
             openApp: (name, url) => openApp(system, name, url, runner),
+            callView: (session) =>
+              showOnCall(
+                {
+                  store: new ViewStore(root, () => system.now()),
+                  run: runner,
+                  titles: (item) => tabTitles(item, titles(item)),
+                },
+                session,
+              ),
             browse: (action, options) =>
               browse(system, runner, action, options),
             look: (question) =>
@@ -840,6 +868,15 @@ export async function supervisorCli(
           ),
         jobs: jobsFor(system, root, runner),
         openApp: (name, url) => openApp(system, name, url, runner),
+        callView: (session) =>
+          showOnCall(
+            {
+              store: new ViewStore(root, () => system.now()),
+              run: runner,
+              titles: (item) => tabTitles(item, titles(item)),
+            },
+            session,
+          ),
         browse: (action, options) => browse(system, runner, action, options),
         look: (question) =>
           lookAtScreen(
@@ -923,6 +960,19 @@ export async function supervisorCli(
         );
       }
       return supervisor.learning;
+    }
+    if (group === "chat" && args[0] === "--recent") {
+      // The newest messages of the conversation, as data: a call that starts reads them, so it knows what came before.
+      const count = Math.min(40, Math.max(1, Number(args[1]) || 12));
+      return print(
+        JSON.stringify(
+          log.recent(count).map((message) => ({
+            role: message.role,
+            text: message.text.slice(0, 400),
+            at: message.at,
+          })),
+        ),
+      );
     }
     if (group === "chat") {
       if (args.length) {

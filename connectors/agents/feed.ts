@@ -29,6 +29,7 @@ import { sendText } from "./input.js";
 import { openApp } from "./apps.js";
 import { browse, type BrowserAction } from "./browsing.js";
 import { lookAtScreen } from "./eyes.js";
+import { showOnCall, ViewStore } from "./view.js";
 import { Jobs } from "./jobs.js";
 import { title } from "./render.js";
 import { realSystem, type System } from "./system.js";
@@ -253,6 +254,15 @@ export class BoardFeed implements AgentBoardPort {
                 action: BrowserAction,
                 choice: { browser?: string; tab?: number },
               ) => browse(files, options.runner ?? realRunner, action, choice),
+              callView: (session: AgentSession | null) =>
+                showOnCall(
+                  {
+                    store: new ViewStore(this.root, options.now ?? Date.now),
+                    run: options.runner ?? realRunner,
+                    titles: (item) => tabTitles(item, this.titles(item)),
+                  },
+                  session,
+                ),
               look: (question: string) =>
                 lookAtScreen(
                   {
