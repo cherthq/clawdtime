@@ -5417,7 +5417,7 @@ describe("a job that still works: only what is known of it is said", () => {
     async (draft) => {
       const got = await twoJobs("how are the jobs?", [draft, draft]);
       expect(got.answer, draft).toBe(
-        `"${work}" still works: one minute so far. "check the server" is done: "Three error logs were found". It runs in its own terminal window, where you can watch it. Ask me again for its answer.`,
+        `"check the server" is done: "Three error logs were found". "${work}" still works: one minute so far. The job that works runs in its own terminal window, where you can watch it. Ask me again for its answer.`,
       );
       expect(got.seen, draft).toHaveLength(3);
       // The note holds fixed words only: no request of a job.
@@ -5442,7 +5442,7 @@ describe("a job that still works: only what is known of it is said", () => {
     expect(got.seen).toHaveLength(2);
   });
 
-  it("reads only the job that the model saw when the code alone read the job", async () => {
+  it("reads only the jobs that the model saw when the code alone read them", async () => {
     // Five jobs of the day. The oldest has worked for 40 minutes. The
     // newest started from the person's last message, and the code reads
     // its line for "is it done?": the model sees no other job.
@@ -5498,7 +5498,11 @@ describe("a job that still works: only what is known of it is said", () => {
       await build(false),
       "Not yet: it has run 40 minutes.",
     );
-    expect(working.answer).toBe(known("2 minutes"));
+    // The state that the code read shows the newest three jobs: the answer
+    // that replaces it names the one that works and the newest that is done.
+    expect(working.answer).toBe(
+      '"tidy the folder" is done: "All fine". "add a footer to the page" still works: 2 minutes so far. The job that works runs in its own terminal window, where you can watch it. Ask me again for its answer.',
+    );
   });
 
   it("counts the news of a job in the conversation as known", async () => {
@@ -5757,6 +5761,338 @@ describe("a correction to a job that still works waits for that job", () => {
       between: ["what is docs doing?", "docs is idle."],
     });
     expect(got.waits).toBe(false);
+  });
+});
+
+describe("a question while jobs of the last day exist starts from their answers", () => {
+  const list = [
+    "The jobs that ClawdTime started in the last day, in the order in which they started:",
+    '1. Job "count the files in my downloads folder", started 5m ago, is done. Its answer: "There are 214 files."',
+    '2. Job "find the biggest file in my home folder", started 3m ago, is done. Its answer: "The biggest file is video.mov, 4.2 GB."',
+  ].join("\n");
+  /**
+   * Two finished jobs, then one message: what the code read for the model
+   * before its first answer, as the id of each read and its text.
+   */
+  const reads = async (
+    question: string,
+    options: { jobs?: boolean; hoursLater?: number } = {},
+  ) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    if (options.jobs !== false) {
+      expect(
+        (await made.jobs.start("count the files in my downloads folder")).ok,
+      ).toBe(true);
+      writeFileSync(
+        join(made.folder, made.ids().at(-1)!, "result.md"),
+        "There are 214 files.\n",
+      );
+      made.clock.now += 2 * 60_000;
+      expect(
+        (await made.jobs.start("find the biggest file in my home folder")).ok,
+      ).toBe(true);
+      writeFileSync(
+        join(made.folder, made.ids().at(-1)!, "result.md"),
+        "The biggest file is video.mov, 4.2 GB.\n",
+      );
+      made.clock.now += 3 * 60_000 + (options.hoursLater ?? 0) * 60 * 60_000;
+    }
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(made.world, model).reply([], question, "chat");
+    return (seen[0]?.messages ?? [])
+      .filter((message) => message.role === "tool")
+      .map((message) => [message.toolCallId, message.content]);
+  };
+
+  it.each([
+    "and which file was the biggest?",
+    "wait how many files did the first one count?",
+    "what did it find?",
+    "which of the two took longer to say?",
+  ])("reads the job list before the model answers %j", async (question) => {
+    // With no answer in front of it, the model makes one up: a name, a size.
+    expect(await reads(question), question).toEqual([["jobs_first", list]]);
+  });
+
+  it("reads nothing more for a question about the sessions: the state has the jobs", async () => {
+    const got = await reads("what is everyone doing?");
+    expect(got.map((read) => read[0])).toEqual(["state_first"]);
+    expect(got[0]![1]).toContain(
+      'Job "find the biggest file in my home folder"',
+    );
+  });
+
+  it.each([
+    // No question.
+    "thanks, that helps",
+    // The words fit a session: the question is about it.
+    "can you see what docs wrote?",
+  ])("reads no job list for %j", async (words) => {
+    expect((await reads(words)).map((read) => read[0])).not.toContain(
+      "jobs_first",
+    );
+  });
+
+  it("reads no job list when ClawdTime started no job, or none in the last day", async () => {
+    expect(
+      await reads("and which file was the biggest?", { jobs: false }),
+    ).toEqual([]);
+    expect(
+      await reads("and which file was the biggest?", { hoursLater: 25 }),
+    ).toEqual([]);
+  });
+
+  it("does not make the check of a job's answer look at other answers", async () => {
+    // A job still works, and the person asks about another thing. The list
+    // is read, but the answer is not about the job: it stands.
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    expect((await made.jobs.start("count the files")).ok).toBe(true);
+    made.clock.now += 3 * 60_000;
+    const draft = "You use pnpm here. A clean install takes 10 minutes.";
+    const { model, seen } = scripted([draft, draft]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "which package manager do I use?",
+        "chat",
+      ),
+    ).toBe(draft);
+    expect(seen).toHaveLength(1);
+    expect(
+      seen[0]!.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.toolCallId),
+    ).toEqual(["jobs_first"]);
+  });
+});
+
+describe("an offer to cancel a job that still works is not said", () => {
+  const request = "build a small landing page for my bakery in one html file";
+  const correction = "wait no, it's a cafe not a bakery";
+  /** The bakery job works and the correction waits for it. Then turns that are kept with the time of the clock. */
+  const twoJobs = async () => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    const say = async (model: ModelClient, sentence: string) => {
+      const at = made.clock.now;
+      const reply = await new Supervisor(made.world, model).reply(
+        [...history],
+        sentence,
+        "chat",
+      );
+      history.push(
+        { ...said("user", sentence), at },
+        { ...said("assistant", reply), at },
+      );
+      return reply;
+    };
+    expect(await say(wantsJob().model, request)).toBe(started);
+    made.clock.now += 3 * 60_000;
+    expect(await say(wantsJob().model, correction)).toContain(
+      "when the job before it is done",
+    );
+    made.clock.now += 30_000;
+    return { made, say };
+  };
+
+  it("drops the offer and keeps the rest when the newest job waits and the one before it works", async () => {
+    const { say } = await twoJobs();
+    // The code reads the newest job for "is the first one done?", and that job waits. The state shows both.
+    const offer =
+      "The bakery page still works. Want me to cancel it and switch to the cafe?";
+    const first = scripted([offer, offer]);
+    expect(await say(first.model, "ok and is the first one done?")).toBe(
+      "The bakery page still works.",
+    );
+    // The first fault asks for the same answer without the offer.
+    expect(first.seen[1]!.system).toContain(
+      "A check of your last draft: it offers to cancel, stop or restart a job. No tool does that",
+    );
+    // The same when the model reads the state itself before it offers.
+    expect(
+      await say(
+        scripted([[call("status")], offer, offer]).model,
+        "ok and is the first one done?",
+      ),
+    ).toBe("The bakery page still works.");
+    // An honest answer stands.
+    const honest =
+      "Not yet: the bakery page still works, and the cafe change waits for it.";
+    expect(
+      await say(scripted([honest]).model, "is the first one done now?"),
+    ).toBe(honest);
+  });
+
+  it("says what is known of the jobs when the offer is all that the answer holds", async () => {
+    const { say } = await twoJobs();
+    const offer = "Want me to cancel the bakery job?";
+    expect(
+      await say(
+        scripted([offer, offer]).model,
+        "ok and is the first one done?",
+      ),
+    ).toBe(
+      `"${request}" still works: 3 minutes so far. "${correction}" waits for the job before it. The job that works runs in its own terminal window, where you can watch it. Ask me again for its answer.`,
+    );
+  });
+
+  it.each([
+    // The offer speaks of a job by a word of its request, by "job", or by "it" after a sentence about a job.
+    ["Not yet. Want me to cancel the bakery one?", "Not yet."],
+    [
+      "The bakery job still works. Should I cancel it?",
+      "The bakery job still works.",
+    ],
+    [
+      "deploy fix still works. Want me to cancel the bakery job?",
+      "deploy fix still works.",
+    ],
+    [
+      "Still at it. I can restart the landing page job if you like.",
+      "Still at it.",
+    ],
+  ])("drops the offer in %j", async (draft, kept) => {
+    const { say } = await twoJobs();
+    expect(
+      await say(
+        scripted([draft, draft]).model,
+        "ok and is the first one done?",
+      ),
+    ).toBe(kept);
+  });
+
+  it.each([
+    // "It" is the job that the person asked about.
+    ["Not yet. Want me to cancel it?", "Not yet."],
+    // A word of a job's request, when the person asked about a job.
+    [
+      "The bakery page still works. Want me to cancel the bakery page?",
+      "The bakery page still works.",
+    ],
+    ["Not yet. Or should I cancel it?", "Not yet."],
+  ])(
+    "drops the offer when the person asked about a job: %j",
+    async (draft, kept) => {
+      const { say } = await twoJobs();
+      expect(
+        await say(
+          scripted([draft, draft]).model,
+          "ok and is the first one done?",
+        ),
+      ).toBe(kept);
+    },
+  );
+
+  it.each([
+    // The "not" of "Not yet" denies nothing: the offer stands in its own clause.
+    "Not yet; want me to cancel the bakery job?",
+    "Not yet, want me to cancel the bakery job?",
+    "Not yet - want me to cancel the bakery job",
+    // The only fact stands in the offer's sentence.
+    "The bakery job still works, want me to cancel it?",
+  ])(
+    "says what is known of the jobs when the whole answer is one sentence with the offer: %j",
+    async (draft) => {
+      const { say } = await twoJobs();
+      expect(
+        await say(
+          scripted([draft, draft]).model,
+          "ok and is the first one done?",
+        ),
+      ).toBe(
+        `"${request}" still works: 3 minutes so far. "${correction}" waits for the job before it. The job that works runs in its own terminal window, where you can watch it. Ask me again for its answer.`,
+      );
+    },
+  );
+
+  it.each([
+    "Sure. Should I stop the bakery job now?",
+    "Yes. I'll stop the bakery job now.",
+    "Okay. Want me to cancel the bakery job?",
+    "Of course, no problem. Let me stop the bakery job.",
+  ])("never leaves a bare yes when the offer is dropped: %j", async (draft) => {
+    // "Sure." alone would say yes to a stop that never happens.
+    const { say } = await twoJobs();
+    const answer = await say(
+      scripted([draft, draft]).model,
+      "can you stop the bakery job?",
+    );
+    expect(answer, draft).toContain("still works: 3 minutes so far.");
+    expect(answer, draft).not.toMatch(/^(?:sure|yes|okay|of course)/i);
+  });
+
+  it("drops such an offer also on a turn where only the job list was read", async () => {
+    const { say } = await twoJobs();
+    const draft = "I do not know. Want me to stop the bakery job?";
+    expect(
+      await say(scripted([draft, draft]).model, "which page has more text?"),
+    ).toBe("I do not know.");
+  });
+
+  it.each([
+    // About a session, about a task, or no offer at all: these stand on a question about the state.
+    "Two sessions work and one waits for you. Want me to stop the one that waits?",
+    "One session looks stuck. Should I restart the stuck one?",
+    "The task waits for your review. Should I cancel it?",
+    "The bakery job still works. There is nothing I can do to stop it.",
+    "I'll tell you if I have to restart anything.",
+    "The bakery job still works, and I cannot cancel it.",
+    // A word of a job's request in an offer about another thing.
+    "Two sessions work. Want me to stop the page from loading?",
+    "Should I restart the landing page server?",
+    // A session or the task in the offer's sentence: that offer is real.
+    "Want me to tell deploy fix to restart the tests?",
+    "The bakery job still works. Should I cancel that task instead?",
+  ])(
+    "leaves an answer alone that offers nothing about a job: %j",
+    async (draft) => {
+      const { say } = await twoJobs();
+      const run = scripted([draft, draft]);
+      expect(await say(run.model, "what is everyone doing?")).toBe(draft);
+      // An older check may ask once for the sessions' names. This one never asks.
+      expect(
+        run.seen.some((asked) =>
+          asked.system.includes("offers to cancel, stop or restart a job"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("says that the model did not answer when it fails after the code read the job list", async () => {
+    // The code's own read of the list is no action: the person still hears why nothing came.
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    expect((await made.jobs.start("count the files")).ok).toBe(true);
+    writeFileSync(
+      join(made.folder, made.ids().at(-1)!, "result.md"),
+      "There are 214 files.\n",
+    );
+    made.clock.now += 10 * 60_000;
+    const failing: ModelClient = {
+      async complete() {
+        throw new Error("the model is down");
+      },
+    };
+    expect(
+      await new Supervisor(made.world, failing).reply(
+        [],
+        "which file was the biggest?",
+        "chat",
+      ),
+    ).toContain(
+      "The language model did not answer, so nothing was done with that.",
+    );
   });
 });
 

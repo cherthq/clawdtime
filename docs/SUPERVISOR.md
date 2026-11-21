@@ -852,6 +852,21 @@ a tunnel and get its link, find something out: all of these are jobs.
   next message after you started a job, is about that job. The answer is data:
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
+- A question while ClawdTime started a job in the last day starts from the
+  jobs' answers: the code reads the job list before the language model
+  answers, unless it read the state (which shows the jobs) or your words
+  fit a session. With no answer in front of it, the model made one up
+  ("the biggest file is large_video.mp4").
+- An offer to cancel, stop or restart a job is never said: no tool does
+  that. When an answer about the jobs or the state makes such an offer
+  while a job works or waits, the language model answers once more without
+  it, and a second such answer loses the sentence with the offer and keeps
+  the rest. When what is left is nothing, or only a "yes" or "sure", it
+  says what is known of the jobs instead. Only a sentence that speaks of a
+  job counts: the word "job", a word of a job's request before "one" or
+  "job" ("the bakery one"), or, when you asked about a job, a word of a
+  request or "it". An offer in a sentence that names a session or the task
+  is another matter, and "I cannot stop it" is no offer.
 - With several jobs in the last day, "what did the first one find?" gets
   the first one's answer: the job tool gives the language model each job
   of the last day (the newest five), in the order in which they started,
