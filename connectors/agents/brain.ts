@@ -1066,7 +1066,7 @@ const clausesOf = (spoken: string) =>
     .filter(Boolean);
 /** What comes before an instruction in speech: a filler, a greeting, a polite opening. */
 const opening =
-  /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime)[,.!]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to)\s+)+/i;
+  /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|and|also|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime)[,.!]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to)\s+)+/i;
 const softwareNoun =
   /\b(?:landing\s+page|web\s*site|web\s*page|web\s*app|application|app|dashboard|feature|component|code|function|endpoint|API|test|tests|bug|bugs|config(?:uration)?|script|scripts|documentation|README)\b/i;
 /**
@@ -1091,12 +1091,82 @@ function codingGoal(
       request,
     );
   if (!verb) return null;
-  const object = verb[1]!.replace(/[^\p{L}]/gu, "").toLowerCase();
+  // "Build me a status page", "make us a dashboard": the thing to make is
+  // what follows "me" or "us" and an article. It is made for the person, so
+  // it is work of its own, and a thing that software work makes counts as
+  // its noun. "Update me", "make me sure" and "build me up" have no such
+  // thing after them.
+  // Only after "a", "an", "some" and the like: "write me the status of the
+  // tests" asks for the state.
+  const forThem =
+    /^(?:build|make|create|develop|write|design)\s+(?:me|us)\s+(?:an?|some|another|one|two|three)\s+(.+)$/i.exec(
+      request.split(/[.!?,;:]/, 1)[0]!,
+    );
+  // The thing itself must be one that software work makes: its phrase runs
+  // from the article to the first "of", "for", "with" and the like, and the
+  // last word of the phrase is its head. "A small status page for the team"
+  // is a page. "A table of the tests", "a server rack", "a logo for the
+  // site" and "a coffee and ..." are none, whatever stands after them.
+  const thing = forThem
+    ? forThem[1]!
+        .split(
+          /\s+(?:of|for|about|on|with|to|in|at|from|that|which|who|and|or|but|so|when|if|as)\b/i,
+          1,
+        )[0]!
+        .trim()
+    : "";
+  const lastWord = thing.split(/\s+/).at(-1) ?? "";
+  const lastTwo = thing.split(/\s+/).slice(-2).join(" ");
+  // Only a short list of things starts at once in this form: what is never
+  // an everyday thing (a site, an app, a dashboard, a bot, a CLI, an API, an
+  // endpoint, a landing page), and a page, script, test, file, config, tool
+  // or code only with a software word in its phrase ("a small status page",
+  // "a config file", "a unit test", "a cli tool") or, for a script, with
+  // what it does ("a script that renames the files"). Those words are also
+  // words for text and for things ("a page on the history of Rome", "a
+  // script for my presentation"), and so are a workflow, a pipeline, a
+  // library, a service, a package, a module and a server ("a hiring
+  // workflow", "a care package"): such a sentence goes to the model, as
+  // before. The list says what is taken: no list of what must be refused is
+  // ever complete.
+  const neverAThing =
+    /^(?:sites?|websites?|apps?|applications?|dashboards?|bots?|cli|apis?|endpoints?)$/i.test(
+      lastWord,
+    ) || /^(?:landing\s+page|web\s*site|web\s*page|web\s*app)$/i.test(lastTwo);
+  const withASoftwareWord =
+    /^(?:pages?|scripts?|tests?|code|files?|configs?|tools?)$/i.test(
+      lastWord,
+    ) &&
+    (/\b(?:status|landing|pricing|login|settings|admin|web|html|css|js|python|bash|shell|cli|unit|integration|api|config)\b/i.test(
+      thing,
+    ) ||
+      (/^scripts?$/i.test(lastWord) &&
+        /^\s+(?:that|to)\s+\S/i.test(
+          (forThem?.[1] ?? "").slice(thing.length),
+        )));
+  const madeForThem =
+    forThem !== null && thing !== "" && (neverAThing || withASoftwareWord);
+  const object = (forThem ? (thing.split(/\s+/).at(-1) ?? "") : verb[1]!)
+    .replace(/[^\p{L}]/gu, "")
+    .toLowerCase();
   // "Make no changes", "fix nothing": no work is asked for.
   if (["no", "nothing", "none"].includes(object)) return null;
   const firstSentence = request.split(/[.!?]/, 1)[0]!;
-  if (!softwareNoun.test(firstSentence)) return null;
+  // "Build me a ..." counts only by its own thing. Any other sentence needs
+  // a software noun, as before.
+  if (forThem ? !madeForThem : !softwareNoun.test(firstSentence)) return null;
   if (/\b(?:for example|hypothetical|hypothetically)\b/i.test(request))
+    return null;
+  // "Build me a status page when you have time", "... later", "... tomorrow":
+  // the person puts it off. Only for the new form: any other sentence is
+  // read as before.
+  if (
+    forThem &&
+    (putsOff(request) ||
+      /\bwhen(?:ever)?\s+you\s+(?:have|get|find)\s+(?:the\s+|some\s+|a\s+)?(?:time|chance|minute|moment)\b/i.test(
+        request,
+      ))
+  )
     return null;
   // The person takes it back or delays it, or reports what another person said.
   if (
