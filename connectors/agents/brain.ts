@@ -2041,6 +2041,19 @@ const notDone =
 /** What the job tool answers when ClawdTime started no job. The sessions of the person are not jobs. */
 const noJobYet =
   "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.";
+/** How long a job has run, in words that can be said: "3 minutes", "less than a minute". */
+const ranFor = (ms: number) => {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000);
+  return minutes < 1
+    ? "less than a minute"
+    : minutes === 1
+      ? "one minute"
+      : minutes < 60
+        ? `${minutes} minutes`
+        : minutes < 120
+          ? "more than an hour"
+          : `more than ${Math.floor(minutes / 60)} hours`;
+};
 /** One job in a sentence that can be said aloud. */
 function jobLine(job: JobFacts, now: number) {
   const head = `Job "${clean(job.job, 120)}", started ${elapsed(job.startedAt, now)} ago`;
@@ -2048,8 +2061,133 @@ function jobLine(job: JobFacts, now: number) {
     ? `${head}, is done. Its answer: ${clean(job.result ?? "", 600)}`
     : job.waiting
       ? `${head}, has not begun: it waits for the job before it.`
-      : `${head}, still works.`;
+      : // A job reports nothing until its answer is written. The line says
+        // so: a model that is not told what is unknown fills it in ("it is
+        // going through the logs").
+        `${head}, still works. It has run ${ranFor(now - job.startedAt)}. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.`;
 }
+/**
+ * Things inside a job's work. An answer about a job that still works names
+ * them only when the job's request, the person or a tool did: nothing
+ * reports what a job does until its answer is written.
+ */
+const jobInner =
+  /\b(?:logs?|errors?|error\s+messages?|commands?|scripts?|settings|configs?|configuration|files?|outputs?|services?|steps?|tests?|traces?|queries|records|entries)\b/gi;
+/** What the job "is doing": a verb in -ing after "is", "it's", "currently", "still" or "now". */
+const jobDoing =
+  /\b(?:is|it['\u2019]s|currently|still|now)\s+(?:(?:still|currently|now|just|busy)\s+)?(\p{L}+ing)\b/giu;
+/** Plain words for working on a request: they say nothing about the steps. */
+const plainDoing =
+  /^(?:working|running|going|taking|doing|checking|looking|digging|figuring|investigating|trying|finding|handling|getting|being|reporting|thing|nothing|anything|something|everything|during)$/i;
+/** How far a job is or when it ends: nothing reports that either. */
+const jobProgress =
+  /\b(?:halfway|half\s+way|(?:almost|nearly|about)\s+(?:done|finished|there|ready|complete|through)|about\s+to\s+(?:finish|end|be\s+done|complete|wrap)|percent|(?<!\bas\s)soon(?!\s+as\b)|shortly|any\s+(?:minute|moment|second)|(?:more|another|extra)\s+(?:\w+\s+)?(?:seconds?|minutes?|mins?|hours?)|(?:seconds?|minutes?|mins?|hours?)\s+(?:more|longer|left|to\s+go|remaining)|stuck|waiting\s+(?:for|on)\s+(?:you|your|input|an\s+answer))\b|%/i;
+/** An offer or a promise to look into a job, to hurry it or to stop it: no tool does that. */
+const jobOffer =
+  /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:speed|hurry|rush|nudge|push|poke|ping|check|look|peek|inspect|dig|investigate|try|run|restart|redo|scan|test|debug|fix|cancel|stop|kill|abort)\b/i;
+/**
+ * The answer says what a job that still works does now, in words that
+ * neither its request, nor the person, nor a tool used ("it is going through
+ * the logs", "it is compiling"), how far it is ("almost done"), or it offers
+ * to look into the job, to hurry it or to stop it.
+ */
+const guessesAtAJob = (answer: string, known: string) => {
+  const stem = (word: string) => word.toLowerCase().replace(/s$/, "");
+  const said = new Set((known.match(/\p{L}+/gu) ?? []).map(stem));
+  // "Building" is the request's "build", "debugging" its "debug", "making" its "make".
+  const doing = (word: string) => {
+    const root = word
+      .toLowerCase()
+      .replace(/ing$/, "")
+      .replace(/(.)\1$/, "$1");
+    return (
+      root.length >= 3 && [...said].some((other) => other.startsWith(root))
+    );
+  };
+  return (
+    jobOffer.test(answer) ||
+    jobProgress.test(answer) ||
+    [...answer.matchAll(jobInner)].some(
+      (match) => !match[0].split(/\s+/).every((word) => said.has(stem(word))),
+    ) ||
+    [...answer.matchAll(jobDoing)].some(
+      (match) => !plainDoing.test(match[1]!) && !doing(match[1]!),
+    )
+  );
+};
+/**
+ * Each length of time in the answer, in minutes: "3 minutes", "3m", "a
+ * minute", "30 seconds", "half an hour", "a couple of minutes". One letter is
+ * a unit only right after a figure that stands alone ("3m", not "fix-3m-bug"),
+ * and "one second" is a word of speech, not a time.
+ */
+const timesSaid = (answer: string) => {
+  const numbers: Record<string, number> = {
+    a: 1,
+    an: 1,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    "a couple of": 2,
+    "a few": 3,
+  };
+  const unit = (word: string) =>
+    word[0] === "s" ? 1 / 60 : word[0] === "h" ? 60 : 1;
+  const text = answer
+    .toLowerCase()
+    .replace(/\b(?:one|a)\s+(?:second|sec)\b/g, " ");
+  return [
+    ...[...text.matchAll(/\bhalf\s+an?\s+(hour|minute)\b/g)].map(
+      (match) => unit(match[1]!) / 2,
+    ),
+    ...[
+      ...text
+        .replace(/\bhalf\s+an?\s+(?:hour|minute)\b/g, " ")
+        .matchAll(
+          /(?<![\w.-])(?:(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|[smh])(?![\w-])|(a\s+couple\s+of|a\s+few|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:more\s+|full\s+|whole\s+)?(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b)/g,
+        ),
+    ].map((match) =>
+      match[1]
+        ? Number(match[1]) * unit(match[2]!)
+        : (numbers[match[3]!.replace(/\s+/g, " ")] ?? 0) * unit(match[4]!),
+    ),
+  ];
+};
+/**
+ * The answer gives a time that is not the time the job has run: "about a
+ * minute" after three, "23 minutes", "it just started".
+ */
+const wrongTimeOfAJob = (answer: string, ms: number) => {
+  const minutes = Math.max(0, ms) / 60_000;
+  return (
+    timesSaid(answer).some(
+      (said) => Math.abs(said - minutes) > Math.max(1, minutes / 4),
+    ) ||
+    (minutes >= 2 &&
+      /\b(?:just\s+(?:started|began|now)|only\s+just|(?:a\s+few\s+)?moments?\s+ago|a\s+moment\s+ago|(?:a\s+few\s+)?seconds?\s+ago)\b/i.test(
+        answer,
+      ))
+  );
+};
+/** The person asks how long it takes: the answer to that is a time. */
+const asksHowLong = (spoken: string) =>
+  /\b(?:how\s+long|so\s+long|too\s+long|taking\s+(?:forever|ages|long|so)|forever|ages|slow|stuck)\b/i.test(
+    spoken,
+  );
+/**
+ * Said in place of an answer that guesses at a job that still works, twice:
+ * only what is known. It promises no word when the job is done: only the
+ * message line tells a finished job by itself, and asking works everywhere.
+ */
+const jobStillWorks = (job: JobFacts, now: number) =>
+  `It still works: ${ranFor(now - job.startedAt)} so far. It runs in its own terminal window, where you can watch it. Ask me again for its answer.`;
 /** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
 const modelSilent =
   "The language model did not answer, so nothing was done with that. Say it again in a moment. The state now:";
@@ -4671,8 +4809,10 @@ export class Supervisor {
     // A message about sessions, agents or what waits is answered from the
     // state, so the state is read first and the model starts with it. It is
     // the same tool, called by the code: one answer of the model less, and
-    // no state from memory.
-    if (asksAboutState(words)) {
+    // no state from memory. A complaint about how long something takes
+    // ("why is this taking so long", "this is taking forever") is such a
+    // message too: with no state before it, the model makes one up.
+    if (asksAboutState(words) || asksHowLong(words)) {
       // When the state cannot be read here, the model reads it as before.
       try {
         const state = this.status().slice(0, 6000);
@@ -5066,6 +5206,65 @@ export class Supervisor {
               recheck = `\nA check of your last draft: it names no session. The person asked what runs, so call each session that works or waits by its name: ${busy.map(title).join(", ")}.`;
               continue;
             }
+          }
+          // The answer is about a job that still works, and it says what
+          // the job does now ("it is going through the logs"), how far it is,
+          // or offers to look into it or to speed it up. A job reports
+          // nothing until its answer is written, and no tool looks into it
+          // or hurries it. The model answers once more; a second such answer
+          // is replaced by what is known. The same holds for a time that is
+          // not the time the job has run ("about a minute" after three), and
+          // for no time at all when the person asks how long it takes.
+          // Only a turn that read the job is about the job: the model called
+          // the job tool, or the code read the job for a message that points
+          // at it. Words in the person's message are no sign of that ("how
+          // long is the readme?"). An answer that names a session is about
+          // that session, and a word that a tool gave in this turn (what a
+          // session does, the answer of an older job) is not a guess.
+          const running = this.jobsNow(1)[0];
+          const told = messages
+            .filter((message) => message.role === "tool")
+            .map((message) => message.content ?? "");
+          if (
+            running &&
+            !running.done &&
+            !running.waiting &&
+            this.world.now() - running.startedAt < 24 * 60 * 60 * 1000 &&
+            (ran.has("job_result") ||
+              messages.some(
+                (message) =>
+                  message.role === "tool" &&
+                  message.toolCallId === "job_first" &&
+                  message.content !== noJobYet,
+              )) &&
+            [...ran].every((name) => name === "job_result") &&
+            // The person asks about another job: the tool gives the newest.
+            !/\b(?:first|earlier|previous|other|older|last)\s+(?:job|one)\b/i.test(
+              words,
+            ) &&
+            !(this.world.board()?.sessions ?? []).some(
+              (session) =>
+                session.name !== null &&
+                saidAsWords(title(session), reply.text),
+            ) &&
+            (guessesAtAJob(
+              reply.text,
+              `${running.job} ${words} ${told.join(" ")}`,
+            ) ||
+              wrongTimeOfAJob(
+                reply.text,
+                this.world.now() - running.startedAt,
+              ) ||
+              // "Why is this taking so long": the answer is a time.
+              (asksHowLong(words) &&
+                !timesSaid(reply.text).length &&
+                !/\bless\s+than\s+a\s+minute\b/i.test(reply.text)))
+          ) {
+            if (rechecked) return jobStillWorks(running, this.world.now());
+            rechecked = true;
+            const since = ranFor(this.world.now() - running.startedAt);
+            recheck = `\nA check of your last draft: the job still works, and a job reports nothing until its answer is written. You know its request and that it has run ${since}, nothing else. Your draft says what the job does now or how far it is, or gives another time, or offers to look into the job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences: it still works and it has run ${since}. You can add that it runs in its own terminal window, where they can watch it. Offer nothing.`;
+            continue;
           }
           const offered = offeredWords(reply.text);
           if (offered !== null && !this.saidByThePerson(offered, words, turn)) {
