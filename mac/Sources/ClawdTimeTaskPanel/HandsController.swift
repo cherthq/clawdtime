@@ -41,6 +41,10 @@ import TaskPanelCore
   private var rights: (accessibility: Bool, screenRecording: Bool, at: Date)?
   /// A run begins: the app's own sheets get out of the way.
   var onRunStarted: (() -> Void)?
+  /// True when these hands do the computer work of the service. The panel then keeps its chat open
+  /// on a sent message: `onRunStarted` closes it when a run really starts.
+  private(set) var engine = false
+  private var engineRead: Date?
 
   init(pet: PetController) {
     self.pet = pet
@@ -62,6 +66,12 @@ import TaskPanelCore
         guard let self else { return }
         var active = false
         do {
+          // Which engine the service has changes only when the service starts again, or with the
+          // switch. A read every few seconds is enough.
+          if self.engineRead.map({ Date().timeIntervalSince($0) > 10 }) ?? true {
+            self.engine = (try? await client.handsAreEngine()) ?? false
+            self.engineRead = Date()
+          }
           let next = try await client.handsNext(after: self.ledger.last)
           failures = 0
           active = next.run.active || next.command != nil
@@ -90,7 +100,12 @@ import TaskPanelCore
     quiet()
   }
   /// The task service that answers now. Another instance counts its commands from the start again.
-  func service(instance: String) { ledger.service(instance) }
+  func service(instance: String) {
+    // Another service can have another engine: read it again at once.
+    if instance != serviceInstance { serviceInstance = instance; engineRead = nil }
+    ledger.service(instance)
+  }
+  private var serviceInstance: String?
 
   private func present(_ next: HandsNext) {
     // A command that waits counts as a run: the person sees the bar before anything is done.

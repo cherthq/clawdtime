@@ -208,6 +208,11 @@ On a phone call nothing says a question by itself. Ask "computer status": the
 answer is the question that waits. Then say yes or no. Both go to the desktop
 service through `clawdtime chat TEXT`.
 
+The chat of the panel stays open when you send a message. The panel closes its
+chat and its board only when a run really starts, so that they are not in the
+way of the hands. It reads which engine the service has from
+`GET /desktop/computer`, every few seconds.
+
 ## Stop
 
 Four ways: say `stop` in the chat, by voice or on a call, press **Stop** on the
@@ -444,8 +449,6 @@ Not tested, and so not proven:
   yes before the click, because of the name.
 - The words refresh, reload and press pass the hand-off with any object, when
   the language model picks the tool: "refresh the board" can go to the worker.
-- With the worker as the engine, the panel closes its chat and its board each
-  time you send a message. The answer shows when you open the chat again.
 - A second desktop service of the same user builds a second worker. The switch
   and the journal are one for each user, so its start marks a request of the
   first as uncertain.

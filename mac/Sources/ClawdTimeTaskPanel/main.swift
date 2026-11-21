@@ -337,7 +337,7 @@ import TaskPanelCore
     }
   }
   private func releaseNativeEditor() {
-    guard NativeExecutionPresentation.releasesEditor(executionControl.execution) else { return }
+    guard NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine) else { return }
     // Release only our UI. AppKit returns focus; no AX activation or target
     // restoration is attempted. Native capture still verifies the real focus.
     chatPanel.close(immediately: true)
@@ -397,7 +397,7 @@ import TaskPanelCore
   /// One typed message. The words show at once; the answer follows.
   private func sendChat(_ text: String) {
     guard let client, chatPending == nil else { return }
-    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine)
     releaseNativeEditor()
     chatPending = text; chatNotice = ""; renderChat()
     Task {
@@ -415,7 +415,7 @@ import TaskPanelCore
   /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
   private func heard(_ recording: String) async -> URL? {
     guard let client else { return nil }
-    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine)
     releaseNativeEditor(); renderChat()
     let result = try? await client.hear(recording)
     nativeSubmissionPending = false

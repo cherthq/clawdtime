@@ -250,6 +250,13 @@ extension HandCommand: Codable {
 
 /// What the panel reads from `GET /desktop/hands/next`: the next command, if one
 /// waits, and what to show while the worker runs.
+/// `GET /desktop/computer`, as far as the panel reads it: `enabled` is true when the worker that
+/// commands these hands is the engine of the service, and its switch is on.
+public struct ComputerEngine: Decodable, Equatable, Sendable {
+  public let enabled: Bool
+  public init(enabled: Bool) { self.enabled = enabled }
+}
+
 public struct HandsNext: Codable, Equatable, Sendable {
   public struct Pending: Codable, Equatable, Sendable {
     public let seq: Int

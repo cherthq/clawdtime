@@ -26,7 +26,7 @@ public final class PanelClient {
       path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
-      path == "/desktop/hands/result" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}$", options: .regularExpression) != nil ||
+      path == "/desktop/computer" || path == "/desktop/hands/result" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}$", options: .regularExpression) != nil ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -138,6 +138,11 @@ public final class PanelClient {
     let result = try JSONDecoder().decode(HandsNext.self, from: await request(path: "/desktop/hands/next?after=\(seq)"))
     try result.validate()
     return result
+  }
+  /// Computer use: true when the worker that commands the panel's hands is the engine of this
+  /// service. A service without that route, or without the worker, is not: the call throws or says false.
+  public func handsAreEngine() async throws -> Bool {
+    try JSONDecoder().decode(ComputerEngine.self, from: await request(path: "/desktop/computer")).enabled
   }
   /// Computer use: the result of one command. Exactly one POST: a failure is never
   /// sent again, and the worker reads a missing answer as an unknown outcome.
