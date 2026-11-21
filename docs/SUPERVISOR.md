@@ -564,6 +564,11 @@ done" does not open payments. One message opens a session once. The common typos
 "The other one", "another one" and "a different one" never mean the session
 that you asked to see just before: that one does not open again.
 
+Speech has fillers, and they do not hide a request: "um, can you like go back
+to the deploy fix one" opens it. After a question about the sessions in the
+same message ("what's waiting on me? open it"), ClawdTime makes sure that the
+second part is not left out.
+
 Right after you asked to see a session, your next message can be only the
 session, within ten minutes: "no wait, the other one", "and the docs one",
 "the web one" as the answer to "which one?". A remark is none: "now the docs
