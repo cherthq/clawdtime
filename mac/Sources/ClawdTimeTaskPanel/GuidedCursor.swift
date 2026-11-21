@@ -154,11 +154,13 @@ private final class GuidedCursorView: NSView {
   /// The main display: the one that the hands use.
   private var screen: CGRect { (NSScreen.screens.first ?? NSScreen.main)?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900) }
 
+  /// The size that the window was last given. While it stays, only the place of the window changes.
+  private var size = CGSize.zero
   private func put(_ tip: CGPoint) {
     shown = tip
     let layout = GuidedLayout(tip: tip, pillWidth: pillWidth, screen: screen)
-    if window.frame.size == layout.window.size { window.setFrameOrigin(layout.window.origin) }
-    else { window.setFrame(layout.window, display: false) }
+    if size == layout.window.size { window.setFrameOrigin(layout.window.origin) }
+    else { size = layout.window.size; window.setFrame(layout.window, display: false) }
     view.show(layout, label: label)
   }
   private func frame(_ step: Double) {

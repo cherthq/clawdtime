@@ -56,16 +56,17 @@ public struct GuidedPath: Equatable, Sendable {
   /// Seconds for a drag: slow enough that an app follows it.
   public static func dragDuration(length: Double) -> Double { min(0.60, 0.25 + max(0, length) / 3000) }
   /// Seconds for the guided cursor to glide `length` points. A glide is slow enough to follow on a
-  /// phone that shows the screen, and a long way takes longer than a short one, up to a limit.
-  public static let shortestGlide = 0.35, longestGlide = 0.70
+  /// phone that shows the screen: the picture of a call has 10 frames a second, so the shortest
+  /// glide is in four of them or more. A long way takes longer than a short one, up to a limit.
+  public static let shortestGlide = 0.45, longestGlide = 0.90
   public static func glideDuration(length: Double) -> Double {
     guard length.isFinite else { return shortestGlide }
-    return min(longestGlide, shortestGlide + max(0, length) / 2400)
+    return min(longestGlide, shortestGlide + max(0, length) / 2000)
   }
   /// Seconds that the cursor waits at the target before the click or the first key, so the eye
-  /// is there before the hand and the label can be read. Reduce Motion had no glide to lead the
-  /// eye, so its wait is longer.
-  public static func dwell(still: Bool) -> Double { still ? 0.35 : 0.20 }
+  /// is there before the hand and the label can be read: three frames of a call's picture. Reduce
+  /// Motion had no glide to lead the eye, so its wait is longer.
+  public static func dwell(still: Bool) -> Double { still ? 0.40 : 0.30 }
   /// Seconds that the cursor stays after a command, before it fades. A command that comes in this
   /// time takes the cursor on from where it is.
   public static let rest = 1.5

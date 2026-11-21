@@ -125,6 +125,12 @@ final class GuidedCursorLookTests: XCTestCase {
     XCTAssertEqual(first.tip, second.tip); XCTAssertEqual(first.pill, second.pill)
     XCTAssertEqual(second.window.origin.x - first.window.origin.x, 340.5, accuracy: 0.000_001)
     XCTAssertEqual(second.window.origin.y - first.window.origin.y, 112.25, accuracy: 0.000_001)
+    // That holds to the last digit at every place of a glide, also at places with a long fraction.
+    let way = GuidedPath.glide(from: CGPoint(x: 301.37, y: 399.91), to: CGPoint(x: 977.13, y: 641.07), still: false)
+    for frame in 0...108 {
+      let layout = GuidedLayout(tip: way.point(at: way.duration * Double(frame) / 108), pillWidth: 180, screen: screen)
+      XCTAssertEqual(layout.window.size, first.window.size); XCTAssertEqual(layout.tip, first.tip); XCTAssertEqual(layout.pill, first.pill)
+    }
   }
 
   func testWithNoLabelThereIsOnlyThePointerAndItsRing() {

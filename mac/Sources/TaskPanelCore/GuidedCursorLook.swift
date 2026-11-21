@@ -80,30 +80,35 @@ public struct GuidedLayout: Equatable, Sendable {
   /// label is whole on the screen wherever the hands act.
   public init(tip: CGPoint, pillWidth: Double, screen: CGRect) {
     let reach = Self.reach
-    let box = CGRect(x: Double(tip.x) - reach, y: Double(tip.y) - reach, width: reach * 2, height: reach * 2)
+    // Every part is first placed from the tip, so the parts keep the same places inside the
+    // window while the cursor glides, to the last digit. Only the window moves then.
+    let box = CGRect(x: -reach, y: -reach, width: reach * 2, height: reach * 2)
     let width = pillWidth.isFinite ? max(0, min(GuidedLook.pillMax, pillWidth)) : 0
     guard width > 0, tip.x.isFinite, tip.y.isFinite else {
-      window = box; self.tip = CGPoint(x: reach, y: reach); pill = .zero; side = .right; under = true
+      let at = tip.x.isFinite && tip.y.isFinite ? tip : .zero
+      window = box.offsetBy(dx: at.x, dy: at.y); self.tip = CGPoint(x: reach, y: reach); pill = .zero; side = .right; under = true
       return
     }
+    let x = Double(tip.x), y = Double(tip.y)
     let away = GuidedLook.ring / 2 + GuidedLook.gap
-    let fitsRight = Double(tip.x) + away + width <= Double(screen.maxX) - GuidedLook.margin
-    let fitsLeft = Double(tip.x) - away - width >= Double(screen.minX) + GuidedLook.margin
+    let fitsRight = x + away + width <= Double(screen.maxX) - GuidedLook.margin
+    let fitsLeft = x - away - width >= Double(screen.minX) + GuidedLook.margin
     // The right side is the usual one. The left side is taken only when it helps.
     let side: Side = fitsRight || !fitsLeft ? .right : .left
-    let fitsUnder = Double(tip.y) - GuidedLook.drop - GuidedLook.pill / 2 >= Double(screen.minY) + GuidedLook.margin
-    let middle = Double(tip.y) + (fitsUnder ? -GuidedLook.drop : GuidedLook.drop)
+    let fitsUnder = y - GuidedLook.drop - GuidedLook.pill / 2 >= Double(screen.minY) + GuidedLook.margin
+    var dx = side == .right ? away : -away - width
+    var dy = (fitsUnder ? -GuidedLook.drop : GuidedLook.drop) - GuidedLook.pill / 2
     // At the very edge of the screen the pill moves in, so all of it stays in view.
     func within(_ value: Double, _ low: Double, _ high: Double) -> Double { high < low ? low : max(low, min(high, value)) }
-    let left = side == .right ? Double(tip.x) + away : Double(tip.x) - away - width
-    let onScreen = CGRect(
-      x: within(left, Double(screen.minX) + GuidedLook.margin, Double(screen.maxX) - GuidedLook.margin - width),
-      y: within(middle - GuidedLook.pill / 2, Double(screen.minY) + GuidedLook.margin, Double(screen.maxY) - GuidedLook.margin - GuidedLook.pill),
-      width: width, height: GuidedLook.pill)
-    let frame = box.union(onScreen.insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade))
-    window = frame
-    self.tip = CGPoint(x: tip.x - frame.minX, y: tip.y - frame.minY)
-    pill = onScreen.offsetBy(dx: -frame.minX, dy: -frame.minY)
+    let left = within(x + dx, Double(screen.minX) + GuidedLook.margin, Double(screen.maxX) - GuidedLook.margin - width)
+    if left != x + dx { dx = left - x }
+    let bottom = within(y + dy, Double(screen.minY) + GuidedLook.margin, Double(screen.maxY) - GuidedLook.margin - GuidedLook.pill)
+    if bottom != y + dy { dy = bottom - y }
+    let label = CGRect(x: dx, y: dy, width: width, height: GuidedLook.pill)
+    let frame = box.union(label.insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade))
+    window = frame.offsetBy(dx: tip.x, dy: tip.y)
+    self.tip = CGPoint(x: -frame.minX, y: -frame.minY)
+    pill = label.offsetBy(dx: -frame.minX, dy: -frame.minY)
     self.side = side; under = fitsUnder
   }
 }

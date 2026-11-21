@@ -103,17 +103,18 @@ final class GuidedPathTests: XCTestCase {
   }
 
   func testTheGlideIsSlowEnoughToFollowAndALongWayTakesLonger() {
-    // Never shorter than a third of a second: a picture of the screen at 30 frames a second shows ten of its places.
-    XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.35)
-    XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.35)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 600), 0.60, accuracy: 0.000_001)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.70)
-    XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.35)
-    XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.35)
+    // The picture of a call has 10 frames a second: the shortest glide is in four of them or more.
+    XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.45)
+    XCTAssertGreaterThanOrEqual((GuidedPath.shortestGlide * 10).rounded(.down), 4)
+    XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.45)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 600), 0.75, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.90)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.45)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.45)
     var before = 0.0
     for length in stride(from: 0.0, through: 4000, by: 50) {
       let now = GuidedPath.glideDuration(length: length)
-      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.35); XCTAssertLessThanOrEqual(now, 0.70)
+      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.45); XCTAssertLessThanOrEqual(now, 0.90)
       before = now
     }
     // The way to one target takes the time of its length, and ends on the target.
@@ -135,7 +136,8 @@ final class GuidedPathTests: XCTestCase {
     }
     // With no glide to lead the eye, the cursor waits longer at the target before the hands act.
     XCTAssertGreaterThan(GuidedPath.dwell(still: true), GuidedPath.dwell(still: false))
-    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false), 0.15)
+    // Three frames of a call's picture at the target before the hands act, and never a long wait.
+    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false), 0.3)
     XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 0.5)
   }
 
