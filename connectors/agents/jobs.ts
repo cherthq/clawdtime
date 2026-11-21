@@ -153,7 +153,7 @@ export const waitBlock = (
   return [
     "key=",
     `if [[ ! -e ${answer} ]]; then`,
-    "  print -r -- 'This job waits for the job before it. Press Return to start it now.'",
+    "  print -r -- 'This job waits for the job before it. Press Return to begin without the wait.'",
     "  waited=0",
     `  while [[ ! -e ${answer} && $waited -lt ${Math.max(1, Math.floor(steps))} ]]; do`,
     "    if [[ -t 0 ]]; then read -t 2 -k 1 && { key=1; break; }; else sleep 2; fi",
@@ -371,7 +371,7 @@ export class Jobs implements JobPort {
     return {
       ok: true,
       said: waitsFor
-        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Press Return in that window to start it at once.`
+        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.`
         : `On it. ${jobAgentLabels[agent]} is working on that in a new terminal window, and I will tell you its answer when it is done.`,
     };
   }

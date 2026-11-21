@@ -1161,12 +1161,6 @@ const followsUp = (spoken: string) => {
     )
   );
 };
-/**
- * "Start it now": the person ends the wait of a job that waits for the job
- * before it. Whole messages only, so that no other sentence with these words
- * starts a job early. "Don't wait" alone is not one: it can answer another
- * question, and a "don't" can read as a no to a request.
- */
 const pointsBack = (spoken: string) =>
   /\b(?:it|that|this|those|these|them|one|ones|same|again|previous|last|earlier|before|above|there)\b/i.test(
     spoken,
@@ -2489,10 +2483,6 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
-    // "Start it now": a job that the person asked for waits for the job
-    // before it, and the person ends that wait. These words are no work and
-    // no answer to anything else, so the code owns them whenever a job was
-    // started lately: they never reach a task, a request or the model.
     // "Then ask it", after the person's question about one session. Nothing
     // is typed: the code says the sentence that sends that question, with the
     // session's name and the person's own earlier words. The person then says

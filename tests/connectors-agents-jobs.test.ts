@@ -588,7 +588,7 @@ describe("a job that follows up on a job that still runs", () => {
   const first = "build a small landing page for my bakery in one html file";
   const second = "also add a contact form to it";
   const waiting =
-    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Press Return in that window to start it at once.";
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.";
   const atOnce =
     "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
   const follows = { refersBack: true, followsUp: true };
@@ -758,7 +758,7 @@ describe("a job that follows up on a job that still runs", () => {
         };
       };
       const line =
-        "This job waits for the job before it. Press Return to start it now.\n";
+        "This job waits for the job before it. Press Return to begin without the wait.\n";
       // 1. The answer comes half a second later: the wait shows its line,
       //    ends, writes that it is over, and the script goes on.
       const a = fresh();

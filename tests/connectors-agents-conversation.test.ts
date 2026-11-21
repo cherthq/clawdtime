@@ -1720,7 +1720,7 @@ describe("more work on a job that still runs", () => {
   const started =
     "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
   const waiting =
-    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Press Return in that window to start it at once.";
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.";
 
   it("waits for that job when the message points back at it, and says so", async () => {
     const made = mac();
