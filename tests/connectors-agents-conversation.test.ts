@@ -1881,6 +1881,15 @@ describe("a session opens only when the person asks to see it", () => {
     "bring payments to the front please",
     "get payments on screen",
     "could you put up payments",
+    // A clause that waits for nothing does not put the request off.
+    "show me payments, if you can",
+    "show me payments, if possible",
+    "open payments, when you get a chance",
+    "open payments, before I forget",
+    "open payments, while I get coffee",
+    "show me payments, once more",
+    "open payments, when you are ready",
+    "open payments, after that make the text bigger",
     // A question, a remark or another instruction before it.
     "is payments done? open it",
     "no wait, show me the payments one",
@@ -1924,6 +1933,9 @@ describe("a session opens only when the person asks to see it", () => {
     "open payments, if it fails",
     "show me payments, after the tests pass",
     "show me payments as soon as it is done",
+    "show me payments, later",
+    "open payments, in 10 minutes",
+    "open payments, until the build is green",
     // Words are asked for, not a window.
     "show me the status",
     "show me what is waiting",

@@ -912,14 +912,27 @@ const seeTakenBack = (clause: string) =>
     clause,
   );
 /**
- * A clause that puts the request off or ties it to something: "show me
- * payments, when it is done", "open docs, once the build passes". Nothing
- * here can open a session later, so such a request opens nothing now.
+ * A clause that puts the request off: it names something to wait for, or a
+ * time. "Show me payments, when it is done", "open docs, once the build
+ * passes", "open it later". Nothing here can open a session later, so such a
+ * request opens nothing now. "If you can", "before I forget", "once more"
+ * and "when you are ready" wait for nothing.
  */
-const seeLater = (clause: string) =>
-  /^(?:when|whenever|once|after|before|until|unless|if|while|later|as\s+soon\s+as)\b/i.test(
-    clause.replace(seeLead, "").trim(),
+const seeLater = (clause: string) => {
+  const plain = clause.replace(seeLead, "").trim();
+  return (
+    /^(?:later|tomorrow|tonight|in\s+(?:\d+|an?|a\s+few|some)\s+(?:seconds?|secs?|minutes?|mins?|hours?|days?|bit|while|moment)|at\s+\d)\b/i.test(
+      plain,
+    ) ||
+    (/^(?:when|whenever|once|after|before|until|unless|if|while|as\s+soon\s+as)\b/i.test(
+      plain,
+    ) &&
+      !/\byou\b/i.test(plain) &&
+      /\b(?:done|finish(?:es|ed)?|complet(?:e|es|ed)|pass(?:es|ed)?|fail(?:s|ed)?|ready|stuck|ends?|ended|stops?|stopped|idle|green|red|breaks?|broken|crash(?:es|ed)?|errors?|waits?|waiting|free|over)\b/i.test(
+        plain,
+      ))
   );
+};
 /** A clause that rules a session out of a request: "show me payments, not docs". */
 const seeNot = (clause: string) =>
   /^(?:(?:and|but|just|only|so)[,\s]+)*(?:not|except|excluding|other\s+than|no)\b/i.test(

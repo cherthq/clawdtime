@@ -547,9 +547,11 @@ So these open nothing:
   "open payments, actually never mind". "Open payments, no, docs" is a
   correction, and "open payments but don't type anything" is still a request.
 - Words for a session: "tell docs: open the file".
-- A request for later: "show me payments, when it is done", "open docs, once
-  the build passes". ClawdTime has nothing that opens a session later, so it
-  opens nothing now.
+- A request for later, with something to wait for or a time: "show me
+  payments, when it is done", "open docs, once the build passes", "open it in
+  ten minutes". ClawdTime has nothing that opens a session later, so it opens
+  nothing now. "Show me payments, if you can" and "open docs, before I
+  forget" wait for nothing, and open at once.
 
 When the part of your sentence that asks names exactly one session by its own
 name, it opens at once: ClawdTime does not wait for the model to choose it,
