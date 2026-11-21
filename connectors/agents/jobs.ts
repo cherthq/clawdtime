@@ -44,8 +44,6 @@ export interface JobFacts {
   text?: string | null;
   /** The job has not started its agent yet: it waits for the job before it. */
   waiting?: boolean;
-  /** The job waited for the job before it, now or earlier: the person heard how to start it at once. */
-  waited?: boolean;
 }
 
 /** What one job may carry besides its words. */
@@ -93,11 +91,6 @@ export interface JobPort {
   offered?(): JobOffer | null;
   /** Ends the question: one question gets one answer. */
   clearOffer?(): void;
-  /**
-   * Ends the wait of the newest job that waits for the job before it: its
-   * agent begins at once. `said` is one sentence that can be spoken.
-   */
-  release?(): { ok: boolean; said: string };
 }
 
 /** The coding agents that can take a job, and how each takes its first message. */
@@ -123,13 +116,8 @@ const contextLineLength = 400;
 
 /** One word of a shell script, in single quotes. A quote in a path cannot end them. */
 const quoted = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-/**
- * In the folder of a job that waits for the job before it: written at the
- * start, when the person said to start it now, and when its script ended the
- * wait.
- */
+/** In the folder of a job that waits for the job before it: written at the start, and when its script ended the wait. */
 const waitsFile = "waits";
-const startNowFile = "start-now";
 const waitOverFile = "wait-over";
 /** Written when the wait ran out: a job that waits for this one gives up too. */
 const gaveUpFile = "gave-up";
@@ -140,11 +128,11 @@ const neverFinished =
 /**
  * The lines of a start script that wait until the answer file of the job
  * before this one exists. Only paths that this program made stand in them.
- * The wait also ends when the person says to start it now (the file `now`),
- * and in a terminal when a key is pressed. When the job before never wrote
- * an answer in two hours, this job writes that as its own answer and starts
- * nothing: work that begins hours late, with no one there, is a surprise. A
- * job that waits for a job that gave up gives up too.
+ * In a terminal, a key ends the wait: the person can start the job at once.
+ * When the job before never wrote an answer in two hours, this job writes
+ * that as its own answer and starts nothing: work that begins hours late,
+ * with no one there, is a surprise. A job that waits for a job that gave up
+ * gives up too.
  */
 export const waitBlock = (
   paths: {
@@ -152,7 +140,6 @@ export const waitBlock = (
     answer: string;
     beforeGaveUp: string;
     /** In this job's own folder. */
-    now: string;
     over: string;
     result: string;
     gaveUp: string;
@@ -160,26 +147,24 @@ export const waitBlock = (
   steps = waitSteps,
 ) => {
   const answer = quoted(paths.answer);
-  const now = quoted(paths.now);
   const over = quoted(paths.over);
   const result = quoted(paths.result);
   const gaveUp = quoted(paths.gaveUp);
   return [
-    "released=",
-    `if [[ ! -e ${answer} && ! -e ${now} ]]; then`,
+    "key=",
+    `if [[ ! -e ${answer} ]]; then`,
     "  print -r -- 'This job waits for the job before it. Press Return to start it now.'",
     "  waited=0",
-    `  while [[ ! -e ${answer} && ! -e ${now} && $waited -lt ${Math.max(1, Math.floor(steps))} ]]; do`,
-    "    if [[ -t 0 ]]; then read -t 2 -k 1 && { released=1; break; }; else sleep 2; fi",
+    `  while [[ ! -e ${answer} && $waited -lt ${Math.max(1, Math.floor(steps))} ]]; do`,
+    "    if [[ -t 0 ]]; then read -t 2 -k 1 && { key=1; break; }; else sleep 2; fi",
     "    waited=$((waited + 1))",
     "  done",
     "fi",
     // The job before wrote no answer in time, or it gave up its own wait:
-    // this job gives up too, unless the person started it. A link in the
-    // place of a file is not written through.
-    `if [[ ! -e ${now} && -z $released ]] && [[ ! -e ${answer} || -e ${quoted(paths.beforeGaveUp)} ]]; then`,
-    // The mark first: a job that waits for this one never sees the answer
-    // without it.
+    // this job gives up too, unless the person started it with a key. A link
+    // in the place of a file is not written through. The mark first: a job
+    // that waits for this one never sees the answer without it.
+    `if [[ -z $key ]] && [[ ! -e ${answer} || -e ${quoted(paths.beforeGaveUp)} ]]; then`,
     `  [[ -L ${gaveUp} ]] || : > ${gaveUp}`,
     `  [[ -L ${result} ]] || print -r -- ${quoted(neverFinished)} > ${result}`,
     "  exit 0",
@@ -369,7 +354,7 @@ export class Jobs implements JobPort {
     // job then ends with a true sentence, and holds no place for two hours.
     writeFileSync(
       script,
-      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor && newest ? waitBlock({ answer: waitsFor, beforeGaveUp: join(this.folder, newest.id, gaveUpFile), now: join(directory, startNowFile), over: join(directory, waitOverFile), result, gaveUp: join(directory, gaveUpFile) }) : ""}${agents[agent](quoted(prompt))}\n`,
+      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor && newest ? waitBlock({ answer: waitsFor, beforeGaveUp: join(this.folder, newest.id, gaveUpFile), over: join(directory, waitOverFile), result, gaveUp: join(directory, gaveUpFile) }) : ""}${agents[agent](quoted(prompt))}\n`,
       { mode: 0o700 },
     );
     chmodSync(script, 0o700);
@@ -386,33 +371,8 @@ export class Jobs implements JobPort {
     return {
       ok: true,
       said: waitsFor
-        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" to start it at once.`
+        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Press Return in that window to start it at once.`
         : `On it. ${jobAgentLabels[agent]} is working on that in a new terminal window, and I will tell you its answer when it is done.`,
-    };
-  }
-
-  /**
-   * The person said to start the job that waits. Its script sees the file
-   * within two seconds and begins the agent. The file is made new: a link in
-   * its place is never written through.
-   */
-  release(): { ok: boolean; said: string } {
-    const waiting = this.recent(20).find((job) => job.waiting);
-    if (!waiting) return { ok: false, said: "No job waits now." };
-    try {
-      writeFileSync(join(this.folder, waiting.id, startNowFile), "", {
-        mode: 0o600,
-        flag: "wx",
-      });
-    } catch {
-      return {
-        ok: false,
-        said: "I could not start that job from here. Press Return in its terminal window.",
-      };
-    }
-    return {
-      ok: true,
-      said: `Okay. The job "${waiting.job.slice(0, 80)}" starts now.`,
     };
   }
 
@@ -585,11 +545,9 @@ export class Jobs implements JobPort {
         ),
         startedAt: Number.isFinite(startedAt) ? startedAt : 0,
         done: answer !== null,
-        ...(there(waitsFile) ? { waited: true } : {}),
         ...(answer === null &&
         read(waitsFile, 1) !== null &&
-        !there(waitOverFile) &&
-        !there(startNowFile)
+        !there(waitOverFile)
           ? { waiting: true }
           : {}),
         result:

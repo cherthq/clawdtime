@@ -588,7 +588,7 @@ describe("a job that follows up on a job that still runs", () => {
   const first = "build a small landing page for my bakery in one html file";
   const second = "also add a contact form to it";
   const waiting =
-    'On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" to start it at once.';
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Press Return in that window to start it at once.";
   const atOnce =
     "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
   const follows = { refersBack: true, followsUp: true };
@@ -609,7 +609,6 @@ describe("a job that follows up on a job that still runs", () => {
     const paths = (id: string, before: string) => ({
       answer: join(folder, before, "result.md"),
       beforeGaveUp: join(folder, before, "gave-up"),
-      now: join(folder, id, "start-now"),
       over: join(folder, id, "wait-over"),
       result: join(folder, id, "result.md"),
       gaveUp: join(folder, id, "gave-up"),
@@ -654,41 +653,6 @@ describe("a job that follows up on a job that still runs", () => {
     ]);
     writeFileSync(join(folder, two!, "wait-over"), "");
     expect(jobs.recent(1)[0]!.waiting ?? false).toBe(false);
-    // It still counts as a job that waited: the person heard how to start it.
-    expect(jobs.recent(2).map((job) => job.waited ?? false)).toEqual([
-      true,
-      false,
-    ]);
-  });
-
-  it("starts the job that waits when the person says so, once, and through no link", async () => {
-    const { jobs, clock, folder, ids } = made();
-    // No job waits.
-    expect(jobs.release()).toEqual({ ok: false, said: "No job waits now." });
-    await jobs.start(first);
-    expect(jobs.release()).toEqual({ ok: false, said: "No job waits now." });
-    clock.now += 30_000;
-    await jobs.start(second, follows);
-    const two = ids()[1]!;
-    expect(jobs.release()).toEqual({
-      ok: true,
-      said: 'Okay. The job "also add a contact form to it" starts now.',
-    });
-    expect(readFileSync(join(folder, two, "start-now"), "utf8")).toBe("");
-    // It does not wait any more: nothing is left to start.
-    expect(jobs.recent(1)[0]!.waiting ?? false).toBe(false);
-    expect(jobs.release()).toEqual({ ok: false, said: "No job waits now." });
-    // A link in the place of that file is not written through.
-    clock.now += 30_000;
-    await jobs.start("then make it blue", follows);
-    const three = ids()[2]!;
-    const outside = join(folder, "outside.txt");
-    writeFileSync(outside, "keep");
-    symlinkSync(outside, join(folder, three, "start-now"));
-    // Something has that name already: the job counts as told to start, and
-    // nothing is written through the link.
-    expect(jobs.release().ok).toBe(false);
-    expect(readFileSync(outside, "utf8")).toBe("keep");
   });
 
   it("says that a job runs when anything stands in the place of its wait-over file", async () => {
@@ -788,7 +752,6 @@ describe("a job that follows up on a job that still runs", () => {
         return {
           answer: join(directory, "answer.md"),
           beforeGaveUp: join(directory, "before-gave-up"),
-          now: join(directory, "start-now"),
           over: join(directory, "wait-over"),
           result: join(directory, "result.md"),
           gaveUp: join(directory, "gave-up"),
@@ -808,16 +771,7 @@ describe("a job that follows up on a job that still runs", () => {
       expect(existsSync(a.result)).toBe(false);
       // 2. The answer is there already: no wait and no line.
       expect(zsh(`${waitBlock(a)}print -r -- started`)).toBe("started\n");
-      // 3. The person said to start it now: the wait ends, with no answer of
-      //    the job before.
-      const b = fresh();
-      expect(
-        zsh(
-          `( sleep 0.5; : > ${q(b.now)} ) &\n${waitBlock(b)}print -r -- started`,
-        ),
-      ).toBe(`${line}started\n`);
-      expect(existsSync(b.over)).toBe(true);
-      // 4. The job before never wrote an answer until the wait was over: this
+      // 3. The job before never wrote an answer until the wait was over: this
       //    job writes that as its own answer and starts nothing.
       const c = fresh();
       expect(zsh(`${waitBlock(c, 1)}print -r -- started`)).toBe(line);
@@ -834,13 +788,7 @@ describe("a job that follows up on a job that still runs", () => {
       expect(zsh(`${waitBlock(e, 1)}print -r -- started`)).toBe("");
       expect(readFileSync(e.result, "utf8")).toContain("did not start");
       expect(existsSync(e.gaveUp)).toBe(true);
-      // 4c. The person started it: it starts, also after a job that gave up.
-      const f = fresh();
-      writeFileSync(f.answer, "The job before this one did not finish.");
-      writeFileSync(f.beforeGaveUp, "");
-      writeFileSync(f.now, "");
-      expect(zsh(`${waitBlock(f, 1)}print -r -- started`)).toBe("started\n");
-      // 4d. At the end of the wait, a link in the place of this job's answer
+      // 4c. At the end of the wait, a link in the place of this job's answer
       //     is not written through.
       const g = fresh();
       const kept = `${g.answer}.kept`;

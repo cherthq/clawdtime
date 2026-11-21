@@ -1151,7 +1151,11 @@ const followsUp = (spoken: string) => {
       /[,;:.!?\n]|\b(?:and|then|that(?!\s+one\b)|which|when|if|so|because|while|until|what|how|where|who|whether|but|or)\b/i,
     )[0] ?? "";
   return (
-    /\b(?:it|them|those|these|that one|this one)\b/i.test(first) &&
+    // "Those" and "these" count at the end of the clause only: in "close
+    // those windows" they stand before the thing that the sentence names.
+    /\b(?:it|them|that one|this one)\b|\b(?:those|these)(?:\s+(?:too|also|again|now|please|as well))*\s*$/i.test(
+      first,
+    ) &&
     !/\bit\s+(?:is|was|will|would|has|had|can|could|should)\b|\bit['\u2019]s\b|\b(?:is|was|does|did|will|can)\s+it\b/i.test(
       first,
     )
@@ -1163,19 +1167,6 @@ const followsUp = (spoken: string) => {
  * starts a job early. "Don't wait" alone is not one: it can answer another
  * question, and a "don't" can read as a no to a request.
  */
-/**
- * The message holds a form of "start", "begin" or "wait". Wide on purpose:
- * after ClawdTime told the person how to start a job that waits, a message
- * with one of these words can be meant as that ("yes, start", "sure, start it
- * now", "don't wait"). This reader only keeps such a message from being read
- * as an answer to a request or to a task.
- */
-const mentionsStart = (text: string) =>
-  /\b(?:start|begin|wait)\w*\b/i.test(text);
-const startsNow = (text: string) =>
-  /^(?:(?:ok|okay|so|then|please|just|well|yes|no)[,\s]+)*(?:(?:do\s+not|don['\u2019]?t)\s+wait[,\s]+)?(?:(?:start|begin)\s+(?:it|that|that one|that job|the job|this one)\s+(?:now|right now|at once|anyway|without waiting)|start now|begin now)(?:[,\s]+please)?[\s.!]*$/i.test(
-    text.trim(),
-  );
 const pointsBack = (spoken: string) =>
   /\b(?:it|that|this|those|these|them|one|ones|same|again|previous|last|earlier|before|above|there)\b/i.test(
     spoken,
@@ -1666,12 +1657,6 @@ export class Supervisor {
     const before = turn.done.get("job");
     if (before !== undefined) return before;
     if (this.ownedByRequest(turn, spoken)) return refuse(turn, requestOwns);
-    // "Start it now" ends the wait of a job. It is no work of its own.
-    if (startsNow(spoken))
-      return refuse(
-        turn,
-        "That sentence starts a job that waits, and no job waits now. It names no work. Ask the person what to start.",
-      );
     // The whole sentence is read, never a part of it: a question, a remark
     // and a sentence that takes the work back start nothing.
     if (!asksForWork(spoken)) {
@@ -2508,66 +2493,6 @@ export class Supervisor {
     // before it, and the person ends that wait. These words are no work and
     // no answer to anything else, so the code owns them whenever a job was
     // started lately: they never reach a task, a request or the model.
-    // A choice of the task that asks is the task's own text: a click on it
-    // answers the task, as before.
-    const isChoice =
-      !!current &&
-      !taskIsOver(current) &&
-      current.choices.some(
-        (choice) =>
-          spokenWords(choice).join(" ") === spokenWords(words).join(" "),
-      );
-    // The strict reader finds the sentence that releases a job. The wide
-    // reader finds every message that can be meant as that sentence ("sure,
-    // start it now", "yes, start", "don't wait"): none of them is an answer
-    // to something else for one day after a job waited.
-    const releases = startsNow(words);
-    const namesRelease = releases || mentionsStart(words);
-    if (namesRelease && !isChoice && this.world.jobs?.release) {
-      const now = this.world.now();
-      const lately = this.jobsNow(20).filter(
-        (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
-      );
-      // The code owns such a message whenever a job started lately, also when
-      // its wait is over by now and also in a closed turn: "start it now" is
-      // the sentence that ClawdTime teaches for a job, so it is never an
-      // answer to a request ("yes, start it now") or to a question of a task.
-      if (lately.length) {
-        const waits = lately.some((job) => job.waiting);
-        const job = waits
-          ? "A job also waits for the job before it."
-          : "No job waits now.";
-        // A job waited in the last day, so the person heard the sentence that
-        // starts it. Something else waits for an answer: nothing is passed
-        // on, and both are named. With no such job the sentence was not
-        // taught, and a message is read as before.
-        const taught = lately.some((job) => job.waited);
-        if (taught && this.world.desk.pending().length > 0)
-          return `${this.waitingRequest()} ${job} I did nothing with that sentence${waits ? ": answer the request first, then say it again" : ""}.`;
-        if (taught && taskWaits)
-          return `Your task asks: ${clean(current!.question!, 200)} ${job} I did nothing with that sentence: answer the task in its own words${waits ? ", then say it again" : ""}.`;
-        if (releases && waits) {
-          // ClawdTime's own question about other work is the last message:
-          // "start it now" can mean that work. Nothing starts, and both are named.
-          if (turn.closed === "after work")
-            return 'A job waits for the job before it, and I had also asked you about other work. I did nothing with that sentence. Say the work again to start that, or say "start it now" again for the job.';
-          try {
-            return this.world.jobs.release().said;
-          } catch {
-            return "I could not start that job from here. Press Return in its terminal window.";
-          }
-        }
-        // No job waits and nothing else waits. After a question of ClawdTime
-        // the sentence can be its answer: the model reads it then, and the
-        // job tool refuses those words as work.
-        const before = history.at(-1);
-        const asked =
-          before?.role === "assistant" && /\?\s*$/.test(before.text);
-        const newest = lately[0]!;
-        if (releases && !waits && !asked)
-          return `No job waits now. The job "${clean(newest.job, 80)}" ${newest.done ? "is done: ask me for its answer" : now - newest.startedAt < 2 * 60 * 60 * 1000 ? "works already" : "wrote no answer"}.`;
-      }
-    }
     // "Then ask it", after the person's question about one session. Nothing
     // is typed: the code says the sentence that sends that question, with the
     // session's name and the person's own earlier words. The person then says
