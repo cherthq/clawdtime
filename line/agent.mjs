@@ -37,6 +37,7 @@ import {
 import { makeEars } from "./ears.mjs";
 import { greetOnBridgeReady } from "./greet.mjs";
 import { layoutName } from "./layout.mjs";
+import { makeWords, WIDE_WORDS } from "./words.mjs";
 import { makePicture } from "./picture.mjs";
 import { FPS, HEIGHT, startScreen, WIDTH } from "./screen.mjs";
 
@@ -64,6 +65,8 @@ const log = (event, detail = {}) =>
     }),
   );
 const SHOWN = new Set(["listening", "thinking", "speaking"]);
+// The time between two frames of the picture while no caller is there.
+const WAITING_FRAME_MS = 1000;
 
 const agent = defineAgent({
   entry: async (ctx) => {
@@ -82,6 +85,8 @@ const agent = defineAgent({
     let picture = makePicture({ layout });
     // One part of the screen that the call shows, in shares, or null for the whole screen.
     let view = null;
+    // The caller's own words of the last moments. They are kept in memory only, and never written down.
+    const words = makeWords();
     let tick = 0,
       heard = "idle",
       busy = 0,
@@ -109,12 +114,23 @@ const agent = defineAgent({
     await ctx.room.localParticipant.publishTrack(track, {
       source: TrackSource.SOURCE_CAMERA,
     });
-    const timer = setInterval(frame, 1000 / FPS);
+    // While it waits for a call, one frame a second keeps the track alive at almost no cost: the agent waits
+    // all day, and a full rate there used a tenth of a processor core for nobody.
+    let timer = setInterval(frame, WAITING_FRAME_MS);
     // A room that ends before a caller came must leave no timer behind.
     ctx.addShutdownCallback(async () => clearInterval(timer));
 
-    const caller = await ctx.waitForParticipant();
+    let caller;
+    try {
+      caller = await ctx.waitForParticipant();
+    } catch {
+      // Chert makes a new waiting room every few minutes. A room that ends before a caller came is no error.
+      clearInterval(timer);
+      return;
+    }
     callStarted = Date.now();
+    clearInterval(timer);
+    timer = setInterval(frame, 1000 / FPS);
     log("call_started");
 
     const showScreen = async (on) => {
@@ -209,6 +225,12 @@ const agent = defineAgent({
             .describe("true when the phone is held sideways"),
         }),
         execute: async ({ sideways }) => {
+          // A wide picture is cut on a phone held upright. Only the caller's own words turn it on: the voice
+          // model alone is not enough. The narrow picture is whole on every phone, so it needs no such check.
+          if (sideways === true && !(await words.said(WIDE_WORDS))) {
+            log("phone_view_refused");
+            return "The caller did not say that the phone is sideways, and did not ask for a wide picture. Nothing changed. Do not say that it changed.";
+          }
           layout = sideways === true ? "wide" : "upright";
           log("phone_view", { layout });
           picture = makePicture({ layout });
@@ -241,6 +263,9 @@ const agent = defineAgent({
       // The realtime model decides the turns. Saying so keeps the session from loading a second detector.
       turnHandling: { turnDetection: "realtime_llm" },
     });
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) =>
+      words.add(event.transcript, event.isFinal),
+    );
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (event) => {
       heard = SHOWN.has(event.newState) ? event.newState : "idle";
       // The state is in the log, never the words: it shows when the agent spoke and when it listened.
@@ -266,6 +291,7 @@ const agent = defineAgent({
       clearInterval(timer);
       stopGreeting?.();
       ears?.stop();
+      words.stop();
       jobs?.stop();
       screen?.stop();
       screen = null;
