@@ -29,6 +29,7 @@ import { z } from "zod";
 import { readDesktopPrivateJSON } from "../../src/control/task-desktop-config.js";
 import { stateRoot } from "./hooks.js";
 import type { System } from "./system.js";
+import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 
 /** How long the service has to answer the two reads that come first. After that the command answers by itself. */
 export const desktopConnectMs = 2000;
@@ -141,6 +142,8 @@ export function findDesktopService(
 }
 
 export type DesktopAnswer =
+  /** Rejected before transport; never fall back to another executor. */
+  | { kind: "rejected"; text: string }
   /** The service answered. */
   | { kind: "answered"; text: string }
   /** No service took the message: the command answers by itself. */
@@ -166,8 +169,10 @@ export async function sayToDesktop(
     ownModel?: boolean;
   } = {},
 ): Promise<DesktopAnswer> {
+  if (text.length > userMessageLimit)
+    return { kind: "rejected", text: userMessageTooLong };
   const absent: DesktopAnswer = { kind: "absent" };
-  const words = text.trim().slice(0, 2000);
+  const words = text.trim();
   if (!words) return absent;
   const folder = desktopStateFolder(system);
   if (!folder) return absent;

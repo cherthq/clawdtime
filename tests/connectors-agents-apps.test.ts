@@ -278,6 +278,26 @@ describe("the brain opens an application", () => {
     return { ...f, submitted, message };
   }
 
+  it("rejects over-limit original text before navigation, history interpretation, or effects", async () => {
+    const f = withExecution();
+    const run = scripted([[call("open_app", { name: "Messages" })]]);
+    let interpretations = 0;
+    run.model.navigation = async () => {
+      interpretations++;
+      return { kind: "app", name: "Messages" };
+    };
+    const text =
+      "Bring Messages forward. ".padEnd(2000, " ") + "Do not do that yet.";
+    expect(
+      await new Supervisor(f.value, run.model).reply([], text, "call"),
+    ).toContain("longer than 2000");
+    expect(interpretations).toBe(0);
+    expect(run.offered).toEqual([]);
+    expect(f.submitted).toEqual([]);
+    expect(f.opened).toEqual([]);
+    expect(f.started).toEqual([]);
+  });
+
   it("hands plain app opening to the native worker once, in the person's original words", async () => {
     const f = withExecution();
     const run = scripted([

@@ -1,3 +1,4 @@
+import { userMessageTooLong } from "../connectors/agents/request-text.js";
 import {
   existsSync,
   mkdirSync,
@@ -893,6 +894,31 @@ describe("chat log and speech", () => {
     await expect(speak("x", refused)).rejects.toThrow("Speech answered 429.");
   });
 
+  it("refuses an over-limit transcript before its trailing negation can be lost", async () => {
+    const recording = join(root(), "fixture.wav");
+    writeFileSync(recording, Buffer.alloc(4000, 1));
+    const text =
+      "Bring Messages forward. ".padEnd(2000, " ") +
+      "Don't switch anything yet.";
+    const settings = {
+      ...speechSettings({ OPENAI_API_KEY: "fixture-key" })!,
+      request: (async () =>
+        new Response(JSON.stringify({ text }))) as typeof fetch,
+    };
+    await expect(transcribe(recording, settings)).rejects.toThrow(
+      userMessageTooLong,
+    );
+    settings.request = async () =>
+      new Response(
+        JSON.stringify({
+          text:
+            "Bring Messages forward. ".padEnd(1977, "x") +
+            " Do not send a message.",
+        }),
+      );
+    expect(await transcribe(recording, settings)).toHaveLength(2000);
+  });
+
   it("the service keeps the chat, hears a recording, answers, and speaks", async () => {
     const directory = root();
     const { model } = scripted(["All quiet. Nothing waits for you."]);
@@ -1093,6 +1119,27 @@ describe("chat command", () => {
 });
 
 describe("talk in a terminal", () => {
+  it("does not pass an oversized spoken instruction to the brain", async () => {
+    const lines = ["", "", "q"];
+    const answered: string[] = [];
+    const said: string[] = [];
+    await talkLoop({
+      print: () => {},
+      next: async () => lines.shift() ?? null,
+      record: () => ({ stop: async () => "fixture.wav" }),
+      hear: async () => "Move right.".padEnd(2000, " ") + "Don't do that",
+      answer: async (words) => {
+        answered.push(words);
+        return "unexpected";
+      },
+      say: async (text) => {
+        said.push(text);
+      },
+    });
+    expect(answered).toEqual([]);
+    expect(said).toEqual([userMessageTooLong]);
+  });
+
   it("takes one Return to start and one to send, and never reads a key twice", async () => {
     const input = ["", "", "", "", "q"];
     const printed: string[] = [];

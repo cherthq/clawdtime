@@ -4,9 +4,9 @@ November 21, 2026. Branch: `spaces-zoom-integration`.
 
 The branch combines desktop navigation and automatic zoom, and now adds dynamic
 app/desktop intent, previous-app switching and full-screen arrival verification.
-See [the current navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md). Earlier physical
-preflight observations appear below; the new navigation build still needs its
-physical acceptance session. It has not replaced the installed app or used a phone line.
+See [the current navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md). Local app and desktop round trips are now physically verified on the isolated
+test build. Phone screen-sharing/zoom acceptance is being prepared separately.
+The installed app has not been replaced.
 
 ## Sources and integration changes
 
@@ -54,7 +54,8 @@ and matching full-width geometry. A narrow same-app system top strip may precede
 the focused window only if it is not exposed as an AX window/dialog. Other overlays,
 Split View, multiple displays, missing evidence and ambiguous windows remain
 blocking. All transitions retain the existing wide-video latch and retire old
-coordinates. Actual full-screen/Command–Tab/video behavior needs physical testing.
+coordinates. The local full-screen/Command–Tab round trip passed below; phone video behavior
+still needs physical testing.
 
 The access/navigation setup menu reports permissions, explicit shortcut readiness
 and the saved app-to-Space preference. That preference is advisory; an unreadable
@@ -67,8 +68,8 @@ Run in an isolated worktree using Node 24.22.1, Apple Swift 6.2.4, and Python
 
 | Check                                                                                  | Result                                               |
 | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `npm run check`                                                                        | 3,920 tests in 126 files; typecheck and build passed |
-| `npm --prefix line test`                                                               | 95 tests passed                                      |
+| `npm run check`                                                                        | 3,931 tests in 126 files; typecheck and build passed |
+| `npm --prefix line test`                                                               | 98 tests passed                                      |
 | `cd mac && swift test`                                                                 | 295 tests passed                                     |
 | `cd mac && swift build --product ClawdTimeTaskPanel`                                   | Passed                                               |
 | `media/.venv/bin/python -m unittest discover -s media -p 'test_task_presentation*.py'` | 36 tests passed                                      |
@@ -166,8 +167,9 @@ receipts, unknown outcomes, and rollback. Never run two owners for the line.
    memory, CPU, bandwidth and thermals. Do not retain private screens in Git.
 
 Use the full matrices in [desktop acceptance](DESKTOP_SPACES.md) and
-[zoom acceptance](AUTOMATIC_CALL_ZOOM.md). Full-screen and actual phone display-follow behavior remain physically
-unqualified until tested; Split View and multi-display navigation remain unsupported.
+[zoom acceptance](AUTOMATIC_CALL_ZOOM.md). The tested single-display full-screen pair passed locally; actual phone
+display-follow behavior remains unqualified. Split View and multi-display
+navigation remain unsupported.
 
 ## Initial physical preflight findings
 
@@ -213,5 +215,41 @@ empty. It then performs bounded read-only discovery and verification, with no
 second activation, restore or raise. AX errors, exact-window requests and
 ambiguity do not widen into this path. A final authority check follows the last
 AX read so takeover during that read prevents input. Three regression tests were
-added; 295 Swift tests and the panel build passed. Physical verification of this
-follow-up remains pending; prior backend/line/Python results are unchanged.
+added; 295 Swift tests and the panel build passed. Physical verification of this follow-up passed as recorded below.
+
+## Verified local round trips and phone preparation
+
+On November 21, the isolated native test build at `c9e4145` completed these
+one-step requests on one display with TextEdit on an ordinary desktop and a
+full-screen second app:
+
+- Bring the named app into view, then return to the previous app.
+- Move one desktop right, then one desktop left.
+
+Each request passed the controller's arrival verification. Independent native
+foreground/window checks confirmed the destination, and the person confirmed
+both visible round trips. The requests used natural paraphrases through the
+model, not a scripted directional phrase match. No destination edit was made.
+The test computer was switched off and the installed Supervisor's prior computer
+setting restored afterward. Earlier unknown outcomes above remain historical
+evidence, not the result of this later build.
+
+For phone acceptance, stage the integration line agent with its own agent name
+and health port, and pin its CLI to the isolated service/configuration/project.
+An unavailable test service must refuse rather than fall back to another
+controller. Reuse the existing protected credential source without copying it.
+Verify the line is idle and the existing owner matches its receipt; gracefully
+release that owner and confirm a new release event before claiming the same
+line for the bounded test. Preserve the original source/configuration and
+receipts for rollback. Do not place an outgoing call.
+
+Phone video/zoom, destination editing, previous-desktop history, live takeover,
+and longer-call performance remain pending. Local navigation success does not
+qualify those paths or broader desktop arrangements.
+
+Before the phone pass, the transport boundary was hardened to reject requests
+over 2,000 characters before normalization or dispatch instead of silently
+truncating a trailing prohibition. A refusal cannot fall back to another
+executor. Direct task-service software goals retain their existing complete
+8,000-character limit and cannot fall through into navigation when oversized.
+The updated backend/typecheck/build and 98 line tests passed.

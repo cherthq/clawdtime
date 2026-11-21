@@ -67,6 +67,10 @@ import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { sayToDesktop } from "../connectors/agents/desktop-chat.js";
+import {
+  userMessageLimit,
+  userMessageTooLong,
+} from "../connectors/agents/request-text.js";
 import { openApp } from "../connectors/agents/apps.js";
 import { browse } from "../connectors/agents/browsing.js";
 import { showOnCall, ViewStore } from "../connectors/agents/view.js";
@@ -137,7 +141,10 @@ export async function talkLoop(io: {
     }
     turns++;
     io.print(`You: ${heard}`);
-    const answer = await io.answer(heard);
+    const answer =
+      heard.length > userMessageLimit
+        ? userMessageTooLong
+        : await io.answer(heard);
     io.print(`ClawdTime: ${answer}`);
     try {
       await io.say(answer);
@@ -575,10 +582,11 @@ export async function supervisorCli(
         const result = await converseByCall(
           await openCall(link, `talk-${system.now().toString(36)}`),
           async (spoken) => {
+            if (spoken.length > userMessageLimit) return userMessageTooLong;
             const history = log.recent(historyForTurn);
             log.append({
               role: "user",
-              text: spoken.slice(0, 2000),
+              text: spoken,
               at: system.now(),
               via: "call",
             });
@@ -921,10 +929,11 @@ export async function supervisorCli(
     );
     const log = new ChatLog(root);
     const turn = async (words: string, via: "chat" | "voice") => {
+      if (words.length > userMessageLimit) return userMessageTooLong;
       const history = log.recent(historyForTurn);
       log.append({
         role: "user",
-        text: words.slice(0, 2000),
+        text: words,
         at: system.now(),
         via,
       });

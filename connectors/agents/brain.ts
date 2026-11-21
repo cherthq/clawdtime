@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
 import {
   navigationRules,
@@ -4608,6 +4609,18 @@ export class Supervisor {
     spoken: string,
     via: ChatMessage["via"],
   ): Promise<{ text: string; choices: string[] }> {
+    // The desktop/voice transports are bounded at 2,000 characters. Direct
+    // task-service callers historically support complete software goals up to
+    // 8,000; preserve that route without admitting oversized UI instructions.
+    if (
+      spoken.length > userMessageLimit &&
+      !(
+        spoken.length <= 8000 &&
+        this.world.tasks &&
+        codingGoal(spoken, "polite") !== null
+      )
+    )
+      return { text: userMessageTooLong, choices: [] };
     // A line of news stands between two messages by chance: the answer of a
     // job that finished. Every rule that reads ClawdTime's last answer (a
     // question that waits for a yes, the session that was just spoken of)
@@ -4637,7 +4650,7 @@ export class Supervisor {
     via: ChatMessage["via"],
     turn: Turn,
   ): Promise<string> {
-    const words = clean(spoken, 2000);
+    const words = clean(spoken, 8000);
     if (!words) return "I did not catch that.";
     // The message after ClawdTime's own words about work that waits for a
     // yes. That is read from the conversation alone: whatever a file holds,
@@ -4672,7 +4685,10 @@ export class Supervisor {
       turn.closed = "after notice";
       if (!stopsSomething) return this.closedAnswer(turn);
     }
-    if (asked?.role === "assistant" && aboutOfferedWork(asked.text)) {
+    if (
+      asked?.role === "assistant" &&
+      (aboutOfferedWork(asked.text) || asked.text === userMessageTooLong)
+    ) {
       // A request of an agent arrived after it. Nothing in this turn decides
       // that request, whatever the words: the person meant the work.
       turn.closed = "after work";
@@ -4741,6 +4757,7 @@ export class Supervisor {
     // Interpret navigation before coding/session heuristics, from only this message.
     // No keyword allowlist, prior conversation, screen or model paraphrase supplies authority.
     if (
+      spoken.length <= userMessageLimit &&
       this.model?.navigation &&
       this.world.execution?.snapshot().configured &&
       this.world.execution.snapshot().mode === "native" &&
@@ -4860,9 +4877,10 @@ export class Supervisor {
     // a session of that agent that already runs: the model routes that.
     // The reader also takes the sentence with its common typos put right
     // ("opn codex nd write tests"). The job is the person's own text.
-    const viaAgent = this.world.jobs
-      ? (agentJob(words, "plain") ?? agentJob(typosFixed(words), "plain"))
-      : null;
+    const viaAgent =
+      spoken.length <= userMessageLimit && this.world.jobs
+        ? (agentJob(words, "plain") ?? agentJob(typosFixed(words), "plain"))
+        : null;
     if (
       viaAgent &&
       // A sentence with a "don't" gets the question, never a start.
@@ -4894,6 +4912,9 @@ export class Supervisor {
       if (turn.refused === undefined) return said;
       turn.refused = undefined;
     }
+    // A large direct request may only take the full-goal task route above.
+    // Refusal/ambiguity must not fall through to another action interpreter.
+    if (spoken.length > userMessageLimit) return userMessageTooLong;
     const execution = this.world.execution;
     if (execution?.snapshot().configured) {
       if (

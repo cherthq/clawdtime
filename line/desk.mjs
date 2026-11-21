@@ -61,9 +61,21 @@ function environment() {
  * @param {typeof run} [exec] runs the command, for a test
  */
 export async function ask(request, exec = run) {
-  // A request is words. Without a dash at its start, the command can never read it as an option.
-  const text = spoken(request, 2000).replace(/^[-\s]+/, "");
+  // Check the complete input before normalization. Truncating could remove a
+  // trailing negation/qualifier and authorize something the caller did not ask.
+  if (typeof request !== "string") return "There was no request.";
+  if (request.length > 2000)
+    return "That request is longer than 2000 characters. Nothing was started. Please shorten it without removing any constraints.";
+  // Requests are not terminal output: never strip escapes or control bytes to
+  // turn them into different words. Ordinary whitespace can be normalized.
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(request))
+    return "The request contains unsupported control characters. Nothing was sent.";
+  const text = request.trim().replace(/\s+/g, " ");
   if (!text) return "There was no request.";
+  // The CLI has no end-of-options form here. Refuse instead of deleting dashes
+  // and silently changing the caller's text.
+  if (text.startsWith("-"))
+    return "Please rephrase the request without a leading dash. Nothing was sent.";
   let result = null;
   try {
     result = await exec(settings.clawdtime, ["chat", text], {
