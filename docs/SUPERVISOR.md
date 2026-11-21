@@ -382,6 +382,50 @@ These rules are in the code, not in the model's instructions:
   still waits"), and so is one that names a session. 'Say "approve" to let it
   push' in an answer asks you for a word of decision: it offers no words to
   type into a session ('Say "yes" to docs' does, when docs is a session).
+- A bare "yes", "ok" or "no" with no request on the desk gets the sentence
+  "There is no pending request to approve or deny." only when it answers no
+  question. When ClawdTime's own last message ends with a question ("Should
+  I keep an eye on the tests?"), on the same channel and younger than five
+  minutes, your word is the answer to that question, and the model replies
+  to it. A yes to an offer of work in ClawdTime's own words starts nothing:
+  say the work yourself. "Please do", "yes please", "sure, go for it", "ok
+  thanks" and "sure thing" are a yes too: they hold no work, so no job and
+  no task starts with them, wherever you say them. "Yes, start it", "ok,
+  continue" and "do the job" are a yes with no work only as the answer to
+  ClawdTime's own offer ("Want me to start a job for the footer?"), with no
+  news of a job after it; after a job's answer, "please continue" is work on
+  that job, as before.
+  A yes to an offer to tell a session something types nothing: only your
+  own words are typed.
+- A yes to ClawdTime's offer to open one session opens that session ("Want
+  me to open the docs session?", then "yes", "ok", "go ahead"). The offer is
+  the last sentence of ClawdTime's last message; it names one session on
+  the board by its whole name, or it says "it" after a sentence that names
+  exactly one session and says only its state ("Docs is idle. Want me to
+  open it?"; after "Docs wrote a summary file", "it" is the file, and no
+  session opens); the message names no other session; no task is live; and
+  no computer action waits for the panel. The code opens it before the
+  model, and it opens no other session for that message.
+- After ClawdTime's own offer to tell a session something or to open one,
+  it checks its answer to your bare word for typing or opening that did not
+  happen. When the answer says that it told or typed a session something
+  ("I told it to go on", "I let the agent know", "Sent.") and the turn typed
+  nothing, or that it opened a session ("Opened docs.") and the turn did not
+  open that session, the model answers once more. The one that is told or
+  opened is a session, by its name, the name of its agent, "it", "them",
+  "the session" or "the agent". A thing of a session is none ("I pulled up
+  deploy fix's output"), and neither is "As I told you", "I typed nothing",
+  or what a session did ("I see deploy fix opened a pull request"); quoted
+  words are not read. A word about a turn of the last ten minutes stands
+  when it names no other session than the one of that turn. When the second
+  answer says it again, you get plain words: "Nothing was started or
+  changed for that message. Say what I should do, and I do it.", or, when a
+  tool of the turn acted, what it did and what did not happen ("Opened
+  docs. I typed nothing into a session for that message. ..."). After any
+  other question of ClawdTime ("Want me to check on deploy fix?") a yes
+  asks for no typing and no opening, and the answer is not checked this
+  way. Neither is a turn that decided a request, nor your own question
+  ("did you tell deploy fix?").
 - A "yes" is your denial in one case: ClawdTime offered to deny the one
   request that waits. Its message is the last one, on the same channel and
   younger than five minutes, and it ends with the offer itself: "Should I",

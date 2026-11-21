@@ -8467,6 +8467,964 @@ describe("a decision that the person said: the model is asked once more, and a y
   });
 });
 
+describe("a bare yes after ClawdTime's own question, with no request on the desk", () => {
+  const noRequest =
+    "There is no pending request to approve or deny. Nothing was authorized.";
+  /** A Mac with three sessions that records which session came to the front, and a conversation with the clock's time. */
+  const room = (more: Partial<SupervisorWorld> = {}) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      session({
+        id: "102-ghi",
+        pid: 102,
+        name: "payments tests",
+        state: "idle",
+      }),
+    ]);
+    const opened: string[] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(item.name ?? "");
+        return { ok: true, precision: "tab" };
+      },
+      ...more,
+    };
+    const history: ChatMessage[] = [];
+    const told = (text: string, via: ChatMessage["via"] = "chat") => {
+      made.clock.now += 1_000;
+      history.push({ ...said("assistant", text), at: made.clock.now, via });
+      made.clock.now += 5_000;
+    };
+    const say = async (
+      words: string,
+      steps: (ToolCall[] | string)[],
+      via: ChatMessage["via"] = "chat",
+      model = true,
+    ) => {
+      const at = made.clock.now;
+      const run = scripted(steps);
+      const reply = await new Supervisor(world, model ? run.model : null).reply(
+        [...history],
+        words,
+        via,
+      );
+      history.push(
+        { ...said("user", words), at, via },
+        { ...said("assistant", reply), at, via },
+      );
+      made.clock.now += 5_000;
+      return { reply, run };
+    };
+    return { made, opened, told, say, history };
+  };
+
+  describe("the word answers the question: it is no decision", () => {
+    it.each(["yes", "ok", "sure", "no", "okay", "go ahead", "do it"])(
+      "%j after a question of ClawdTime goes to the model, and not to the sentence about requests",
+      async (words) => {
+        const { told, say } = room();
+        told("The payments tests look flaky. Should I keep an eye on them?");
+        const got = await say(words, [
+          "Got it, I'll watch the payments tests.",
+        ]);
+        expect(got.reply, words).toBe("Got it, I'll watch the payments tests.");
+        expect(got.run.seen, words).toHaveLength(1);
+      },
+    );
+
+    it("keeps the sentence about requests where the word answers no question", async () => {
+      // No message before it.
+      const first = room();
+      expect((await first.say("yes", ["Model."])).reply).toBe(noRequest);
+      // A statement before it.
+      const statement = room();
+      statement.told("docs is idle.");
+      expect((await statement.say("yes", ["Model."])).reply).toBe(noRequest);
+      // The question is not the end of ClawdTime's message.
+      const middle = room();
+      middle.told("Should I keep an eye on them? The tests ran twice today.");
+      expect((await middle.say("ok", ["Model."])).reply).toBe(noRequest);
+      // An old question, another channel.
+      const old = room();
+      old.told("Should I keep an eye on them?");
+      old.made.clock.now += 5 * 60_000;
+      expect((await old.say("yes", ["Model."])).reply).toBe(noRequest);
+      const channel = room();
+      channel.told("Should I keep an eye on them?", "voice");
+      expect((await channel.say("yes", ["Model."])).reply).toBe(noRequest);
+      // No model: nobody words an answer.
+      const plain = room();
+      plain.told("Should I keep an eye on them?");
+      expect((await plain.say("yes", ["Model."], "chat", false)).reply).toBe(
+        noRequest,
+      );
+    });
+
+    it("starts nothing and types nothing for a yes to an offer of work or of words", async () => {
+      const work = room();
+      work.told(
+        "The header looks off on small screens. Want me to start a job to fix it?",
+      );
+      const got = await work.say("yes", [
+        [call("start_job", { job: "fix the header on small screens" })],
+        'Say "fix the header on small screens" and I start it.',
+      ]);
+      expect(got.reply).toBe(
+        'Say "fix the header on small screens" and I start it.',
+      );
+      expect(work.made.windows).toHaveLength(0);
+      // A claim of a start is still caught.
+      const claim = room();
+      claim.told(
+        "The header looks off on small screens. Want me to start a job to fix it?",
+      );
+      expect(
+        (
+          await claim.say("yes", [
+            "Started a job to fix the header.",
+            "Started a job to fix the header.",
+          ])
+        ).reply,
+      ).toBe(
+        "Nothing was started or changed for that message. Say what I should do, and I do it.",
+      );
+      expect(claim.made.windows).toHaveLength(0);
+    });
+  });
+
+  describe("a yes to ClawdTime's offer to open one session opens that session", () => {
+    const offer =
+      "Docs finished rewriting the API docs and waits for you. Want me to open the docs session?";
+
+    it("opens it by the code, before the model, and opens no other", async () => {
+      const { told, say, opened } = room();
+      told(offer);
+      const got = await say("yes", ["Docs is open."]);
+      expect(opened).toEqual(["docs"]);
+      expect(got.reply).toBe("Docs is open.");
+      // The model saw that the code opened it.
+      expect(
+        got.run.seen[0]!.messages.filter(
+          (message) => message.role === "tool",
+        ).at(-1)!.content,
+      ).toBe("Opened docs.");
+    });
+
+    it.each([
+      "Want me to open the docs session?",
+      "Should I open docs?",
+      "Shall I open docs for you?",
+      "Do you want me to show you the docs session?",
+      "Would you like me to bring up docs?",
+      "Docs is idle. Want me to open it?",
+      "The docs session waits for you. Should I pull it up?",
+      "Want me to switch to the docs one?",
+    ])("after the offer %j", async (question) => {
+      const { told, say, opened } = room();
+      told(question);
+      await say("yes", ["Docs is open."]);
+      expect(opened, question).toEqual(["docs"]);
+    });
+
+    it.each([
+      "yes",
+      "Yes.",
+      "yeah",
+      "ok",
+      "okay",
+      "sure",
+      "please do",
+      "do it",
+      "go ahead",
+      "yes please",
+      "yes, open it",
+      "ok show me",
+      "um, yes",
+    ])("for the answer %j", async (words) => {
+      const { told, say, opened } = room();
+      told(offer);
+      await say(words, ["Docs is open."]);
+      expect(opened, words).toEqual(["docs"]);
+    });
+
+    it("opens the offered session also when the model asks for another one", async () => {
+      const { told, say, opened } = room();
+      told(offer);
+      await say("yes", [
+        [call("open_session", { session: "deploy fix" })],
+        "Open.",
+      ]);
+      // The code opened docs; the model's call for another session opens nothing more.
+      expect(opened).toEqual(["docs"]);
+    });
+
+    it.each([
+      // The offer names two sessions, or none, or one that is not on the board.
+      "Want me to open docs or deploy fix?",
+      "Docs and deploy fix wait. Want me to open it?",
+      "Want me to open it?",
+      "Want me to open the billing session?",
+      // An offer of another thing.
+      "Want me to open Safari?",
+      "Want me to open the docs folder in Finder?",
+      "Should I keep an eye on docs?",
+      "Did you open docs?",
+      "Want me to open docs later?",
+      // The offer is not the end of the message.
+      "Want me to open the docs session? It finished a minute ago.",
+    ])("opens nothing by a yes after %j", async (question) => {
+      const { told, say, opened } = room();
+      told(question);
+      await say("yes", [[call("open_session", { session: "docs" })], "Okay."]);
+      expect(opened, question).toEqual([]);
+    });
+
+    it.each([
+      "no",
+      "not now",
+      "yes but later",
+      "yes?",
+      "maybe",
+      "yes and tell it to run the tests",
+      "hmm",
+      "what does it say",
+    ])("opens nothing for the answer %j", async (words) => {
+      const { told, say, opened } = room();
+      told(offer);
+      await say(words, ["Okay."]);
+      expect(opened, words).toEqual([]);
+    });
+
+    it("needs the offer to be the last message, on this channel, and younger than five minutes", async () => {
+      const old = room();
+      old.told(offer);
+      old.made.clock.now += 5 * 60_000;
+      await old.say("yes", ["Okay."]);
+      expect(old.opened).toEqual([]);
+
+      const channel = room();
+      channel.told(offer, "voice");
+      await channel.say("yes", ["Okay."]);
+      expect(channel.opened).toEqual([]);
+
+      const between = room();
+      between.told(offer);
+      await between.say("what is deploy fix doing?", ["It works."]);
+      await between.say("yes", ["Okay."]);
+      expect(between.opened).toEqual([]);
+    });
+
+    it("opens nothing by a yes while a task is live: the yes can be for the task", async () => {
+      const { told, say, opened } = room({
+        tasks: {
+          current: () => ({
+            goal: "build the landing page",
+            state: "needs_decision",
+            summary: "A question waits.",
+            question: "Keep the old header?",
+            choices: [],
+            canAnswer: true,
+            canAccept: false,
+            canCancel: true,
+          }),
+          canStart: () => false,
+          start: async () => ({ ok: false, message: "A task is active." }),
+          answer: async () => ({ ok: true, message: "answered" }),
+          accept: async () => ({ ok: true, message: "accepted" }),
+          cancel: async () => ({ ok: true, message: "cancelled" }),
+        },
+      });
+      told(offer);
+      await say("yes", ["Okay."]);
+      expect(opened).toEqual([]);
+    });
+
+    it("opens it also while a request waits, and decides nothing", async () => {
+      const { made, told, say, opened } = room();
+      made.clock.now += 1000;
+      const request = made.world.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary: "git push origin main",
+          options: [],
+        },
+        holdSeconds: 600,
+      });
+      told(offer);
+      await say("yes", [
+        [call("decide", { request: request.id, decision: "allow" })],
+        "Docs is open.",
+      ]);
+      expect(opened).toEqual(["docs"]);
+      expect(made.world.desk.take(request.id)).toBeNull();
+    });
+  });
+  describe("an answer that says that words were typed or a session was opened, when none was", () => {
+    const nothing =
+      "Nothing was started or changed for that message. Say what I should do, and I do it.";
+    const tellOffer =
+      "Deploy fix asks whether it should use the staging key. Want me to tell it to go on?";
+    const nothingTyped =
+      "I typed nothing into a session for that message. Only your own words are typed: say them, with the name of the session.";
+    const noSessionOpened =
+      "I opened no session for that message. Say which session to open.";
+    const check =
+      "A check of your last draft: it said that you typed or told something, or opened a session, but that did not happen in this turn. The person's last message asked for none of that. Answer it again with what is true. You type only words that the person says themselves: say that they can tell the session in their own words.";
+
+    it.each([
+      "I told it yes to proceed.",
+      'I sent "ok" to the deploy fix session to use the staging key.',
+      "I've told deploy fix to go on.",
+      "Told it to go on.",
+      "I typed that into deploy fix.",
+      "Okay, I passed that on to deploy fix.",
+      "I forwarded your ok to deploy fix.",
+      "Sent it.",
+      "Sent.",
+      // Other words for the same claim.
+      "I asked deploy fix to go on.",
+      "I went ahead and told deploy fix to go on.",
+      "I let deploy fix know.",
+      "I passed your ok along to deploy fix.",
+      "I gave deploy fix the go-ahead.",
+      "Done: told deploy fix to go on.",
+      // A hedge after the claim does not take it back.
+      "I told deploy fix to go on, so it can finish the push.",
+      "No problem, I told deploy fix to go on.",
+    ])(
+      "after a yes to an offer to tell a session, %j is sent back and then replaced",
+      async (claim) => {
+        const first = room();
+        first.told(tellOffer);
+        const got = await first.say("ok", [
+          claim,
+          "I type only words that you say yourself: tell deploy fix what to do in your own words.",
+        ]);
+        expect(got.reply, claim).toBe(
+          "I type only words that you say yourself: tell deploy fix what to do in your own words.",
+        );
+        expect(
+          got.run.seen
+            .at(-1)!
+            .system.split("\n")
+            .find((line) => line.startsWith("A check of your last draft")),
+          claim,
+        ).toBe(check);
+        const second = room();
+        second.told(tellOffer);
+        expect((await second.say("ok", [claim, claim])).reply, claim).toBe(
+          nothing,
+        );
+      },
+    );
+
+    it.each([
+      "Opened docs.",
+      "I opened the docs session for you.",
+      "I've brought up docs.",
+      "I pulled up the docs session.",
+      "I switched to docs.",
+      "Brought docs to the front.",
+      "Pulled up docs.",
+      "Switched to docs.",
+      "I opened docs so you can see it.",
+      "I opened up docs for you.",
+      "I switched over to docs.",
+      "I brought the docs session to the front.",
+      "I brought the docs terminal to the front.",
+    ])(
+      "after a yes to an offer that names no session, %j is replaced",
+      async (claim) => {
+        const { told, say, opened } = room();
+        told("Want me to open it?");
+        const got = await say("yes", [
+          [call("open_session", { session: "docs" })],
+          claim,
+          claim,
+        ]);
+        // The model's call was refused: a tool ran, so the sentence says
+        // only what did not happen.
+        expect(got.reply, claim).toBe(noSessionOpened);
+        expect(opened, claim).toEqual([]);
+        // With no call at all, nothing ran in the turn.
+        const plain = room();
+        plain.told("Want me to open it?");
+        expect((await plain.say("yes", [claim, claim])).reply, claim).toBe(
+          nothing,
+        );
+      },
+    );
+
+    it.each([
+      "As I told you, docs is idle.",
+      "I sent you the summary above.",
+      "I can tell it when you say the words.",
+      "You told it to run the tests earlier.",
+      "I have not told it anything.",
+      "I told it to go on earlier today.",
+      "Should I tell it to go on?",
+      "Deploy fix sent its answer to the terminal.",
+      "I told you what it asks.",
+      "Sending words to deploy fix takes your own words.",
+      "Opening hours are nine to five.",
+      "Telling it needs your own words.",
+      // The true answer to the offer: nothing was typed.
+      "I typed nothing into deploy fix. Tell it in your own words.",
+      "Typed nothing yet: only your own words go to deploy fix.",
+      "I have typed nothing, so deploy fix still waits.",
+      "I sent nothing to deploy fix. Tell it in your own words.",
+      "I've told deploy fix nothing yet: only your own words go to a session.",
+      "I said nothing to deploy fix.",
+      "I told it nothing: only your words go to a session.",
+      "I've sent no words to deploy fix.",
+      // A thing of a session is not the session.
+      "I pulled up deploy fix's output: the tests pass.",
+      "I brought up the payments tests results: three failed.",
+      "I pulled up the docs logs: no errors.",
+      "I opened the docs readme: it lists four steps.",
+    ])("lets %j stand: it claims no typing of this turn", async (answer) => {
+      const { told, say } = room();
+      told(tellOffer);
+      const got = await say("ok", [answer, "Second."]);
+      expect(got.reply, answer).toBe(answer);
+    });
+
+    it.each([
+      // The true answer that the check asks for.
+      "I haven't told deploy fix anything: tell it in your own words.",
+      "I haven't sent anything to deploy fix yet.",
+      "I didn't tell it anything.",
+      // What a session did is no claim of ClawdTime.
+      "Deploy fix just pushed the branch and opened a pull request.",
+      "Deploy fix ran the tests, then sent a summary to the log.",
+      "Docs finished and brought back three errors.",
+      // Quoted words of a session.
+      'Deploy fix says: "I opened a pull request for the footer."',
+      // "I asked" about ClawdTime's own question.
+      "Okay, I'll watch them. I asked because they failed twice today.",
+      "I asked since they were flaky this morning.",
+      // A word about an older time.
+      "Will do. I told deploy fix to run the tests a while back.",
+      "I already told deploy fix to go on.",
+      // A true word about what ClawdTime read, or about what a session did.
+      "I pulled up the job's answer: three files are over a gigabyte.",
+      "Okay, I switched to watching the payments tests.",
+      "I see deploy fix opened a pull request.",
+      "I think docs opened the preview page.",
+      "I noticed deploy fix sent the summary to docs.",
+      "I checked: deploy fix pushed the branch and opened a pull request.",
+      "I see deploy fix pushed and opened a pull request.",
+      "Ok, I see docs finished and then sent the report to deploy fix.",
+      "I answered it above: the config is missing a key.",
+    ])(
+      "after a bare yes, %j stands: it is no claim of typing or opening in this turn",
+      async (answer) => {
+        const { told, say } = room();
+        told(
+          "Deploy fix works on the push. Should I keep an eye on deploy fix?",
+        );
+        const got = await say("yes", [answer, answer]);
+        expect(got.reply, answer).toBe(answer);
+      },
+    );
+
+    it.each([
+      "I replied to deploy fix.",
+      "I said go on to deploy fix.",
+      "I've passed it to deploy fix.",
+      "I pinged deploy fix.",
+      "I nudged deploy fix to go on.",
+      "I've now gone ahead and told deploy fix to go on.",
+      "Told deploy fix. It's pushing.",
+      // "The agent" and the like are the session too.
+      "I told the agent to go on.",
+      "I let the agent know.",
+      "I gave the agent the go-ahead.",
+      "I told your coding agent to keep going.",
+      "I sent go on to the agent.",
+      "I replied to the agent.",
+      "Told the agent to go on.",
+      "Sent your ok to the agent.",
+      "I told the terminal to go on.",
+      "I quickly told deploy fix to go on.",
+      "I simply told deploy fix to go on.",
+      // The name of its agent.
+      "I told Claude Code to go on.",
+    ])("after a bare yes, %j is a claim of typing", async (claim) => {
+      const { told, say } = room();
+      told(tellOffer);
+      expect((await say("ok", [claim, claim])).reply, claim).toBe(nothing);
+    });
+
+    it.each([
+      ["Should I send that to deploy fix?", "I sent it."],
+      ["Should I send that to deploy fix?", "I sent it over."],
+      ["Should I send that to deploy fix?", "I've sent your yes."],
+      ["Want me to pass that on to deploy fix?", "I passed it on."],
+      ["Want me to pass that on to deploy fix?", "I passed it along."],
+      ["Should I forward that to deploy fix?", "I forwarded it."],
+      ["Should I forward that to deploy fix?", "I relayed your answer."],
+      ["Should I tell deploy fix to go on?", "I sent go on."],
+      ["Should I tell deploy fix to go on?", "Told."],
+      // Other words for the same offer.
+      ["Should I just say go on to deploy fix?", "I told deploy fix to go on."],
+      [
+        "Want me to give deploy fix the go-ahead?",
+        "I gave deploy fix the go-ahead.",
+      ],
+      ["Should I nudge deploy fix?", "I nudged deploy fix."],
+      ["Want me to have deploy fix go on?", "I told deploy fix to go on."],
+    ])(
+      "after the offer %j and a yes, %j is a claim of typing",
+      async (offer, claim) => {
+        const { told, say } = room();
+        told(offer);
+        expect((await say("yes", [claim, claim])).reply, claim).toBe(nothing);
+      },
+    );
+
+    it("takes no offer to tell the person for an offer to tell a session", async () => {
+      const { told, say } = room();
+      told("Deploy fix is done. Should I tell you what deploy fix did?");
+      const answer =
+        "Sure: opened a pull request and sent the summary to docs.";
+      const got = await say("yes", [answer, answer]);
+      expect(got.reply).toBe(answer);
+    });
+
+    it("checks only after an offer to tell or to open: a yes to another question asks for neither", async () => {
+      for (const answer of [
+        "I pulled up deploy fix's output: the tests pass.",
+        "I told deploy fix to go on.",
+        "Opened docs.",
+      ]) {
+        const { told, say } = room();
+        told("Deploy fix works on the push. Want me to check on deploy fix?");
+        const got = await say("yes", [answer, "Second."]);
+        expect(got.reply, answer).toBe(answer);
+        expect(got.run.seen, answer).toHaveLength(1);
+      }
+    });
+
+    it("does not check a turn that decided a request: a decided request reaches its agent", async () => {
+      const { made, told, say } = room();
+      made.clock.now += 1000;
+      const request = made.world.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary: "rm -rf node_modules",
+          options: [],
+        },
+        holdSeconds: 600,
+      });
+      told("The agent asks to run rm -rf node_modules. Should I approve it?");
+      const answer = "Approved. I told deploy fix it can push.";
+      const got = await say("yes", [
+        [call("decide", { request: request.id, decision: "allow" })],
+        answer,
+        answer,
+      ]);
+      expect(got.reply).toBe(answer);
+      expect(made.world.desk.take(request.id)).toMatchObject({
+        decision: "allow",
+      });
+    });
+
+    it("checks only a bare answer to ClawdTime's question: a question of the person can get a word about an older turn", async () => {
+      for (const [words, answer] of [
+        [
+          "did you tell deploy fix to run the tests?",
+          "Yes, I told deploy fix to run the tests.",
+        ],
+        [
+          "did you tell deploy fix to run the tests?",
+          "I told deploy fix to run the tests today.",
+        ],
+        [
+          "where is the summary?",
+          "I sent it to deploy fix in my last message.",
+        ],
+        ["what did you do?", "I opened docs for you."],
+      ] as const) {
+        const { told, say } = room();
+        told(tellOffer);
+        const got = await say(words, [answer, "Second."]);
+        expect(got.reply, answer).toBe(answer);
+        expect(got.run.seen, answer).toHaveLength(1);
+      }
+    });
+
+    it("lets a word about what this turn really opened stand, and no word about what it did not do", async () => {
+      // The code opened docs in this turn.
+      const now = room();
+      now.told("Docs waits for you. Want me to open the docs session?");
+      expect((await now.say("yes", ["I opened docs for you."])).reply).toBe(
+        "I opened docs for you.",
+      );
+      expect(now.opened).toEqual(["docs"]);
+      // It opened docs and typed nothing: a claim of telling is false.
+      const told = room();
+      told.told("Docs asks whether to go on. Want me to open docs?");
+      expect(
+        (
+          await told.say("yes", [
+            "Opened docs and told it to go on.",
+            "Opened docs and told it to go on.",
+          ])
+        ).reply,
+      ).toBe(`Opened docs. ${nothingTyped}`);
+      expect(told.opened).toEqual(["docs"]);
+      // It opened docs, and no other session.
+      const two = room();
+      two.told("Docs asks whether to go on. Want me to open docs?");
+      expect(
+        (
+          await two.say("yes", [
+            "Opened docs and deploy fix.",
+            "Opened docs and deploy fix.",
+          ])
+        ).reply,
+      ).toBe("Opened docs. I opened no other session for that message.");
+      expect(two.opened).toEqual(["docs"]);
+      // A second session in the sentence that is not said to be opened.
+      for (const answer of [
+        "Opened docs, and deploy fix is still running.",
+        "Opened docs so you can compare it with deploy fix.",
+      ]) {
+        const more = room();
+        more.told("Docs asks whether to go on. Want me to open docs?");
+        expect((await more.say("yes", [answer, "Second."])).reply, answer).toBe(
+          answer,
+        );
+      }
+      // Only the application came forward: the fallback never says "opened".
+      const app = room({
+        focus: async () => ({ ok: true, precision: "app" }),
+      });
+      app.told("Docs asks whether to go on. Want me to open docs?");
+      expect(
+        (
+          await app.say("yes", [
+            "I told docs to go on.",
+            "I told docs to go on.",
+          ])
+        ).reply,
+      ).toBe(`I brought the terminal of docs to the front. ${nothingTyped}`);
+      // An open is no work that started: a claimed job is still caught.
+      const job = room();
+      job.told("Docs asks whether to go on. Want me to open docs?");
+      expect(
+        (
+          await job.say("yeah", [
+            "Opened docs. I also started a job to update the docs.",
+            "Opened docs. I also started a job to update the docs.",
+          ])
+        ).reply,
+      ).toBe(nothing);
+      expect(job.made.windows).toHaveLength(0);
+    });
+
+    it("lets a word about a turn of the last ten minutes stand only for the session of that turn", async () => {
+      const made = room();
+      const deploy = made.made.world
+        .board()!
+        .sessions.find((item) => item.name === "deploy fix")!;
+      // A real typing into deploy fix, five minutes ago.
+      made.made.world.desk.noteActed(
+        "turn-before",
+        deploy.id,
+        "tell deploy fix: go on",
+        "chat",
+      );
+      made.made.clock.now += 5 * 60_000;
+      made.told("Should I tell docs to go on?");
+      expect(
+        (
+          await made.say("yes", [
+            "I told docs to go on.",
+            "I told docs to go on.",
+          ])
+        ).reply,
+      ).toBe(nothing);
+      const same = room();
+      const session = same.made.world
+        .board()!
+        .sessions.find((item) => item.name === "deploy fix")!;
+      same.made.world.desk.noteActed(
+        "turn-before",
+        session.id,
+        "tell deploy fix: go on",
+        "chat",
+      );
+      same.made.clock.now += 5 * 60_000;
+      same.told("Deploy fix asks again. Should I tell deploy fix to go on?");
+      const answer = "I told deploy fix to go on.";
+      expect((await same.say("ok", [answer, "Second."])).reply).toBe(answer);
+      // Eleven minutes later it is no word about now.
+      const old = room();
+      const third = old.made.world
+        .board()!
+        .sessions.find((item) => item.name === "deploy fix")!;
+      old.made.world.desk.noteActed(
+        "turn-before",
+        third.id,
+        "tell deploy fix: go on",
+        "chat",
+      );
+      old.made.clock.now += 11 * 60_000;
+      old.told("Deploy fix asks again. Should I tell deploy fix to go on?");
+      expect(
+        (
+          await old.say("ok", [
+            "I told deploy fix to go on.",
+            "I told deploy fix to go on.",
+          ])
+        ).reply,
+      ).toBe(nothing);
+    });
+  });
+
+  describe("what a yes to an offer does not do", () => {
+    it.each([
+      // "It" is a thing that the session made, not the session.
+      "Docs wrote a summary file. Want me to open it?",
+      "Docs left a link to the pull request. Want me to pull that up?",
+      "Docs opened the preview page in the browser. Want me to bring it up?",
+      "Deploy fix printed the error log. Should I show it?",
+      // "Pull" and "bring" with no "up".
+      "Should I pull docs?",
+      "Want me to bring docs?",
+    ])("opens no session after %j", async (question) => {
+      const { told, say, opened } = room();
+      told(question);
+      await say("yes", [[call("open_session", { session: "docs" })], "Okay."]);
+      expect(opened, question).toEqual([]);
+    });
+
+    it.each(["Want me to focus docs?", "Want me to switch over to docs?"])(
+      "opens the session after the offer %j",
+      async (question) => {
+        const { told, say, opened } = room();
+        told(question);
+        await say("yes", ["Docs is open."]);
+        expect(opened, question).toEqual(["docs"]);
+      },
+    );
+
+    it.each([
+      "Docs is idle. Want me to open it?",
+      "Docs is done and waits for you. Should I pull it up?",
+      "The docs session still needs your answer. Want me to bring it up?",
+      "Docs just finished. Want me to bring it to the front?",
+    ])(
+      "opens the session after %j: the sentence before says only its state",
+      async (question) => {
+        const { told, say, opened } = room();
+        told(question);
+        await say("yes", ["Docs is open."]);
+        expect(opened, question).toEqual(["docs"]);
+      },
+    );
+
+    it("opens no session while a computer action waits for the panel", async () => {
+      for (const words of ["yeah", "please", "ok"]) {
+        const { told, say, opened } = room({
+          execution: {
+            snapshot: () => ({
+              configured: true,
+              mode: "browser",
+              message: "An action waits.",
+              pendingAction: { id: "a1", description: "Click Send" },
+            }),
+            submit: async () => ({ message: "submitted" }),
+            stop: () => ({
+              configured: true,
+              mode: "browser",
+              message: "Stopped.",
+              pendingAction: null,
+            }),
+          } as never,
+        });
+        told("Docs waits for you. Want me to open the docs session?");
+        await say(words, ["Okay."]);
+        expect(opened, words).toEqual([]);
+      }
+    });
+
+    it.each([
+      "please do",
+      "yes please",
+      "yeah do it",
+      "sure, go for it",
+      "ok go ahead",
+      "yes",
+      "go ahead with it",
+      "sure, go ahead and do it",
+      "ok let's do it",
+      "yes, start it",
+      "yes start the job",
+      "yep, let's go",
+      "sure thing",
+      "yeah, go on",
+      "ok, kick it off",
+      "yes, run it",
+      "fine, do it",
+      "yes, go ahead and start it",
+      "yes, please proceed",
+      "ok, continue",
+      "yes, carry on",
+      "yes, let's get started",
+      "yep, make it so",
+      "ok, go ahead, start the job",
+      "sounds good, do it",
+    ])(
+      "starts no job for %j after an offer of work: a yes holds no work",
+      async (words) => {
+        // The model asks for a job with the offer's words.
+        const model = room();
+        model.told(
+          "The footer looks off. Want me to start a job to fix the footer?",
+        );
+        await model.say(words, [
+          [call("start_job", { job: "fix the footer" })],
+          "Say the work in one sentence, and I start it.",
+        ]);
+        expect(model.made.windows, words).toHaveLength(0);
+        // And with no model.
+        const plain = room();
+        plain.told(
+          "The footer looks off. Want me to start a job to fix the footer?",
+        );
+        await plain.say(words, ["Model."], "chat", false);
+        expect(plain.made.windows, words).toHaveLength(0);
+        // As the first message of a conversation, too.
+        const first = room();
+        await first.say(words, [
+          "Say the work in one sentence, and I start it.",
+        ]);
+        expect(first.made.windows, words).toHaveLength(0);
+      },
+    );
+
+    it.each([
+      // After the person's own words about the work, with no question of
+      // ClawdTime before the message.
+      ["the next task is in TODO.md, about the footer", "do the task"],
+      ["the login page is broken", "ok make it work"],
+      ["the nightly job is in jobs/nightly.sh", "yes run the job"],
+      ["the build script is in tools/build.sh", "ok get it started"],
+      ["I updated 3 of 6 pages and stopped there", "please continue"],
+      ["I updated 3 of 6 pages and stopped there", "ok, carry on"],
+    ])(
+      "after %j and a plain answer, %j is work, as before",
+      async (before, words) => {
+        const { say, made } = room();
+        await say(before, ["Got it."]);
+        const windows = made.windows.length;
+        await say(words, [[call("start_job", { job: words })], "Okay."]);
+        expect(made.windows.length - windows, words).toBe(1);
+      },
+    );
+
+    it("reads a yes with a start word as no work only after ClawdTime's own offer, with no news of a job after it", async () => {
+      // A question that is no offer: the person names their own work.
+      const plain = room();
+      await plain.say("the nightly job is in jobs/nightly.sh", [
+        "Got it. Anything else?",
+      ]);
+      const before = plain.made.windows.length;
+      await plain.say("yes, run the job", [
+        [call("start_job", { job: "yes, run the job" })],
+        "Okay.",
+      ]);
+      expect(plain.made.windows.length - before).toBe(1);
+      // An offer, and then the news of a job: "please continue" answers the news.
+      const news = room();
+      news.made.clock.now += 1000;
+      const history: ChatMessage[] = [
+        {
+          ...said("assistant", "Want me to check back on it in a few minutes?"),
+          at: news.made.clock.now,
+          via: "chat",
+        },
+        {
+          ...said(
+            "assistant",
+            "Done: update the docs pages for the new api\n\nIts answer: I updated 3 of 6 pages and stopped there.",
+          ),
+          at: news.made.clock.now + 60_000,
+          via: "chat",
+          news: true,
+        },
+      ];
+      news.made.clock.now += 120_000;
+      const run = scripted([
+        [call("start_job", { job: "please continue" })],
+        "Okay.",
+      ]);
+      await new Supervisor(news.made.world, run.model).reply(
+        history,
+        "please continue",
+        "chat",
+      );
+      expect(news.made.windows).toHaveLength(1);
+      // Right after the offer of work itself, the same words start nothing.
+      const offer = room();
+      offer.told(
+        "The footer looks off. Want me to start a job to fix the footer?",
+      );
+      await offer.say("yes, continue", [
+        [call("start_job", { job: "yes, continue" })],
+        "Okay.",
+      ]);
+      expect(offer.made.windows).toHaveLength(0);
+    });
+
+    it.each(["please do", "yes please", "sure thing", "ok thanks", "yes"])(
+      "%j is a yes and no work also after a plain answer",
+      async (words) => {
+        const { say, made } = room();
+        await say("the login page is broken", ["Got it."]);
+        const windows = made.windows.length;
+        await say(words, [[call("start_job", { job: words })], "Okay."]);
+        expect(made.windows.length - windows, words).toBe(0);
+      },
+    );
+
+    it.each([
+      "yes please, fix the footer on the landing page",
+      "ok, fix the footer",
+      "sure, go ahead and build a landing page for my bakery",
+      "yes, run the tests in the app folder and fix what fails",
+      "ok, do the thing we discussed",
+      "yes, start the build",
+      "go fix the footer",
+    ])(
+      "still starts work that the person says after the yes: %j",
+      async (words) => {
+        // The code starts it itself, or the model asks for the job: the
+        // gate takes the person's own words either way.
+        const { told, say, made } = room();
+        told("The footer looks off. Want me to start a job to fix the footer?");
+        await say(words, [[call("start_job", { job: words })], "Okay."]);
+        expect(made.windows, words).toHaveLength(1);
+      },
+    );
+  });
+});
+
 describe("an answer that says that work started, when nothing started in this turn", () => {
   const claim =
     "I started a job with Claude Code to deploy fix and push the branch, then I'll get the tests run; I'll tell you when it's done.";

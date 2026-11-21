@@ -1552,6 +1552,30 @@ const bareWordForTheModel =
   "(For you, the model: their word is the answer to your own last message, which was not about this request. Reply to that answer first, in words: say what your last message offered, and do not say that you did it. You may add one short sentence that the request still waits. Call no tool for this word.)";
 const bareNoHasNoQuestion =
   'A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny".';
+/**
+ * A message that says yes to an offer of ClawdTime and nothing else: "yes",
+ * "ok", "go ahead", "please do", "yes, open it", "ok show me".
+ */
+const yesToAnOffer =
+  /^(?:(?:um+|uh+|oh|so|well)[,.!\s]+)*(?:yes|yeah|yep|yup|sure|ok|okay|please\s+do|please|do\s+it|do\s+that|go\s+ahead)(?:[,.!\s]+(?:yes|please|do\s+it|do\s+that|go\s+ahead|open\s+it|show\s+me|show\s+it|thanks|thank\s+you))*[.!\s]*$/i;
+/**
+ * ClawdTime's offer to open or show a session, as the whole sentence: "Want
+ * me to open the docs session?", "Should I pull it up?". What it offers to
+ * open is the group.
+ */
+const offerToOpen =
+  /^(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i)\s+(?:just\s+)?(?:(?:open|show(?:\s+you)?|bring\s+up|pull\s+up|switch(?:\s+over)?\s+to|go\s+to|focus)\s+(.+?)|(?:bring|pull)\s+(.+?)\s+(?:up|to\s+the\s+front))(?:\s+(?:for\s+you|now))*\?$/i;
+/**
+ * In "Docs is idle. Want me to open it?", "it" is the session only when the
+ * sentence before says nothing but the state of that session: its name and
+ * these words. "Docs wrote a summary file. Want me to open it?" speaks of a
+ * file.
+ */
+const stateOfASession = new Set(
+  "is was has just now still idle waiting waits for you your answer finished done stopped working needs asks ready the session one and it".split(
+    " ",
+  ),
+);
 /** What such an offer can name with no word of the request: the request itself. */
 const offeredThing =
   /^(?:it|that|this|(?:this|that) one|(?:the|that|this) (?:request|command))$/;
@@ -2321,6 +2345,119 @@ const sizeNotDone =
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
+/**
+ * What a sentence of an answer claims: that ClawdTime told or typed a
+ * session something ("I told it to go on", "I went ahead and sent ok to
+ * deploy fix", "I let deploy fix know", "Sent."), and that it opened a
+ * session ("Opened docs.", "I've brought up docs", "Switched to docs").
+ *
+ * The one that is told is a session: its name, "it" or "them". What was
+ * told or sent to the person is no such claim ("As I told you", "I sent you
+ * the summary", "I asked because they failed"), and what a session did is
+ * none ("Deploy fix pushed the branch and opened a pull request"): the
+ * claim opens with "I", or it opens the sentence with no subject ("Opened
+ * docs and told it to go on"). Quoted words are not read. Not in a
+ * question, not with a word of an earlier time, and not where the words
+ * between "I" and the verb say the opposite or what could be ("I haven't
+ * told it", "I can tell it").
+ */
+const typingOrOpeningClaimed = (
+  sentence: string,
+  sessions: string[],
+): { typing: boolean; opening: string[] | null } => {
+  const none = { typing: false, opening: null };
+  // What a session said, in quotes, is not ClawdTime's claim.
+  const read = sentence.replace(/"[^"]*"|\u201c[^\u201d]*\u201d/g, " ").trim();
+  if (
+    /\?\s*$/.test(read) ||
+    /\b(?:earlier|before|ago|previously|yesterday|already|today|this\s+(?:morning|afternoon|evening)|a\s+while\s+back)\b/i.test(
+      read,
+    )
+  )
+    return none;
+  // "I", then only words of a closed family: "I just told", "I went ahead
+  // and told", "I've now gone ahead and told". After "I see deploy fix
+  // opened ..." the session did it; after "I haven't told ..." nobody did.
+  const i =
+    "\\bI(?:['\u2019]ve|\\s+have)?(?:\\s+(?:just|also|now|then|went|gone|ahead|and|have|actually|finally|quickly|simply))*\\s+";
+  // The one that is told or opened is a session: its name, the name of its
+  // agent, "it", "them", "the session", "the agent", "your coding agent",
+  // "the terminal". Not a thing of the session: "deploy fix's output",
+  // "the docs logs".
+  const names = sessions
+    .filter((name) => name.trim().length > 0)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const who = `(?:(?:the|that|your)\\s+)?(?:it|them|(?:coding\\s+)?(?:agent|terminal|one|session)${names.length ? `|${names.join("|")}` : ""})\\b(?!['\u2019]s)`;
+  // After the session that is opened: the end of the clause, or a word
+  // that still means the session.
+  const kind = "(?:\\s+(?:session|one|agent|window|terminal|tab))?";
+  const end =
+    "(?=\\s*(?:[.!,;:]|$)|\\s+(?:for\\s+you|now|so|and|up|to\\s+the\\s+front)\\b)";
+  // "I sent nothing to deploy fix", "I told it nothing": no claim.
+  const none2 = "(?!\\s+(?:nothing|no|none|anything)\\b)";
+  // The check runs only after an offer to tell a session something, so "I
+  // sent it" and "I passed it on" speak of that session with no "to".
+  const told = `(?:(?:told|asked|messaged|pinged|nudged)${none2}\\s+${who}${none2}|replied${none2}\\s+to\\s+${who}|(?:sent|forwarded|relayed)${none2}\\s+(?!you\\b)\\S+|said${none2}\\s+.{1,60}?\\bto\\s+${who}|passed${none2}\\s+(?!you\\b)\\S+(?:\\s+\\S+)?\\s+(?:on|along|to\\s+${who})|typed\\b${none2}|let\\s+${who}\\s+know\\b|gave\\s+${who}\\s+(?:the\\s+|your\\s+)?(?:go-ahead|go\\s+ahead|ok|okay)\\b)`;
+  const open = `(?:(?:opened(?:\\s+up)?|brought\\s+up|pulled\\s+up|switched(?:\\s+over)?\\s+to)\\s+(${who})${kind}${end}|(?:brought|pulled)\\s+(${who})${kind}\\s+(?:up|to\\s+the\\s+front)\\b)`;
+  // The sentence opens with the verb and has no subject: "Opened docs",
+  // "Told it to go on". A verb after "and" or "then" counts only in a
+  // sentence that is ClawdTime's own: it opens with "I" and a claim verb,
+  // or with a claim verb. After "Deploy fix pushed the branch and opened a
+  // pull request", and after "I checked: deploy fix pushed and opened one",
+  // the session did it.
+  const opener = "^(?:(?:ok|okay|done|sure|yes|got it)[,.!:\\s]+)*";
+  const own = new RegExp(
+    `${opener}(?:${i.replace("\\b", "")}(?:told|asked|messaged|pinged|nudged|replied|sent|forwarded|relayed|passed|said|typed|let|gave|opened|brought|pulled|switched)\\b|(?:told|typed|sent|opened|brought|pulled|switched)\\b)`,
+    "i",
+  ).test(read);
+  const start = own ? `(?:${opener}|\\b(?:and|then)\\s+(?:also\\s+)?)` : opener;
+  const typing = new RegExp(
+    `${i}${told}|${start}(?:told${none2}(?:\\s+${who}${none2}|\\s*[.!]?$)|typed\\b${none2}|sent${none2}(?:\\s*[.!]?$|\\s+(?!you\\b)\\S+))`,
+    "iu",
+  );
+  const opening = new RegExp(`(?:${i}|${start})${open}`, "iu");
+  // The claim's own clause must not say the opposite before it.
+  const clear = (found: RegExpExecArray | null) => {
+    if (!found) return false;
+    const before = read
+      .slice(0, found.index)
+      .split(/[,;:]\s+|\s+(?:and|but|so|then)\s+/)
+      .at(-1)!;
+    return !/\b(?:not|never|nothing|no|none|cannot|if|when|once|unless|until)\b|n['\u2019]t\b/i.test(
+      before,
+    );
+  };
+  const opened = opening.exec(read);
+  // What the sentence says was opened, without "the" before it: the one
+  // after the verb, and one more after "and" ("Opened docs and deploy fix").
+  const bare = (text: string) =>
+    text.replace(/^(?:the|that|your)\s+/i, "").toLowerCase();
+  const second = opened
+    ? new RegExp(
+        `^${kind}\\s*(?:,|and|,\\s*and)\\s+(${who})${kind}${end}`,
+        "iu",
+      ).exec(read.slice(opened.index + opened[0].length))?.[1]
+    : undefined;
+  return {
+    typing: clear(typing.exec(read)),
+    opening: clear(opened)
+      ? [opened![1] ?? opened![2] ?? "", ...(second ? [second] : [])].map(bare)
+      : null,
+  };
+};
+/**
+ * ClawdTime's offer to tell or type a session something, as the whole
+ * sentence: "Want me to tell it to go on?", "Should I send that to deploy
+ * fix?". Not an offer to tell the person ("Should I tell you what it
+ * did?").
+ */
+const offerToTell =
+  /^(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i)\s+(?:just\s+)?(?:tell|type|send|ask|message|reply|answer|pass|forward|let|say|give|have|nudge|ping|ok)\b(?!\s+(?:you|me|us)\b).+\?$/i;
+/** Said in place of a second answer that claims typing or opening that this turn did not do, when another tool of the turn acted. */
+const nothingTyped =
+  "I typed nothing into a session for that message. Only your own words are typed: say them, with the name of the session.";
+const noSessionOpened =
+  "I opened no session for that message. Say which session to open.";
 /** Said in place of an answer that says twice that work started, when the person asked for none and none started. */
 const nothingStarted =
   "Nothing was started or changed for that message. Say what I should do, and I do it.";
@@ -2529,6 +2666,54 @@ const jobCancelOffers = (
     );
   });
 };
+/**
+ * The person's message is a yes and holds no work: "please do", "yes
+ * please", "yeah do it", "sure, go for it". It answers an offer; a job or a
+ * task with that text would have nothing to do.
+ */
+const yesAndNoWork = (text: string) => {
+  const words = spokenWords(text);
+  if (words.length === 0 || words.length > 12) return false;
+  const yes = words.filter((word) => yesWords.has(word)).length;
+  const go = words.filter((word) => goWords.has(word)).length;
+  const start = words.filter((word) => startWords.has(word)).length;
+  return (
+    // Nothing is left after the yes, the fillers, the verbs for "go" and
+    // "start", and "it", "the job" and the like.
+    words.every(
+      (word) =>
+        yesWords.has(word) ||
+        goWords.has(word) ||
+        startWords.has(word) ||
+        yesFillers.has(word),
+    ) &&
+    yes + go + start > 0 &&
+    // "Run it" and "start it" can point at a thing that the person named
+    // before: they are a yes only with a yes word.
+    (start === 0 || yes > 0)
+  );
+};
+/** A message of yes words and nothing else: "yes", "please do", "sure thing", "ok thanks". */
+const onlyYesWords = (text: string) =>
+  /^(?:(?:um+|uh+|oh|so|well)[,.!\s]+)*(?:(?:yes|yeah|yep|yup|sure\s+thing|sure|ok|okay|alright|fine|please\s+do|please|absolutely|definitely|of\s+course|sounds\s+good|great|perfect)[,.!\s]*)+(?:(?:thanks|thank\s+you)[.!\s]*)?$/i.test(
+    text.trim(),
+  );
+const yesWords = new Set(
+  "yes yeah yep yup sure ok okay alright fine please absolutely definitely course sounds good great perfect thing".split(
+    " ",
+  ),
+);
+const goWords = new Set("do go".split(" "));
+const startWords = new Set(
+  "start run launch begin kick proceed continue carry get started make".split(
+    " ",
+  ),
+);
+const yesFillers = new Set(
+  "um uh oh so well then now thanks thank you of and just with ahead on off for let lets s it that this the job task work".split(
+    " ",
+  ),
+);
 /** What is left of an answer says only yes: it would promise what was dropped. */
 const onlyAYes = (text: string) =>
   /^(?:(?:yes|yeah|yep|yup|sure|okay|ok|of\s+course|alright|all\s+right|will\s+do|no\s+problem|certainly|absolutely|got\s+it|on\s+it)[\s,.!]*)+$/i.test(
@@ -2729,6 +2914,8 @@ interface Turn {
   refused?: string;
   /** The gate of decide refused a bare word in this turn: the word answered ClawdTime's own last message. */
   bareWordRefused?: boolean;
+  /** The channel of the person's message. */
+  via?: ChatMessage["via"];
   /**
    * The call to type that the code itself makes for the plain form ("ask the
    * deploy one to run the tests"). Only that call goes without a cue word
@@ -3338,7 +3525,7 @@ export class Supervisor {
         "The person's message was words for a session, and they are typed. No job and no task starts for the same message.",
       );
     // The person's own last words must ask for a task. The model alone cannot start one.
-    if (!asksToStart(spoken))
+    if (!asksToStart(spoken) || this.isAYesWithNoWork(turn, spoken))
       return refuse(
         turn,
         "The person did not ask for a task in their last message. Ask them.",
@@ -3712,6 +3899,14 @@ export class Supervisor {
         "The person did not ask for work in their last message. Ask them what to do.",
       );
     }
+    // "Please do", "yes please", "sure, go for it": a yes, and no work. The
+    // reader of work takes such words for an instruction, and a job with
+    // that text has nothing to do.
+    if (this.isAYesWithNoWork(turn, this.boundJob(spoken)))
+      return refuse(
+        turn,
+        "The person's message is a yes and holds no work: nothing starts. Ask them to say the work in one sentence.",
+      );
     let said: string;
     try {
       const started = await jobs.start(
@@ -4381,6 +4576,216 @@ export class Supervisor {
     }
     const [only] = [...named];
     return named.size === 1 && only && only.name !== null ? only : null;
+  }
+  /**
+   * The answer claims typing or opening that did not happen. A claim of
+   * this turn is true only when this turn typed (for telling and typing) or
+   * opened (for opening): "Opened docs and told it to go on" is false when
+   * the turn only opened docs. With nothing of that kind in this turn, the
+   * claim can speak of a turn of the last ten minutes, which the desk
+   * records: it stands when it names no session other than the ones of
+   * that record.
+   */
+  private claimsTypingOrOpeningThatWasNot(
+    text: string,
+    turn: Turn,
+  ): "typing" | "opening" | null {
+    const keys = [...turn.done.keys()];
+    const typed = keys.some((key) => key.startsWith("typed "));
+    const opened = keys.some((key) => key.startsWith("opened "));
+    let before: ReturnType<DecisionDesk["lastActed"]> = null;
+    let sessions: AgentSession[] = [];
+    try {
+      before = this.world.desk.lastActed?.() ?? null;
+      sessions = this.world.board()?.sessions ?? [];
+    } catch {
+      // The record cannot be read: the answer is not checked.
+      return null;
+    }
+    const lately =
+      !!before &&
+      before.turn !== turn.id &&
+      this.world.now() - before.at < 10 * 60 * 1000;
+    // A session is spoken of by its name, and by the name of its agent.
+    const names = [
+      ...new Set(
+        sessions.flatMap((session) => [
+          title(session),
+          agentKinds[session.agent] ?? "",
+        ]),
+      ),
+    ].filter(Boolean);
+    for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+      const claim = typingOrOpeningClaimed(sentence, names);
+      // The session that the sentence says was opened, when it names one.
+      const target =
+        claim.opening === null
+          ? []
+          : sessions.filter((session) =>
+              claim.opening!.includes(title(session).toLowerCase()),
+            );
+      // Each kind that the sentence claims needs its own act in this turn,
+      // and an open of this turn covers only the session that it opened.
+      const kind =
+        claim.typing && !typed
+          ? "typing"
+          : claim.opening !== null &&
+              (!opened ||
+                !target.every((session) =>
+                  keys.includes(`opened ${session.id}`),
+                ))
+            ? "opening"
+            : null;
+      if (!kind) continue;
+      // An older turn: the sentence names only sessions of that record.
+      const named = sessions.filter((session) =>
+        saidAsWords(title(session), sentence),
+      );
+      if (
+        lately &&
+        !typed &&
+        !opened &&
+        named.every((session) => before!.sessions.includes(session.id))
+      )
+        continue;
+      return kind;
+    }
+    return null;
+  }
+  /**
+   * The person's message answers ClawdTime's own offer to tell or type a
+   * session something, or to open one: the last sentence of ClawdTime's
+   * last message is that offer.
+   */
+  private offeredToTellOrOpen(turn: Turn, via: ChatMessage["via"]) {
+    if (!this.answersItsQuestion(turn, via)) return false;
+    const offer =
+      turn.history
+        .at(-1)!
+        .text.trim()
+        .split(/(?<=[.?!])\s+/)
+        .at(-1) ?? "";
+    return offerToOpen.test(offer) || offerToTell.test(offer);
+  }
+  /** "Opened docs. " for the sessions that this turn opened, or "". */
+  private openedInTurn(turn: Turn) {
+    try {
+      const sessions = (this.world.board()?.sessions ?? []).filter((session) =>
+        turn.done.has(`opened ${session.id}`),
+      );
+      // Only the application came forward: never "opened".
+      const tabs = sessions.filter(
+        (session) => turn.done.get(`opened ${session.id}`) !== "app",
+      );
+      const apps = sessions.filter(
+        (session) => turn.done.get(`opened ${session.id}`) === "app",
+      );
+      return `${tabs.length ? `Opened ${tabs.map(title).join(" and ")}. ` : ""}${apps.length ? `I brought the terminal of ${apps.map(title).join(" and ")} to the front. ` : ""}`;
+    } catch {
+      return "";
+    }
+  }
+  /**
+   * The person's message answers ClawdTime's own question: ClawdTime's
+   * message is the last one of the conversation, on this channel and
+   * younger than five minutes, and it ends with a question.
+   */
+  private answersItsQuestion(turn: Turn, via: ChatMessage["via"]) {
+    const last = turn.history.at(-1);
+    const now = this.world.now();
+    return (
+      !!last &&
+      last.role === "assistant" &&
+      last.via === via &&
+      now - last.at < questionHoldMs &&
+      now >= last.at &&
+      /\?\s*$/.test(last.text.trim())
+    );
+  }
+  /**
+   * "Yes", after ClawdTime's own offer to open one session: that session.
+   * All of this holds, or null:
+   * - the message is a yes and nothing else (`yesToAnOffer`);
+   * - no task is live: the yes can be for the task;
+   * - ClawdTime's message is the last one, on this channel and younger than
+   *   five minutes, and it ENDS with the offer as a whole sentence
+   *   (`offerToOpen`): "Want me to open the docs session?";
+   * - what the offer names is one session on the board, by its whole name
+   *   ("docs", "the docs session"), or it is "it" or "that one" and the
+   *   sentence right before names exactly one session and says only its
+   *   state; and the message names no other session. Only a session with a
+   *   name of its own;
+   * - no computer action waits for an approval in the panel.
+   */
+  private offeredToOpen(
+    turn: Turn,
+    spoken: string,
+    via: ChatMessage["via"],
+  ): AgentSession | null {
+    if (turn.closed !== undefined || !yesToAnOffer.test(spoken.trim()))
+      return null;
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+      // A computer action that waits for the panel owns a bare word.
+      if (this.world.execution?.snapshot().pendingAction) return null;
+    } catch {
+      return null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    const last = turn.history.at(-1);
+    const now = this.world.now();
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      now - last.at >= questionHoldMs ||
+      now < last.at
+    )
+      return null;
+    const sentences = last.text.trim().split(/(?<=[.?!])\s+/);
+    const found = offerToOpen.exec(sentences.at(-1) ?? "");
+    const thing = found?.[1] ?? found?.[2];
+    if (thing === undefined) return null;
+    let sessions: AgentSession[] = [];
+    try {
+      sessions = (this.world.board()?.sessions ?? []).filter(
+        (session) => session.name !== null,
+      );
+    } catch {
+      return null;
+    }
+    const inMessage = sessions.filter((session) =>
+      saidAsWords(title(session), last.text),
+    );
+    const name = thing
+      .trim()
+      .replace(/^(?:the|that|this|your)\s+/i, "")
+      .replace(/\s+(?:session|one|agent|window|terminal|tab)$/i, "")
+      .trim()
+      .toLowerCase();
+    const before = sentences.at(-2) ?? "";
+    const named = /^(?:it|that|this|one|session)$/.test(name)
+      ? sessions.filter(
+          (session) =>
+            saidAsWords(title(session), before) &&
+            // The sentence before says only the state of that session:
+            // "it" after "Docs wrote a summary file" is the file.
+            spokenWords(
+              before.replace(
+                new RegExp(
+                  title(session).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                  "gi",
+                ),
+                " ",
+              ),
+            ).every((word) => stateOfASession.has(word)),
+        )
+      : sessions.filter((session) => title(session).toLowerCase() === name);
+    return named.length === 1 &&
+      inMessage.every((session) => session === named[0])
+      ? named[0]!
+      : null;
   }
   /**
    * "Ok show me", with nothing after it: the session that the exchange just
@@ -5196,6 +5601,38 @@ export class Supervisor {
     );
   }
   /**
+   * The message is a yes and holds no work. A message of yes words alone
+   * ("please do", "yes please", "sure thing") is one everywhere. A message
+   * with a word for "go" or "start" ("yes, start it", "ok, continue", "do
+   * the job") is one only as the answer to ClawdTime's own offer ("Want me
+   * to start a job for the footer?"): after a job's answer, "please
+   * continue" is work on that job, and after "the next task is in
+   * TODO.md", "do the task" is work that the person named.
+   */
+  private isAYesWithNoWork(turn: Turn, text: string) {
+    if (onlyYesWords(text)) return true;
+    if (
+      !yesAndNoWork(text) ||
+      turn.via === undefined ||
+      !this.answersItsQuestion(turn, turn.via)
+    )
+      return false;
+    // ClawdTime's question is an offer ("Want me to ...?", "Should I
+    // ...?"), and it is the last thing in the conversation: after the news
+    // of a job, "please continue" answers that news.
+    const offer =
+      turn.history
+        .at(-1)!
+        .text.trim()
+        .split(/(?<=[.?!])\s+/)
+        .at(-1) ?? "";
+    return (
+      /^(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i)\b/i.test(
+        offer,
+      ) && turn.whole?.at(-1)?.news !== true
+    );
+  }
+  /**
    * The answer says that ClawdTime started work ("I started a job to push
    * the branch", "On it", "I'll kick that off"), and that is not true. The
    * caller knows that nothing acted in this turn.
@@ -5677,7 +6114,10 @@ export class Supervisor {
         const see = this.seeWords(spoken);
         // "Ok show me": the session that the exchange just before speaks of,
         // and no other. The model's choice does not stand against it.
-        const bare = this.bareSee(turn, spoken);
+        // "Yes", after ClawdTime's own offer to open one session: that
+        // session, and no other, whatever the model asks for.
+        const offered = this.offeredToOpen(turn, spoken, via);
+        const bare = offered ?? this.bareSee(turn, spoken);
         // "The second one": its place in the question that the code itself
         // asked, and nowhere else.
         const place = bare ? null : this.placeReferent(turn, see.words);
@@ -5691,7 +6131,7 @@ export class Supervisor {
             this.pointsIntoAList(this.seeAsked(spoken)?.thing ?? ""))
         )
           return "The person's words name a place in a list, and that cannot be read for sure here. Open nothing. Ask them to say the name of the session.";
-        if (!this.asksToSeeNow(turn, spoken))
+        if (!offered && !this.asksToSeeNow(turn, spoken))
           return "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
         // "The other one that's still working", as a correction: the one
         // other session that those words fit.
@@ -5719,7 +6159,8 @@ export class Supervisor {
         const result = await this.world.focus(session);
         if (!result.ok)
           return `${title(session)} has no terminal on this Mac to open.`;
-        turn.done.set(opened, "");
+        // The value says how far it came: the tab, or only the application.
+        turn.done.set(opened, result.precision === "app" ? "app" : "tab");
         this.noteActed(turn, session, spoken, via);
         // Only the application came forward: say so, never "opened".
         return result.precision === "app"
@@ -6174,6 +6615,7 @@ export class Supervisor {
       done: new Map(),
       history: spokenHistory,
       whole: history,
+      via,
     };
     const text = await this.turn(spokenHistory, spoken, via, turn);
     let choices: string[] = [];
@@ -6489,7 +6931,20 @@ export class Supervisor {
       const waiting = computerApproval();
       if (waiting) return waiting;
     }
-    if (bareDecision.test(words) && !hasDecisionTarget())
+    // A bare word with nothing to decide. When it answers ClawdTime's own
+    // question ("Should I keep an eye on the tests?", then "yes"), it is no
+    // word about a request at all: the model answers it. A word of decision
+    // ("approve") gets the sentence about requests as before, and so does
+    // every bare word when no model is there to word an answer.
+    if (
+      bareDecision.test(words) &&
+      !hasDecisionTarget() &&
+      !(
+        this.model &&
+        !namesDecision(words) &&
+        this.answersItsQuestion(turn, via)
+      )
+    )
       return noPendingDecision;
     if (!this.model) return this.plainly(words, via, turn);
     // The person's own earlier words come first, as their words: they are
@@ -6745,6 +7200,26 @@ export class Supervisor {
           { role: "tool", toolCallId: call.id, content: typed.slice(0, 6000) },
         );
       }
+      // "Yes", after ClawdTime's own offer to open one session ("Want me to
+      // open the docs session?"): the code calls the tool that opens it.
+      // The gate of that tool decides as for a call of the model, and the
+      // model then words the answer.
+      const offeredToOpen = this.offeredToOpen(turn, words, via);
+      if (offeredToOpen) {
+        const call: ToolCall = {
+          id: "open_first",
+          name: "open_session",
+          arguments: JSON.stringify({ session: title(offeredToOpen) }),
+        };
+        messages.push(
+          { role: "assistant", content: "", toolCalls: [call] },
+          {
+            role: "tool",
+            toolCallId: call.id,
+            content: (await this.run(call, words, via, turn)).slice(0, 6000),
+          },
+        );
+      }
       // "Show me the payments one": the person asks to see a session, and
       // their own words fit exactly one. The code calls the tool that opens
       // it, where nothing else can own the sentence. The gate of that tool
@@ -6833,10 +7308,11 @@ export class Supervisor {
       const startsJob = (name: string) =>
         name === "start_job" || (name === "start_task" && !this.world.tasks);
       // A call of decide that the gate refused did nothing either.
-      const acted = () =>
+      const acted = (besides?: string) =>
         [...ran].some(
           (name) =>
             names.has(name) &&
+            name !== besides &&
             !readingTools.has(name) &&
             !startsJob(name) &&
             (name !== "decide" || turn.done.has("decide")),
@@ -6899,6 +7375,43 @@ export class Supervisor {
             names.has("session_window") &&
             !ran.has("session_window") &&
             claimsSize(reply.text);
+          // The person's bare word answered ClawdTime's own question, and
+          // the answer says that ClawdTime typed or told something, or
+          // opened a session ("I told it to go on", after "ok" to an offer
+          // to tell a session). The turn knows what it typed and opened,
+          // and the desk records the turns before. The model answers once
+          // more; a second such answer is replaced by what is true. Only
+          // for a bare answer: a question ("did you tell deploy fix?") can
+          // rightly get "Yes, I told it" about an older turn.
+          // Not in a turn that decided a request: a decided request reaches
+          // its agent ("Approved. I told deploy fix it can push").
+          // Only after ClawdTime's own offer to tell a session something or
+          // to open one: after "Should I keep an eye on the tests?", the
+          // yes asks for no typing and no opening, and a report of what
+          // ClawdTime read must not be taken for one.
+          const falseClaim =
+            (bareDecision.test(words) || yesToAnOffer.test(words.trim())) &&
+            !turn.done.has("decide") &&
+            this.offeredToTellOrOpen(turn, via)
+              ? this.claimsTypingOrOpeningThatWasNot(reply.text, turn)
+              : null;
+          if (falseClaim) {
+            // "Nothing was started or changed" is true only when no tool
+            // acted in this turn. Else the sentence says what did not
+            // happen, and no more.
+            if (rechecked)
+              return !acted()
+                ? nothingStarted
+                : falseClaim === "typing"
+                  ? `${this.openedInTurn(turn)}${nothingTyped}`
+                  : this.openedInTurn(turn)
+                    ? `${this.openedInTurn(turn)}I opened no other session for that message.`
+                    : noSessionOpened;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that you typed or told something, or opened a session, but that did not happen in this turn. The person's last message asked for none of that. Answer it again with what is true. You type only words that the person says themselves: say that they can tell the session in their own words.";
+            continue;
+          }
           // The person asked for no action, and the answer says that work
           // started: a job for words that were a question ("tell deploy fix
           // to push the branch, or should I wait?"). Nothing acted in this
@@ -6914,7 +7427,8 @@ export class Supervisor {
               this.seeRequest(words) ||
               this.bareSee(turn, words) !== null
             ) &&
-            !acted() &&
+            // A session that this turn opened is no work that started.
+            !acted("open_session") &&
             this.startsNothing(reply.text)
           ) {
             if (rechecked) return nothingStarted;
