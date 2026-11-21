@@ -31,6 +31,29 @@ public struct HandsStop: Equatable, Sendable {
   public mutating func observe(active: Bool) { if !active { stopped = false } }
 }
 
+/// The last check before an event of the hands goes out. The guided cursor took
+/// a moment to reach the place, and in that moment the person can have stopped
+/// the work or taken the mouse. So the check comes after the glide, as late as
+/// it can.
+public enum HandsGate {
+  /// Nil: the event may go. Otherwise nothing is sent, and this is what the worker hears.
+  /// - `stopped`: Stop on the bar, or Escape held, at this Mac.
+  /// - `watching` and `personActed`: the tap listens, and the person moved the mouse or pressed
+  ///   a key since the command began. What the worker checked may be another place now, so the
+  ///   worker pauses and asks.
+  /// - `run`: what the service says now, read just before the event. Nil when it did not
+  ///   answer. A stop that came through the chat, a call or the panel shows here as `stopping`.
+  public static func refusal(stopped: Bool, watching: Bool, personActed: Bool, run: HandsNext.Run?) -> HandError? {
+    if stopped { return .stoppedByPerson }
+    if watching && personActed { return .refused }
+    // With no word from the service nothing is sent: its result could not be posted either.
+    guard let run else { return .failed }
+    if run.state == "stopping" { return .stoppedByPerson }
+    // Only a request that runs may act. One that ended or waits for the person sends nothing.
+    return run.active && run.state == "running" ? nil : .refused
+  }
+}
+
 /// How often the hands ask for the next command.
 public enum HandsPace {
   /// Seconds between two reads while the worker runs, and while it does not.

@@ -250,4 +250,28 @@ final class HandsContractTests: XCTestCase {
     XCTAssertEqual([1, 2, 3, 4, 9].map { HandsPace.delay(active: true, failures: $0) }, [1, 2, 4, 5, 5])
     XCTAssertEqual(HandsPace.delay(active: false, failures: 2), 2)
   }
+  func testTheLastCheckBeforeAnEventSendsNothingAfterStopOrWhenThePersonTookOver() {
+    let running = HandsNext.Run(active: true, goal: "Save the note", step: 2, state: "running")
+    // The request runs, nobody stopped it and the person did nothing: the event may go.
+    XCTAssertNil(HandsGate.refusal(stopped: false, watching: true, personActed: false, run: running))
+    // Without the tap nobody listened, so nothing is said about the person.
+    XCTAssertNil(HandsGate.refusal(stopped: false, watching: false, personActed: true, run: running))
+    // Stop at this Mac comes first, whatever else holds.
+    XCTAssertEqual(HandsGate.refusal(stopped: true, watching: true, personActed: true, run: running), .stoppedByPerson)
+    XCTAssertEqual(HandsGate.refusal(stopped: true, watching: false, personActed: false, run: nil), .stoppedByPerson)
+    // The person moved the mouse or pressed a key during the glide: nothing is sent, and the worker asks.
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: true, run: running), .refused)
+    // Stop through the chat, a call or the panel: the worker says that it stops.
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false,
+                                     run: .init(active: true, goal: "Save the note", step: 2, state: "stopping")), .stoppedByPerson)
+    // A request that ended, or one that waits for the person, sends nothing.
+    for state in ["idle", "waiting_for_person", "completed", "canceled", ""] {
+      XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false,
+                                       run: .init(active: true, goal: "", step: 0, state: state)), .refused, state)
+    }
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false,
+                                     run: .init(active: false, goal: "", step: 0, state: "running")), .refused)
+    // The service did not answer: nothing is sent.
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false, run: nil), .failed)
+  }
 }

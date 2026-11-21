@@ -17,6 +17,9 @@ import TaskPanelCore
 ///   them, and typed keys never go to them.
 /// - Before a click, a scroll, a drag or typed keys, the guided cursor glides
 ///   to the place with the label of the command. A screen share shows it.
+/// - After the glide and just before the event, Stop is read once more: at this
+///   Mac and at the service. If the person moved the mouse or pressed a key in
+///   that time, nothing is sent and the worker asks.
 @MainActor final class HandsController: NSObject {
   private let pet: PetController
   private let input = HandsInput()
@@ -189,10 +192,11 @@ import TaskPanelCore
     case .type(let text):
       // The hands never type into ClawdTime itself, and never into a password field.
       guard await keyboardFree(), !(await focusIsSecure()) else { return .failure(.refused) }
-      // The guided cursor goes to the field first. That takes a moment, so the two checks run again after it.
+      if stop.stopped { return .failure(.stoppedByPerson) }
+      // The guided cursor goes to the field first. That takes a moment, so Stop and the two checks run again after it.
       defer { guide.rest() }
       await pointAtKeyboard(label)
-      if stop.stopped { return .failure(.stoppedByPerson) }
+      if let refusal = await lastCheck() { return .failure(refusal) }
       guard await mayType() else { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       // A Tab or a Return in the text can move the keyboard, so the same two checks run again on the way.
@@ -205,10 +209,11 @@ import TaskPanelCore
       guard let keys = KeyCombo.parse(combo), await keyboardFree() else { return .failure(.refused) }
       // A key that prints a character is text: it stays out of a password field too. Return, Tab and shortcuts may go.
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
+      if stop.stopped { return .failure(.stoppedByPerson) }
       defer { guide.rest() }
       await pointAtKeyboard(label)
       // Stop may have come during the waits above, and the keyboard may be in another place now.
-      if stop.stopped { return .failure(.stoppedByPerson) }
+      if let refusal = await lastCheck() { return .failure(refusal) }
       guard NSApp.keyWindow == nil else { return .failure(.refused) }
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
       showTyping(); defer { endTyping() }
@@ -218,7 +223,7 @@ import TaskPanelCore
       guard let app = Self.application(named: safe) else { return .failure(.notFound) }
       defer { guide.rest() }
       await say(label)
-      if stop.stopped { return .failure(.stoppedByPerson) }
+      if let refusal = await lastCheck() { return .failure(refusal) }
       let settings = NSWorkspace.OpenConfiguration()
       settings.activates = true
       do { _ = try await NSWorkspace.shared.openApplication(at: app, configuration: settings); return .success(nil) }
@@ -228,11 +233,23 @@ import TaskPanelCore
       guard let url = HandsTarget.webURL(text) else { return .failure(.refused) }
       defer { guide.rest() }
       await say(label)
-      if stop.stopped { return .failure(.stoppedByPerson) }
+      if let refusal = await lastCheck() { return .failure(refusal) }
       return NSWorkspace.shared.open(url) ? .success(nil) : .failure(.failed)
     case .wait:
       return .success(nil)
     }
+  }
+
+  /// The last check before an event goes out, after the glide of the cursor: Stop at this Mac,
+  /// the person's own mouse and keys since the command began, and Stop at the service, which is
+  /// read once now. Nil: the event may go. `HandsGate` holds the rule.
+  private func lastCheck() async -> HandError? {
+    // Stop at this Mac and the person's own input need no read of the service.
+    if let refusal = HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed,
+                                       run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
+    // The number of this command is taken already, so this read gives no command: only what the worker does now.
+    let now = try? await client?.handsNext(after: ledger.last)
+    return HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed, run: now?.run)
   }
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
@@ -256,12 +273,15 @@ import TaskPanelCore
   private func point(_ command: HandCommand, label: String) async -> Result<Observation?, HandError> {
     guard let map = HandsDisplay.main?.map, !command.places.isEmpty, command.places.allSatisfy(map.contains) else { return .failure(.refused) }
     let places = command.places.map(map.clamp)
-    // ClawdTime's windows are not in the picture that the worker saw. A click on
-    // one of them goes through to what is behind it, which is what the worker meant.
-    var restore = passThrough(places.map(map.flip))
+    var restore: [() -> Void] = []
     defer { restore.forEach { $0() }; guide.rest() }
     await guide.travel(to: map.flip(places[0]), label: label)
-    guard !stop.stopped, await input.move(to: places[0]) else { return .failure(.stoppedByPerson) }
+    if let refusal = await lastCheck() { return .failure(refusal) }
+    // ClawdTime's windows are not in the picture that the worker saw. A click on
+    // one of them goes through to what is behind it, which is what the worker meant.
+    // They let clicks through only from here: during the glide the bar keeps its Stop.
+    restore = passThrough(places.map(map.flip))
+    guard await input.move(to: places[0]) else { return .failure(.stoppedByPerson) }
     // A window of ClawdTime that came up on the way, for example a request with Approve on it, gets no click either.
     restore += passThrough(places.map(map.flip))
     let done: Bool
