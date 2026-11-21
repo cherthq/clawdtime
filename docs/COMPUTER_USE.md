@@ -159,8 +159,9 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
   remove, erase, pay, buy, order, submit, post, publish, share, transfer,
   confirm, sign out, log out, empty trash, reset, format, purchase, check out,
   donate, discard, trash, uninstall, wipe, shut down, restart, log off, quit,
-  replace, overwrite, revert, don't save. A click that only gives a text field
-  the focus is not asked about. For a point with no named element under it, the
+  replace, overwrite, revert, don't save. The same holds for a name that gives
+  a yes in your place: approve, allow, accept, authorize, grant, agree, permit,
+  trust. A click that only gives a text field the focus is not asked about. For a point with no named element under it, the
   planner's own reason is read for these words.
 - **Your yes in a terminal.** Typing and every key need your yes while a
   terminal app is in front, or while a terminal inside another app has the
@@ -225,7 +226,10 @@ Stop is checked before and after every action. The answer is always the same:
 > Stopped. An action that was already sent may have finished.
 
 A command that the panel has not fetched yet is taken back, so it never runs.
-An action that is already with the hands may finish. The request stays in the
+A command that the panel has fetched is checked once more, after the glide of
+the cursor and just before the event (`HandsGate` in the panel): Stop on the
+bar, Stop at the service, and your own mouse and keys since the command began.
+With one of them nothing is sent. After that check an action may finish. The request stays in the
 state `stopping` until its result arrives, and nothing follows it. Stop does not
 wait for the language model.
 
@@ -349,9 +353,9 @@ Tested, with made-up hands, a scripted planner, a scripted language model and
 a made-up browser. No test moves the real mouse, presses a real key, captures
 the real screen, draws the cursor or calls a language model.
 
-306 tests in `tests/connectors-computer-*.test.ts`:
+316 tests in `tests/connectors-computer-*.test.ts`:
 
-- `guards` (78): every check above, one by one.
+- `guards` (88): every check above, one by one.
 - `worker` (56): a task that completes; Stop before, during and after an
   action; each question with yes and with no; the screen that changed while you
   answered; you take over; both missing permissions; a restart; a lost result;
@@ -379,8 +383,9 @@ the real screen, draws the cursor or calls a language model.
 an option that is never sent as a message, the message that is never said
 twice, and one real desktop service that this test started.
 
-50 pure tests of the panel's side in `mac/Tests/TaskPanelCoreTests/`: the
-contract, the key plans, the picture and the elements, and for the cursor the
+51 pure tests of the panel's side in `mac/Tests/TaskPanelCoreTests/`: the
+contract, the last check before an event, the key plans, the picture and the
+elements, and for the cursor the
 time and the start of the glide, the jump with Reduce Motion, the sizes in a
 picture 720 pixels high, the place of the pill at every edge of the screen,
 the place for typed keys, and the rule of the window.
@@ -431,6 +436,24 @@ Not tested, and so not proven:
 - Two tools of the supervisor overlap with the worker: the browser tool and
   the tool that reads the screen from a picture. Which one its language model
   picks for "refresh the browser" is not fixed in code.
+- A question about what ClawdTime can do, in the form of a polite request, is
+  read as a request: "Can you click buttons on my screen?" starts a task with
+  those words. The route before the language model cannot tell the two apart.
+- That route has no check for a request of an agent that waits at the desk.
+  "Click the Approve button" goes to the worker. The worker then asks for your
+  yes before the click, because of the name.
+- The words refresh, reload and press pass the hand-off with any object, when
+  the language model picks the tool: "refresh the board" can go to the worker.
+- With the worker as the engine, the panel closes its chat and its board each
+  time you send a message. The answer shows when you open the chat again.
+- A second desktop service of the same user builds a second worker. The switch
+  and the journal are one for each user, so its start marks a request of the
+  first as uncertain.
+- The tool that reads the screen from a picture shows the cursor and its label
+  when it runs during a task of the worker.
+- `clawdtime chat TEXT` sends the panel credential with its first read, before
+  the service has shown that it is the one that wrote the files. A process of
+  the same user that takes the port after a crash would get it.
 - While the worker runs the panel shows two windows with a Stop button.
 - The cursor is the only window of ClawdTime in a screen share during a run.
   The mascot that it comes out of is not in the share.

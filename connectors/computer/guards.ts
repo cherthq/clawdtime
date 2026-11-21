@@ -126,6 +126,17 @@ export const dangerWords = [
   "overwrite",
   "revert",
   "don't save",
+  // A name that gives a yes in the person's place: a permission of macOS, a
+  // request of an agent, the terms of a site.
+  "approve",
+  "allow",
+  "accept",
+  "authorize",
+  "authorise",
+  "grant",
+  "agree",
+  "permit",
+  "trust",
 ] as const;
 // A space in a word also stands for no space and for a hyphen: "log out",
 // "logout", "log-out". An apostrophe also stands for the curved one.

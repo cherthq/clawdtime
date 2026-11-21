@@ -208,6 +208,35 @@ describe("an action that needs the person's yes", () => {
       .concat(["sign out", "log out", "empty trash"]))
       expect(dangerWords).toContain(word);
   });
+  it("asks before a click that gives a yes in the person's place", () => {
+    for (const [role, title] of [
+      ["AXButton", "Approve"],
+      ["AXButton", "Allow"],
+      ["AXButton", "Don\u2019t Allow"],
+      ["AXButton", "Always Allow"],
+      ["AXButton", "Accept All"],
+      ["AXButton", "Authorize"],
+      ["AXButton", "Authorise app"],
+      ["AXButton", "Grant Access"],
+      ["AXCheckBox", "I agree"],
+      ["AXButton", "Permit"],
+      ["AXButton", "Trust"],
+    ]) {
+      const seen = observation([element(1, { role: role!, title: title! })]);
+      expect(
+        run({ kind: "click_element", element: 1 }, view(seen)).risk,
+        title,
+      ).toMatch(/speaks for you/);
+    }
+    // A word that only holds one of them inside is not asked about.
+    for (const title of ["Allowance", "Acceptance report", "Approved items"]) {
+      const seen = observation([element(1, { title })]);
+      expect(
+        run({ kind: "click_element", element: 1 }, view(seen)).risk,
+        title,
+      ).toBeNull();
+    }
+  });
   it("asks for a menu item, a link and a name in capitals", () => {
     for (const [role, title] of [
       ["AXMenuItem", "Empty Trash…"],
