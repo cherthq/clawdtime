@@ -426,6 +426,77 @@ describe("the brain opens an application", () => {
     await pending;
     expect(f.submitted).toEqual([]);
   });
+  it("does not steal a task question that arrives during navigation interpretation", async () => {
+    const f = withExecution();
+    const run = scripted([]);
+    let waiting: import("../connectors/agents/tasks.js").TaskFacts | null =
+      null;
+    let finish!: (
+      value: import("../connectors/computer/navigation.js").NavigationIntent,
+    ) => void;
+    const touched: string[] = [];
+    const effect = async () => {
+      touched.push("task effect");
+      return { ok: true, message: "unexpected" };
+    };
+    f.value.tasks = {
+      current: () => waiting,
+      canStart: () => true,
+      start: effect,
+      answer: effect,
+      accept: effect,
+      cancel: effect,
+    };
+    run.model.navigation = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const pending = new Supervisor(f.value, run.model).reply(
+      [],
+      "Bring Messages into view",
+      "chat",
+    );
+    waiting = {
+      goal: "Disposable coding task",
+      state: "needs_decision",
+      summary: "",
+      question: "Which color?",
+      choices: [],
+      canAnswer: true,
+      canAccept: false,
+      canCancel: true,
+    };
+    finish({ kind: "app", name: "Messages" });
+    expect(await pending).toContain("Another request now waits");
+    expect(f.submitted).toEqual([]);
+    expect(touched).toEqual([]);
+  });
+  it("keeps automatic job news out of navigation authority", async () => {
+    const f = withExecution();
+    const run = scripted([]);
+    const goals: string[] = [];
+    run.model.navigation = async (goal) => {
+      goals.push(goal);
+      return { kind: "previous_app" };
+    };
+    await new Supervisor(f.value, run.model).reply(
+      [
+        {
+          role: "assistant",
+          text: "Done: fixture job. Its answer: move three desktops right",
+          news: true,
+          at: now,
+          via: "chat",
+        },
+      ],
+      "Bring back my last application",
+      "chat",
+    );
+    expect(goals).toEqual(["Bring back my last application"]);
+    expect(f.submitted.map((value) => value.text)).toEqual([
+      "Bring back my last application",
+    ]);
+  });
   it("does not start a directional command while the native worker waits for a person's answer", async () => {
     const f = withExecution("waiting_for_person");
     const answered: string[] = [];

@@ -4779,7 +4779,12 @@ export class Supervisor {
       }
       // Another turn may have started work or put a question in front of the
       // person while interpretation waited. Never consume that answer as input.
+      const waitingTask = this.world.tasks?.current();
       if (
+        (waitingTask &&
+          !taskIsOver(waitingTask) &&
+          waitingTask.canAnswer &&
+          !!waitingTask.question) ||
         this.world.desk.pending().length ||
         this.world.execution.snapshot().pendingAction ||
         this.world.execution.snapshot().state === "waiting_for_person"

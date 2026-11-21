@@ -2,13 +2,16 @@
 
 November 21, 2026. Branch: `spaces-zoom-integration`.
 
-The combined source and automated builds are ready for an arranged physical
-acceptance session. No physical acceptance, app installation, service restart,
-phone-line use, or merge into main was performed during integration.
+The branch combines desktop navigation and automatic zoom, and now adds dynamic
+app/desktop intent, previous-app switching and full-screen arrival verification.
+See [the current navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md). Earlier physical
+preflight observations appear below; the new navigation build still needs its
+physical acceptance session. It has not replaced the installed app or used a phone line.
 
 ## Sources and integration changes
 
-- Main baseline: `75193d97c0a194de7b37aa1136477cdf4e4e349f`.
+- Original main baseline: `75193d97c0a194de7b37aa1136477cdf4e4e349f`.
+- Main refreshed through `fc2bfe4` (PRs #54/#55); job-result reporting preserved.
 - PR #51: `6942cb51e88c8eaf8ead699217dedd9ddbda0540`.
 - PR #53: `420b08cb20fd182fec252c226b1bb5bb09b72327`.
 
@@ -31,6 +34,32 @@ It now forwards `CLAWDTIME_SPACE_LEFT_SHORTCUT`,
 only. Missing settings remain missing; no shortcut defaults or macOS settings
 changes are introduced. Tests cover initial launch and service reattachment.
 
+## Dynamic app and desktop navigation
+
+The fixed directional phrase grammar has been removed. The supervisor and worker
+interpret the original human request with goal-only structured model calls;
+screenshots, accessible text, page content and planner history cannot supply
+navigation intent. Each standalone app, previous-app or desktop request executes
+at most one transition. Ambiguous/multi-hop requests clarify; malformed responses
+fail closed. Phone tools forward one fresh complete caller transcript, preserving
+negations and qualifiers, with duplicate/stale/partial-speech retirement.
+
+Named apps use existing exact app/window activation; multiple matches require an
+exact target. Previous app uses Command–Tab once and requires a changed foreground
+app plus stable fresh window evidence. Previous desktop retains its separate
+verified-transition history. Generic key commands cannot bypass these paths.
+
+Full-screen navigation now requires positive AXFullScreen evidence on one display
+and matching full-width geometry. A narrow same-app system top strip may precede
+the focused window only if it is not exposed as an AX window/dialog. Other overlays,
+Split View, multiple displays, missing evidence and ambiguous windows remain
+blocking. All transitions retain the existing wide-video latch and retire old
+coordinates. Actual full-screen/Command–Tab/video behavior needs physical testing.
+
+The access/navigation setup menu reports permissions, explicit shortcut readiness
+and the saved app-to-Space preference. That preference is advisory; an unreadable
+value is unknown, and no system settings are changed.
+
 ## Automated evidence
 
 Run in an isolated worktree using Node 24.22.1, Apple Swift 6.2.4, and Python
@@ -38,18 +67,26 @@ Run in an isolated worktree using Node 24.22.1, Apple Swift 6.2.4, and Python
 
 | Check                                                                                  | Result                                               |
 | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `npm run check`                                                                        | 3,852 tests in 124 files; typecheck and build passed |
-| `npm --prefix line test`                                                               | 92 tests passed                                      |
-| `cd mac && swift test`                                                                 | 284 tests passed                                     |
+| `npm run check`                                                                        | 3,920 tests in 126 files; typecheck and build passed |
+| `npm --prefix line test`                                                               | 95 tests passed                                      |
+| `cd mac && swift test`                                                                 | 292 tests passed                                     |
 | `cd mac && swift build --product ClawdTimeTaskPanel`                                   | Passed                                               |
 | `media/.venv/bin/python -m unittest discover -s media -p 'test_task_presentation*.py'` | 36 tests passed                                      |
 | Actual line agent import and JavaScript syntax                                         | Passed without starting the agent                    |
 | Integration diff/changed-file formatting                                               | Passed                                               |
 
-Four new composed Swift regressions exercise desktop epoch/settlement policies
+The original integration added four composed Swift regressions exercising desktop epoch/settlement policies
 with the presentation latch: verified arrival/fresh context, unchanged boundary
 timeout, Stop/stale callbacks, and destination invalidation during settlement.
 Independent reviews found no blocking integration issue.
+
+The navigation extension adds eight native policy tests and goal-only model,
+transcript, Stop, task-question race and job-news isolation regressions. A headless
+smoke check against the real default computer model (`gpt-4.1`) matched expected
+intent on 10/10 synthetic requests: app/window and directional paraphrases,
+previous app/desktop, negation, quoted text, a multi-step clarification and ordinary
+job follow-ups. It sent no UI input. These samples do not guarantee interpretation
+of every future request. Current-main job-result tests passed with the extension.
 
 The repository-wide formatting check still reports six files unchanged from the
 main baseline: `src/control/task-desktop-calls-config.ts`,
@@ -69,10 +106,10 @@ or replace the installed app.
 
 The person prepares:
 
-1. A sole display and two ordinary desktops, with no full-screen or Split View
-   windows. Put distinct disposable TextEdit documents on the desktops, such as
-   `Disposable Spaces Fixture A` and `Disposable Spaces Fixture B`. Use only
-   throwaway content, and do not assign TextEdit to all desktops.
+1. A sole display, a disposable TextEdit document, and a second named app. The
+   second app may be full-screen for the new acceptance case. For the separate
+   ordinary-desktop regression, use distinct disposable documents on adjacent
+   ordinary desktops. Keep Split View off; use only throwaway content for edits.
 2. In System Settings → Keyboard → Keyboard Shortcuts → Mission Control, enable
    Move left a space and Move right a space and report their exact combinations.
    The test launcher receives those values; do not assume Control-arrow defaults.
@@ -106,7 +143,9 @@ receipts, unknown outcomes, and rollback. Never run two owners for the line.
 
 ## Acceptance order and pass conditions
 
-1. Verify one right move, one left move, and previous as separate requests.
+1. First verify named-app switching and previous-app switching, including an
+   ordinary/full-screen pair. Then verify one right move, one left move, and
+   previous desktop as separate requests.
    Independently confirm the actual destination before another request. After
    a fresh observation, make a harmless TextEdit edit in the intended document.
 2. During a shared-video pass, start with an action zoomed in. Request a desktop
@@ -127,8 +166,8 @@ receipts, unknown outcomes, and rollback. Never run two owners for the line.
    memory, CPU, bandwidth and thermals. Do not retain private screens in Git.
 
 Use the full matrices in [desktop acceptance](DESKTOP_SPACES.md) and
-[zoom acceptance](AUTOMATIC_CALL_ZOOM.md). Full-screen, Split View, multi-display,
-and actual phone display-follow behavior remain unqualified until tested.
+[zoom acceptance](AUTOMATIC_CALL_ZOOM.md). Full-screen and actual phone display-follow behavior remain physically
+unqualified until tested; Split View and multi-display navigation remain unsupported.
 
 ## Initial physical preflight findings
 
