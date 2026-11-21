@@ -368,6 +368,25 @@ These rules are in the code, not in the model's instructions:
   docs to wait, or should I?" are not typed this way: ClawdTime reads them as
   before, and can ask you.
 
+- "Tell it to run the tests" is typed too, by the same conditions, when "it",
+  "that one" or "that session" can mean one session only. Two things say
+  that, and nothing else does:
+  - ClawdTime opened or typed into exactly one session in its answer to your
+    message just before, on the same channel, and that answer names no other
+    session. It keeps a small record of what it did in its state folder (the
+    sessions, the channel and a digest of your message, not the message).
+  - Or that answer opens with the full name of one session and its state
+    ("docs is idle", "the payments tests session has been running for 3
+    minutes"), and names no other session.
+
+  A name in your own message says nothing here ("forget docs, how is the
+  build?"), and neither does a name that is a part of another thing ("the
+  docs build fails"). After another exchange, after ten minutes, while a job
+  of ClawdTime runs or right after one started, and while a task is not over,
+  "it" names no session, and ClawdTime asks you which one. "Tell it to the
+  team" and "tell it to Marketing" are not typed: words that open with "the", "my",
+  "everyone", "both" or a capital letter are an audience, not an instruction.
+
 - Words for a session that runs never start a job or a task: "show me docs
   and tell deploy fix to run the tests again" opens docs and types into
   deploy fix, and "ask deploy fix if the tests pass" starts nothing. Work of

@@ -15,6 +15,7 @@ import { agentLabel } from "./catalog.js";
 import {
   answerInTerminalText,
   type DecisionDesk,
+  saidDigest,
   type DecisionRequest,
 } from "./decisions.js";
 import type { CliFact } from "./inventory.js";
@@ -820,6 +821,9 @@ const seeLead =
  */
 const toldLead =
   /^(?:(?:please|ok|okay|so|then|now|and|also|hey|hi|clawdtime|just|well|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+/** Words that point at a session to tell, with no name: "tell it to ...", "ask that one to ...". */
+const tellPointer =
+  /^(?:it|that\s+one|this\s+one|that\s+session|this\s+session|the\s+session|that\s+agent)$/i;
 /**
  * A clause that opens with words that ask to see something, and what it asks
  * to see. The words must open the clause: "the show must go on", "in my
@@ -1981,6 +1985,110 @@ export class Supervisor {
     });
   }
   /**
+   * The session to tell: the one that the words name, or, for a word that
+   * points ("it", "that one", "that session"), the one session that
+   * `pointedAt` gives. With no such session, the word names none.
+   */
+  private toldWho(head: string, turn?: Turn): AgentSession | null {
+    return (
+      this.namedToTell(head) ??
+      (turn && tellPointer.test(head.trim()) ? this.pointedAt(turn) : null)
+    );
+  }
+  /**
+   * The session that "it" means in words that are typed ("tell it to run
+   * the tests"), right after the exchange that the history ends with: the
+   * person's message and ClawdTime's answer to it, at most ten minutes old.
+   * Two things say it for sure, and nothing else does:
+   * 1. What ClawdTime did in that turn, on the same channel: it opened or
+   *    typed into exactly one session (the desk's record, whatever words the
+   *    answer used), and the answer names no other session.
+   * 2. The answer opens with the full name of one session and its state
+   *    ("docs is idle", "the payments tests session has been running"), and
+   *    names no other session.
+   * Words of the person name nothing here: "forget docs, how is the build?"
+   * speaks of docs. None while a job of ClawdTime runs or right after one
+   * started ("it" can be the job), and none while a task is not over.
+   */
+  private pointedAt(turn: Turn): AgentSession | null {
+    const answer = turn.history.at(-1);
+    const asked = turn.history.at(-2);
+    const now = this.world.now();
+    if (
+      !answer ||
+      !asked ||
+      answer.role !== "assistant" ||
+      asked.role !== "user" ||
+      now - answer.at > 10 * 60 * 1000 ||
+      this.jobsNow(5).some(
+        (job) =>
+          (!job.done && now - job.startedAt < 2 * 60 * 60 * 1000) ||
+          // A job knows its start by the second.
+          job.startedAt >= Math.floor(asked.at / 1000) * 1000,
+      )
+    )
+      return null;
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+    } catch {
+      task = null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    const sessions = this.world.board()?.sessions ?? [];
+    // 1. The record of that turn.
+    let acted: ReturnType<DecisionDesk["lastActed"]> = null;
+    try {
+      acted = this.world.desk.lastActed?.() ?? null;
+    } catch {
+      acted = null;
+    }
+    if (
+      acted &&
+      // The record is of the turn that answered the person's last message:
+      // it holds that message's digest, and it was written between the
+      // message and the answer.
+      acted.said === saidDigest(asked.text) &&
+      acted.via === asked.via &&
+      acted.at >= asked.at - 1000 &&
+      acted.at <= answer.at + 1000
+    ) {
+      // Two sessions in one turn, or a session that is gone: "it" names none.
+      // And none when the answer then speaks of another session ("Opened
+      // docs. By the way, payments is stuck."): "it" can be that one.
+      const only =
+        acted.sessions.length === 1
+          ? sessions.find((session) => session.id === acted.sessions[0])
+          : undefined;
+      return only &&
+        only.name !== null &&
+        !sessions.some(
+          (session) =>
+            session !== only && saidAsWords(title(session), answer.text),
+        )
+        ? only
+        : null;
+    }
+    // 2. The answer opens with one session's name and its state.
+    const stated = sessions.filter(
+      (session) =>
+        session.name !== null &&
+        new RegExp(
+          `^(?:the\\s+)?${title(session).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+session)?\\s+(?:is|was|has\\s+been|is\\s+still|still)\\s+(?:(?:still|now|currently|already)\\s+)?(?:idle|working|running|waiting|done|stuck|finished|busy)\\b`,
+          "i",
+        ).test(answer.text.trim()),
+    );
+    const [only] = stated;
+    return stated.length === 1 &&
+      only &&
+      !sessions.some(
+        (session) =>
+          session !== only && saidAsWords(title(session), answer.text),
+      )
+      ? only
+      : null;
+  }
+  /**
    * The session that the message speaks to, so that it is no work for a new
    * agent: a clause opens with "tell" or "ask" (after a filler or a polite
    * opening only), and what follows at once names one session and nothing
@@ -1991,7 +2099,7 @@ export class Supervisor {
    * landing page". After the clause, only more words for the session can
    * follow ("..., and to report back").
    */
-  private toldSession(spoken: string): AgentSession | null {
+  private toldSession(spoken: string, turn?: Turn): AgentSession | null {
     const sessions = this.world.board()?.sessions ?? [];
     for (const form of toldForms(spoken)) {
       const named = sessions.filter(
@@ -2008,10 +2116,11 @@ export class Supervisor {
       );
       if (!told) continue;
       // The name ends where the words for the session begin.
-      const session = this.namedToTell(
+      const session = this.toldWho(
         /^(.+?)\s+(?:to|that|if|whether|about|what|why|how|when|where|which|who)\b/i.exec(
           told[1]!,
         )?.[1] ?? told[1]!,
+        turn,
       );
       if (!session) continue;
       return clauses.slice(0, at).some(work) ||
@@ -2031,7 +2140,7 @@ export class Supervisor {
    * given, as for the form with a colon: a session whose name holds "to" can
    * be read in more than one way. A message with a question mark is none.
    */
-  private toldPlainly(spoken: string) {
+  private toldPlainly(spoken: string, turn?: Turn) {
     const readings: { session: AgentSession; text: string }[] = [];
     if (/\?/.test(spoken)) return readings;
     const clauses = clausesOf(spoken);
@@ -2051,7 +2160,7 @@ export class Supervisor {
     if (!told) return readings;
     const rest = told[1]!;
     for (const found of rest.matchAll(/\s+to\s+/gi)) {
-      const session = this.namedToTell(rest.slice(0, found.index));
+      const session = this.toldWho(rest.slice(0, found.index), turn);
       // A "please" at the end is no part of the words for the session.
       const text = rest
         .slice(found.index + found[0].length)
@@ -2068,14 +2177,21 @@ export class Supervisor {
    * session are one clause in which no word can take them back, hedge them or
    * begin something else.
    */
-  private plainlyTold(spoken: string) {
+  private plainlyTold(spoken: string, turn?: Turn) {
     if (takesBack(spoken) || takenBackAtTheEnd(spoken)) return null;
-    const readings = this.toldPlainly(spoken);
+    const readings = this.toldPlainly(spoken, turn);
     const only = readings.length === 1 ? readings[0]! : null;
     return only &&
       oneClause(only.text) &&
       !mayTakeBack(only.text) &&
-      !maySayMore(only.text)
+      !maySayMore(only.text) &&
+      // "Tell it to the team", "tell docs to everyone", "tell it to Marketing":
+      // an audience, not an instruction for the session. A first word with
+      // a capital is a name.
+      !/^(?:an?|the|my|our|your|their|his|her|every(?:one|body)|all|us|them|him|me|both|who(?:m)?ever|any(?:one|body)|some(?:one|body)|no(?:body|\s+one)|people|others)\b/i.test(
+        only.text,
+      ) &&
+      !/^\p{Lu}/u.test(only.text)
       ? only
       : null;
   }
@@ -2145,7 +2261,7 @@ export class Supervisor {
       return this.startJob(turn, spoken);
     if (this.ownedByRequest(turn, spoken)) return refuse(turn, requestOwns);
     // Words for a session that runs are no task either.
-    const told = this.toldSession(spoken);
+    const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
     // The person's own last words must ask for a task. The model alone cannot start one.
     if (!asksToStart(spoken))
@@ -2300,7 +2416,7 @@ export class Supervisor {
     if (this.ownedByRequest(turn, spoken)) return refuse(turn, requestOwns);
     // "Tell deploy fix to run the tests again": words for a session that
     // runs are not work for a new one.
-    const told = this.toldSession(spoken);
+    const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
     // The whole sentence is read, never a part of it: a question, a remark
     // and a sentence that takes the work back start nothing.
@@ -2771,7 +2887,9 @@ export class Supervisor {
    * exactly one session. None when they name two sessions
    * or none, when the last message is not an answer to the person, when a
    * job started in that exchange ("it" is then the job), and while a task
-   * is not over.
+   * is not over. This reading is wide ("the docs build" names docs): it only
+   * pins a call of the model for "ok show me". Words are typed by the
+   * stricter `pointedAt`.
    */
   private inFocus(turn: Turn): AgentSession | null {
     const answer = turn.history.at(-1);
@@ -2993,6 +3111,19 @@ export class Supervisor {
     );
     // A session with no name of its own can be the one that is meant.
     return others.length === 1 && others[0]!.name !== null ? others[0]! : null;
+  }
+  /** Writes down that this turn opened or typed into a session, so that the next message can say "it". */
+  private noteActed(
+    turn: Turn,
+    session: AgentSession,
+    spoken: string,
+    via: ChatMessage["via"],
+  ) {
+    try {
+      this.world.desk.noteActed?.(turn.id, session.id, spoken, via);
+    } catch {
+      // The record is a help for the next message. Without it, "it" names none.
+    }
   }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
@@ -3237,6 +3368,7 @@ export class Supervisor {
         if (!result.ok)
           return `${title(session)} has no terminal on this Mac to open.`;
         turn.done.set(opened, "");
+        this.noteActed(turn, session, spoken, via);
         // Only the application came forward: say so, never "opened".
         return result.precision === "app"
           ? `I brought ${session.terminal.app ?? "its terminal"} to the front, but I could not select the tab of ${title(session)}.`
@@ -3349,7 +3481,7 @@ export class Supervisor {
         // and only in the code's own call: where something else waits for an
         // answer, the code makes no such call.
         const plainly =
-          turn.ownTyping === call ? this.plainlyTold(spoken) : null;
+          turn.ownTyping === call ? this.plainlyTold(spoken, turn) : null;
         const told =
           plainly !== null &&
           plainly.session === session &&
@@ -3380,7 +3512,10 @@ export class Supervisor {
         if (turn.done.has(typed))
           return `That is typed into ${title(session)} already. Nothing more is typed.`;
         const sent = await this.world.send(session, text);
-        if (sent.ok) turn.done.set(typed, "");
+        if (sent.ok) {
+          turn.done.set(typed, "");
+          this.noteActed(turn, session, spoken, via);
+        }
         return sent.ok
           ? `Typed into ${title(session)}.`
           : `${title(session)} runs in a terminal that cannot take text from here.`;
@@ -4095,7 +4230,7 @@ export class Supervisor {
         !mayTakeBack(fits[0]!.text)
           ? fits[0]!
           : fits.length === 0 && nothingWaits && toldForms(words).length === 0
-            ? this.plainlyTold(words)
+            ? this.plainlyTold(words, turn)
             : null;
       if (toType) {
         const call: ToolCall = {
