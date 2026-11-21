@@ -1163,6 +1163,15 @@ const followsUp = (spoken: string) => {
  * starts a job early. "Don't wait" alone is not one: it can answer another
  * question, and a "don't" can read as a no to a request.
  */
+/**
+ * The message holds "start it", "begin that job" or the like, in any
+ * sentence. Wide on purpose: it only keeps such a message from being read as
+ * an answer to a request or a task while a job started lately.
+ */
+const mentionsStart = (text: string) =>
+  /\b(?:start|begin)\w*\s+(?:it|that|that one|that job|the job|this one)\b/i.test(
+    text,
+  );
 const startsNow = (text: string) =>
   /^(?:(?:ok|okay|so|then|please|just|well|yes|no)[,\s]+)*(?:(?:do\s+not|don['\u2019]?t)\s+wait[,\s]+)?(?:(?:start|begin)\s+(?:it|that|that one|that job|the job|this one)\s+(?:now|right now|at once|anyway|without waiting)|start now|begin now)(?:[,\s]+please)?[\s.!]*$/i.test(
     text.trim(),
@@ -2508,15 +2517,21 @@ export class Supervisor {
         (choice) =>
           spokenWords(choice).join(" ") === spokenWords(words).join(" "),
       );
-    if (startsNow(words) && !isChoice && this.world.jobs?.release) {
+    // The strict reader finds the sentence that releases a job. The wide
+    // reader finds every message that can be meant as that sentence ("sure,
+    // start it now", "yes, start it", "no, don't start it now"): none of
+    // them is an answer to something else while a job started lately.
+    const releases = startsNow(words);
+    const namesRelease = releases || mentionsStart(words);
+    if (namesRelease && !isChoice && this.world.jobs?.release) {
       const now = this.world.now();
       const lately = this.jobsNow(20).filter(
         (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
       );
-      // The code owns the sentence whenever a job started lately, also when
-      // its wait is over by now and also in a closed turn: it is the sentence
-      // that ClawdTime teaches for a job, so it is never an answer to a
-      // request ("yes, start it now") or to a question of a task.
+      // The code owns such a message whenever a job started lately, also when
+      // its wait is over by now and also in a closed turn: "start it now" is
+      // the sentence that ClawdTime teaches for a job, so it is never an
+      // answer to a request ("yes, start it now") or to a question of a task.
       if (lately.length) {
         const waits = lately.some((job) => job.waiting);
         const job = waits
@@ -2527,7 +2542,11 @@ export class Supervisor {
           return `${this.waitingRequest()} ${job} I did nothing with that sentence${waits ? ": answer the request first, then say it again" : ""}.`;
         if (taskWaits)
           return `Your task asks: ${clean(current!.question!, 200)} ${job} I did nothing with that sentence: answer the task in its own words${waits ? ", then say it again" : ""}.`;
-        if (waits) {
+        if (releases && waits) {
+          // ClawdTime's own question about other work is the last message:
+          // "start it now" can mean that work. Nothing starts, and both are named.
+          if (turn.closed === "after work")
+            return 'A job waits for the job before it, and I had also asked you about other work. I did nothing with that sentence. Say the work again to start that, or say "start it now" again for the job.';
           try {
             return this.world.jobs.release().said;
           } catch {
@@ -2541,7 +2560,7 @@ export class Supervisor {
         const asked =
           before?.role === "assistant" && /\?\s*$/.test(before.text);
         const newest = lately[0]!;
-        if (!asked)
+        if (releases && !waits && !asked)
           return `No job waits now. The job "${clean(newest.job, 80)}" ${newest.done ? "is done: ask me for its answer" : now - newest.startedAt < 2 * 60 * 60 * 1000 ? "works already" : "wrote no answer"}.`;
       }
     }

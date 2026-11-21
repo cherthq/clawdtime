@@ -1988,6 +1988,101 @@ describe("start it now", () => {
     }
   });
 
+  it.each([
+    "yeah, start it now",
+    "sure, start it now",
+    "yep start it now",
+    "yes, start it",
+    "ok start it",
+    "yes start it now thanks",
+    "ok go ahead and start it now",
+    "alright start it now",
+    "no, don't start it now",
+    "yes begin that job",
+    "sure, go on and start the job",
+  ])(
+    "%j answers no request and no task while a job started lately",
+    async (words) => {
+      for (const waitsNow of [true, false]) {
+        const state = async () => {
+          if (waitsNow) return waitingJob();
+          const made = mac();
+          expect((await made.jobs.start(work)).ok).toBe(true);
+          made.clock.now += 5 * 60_000;
+          return { ...made, go: () => false };
+        };
+        const head = waitsNow
+          ? "A job also waits for the job before it."
+          : "No job waits now.";
+        // A request of an agent waits: with no model, and with a model that
+        // decides it with the person's words.
+        for (const kind of ["none", "decides"] as const) {
+          const made = await state();
+          const request = waits(made.world);
+          const model =
+            kind === "none"
+              ? null
+              : scripted([
+                  [
+                    call("decide", {
+                      request: request.id,
+                      decision: /^no/.test(words) ? "deny" : "allow",
+                    }),
+                  ],
+                  "Done.",
+                ]).model;
+          const answer = await new Supervisor(made.world, model).reply(
+            [],
+            words,
+            "chat",
+          );
+          expect(answer, words).toContain(
+            `One request waits for your answer: git push origin main. Say approve or deny to answer it. ${head} I did nothing with that sentence`,
+          );
+          expect(made.world.desk.take(request.id), words).toBeNull();
+          expect(made.go(), words).toBe(false);
+        }
+        // A task asks.
+        for (const model of [scripted(["Okay."]).model, null]) {
+          const made = await state();
+          const { world, answered } = asking(made.world);
+          const answer = await new Supervisor(world, model).reply(
+            [],
+            words,
+            "chat",
+          );
+          expect(answer, words).toContain(
+            `Your task asks: Deploy now? ${head} I did nothing with that sentence`,
+          );
+          expect(answered, words).toEqual([]);
+          expect(made.go(), words).toBe(false);
+        }
+      }
+    },
+  );
+
+  it("releases nothing in the turn after ClawdTime's own question about other work: it names both", async () => {
+    const made = await waitingJob();
+    const sentence = "build a status page, don't use a framework";
+    expect(
+      await new Supervisor(made.world, scripted(["Okay."]).model).reply(
+        [
+          said("user", sentence),
+          said(
+            "assistant",
+            `There is a "don't" in that, so I want to be sure. Should I start this just as you said it: "${sentence}"? Say yes or no.`,
+          ),
+        ],
+        "start it now",
+        "chat",
+      ),
+    ).toBe(
+      'A job waits for the job before it, and I had also asked you about other work. I did nothing with that sentence. Say the work again to start that, or say "start it now" again for the job.',
+    );
+    expect(made.go()).toBe(false);
+    expect(made.ids()).toHaveLength(2);
+  });
+
   it("answers no task in the turn after ClawdTime's own question about work", async () => {
     const made = await waitingJob();
     const { world, answered } = asking(made.world);
