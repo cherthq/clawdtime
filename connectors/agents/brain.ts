@@ -1563,6 +1563,17 @@ const claimsAction = (text: string) =>
       );
     }),
   );
+/** The answer claims, in the first person, that a size or a window changed: "I made its text bigger". */
+const claimsSize = (text: string) =>
+  text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .some(
+      (sentence) =>
+        claimsAction(sentence) &&
+        /\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|size|resized|zoomed|enlarged|shrunk)\b/i.test(
+          sentence,
+        ),
+    );
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
@@ -1723,21 +1734,27 @@ export class Supervisor {
     );
   }
   /**
-   * True when work for a new agent speaks to a session that runs: it has the
-   * word "session" or "agent", or it opens with a verb that speaks ("tell",
-   * "ask", "type") and names a session. In "open Codex and write tests for
-   * the login page" a session of that name is only what the work is about:
-   * the person asked for a new agent.
+   * True when work for a new agent can be for a session that runs: it has
+   * the word "session" or "agent", it opens with a verb that speaks ("tell",
+   * "ask", "type") and names a session, or it names a session of the agent
+   * that the person asked for. In "open Codex and write tests for the login
+   * page", with a Claude Code session of that name, the name is only what
+   * the work is about: the person asked for a new agent.
    */
-  private speaksToSession(work: string) {
+  private speaksToSession(work: string, agent: JobAgent) {
+    const kind = agent === "codex" ? "codex" : "claude-code";
+    const named = (this.world.board()?.sessions ?? []).filter(
+      (session) => session.name !== null && saidAsWords(session.name, work),
+    );
     return (
       /\b(?:agents?|sessions?)\b/i.test(work) ||
       (/^\s*(?:please\s+)?(?:tell|ask|type|say|send|reply|answer|message|ping)\b/i.test(
         work,
       ) &&
-        (this.world.board()?.sessions ?? []).some(
-          (session) => session.name !== null && saidAsWords(session.name, work),
-        ))
+        named.length > 0) ||
+      // "Use Claude to fix the bug in payments", with a Claude session named
+      // payments: the person can mean that session.
+      named.some((session) => session.agent === kind)
     );
   }
   /**
@@ -2194,9 +2211,20 @@ export class Supervisor {
     const stands = (word: string) =>
       known.has(word) || known.has(word.replace(/e?s$/, ""));
     if (!typo) return rest.every(stands);
+    // A near word must be near the words of exactly one session.
     const near = (word: string) =>
       word.length >= 5 &&
-      [...known].some((name) => name.length >= 5 && oneLetterApart(word, name));
+      sessions.filter((session) => {
+        let names: string[];
+        try {
+          names = this.world.titles?.(session) ?? [title(session)];
+        } catch {
+          names = [title(session)];
+        }
+        return [title(session), ...names]
+          .flatMap(spokenWords)
+          .some((name) => name.length >= 5 && oneLetterApart(word, name));
+      }).length === 1;
     return rest.every((word) => stands(word) || near(word)) && rest.some(near);
   }
   /**
@@ -2219,52 +2247,23 @@ export class Supervisor {
     }
   }
   /**
-   * The words of the message that say which session to see. After a
-   * take-back that a named session follows ("open payments, no, the other
-   * one"), only the words after the take-back say it, and a session that was
-   * named before it is ruled out.
+   * The clause of the message that asks to see a session, and what it asks
+   * to see: the last clause that opens with words for it ("show me", "open",
+   * "switch to", "can I see") and whose thing is a session: its name and
+   * nothing else, a word that points at one, or a description whose head is
+   * a word for a session. "Show me the status" asks for words, and "open a
+   * new terminal and run the tests" asks for work. A message that is words
+   * for a session ("tell docs: open the file") has no such clause.
    */
-  private seeWords(spoken: string) {
-    const clauses = clausesOf(spoken);
-    const at = clauses.findIndex(seeTakenBack);
-    const none = { words: spoken, ruledOut: [] as AgentSession[] };
-    if (at <= 0) return none;
-    const after = clauses.slice(at);
-    if (
-      !after.some((clause) =>
-        this.namesOnlyASession(clause.replace(seeLead, "")),
-      )
-    )
-      return none;
-    const before = clauses.slice(0, at).join(", ");
-    return {
-      words: after.join(", "),
-      ruledOut: (this.world.board()?.sessions ?? []).filter((session) =>
-        saidAsWords(title(session), before),
-      ),
-    };
-  }
-  /**
-   * The person's own words ask to see a session. One clause opens with words
-   * for it ("show me", "open", "switch to", "can I see"), and what it asks to
-   * see is a session: its name and nothing else, a word that points at one,
-   * or a description whose head is a word for a session. "Show me the
-   * status" asks for words, and "open a new terminal and run the tests" asks
-   * for work. A clause after
-   * it that takes it back ends the request, unless a session is named after
-   * that: "open payments, no, docs" corrects the request. A message that is
-   * words for a session ("tell docs: open the file") asks ClawdTime to open
-   * nothing.
-   */
-  private seeRequest(spoken: string) {
+  private seeAsked(spoken: string) {
     const clauses = clausesOf(spoken);
     if (
       /^(?:tell|ask|type|say|send|reply|answer)\b/i.test(
         (clauses[0] ?? "").replace(seeLead, ""),
       )
     )
-      return false;
-    let asked = -1;
+      return null;
+    let asked: { clauses: string[]; at: number; thing: string } | null = null;
     for (const [at, clause] of clauses.entries()) {
       // A polite word at the end is not part of the request's form.
       const plain = clause
@@ -2283,16 +2282,65 @@ export class Supervisor {
       if (!thing || seeAsks.test(thing)) continue;
       // A name, a word that points at a session, or a session that is described.
       if (this.namesOnlyASession(thing) || this.describesASession(thing))
-        asked = at;
+        asked = { clauses, at, thing };
     }
-    if (asked < 0) return false;
-    const after = clauses.slice(asked + 1);
+    return asked;
+  }
+  /**
+   * The person's own words ask to see a session. A clause after the request
+   * that takes it back ends it, unless a session is named after that: "open
+   * payments, no, docs" corrects the request.
+   */
+  private seeRequest(spoken: string) {
+    const asked = this.seeAsked(spoken);
+    if (!asked) return false;
+    const after = asked.clauses.slice(asked.at + 1);
     const takenBack = after.findIndex(seeTakenBack);
     if (takenBack < 0) return true;
-    // A session named after the take-back corrects the request.
     return after
       .slice(takenBack)
       .some((clause) => this.namesOnlyASession(clause.replace(seeLead, "")));
+  }
+  /**
+   * The words of the message that say which session to see: what the clause
+   * that asks names, and no other part of the message. "Show me the other
+   * one, payments is done" does not ask for payments. After a take-back that
+   * a named session follows ("open payments, no, the other one"), the words
+   * after the take-back say it, and a session that was named before it is
+   * ruled out. "It" can be a session that the message named before the
+   * request ("is payments done? open it"), and never one that it names after.
+   * With no clause that asks (a correction of the message before), the whole
+   * message says it.
+   */
+  private seeWords(spoken: string) {
+    const asked = this.seeAsked(spoken);
+    const none = { words: spoken, ruledOut: [] as AgentSession[] };
+    if (!asked) return none;
+    const after = asked.clauses.slice(asked.at + 1);
+    const takenBack = after.findIndex(seeTakenBack);
+    if (takenBack >= 0) {
+      const tail = after.slice(takenBack);
+      if (
+        tail.some((clause) =>
+          this.namesOnlyASession(clause.replace(seeLead, "")),
+        )
+      ) {
+        const before = asked.clauses
+          .slice(0, asked.at + 1 + takenBack)
+          .join(", ");
+        return {
+          words: tail.join(", "),
+          ruledOut: (this.world.board()?.sessions ?? []).filter((session) =>
+            saidAsWords(title(session), before),
+          ),
+        };
+      }
+    }
+    const pronoun = /^(?:it|that|this|them)$/i.test(
+      asked.thing.replace(seeTail, "").trim(),
+    );
+    const before = asked.clauses.slice(0, asked.at).join(", ");
+    return { words: pronoun && before ? before : asked.thing, ruledOut: [] };
   }
   /**
    * The message asks to see a session. Or it corrects such a request: the
@@ -3117,7 +3165,7 @@ export class Supervisor {
       asksForWork(words, { dont: true }) &&
       this.world.desk.pending().length === 0 &&
       !this.world.execution?.snapshot().pendingAction &&
-      !this.speaksToSession(viaAgent.work) &&
+      !this.speaksToSession(viaAgent.work, viaAgent.agent) &&
       !this.mayMeanSession(viaAgent)
     ) {
       // The agent that the reader found. It counts only when the person's
@@ -3408,7 +3456,13 @@ export class Supervisor {
         } catch {
           // The board cannot be read: the model opens it.
         }
-        if (named.kind === "one" && !see.ruledOut.includes(named.session)) {
+        // Only a session with a name of its own. One that is known by its
+        // folder ("app", "website") can be the thing itself, not a session.
+        if (
+          named.kind === "one" &&
+          named.session.name !== null &&
+          !see.ruledOut.includes(named.session)
+        ) {
           const call: ToolCall = {
             id: "open_first",
             name: "open_session",
@@ -3489,24 +3543,34 @@ export class Supervisor {
           // is not true. The model answers once more, and can call the tool
           // then: its gates decide as always. A second such answer is
           // replaced by plain words.
+          // The person asked for a window to change, the answer says that a
+          // size changed, and the tool for windows did not run: another tool
+          // that ran (the session came to the front) stands behind no such
+          // claim.
+          const sizeClaim =
+            asksForSize(words) &&
+            !ran.has("session_window") &&
+            claimsSize(reply.text);
           if (
+            sizeClaim ||
             // The person asked for an action: work, a window to change, or a
             // session to see.
-            (asksForWork(words) ||
+            ((asksForWork(words) ||
               asksForSize(words) ||
               this.seeRequest(words)) &&
-            claimsAction(reply.text) &&
-            !acted()
+              claimsAction(reply.text) &&
+              !acted())
           ) {
             if (rechecked) return notDone;
             rechecked = true;
             // The tool for what the person asked: a window, a session to
             // see, or work.
-            const tool = asksForSize(words)
-              ? "session_window"
-              : this.seeRequest(words)
-                ? "open_session"
-                : "start_job";
+            const tool =
+              sizeClaim || asksForSize(words)
+                ? "session_window"
+                : this.seeRequest(words)
+                  ? "open_session"
+                  : "start_job";
             recheck = `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`;
             continue;
           }
@@ -3557,6 +3621,17 @@ export class Supervisor {
       );
       if (typed?.role === "tool" && typed.content.startsWith("Typed into "))
         return typed.content;
+      // The code opened a session, and then the model did not answer: which
+      // session came to the front is said.
+      const shown = messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "open_first",
+      );
+      if (
+        shown?.role === "tool" &&
+        /^(?:Opened |I brought )/.test(shown.content)
+      )
+        return shown.content;
       // No model now: the plain answer still tells the state and takes a clear yes or no.
       const acted = messages.some(
         (message) =>

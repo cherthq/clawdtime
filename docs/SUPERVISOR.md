@@ -548,9 +548,11 @@ So these open nothing:
   correction, and "open payments but don't type anything" is still a request.
 - Words for a session: "tell docs: open the file".
 
-When your words name exactly one session, it opens at once: ClawdTime does not
-wait for the model to choose it, and "show me the deploy fix one and make it
-bigger" does both. One message opens a session once. The common typos count:
+When the part of your sentence that asks names exactly one session by its own
+name, it opens at once: ClawdTime does not wait for the model to choose it,
+and "show me the deploy fix one and make it bigger" does both. Another part of
+the sentence does not choose the session: "show me the other one, payments is
+done" does not open payments. One message opens a session once. The common typos count:
 "shwo me the payments one", "opne docs", and a long name with one wrong letter
 ("the paymnts one").
 
@@ -609,7 +611,9 @@ a tunnel and get its link, find something out: all of these are jobs.
   session whose name stands in the work ("... write tests for the login page",
   with a session named "login page") does not hold the job back: you asked
   for a new agent. Work that speaks to a session ("open Codex and tell login
-  page to ...") is routed as before. With no agent in the sentence, the agent of
+  page to ...") is routed as before, and so is work that names a session of
+  the same agent ("use Claude to fix the bug in payments", with a Claude
+  session named payments): you can mean that session. With no agent in the sentence, the agent of
   `CLAWDTIME_JOB_AGENT` takes it. "Open Claude and build ..." starts at once,
   also while sessions of that agent run. "Tell Claude to ..." and "open my
   Claude session and ..." can mean a session that runs, so ClawdTime works out

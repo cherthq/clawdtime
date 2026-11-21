@@ -1754,6 +1754,23 @@ describe("an agent and its work, with typos", () => {
     // The job is the work that the person gave the agent, in their words.
     expect(made.jobs.recent()[0]!.job).toBe("write tests for the login page");
     expect(made.file("start.command")).toContain("exec codex ");
+    // A session of the SAME agent that the work names: the person can mean
+    // that session, so the model routes it, as before.
+    const same = mac([
+      session({
+        name: "payments",
+        agent: "claude-code",
+        agentLabel: "Claude Code",
+      }),
+    ]);
+    const routed = scripted(["Which one do you mean?"]);
+    await new Supervisor(same.world, routed.model).reply(
+      [],
+      "use claude to fix the bug in payments",
+      "chat",
+    );
+    expect(same.windows).toHaveLength(0);
+    expect(routed.seen.length).toBeGreaterThan(0);
     // Work that speaks to a session goes to the model, as before.
     for (const speaks of [
       "open codex and tell login page to run the tests",
@@ -1993,6 +2010,157 @@ describe("a session opens only when the person asks to see it", () => {
       "chat",
     );
     expect(opened).toEqual([]);
+  });
+
+  it("opens by itself only what the asking clause names", async () => {
+    const run = async (
+      words: string,
+      sessions = [
+        session({ name: "payments" }),
+        session({ id: "2", name: "docs" }),
+      ],
+    ) => {
+      const opened: string[] = [];
+      const made = mac(sessions);
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async (item) => {
+          opened.push(String(item.name));
+          return { ok: true };
+        },
+      };
+      // A model that only talks: whatever opens here, the code opened.
+      await new Supervisor(world, scripted(["Okay."]).model).reply(
+        [],
+        words,
+        "chat",
+      );
+      return opened;
+    };
+    // Another part of the message names a session: it is not what was asked for.
+    expect(await run("show me the other one, payments is done")).toEqual([]);
+    expect(await run("switch to it, payments is too noisy")).toEqual([]);
+    expect(
+      await run("open the one you started, and ask payments to wait"),
+    ).toEqual([]);
+    // "It" is the session that the message named before the request.
+    expect(await run("is payments done? open it")).toEqual(["payments"]);
+    // A session that is known only by its folder: "the app" can be the app.
+    expect(
+      await run("open the app", [
+        session({ name: null, project: "app" }),
+        session({ id: "2", name: "docs" }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("does not let the model open what another part of the message names", async () => {
+    // The model follows the person and asks for docs: docs opens, not payments.
+    const { world, model, opened } = opening("docs");
+    await new Supervisor(world, model).reply(
+      [],
+      "show me the other one, payments is done",
+      "chat",
+    );
+    expect(opened).toEqual(["docs"]);
+  });
+
+  it("says which session opened when the model does not answer after it", async () => {
+    const opened: string[] = [];
+    const made = mac([session({ name: "payments" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+    };
+    const silent: ModelClient = {
+      complete: async () => {
+        throw new Error("The operation timed out.");
+      },
+    };
+    expect(
+      await new Supervisor(world, silent).reply(
+        [],
+        "show me the payments one",
+        "chat",
+      ),
+    ).toBe("Opened payments.");
+    expect(opened).toEqual(["payments"]);
+  });
+
+  it("checks a claim about a size when only the session came to the front", async () => {
+    const acts: string[] = [];
+    const made = mac([session({ name: "deploy fix" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        acts.push(`focus ${String(item.name)}`);
+        return { ok: true };
+      },
+      window: async (item, action) => {
+        acts.push(`window ${String(item.name)} ${action}`);
+        return { ok: true, said: "The window changed." };
+      },
+    };
+    // The code opens the session. The model says that the text is bigger too,
+    // and called no tool for it: after the note it does.
+    const { model, seen } = scripted([
+      "I opened deploy fix and made its text bigger.",
+      [
+        call("session_window", {
+          session: "deploy fix",
+          action: "bigger_text",
+        }),
+      ],
+      "Deploy fix is in front, with bigger text.",
+    ]);
+    expect(
+      await new Supervisor(world, model).reply(
+        [],
+        "show me the deploy fix one and make it bigger",
+        "chat",
+      ),
+    ).toBe("Deploy fix is in front, with bigger text.");
+    expect(acts).toEqual(["focus deploy fix", "window deploy fix bigger_text"]);
+    expect(seen[1]!.system).toContain("so call session_window now");
+    // A true answer about the opening alone is said as it is.
+    acts.length = 0;
+    const honest = scripted(["I opened deploy fix. Which size do you want?"]);
+    expect(
+      await new Supervisor(world, honest.model).reply(
+        [],
+        "show me the deploy fix one and make it bigger",
+        "chat",
+      ),
+    ).toBe("I opened deploy fix. Which size do you want?");
+  });
+
+  it("takes a near word only when it is near one session", async () => {
+    // "noses" is one letter from "notes" and from "nodes": two sessions.
+    const two = async (words: string) => {
+      const opened: string[] = [];
+      const made = mac([
+        session({ name: "notes" }),
+        session({ id: "2", name: "nodes" }),
+      ]);
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async (item) => {
+          opened.push(String(item.name));
+          return { ok: true };
+        },
+      };
+      const { model } = scripted([
+        [call("open_session", { session: "notes" })],
+        "Okay.",
+      ]);
+      await new Supervisor(world, model).reply([], words, "chat");
+      return opened;
+    };
+    expect(await two("show me the noses one")).toEqual([]);
+    expect(await two("show me the notes one")).toEqual(["notes"]);
   });
 
   it.each([
