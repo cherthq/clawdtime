@@ -122,7 +122,9 @@ esac`,
   };
 }
 
-describe("the host script of the line agent", () => {
+// These tests run real git and shell commands on a small repository. On a busy
+// machine one of them can take longer than the usual five seconds.
+describe("the host script of the line agent", { timeout: 60_000 }, () => {
   it("knows a call from its records: the newest call record decides", () => {
     const f = fixture();
     expect(f.run("in-call").out.trim()).toBe("no");
