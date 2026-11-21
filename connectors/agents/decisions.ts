@@ -92,6 +92,22 @@ const actedSchema = z
     sessions: z.array(z.string().max(200)).max(20),
   })
   .strict();
+const askedSchema = z
+  .object({
+    version: z.literal(1),
+    /** A digest of the person's message that said the decision. Not the message. */
+    said: z.string().max(64),
+    /** A digest of ClawdTime's question "which one?". Not the question. */
+    question: z.string().max(64),
+    /** The channel of the person's message that the question answered. */
+    via: z.string().max(40),
+    at: z.number().int().nonnegative(),
+    /** What the person said to do, in the message before the question. */
+    decision: z.enum(["allow", "deny"]),
+    /** The ids of the requests that waited when the question was asked. */
+    requests: z.array(z.string().max(32)).max(20),
+  })
+  .strict();
 /** A short digest of a message, with its case and its spaces evened out. It ties a record to a message without a copy of it. */
 export const saidDigest = (text: string) =>
   createHash("sha256")
@@ -367,6 +383,45 @@ export class DecisionDesk {
   /** What `noteActed` wrote last, or null. */
   lastActed() {
     return this.read(join(this.directory, "acted.json"), actedSchema);
+  }
+  /**
+   * ClawdTime asked which of several requests the person's decision is for.
+   * The record keeps what they said to do and which requests waited, with a
+   * digest of their message and one of the question. The person's next message can then name one
+   * request: the decision is theirs, from the message before.
+   */
+  noteAsked(
+    said: string,
+    question: string,
+    via: string,
+    decision: "allow" | "deny",
+    requests: string[],
+  ) {
+    secureWrite(join(this.directory, "asked.json"), {
+      version: 1,
+      said: saidDigest(said),
+      question: saidDigest(question),
+      via: via.slice(0, 40),
+      at: this.now(),
+      decision,
+      requests: requests.slice(0, 20),
+    });
+  }
+  /** What `noteAsked` wrote last, or null. */
+  lastAsked() {
+    return this.read(join(this.directory, "asked.json"), askedSchema);
+  }
+  /** The question is used up: no later message can answer it. */
+  clearAsked() {
+    secureWrite(join(this.directory, "asked.json"), {
+      version: 1,
+      said: "",
+      question: "",
+      via: "",
+      at: 0,
+      decision: "deny",
+      requests: [],
+    });
   }
   /** Away: the person is not at the Mac. Requests wait for a phone call. */
   setAway(away: boolean) {

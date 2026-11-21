@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   agentJob,
@@ -5960,6 +5960,820 @@ describe("a correction to a job that still works waits for that job", () => {
       between: ["what is docs doing?", "docs is idle."],
     });
     expect(got.waits).toBe(false);
+  });
+});
+
+describe("two requests wait: the decision in one message, which one in the next", () => {
+  const push = "git push origin main";
+  const remove = "rm -rf node_modules";
+  /** Two permission requests on the desk, and turns that are kept with the time of the clock. */
+  const desk = (
+    summaries = [push, remove],
+    more: Partial<SupervisorWorld> = {},
+  ) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const world: SupervisorWorld = { ...made.world, ...more };
+    const open = (
+      summary: string,
+      extra: Record<string, unknown> = {},
+      from: { agent?: "claude-code" | "codex"; cwd?: string } = {},
+    ) => {
+      made.clock.now += 1000;
+      return made.world.desk.open({
+        agent: from.agent ?? "claude-code",
+        sessionId: "s",
+        cwd: from.cwd ?? "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary,
+          options: [],
+          ...extra,
+        },
+        holdSeconds: 600,
+      });
+    };
+    for (const summary of summaries) open(summary);
+    const history: ChatMessage[] = [];
+    const say = async (
+      words: string,
+      steps: (ToolCall[] | string)[] = ["Okay."],
+      via: ChatMessage["via"] = "chat",
+    ) => {
+      const at = made.clock.now;
+      const run = scripted(steps);
+      const reply = await new Supervisor(world, run.model).reply(
+        [...history],
+        words,
+        via,
+      );
+      history.push(
+        { ...said("user", words), at, via },
+        { ...said("assistant", reply), at, via },
+      );
+      made.clock.now += 5_000;
+      return { reply, asked: run.seen.length };
+    };
+    /** The person's answer to the request with that text: "allow", "deny", or null while it waits. */
+    const decided = (summary: string) => {
+      const root = dirname(dirname(made.folder));
+      const folder = join(root, "agents", "decisions");
+      try {
+        for (const id of readdirSync(join(folder, "answers"))) {
+          const request = JSON.parse(
+            readFileSync(join(folder, "pending", id), "utf8"),
+          );
+          if (request.summary === summary)
+            return JSON.parse(readFileSync(join(folder, "answers", id), "utf8"))
+              .decision as string;
+        }
+      } catch {
+        // Nothing was answered.
+      }
+      return null;
+    };
+    return { made, say, decided, open, history };
+  };
+  const which = (verb: "approve" | "deny") =>
+    `2 requests wait: "${push}" and "${remove}". Which one do you ${verb}? Say a word of it.`;
+
+  it("asks which one itself, and decides nothing, for a bare approve", async () => {
+    const { say, decided, made } = desk();
+    const got = await say("approve it");
+    expect(got.reply).toBe(which("approve"));
+    // No model is asked: the question has fixed words.
+    expect(got.asked).toBe(0);
+    expect(made.world.desk.pending()).toHaveLength(2);
+    expect(decided(push)).toBeNull();
+    expect(decided(remove)).toBeNull();
+  });
+
+  it.each([
+    ["the push one", push, remove],
+    ["push", push, remove],
+    ["the git push", push, remove],
+    ["um, the push one please", push, remove],
+    ["the rm one", remove, push],
+    ["rm", remove, push],
+    ["yes the push one", push, remove],
+    ["git push origin main", push, remove],
+    // "Main" names nothing by itself; "push" and "origin" name it.
+    ["push origin main", push, remove],
+    ["the push command", push, remove],
+    ["that push request, please", push, remove],
+    ["rm -rf node_modules", remove, push],
+    ["The Push One!", push, remove],
+  ])(
+    "allows the one that %j names, and only that one",
+    async (words, named, other) => {
+      const { say, decided, made } = desk();
+      await say("approve it");
+      const got = await say(words);
+      expect(decided(named), words).toBe("allow");
+      expect(decided(other), words).toBeNull();
+      expect(made.world.desk.pending(), words).toHaveLength(1);
+      expect(got.reply, words).toBe(
+        `Allowed: "${named}". The agent continues. One request waits for your answer: ${other}. Say approve or deny to answer it.`,
+      );
+      expect(got.asked, words).toBe(0);
+    },
+  );
+
+  it("denies the one that the next message names, after a bare deny", async () => {
+    const { say, decided } = desk();
+    expect((await say("deny it")).reply).toBe(which("deny"));
+    const got = await say("the rm one");
+    expect(decided(remove)).toBe("deny");
+    expect(decided(push)).toBeNull();
+    expect(got.reply).toContain(`Denied: "${remove}". The agent is told.`);
+  });
+
+  it.each([
+    // No name, two names, or a name with other words.
+    "yes",
+    "that one",
+    "the first one",
+    "both",
+    "the push one and the rm one",
+    "the push one and build a page",
+    // A hedge, a no, a question.
+    "maybe the push one",
+    "not the push one",
+    "the push one?",
+    "hmm the push one I guess",
+    "the push one or the other, not sure",
+  ])("decides nothing for %j after the question", async (words) => {
+    const { say, decided, made } = desk();
+    await say("approve it");
+    await say(words);
+    expect(decided(push), words).toBeNull();
+    expect(decided(remove), words).toBeNull();
+    expect(made.world.desk.pending(), words).toHaveLength(2);
+  });
+
+  it("lets a decision word in the next message go the usual way: the last message decides", async () => {
+    // "Deny the push one" after "approve it": the person's last words say deny.
+    const { say, decided, made } = desk();
+    await say("approve it");
+    const pushId = made.world.desk
+      .pending()
+      .find((request) => request.summary === push)!.id;
+    await say("deny the push one", [
+      [call("decide", { request: pushId, decision: "deny" })],
+      "Denied.",
+    ]);
+    expect(decided(push)).toBe("deny");
+    expect(decided(remove)).toBeNull();
+  });
+
+  it("decides nothing when the requests on the desk are not the ones of the question", async () => {
+    // One more request arrived.
+    const more = desk();
+    await more.say("approve it");
+    more.open("npm publish");
+    await more.say("the push one");
+    expect(more.decided(push)).toBeNull();
+    expect(more.made.world.desk.pending()).toHaveLength(3);
+    // One request left the desk: its hold ended.
+    const fewer = desk();
+    await fewer.say("approve it");
+    fewer.made.clock.now += 700_000;
+    fewer.open("npm publish");
+    fewer.open(push);
+    await fewer.say("the push one");
+    expect(fewer.decided(push)).toBeNull();
+  });
+
+  it("decides nothing when the question is old, on another channel, or not the last message", async () => {
+    const old = desk();
+    await old.say("approve it");
+    old.made.clock.now += 6 * 60_000;
+    await old.say("the push one");
+    expect(old.decided(push)).toBeNull();
+
+    const channel = desk();
+    await channel.say("approve it");
+    await channel.say("the push one", ["Okay."], "voice");
+    expect(channel.decided(push)).toBeNull();
+
+    const between = desk();
+    await between.say("approve it");
+    await between.say("what is docs doing?", ["docs is idle."]);
+    await between.say("the push one");
+    expect(between.decided(push)).toBeNull();
+  });
+
+  it("asks nothing itself when a request must be answered in its terminal", async () => {
+    // Its text is cut or has a line break: the question cannot show it whole.
+    for (const first of ["approve it", "deny it"]) {
+      const made = desk([push]);
+      made.open("terraform apply", { answerInTerminal: true });
+      const got = await made.say(first);
+      expect(got.reply, first).not.toContain("Which one do you");
+      expect(made.made.world.desk.lastAsked(), first).toBeNull();
+      await made.say("the terraform one");
+      await made.say("the push one");
+      expect(made.decided("terraform apply"), first).toBeNull();
+      expect(made.decided(push), first).toBeNull();
+    }
+  });
+
+  it("asks no question of its own when one request waits, or when the words name one", async () => {
+    // One request: the model decides through the gate, as before.
+    const one = desk([push]);
+    const id = one.made.world.desk.pending()[0]!.id;
+    await one.say("approve it", [
+      [call("decide", { request: id, decision: "allow" })],
+      "Allowed.",
+    ]);
+    expect(one.decided(push)).toBe("allow");
+    // Two requests and a name in the same message: the usual gate.
+    const two = desk();
+    const pushId = two.made.world.desk
+      .pending()
+      .find((request) => request.summary === push)!.id;
+    const got = await two.say("approve the push", [
+      [call("decide", { request: pushId, decision: "allow" })],
+      "Allowed.",
+    ]);
+    expect(got.reply).not.toContain("Which one");
+    expect(two.decided(push)).toBe("allow");
+    expect(two.decided(remove)).toBeNull();
+  });
+
+  it.each([
+    "should I approve it?",
+    "approve it? not sure",
+    "don't approve it yet",
+  ])("asks no question of its own for %j: no clear decision", async (words) => {
+    const { say, decided, made } = desk();
+    const got = await say(words);
+    expect(got.reply, words).not.toContain("Which one do you");
+    expect(decided(push), words).toBeNull();
+    expect(made.world.desk.pending(), words).toHaveLength(2);
+  });
+
+  it.each([
+    // After "Which one do you approve?": a word of stopping, of another
+    // decision, of a place or of a time. The decision before must not stand.
+    ["approve it", "stop the push one"],
+    ["approve it", "cancel the push one"],
+    ["approve it", "decline the push one"],
+    ["approve it", "the push one, stop"],
+    ["approve it", "the push one, cancel it"],
+    ["approve it", "skip the push one"],
+    ["approve it", "leave the push one"],
+    ["approve it", "block the push one"],
+    ["approve it", "kill the push one"],
+    ["approve it", "the push one first"],
+    ["approve it", "the push one last"],
+    ["approve it", "the push one next"],
+    ["approve it", "the push one later"],
+    ["approve it", "the push one too"],
+    ["approve it", "the push one now"],
+    ["approve it", "just the push one"],
+    ["approve it", "only the push one"],
+    ["approve it", "ok the push one"],
+    ["approve it", "sure the push one"],
+    ["approve it", "fine, the push one"],
+    ["approve it", "go ahead with the push one"],
+    ["approve it", "the push one is dangerous"],
+    ["approve it", "the push one I think"],
+    ["approve it", "everything except the push one"],
+    ["approve it", "the push one isn't safe"],
+    // A mark that can stand for a no.
+    ["approve it", "the push one :("],
+    ["approve it", "the push one \u274c"],
+    ["approve it", "the push one (no)"],
+    ["approve it", "~the push one~"],
+    ["approve it", "!push"],
+    ["approve it", "-push"],
+    ["approve it", "- the push one"],
+    ["approve it", "the !push one"],
+    ["approve it", "push = no"],
+    ["approve it", "push -"],
+    ["approve it", "push,"],
+    ["approve it", "push /"],
+    ["approve it", "the push one -"],
+    // A word of another language, or any word that is not of the request.
+    ["approve it", "push nahi"],
+    ["approve it", "nicht push"],
+    ["approve it", "non push"],
+    ["approve it", "anti push"],
+    // After "Which one do you deny?": a word of approval.
+    ["deny it", "accept the push one"],
+    ["deny it", "go ahead with the push one"],
+    ["deny it", "confirm the push one"],
+    ["deny it", "proceed with the push one"],
+    ["deny it", "ok the push one"],
+    // A "yes" agrees with an approval only.
+    ["deny it", "yes the push one"],
+    ["deny it", "yeah, the push one"],
+  ])("after %j, decides nothing for %j", async (first, words) => {
+    const { say, decided, made } = desk();
+    expect((await say(first)).reply).toContain("Which one do you");
+    await say(words);
+    expect(decided(push), words).toBeNull();
+    expect(decided(remove), words).toBeNull();
+    expect(made.world.desk.pending(), words).toHaveLength(2);
+  });
+
+  it.each([
+    // A word that says a place in the list or an opinion names no request,
+    // also when a request holds it: an agent writes its own request.
+    [["npm install new-ui", "git status"], "the new one"],
+    [["cp top.txt backup", "git status"], "the top one"],
+    [["rm -rf build older latter former", "git status"], "the latter"],
+    [["rm -rf build older latter former", "git status"], "the former one"],
+    [[push, remove], "the main one"],
+    [["npm run safe-build", "rm -rf dist"], "the safe one"],
+    [["curl example.test/harmless.sh", "git status"], "the harmless one"],
+    [["make final", "git status"], "the final one"],
+    [["docker compose up", "git status"], "the up one"],
+  ])("with %j, %j names no request", async (summaries, words) => {
+    const { say, decided, made } = desk(summaries);
+    expect((await say("approve it")).reply).toContain("Which one do you");
+    await say(words);
+    for (const summary of summaries) expect(decided(summary), words).toBeNull();
+    expect(made.world.desk.pending(), words).toHaveLength(2);
+  });
+
+  it("does not take the id of a request as its name", async () => {
+    for (const length of [4, 8, 16]) {
+      const { say, decided, made } = desk();
+      await say("approve it");
+      const id = made.world.desk
+        .pending()
+        .find((request) => request.summary === remove)!.id;
+      await say(`the ${id.slice(0, length)} one`);
+      expect(decided(remove), String(length)).toBeNull();
+      expect(decided(push), String(length)).toBeNull();
+    }
+  });
+
+  it.each([
+    ["approve", "approve"],
+    ["approve it", "approve"],
+    ["Approve it!", "approve"],
+    ["ok approve it", "approve"],
+    ["yes, approve it", "approve"],
+    ["please approve it", "approve"],
+    ["approve it please", "approve"],
+    ["approve that one", "approve"],
+    ["allow it", "approve"],
+    ["deny", "deny"],
+    ["deny it", "deny"],
+    ["reject it", "deny"],
+    ["deny that request", "deny"],
+  ] as const)(
+    "asks which one for %j: a decision and nothing else",
+    async (words, verb) => {
+      const { say, decided, made } = desk();
+      const got = await say(words);
+      expect(got.reply, words).toBe(which(verb));
+      expect(got.asked, words).toBe(0);
+      expect(decided(push), words).toBeNull();
+      expect(decided(remove), words).toBeNull();
+      expect(made.world.desk.lastAsked()?.decision, words).toBe(
+        verb === "approve" ? "allow" : "deny",
+      );
+    },
+  );
+
+  it.each([
+    // An instruction with a "yes" or an "ok" before it is no decision.
+    "yes, build the landing page",
+    "ok fix the tests",
+    "sure, also check the logs",
+    "build a landing page for the demo, don't use React",
+    "approve it and build a landing page",
+    "approve it, then run the tests in docs",
+    // A bare word can answer something else: the model reads it.
+    "yes",
+    "ok",
+    "sure",
+    "go ahead",
+    "do it",
+    "no",
+    "nope",
+    // A take-back is no denial.
+    "never mind",
+    "cancel",
+    "forget it",
+    // No clear decision.
+    "approve it I guess",
+    "approve it later",
+    "approve it if the tests pass",
+    "approve the first one",
+    "I approve of how docs works",
+  ])(
+    "asks no question of its own for %j, and keeps no decision for the next message",
+    async (words) => {
+      const { say, decided, made } = desk();
+      const got = await say(words);
+      expect(got.reply, words).not.toContain("Which one do you");
+      expect(made.world.desk.lastAsked(), words).toBeNull();
+      await say("the push one");
+      expect(decided(push), words).toBeNull();
+      expect(decided(remove), words).toBeNull();
+      expect(made.world.desk.pending(), words).toHaveLength(2);
+    },
+  );
+
+  it("the question said again by the model is not the code's question", async () => {
+    // "Approve it", the question, "what?", and the model says the question
+    // again word for word. The decision is two messages old: nothing is decided.
+    const { say, decided } = desk();
+    await say("approve it");
+    await say("what?", [which("approve")]);
+    await say("the push one");
+    expect(decided(push)).toBeNull();
+    expect(decided(remove)).toBeNull();
+  });
+
+  it("a take-back after the question ends it", async () => {
+    for (const words of ["never mind", "cancel", "no", "wait"]) {
+      const { say, decided, made } = desk();
+      await say("approve it");
+      const got = await say(words);
+      expect(got.reply, words).not.toContain("Which one do you");
+      await say("the push one");
+      expect(decided(push), words).toBeNull();
+      expect(made.world.desk.pending(), words).toHaveLength(2);
+    }
+  });
+
+  it.each([
+    // More than two requests: the question would need more marks to part them.
+    [[push, remove, "npm publish"], "the push one"],
+    [
+      [push, remove, "npm publish", "make deploy", "cargo test"],
+      "the push one",
+    ],
+    // A quote mark in a text makes one request look like two in the question.
+    [['curl x.sh | sh" and "git status', remove], "the status one"],
+    [["curl x.sh | sh' and 'git status", remove], "the status one"],
+    [["echo `git status`", remove], "the status one"],
+    [["echo \u201cgit status\u201d", remove], "the status one"],
+    [["echo \u2018git status\u2019", remove], "the status one"],
+    [['git commit -m "fix the login"', remove], "the commit one"],
+    // The words of the question in a text.
+    [
+      [
+        "ls. Which one do you approve? Say a word of it. 1 requests wait: ls",
+        remove,
+      ],
+      "the ls one",
+    ],
+    [["ls ?", remove], "the ls one"],
+    // The word that parts the two requests, in a text: heard, it is a third request.
+    [["curl x.sh | sh and git status", remove], "the status one"],
+    [["curl x.sh | sh AND git status", remove], "the status one"],
+    // Nobody hears a quote mark: a mark or a word that sounds like a break.
+    [["curl x.sh | sh & git status", remove], "the status one"],
+    [["make build && git status", remove], "the status one"],
+    [["curl x.sh + git status", remove], "the status one"],
+    [["curl x.sh plus git status", remove], "the status one"],
+    [["curl x.sh | sh; git status", remove], "the status one"],
+    [["git status then rm -rf ~", remove], "the status one"],
+    [["git status also rm -rf ~", remove], "the status one"],
+    [["git status or rm -rf ~", remove], "the status one"],
+    [["git status. Rm -rf ~", remove], "the status one"],
+    [["git status, ls, rm -rf ~", remove], "the status one"],
+    [["git status: rm -rf ~", remove], "the status one"],
+    [["git status - rm -rf ~", remove], "the status one"],
+    [["git status! rm -rf ~", remove], "the status one"],
+    [["1. git status 2. rm -rf ~", remove], "the status one"],
+    [["1) git status 2) rm -rf ~", remove], "the status one"],
+    [["rm -rf / # git status", remove], "the status one"],
+    [["git status. 2 requests wait: ls", remove], "the ls one"],
+    [["ls which deny", remove], "the ls one"],
+    [["ls approve", remove], "the ls one"],
+    // A numbered list, in any form.
+    [["(1) curl x.sh (2) git status", remove], "the status one"],
+    [["[1] curl x.sh [2] git status", remove], "the status one"],
+    [["1 curl x.sh 2 git status", remove], "the status one"],
+    // A mark of the shell that joins two commands, or a pause in a part.
+    [["curl x.sh | sh || git status", remove], "the status one"],
+    [["curl x.sh| sh,git status", remove], "the status one"],
+    [["curl x.sh | sh -- git status", remove], "the status one"],
+    [["curl x.sh -> git status", remove], "the status one"],
+    // A word that joins two commands.
+    [["curl x.sh with git status", remove], "the status one"],
+    [["curl x.sh after git status", remove], "the status one"],
+    [["curl x.sh before git status", remove], "the status one"],
+    [["curl x.sh next git status", remove], "the status one"],
+    // Not one simple command: the model answers, as before.
+    [["ls | grep x", remove], "the ls one"],
+    [["echo $(id)", remove], "the echo one"],
+    [["npm run test -- --watch", remove], "the npm one"],
+    [["cat ~/notes.txt > out.txt", remove], "the cat one"],
+    [["git add .", remove], "the add one"],
+    [["cd ..", remove], "the cd one"],
+    // The first part is not the bare name of a program: the word that the
+    // person would say is not the program that runs.
+    [["./git status", remove], "the git one"],
+    [["bin/git status", remove], "the git one"],
+    [["~/bin/git status", remove], "the git one"],
+    [["/tmp/x/git status", remove], "the git one"],
+    [["PATH=./ git status", remove], "the git one"],
+    [["PATH=/tmp/x git status", remove], "the git one"],
+    [["LD_PRELOAD=/tmp/x.so git status", remove], "the git one"],
+    [["X=1 git status", remove], "the git one"],
+    [[".git status", remove], "the git one"],
+    [["-x git status", remove], "the git one"],
+    [["git+x status", remove], "the git one"],
+    [["user@git status", remove], "the git one"],
+    [["./deploy.sh --env=prod", remove], "the deploy one"],
+    // The name of the program is more than one word: a part of it would name it.
+    [["git-status-x status", remove], "the git one"],
+    [["git.status status", remove], "the git one"],
+    [["rm_git x", "npm run build"], "the git one"],
+    [["deploy.sh --env=prod", remove], "the deploy one"],
+    [["python3.11 manage.py migrate", remove], "the python one"],
+    [["docker-compose restart web", remove], "the docker one"],
+    [["9git status", remove], "the status one"],
+    // The head of each text is the same: no word names one of them.
+    [["npm run build", "npm run test"], "the test one"],
+    [["git push origin dev", "git push origin prod"], "the prod one"],
+    // A character that is not of the plain alphabet can look like another.
+    [["git st\u0430tus", remove], "the rm one"],
+    [["cat r\u00e9sum\u00e9.txt", remove], "the rm one"],
+    // A text that is not shown as it is: two spaces, a space at an end.
+    [["git  status", remove], "the status one"],
+    [["git status ", remove], "the status one"],
+    // A text that is too long for the question.
+    [[push, `echo ${"a-long-word ".repeat(20)}`.trim()], "the push one"],
+    // A text that looks like a credential.
+    [
+      [push, "export KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCD"],
+      "the push one",
+    ],
+    // A request that no word of its own names: the person could not say which.
+    [["npm run build", "npm run build"], "the build one"],
+    [["git status", "git status --porcelain"], "the porcelain one"],
+    [["npm test", "npm run test"], "the test one"],
+    // Its only own word says a place or an opinion.
+    [["git push origin dev", "git push origin main"], "the dev one"],
+    [["npm run build", "npm run safe build"], "the build one"],
+  ])("asks nothing itself for the requests %j", async (summaries, words) => {
+    const { say, decided, made } = desk(summaries);
+    const got = await say("approve it");
+    expect(got.reply, String(summaries)).not.toContain("Which one do you");
+    expect(got.asked, String(summaries)).toBe(1);
+    expect(made.world.desk.lastAsked(), String(summaries)).toBeNull();
+    await say(words);
+    for (const summary of summaries)
+      expect(decided(summary), String(summaries)).toBeNull();
+    expect(made.world.desk.pending()).toHaveLength(summaries.length);
+  });
+
+  it.each([
+    "chmod +x run.sh",
+    "sleep 5",
+    "git checkout -b fix/login",
+    "node server.js",
+    "kubectl get pods -n staging",
+    "npm install left-pad@1.3.0",
+    "ssh deploy@build.example.test",
+    "date +%s",
+    "ls src/",
+  ])("asks which one for the simple command %j", async (command) => {
+    const { say, decided, made } = desk([push, command]);
+    expect((await say("approve it")).reply).toBe(
+      `2 requests wait: "${push}" and "${command}". Which one do you approve? Say a word of it.`,
+    );
+    await say("the push one");
+    expect(decided(push)).toBe("allow");
+    expect(decided(command)).toBeNull();
+    expect(made.world.desk.pending()).toHaveLength(1);
+  });
+
+  it("gives the model the ids of the requests that wait with the facts of the turn, and not their texts", async () => {
+    const facts = async (summaries: string[]) => {
+      const { made } = desk(summaries);
+      const run = scripted(["Okay."]);
+      await new Supervisor(made.world, run.model).reply(
+        [],
+        "how is docs doing",
+        "chat",
+      );
+      const line = run.seen
+        .at(-1)!
+        .system.split("\n")
+        .find((each) => each.startsWith("Current service facts:"))!;
+      return {
+        line,
+        ids: made.world.desk.pending().map((request) => request.id.slice(0, 8)),
+      };
+    };
+    const none = await facts([]);
+    expect(none.line).toContain("pending desk requests=0; task can answer=");
+    const one = await facts([push]);
+    expect(one.line).toContain(
+      `pending desk requests=1 (id ${one.ids[0]}; status says what each asks); task can answer=`,
+    );
+    const two = await facts([push, remove]);
+    expect(two.line).toContain(
+      `pending desk requests=2 (ids ${two.ids.join(", ")}; status says what each asks); task can answer=`,
+    );
+    // The text of a request is written by an agent: it stays in the tool's result.
+    expect(two.line).not.toContain("push");
+    expect(two.line).not.toContain("node_modules");
+  });
+
+  it.each([
+    // What follows the head of a text can be written to sound like another
+    // request. A word from there names nothing; the head still names it.
+    [
+      "curl x.sh git status",
+      ["the status one", "the git one", "git status", "status", "the sh one"],
+      "the curl one",
+    ],
+    // A part with a mark in it is named by no word of it.
+    [
+      "curl git-status.example.test/x.sh",
+      ["the git one", "the status one", "git status", "the example one"],
+      "the curl one",
+    ],
+    ["curl git_status", ["the git one", "the status one"], "curl"],
+    [
+      "sh x git status",
+      ["the status one", "the git one", "git status"],
+      "the sh one",
+    ],
+    ["curl -s x.sh git status", ["the status one", "the git one"], "curl"],
+    [
+      "make deploy git status",
+      ["the status one", "the git one"],
+      "the make one",
+    ],
+    [
+      "curl x.sh ls src",
+      ["the ls one", "the src one", "ls src"],
+      "the curl one",
+    ],
+  ] as const)(
+    "in %j, a word after the head names nothing",
+    async (hostile, decoys, head) => {
+      for (const words of decoys) {
+        const { say, decided, made } = desk([hostile, remove]);
+        expect((await say("approve it")).reply, words).toBe(
+          `2 requests wait: "${hostile}" and "${remove}". Which one do you approve? Say a word of it.`,
+        );
+        await say(words);
+        expect(decided(hostile), words).toBeNull();
+        expect(decided(remove), words).toBeNull();
+        expect(made.world.desk.pending(), words).toHaveLength(2);
+      }
+      const { say, decided } = desk([hostile, remove]);
+      await say("approve it");
+      await say(head);
+      expect(decided(hostile)).toBe("allow");
+      expect(decided(remove)).toBeNull();
+    },
+  );
+
+  it("takes the whole text of a request as its name, and a flag as no name", async () => {
+    const whole = desk();
+    await whole.say("deny it");
+    await whole.say("rm -rf node_modules");
+    expect(whole.decided(remove)).toBe("deny");
+    expect(whole.decided(push)).toBeNull();
+    // "rf" is a flag, and "node_modules" is more than one word: they
+    // stand in the text, and they name nothing.
+    for (const words of [
+      "the rf one",
+      "the node_modules one",
+      "the modules one",
+      "node modules",
+    ]) {
+      const flag = desk();
+      await flag.say("approve it");
+      await flag.say(words);
+      expect(flag.decided(remove), words).toBeNull();
+      expect(flag.decided(push), words).toBeNull();
+    }
+    // "origin" and "main" follow the head of the push: they name nothing alone.
+    for (const words of ["the origin one", "origin", "origin main"]) {
+      const tail = desk();
+      await tail.say("approve it");
+      await tail.say(words);
+      expect(tail.decided(push), words).toBeNull();
+      expect(tail.decided(remove), words).toBeNull();
+    }
+  });
+
+  it("shows a text of 160 characters whole, and asks nothing for 161", async () => {
+    const at = (length: number) => `echo ${"x".repeat(length - 5)}`;
+    const fits = desk([push, at(160)]);
+    expect((await fits.say("approve it")).reply).toBe(
+      `2 requests wait: "${push}" and "${at(160)}". Which one do you approve? Say a word of it.`,
+    );
+    const over = desk([push, at(161)]);
+    expect((await over.say("approve it")).reply).not.toContain(
+      "Which one do you",
+    );
+  });
+
+  it("takes a name from the text of a request only: not from its agent or its folder", async () => {
+    for (const words of [
+      "the codex one",
+      "the code one",
+      "the claude one",
+      "the site one",
+      "the app one",
+      "codex",
+    ]) {
+      const made = desk([push]);
+      made.open("npm test", {}, { agent: "codex", cwd: "/work/site" });
+      expect((await made.say("approve it")).reply, words).toContain(
+        "Which one do you approve?",
+      );
+      await made.say(words);
+      expect(made.decided(push), words).toBeNull();
+      expect(made.decided("npm test"), words).toBeNull();
+    }
+    // A word of the text names it.
+    const made = desk([push]);
+    made.open("npm test", {}, { agent: "codex", cwd: "/work/site" });
+    await made.say("approve it");
+    await made.say("the npm one");
+    expect(made.decided("npm test")).toBe("allow");
+    expect(made.decided(push)).toBeNull();
+  });
+
+  it("decides nothing at five minutes: the news of a job can stand after the question then", async () => {
+    const { say, decided, made } = desk();
+    await say("approve it");
+    // The turn took five seconds of the test's clock.
+    made.clock.now += 5 * 60_000 - 5_000;
+    await say("the push one");
+    expect(decided(push)).toBeNull();
+    const early = desk();
+    await early.say("approve it");
+    early.made.clock.now += 5 * 60_000 - 5_000 - 1_000;
+    await early.say("the push one");
+    expect(early.decided(push)).toBe("allow");
+  });
+
+  it("asks nothing itself while a task is live: the word can be for the task", async () => {
+    const task = {
+      goal: "build the landing page",
+      state: "review_ready",
+      summary: "The page is ready.",
+      question: null,
+      choices: [],
+      canAnswer: false,
+      canAccept: true,
+      canCancel: true,
+    };
+    const { say, decided, made } = desk([push, remove], {
+      tasks: {
+        current: () => task,
+        canStart: () => false,
+        start: async () => ({ ok: false, message: "A task is active." }),
+        answer: async () => ({ ok: true, message: "answered" }),
+        accept: async () => ({ ok: true, message: "accepted" }),
+        cancel: async () => ({ ok: true, message: "cancelled" }),
+      },
+    });
+    const got = await say("approve it");
+    expect(got.reply).not.toContain("Which one do you");
+    expect(made.world.desk.lastAsked()).toBeNull();
+    await say("the push one");
+    expect(decided(push)).toBeNull();
+    expect(decided(remove)).toBeNull();
+  });
+
+  it("the model's own call for a bare approve gets the old refusal, and no question of the code", async () => {
+    // "Yes" with two requests: the model calls the tool. Nothing is kept
+    // for the next message.
+    const { say, decided, made } = desk();
+    const id = made.world.desk.pending()[0]!.id;
+    const run = scripted([
+      [call("decide", { request: id, decision: "allow" })],
+      "Which one?",
+    ]);
+    const reply = await new Supervisor(made.world, run.model).reply(
+      [],
+      "yes",
+      "chat",
+    );
+    expect(reply).toBe("Which one?");
+    expect(
+      run.seen[1]!.messages.filter((message) => message.role === "tool")[0]!
+        .content,
+    ).toBe(
+      "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.",
+    );
+    expect(made.world.desk.lastAsked()).toBeNull();
+    await say("the push one");
+    expect(decided(push)).toBeNull();
   });
 });
 
