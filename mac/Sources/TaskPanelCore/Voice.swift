@@ -193,10 +193,17 @@ public struct VoiceActivity: Equatable, Sendable {
 
 /// UI-only handoff policy: withdrawing our editor never activates another app.
 public enum NativeExecutionPresentation {
-  public static func releasesEditor(_ execution: ChatExecution?) -> Bool {
+  /// The engine works on the screen of this Mac.
+  public static func native(_ execution: ChatExecution?) -> Bool {
     execution?.configured == true && execution?.mode == "native"
   }
+  /// A sent message withdraws our editor for a native engine, because that engine can act at once.
+  /// The panel's own hands are the exception: they close the chat and the board when a run really
+  /// starts, so a plain question keeps its chat open.
+  public static func releasesEditor(_ execution: ChatExecution?, ownHands: Bool = false) -> Bool {
+    native(execution) && !ownHands
+  }
   public static func visible(_ execution: ChatExecution?, submissionPending: Bool, stopping: Bool) -> Bool {
-    releasesEditor(execution) && (submissionPending || stopping || execution?.canStop == true || execution?.pendingAction != nil)
+    native(execution) && (submissionPending || stopping || execution?.canStop == true || execution?.pendingAction != nil)
   }
 }
