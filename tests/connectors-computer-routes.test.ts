@@ -28,6 +28,7 @@ import {
   buildComputer,
   computerPort,
   offComputerPort,
+  testServiceText,
 } from "../connectors/computer/service.js";
 import {
   ComputerWorker,
@@ -574,10 +575,6 @@ async function closeOwned(child: ChildProcess) {
   await exited;
   clearTimeout(timeout);
 }
-
-/** What a service that a test started says about computer use. */
-const testServiceText =
-  "Computer use does not run in a service that a test started.";
 
 it("real desktop service that a test started has no worker and no hands, whatever the switch and the key say", async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");

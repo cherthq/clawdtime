@@ -34,7 +34,7 @@ import {
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
-import { buildComputer } from "../connectors/computer/service.js";
+import { chooseExecution } from "../connectors/computer/service.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
@@ -397,45 +397,27 @@ const executor =
         (text) => agentBoard?.appendExecutionResult(text),
       )
     : undefined);
-// Computer use: the app-owned worker that looks, clicks and types by itself.
-// An engine that a file of this service configured keeps priority: the
-// connection to an existing chat, or the bundled runtime. With one of them,
-// this worker is not built. It is off until `clawdtime computer on`, it needs
-// the chat of the agent board to take a request, and it never runs in one
-// service with phone or presentation actors. A service that a test started
-// never has a worker, so no command for the hands can come from a test.
-const computer = desktop
-  ? buildComputer({
+// One engine does the computer work of this service. A file in the state
+// folder keeps priority: the connection to an existing chat, then the bundled
+// runtime. With neither, the app-owned computer worker runs, when the person
+// turned it on with `clawdtime computer on` and a key for the language model
+// is in this environment. A service that a test started never has that
+// worker, so no command for the hands can come out of a test.
+const chosen = desktop
+  ? chooseExecution({
       root: stateRoot({ env: process.env, home: homedir() }),
       env: process.env,
+      chat: executorConfig ? executor : undefined,
+      bundled,
+      actors: !!(calls || presentation),
+      board: flags.get("--agents") !== "false",
       notify: (text) => agentBoard?.appendExecutionResult(text),
       // The browser goes in here, as one more line:
       //   browser: new AppleEventsBrowser(),
       // Without it the worker refuses the browser actions and uses the screen.
-      ...(process.env.VITEST
-        ? {
-            unavailable:
-              "Computer use does not run in a service that a test started.",
-          }
-        : executor
-          ? {
-              unavailable:
-                "Another engine does the computer work in this service.",
-            }
-          : calls || presentation
-            ? {
-                unavailable:
-                  "Computer use does not run in a service with phone or presentation actors.",
-              }
-            : flags.get("--agents") === "false"
-              ? {
-                  unavailable:
-                    "Computer use needs the agent board of this service, and it is turned off.",
-                }
-              : {}),
     })
   : undefined;
-const execution = executor ?? computer?.worker ?? undefined;
+const execution = chosen?.execution;
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -467,7 +449,7 @@ const app = createTaskApp(
   calls,
   agentBoard,
   executor,
-  computer?.port,
+  chosen?.computer.port,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
