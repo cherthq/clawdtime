@@ -1228,10 +1228,12 @@ const mayTakeBack = (text: string) =>
  * branch, never mind", "push to main. Actually no, wait", "run it - scratch
  * that". A mark must stand before that clause, and the clause runs to the
  * end: "do not deploy until I say" and "never mind the warnings" are words
- * for the session.
+ * for the session. "Cancel that", "ignore that" and "I changed my mind" can
+ * be words for the session too ("the deploy you started, cancel that"): the
+ * model reads those.
  */
 const takenBackAtTheEnd = (text: string) =>
-  /(?:[,.;!?\u2026\u2013\u2014]|\s-+)\s*(?:(?:oh|ah|um|uh|hmm|wait|sorry|ok|okay)[,\s]+)*(?:never\s*mind|nevermind|nvm|actually,? no(?:[,\s]+wait)?|no,? wait(?:[,\s]+don['\u2019]?t\b[^.!?]*)?|scratch that|scrap that|forget (?:it|that|about it)|cancel that|ignore that|(?:i )?changed my mind|i take (?:that|it) back|on second thoughts?(?:[,\s]+(?:no|never\s*mind|don['\u2019]?t\b[^.!?]*))?)[\s.!]*$/i.test(
+  /(?:[,.;!?\u2026\u2013\u2014]|\s-+)\s*(?:(?:oh|ah|um|uh|hmm|wait|sorry|ok|okay)[,\s]+)*(?:never\s*mind|nevermind|nvm|actually,? no(?:[,\s]+wait)?|no,? wait(?:[,\s]+don['\u2019]?t\b[^.!?]*)?|scratch that|scrap that|forget (?:it|that|about it)|i take (?:that|it) back|on second thoughts?(?:[,\s]+(?:no|never\s*mind|don['\u2019]?t\b[^.!?]*))?)[\s.!]*$/i.test(
     text,
   );
 /**

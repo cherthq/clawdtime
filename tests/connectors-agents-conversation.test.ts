@@ -2014,11 +2014,10 @@ describe("then ask it", () => {
     "tell payments tests: run the migration - scratch that",
     "tell payments tests: deploy now. no wait, don't send that",
     "tell payments tests: delete the branch, oh never mind",
-    "tell payments tests: delete the branch; I changed my mind",
     "tell payments tests: delete the branch, forget it.",
     "tell payments tests: delete the branch\u2026 nvm",
     "tell payments tests: delete the branch, on second thought",
-    "ok tell payments tests: delete the branch, sorry, cancel that",
+    "ok tell payments tests: delete the branch, sorry, scratch that",
   ])(
     "says that nothing is typed for %j, with no model and no offer",
     async (words) => {
@@ -2041,6 +2040,10 @@ describe("then ask it", () => {
     "tell payments tests: delete the branch, then never mind the logs",
     "tell payments tests: push to main. actually no rush on this",
     "tell payments tests: never mind",
+    // These can be words for the session: the model reads them.
+    "tell payments tests: use plan B, I changed my mind",
+    "tell payments tests: the deploy you started, cancel that",
+    "tell payments tests: about my last message, ignore that",
     // No session of that name.
     "tell billing: delete the branch, never mind",
   ])(
