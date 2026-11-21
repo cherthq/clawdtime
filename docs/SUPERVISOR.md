@@ -842,6 +842,16 @@ a tunnel and get its link, find something out: all of these are jobs.
   next message after you started a job, is about that job. The answer is data:
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
+- With several jobs in the last day, "what did the first one find?" gets
+  the first one's answer: the job tool gives the language model each job
+  of the last day (the newest five), in the order in which they started,
+  each with its answer or that it still works. The check of an answer
+  about a job that still works then guards each such job in the list: a
+  time is right when it fits the start of any listed job, and a second
+  wrong answer is replaced by one sentence for each job that still works,
+  with its request and the time it has run, and the newest finished job
+  with its answer. The check reads only the jobs that the language model
+  saw in that turn.
 - When a job is done, the chat of the desktop panel says its answer by
   itself, once: a line "Done:" with your request, then the answer. The
   desktop service writes it into the conversation on its own rhythm, and

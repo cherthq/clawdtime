@@ -681,7 +681,7 @@ const jobTools: ToolSpec[] = [
   {
     name: "job_result",
     description:
-      "The answer of the newest job that ClawdTime started, or that it still works. Use it when the person asks what a job found or whether it is done.",
+      "The jobs that ClawdTime started in the last day, in the order in which they started: each with its answer, or that it still works. Use it when the person asks what a job found or whether it is done.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
@@ -2065,6 +2065,26 @@ const ranFor = (ms: number) => {
           ? "more than an hour"
           : `more than ${Math.floor(minutes / 60)} hours`;
 };
+/** How many jobs the job tool lists at most. */
+const jobsListed = 5;
+/**
+ * One job as an item of the list. The request and the answer are text of the
+ * person and of a session: a double quote in them becomes a single one and
+ * the answer stands in quotes, so that neither can close its own quote and
+ * look like the next item of the list.
+ */
+const jobListLine = (job: JobFacts, now: number) =>
+  jobLine(
+    {
+      ...job,
+      job: job.job.replace(/"/g, "'"),
+      result:
+        job.result === null
+          ? null
+          : `"${clean(job.result, 590).replace(/"/g, "'")}"`,
+    },
+    now,
+  );
 /** One job in a sentence that can be said aloud. */
 function jobLine(job: JobFacts, now: number) {
   const head = `Job "${clean(job.job, 120)}", started ${elapsed(job.startedAt, now)} ago`;
@@ -2092,7 +2112,7 @@ const plainDoing =
   /^(?:working|running|going|taking|doing|checking|looking|digging|figuring|investigating|trying|finding|handling|getting|being|reporting|thing|nothing|anything|something|everything|during)$/i;
 /** How far a job is or when it ends: nothing reports that either. */
 const jobProgress =
-  /\b(?:halfway|half\s+way|(?:almost|nearly|about)\s+(?:done|finished|there|ready|complete|through)|about\s+to\s+(?:finish|end|be\s+done|complete|wrap)|percent|(?<!\bas\s)soon(?!\s+as\b)|shortly|any\s+(?:minute|moment|second)|(?:more|another|extra)\s+(?:\w+\s+)?(?:seconds?|minutes?|mins?|hours?)|(?:seconds?|minutes?|mins?|hours?)\s+(?:more|longer|left|to\s+go|remaining)|stuck|waiting\s+(?:for|on)\s+(?:you|your|input|an\s+answer))\b|%/i;
+  /\b(?:halfway|half\s+way|half\s+(?:done|finished|through|complete|over)|(?:almost|nearly|about)\s+(?:done|finished|there|ready|complete|through)|about\s+to\s+(?:finish|end|be\s+done|complete|wrap)|percent|(?<!\bas\s)soon(?!\s+as\b)|shortly|any\s+(?:minute|moment|second)|(?:more|another|extra)\s+(?:\w+\s+)?(?:seconds?|minutes?|mins?|hours?)|(?:seconds?|minutes?|mins?|hours?)\s+(?:more|longer|left|to\s+go|remaining)|stuck|waiting\s+(?:for|on)\s+(?:you|your|input|an\s+answer))\b|%/i;
 /** An offer or a promise to look into a job, to hurry it or to stop it: no tool does that. */
 const jobOffer =
   /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:speed|hurry|rush|nudge|push|poke|ping|check|look|peek|inspect|dig|investigate|try|run|restart|redo|scan|test|debug|fix|cancel|stop|kill|abort)\b/i;
@@ -2172,16 +2192,25 @@ const timesSaid = (answer: string) => {
   ];
 };
 /**
- * The answer gives a time that is not the time the job has run: "about a
- * minute" after three, "23 minutes", "it just started".
+ * The answer gives a time that is not the time since a job started: "about
+ * a minute" after three, "23 minutes", "it just started".
  */
-const wrongTimeOfAJob = (answer: string, ms: number) => {
-  const minutes = Math.max(0, ms) / 60_000;
+const wrongTimeOfAJob = (
+  answer: string,
+  since: number[],
+  given: number[] = [],
+) => {
+  // The time since each job started, in minutes. A time in the answer is
+  // right when it fits one of them: with several jobs the answer can speak
+  // of any. A time that the turn was told as it stands is right too.
+  const minutes = since.map((ms) => Math.max(0, ms) / 60_000);
   return (
     timesSaid(answer).some(
-      (said) => Math.abs(said - minutes) > Math.max(1, minutes / 4),
+      (said) =>
+        minutes.every((own) => Math.abs(said - own) > Math.max(1, own / 4)) &&
+        !given.some((told) => Math.abs(told - said) < 0.01),
     ) ||
-    (minutes >= 2 &&
+    (minutes.every((own) => own >= 2) &&
       /\b(?:just\s+(?:started|began|now)|only\s+just|(?:a\s+few\s+)?moments?\s+ago|a\s+moment\s+ago|(?:a\s+few\s+)?seconds?\s+ago)\b/i.test(
         answer,
       ))
@@ -2199,6 +2228,36 @@ const asksHowLong = (spoken: string) =>
  */
 const jobStillWorks = (job: JobFacts, now: number) =>
   `It still works: ${ranFor(now - job.startedAt)} so far. It runs in its own terminal window, where you can watch it. Ask me again for its answer.`;
+/** A job's request in quotes for a sentence, cut with a mark when it is long. */
+const requestSaid = (job: JobFacts) => {
+  const words = clean(job.job, 400).replace(/"/g, "'");
+  return `"${words.length > 80 ? `${words.slice(0, 80).trimEnd()} ...` : words}"`;
+};
+/**
+ * The same where the job tool listed several jobs: each job that still works,
+ * by its request, and the newest job that is done with its answer, so that a
+ * question about that one still gets it.
+ */
+const jobsStillWork = (listed: JobFacts[], now: number) => {
+  const working = listed.filter((job) => !job.done && !job.waiting).slice(-3);
+  const done = listed.filter((job) => job.done).at(-1);
+  return [
+    ...working.map(
+      (job) =>
+        `${requestSaid(job)} still works: ${ranFor(now - job.startedAt)} so far.`,
+    ),
+    ...(done
+      ? [
+          `${requestSaid(done)} is done: "${clean(done.result ?? "", 300)
+            .replace(/"/g, "'")
+            .replace(/[.\s]+$/, "")}".`,
+        ]
+      : []),
+    working.length > 1
+      ? "Each job that works runs in its own terminal window, where you can watch it. Ask me again for an answer."
+      : "It runs in its own terminal window, where you can watch it. Ask me again for its answer.",
+  ].join(" ");
+};
 /** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
 const modelSilent =
   "The language model did not answer, so nothing was done with that. Say it again in a moment. The state now:";
@@ -2986,6 +3045,18 @@ export class Supervisor {
     }
     turn.done.set(key, said);
     return said;
+  }
+  /**
+   * The jobs that the job tool reports: those that started in the last day,
+   * the newest five, in the order in which they started. With fewer than two
+   * of them: the newest job alone, whatever its age, or none.
+   */
+  private jobsOfTheDay(now: number): JobFacts[] {
+    const day = this.jobsNow(jobsListed + 1)
+      .filter((job) => now - job.startedAt < 24 * 60 * 60 * 1000)
+      .reverse()
+      .slice(-jobsListed);
+    return day.length < 2 ? this.jobsNow(1) : day;
   }
   private jobsNow(limit: number): JobFacts[] {
     try {
@@ -4126,8 +4197,18 @@ export class Supervisor {
       case "start_job":
         return this.startJob(turn, spoken, args.agent);
       case "job_result": {
-        const job = this.jobsNow(1)[0];
-        return job ? jobLine(job, this.world.now()) : noJobYet;
+        const now = this.world.now();
+        const listed = this.jobsOfTheDay(now);
+        if (!listed.length) return noJobYet;
+        if (listed.length < 2) return jobLine(listed[0]!, now);
+        // Each job of the last day, in the order in which the jobs started:
+        // "what did the first one find?" has no answer in the newest job
+        // alone, and the model then says that the answer never came.
+        const more =
+          this.jobsNow(jobsListed + 1).filter(
+            (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
+          ).length > jobsListed;
+        return `${more ? `The newest ${jobsListed} jobs` : "The jobs"} that ClawdTime started in the last day, in the order in which they started:\n${listed.map((job, index) => `${index + 1}. ${jobListLine(job, now)}`).join("\n")}`;
       }
       case "session_window": {
         if (!this.world.window)
@@ -5235,24 +5316,43 @@ export class Supervisor {
           // or offers to look into it or to speed it up. A job reports
           // nothing until its answer is written, and no tool looks into it
           // or hurries it. The model answers once more; a second such answer
-          // is replaced by what is known. The same holds for a time that is
-          // not the time the job has run ("about a minute" after three), and
-          // for no time at all when the person asks how long it takes.
-          // Only a turn that read the job is about the job: the model called
+          // is replaced by what is known. The same holds for a time that
+          // fits no job ("about a minute" after three), and for no time at
+          // all when the person asks how long it takes.
+          // Only a turn that read the jobs is about them: the model called
           // the job tool, or the code read the job for a message that points
           // at it. Words in the person's message are no sign of that ("how
           // long is the readme?"). An answer that names a session is about
           // that session, and a word that a tool gave in this turn (what a
-          // session does, the answer of an older job) is not a guess.
-          const running = this.jobsNow(1)[0];
-          const told = messages
-            .filter((message) => message.role === "tool")
-            .map((message) => message.content ?? "");
+          // session does, the answer of a job that is done) is not a guess.
+          // With several jobs in the tool's list, each job that still works
+          // is guarded, and a time is right when it fits any listed job.
+          const moment = this.world.now();
+          // The check reads the jobs that the model saw: the tool's list
+          // when the model called the tool, and the newest job alone when
+          // only the code read it. A job that the model never saw must not
+          // decide whether its answer is right.
+          const listed = ran.has("job_result")
+            ? this.jobsOfTheDay(moment)
+            : this.jobsNow(1);
+          const working = listed.filter(
+            (job) =>
+              !job.done &&
+              !job.waiting &&
+              moment - job.startedAt < 24 * 60 * 60 * 1000,
+          );
+          // What this turn was told: every tool text, and the lines of news
+          // in the conversation (the answer of a job that was said before).
+          const told = [
+            ...messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content ?? ""),
+            ...(turn.whole ?? [])
+              .filter((message) => message.news === true)
+              .map((message) => message.text),
+          ];
           if (
-            running &&
-            !running.done &&
-            !running.waiting &&
-            this.world.now() - running.startedAt < 24 * 60 * 60 * 1000 &&
+            working.length > 0 &&
             (ran.has("job_result") ||
               messages.some(
                 (message) =>
@@ -5261,10 +5361,6 @@ export class Supervisor {
                   message.content !== noJobYet,
               )) &&
             [...ran].every((name) => name === "job_result") &&
-            // The person asks about another job: the tool gives the newest.
-            !/\b(?:first|earlier|previous|other|older|last)\s+(?:job|one)\b/i.test(
-              words,
-            ) &&
             !(this.world.board()?.sessions ?? []).some(
               (session) =>
                 session.name !== null &&
@@ -5272,21 +5368,41 @@ export class Supervisor {
             ) &&
             (guessesAtAJob(
               reply.text,
-              `${running.job} ${words} ${told.join(" ")}`,
+              `${listed.map((job) => job.job).join(" ")} ${words} ${told.join(" ")}`,
             ) ||
               wrongTimeOfAJob(
                 reply.text,
-                this.world.now() - running.startedAt,
+                listed.map((job) => moment - job.startedAt),
+                // A time that a job's own line gave ("Done in 5 minutes")
+                // is no guess. The state of the sessions has times too, and
+                // they are not times of a job.
+                timesSaid(
+                  told
+                    .filter((text) =>
+                      /^(?:Job "|The (?:newest \d+ )?jobs that ClawdTime started|Done: )/.test(
+                        text,
+                      ),
+                    )
+                    .join(" "),
+                ),
               ) ||
               // "Why is this taking so long": the answer is a time.
               (asksHowLong(words) &&
                 !timesSaid(reply.text).length &&
                 !/\bless\s+than\s+a\s+minute\b/i.test(reply.text)))
           ) {
-            if (rechecked) return jobStillWorks(running, this.world.now());
+            if (rechecked)
+              return listed.length < 2
+                ? jobStillWorks(working[0]!, moment)
+                : jobsStillWork(listed, moment);
             rechecked = true;
-            const since = ranFor(this.world.now() - running.startedAt);
-            recheck = `\nA check of your last draft: the job still works, and a job reports nothing until its answer is written. You know its request and that it has run ${since}, nothing else. Your draft says what the job does now or how far it is, or gives another time, or offers to look into the job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences: it still works and it has run ${since}. You can add that it runs in its own terminal window, where they can watch it. Offer nothing.`;
+            const since = ranFor(moment - working[0]!.startedAt);
+            // Only fixed words and a time stand in this note: a job's request
+            // is text, and stays behind the job tool.
+            recheck =
+              listed.length < 2
+                ? `\nA check of your last draft: the job still works, and a job reports nothing until its answer is written. You know its request and that it has run ${since}, nothing else. Your draft says what the job does now or how far it is, or gives another time, or offers to look into the job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences: it still works and it has run ${since}. You can add that it runs in its own terminal window, where they can watch it. Offer nothing.`
+                : "\nA check of your last draft: a job that still works reports nothing until its answer is written. Of each job you know its request, when it started and, for a job that is done, its answer: the job tool gave you that, and nothing else is known. Your draft says what a job that still works does now or how far it is, or gives a time that fits no job, or offers to look into a job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences, from the lines of the job tool only. Offer nothing.";
             continue;
           }
           const offered = offeredWords(reply.text);
