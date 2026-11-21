@@ -1,6 +1,6 @@
 # Computer use
 
-November 20, 2026. This is the app-owned worker that
+November 21, 2026. This is the app-owned worker that
 [the execution page](DESKTOP_EXECUTOR.md) recommends. You say what to do on this
 Mac. The worker then looks at the screen, clicks, types and drives the browser by
 itself, one checked action at a time, until the task is done or it must ask you.
@@ -17,11 +17,18 @@ rely on it.
 | Hands   | The ClawdTime panel                    | See the screen and send input. macOS gives those rights to the panel   |
 | Browser | The desktop service, when it is wired  | Reads and drives the web page in front through the browser's scripting |
 | Planner | A language model, behind one interface | Picks the next action. It is the replaceable part                      |
+| Cursor  | The ClawdTime panel                    | Glides to each place before the hands act there, with a short label    |
 
-The code is in `connectors/computer/`. `ports.ts` is the contract between the
-parts. This change builds the worker, the planner and the service side of the
-hands. The hands inside the panel and the browser driver are built by other
-changes against the same contract.
+The code of the worker, the planner, the browser driver and the service side of
+the hands is in `connectors/computer/`. `ports.ts` is the contract between the
+parts. The hands and the cursor are in `mac/Sources/ClawdTimeTaskPanel/`
+(`HandsController.swift`, `HandsInput.swift`, `HandsObserver.swift`,
+`HandsBar.swift`, `GuidedCursor.swift`), over the pure rules in
+`mac/Sources/TaskPanelCore/`.
+
+The browser driver is built and tested, and the desktop service does not
+connect it yet: one line in `scripts/task-server.ts` does that. Until then the
+worker uses the screen for web pages.
 
 ## One request, one action at a time
 
@@ -52,19 +59,33 @@ clawdtime computer off       # off again. A request that runs stops
 clawdtime computer clear     # after a request with an unknown result
 ```
 
-The desktop service builds the worker when it starts, and only when all of
-this holds:
+### Which engine does the computer work
 
-- The switch is on. The switch is the file `computer/config.json` in the state
-  folder (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`). A switch file
-  that is not a regular file of this user for its owner only does not turn it
-  on.
-- A key for the language model is in the environment of the service:
-  `CLAWDTIME_OPENAI_API_KEY`, or `OPENAI_API_KEY`.
-- No connection to an existing chat is configured. With a
-  `desktop-executor.json`, that connection keeps priority and works as before.
-- The agent board of the service is on, and the service has no phone or
-  presentation actors.
+One engine does the computer work of a desktop service. The service picks it
+when it starts, in this order (`chooseExecution` in
+`connectors/computer/service.ts`):
+
+1. The connection to an existing chat, when `desktop-executor.json` is in the
+   state folder of the service. See [the execution page](DESKTOP_EXECUTOR.md).
+2. The bundled runtime, when `bundled-cua.json` is there. See
+   [the bundled runtime](BUNDLED_CUA.md). A service with both files does not
+   start.
+3. This worker, and only when all of this holds:
+   - The switch is on. The switch is the file `computer/config.json` in the
+     state folder (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`). A
+     switch file that is not a regular file of this user for its owner only
+     does not turn it on.
+   - A key for the language model is in the environment of the service:
+     `CLAWDTIME_OPENAI_API_KEY`, or `OPENAI_API_KEY`.
+   - The agent board of the service is on, and the service has no phone or
+     presentation actors.
+   - No test started the service. A service with `VITEST` in its environment
+     never builds the worker, whatever the switch and the key say, so no
+     command for the hands can come out of a test.
+
+With the first or the second engine, that engine works exactly as before: its
+routes, its Stop and its approvals are its own. The routes of the hands still
+answer, with nothing to do and the reason.
 
 So after `clawdtime computer on`, start the desktop service again.
 `clawdtime computer off` needs no restart: the worker reads the switch before
@@ -76,13 +97,44 @@ The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
 request ends as `blocked` and the message names the permission to grant.
 
-To give it a task, talk to ClawdTime in the chat of the panel. The supervisor
-hands a message to the worker only when its language model chooses to, and only
-when the message begins with one of these words, with or without "can you" or
-"please": check, read, summarize, review, open, search, find, browse, navigate,
-click, type, fill, download, compare, inspect, use, look, go, scroll, select.
-That rule is the supervisor's and this change did not widen it. The supervisor
-needs its own language model for this.
+### Give it a task
+
+Talk to ClawdTime: in the chat of the panel, by voice, or on a phone call. Your
+own words are the task. Two ways lead to the worker, and both are code in
+`connectors/agents/brain.ts`:
+
+- **At once, before the language model.** The worker reports the mode
+  `native`, as the bundled runtime does for the screen. For an engine with
+  that mode, a plain instruction for the screen goes straight to it: it starts
+  with use, click, type, scroll, switch, focus, fill, select, bring, open or
+  navigate (with or without "can you" or "please"), and it names a window, an
+  app, the desktop, the screen, the browser, a field, a button or the dock.
+  "Click the blue Send button" and "type hello in the search field" go this
+  way. So does a sentence that names its place first: "In the Notes window,
+  click Save".
+- **When the language model chooses it.** For every other sentence the
+  supervisor's language model picks a tool. When it picks
+  `delegate_computer_task`, the code hands over only a message that begins
+  with one of these words: check, read, summarize, review, open, search, find,
+  browse, navigate, click, type, fill, download, compare, inspect, use, look,
+  go, scroll, select, switch, focus, bring, show, refresh, reload, press.
+  "Scroll down in Slack", "refresh the browser" and "read my Slack messages"
+  go this way. The supervisor needs its own language model for this.
+
+A question, a bare yes or no, a request for the state and a sentence about a
+session or an agent are never handed over, whatever the model asks.
+
+The supervisor also has a tool for the browser that runs (reload, back,
+forward, tabs, read a page) and one that reads the screen from a picture. For
+"refresh the browser" and "read my Slack messages" its language model chooses
+between those tools and the worker. Both do what you asked. Only the worker
+shows the cursor.
+
+**From a phone call.** A call asks through `clawdtime chat TEXT`. That command
+now hands the text to the running desktop service, so a caller's request
+reaches the worker as the same words in the panel's chat do. See "One message
+from a command, and the desktop service" in [the supervisor page](SUPERVISOR.md)
+for how the command finds the service, and what it does when none answers.
 
 ## The guards
 
@@ -151,11 +203,22 @@ When an agent's request waits on the desk at the same time, your message
 answers neither. Answer the agent's request first, in the panel or in its
 terminal.
 
+On a phone call nothing says a question by itself. Ask "computer status": the
+answer is the question that waits. Then say yes or no. Both go to the desktop
+service through `clawdtime chat TEXT`.
+
 ## Stop
 
-Three ways: say `stop` in the chat or by voice, press **Stop work** in the
-panel, or run `clawdtime computer off`. The panel's button uses the existing
-route `POST /desktop/execution/stop`.
+Four ways: say `stop` in the chat, by voice or on a call, press **Stop** on the
+bar at the top of the screen (or hold Escape), press **Stop work** in the
+panel, or run `clawdtime computer off`. The buttons use the existing route
+`POST /desktop/execution/stop`. That route belongs to the engine that the
+service picked: the worker has it only when it is the engine.
+
+While the worker runs, the panel shows two things with a Stop button: the bar
+of the hands at the top of the screen, and the small window for native
+computer work beside the mascot, which the panel shows for every engine in the
+mode `native`. Both stop the same request.
 
 Stop is checked before and after every action. The answer is always the same:
 
@@ -165,6 +228,46 @@ A command that the panel has not fetched yet is taken back, so it never runs.
 An action that is already with the hands may finish. The request stays in the
 state `stopping` until its result arrives, and nothing follows it. Stop does not
 wait for the language model.
+
+## The live cursor
+
+Before the hands click, scroll, drag, type, press a key, or open an app or a
+link, a cursor glides to the place and says what happens there. Only then does
+the real event go. A person at the Mac sees each action before it happens, and
+so does a person who watches the shared screen on a phone.
+
+- **The window.** One rule in code, `GuidedOverlay.cursor`: the window is at
+  the level of a screen saver, which is above the menu bar, an open menu and
+  every app. It is on every Space and beside an app that fills the screen. It
+  takes no mouse event, so every click goes through it, and it can never have
+  the keyboard. A screen share and a recording show it.
+- **Not in the worker's own picture.** The picture that the hands take for the
+  planner leaves out every window of ClawdTime with a filter of its own, so
+  the planner never sees the cursor or its label.
+- **The label.** Each command for the hands comes with a short label from the
+  worker: `Click "Save"`, `Type in "Search"`, `Press cmd+s`, `Scroll down`,
+  `Open Notes`. The cursor shows it in a pill beside the pointer, as one line of
+  at most 44 characters. The label of typed text never holds that text. The
+  label of a key names the key, and the label of a click names the element as
+  the screen names it.
+- **The glide.** The cursor goes on from where it is. The first time it comes
+  out of the mascot. A glide takes 0.35 to 0.70 seconds, longer for a longer
+  way, and the cursor then waits 0.2 seconds at the target. It stays 1.5
+  seconds after the command and then fades.
+- **Typed keys.** A command that types names no place. The cursor goes to the
+  field that has the keyboard: to the lower edge of a field of one line, so
+  the pointer is under the text. With no field known it stays where it last
+  pointed. The checks for a password field and for ClawdTime's own windows run
+  again after the glide, just before the first key.
+- **The size.** For a screen that a phone shows as a picture of 1280 by 720
+  pixels: a pointer of 28 points in a bright ring of 44 points, and letters of
+  20 points in the pill. The colors and the typeface are those of the panel.
+- **Reduce Motion.** With the macOS setting Reduce Motion the cursor jumps to
+  the target with no glide, waits 0.35 seconds, and the ring of a click shows
+  with no growth.
+
+The bar at the top of the screen and the other windows of ClawdTime stay out
+of a screen share while the worker runs. Only the cursor is in it.
 
 ## What is not known
 
@@ -221,7 +324,8 @@ panel must never run one number twice. The numbers start at the time of the
 service start in milliseconds, so they stay above those of an earlier run.
 
 A service where no worker runs still answers all three, with `enabled` false,
-no command, and the reason in `message`.
+no command, and the reason in `message`. That holds for a service with another
+engine, with the switch off, with no key, and for one that a test started.
 
 ## Limits
 
@@ -240,9 +344,11 @@ no command, and the reason in `message`.
 
 ## What is tested and what is not
 
-Tested, with made-up hands, a scripted planner and a made-up browser. No test
-moves the real mouse, presses a real key, captures the real screen or calls the
-language model. 201 tests in `tests/connectors-computer-*.test.ts`:
+Tested, with made-up hands, a scripted planner, a scripted language model and
+a made-up browser. No test moves the real mouse, presses a real key, captures
+the real screen, draws the cursor or calls a language model.
+
+306 tests in `tests/connectors-computer-*.test.ts`:
 
 - `guards` (78): every check above, one by one.
 - `worker` (56): a task that completes; Stop before, during and after an
@@ -250,20 +356,56 @@ language model. 201 tests in `tests/connectors-computer-*.test.ts`:
   answered; you take over; both missing permissions; a restart; a lost result;
   the step and time limits; `done` before a fresh observation; the journal
   holds no typed text.
+- `browser-script` (49) and `browser` (30): the page script in a made-up page,
+  and the driver over a scripted command runner.
+- `talk` (26): the person's next message answers the worker; and each of
+  "click the blue Send button", "type hello in the search field", "refresh the
+  browser", "scroll down in Slack" and "read my Slack messages" reaches the
+  engine in the person's own words, at once or through the tool of a scripted
+  language model. A question, a state and a bare yes do not.
 - `routes` (16): the three routes and the stop route through the real route
-  code, with and without the panel credential, with a 6 MB body, and against
-  three real desktop services on free ports: on with a key, off, and on with no
-  key.
-- `hands` (10), `journal` (12), `planner` (12), `talk` (8), `cli` (9).
+  code, with and without the panel credential, with a 6 MB body; and three
+  real desktop services on free ports that this test started, which have no
+  worker and no hands whatever the switch and the key say.
+- `engine` (8): the choice of the engine through the real route code: the chat
+  connection first, the bundled runtime next, both, the worker with one whole
+  task and with Stop, a test's service, the switch off, no key, actors and no
+  board.
+- `hands` (10), `journal` (12), `planner` (12), `cli` (9).
+
+12 tests in `tests/connectors-agents-desktop-chat.test.ts`: where
+`clawdtime chat TEXT` looks for the service, each reason to answer by itself,
+the message that is never said twice, and one real desktop service that this
+test started.
+
+50 pure tests of the panel's side in `mac/Tests/TaskPanelCoreTests/`: the
+contract, the key plans, the picture and the elements, and for the cursor the
+time and the start of the glide, the jump with Reduce Motion, the sizes in a
+picture 720 pixels high, the place of the pill at every edge of the screen,
+the place for typed keys, and the rule of the window.
 
 Not tested, and so not proven:
 
 - The hands in the panel. Nothing here shows that a click lands where the
   observation says, that a secure field is reported as secure, or that the
   panel reports your mouse and keys.
-- The browser driver. The worker ran only against a made-up one.
+- The cursor on a screen. Its window, its drawing and its glide are AppKit
+  code that no test runs. Nothing here shows that a screen share or a call
+  shows it, that it is above a menu or a full-screen app, that the label is
+  readable on a phone, or that the worker's own picture leaves it out.
+- The desktop service with the worker as its engine. A service that a test
+  starts never has the worker, so the worker and its routes are tested in the
+  test's own process only. The lines of `scripts/task-server.ts` that wire it
+  are checked by the type checker and by nothing else.
+- The browser driver against a real browser, and the driver in the service:
+  it is not connected.
 - The planner against the real language model. Its request has the shape that
   the tests check. No test shows that the model picks good actions.
+- The supervisor's language model. No test shows which tool the real model
+  picks for a sentence that the code does not route by itself.
+- A phone call that reaches the worker. `clawdtime chat TEXT` is tested
+  against a service with no engine. The line agent that calls the command is
+  not part of these tests.
 - A whole task on a real Mac. There is no physical acceptance yet.
 
 ## Known gaps
@@ -280,4 +422,11 @@ Not tested, and so not proven:
   click on a plain name.
 - Between the look just before an input and the input itself, the screen can
   still change. The hands are the last place that can refuse.
-- A question reaches you in the chat only. On a phone call nothing says it yet.
+- A question reaches you in the chat only. On a phone call nothing says it by
+  itself: ask "computer status".
+- Two tools of the supervisor overlap with the worker: the browser tool and
+  the tool that reads the screen from a picture. Which one its language model
+  picks for "refresh the browser" is not fixed in code.
+- While the worker runs the panel shows two windows with a Stop button.
+- The cursor is the only window of ClawdTime in a screen share during a run.
+  The mascot that it comes out of is not in the share.
