@@ -326,7 +326,12 @@ These rules are in the code, not in the model's instructions:
   follow a "not" in your sentence.
 - "Tell deploy fix: run the tests again", with the full name of one session
   before the colon, is typed at once, by the same rules. ClawdTime does not
-  ask you again. One message types the same words into a session once.
+  ask you again. This holds only while no task, request or computer action
+  waits for your answer, and only for a message with no word that can take
+  it back ("no", "not", "wait", "stop", "never mind", "actually"). Such a
+  message is read as before, and ClawdTime can ask you.
+- One message types the same words into a session once. A choice of a task
+  is never typed into a session: a click on it answers the task.
 - "Then ask it", after your question about one session, types nothing.
   ClawdTime answers with the sentence that sends it, made of that session's
   name and your own question: say it, and it is typed.

@@ -581,23 +581,15 @@ describe("the ClawdTime agent", () => {
         "run the tests again",
       ),
     ).toBe("The person did not name that session. Ask them which session.");
-    // "Tell deploy fix: do not delete the release branch" has the session's
-    // full name before a colon: the code typed the person's whole words, once.
-    // The part of them that the model asked for was refused, as above.
-    expect(log).toEqual(["send 100-abc: do not delete the release branch"]);
-    // The model asks for the person's whole words, in a sentence that the
-    // code does not type by itself.
+    expect(log).toEqual([]);
     expect(
       await result(
-        "Say to deploy fix: do not delete the release branch",
+        "Tell deploy fix: do not delete the release branch",
         "deploy fix",
         "do not delete the release branch",
       ),
     ).toBe("Typed into deploy fix.");
-    expect(log).toEqual([
-      "send 100-abc: do not delete the release branch",
-      "send 100-abc: do not delete the release branch",
-    ]);
+    expect(log).toEqual(["send 100-abc: do not delete the release branch"]);
     // A session with a request on the desk gets an answer, not typed text:
     // Return in its terminal would answer the prompt that shows there.
     ask(desk, "npm test");
@@ -617,7 +609,7 @@ describe("the ClawdTime agent", () => {
         "run the tests again",
       ),
     ).toBe("Typed into docs.");
-    expect(log).toHaveLength(3);
+    expect(log).toHaveLength(2);
   });
 
   it("works with no language model, and falls back when the model fails", async () => {

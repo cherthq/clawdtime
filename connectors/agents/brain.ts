@@ -1142,18 +1142,44 @@ export function earlierSaid(history: ChatMessage[]): string[] {
 }
 /**
  * 'Tell payments tests: did the tests pass?': the form that ClawdTime itself
- * offers for words to a session. The name stands before the colon and the
- * words after it. Quotes around the whole message are not part of it.
+ * offers for words to a session. The name stands before a colon and the
+ * words after it. Quotes around the whole message are not part of it. A
+ * message with more than one colon can be read in more than one way: each
+ * reading is given, and the caller takes the message only when one fits.
  */
-const toldForm = (spoken: string) => {
+const toldForms = (spoken: string) => {
   const whole = spoken.trim();
   const inner = /^["'\u201c\u2018]([\s\S]*)["'\u201d\u2019]$/.exec(whole);
-  const found =
-    /^(?:(?:please|ok|okay|so|then|now)[,\s]+)*tell\s+([^:]{1,120}?)\s*:\s*(\S[\s\S]*)$/i.exec(
+  const lead =
+    /^(?:(?:please|ok|okay|so|then|now)[,\s]+)*tell\s+([\s\S]+)$/i.exec(
       (inner ? inner[1]! : whole).trim(),
     );
-  return found ? { name: found[1]!.trim(), text: found[2]!.trim() } : null;
+  const forms: { name: string; text: string }[] = [];
+  if (!lead) return forms;
+  const rest = lead[1]!;
+  for (
+    let at = rest.indexOf(":");
+    at >= 0 && at <= 120;
+    at = rest.indexOf(":", at + 1)
+  ) {
+    const name = rest.slice(0, at).trim();
+    const text = rest.slice(at + 1).trim();
+    if (name && text) forms.push({ name, text });
+  }
+  return forms;
 };
+/**
+ * A word that can take the message back, stop it or turn it around, or a
+ * question to ClawdTime that hangs on it. The code types nothing by itself
+ * past this reader: the model reads such a message, as before. It only sends
+ * a message to the slower way, so it can be wide.
+ */
+const mayTakeBack = (text: string) =>
+  takesBack(text) ||
+  asksAtTheEnd(text) ||
+  /(?:\b(?:no|not|never|nope|nvm|nevermind|cancel|wait|undo|ignore|disregard|oops|instead|actually|sorry|mistake|wrong|stop|hold on|hang on|second thought|rather|unless|maybe|kidding)\b|n['\u2019\u2018\u00b4\u02bc\u2032`]t\b)/i.test(
+    text,
+  );
 /**
  * "Then ask it", "tell it": the person wants a session asked or told, and
  * this message holds no words for it and no name.
@@ -1959,6 +1985,18 @@ export class Supervisor {
           return "The person did not name that session. Ask them which session.";
         if (!saidAsWords(text, spoken))
           return "Only the person's own words are typed. Ask them for the exact text.";
+        // A choice of a task is text that an agent wrote. A message that is
+        // such a choice answers the task, and is not words for a session.
+        const asking = this.world.tasks?.current();
+        if (
+          asking &&
+          !taskIsOver(asking) &&
+          asking.choices.some(
+            (choice) =>
+              spokenWords(choice).join(" ") === spokenWords(spoken).join(" "),
+          )
+        )
+          return "That message is a choice of the task, not the person's own words for a session. Nothing is typed.";
         // Return in a terminal that shows a prompt answers that prompt.
         if (this.waitsOnDesk(session))
           return `${title(session)} has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.`;
@@ -2368,7 +2406,15 @@ export class Supervisor {
         } catch {
           // The board cannot be read: the model answers.
         }
-        if (about.kind === "one")
+        // A name or a question with a quote or a colon in it would make a
+        // sentence that reads another way: the model answers then.
+        const plain = (value: string) => !/["\u201c\u201d\n\r]/.test(value);
+        if (
+          about.kind === "one" &&
+          plain(title(about.session)) &&
+          !title(about.session).includes(":") &&
+          plain(asked)
+        )
           return `Say "tell ${title(about.session)}: ${asked}" and I type it.`;
       }
     }
@@ -2541,7 +2587,8 @@ export class Supervisor {
           newest &&
           before &&
           pointsBack(words) &&
-          newest.startedAt >= before.at &&
+          // A job's start time has whole seconds.
+          newest.startedAt >= Math.floor(before.at / 1000) * 1000 &&
           this.pick("", words).kind === "none"
         )
           messages.push(
@@ -2567,29 +2614,44 @@ export class Supervisor {
       // one session: the code calls the tool that types, with their words. The
       // gates of that tool decide as for a call of the model, and the model
       // words the answer. No second round of "should I type it?".
-      const told = toldForm(words);
-      if (told) {
-        const named = (this.world.board()?.sessions ?? []).filter(
-          (session) => title(session).toLowerCase() === told.name.toLowerCase(),
+      // The code does this only where nothing else can own the sentence: no
+      // task, request or computer action waits for an answer (a choice of a
+      // task is text of an agent, not words of the person), the turn is open,
+      // nothing in the message can take it back, and the message reads as
+      // that form in one way only.
+      const waitingTask = this.world.tasks?.current();
+      const fits =
+        turn.closed ||
+        mayTakeBack(words) ||
+        hasDecisionTarget() ||
+        computerApproval() !== null ||
+        (waitingTask && !taskIsOver(waitingTask))
+          ? []
+          : toldForms(words).flatMap((form) =>
+              (this.world.board()?.sessions ?? [])
+                .filter(
+                  (session) =>
+                    title(session).toLowerCase() === form.name.toLowerCase(),
+                )
+                .map((session) => ({ session, text: form.text })),
+            );
+      if (fits.length === 1) {
+        const call: ToolCall = {
+          id: "tell_first",
+          name: "type_into_session",
+          arguments: JSON.stringify({
+            session: title(fits[0]!.session),
+            text: fits[0]!.text,
+          }),
+        };
+        messages.push(
+          { role: "assistant", content: "", toolCalls: [call] },
+          {
+            role: "tool",
+            toolCallId: call.id,
+            content: (await this.run(call, words, via, turn)).slice(0, 6000),
+          },
         );
-        if (named.length === 1) {
-          const call: ToolCall = {
-            id: "tell_first",
-            name: "type_into_session",
-            arguments: JSON.stringify({
-              session: title(named[0]!),
-              text: told.text,
-            }),
-          };
-          messages.push(
-            { role: "assistant", content: "", toolCalls: [call] },
-            {
-              role: "tool",
-              toolCallId: call.id,
-              content: (await this.run(call, words, via, turn)).slice(0, 6000),
-            },
-          );
-        }
       }
       for (let step = 0; step < 6; step++) {
         const task = this.world.tasks?.current();
