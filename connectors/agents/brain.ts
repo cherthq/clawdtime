@@ -2156,6 +2156,88 @@ const jobProgress =
 /** An offer or a promise to look into a job, to hurry it or to stop it: no tool does that. */
 const jobOffer =
   /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:speed|hurry|rush|nudge|push|poke|ping|check|look|peek|inspect|dig|investigate|try|run|restart|redo|scan|test|debug|fix|cancel|stop|kill|abort)\b/i;
+/** An offer or a promise to cancel, stop or restart: no tool does that for a job. */
+const jobCancelOffer =
+  /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:cancel|stop|kill|abort|restart)\b/i;
+/**
+ * The sentences of an answer that offer to cancel, stop or restart A JOB.
+ *
+ * A sentence speaks of a job when it holds "job", or a word of a job's
+ * request right before "one" or "job" ("the bakery one"). When the person's
+ * own message is about a job ("is the first one done?"), a word of a request
+ * anywhere in the sentence counts too, and so does a word that points
+ * ("cancel it"). A word that points also counts after a sentence that speaks
+ * of a job. A sentence that names a session or a task is about that: a task
+ * can be cancelled, and words can be typed into a session.
+ *
+ * "There is nothing I can do to stop it" is no offer. The words that deny
+ * are read in the offer's own clause only: the "not" of "Not yet; want me to
+ * cancel the bakery job?" denies nothing.
+ */
+const jobCancelOffers = (
+  answer: string,
+  jobs: JobFacts[],
+  spoken: string,
+  namesASession: (text: string) => boolean,
+): string[] => {
+  const requested = new Set(
+    jobs.flatMap((job) =>
+      (job.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) => !correctionStop.has(word),
+      ),
+    ),
+  );
+  const words = (text: string) => text.toLowerCase().match(/\p{L}+/gu) ?? [];
+  const namesARequest = (text: string) =>
+    words(text).some((word) => requested.has(word));
+  // "The bakery one", "the landing page job".
+  const namesAJob = (text: string) =>
+    /\bjobs?\b/i.test(text) ||
+    words(text).some(
+      (word, index, all) =>
+        requested.has(word) && /^(?:one|job)$/.test(all[index + 1] ?? ""),
+    );
+  const other = (text: string) =>
+    /\btasks?\b/i.test(text) || namesASession(text);
+  // The person asks about a job: then the answer is about it.
+  const asked =
+    !other(spoken) &&
+    (namesAJob(spoken) ||
+      namesARequest(spoken) ||
+      /\b(?:first|second|third|last|other|newest|older|earlier)\s+ones?\b/i.test(
+        spoken,
+      ));
+  const points = (text: string) =>
+    /\b(?:it|that|this|them|that\s+one|this\s+one)\b/i.test(text);
+  const sentences = answer.split(/(?<=[.!?])\s+/);
+  return sentences.filter((sentence, index) => {
+    const offer = jobCancelOffer.exec(sentence);
+    if (!offer) return false;
+    // The offer's own clause: from the last mark before it to its verb.
+    const clause = sentence
+      .slice(0, offer.index + offer[0].length)
+      .split(/[,;:\u2014]|\s-\s/)
+      .at(-1)!;
+    if (
+      /\b(?:nothing|no\s+way|not|never|cannot|can['\u2019]t|unable|no\s+tool)\b/i.test(
+        clause,
+      )
+    )
+      return false;
+    if (other(sentence)) return false;
+    const before = index > 0 ? sentences[index - 1]! : "";
+    return (
+      namesAJob(sentence) ||
+      (asked && (namesARequest(sentence) || points(sentence))) ||
+      (points(sentence) && !other(before) && namesAJob(before))
+    );
+  });
+};
+/** What is left of an answer says only yes: it would promise what was dropped. */
+const onlyAYes = (text: string) =>
+  /^(?:(?:yes|yeah|yep|yup|sure|okay|ok|of\s+course|alright|all\s+right|will\s+do|no\s+problem|certainly|absolutely|got\s+it|on\s+it)[\s,.!]*)+$/i.test(
+    text.trim(),
+  );
 /**
  * The answer says what a job that still works does now, in words that
  * neither its request, nor the person, nor a tool used ("it is going through
@@ -2280,12 +2362,10 @@ const requestSaid = (job: JobFacts) => {
  */
 const jobsStillWork = (listed: JobFacts[], now: number) => {
   const working = listed.filter((job) => !job.done && !job.waiting).slice(-3);
+  const waiting = listed.filter((job) => !job.done && job.waiting).slice(-2);
   const done = listed.filter((job) => job.done).at(-1);
   return [
-    ...working.map(
-      (job) =>
-        `${requestSaid(job)} still works: ${ranFor(now - job.startedAt)} so far.`,
-    ),
+    // The job that is done comes first: what follows is about the others.
     ...(done
       ? [
           `${requestSaid(done)} is done: "${clean(done.result ?? "", 300)
@@ -2293,9 +2373,16 @@ const jobsStillWork = (listed: JobFacts[], now: number) => {
             .replace(/[.\s]+$/, "")}".`,
         ]
       : []),
+    ...working.map(
+      (job) =>
+        `${requestSaid(job)} still works: ${ranFor(now - job.startedAt)} so far.`,
+    ),
+    ...waiting.map((job) => `${requestSaid(job)} waits for the job before it.`),
     working.length > 1
       ? "Each job that works runs in its own terminal window, where you can watch it. Ask me again for an answer."
-      : "It runs in its own terminal window, where you can watch it. Ask me again for its answer.",
+      : working.length === 1
+        ? "The job that works runs in its own terminal window, where you can watch it. Ask me again for its answer."
+        : "Ask me again for an answer.",
   ].join(" ");
 };
 /** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
@@ -3085,6 +3172,20 @@ export class Supervisor {
     }
     turn.done.set(key, said);
     return said;
+  }
+  /** What the job tool answers: no job, the one job, or the list of the last day. */
+  private jobsReport(now: number): string {
+    const listed = this.jobsOfTheDay(now);
+    if (!listed.length) return noJobYet;
+    if (listed.length < 2) return jobLine(listed[0]!, now);
+    // Each job of the last day, in the order in which the jobs started:
+    // "what did the first one find?" has no answer in the newest job alone,
+    // and the model then says that the answer never came.
+    const more =
+      this.jobsNow(jobsListed + 1).filter(
+        (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
+      ).length > jobsListed;
+    return `${more ? `The newest ${jobsListed} jobs` : "The jobs"} that ClawdTime started in the last day, in the order in which they started:\n${listed.map((job, index) => `${index + 1}. ${jobListLine(job, now)}`).join("\n")}`;
   }
   /**
    * The jobs that the job tool reports: those that started in the last day,
@@ -4299,20 +4400,8 @@ export class Supervisor {
       }
       case "start_job":
         return this.startJob(turn, spoken, args.agent);
-      case "job_result": {
-        const now = this.world.now();
-        const listed = this.jobsOfTheDay(now);
-        if (!listed.length) return noJobYet;
-        if (listed.length < 2) return jobLine(listed[0]!, now);
-        // Each job of the last day, in the order in which the jobs started:
-        // "what did the first one find?" has no answer in the newest job
-        // alone, and the model then says that the answer never came.
-        const more =
-          this.jobsNow(jobsListed + 1).filter(
-            (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
-          ).length > jobsListed;
-        return `${more ? `The newest ${jobsListed} jobs` : "The jobs"} that ClawdTime started in the last day, in the order in which they started:\n${listed.map((job, index) => `${index + 1}. ${jobListLine(job, now)}`).join("\n")}`;
-      }
+      case "job_result":
+        return this.jobsReport(this.world.now());
       case "session_window": {
         if (!this.world.window)
           return "I cannot change a terminal window from here.";
@@ -5084,6 +5173,48 @@ export class Supervisor {
         // Nothing more is seeded.
       }
     }
+    // A question, and ClawdTime started a job in the last day: what a job
+    // answered is not in the conversation unless a line of news said it, and
+    // with no answer in front of it the model makes one up ("the biggest
+    // file is large_video.mp4, 2.3 GB"). So the code reads the job list
+    // first, as the model's own call of the job tool would. Not when the
+    // state was read (it holds the jobs), and not when the words fit a
+    // session: the question is then about that session. This read has its
+    // own id: the check of an answer about a job that still works looks only
+    // at a turn that read THE job, never at every question.
+    try {
+      const now = this.world.now();
+      const newest = this.jobsNow(1)[0];
+      if (
+        this.world.jobs &&
+        newest &&
+        now - newest.startedAt < 24 * 60 * 60 * 1000 &&
+        isQuestion(words) &&
+        !messages.some(
+          (message) =>
+            message.role === "tool" &&
+            (message.toolCallId === "state_first" ||
+              message.toolCallId === "job_first"),
+        ) &&
+        this.pick("", words).kind === "none"
+      )
+        messages.push(
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              { id: "jobs_first", name: "job_result", arguments: "{}" },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "jobs_first",
+            content: this.jobsReport(now),
+          },
+        );
+    } catch {
+      // Nothing more is seeded.
+    }
     try {
       // The person said the form that ClawdTime offers, with the full name of
       // one session, or the same in plain speech ("tell deploy fix to run the
@@ -5432,12 +5563,30 @@ export class Supervisor {
           // is guarded, and a time is right when it fits any listed job.
           const moment = this.world.now();
           // The check reads the jobs that the model saw: the tool's list
-          // when the model called the tool, and the newest job alone when
-          // only the code read it. A job that the model never saw must not
-          // decide whether its answer is right.
-          const listed = ran.has("job_result")
-            ? this.jobsOfTheDay(moment)
-            : this.jobsNow(1);
+          // when the model called the tool; else the jobs in the state that
+          // the code read; else the newest job alone. A job that the model
+          // never saw must not decide whether its answer is right.
+          const listRead = messages.some(
+            (message) =>
+              message.role === "tool" && message.toolCallId === "jobs_first",
+          );
+          const listed =
+            ran.has("job_result") || listRead
+              ? this.jobsOfTheDay(moment)
+              : ran.has("status") ||
+                  messages.some(
+                    (message) =>
+                      message.role === "tool" &&
+                      message.toolCallId === "state_first",
+                  )
+                ? // The state, read by the code or by the model, shows the
+                  // newest three jobs of the last day: the model saw those.
+                  this.jobsNow(3)
+                    .filter(
+                      (job) => moment - job.startedAt < 24 * 60 * 60 * 1000,
+                    )
+                    .reverse()
+                : this.jobsNow(1);
           const working = listed.filter(
             (job) =>
               !job.done &&
@@ -5454,27 +5603,71 @@ export class Supervisor {
               .filter((message) => message.news === true)
               .map((message) => message.text),
           ];
+          // The turn read THE job: the model called the job tool, or the
+          // code read the job for a message that points at it.
+          const jobRead =
+            ran.has("job_result") ||
+            messages.some(
+              (message) =>
+                message.role === "tool" &&
+                message.toolCallId === "job_first" &&
+                message.content !== noJobYet,
+            );
+          // The turn read the state, which shows the jobs too.
+          const stateRead =
+            ran.has("status") ||
+            messages.some(
+              (message) =>
+                message.role === "tool" && message.toolCallId === "state_first",
+            );
+          // The model read the jobs or the state, and nothing else: an
+          // answer that came from a page or the screen is about that.
+          const onlyRead = [...ran].every(
+            (name) => name === "job_result" || name === "status",
+          );
+          // An offer to cancel, stop or restart a job: no tool does that. It
+          // counts while a job works or waits, whenever the turn read the
+          // jobs or the state, and only for a sentence that speaks of a job:
+          // an offer about a session or a task is another matter. Such an
+          // answer loses that sentence, and nothing else.
+          const offers =
+            onlyRead &&
+            (jobRead || stateRead || listRead) &&
+            listed.some(
+              (job) =>
+                !job.done && moment - job.startedAt < 24 * 60 * 60 * 1000,
+            )
+              ? jobCancelOffers(reply.text, listed, words, (text) =>
+                  (this.world.board()?.sessions ?? []).some(
+                    (session) =>
+                      session.name !== null &&
+                      saidAsWords(title(session), text),
+                  ),
+                )
+              : [];
+          // The answer without those sentences. The rules for a guess read
+          // this: an answer whose only fault is such an offer keeps its own
+          // words and loses the offer.
+          const body = offers.length
+            ? reply.text
+                .split(/(?<=[.!?])\s+/)
+                .filter((sentence) => !offers.includes(sentence))
+                .join(" ")
+            : reply.text;
           if (
-            working.length > 0 &&
-            (ran.has("job_result") ||
-              messages.some(
-                (message) =>
-                  message.role === "tool" &&
-                  message.toolCallId === "job_first" &&
-                  message.content !== noJobYet,
-              )) &&
-            [...ran].every((name) => name === "job_result") &&
+            onlyRead &&
             !(this.world.board()?.sessions ?? []).some(
               (session) =>
-                session.name !== null &&
-                saidAsWords(title(session), reply.text),
+                session.name !== null && saidAsWords(title(session), body),
             ) &&
+            working.length > 0 &&
+            jobRead &&
             (guessesAtAJob(
-              reply.text,
+              body,
               `${listed.map((job) => job.job).join(" ")} ${words} ${told.join(" ")}`,
             ) ||
               wrongTimeOfAJob(
-                reply.text,
+                body,
                 listed.map((job) => moment - job.startedAt),
                 // A time that a job's own line gave ("Done in 5 minutes")
                 // is no guess. The state of the sessions has times too, and
@@ -5491,21 +5684,39 @@ export class Supervisor {
               ) ||
               // "Why is this taking so long": the answer is a time.
               (asksHowLong(words) &&
-                !timesSaid(reply.text).length &&
-                !/\bless\s+than\s+a\s+minute\b/i.test(reply.text)))
+                !timesSaid(body).length &&
+                !/\bless\s+than\s+a\s+minute\b/i.test(body)))
           ) {
             if (rechecked)
-              return listed.length < 2
+              return listed.length < 2 && working.length === 1
                 ? jobStillWorks(working[0]!, moment)
                 : jobsStillWork(listed, moment);
             rechecked = true;
-            const since = ranFor(moment - working[0]!.startedAt);
+            const since = ranFor(moment - (working[0] ?? listed[0]!).startedAt);
             // Only fixed words and a time stand in this note: a job's request
             // is text, and stays behind the job tool.
             recheck =
-              listed.length < 2
+              listed.length < 2 && working.length === 1
                 ? `\nA check of your last draft: the job still works, and a job reports nothing until its answer is written. You know its request and that it has run ${since}, nothing else. Your draft says what the job does now or how far it is, or gives another time, or offers to look into the job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences: it still works and it has run ${since}. You can add that it runs in its own terminal window, where they can watch it. Offer nothing.`
                 : "\nA check of your last draft: a job that still works reports nothing until its answer is written. Of each job you know its request, when it started and, for a job that is done, its answer: the job tool gave you that, and nothing else is known. Your draft says what a job that still works does now or how far it is, or gives a time that fits no job, or offers to look into a job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences, from the lines of the job tool only. Offer nothing.";
+            continue;
+          }
+          if (offers.length > 0) {
+            if (rechecked) {
+              // The answer without the sentences that offer it. When nothing
+              // else is left: what is known of the jobs.
+              const rest = clean(body, 900);
+              // A bare "Sure." would say yes to what was dropped.
+              return (
+                (rest && !onlyAYes(rest) ? rest : "") ||
+                (listed.length < 2 && working.length === 1
+                  ? jobStillWorks(working[0]!, moment)
+                  : jobsStillWork(listed, moment))
+              );
+            }
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it offers to cancel, stop or restart a job. No tool does that: a job runs until it writes its answer. Say the same answer once more without that offer, and offer nothing in its place.";
             continue;
           }
           const offered = offeredWords(reply.text);
@@ -5594,7 +5805,8 @@ export class Supervisor {
         (message) =>
           message.role === "tool" &&
           message.toolCallId !== "state_first" &&
-          message.toolCallId !== "job_first",
+          message.toolCallId !== "job_first" &&
+          message.toolCallId !== "jobs_first",
       );
       turn.plainState = false;
       const said = await this.plainly(words, via, turn);
