@@ -66,6 +66,7 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { sayToDesktop } from "../connectors/agents/desktop-chat.js";
 import { openApp } from "../connectors/agents/apps.js";
 import { browse } from "../connectors/agents/browsing.js";
 import { showOnCall, ViewStore } from "../connectors/agents/view.js";
@@ -161,7 +162,8 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   clis [--json]                        agent commands on this Mac, with versions and use
   report [--out FILE] [--open]         the same as a slide deck
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
-  chat [TEXT]                          talk to ClawdTime in text: it answers and can act
+  chat [TEXT]                          talk to ClawdTime in text: it answers and can act. With TEXT,
+                                       the desktop service answers when it runs
   talk                                 the same by voice: you speak, it speaks back
   jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
   view [--json] | view clear           what the video of a call shows: one window, or the whole screen
@@ -837,6 +839,26 @@ export async function supervisorCli(
     return;
   }
 
+  if (group === "chat" && args.length && !args[0]!.startsWith("-")) {
+    // One message: when the desktop service runs, it answers. It has the
+    // task, the engine for computer work and the conversation of the panel,
+    // and this command has none of them. With no service, or one that does
+    // not answer its first reads in two seconds, this command answers as
+    // before. So it does when the service has no language model and this
+    // command has one. A message that may be with the service is never said
+    // again here: two brains must not act on one sentence. Words that start
+    // with a dash are an option of this command, never a message.
+    const said = await sayToDesktop(system, args.join(" "), {
+      ownModel:
+        deps.model !== undefined
+          ? deps.model !== null
+          : !!(
+              system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY
+            ),
+      ...(deps.request ? { request: deps.request } : {}),
+    });
+    if (said.kind !== "absent") return print(said.text);
+  }
   if (group === "chat" || group === "talk" || group === "texts") {
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();

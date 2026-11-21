@@ -11,6 +11,7 @@ import {
   existsSync,
 } from "node:fs";
 import { resolve, join, relative, isAbsolute, sep } from "node:path";
+import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { Store } from "../src/storage/store.js";
 import { Vault, token } from "../src/storage/security.js";
@@ -32,6 +33,8 @@ import {
 } from "../src/task-presentation-contracts.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
+import { stateRoot } from "../connectors/agents/hooks.js";
+import { chooseExecution } from "../connectors/computer/service.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
@@ -394,6 +397,27 @@ const executor =
         (text) => agentBoard?.appendExecutionResult(text),
       )
     : undefined);
+// One engine does the computer work of this service. A file in the state
+// folder keeps priority: the connection to an existing chat, then the bundled
+// runtime. With neither, the app-owned computer worker runs, when the person
+// turned it on with `clawdtime computer on` and a key for the language model
+// is in this environment. A service that a test started never has that
+// worker, so no command for the hands can come out of a test.
+const chosen = desktop
+  ? chooseExecution({
+      root: stateRoot({ env: process.env, home: homedir() }),
+      env: process.env,
+      chat: executorConfig ? executor : undefined,
+      bundled,
+      actors: !!(calls || presentation),
+      board: flags.get("--agents") !== "false",
+      notify: (text) => agentBoard?.appendExecutionResult(text),
+      // The browser goes in here, as one more line:
+      //   browser: new AppleEventsBrowser(),
+      // Without it the worker refuses the browser actions and uses the screen.
+    })
+  : undefined;
+const execution = chosen?.execution;
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -409,7 +433,7 @@ agentBoard =
             }
           : {}),
         tasks: deskTasks(desktop, desktopSetup.config.token),
-        ...(executor ? { execution: executor } : {}),
+        ...(execution ? { execution } : {}),
       })
     : undefined;
 agentBoard?.start();
@@ -425,6 +449,7 @@ const app = createTaskApp(
   calls,
   agentBoard,
   executor,
+  chosen?.computer.port,
 );
 const presentationWatch = presentation
   ? setInterval(() => {

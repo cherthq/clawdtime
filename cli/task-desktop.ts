@@ -131,6 +131,8 @@ function childEnvironment(): NodeJS.ProcessEnv {
           "CLAWDTIME_OPENAI_API_KEY",
           "OPENAI_API_KEY",
           "CLAWDTIME_SUPERVISOR_MODEL",
+          // The language model that plans each action of computer use.
+          "CLAWDTIME_COMPUTER_MODEL",
           "CLAWDTIME_TRANSCRIBE_MODEL",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",
