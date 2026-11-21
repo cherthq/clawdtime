@@ -2068,6 +2068,96 @@ describe("an answer that claims an action that no tool did", () => {
     );
   });
 
+  it("names the tool for what the person asked in the note", async () => {
+    const note = async (
+      world: SupervisorWorld,
+      words: string,
+      answer: string,
+    ) => {
+      const { model, seen } = scripted([answer, "That is not done yet."]);
+      await new Supervisor(world, model).reply([], words, "chat");
+      return seen[1]!.system;
+    };
+    const made = mac([session({ name: "deploy fix" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      window: async () => ({ ok: true, said: "The window changed." }),
+    };
+    // Work, a window, a session to see.
+    expect(
+      await note(world, "add a contact form to the bakery page", "I added it."),
+    ).toContain("so call start_job now");
+    expect(
+      await note(
+        world,
+        "make the deploy fix window bigger",
+        "I made the deploy fix text bigger.",
+      ),
+    ).toContain("so call session_window now");
+    expect(
+      await note(world, "show me the deploy fix one", "I opened it for you."),
+    ).toContain("so call open_session now");
+  });
+
+  it("says in code that it cannot stop or close sessions, and offers no such thing", async () => {
+    const cannot =
+      'I cannot stop or close a session: no tool of mine does that. I can open one, so that you stop it there. Say "show me" and its name.';
+    for (const words of [
+      "stop all my sessions",
+      "kill every agent",
+      "close all the sessions please",
+      "please stop all sessions",
+      "can you restart my sessions?",
+      "shut down all of the claude sessions now",
+    ]) {
+      const made = mac([session({ name: "deploy fix" })]);
+      // A model that would offer it. It is not asked.
+      const { model, seen } = scripted(["Want me to close them all?"]);
+      expect(
+        await new Supervisor(made.world, model).reply([], words, "chat"),
+        words,
+      ).toBe(cannot);
+      expect(seen, words).toHaveLength(0);
+    }
+    // A fact in the state line also says it, for the other wordings.
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(mac().world, model).reply([], "hello there", "chat");
+    expect(seen[0]!.system).toContain(
+      "tools that stop, close or restart a session=none.",
+    );
+  });
+
+  it.each([
+    // Other things to stop, and other sentences.
+    "stop the task",
+    "stop",
+    "stop it",
+    "stop the tests in deploy fix",
+    "don't stop the sessions",
+    "should I stop all sessions?",
+    "stop all my sessions and start a new one for the docs",
+    "why did all my sessions stop?",
+  ])("leaves %j to the model", async (words) => {
+    const made = mac([session({ name: "deploy fix" })]);
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(made.world, model).reply([], words, "chat");
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it("leaves a request to stop sessions alone while a request of an agent waits", async () => {
+    // "Stop" can be the answer to that request: the code says nothing of its own.
+    const made = mac([session({ name: "deploy fix" })]);
+    waits(made.world);
+    const { model } = scripted(["A request waits for your answer."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "stop all my sessions",
+        "chat",
+      ),
+    ).not.toContain("I cannot stop or close a session");
+  });
+
   it("says plainly that nothing was done when the model claims it twice", async () => {
     const made = mac();
     const { model, seen } = scripted([claim, "I've started that for you."]);

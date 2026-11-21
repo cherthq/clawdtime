@@ -391,6 +391,10 @@ request that still waits, and does nothing more with those words.
 A job is only work that ClawdTime started. When you ask about jobs and it
 started none, it says so, and then says what your own sessions do.
 
+ClawdTime cannot stop, close or restart a session: it has no tool for that.
+"Stop all my sessions" gets that answer, and the offer to open a session so
+that you stop it there.
+
 ClawdTime checks its own answer when you asked for work, for a window to
 change, or to see a session. When the answer says
 that it did something ("I added that to the job") and no tool that acts ran in

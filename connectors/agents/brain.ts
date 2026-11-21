@@ -796,6 +796,19 @@ const asksAbout = (spoken: string) =>
   );
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
+/**
+ * The whole message asks to stop, close or restart sessions: "stop all my
+ * sessions", "kill every agent", "close the sessions please". No tool does
+ * that, and a model tends to offer it all the same. "Stop the task", "stop
+ * it" and "stop the tests in deploy fix" are other things.
+ */
+const asksToStopSessions = (spoken: string) =>
+  /^(?:(?:please|ok|okay|so|now|just|hey|clawdtime|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|i\s+want\s+you\s+to|go\s+ahead\s+and)[,\s]+)*(?:stop|close|kill|quit|end|terminate|pause|restart|shut\s+down)\s+(?:all\s+(?:of\s+)?)?(?:my|the|these|those|every|each|your)?\s*(?:[\p{L}]+\s+){0,2}(?:sessions?|agents?)(?:\s+(?:now|please|right\s+now|for\s+me))*[\s.!?]*$/iu.test(
+    spoken.trim(),
+  );
+/** What ClawdTime says to a request to stop or close sessions: it has no tool for that. */
+const cannotStopSessions =
+  'I cannot stop or close a session: no tool of mine does that. I can open one, so that you stop it there. Say "show me" and its name.';
 /** What can stand before a request to see a session, in its clause. */
 const seeLead =
   /^(?:(?:please|ok|okay|so|then|now|and|hey|hi|clawdtime|just|also|well|hmm|uh|um|yes|yeah|yep|no|nope|not|wait|sorry|oops|actually|instead|rather|alright|right|sure|first|next|quickly|i\s+mean|i\s+meant|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|let['\u2019]?s|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
@@ -2954,6 +2967,19 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    // "Stop all my sessions": no tool stops or closes a session, so the code
+    // says that, where nothing else can own the words: no request and no
+    // task waits (a "stop" can answer those), the turn is open, and no
+    // computer executor is there that could do it on the screen.
+    if (
+      asksToStopSessions(words) &&
+      !turn.closed &&
+      !taskWaits &&
+      !(current && !taskIsOver(current)) &&
+      this.world.desk.pending().length === 0 &&
+      !this.world.execution?.snapshot().configured
+    )
+      return cannotStopSessions;
     // "Then ask it", after the person's question about one session. Nothing
     // is typed: the code says the sentence that sends that question, with the
     // session's name and the person's own earlier words. The person then says
@@ -3317,7 +3343,7 @@ export class Supervisor {
           byAgent.set(kind, (byAgent.get(kind) ?? 0) + 1);
         }
         const agentFacts = `sessions by agent: ${[...byAgent].map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"};`;
-        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} These facts take precedence over chat history.`;
+        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} tools that stop, close or restart a session=none. These facts take precedence over chat history.`;
         const reply = await this.model.complete({
           system: `${brief}\n${current}${recheck}`,
           messages,
@@ -3346,8 +3372,14 @@ export class Supervisor {
           ) {
             if (rechecked) return notDone;
             rechecked = true;
-            recheck =
-              "\nA check of your last draft: it said that you did something, but no tool did that in this turn. If the person's last message asks for work that is not done, do it with the tool for that work. Else answer again with what is true, and do not say that it is done.";
+            // The tool for what the person asked: a window, a session to
+            // see, or work.
+            const tool = asksForSize(words)
+              ? "session_window"
+              : this.seeRequest(words)
+                ? "open_session"
+                : "start_job";
+            recheck = `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`;
             continue;
           }
           // The answer is ready. What the message teaches is written after it.
