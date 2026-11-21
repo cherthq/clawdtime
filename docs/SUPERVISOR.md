@@ -431,7 +431,48 @@ The rules, again in the code:
   Those stay on the mascot's bar, the board and the menus.
 
 In a plain terminal with no desktop service (`clawdtime chat` alone) there is no
-task service to reach. A task that you ask for there starts as a job.
+task service to reach. A task that you ask for there starts as a job. With a
+desktop service, `clawdtime chat TEXT` reaches its task service: see the next
+section.
+
+### One message from a command, and the desktop service
+
+`clawdtime chat TEXT` answers one message and exits. A FaceTime call on the
+line uses this command for what the caller asks. When a desktop service runs on
+this Mac, the service answers the message. It has the task, the engine for
+computer work and the conversation of the panel, and the command alone has none
+of them. So "click the blue Send button", said on a call, reaches the same
+place as the same words typed in the chat of the panel.
+
+How the command finds the service:
+
+1. The folder is `CLAWDTIME_DESKTOP_STATE`, a full path, when that variable is
+   set. Otherwise it is the folder `desktop` in the state folder
+   (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`). Start the desktop
+   service with `--state` on that folder, or name its folder in the variable.
+2. The command reads `desktop-service.json`, `desktop-panel.json` and
+   `owner.lock` there. Each must be a regular file of this user for its owner
+   only, in a folder for its owner only. The files must agree, the address
+   must be `http://127.0.0.1` with a port, and the process that wrote them must
+   run.
+3. It reads `GET /desktop/state` with the panel credential and waits 2 seconds
+   at most. The answer must name the same instance as the files.
+4. It sends the text once, to `POST /desktop/chat`, and prints the answer. The
+   text is cut at 2,000 characters.
+
+The command answers by itself, as it does with no service, when one of the
+steps 1 to 3 fails, and when the service has no chat (`--agents false`).
+
+After step 3 the message may be with the service. When no answer comes back
+then, within 110 seconds, the command says so and stops. It does not send the
+message again and it does not answer it by itself: two brains must not act on
+one sentence.
+
+The credential goes to the loopback address of the service and nowhere else.
+It is never printed.
+
+`clawdtime chat` with no text keeps its own conversation in the terminal, as
+before.
 
 ### Find a session
 

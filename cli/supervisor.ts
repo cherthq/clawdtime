@@ -66,6 +66,7 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { sayToDesktop } from "../connectors/agents/desktop-chat.js";
 import { openApp } from "../connectors/agents/apps.js";
 import { browse } from "../connectors/agents/browsing.js";
 import { lookAtScreen } from "../connectors/agents/eyes.js";
@@ -160,7 +161,8 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   clis [--json]                        agent commands on this Mac, with versions and use
   report [--out FILE] [--open]         the same as a slide deck
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
-  chat [TEXT]                          talk to ClawdTime in text: it answers and can act
+  chat [TEXT]                          talk to ClawdTime in text: it answers and can act. With TEXT,
+                                       the desktop service answers when it runs
   talk                                 the same by voice: you speak, it speaks back
   jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
   texts run | check                    answer your text messages on your Chert line (check sends nothing)
@@ -809,6 +811,18 @@ export async function supervisorCli(
     return;
   }
 
+  if (group === "chat" && args.length) {
+    // One message: when the desktop service runs, it answers. It has the
+    // task, the engine for computer work and the conversation of the panel,
+    // and this command has none of them. With no service, or one that does
+    // not answer its first read in two seconds, this command answers as
+    // before. A message that may be with the service is never said again
+    // here: two brains must not act on one sentence.
+    const said = await sayToDesktop(system, args.join(" "), {
+      ...(deps.request ? { request: deps.request } : {}),
+    });
+    if (said.kind !== "absent") return print(said.text);
+  }
   if (group === "chat" || group === "talk" || group === "texts") {
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();
