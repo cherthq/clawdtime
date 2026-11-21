@@ -4701,6 +4701,291 @@ describe("a request to see that points back at the conversation", () => {
   });
 });
 
+describe("the gate of typing refuses words that the message asks about, hedges or takes back", () => {
+  const two = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+  ];
+  /** One turn with a model that types `text` into deploy fix at once: what reached the session, and what the tool answered. */
+  const typing = async (words: string, text: string) => {
+    const made = mac(two());
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, sent) => {
+        typed.push([String(item.name), sent]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    const { model, seen } = scripted([
+      [call("type_into_session", { session: "deploy fix", text })],
+      "Okay.",
+    ]);
+    await new Supervisor(world, model).reply([], words, "chat");
+    const result = seen
+      .flatMap((asked) => asked.messages)
+      .filter(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "c-type_into_session",
+      )
+      .map((message) => String(message.content))
+      .at(-1);
+    return { typed, result };
+  };
+
+  it.each([
+    // The message goes on after the words, with a question, a hedge or a take-back.
+    [
+      "tell deploy fix to push the branch, or should I wait?",
+      "push the branch",
+    ],
+    ["tell deploy fix to push the branch, or should I wait", "push the branch"],
+    ["tell deploy fix to push the branch, would that help", "push the branch"],
+    ["tell deploy fix to push the branch would that help", "push the branch"],
+    ["tell deploy fix to run the tests never mind", "run the tests"],
+    ["tell deploy fix to run the tests, never mind", "run the tests"],
+    ["tell deploy fix to push, actually no", "push"],
+    ["tell deploy fix to push the branch if that is safe", "push the branch"],
+    [
+      "tell deploy fix to push the branch, is that a good idea",
+      "push the branch",
+    ],
+    ["tell deploy fix to push the branch maybe", "push the branch"],
+    ["tell deploy fix to push the branch. wait, no", "push the branch"],
+    // The words themselves end with the question or the take-back.
+    [
+      "tell deploy fix to push the branch, or should I wait?",
+      "push the branch, or should I wait",
+    ],
+    [
+      "tell deploy fix to run the tests, or should I wait",
+      "run the tests, or should I wait",
+    ],
+    [
+      "tell deploy fix to push the branch, would that help",
+      "push the branch, would that help",
+    ],
+    ["tell deploy fix to run the tests never mind", "run the tests never mind"],
+    ["tell deploy fix to push, actually no", "push, actually no"],
+    // The words name another session too.
+    [
+      "tell deploy fix to run the tests, and the docs one too",
+      "run the tests, and the docs one too",
+    ],
+    [
+      "tell deploy fix to run the tests and docs too",
+      "run the tests and docs too",
+    ],
+    // A hedge, a question or a negation before the words.
+    ["maybe tell deploy fix to push", "push"],
+    ["I wonder if you should tell deploy fix to push", "push"],
+    ["don't tell deploy fix to push", "push"],
+    ["should I tell deploy fix to push", "push"],
+    ["do you think I should tell deploy fix to push", "push"],
+    ["never tell deploy fix to push", "push"],
+    ["tell deploy fix not to push", "push"],
+    ["if the build is green tell deploy fix to push", "push"],
+    ["maybe tell deploy fix: push", "push"],
+    // A clause that is only a hedge, before the request.
+    ["maybe, tell deploy fix to push", "push"],
+    ["hmm not sure, tell deploy fix to push", "push"],
+    ["should I? tell deploy fix to push", "push"],
+    ["maybe, tell deploy fix: push the branch", "push the branch"],
+    // A clause before the request that only hedges, says no or puts off.
+    ["don't, tell deploy fix to push", "push"],
+    ["I don't think you should, tell deploy fix to push", "push"],
+    ["maybe later, tell deploy fix to push", "push"],
+    ["probably not, tell deploy fix to push", "push"],
+    ["maybe not, tell deploy fix to push", "push"],
+    ["not now, tell deploy fix to push", "push"],
+    ["no not yet, tell deploy fix to push", "push"],
+    ["do you think so? tell deploy fix to push", "push"],
+    ["wait, should I tell deploy fix to push", "push"],
+    // A time after the words puts them off.
+    ["not yet. tell deploy fix to push later", "push"],
+    ["tell deploy fix to push the branch tomorrow", "push the branch"],
+    ["don't tell deploy fix: push the branch", "push the branch"],
+    // More words after the words that hedge or take back.
+    ["tell deploy fix to push the branch i suppose", "push the branch"],
+    ["tell deploy fix to push the branch idk", "push the branch"],
+    ["tell deploy fix to push the branch, thoughts", "push the branch"],
+    ["tell deploy fix to push the branch jk", "push the branch"],
+    ["tell deploy fix to push the branch eventually", "push the branch"],
+  ])("types nothing for %j with the words %j", async (words, text) => {
+    const got = await typing(words, text);
+    expect(got.typed, `${words} / ${text}`).toEqual([]);
+    expect(got.result, `${words} / ${text}`).toContain("Type nothing");
+  });
+
+  it.each([
+    // The whole of the person's words for the session, or all but a polite word.
+    ["tell deploy fix to push the branch please", "push the branch"],
+    ["tell deploy fix to run the tests again thanks", "run the tests again"],
+    ["tell deploy fix to push the branch thx bro", "push the branch"],
+    [
+      "tell deploy fix to push the branch and wait for my go",
+      "push the branch and wait for my go",
+    ],
+    [
+      "tell deploy fix to push the branch, then tell docs the hash",
+      "push the branch",
+    ],
+    [
+      "tell deploy fix to pull main and run the tests",
+      "pull main and run the tests",
+    ],
+    [
+      "Tell deploy fix: do not delete the release branch",
+      "do not delete the release branch",
+    ],
+    // A question for the session is the words themselves.
+    [
+      "tell deploy fix to check whether the build is green",
+      "check whether the build is green",
+    ],
+    // A first part, with more plain words after it.
+    ["tell deploy fix to run the tests, and the docs one too", "run the tests"],
+    // A question for the session, in the person's own words.
+    ["tell deploy fix: why is it failing?", "why is it failing?"],
+    ["tell deploy fix: what is it doing?", "what is it doing?"],
+    ["tell deploy fix: how long will it take?", "how long will it take?"],
+    ["tell deploy fix: when can you push?", "when can you push?"],
+    ["tell deploy fix: did the tests pass?", "did the tests pass?"],
+    // Words that speak of another session, as a source or as what to wait for.
+    [
+      "tell deploy fix to copy the config from docs",
+      "copy the config from docs",
+    ],
+    ["tell deploy fix to wait for docs to finish", "wait for docs to finish"],
+    // A negation that is the words themselves.
+    ["tell deploy fix not to push", "not to push"],
+    ["tell deploy fix to never push to main", "never push to main"],
+    // A clause before the request that holds "not" or "if" for another reason.
+    ["do not wait, tell deploy fix to push now", "push now"],
+    ["never mind that, tell deploy fix to push", "push"],
+    ["don't touch docs, tell deploy fix to push", "push"],
+    ["it is not done yet, so tell deploy fix to push", "push"],
+    ["if you can, tell deploy fix to push", "push"],
+    [
+      "I'm not sure it works, tell deploy fix to run the tests",
+      "run the tests",
+    ],
+    // A correction or an agreement before the request.
+    ["no, tell deploy fix to push", "push"],
+    ["never mind, tell deploy fix to push", "push"],
+    ["sure, tell deploy fix to push", "push"],
+    ["ok so, tell deploy fix to push", "push"],
+    ["I think so, tell deploy fix to push", "push"],
+    // A hedge about another session, in another sentence.
+    ["maybe tell docs to push. tell deploy fix to push", "push"],
+    ["tell deploy fix to push, then tell deploy fix to push", "push"],
+    // Words that hold a hedge word as a part of the work.
+    [
+      "tell deploy fix to check if the build is green",
+      "check if the build is green",
+    ],
+    ["tell deploy fix to stop the server and wait", "stop the server and wait"],
+  ])("still types for %j the words %j", async (words, text) => {
+    const got = await typing(words, text);
+    expect(got.typed, `${words} / ${text}`).toEqual([["deploy fix", text]]);
+  });
+
+  it.each([
+    ["api.v2", "maybe tell api.v2 to push"],
+    ["fix, v2", "maybe, tell fix, v2 to push"],
+    ["api.v2", "don't tell api.v2 to push"],
+  ])(
+    "reads a hedge before the words past a mark in the name %j",
+    async (name, words) => {
+      const made = mac([
+        session({ name }),
+        session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      ]);
+      const typed: string[][] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        send: async (item, sent) => {
+          typed.push([String(item.name), sent]);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      const { model } = scripted([
+        [call("type_into_session", { session: name, text: "push" })],
+        "Okay.",
+      ]);
+      await new Supervisor(world, model).reply([], words, "chat");
+      expect(typed, words).toEqual([]);
+    },
+  );
+
+  it("types into a session with a mark in its name on a plain request", async () => {
+    const made = mac([session({ name: "api.v2" })]);
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, sent) => {
+        typed.push([String(item.name), sent]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    const { model } = scripted([
+      [call("type_into_session", { session: "api.v2", text: "push" })],
+      "Okay.",
+    ]);
+    await new Supervisor(world, model).reply(
+      [],
+      "do not wait, tell api.v2 to push",
+      "chat",
+    );
+    expect(typed).toEqual([["api.v2", "push"]]);
+  });
+
+  it("types into a session once when the code typed and the model then types a part again", async () => {
+    // The code types the plain form by itself. A call of the model for the
+    // same session in the same turn adds nothing.
+    const made = mac(two());
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, sent) => {
+        typed.push([String(item.name), sent]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    const { model } = scripted([
+      [call("type_into_session", { session: "deploy fix", text: "push" })],
+      "Okay.",
+    ]);
+    await new Supervisor(world, model).reply(
+      [],
+      "tell deploy fix to push the branch",
+      "chat",
+    );
+    expect(typed).toEqual([["deploy fix", "push the branch"]]);
+  });
+
+  it("still types a question for a session in the form with a colon", async () => {
+    const made = mac([session({ name: "payments tests" })]);
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, sent) => {
+        typed.push([String(item.name), sent]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    await new Supervisor(world, scripted(["Okay."]).model).reply(
+      [],
+      "tell payments tests: did the tests pass in the payments session?",
+      "chat",
+    );
+    expect(typed).toEqual([
+      ["payments tests", "did the tests pass in the payments session?"],
+    ]);
+  });
+});
+
 describe("an answer that offers words to type that the person did not say", () => {
   const board2 = () => [
     session({ name: "deploy fix" }),

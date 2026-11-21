@@ -422,6 +422,24 @@ These rules are in the code, not in the model's instructions:
 - Words with a time in them ("tell deploy fix to run the tests tomorrow",
   "... after lunch", "... in an hour") are not typed by ClawdTime by itself:
   it asks you.
+- Nothing is typed when your message hedges the request, asks about it or
+  takes it back: before the words ("maybe tell deploy fix to push", "should
+  I tell deploy fix to push", "don't tell deploy fix to push", "not yet,
+  tell deploy fix to push"), after them
+  ("... push the branch, or should I wait?", "... never mind", "... maybe"),
+  or at their end ("... push the branch, would that help"). The tool that
+  types refuses then, whatever the language model chose, and ClawdTime asks
+  you. A time after the words ("... later") puts them off, and nothing is
+  typed. A clause before the request with your own business in it does not
+  hedge it ("do not wait, tell deploy fix to push now"), and "no, tell
+  deploy fix to push" corrects ClawdTime: both are typed. A polite word
+  after the words ("please", "thanks") is nothing. A
+  question for the session is typed ("tell deploy fix: why is it failing?",
+  "tell payments tests: did the tests pass?"): only a question about you
+  ("should I", "can we") or about the words ("would that help") is one to
+  ClawdTime. Words that add another session as a second target ("..., and
+  the docs one too") are not typed as a whole; words that only speak of
+  another session ("copy the config from docs") are.
 - One message types the same words into a session once. A choice of a task
   is never typed into a session: a click on it answers the task.
 - Words that you take back at the end of the same message are not typed, and
