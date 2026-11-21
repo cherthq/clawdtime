@@ -139,6 +139,8 @@ function childEnvironment(): NodeJS.ProcessEnv {
           // Jobs and applications from the panel's chat: the coding agent, the
           // terminal, the switch for work in a service with no coding worker,
           // and the switch that turns both off.
+          // The model that reads a picture of the screen.
+          "CLAWDTIME_VISION_MODEL",
           "CLAWDTIME_JOB_AGENT",
           "CLAWDTIME_JOB_TERMINAL",
           "CLAWDTIME_SIMULATION_JOBS",
