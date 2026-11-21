@@ -5872,6 +5872,223 @@ describe("a question while jobs of the last day exist starts from their answers"
   });
 });
 
+describe("asked to stop a job: no tool does that, and ClawdTime says so itself", () => {
+  const request = "build a small landing page for my bakery in one html file";
+  // What a model answers today: it asks the task tool, which knows no job.
+  const confused = [
+    [call("cancel_task")],
+    "No task is active, so nothing was cancelled. Want me to start the landing page now?",
+  ];
+  /** The request starts a job; two minutes later the person says `words`. */
+  const then = async (
+    words: string,
+    options: {
+      finish?: boolean;
+      correction?: boolean;
+      request?: string;
+      /** One exchange between the start and the words: the message, and ClawdTime's answer. */
+      between?: [string, string];
+      /** A request of an agent waits on the desk. */
+      waits?: boolean;
+    } = {},
+  ) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    const say = async (model: ModelClient, sentence: string) => {
+      const at = made.clock.now;
+      const reply = await new Supervisor(made.world, model).reply(
+        [...history],
+        sentence,
+        "chat",
+      );
+      history.push(
+        { ...said("user", sentence), at },
+        { ...said("assistant", reply), at },
+      );
+      return reply;
+    };
+    expect(await say(wantsJob().model, options.request ?? request)).toBe(
+      started,
+    );
+    made.clock.now += 2 * 60_000;
+    if (options.correction) {
+      await say(wantsJob().model, "wait no, it's a cafe not a bakery");
+      made.clock.now += 60_000;
+    }
+    if (options.finish)
+      writeFileSync(
+        join(made.folder, made.ids().at(-1)!, "result.md"),
+        "The page is at /work/app/bakery.html.\n",
+      );
+    if (options.between)
+      await say(scripted([options.between[1]]).model, options.between[0]);
+    if (options.waits) waits(made.world);
+    const run = scripted(confused);
+    const answer = await say(run.model, words);
+    return { answer, asked: run.seen.length, jobs: made.ids().length };
+  };
+  const cannot = `I cannot stop a job: no tool does that. "${request}" has run 2 minutes in its own terminal window. To stop it, close that window. It then writes no answer, so I still list it as working for up to a day.`;
+
+  it.each([
+    "actually cancel that",
+    "cancel that",
+    "stop it",
+    "cancel",
+    "stop that job",
+    "cancel the job please",
+    "kill the bakery job",
+    "ok cancel it",
+    "never mind, cancel that",
+    "can you stop that?",
+    "pls stop it now",
+    "abort that",
+    "cancel the landing page one",
+    "Um, cancel that one.",
+    "stop the build",
+    // The same instruction with a wish before it or a courtesy after it.
+    "I want to cancel that",
+    "let's cancel that",
+    "can we cancel it",
+    "cancel it, thanks",
+    "cancel that please, I changed my mind",
+  ])("answers %j with what is true, and asks no model", async (words) => {
+    const got = await then(words);
+    expect(got.answer, words).toBe(cannot);
+    expect(got.asked, words).toBe(0);
+    // Nothing starts, and nothing is typed.
+    expect(got.jobs, words).toBe(1);
+  });
+
+  it("names each job that is not done when there are several", async () => {
+    const got = await then("cancel that", { correction: true });
+    expect(got.answer).toBe(
+      `I cannot stop a job: no tool does that. Each job runs in its own terminal window: to stop one, close its window. It then writes no answer, so I still list it for up to a day. Not done: "${request}" (works, 3 minutes), "wait no, it's a cafe not a bakery" (waits for the job before it).`,
+    );
+    expect(got.asked).toBe(0);
+  });
+
+  it.each([
+    // No instruction to stop a job: the model answers, as before.
+    "should I cancel that?",
+    "don't cancel that",
+    "cancel my newsletter subscription",
+    "stop the tests in deploy fix",
+    "stop the docs one",
+    "what happens if I cancel it?",
+    "cancel that and build a page for my cafe instead",
+    "cancel the task",
+    "quit the browser",
+    "stop the music",
+  ])("leaves %j to the model", async (words) => {
+    const got = await then(words);
+    expect(got.answer, words).not.toContain("I cannot stop a job");
+  });
+
+  it("leaves it to the model when no job is at work", async () => {
+    const got = await then("cancel that", { finish: true });
+    expect(got.answer).not.toContain("I cannot stop a job");
+    expect(got.asked).toBeGreaterThan(0);
+  });
+
+  it.each(["cancel it", "cancel that", "stop it", "cancel that one", "cancel"])(
+    "leaves %j alone while a request of an agent waits: it can mean that request",
+    async (words) => {
+      const got = await then(words, { waits: true });
+      expect(got.answer, words).not.toContain("I cannot stop a job");
+    },
+  );
+
+  it("still answers itself for the job by name while a request waits", async () => {
+    const got = await then("cancel the bakery job", { waits: true });
+    expect(got.answer).toBe(cannot);
+  });
+
+  it.each([
+    // ClawdTime's last message was about a session, not about a job.
+    [
+      "kill it",
+      [
+        "what did deploy fix do?",
+        "deploy fix finished the deploy, and all tests pass.",
+      ],
+    ],
+    ["stop it", ["what did you type?", "Typed into deploy fix: run the tests"]],
+    [
+      "never mind, stop",
+      ["show me that one", "Which one: deploy fix or docs?"],
+    ],
+    // A message that names a session, also when it holds a word of the job's request or "still works".
+    ["stop it", ["what does docs have?", "docs has a page of notes."]],
+    [
+      "stop it",
+      ["what is deploy fix doing?", "deploy fix still works on the tests."],
+    ],
+    ["stop it", ["what does docs write?", "docs writes the bakery menu."]],
+  ] as [string, [string, string]][])(
+    "leaves a word that only points to the model after talk about a session: %j",
+    async (words, between) => {
+      const got = await then(words, { between });
+      expect(got.answer, words).not.toContain("I cannot stop a job");
+    },
+  );
+
+  it("still answers itself after talk about the job", async () => {
+    const got = await then("ok stop it", {
+      between: ["is it done?", "Not yet: the bakery page still works."],
+    });
+    expect(got.answer).toBe(cannot);
+    // Also after a message that names a session and says "job".
+    const both = await then("stop it", {
+      between: [
+        "what runs?",
+        "deploy fix runs the tests, and the bakery job still works.",
+      ],
+    });
+    expect(both.answer).toBe(cannot);
+    // "Anyway" after the thing changes nothing.
+    const anyway = await then("ok stop it anyway");
+    expect(anyway.answer).toBe(cannot);
+  });
+
+  it("reads a short word of a request as no name of the job", async () => {
+    // "app" has three letters: "quit the app" is about an application.
+    const got = await then("quit the app", {
+      request: "build a small todo app in one html file",
+    });
+    expect(got.answer).not.toContain("I cannot stop a job");
+  });
+
+  it("takes a cancel after its own yes or no question as a no", async () => {
+    const made = mac([session({ name: "deploy fix" })]);
+    const history: ChatMessage[] = [];
+    const limit = "build a landing page for the demo, don't use React";
+    expect(await talk(made.world, wantsJob().model, history, limit)).toBe(
+      offerQuestionFor(limit),
+    );
+    // "The job" there is the offered job.
+    for (const words of [
+      "cancel that",
+      "cancel it",
+      "stop that",
+      "cancel the job",
+      "cancel that job please",
+    ]) {
+      expect(
+        await new Supervisor(made.world, scripted(confused).model).reply(
+          [...history],
+          words,
+          "chat",
+        ),
+        words,
+      ).toBe("Okay. Nothing started.");
+    }
+    expect(made.ids()).toHaveLength(0);
+  });
+});
+
 describe("an offer to cancel a job that still works is not said", () => {
   const request = "build a small landing page for my bakery in one html file";
   const correction = "wait no, it's a cafe not a bakery";
@@ -6024,10 +6241,20 @@ describe("an offer to cancel a job that still works is not said", () => {
     const { say } = await twoJobs();
     const answer = await say(
       scripted([draft, draft]).model,
-      "can you stop the bakery job?",
+      "is the bakery page ready, or should it be stopped?",
     );
     expect(answer, draft).toContain("still works: 3 minutes so far.");
     expect(answer, draft).not.toMatch(/^(?:sure|yes|okay|of course)/i);
+  });
+
+  it("answers a plain request to stop the job itself, before any model", async () => {
+    // "Can you stop the bakery job?": the code says that it cannot, so no yes of a model is said.
+    const { say } = await twoJobs();
+    const run = scripted(["Sure. I'll stop the bakery job now."]);
+    expect(await say(run.model, "can you stop the bakery job?")).toBe(
+      `I cannot stop a job: no tool does that. Each job runs in its own terminal window: to stop one, close its window. It then writes no answer, so I still list it for up to a day. Not done: "${request}" (works, 3 minutes), "${correction}" (waits for the job before it).`,
+    );
+    expect(run.seen).toHaveLength(0);
   });
 
   it("drops such an offer also on a turn where only the job list was read", async () => {
