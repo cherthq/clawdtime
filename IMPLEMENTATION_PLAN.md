@@ -1,5 +1,17 @@
 # ClawdTime: approved implementation and migration plan
 
+## App and desktop navigation — November 21, 2026
+
+Retain named app/window activation and adjacent desktop switching; add explicit
+previous-app switching and full-screen destination verification. Interpret
+navigation dynamically from the original human request through structured model
+output, replacing the fixed directional phrase grammar. Keep one-shot execution,
+Stop, fresh observations, unknown-outcome protection and shared-video zoom
+transitions. Add per-Mac navigation readiness to setup. The complete approved
+implementation and test plan is [App and desktop navigation](docs/APP_DESKTOP_NAVIGATION_PLAN.md).
+Work on the integration branch, run the checks and open a PR before physical
+acceptance; this does not authorize a merge or live installation replacement.
+
 ## Direct local task execution — November 20, 2026
 
 The operator requested removal of redundant task-start and local computer-action

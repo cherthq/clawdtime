@@ -10,6 +10,8 @@ public struct DesktopHotKey: Equatable, Sendable {
 }
 public enum DesktopShortcuts {
   public static func permits(_ combo: KeyCombo, resolvedCode: UInt16, configured: [DesktopHotKey]?) -> Bool {
+    // App switching has its own single-dispatch transition command.
+    if resolvedCode == 48 && combo.flags & KeyCombo.command != 0 { return false }
     if combo.flags & KeyCombo.control != 0,
       [123, 124].contains(combo.keyCode) || combo.character.map({ "0123456789".contains($0) }) == true { return false }
     // Without a trustworthy inventory, plain editing keys remain available;

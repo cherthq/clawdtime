@@ -300,105 +300,132 @@ describe("the brain opens an application", () => {
   });
 
   it.each([
-    ["Switch to the desktop on the left", "chat"],
-    ["Move one desktop right", "voice"],
-    ["Go back to the previous desktop", "call"],
+    [
+      "Could you slide us to the neighboring workspace on the left?",
+      "chat",
+      { kind: "desktop", direction: "left" },
+    ],
+    [
+      "Take me back to the app I was using before",
+      "voice",
+      { kind: "previous_app" },
+    ],
+    [
+      "Messages is what I want in front now",
+      "call",
+      { kind: "app", name: "Messages" },
+    ],
   ] as const)(
-    "routes %s directly to native hands on %s",
-    async (words, via) => {
+    "routes dynamically interpreted %s on %s",
+    async (words, via, intent) => {
       const f = withExecution();
-      const run = scripted([
-        [call("open_app", { name: "TextEdit" })],
-        "Opened.",
-      ]);
+      const run = scripted(["Must not reach general model"]);
+      const goals: string[] = [];
+      run.model.navigation = async (goal) => {
+        goals.push(goal);
+        return intent;
+      };
       const said = await new Supervisor(f.value, run.model).reply(
         [],
         words,
         via,
       );
-      expect(f.submitted.map((item) => item.text)).toEqual([words]);
+      expect(f.submitted.map((x) => x.text)).toEqual([words]);
+      expect(goals).toEqual([words]);
       expect(f.opened).toEqual([]);
       expect(f.started).toEqual([]);
       expect(run.offered).toEqual([]);
       expect(said).toBe(f.message);
     },
   );
-
-  it("preserves the original directional request without normalizing it into another command", async () => {
+  it("preserves the original user message for independent worker interpretation", async () => {
     const f = withExecution();
-    const words = "  Switch to the desktop on the left  ";
-    await new Supervisor(f.value, null).reply([], words, "call");
-    expect(f.submitted.map((item) => item.text)).toEqual([words]);
-    expect(f.opened).toEqual([]);
-    expect(f.started).toEqual([]);
+    const words = "  Bring my last-used application back  ";
+    const run = scripted([]);
+    run.model.navigation = async () => ({ kind: "previous_app" });
+    await new Supervisor(f.value, run.model).reply([], words, "call");
+    expect(f.submitted.map((x) => x.text)).toEqual([words]);
   });
-
   it.each(["running", "uncertain"])(
-    "returns the native %s fence without another route for a directional request",
+    "preserves the native %s fence",
     async (state) => {
       const f = withExecution(state);
-      const run = scripted([
-        [call("open_app", { name: "TextEdit" })],
-        "Opened.",
-      ]);
-      const words = "Move one desktop right";
+      const run = scripted([]);
+      run.model.navigation = async () => ({
+        kind: "desktop",
+        direction: "right",
+      });
       expect(
-        await new Supervisor(f.value, run.model).reply([], words, "call"),
+        await new Supervisor(f.value, run.model).reply(
+          [],
+          "Shift our workspace rightward",
+          "call",
+        ),
       ).toBe(f.message);
-      expect(f.submitted.map((item) => item.text)).toEqual([words]);
+      expect(f.submitted).toHaveLength(1);
       expect(f.opened).toEqual([]);
-      expect(f.started).toEqual([]);
-      expect(run.offered).toEqual([]);
     },
   );
-
-  it.each([
-    { nativeWorker: false },
-    { mode: "browser" as const },
-    { configured: false },
-  ])(
-    "refuses unsupported directional execution instead of falling back %#",
+  it.each([{ nativeWorker: false }])(
+    "refuses non-native semantic navigation %#",
     async (options) => {
       const f = withExecution("idle", options);
-      const run = scripted([
-        [call("open_app", { name: "TextEdit" })],
-        "Opened.",
-      ]);
-      const said = await new Supervisor(f.value, run.model).reply(
-        [],
-        "Go back to the previous desktop",
-        "call",
-      );
-      expect(said).toBe(
-        "Desktop switching needs the native ClawdTime computer worker. Nothing was switched.",
-      );
+      const run = scripted([]);
+      run.model.navigation = async () => ({
+        kind: "desktop",
+        direction: "previous",
+      });
+      expect(
+        await new Supervisor(f.value, run.model).reply(
+          [],
+          "Return to the workspace before this one",
+          "call",
+        ),
+      ).toContain("needs the native");
       expect(f.submitted).toEqual([]);
       expect(f.opened).toEqual([]);
-      expect(f.started).toEqual([]);
-      expect(run.offered).toEqual([]);
     },
   );
-
-  it("does not retry or fall back when directional task delivery throws", async () => {
+  it("does not retry unknown semantic navigation delivery", async () => {
     const f = withExecution();
     const submitted: string[] = [];
     f.value.execution!.submit = async (_id, text) => {
       submitted.push(text);
-      throw new Error("Result unavailable after delivery");
+      throw Error("unknown");
     };
-    const run = scripted([[call("open_app", { name: "TextEdit" })], "Opened."]);
-    const words = "Move one desktop right";
+    const run = scripted([]);
+    run.model.navigation = async () => ({ kind: "previous_app" });
     expect(
-      await new Supervisor(f.value, run.model).reply([], words, "call"),
-    ).toBe(
-      "Computer task delivery is uncertain. It was not retried; check execution status.",
-    );
-    expect(submitted).toEqual([words]);
+      await new Supervisor(f.value, run.model).reply(
+        [],
+        "Return to my last app",
+        "call",
+      ),
+    ).toContain("uncertain");
+    expect(submitted).toEqual(["Return to my last app"]);
     expect(f.opened).toEqual([]);
-    expect(f.started).toEqual([]);
-    expect(run.offered).toEqual([]);
   });
-
+  it("does not dispatch a navigation interpretation completed after Stop", async () => {
+    const f = withExecution();
+    const run = scripted([]);
+    let finish!: (
+      v: import("../connectors/computer/navigation.js").NavigationIntent,
+    ) => void;
+    run.model.navigation = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const supervisor = new Supervisor(f.value, run.model);
+    const pending = supervisor.reply(
+      [],
+      "Take me to the neighboring workspace",
+      "chat",
+    );
+    await supervisor.reply([], "stop", "chat");
+    finish({ kind: "desktop", direction: "right" });
+    await pending;
+    expect(f.submitted).toEqual([]);
+  });
   it("does not start a directional command while the native worker waits for a person's answer", async () => {
     const f = withExecution("waiting_for_person");
     const answered: string[] = [];
@@ -426,6 +453,7 @@ describe("the brain opens an application", () => {
     ]) {
       const f = withExecution();
       const run = scripted(["Nothing was switched."]);
+      run.model.navigation = async () => ({ kind: "none" });
       await new Supervisor(f.value, run.model).reply([], words, "chat");
       expect(f.submitted).toEqual([]);
       expect(f.opened).toEqual([]);

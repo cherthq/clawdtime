@@ -269,6 +269,27 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     return .success(())
   }
 
+  /// A dedicated one-shot app switch, never a generic-key escape from navigation
+  /// verification. Releasing Tab and Command completes the selection.
+  func dispatchPreviousApp(allowed: () async -> HandError?) async -> Result<Void, HandError> {
+    guard let down = CGEvent(keyboardEventSource: source, virtualKey: 48, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: 48, keyDown: false),
+      let release = CGEvent(keyboardEventSource: source, virtualKey: 55, keyDown: false) else { return .failure(.failed) }
+    if let refusal = await allowed() { return .failure(refusal) }
+    guard !halted, !Task.isCancelled else { return .failure(.stoppedByPerson) }
+    guard watching, !personActed else { return .failure(.refused) }
+    guard AXIsProcessTrusted() else { return .failure(.noAccessibility) }
+    guard CGPreflightScreenCaptureAccess() else { return .failure(.noScreenRecording) }
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+      session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
+    post(down, flags: .maskCommand)
+    // Once down was submitted, always release both keys, including on Stop.
+    await pause(0.02)
+    post(up, flags: .maskCommand)
+    post(release, flags: [])
+    return .success(())
+  }
+
   /// The key that prints `character` with no modifier on the keyboard layout in use.
   private static func keyCode(printing character: String) -> UInt16? {
     guard let layout = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),

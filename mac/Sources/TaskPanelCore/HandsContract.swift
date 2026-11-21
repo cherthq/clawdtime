@@ -108,6 +108,7 @@ public enum HandCommand: Equatable, Sendable {
   case key(combo: String)
   case openApp(name: String, window: String? = nil)
   case switchDesktop(direction: DesktopDirection)
+  case switchPreviousApp
   case openURL(url: String)
   case wait(ms: Int)
 
@@ -123,6 +124,7 @@ public enum HandCommand: Equatable, Sendable {
     case .key: return "key"
     case .openApp: return "open_app"
     case .switchDesktop: return "switch_desktop"
+    case .switchPreviousApp: return "switch_previous_app"
     case .openURL: return "open_url"
     case .wait: return "wait"
     }
@@ -151,7 +153,7 @@ public enum HandCommand: Equatable, Sendable {
   public var needsAccessibility: Bool {
     switch self {
     case .observe(_, let elements): return elements
-    case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop: return true
+    case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop, .switchPreviousApp: return true
     case .openURL, .wait: return false
     }
   }
@@ -160,6 +162,7 @@ public enum HandCommand: Equatable, Sendable {
     if case .observe(let image, _) = self { return image }
     if case .openApp = self { return true }
     if case .switchDesktop = self { return true }
+    if case .switchPreviousApp = self { return true }
     return false
   }
   /// The right that the command needs and macOS has not given. With one missing, nothing runs.
@@ -217,6 +220,9 @@ extension HandCommand: Codable {
       let window = try box.decodeIfPresent(String.self, forKey: .window)
       guard window.map({ HandsTarget.windowTitle($0) != nil }) ?? true else { throw PanelFailure.response }
       self = .openApp(name: try string(.name, 120), window: window)
+    case "switch_previous_app":
+      try only()
+      self = .switchPreviousApp
     case "switch_desktop":
       try only(.direction)
       self = .switchDesktop(direction: try box.decode(DesktopDirection.self, forKey: .direction))
@@ -255,6 +261,7 @@ extension HandCommand: Codable {
     case .openApp(let name, let window):
       try box.encode(name, forKey: .name); try box.encodeIfPresent(window, forKey: .window)
     case .switchDesktop(let direction): try box.encode(direction, forKey: .direction)
+    case .switchPreviousApp: break
     case .openURL(let url): try box.encode(url, forKey: .url)
     case .wait(let ms): try box.encode(ms, forKey: .ms)
     }

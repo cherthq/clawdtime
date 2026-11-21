@@ -690,6 +690,10 @@ function checkScreen(
     case "key": {
       const parsed = parseCombo(action.combo);
       if (!parsed) return refuse("That is not one key with known modifiers.");
+      if (parsed.modifiers.has("cmd") && parsed.key === "tab")
+        return refuse(
+          "Application switching needs a goal-only navigation interpretation. Ask to return to the previous app, or name the app to bring forward.",
+        );
       if (
         parsed.modifiers.has("ctrl") &&
         (parsed.key === "left" ||

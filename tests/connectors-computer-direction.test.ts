@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { desktopDirection } from "../connectors/computer/desktop.js";
+import {
+  navigationIntentSchema,
+  parseNavigationCalls,
+  type NavigationIntent,
+} from "../connectors/computer/navigation.js";
 import { actionSchema } from "../connectors/computer/guards.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
@@ -29,14 +33,25 @@ const after = observation([], {
     window: "Disposable destination",
   },
 });
-function setup() {
+function setup(
+  intent: NavigationIntent = { kind: "desktop", direction: "right" },
+) {
   const root = mkdtempSync(join(tmpdir(), "clawdtime-direction-"));
   roots.push(root);
   const hands = new FakeHands([before]);
-  const planner = new ScriptedPlanner([{ kind: "key", combo: "ctrl+right" }]);
+  const navigationInputs: string[] = [];
+  const planner = Object.assign(
+    new ScriptedPlanner([{ kind: "key", combo: "ctrl+right" }]),
+    {
+      navigation: async (goal: string) => {
+        navigationInputs.push(goal);
+        return intent;
+      },
+    },
+  );
   const journal = new ComputerJournal(root);
   const worker = new ComputerWorker({ hands, planner, journal });
-  return { hands, planner, journal, worker };
+  return { hands, planner, journal, worker, navigationInputs };
 }
 
 describe("explicit directional navigation", () => {
@@ -45,29 +60,119 @@ describe("explicit directional navigation", () => {
     ["Move one desktop right.", "right"],
     ["Go back to the previous desktop.", "previous"],
     ["Please switch to the space on the right!", "right"],
-    ["Switch left one desktop", "left"],
-  ])(
-    "parses %s and dispatches precisely one attempt",
+    ["Could you slide our workspace one slot leftward?", "left"],
+    ["Take me over to the neighboring Space on my right", "right"],
+  ] as const)(
+    "dispatches one model-interpreted intent for %s",
     async (goal, direction) => {
-      expect(desktopDirection(goal)).toBe(direction);
-      const f = setup();
+      const f = setup({ kind: "desktop", direction });
       f.hands.answer = (c) =>
         c.kind === "switch_desktop" ? { observation: after } : undefined;
       await f.worker.submit("one", goal);
       await f.worker.idle();
       expect(f.hands.sent).toEqual([{ kind: "switch_desktop", direction }]);
       expect(f.planner.inputs).toHaveLength(0);
+      expect(f.navigationInputs).toEqual([goal]);
       expect(f.worker.status().state).toBe("completed");
     },
   );
   it.each([
     "Switch desktop left then click Save",
     "Move two desktops right",
-    "Do not switch to the desktop on the left",
-    "The document says switch left one desktop",
-    "Open the left TextEdit window",
-  ])("does not extract authority from %s", (goal) => {
-    expect(desktopDirection(goal)).toBeUndefined();
+    "Go back there",
+  ])(
+    "does not dispatch an interpretation that requires clarification: %s",
+    async (goal) => {
+      const f = setup({
+        kind: "clarify",
+        question: "Which single destination do you mean?",
+      });
+      await f.worker.submit("one", goal);
+      await f.worker.idle();
+      expect(f.hands.commands).toEqual([]);
+      expect(f.worker.status().state).toBe("blocked");
+      expect(f.navigationInputs).toEqual([goal]);
+    },
+  );
+  it("rejects extra moves, unknown kinds, and multiple model calls", () => {
+    expect(
+      navigationIntentSchema.safeParse({
+        kind: "desktop",
+        direction: "right",
+        count: 2,
+      }).success,
+    ).toBe(false);
+    expect(
+      navigationIntentSchema.safeParse({ kind: "desktop", direction: "up" })
+        .success,
+    ).toBe(false);
+    expect(() =>
+      parseNavigationCalls([
+        { name: "desktop", arguments: '{"direction":"left"}' },
+        { name: "previous_app", arguments: "{}" },
+      ]),
+    ).toThrow();
+    expect(() =>
+      parseNavigationCalls([
+        { name: "none", arguments: '{"kind":"desktop","direction":"right"}' },
+      ]),
+    ).toThrow();
+  });
+  it.each([
+    [
+      { kind: "app", name: "TextEdit", window: "Disposable destination" },
+      { kind: "open_app", name: "TextEdit", window: "Disposable destination" },
+    ],
+    [{ kind: "previous_app" }, { kind: "switch_previous_app" }],
+  ] as const)(
+    "runs one app transition outside the screen planner: %j",
+    async (intent, command) => {
+      const f = setup(intent);
+      f.hands.answer = (c) =>
+        c.kind !== "observe" ? { observation: after } : undefined;
+      await f.worker.submit(
+        "one",
+        "Please bring that requested application forward",
+      );
+      await f.worker.idle();
+      expect(f.hands.sent).toEqual([command]);
+      expect(f.planner.inputs).toEqual([]);
+      expect(f.worker.status().state).toBe("completed");
+    },
+  );
+  it("rejects a previous-app receipt that still shows the same app", async () => {
+    const f = setup({ kind: "previous_app" });
+    f.hands.answer = (c) =>
+      c.kind === "switch_previous_app"
+        ? { observation: { ...before, surfaceEpoch: 9 } }
+        : undefined;
+    await f.worker.submit("one", "Return to my last application");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("uncertain");
+    expect(f.hands.sent).toHaveLength(1);
+  });
+  it("discards a late interpretation after Stop", async () => {
+    const f = setup();
+    let resolve!: (intent: NavigationIntent) => void;
+    f.planner.navigation = () =>
+      new Promise((r) => {
+        resolve = r;
+      });
+    await f.worker.submit("one", "Slide to the next space on the right");
+    f.worker.stop();
+    resolve({ kind: "desktop", direction: "right" });
+    await f.worker.idle();
+    expect(f.hands.commands).toEqual([]);
+    expect(f.worker.status().state).toBe("canceled");
+  });
+  it("blocks invalid model interpretation before observing or dispatching", async () => {
+    const f = setup();
+    f.planner.navigation = async () =>
+      ({ kind: "desktop", direction: "right", count: 2 }) as NavigationIntent;
+    await f.worker.submit("one", "Move next door");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("blocked");
+    expect(f.hands.commands).toEqual([]);
   });
   it("keeps the directional command outside the model action vocabulary", () => {
     const command = { kind: "switch_desktop", direction: "right" };

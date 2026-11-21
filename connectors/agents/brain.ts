@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
-import { desktopDirection } from "../computer/desktop.js";
+import {
+  navigationRules,
+  navigationTools,
+  parseNavigationCalls,
+  navigationIntentSchema,
+  type NavigationIntent,
+} from "../computer/navigation.js";
 import {
   appendFileSync,
   chmodSync,
@@ -132,10 +138,13 @@ export interface ToolSpec {
 }
 /** The language model, behind one call. Tests script it. */
 export interface ModelClient {
+  /** Interpret only the complete current user message, without screen/history data. */
+  navigation?(goal: string): Promise<NavigationIntent>;
   complete(input: {
     system: string;
     messages: ModelMessage[];
     tools: ToolSpec[];
+    requireTool?: boolean;
   }): Promise<{ text: string; toolCalls: ToolCall[] }>;
 }
 
@@ -166,10 +175,20 @@ export class OpenAIModel implements ModelClient {
       retryWaitMs?: number;
     } = {},
   ) {}
+  async navigation(goal: string): Promise<NavigationIntent> {
+    const result = await this.complete({
+      system: navigationRules,
+      messages: [{ role: "user", content: goal }],
+      tools: navigationTools,
+      requireTool: true,
+    });
+    return parseNavigationCalls(result.toolCalls);
+  }
   async complete(input: {
     system: string;
     messages: ModelMessage[];
     tools: ToolSpec[];
+    requireTool?: boolean;
   }) {
     const messages = [
       { role: "system", content: input.system },
@@ -213,6 +232,9 @@ export class OpenAIModel implements ModelClient {
           // A request with no tools carries no tool list: an empty one is refused.
           ...(input.tools.length
             ? {
+                ...(input.requireTool
+                  ? { tool_choice: "required", parallel_tool_calls: false }
+                  : {}),
                 tools: input.tools.map((tool) => ({
                   type: "function",
                   function: tool,
@@ -2255,6 +2277,8 @@ const refuse = (turn: Turn, sentence: string) => {
 };
 
 export class Supervisor {
+  private navigationGeneration = 0;
+  private navigationStops = new Set<() => void>();
   constructor(
     private readonly world: SupervisorWorld,
     private readonly model: ModelClient | null,
@@ -3908,23 +3932,28 @@ export class Supervisor {
     return done;
   }
 
-  private async delegate(turn: Turn, spoken: string): Promise<string> {
+  private async delegate(
+    turn: Turn,
+    spoken: string,
+    navigation = false,
+  ): Promise<string> {
     const execution = this.world.execution;
     if (!execution?.snapshot().configured)
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
-      desktopDirection(spoken) !== undefined ||
+      navigation ||
       contextualUiRequest(spoken) ||
       /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show|refresh|reload|press)\b/i.test(
         spoken,
       );
     if (
-      !action ||
-      asksAbout(spoken) ||
-      bareDecision.test(spoken) ||
-      asksToStart(spoken) ||
-      /\b(?:status|progress|pending requests?)\b/i.test(spoken)
+      !navigation &&
+      (!action ||
+        asksAbout(spoken) ||
+        bareDecision.test(spoken) ||
+        asksToStart(spoken) ||
+        /\b(?:status|progress|pending requests?)\b/i.test(spoken))
     )
       return "That message is not a computer action request. Nothing was delegated.";
     const previous = turn.done.get("execution");
@@ -4521,6 +4550,10 @@ export class Supervisor {
       /^(?:please\s+)?(?:stop|cancel|abort)\b/i.test(words) &&
       (this.world.execution?.snapshot().configured === true ||
         (!!liveTask && !taskIsOver(liveTask)));
+    if (stopsSomething) {
+      this.navigationGeneration++;
+      for (const stop of this.navigationStops) stop();
+    }
     // The notice that a request arrived was the last message. A yes can
     // still mean the work. Only a word for a request decides it now: every
     // other message gets the request in words again, and decides nothing.
@@ -4604,6 +4637,66 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    // Interpret navigation before coding/session heuristics, from only this message.
+    // No keyword allowlist, prior conversation, screen or model paraphrase supplies authority.
+    if (
+      this.model?.navigation &&
+      this.world.execution?.snapshot().configured &&
+      this.world.execution.snapshot().mode === "native" &&
+      !stopsSomething &&
+      !turn.closed &&
+      !taskWaits &&
+      this.world.desk.pending().length === 0 &&
+      this.world.execution.snapshot().state !== "waiting_for_person" &&
+      !this.world.execution.snapshot().pendingAction
+    ) {
+      const generation = this.navigationGeneration;
+      let navigation: NavigationIntent;
+      let timer: NodeJS.Timeout | undefined;
+      let stop!: () => void;
+      try {
+        const halted = new Promise<null>((resolve) => {
+          stop = () => resolve(null);
+          this.navigationStops.add(stop);
+          timer = setTimeout(stop, modelWaitMs);
+          timer.unref();
+        });
+        const result = await Promise.race([
+          this.model.navigation(spoken),
+          halted,
+        ]);
+        if (generation !== this.navigationGeneration)
+          return "Stopped. The pending navigation interpretation was discarded.";
+        if (result === null)
+          return "Navigation interpretation timed out. Nothing was started.";
+        navigation = navigationIntentSchema.parse(result);
+      } catch {
+        return "I could not interpret that request reliably. Nothing was started; please ask again.";
+      } finally {
+        clearTimeout(timer);
+        this.navigationStops.delete(stop);
+      }
+      // Another turn may have started work or put a question in front of the
+      // person while interpretation waited. Never consume that answer as input.
+      if (
+        this.world.desk.pending().length ||
+        this.world.execution.snapshot().pendingAction ||
+        this.world.execution.snapshot().state === "waiting_for_person"
+      )
+        return "Another request now waits for your answer. Nothing was switched.";
+      if (navigation.kind === "clarify") return navigation.question;
+      if (navigation.kind !== "none") {
+        const execution = this.world.execution;
+        const selected = execution.snapshot();
+        if (
+          !execution.answer ||
+          !selected.configured ||
+          selected.mode !== "native"
+        )
+          return "App and desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
+        return this.delegate(turn, spoken, true);
+      }
+    }
     // "Stop all my sessions": no tool stops or closes a session, so the code
     // says that, where nothing else can own the words: no request and no
     // task waits (a "stop" can answer those), the turn is open, and no
@@ -4724,18 +4817,6 @@ export class Supervisor {
           return "The computer task did not take that. Say it again.";
         }
       }
-    }
-    // Directional Space requests are literal native commands. A model must not
-    // turn one into app activation, a coding task, or the opposite direction.
-    if (desktopDirection(spoken) !== undefined) {
-      const selected = execution?.snapshot();
-      if (
-        execution?.answer &&
-        selected?.configured &&
-        selected.mode === "native"
-      )
-        return this.delegate(turn, spoken);
-      return "Desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
     }
     // Obvious UI instructions go directly to the configured app-owned engine;
     // a conversational model must not reinterpret window titles as agent names.

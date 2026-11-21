@@ -49,7 +49,6 @@ import type {
 import { HandsTimeout } from "./panel-hands.js";
 import {
   desktopBlockedText,
-  desktopDirection,
   verifiedDesktopSwitch,
   inputUnknownText,
   sameSurface,
@@ -57,6 +56,7 @@ import {
   verifiedActivation,
 } from "./desktop.js";
 import { handErrors } from "./ports.js";
+import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import type {
   Action,
   BrowserPage,
@@ -160,6 +160,7 @@ interface Question {
   settle: (reply: Reply) => void;
 }
 interface Run {
+  navigation?: NavigationIntent;
   id: string;
   /** The person's words, for the planner. */
   goal: string;
@@ -605,7 +606,11 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (command.kind !== "observe") {
       run.fresh = false;
       run.page = null;
-      if (command.kind === "open_app" || command.kind === "switch_desktop")
+      if (
+        command.kind === "open_app" ||
+        command.kind === "switch_desktop" ||
+        command.kind === "switch_previous_app"
+      )
         run.observation = null;
     }
     let result: HandResult;
@@ -628,6 +633,14 @@ export class ComputerWorker implements DesktopExecutorPort {
     } else if (
       result.error === "transition_unknown" ||
       !verifiedActivation(command, result) ||
+      (command.kind === "switch_previous_app" &&
+        result.ok &&
+        (!beforeTransition ||
+          !result.observation ||
+          result.observation.app.bundleId === beforeTransition.app.bundleId ||
+          result.observation.surfaceEpoch === undefined ||
+          beforeTransition.surfaceEpoch === undefined ||
+          result.observation.surfaceEpoch <= beforeTransition.surfaceEpoch)) ||
       (command.kind === "switch_desktop" &&
         result.ok &&
         (!beforeTransition || !verifiedDesktopSwitch(beforeTransition, result)))
@@ -667,7 +680,9 @@ export class ComputerWorker implements DesktopExecutorPort {
         result.error === "no_screen_recording")
     ) {
       const initialDesktopRead =
-        command.kind === "observe" && desktopDirection(run.goal) !== undefined;
+        command.kind === "observe" &&
+        run.navigation?.kind !== undefined &&
+        run.navigation.kind !== "none";
       this.finish(
         run,
         "blocked",
@@ -696,8 +711,35 @@ export class ComputerWorker implements DesktopExecutorPort {
 
   private async loop(run: Run) {
     try {
-      const direction = desktopDirection(run.goal);
-      if (direction) return await this.navigateDesktop(run, direction);
+      if (this.planner.navigation) {
+        try {
+          const intent = await Promise.race([
+            within(
+              this.planner.navigation(run.goal),
+              Math.max(1, run.deadline - this.now()),
+            ),
+            run.halted,
+          ]);
+          if (this.halted(run) || !intent) return;
+          run.navigation = navigationIntentSchema.parse(intent);
+        } catch {
+          return this.finish(
+            run,
+            "blocked",
+            "navigation_unavailable",
+            "I could not interpret the navigation request reliably. Nothing was sent; please ask again.",
+          );
+        }
+        if (run.navigation.kind === "clarify")
+          return this.finish(
+            run,
+            "blocked",
+            "navigation_ambiguous",
+            run.navigation.question,
+          );
+        if (run.navigation.kind !== "none")
+          return await this.navigate(run, run.navigation);
+      }
       for (;;) {
         if (this.halted(run)) return;
         if (run.step >= this.maxSteps)
@@ -780,9 +822,9 @@ export class ComputerWorker implements DesktopExecutorPort {
 
   /** A user-authored direction is a one-shot operation outside the planner loop.
    * Neither a model, a continuation, nor a failed verification can repeat it. */
-  private async navigateDesktop(
+  private async navigate(
     run: Run,
-    direction: "left" | "right" | "previous",
+    intent: Exclude<NavigationIntent, { kind: "none" | "clarify" }>,
   ) {
     const looked = await this.hand(
       run,
@@ -820,10 +862,24 @@ export class ComputerWorker implements DesktopExecutorPort {
       );
     run.observation = before;
     run.step++;
+    const command: HandCommand =
+      intent.kind === "desktop"
+        ? { kind: "switch_desktop", direction: intent.direction }
+        : intent.kind === "previous_app"
+          ? { kind: "switch_previous_app" }
+          : {
+              kind: "open_app",
+              name: intent.name,
+              ...(intent.window ? { window: intent.window } : {}),
+            };
     const handed = await this.hand(
       run,
-      { kind: "switch_desktop", direction },
-      `Switch one desktop ${direction}`,
+      command,
+      intent.kind === "desktop"
+        ? `Switch one desktop ${intent.direction}`
+        : intent.kind === "previous_app"
+          ? "Switch to the previous app"
+          : `Bring ${intent.name} forward`,
     );
     if (handed.over) return;
     if (!handed.result?.ok)
@@ -833,7 +889,12 @@ export class ComputerWorker implements DesktopExecutorPort {
         "desktop_not_sent",
         "The panel refused the desktop switch before dispatch. No retry was attempted; check permissions and shortcut setup, then ask again.",
       );
-    if (run.takeover || !verifiedDesktopSwitch(before, handed.result))
+    if (
+      run.takeover ||
+      (intent.kind === "desktop"
+        ? !verifiedDesktopSwitch(before, handed.result)
+        : !verifiedActivation(command, handed.result))
+    )
       return this.finish(
         run,
         "uncertain",
@@ -849,7 +910,11 @@ export class ComputerWorker implements DesktopExecutorPort {
       run,
       "completed",
       "desktop_switched",
-      `Verified one desktop transition ${direction}.`,
+      intent.kind === "desktop"
+        ? `Verified one desktop transition ${intent.direction}.`
+        : intent.kind === "previous_app"
+          ? "Verified the switch to the previous app."
+          : `Verified ${intent.name} is in front.`,
     );
   }
 

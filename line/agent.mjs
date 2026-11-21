@@ -38,7 +38,7 @@ import { makeEars } from "./ears.mjs";
 import { greetOnBridgeReady } from "./greet.mjs";
 import { framingName, startLayout } from "./layout.mjs";
 import { makeWords, WIDE_WORDS } from "./words.mjs";
-import { makeDesktopIntent } from "./desktop-intent.mjs";
+import { makeCallerRequestBinding } from "./desktop-intent.mjs";
 import { makePicture } from "./picture.mjs";
 import { HEIGHT, WIDTH } from "./screen.mjs";
 import { makeCallVideo } from "./call-video.mjs";
@@ -51,7 +51,7 @@ import {
 
 const instructions = `You are ClawdTime, the supervisor of the coding agents on this Mac. You are on a FaceTime video call with the person. You are an AI.
 Speak in one or two short sentences. Use plain words.
-You know nothing about the Mac by yourself. For every question or request about the Mac, its agent sessions, their status, a request that waits, an approval, a window or a job, call ask_clawdtime with the request in the caller's own words. Then say its answer. Never invent a status or a result.
+You know nothing about the Mac by yourself. For every question or request about the Mac, its agent sessions, their status, a request that waits, an approval, a window or a job, call ask_clawdtime once with the caller's complete latest utterance copied exactly. Do not summarize, translate, split, or rewrite it. The supervisor interprets natural language for named apps/windows, the previous app, and adjacent or previous desktops; there is no required navigation phrasing. Then say its answer. Never invent a status or a result.
 Never say that something cannot be done before you asked ask_clawdtime.
 When the caller asks to see something (a session, the screen, a window), call show_screen with on true, and call ask_clawdtime with the request so that the right window comes to the front. When the caller asks to hide the screen, call show_screen with on false.
 When the caller asks to zoom in on one session or window, or to see only that one, make sure the screen is shown, then call ask_clawdtime with the request: the video then shows only that window. When the caller wants the whole screen again, call call_zoom with action overview. Automatic zoom follows agent clicks and focused typing. Use call_zoom for enable, disable, overview, or resume only when the caller asks. Overview stays on until explicit resume, including later calls. Enabling the switch alone does not release overview.
@@ -122,7 +122,7 @@ const agent = defineAgent({
     let viewAt = 0;
     // The caller's own words of the last moments. They are kept in memory only, and never written down.
     const words = makeWords();
-    const desktopIntent = makeDesktopIntent();
+    const callerRequest = makeCallerRequestBinding();
     let tick = 0,
       heard = "idle",
       busy = 0,
@@ -161,7 +161,7 @@ const agent = defineAgent({
       stopGreeting?.();
       ears?.stop();
       words.stop();
-      desktopIntent.stop();
+      callerRequest.stop();
       jobs?.stop();
       video?.close();
       await quiet(() => session?.close());
@@ -256,17 +256,19 @@ const agent = defineAgent({
       llm.tool({
         name: "ask_clawdtime",
         description:
-          "Ask the ClawdTime supervisor on the Mac. Use it for status, for anything about agent sessions and their windows, to bring a session to the front, to answer or approve a request that waits, and to start a session for a job. Pass the request in the caller's own words.",
+          "Ask the ClawdTime supervisor on the Mac. Use it for status, for anything about agent sessions and their windows, to bring a session to the front, to answer or approve a request that waits, and to start a session for a job. Pass the caller's complete latest utterance exactly once, copied verbatim, including qualifiers and negations. The supervisor interprets named-app, previous-app and desktop navigation dynamically; never rewrite the request into a command.",
         parameters: z.object({
           request: z
             .string()
-            .describe("The request, in the caller's own words"),
+            .describe(
+              "The complete latest caller utterance, copied exactly without paraphrasing",
+            ),
         }),
         execute: async ({ request }) => {
           log("ask_clawdtime");
           busy++;
           try {
-            const bound = await desktopIntent.take(request);
+            const bound = await callerRequest.take(request);
             if (ended) return "The call has ended.";
             if (!bound.ok) return bound.message;
             const answer = await ask(bound.text);
@@ -347,7 +349,10 @@ const agent = defineAgent({
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) => {
       if (ended) return;
       words.add(event.transcript, event.isFinal);
-      desktopIntent.add(event.transcript, event.isFinal);
+      callerRequest.add(event.transcript, event.isFinal, {
+        itemId: event.itemId,
+        createdAt: event.createdAt,
+      });
       // Deterministic, final caller words control presentation without waiting on a model/tool.
       if (event.isFinal) {
         const action = zoomIntent(event.transcript);

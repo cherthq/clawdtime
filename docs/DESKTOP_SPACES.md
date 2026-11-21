@@ -6,16 +6,18 @@ another Space independently while these hands control the Mac.
 
 ## Directional navigation
 
-The native worker accepts these **separate, complete requests**:
+The native worker interprets **separate, complete requests** dynamically. These
+are examples, not a phrase grammar:
 
 - “Switch to the desktop on the left.”
 - “Move one desktop right.”
 - “Go back to the previous desktop.”
 
 These use `switch_desktop { direction: left | right | previous }`, separate from
-`open_app`. A strict whole-request parser routes the user's words directly;
-the model cannot emit this command. Compound requests and “move two desktops”
-are not directional authorization. Ask for one transition at a time. No target
+`open_app`. A goal-only structured model call interprets the original human
+request before screen observation. Screen/page data and the ordinary action
+planner cannot authorize desktop navigation. Ambiguous or compound directional
+requests produce a clarification; each request permits at most one transition. No target
 application is activated to approximate left/right. A successful request ends
 immediately; it never enters the planner loop or sends follow-up input.
 
@@ -26,6 +28,19 @@ Stop, disconnection, or missing history make it unavailable. Starting the panel
 or making an app-activation request does not manufacture history. Ordinary idle
 between requests preserves verified history. Ask for left or right when no
 previous destination is known.
+
+## Previous app
+
+Requests such as “take me back to the app I was just using” resolve to
+`switch_previous_app`. The native panel sends Command–Tab once and releases both
+keys, then requires a different foreground app and a stable verified visible
+window. It does not cycle through apps, infer a destination from desktop history,
+or promise that a named app is the most recently used one. Generic keyboard
+commands cannot bypass this verified path. A missing or ambiguous destination
+after dispatch remains unknown and is not retried.
+
+See [the navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md) for semantic routing,
+caller transcript binding and the combined acceptance matrix.
 
 ### Explicit prerequisite: user-configured shortcuts
 
@@ -67,7 +82,8 @@ predispatch refusal and a possibly completed transition are different outcomes.
 Ask the native worker to “switch to the TextEdit window” or “bring the TextEdit
 window named Disposable Spaces Fixture forward.” Its `open_app` action accepts
 an app name or bundle ID and an optional **exact** `window` title. App-only
-selection requires one matching ordinary window. Multiple matching apps or
+selection requires one matching standard AX window, including a positively
+verified single-display full-screen window. Multiple matching apps or
 windows block without choosing the first. A validated plain app-opening request
 handled by the supervisor also goes through this worker when it is the selected
 native engine. URL opening, terminal-session selection, and other execution
@@ -76,14 +92,16 @@ engines retain their existing routes.
 The panel selects the AX window, restores it if minimized, and requests supported
 activation/raise operations. It never selects a sibling merely because that
 window is already visible. For an absent running app it may launch the installed
-application once; a launch that does not yield a verifiable ordinary window is
+application once; a launch that does not yield a verifiable window is
 an unknown outcome, not success. An app or exact target that cannot be resolved
 before any external effect gets a definite refusal.
 
 Readiness requires the same AX window to be focused, its app to be frontmost,
 and a unique matching on-screen Quartz window to agree on owner, title and
-geometry. The selected window must be the front ordinary window and wholly on
-the main display. Repeated observations must agree for at least 600 ms, with
+geometry. The selected window must be the front verified window and wholly on
+the main display. Full-screen matching permits at most one same-app auxiliary
+top strip under narrow geometry checks and only when AX does not expose that
+strip as a window/dialog. Other overlays remain blocking. Repeated observations must agree for at least 600 ms, with
 at least three samples within five seconds. Space-generation changes reset
 settling. A fresh screenshot and accessibility observation are bracketed by
 identity checks before success is reported. A successful API call or a Space
@@ -101,7 +119,7 @@ Clearing is reconciliation, not permission to replay the original request.
 ## Freshness and interruption
 
 The previous screenshot, coordinates, and browser page are retired before
-any activation or directional switching. Observations carry a native `surfaceEpoch`; a changed or missing
+any app activation, previous-app or directional switching. Observations carry a native `surfaceEpoch`; a changed or missing
 epoch prevents the worker from adapting an old plan to a newly observed screen,
 even if the app and window titles look identical. Display size/scale changes
 also refuse old-frame actions. A successful activation returns its verified
@@ -172,24 +190,28 @@ be read, modified/function shortcuts are refused; plain editing remains
 available. This is a guard against a generic key action bypassing verification,
 not the dedicated `switch_desktop` command. Only that command can dispatch the explicitly configured directional combination. No shortcut settings are changed.
 
-Initial switching scope is distinguishable ordinary-window desktops on **one active main display**. Empty desktops or Spaces whose visible evidence is identical cannot be independently qualified by this implementation. Full-screen,
-Split View, multiple displays, off-main/partly off-screen windows, missing AX/CG
-metadata, and ambiguous duplicate windows are not qualified. Known unsupported
-configurations are refused. Stage Manager and unusual window managers also need
-separate acceptance. Do not infer coverage from a successful ordinary-desktop
-case. App activation depends on macOS and application behavior, so a documented
-API does not guarantee it can reach every cross-Space window.
+Switching supports distinguishable ordinary windows and positively verified
+full-screen app windows on **one active main display**. Full-screen acceptance
+requires `AXFullScreen` plus full-width, near-full-height geometry. Split View,
+multiple displays, off-main/partly off-screen windows, missing AX/CG evidence,
+ambiguous duplicate windows and identical destination surfaces remain unsupported.
+Stage Manager and unusual window managers need separate acceptance. This is an
+implemented verification path; physical full-screen acceptance is still pending.
+App activation also depends on macOS settings and application behavior.
 
-The defensive `AXFullScreen` attribute read and full-display geometry check
-are not a portable public Space classifier. They reject known full-screen
-surfaces; they do not qualify every full-screen/Split View implementation.
+The access menu's navigation setup reports permissions, configured/enabled
+left/right shortcuts and the saved Mission Control app-to-Space preference.
+An unreadable preference is explicitly unknown; the application never changes
+these settings. Confirm “When switching to an application, switch to a Space with
+open windows for the application” in System Settings when named-app activation
+cannot reach the intended window.
 
 Set `CLAWDTIME_DESKTOP_SWITCHING=off` in the **panel's** launch environment to
 disable activation independently of video zoom. The default is enabled only
 inside the already opted-in native computer engine. This variable does not
 enable computer use, start a service, or change the installed environment. Input
 freshness/Stop checks remain active when desktop activation is disabled. The
-single-display, standard-window, and non-full-screen qualification checks apply
+single-display and independently verified window checks apply
 to transitions, not unrelated input. Existing input can still use a fresh
 visible main-display window on multi-display or full-screen configurations;
 that does not qualify Space switching in those configurations.
@@ -266,8 +288,8 @@ Final automated results for the directional extension (November 21, 2026):
 - `swift build --package-path mac --product ClawdTimeTaskPanel`: passed.
 - `node --check line/agent.mjs` and `git diff --check`: passed.
 
-Tests
-cover whole-request direction parsing, model-command exclusion, one dispatch,
+These historical tests
+covered whole-request direction parsing (now replaced by goal-only model interpretation), model-command exclusion, one dispatch,
 repeat requests with fresh observation, refusal/unknown classification,
 Stop/takeover, missing/stale evidence, receipt non-replay and capture expiry.
 Swift tests exercise native direction/history, settling and shortcut validation.
@@ -279,7 +301,7 @@ install `media/requirements.txt` before rerunning; do not borrow installed runti
 state. Run `npm run check`, `cd mac && swift test`, and
 `swift build --product ClawdTimeTaskPanel`. Builds do not launch or install.
 
-**Physical acceptance has not been performed.** The coordinating chat was
+**Historical PR #51 acceptance status:** the coordinating chat was
 asked for the explicit exclusive test arrangement after implementation and
 checks; it confirmed no exclusive Mac-control handoff has been granted. No
 Mac control, capture, app activation, live install/service change, or phone use
@@ -325,8 +347,9 @@ The tester verifies arrival and a harmless unsent edit, then exercises:
     transition when integrated with PR #53, and cannot reuse the old zoom target.
     Pause disposable capture delivery to verify the old picture disappears after
     500 ms; resume and verify a fresh destination view. No outgoing call is a test.
-11. Full-screen, Split View, and multi-display refusal as separate cases. Successful
-    ordinary-window tests do not qualify these configurations.
+11. Verify ordinary-to-full-screen and full-screen-to-ordinary transitions, named
+    full-screen app activation, and previous-app switching. Confirm Split View and
+    multi-display refusal separately. Reconcile any unknown result before new work.
 
 Record app/OS/build identities, independently observed target/geometry, result
 classification, and whether the harmless edit landed correctly; retain no screen
@@ -338,6 +361,9 @@ changes the desktop order; left/right means current adjacent order, not creation
 order or a numbered desktop. Turn it off manually for reproducible two-desktop
 acceptance. The app-switching setting affects target activation, not the
 operator's explicit directional shortcut. **Displays have separate Spaces**,
-Stage Manager, full-screen and Split View require separate qualification; this
-PR neither changes them nor claims they work. Record all settings in the
+Stage Manager and Split View require separate qualification. Full-screen support
+is implemented but awaits physical acceptance; settings are never changed. Record all settings in the
 acceptance evidence, plus actual shortcut mappings and the display capture source.
+
+Current integration changes, checks and physical observations are recorded in
+[SPACES_ZOOM_INTEGRATION.md](SPACES_ZOOM_INTEGRATION.md).

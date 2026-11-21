@@ -24,13 +24,66 @@ public struct DesktopSwitchHistory<Surface: Equatable> {
   }
 }
 
-/// A generic input lease may describe a full-screen or partially visible main-
-/// display window on a multi-display setup. Desktop switching is narrower.
+/// Full-screen acceptance requires affirmative AX evidence and a window that
+/// spans the sole display, allowing only the system menu/notch inset at its top.
+/// A half-screen Split View window or an inferred full-screen frame is insufficient.
 public enum DesktopSurfaceScope {
+  public static func fullScreenGeometry(window: CGRect, display: CGRect) -> Bool {
+    display.contains(window) && abs(window.minX - display.minX) <= 1 && abs(window.maxX - display.maxX) <= 1 &&
+      abs(window.maxY - display.maxY) <= 1 && window.minY - display.minY <= 80 && window.height >= display.height * 0.85
+  }
   public static func permits(window: CGRect, display: CGRect, ordinary: Bool, fullScreen: Bool,
-                             activeDisplays: Int, transition: Bool) -> Bool {
+                             activeDisplays: Int, transition: Bool, fullScreenConfirmed: Bool = false) -> Bool {
     guard !window.isNull, !window.isEmpty, !window.intersection(display).isEmpty else { return false }
-    return !transition || (activeDisplays == 1 && ordinary && !fullScreen && display.contains(window))
+    guard transition else { return true }
+    guard activeDisplays == 1, ordinary, display.contains(window) else { return false }
+    return !fullScreen || (fullScreenConfirmed && fullScreenGeometry(window: window, display: display))
+  }
+}
+
+/// Metadata only: a Quartz row has no screen pixels or window contents.
+public struct DesktopWindowEvidence {
+  public let id: Int, pid: Int
+  public let title: String?
+  public let frame: CGRect
+  public init(id: Int, pid: Int, title: String?, frame: CGRect) {
+    self.id = id; self.pid = pid; self.title = title; self.frame = frame
+  }
+}
+public enum DesktopWindowVisibility {
+  private static func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
+    abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1 && abs(a.width - b.width) <= 1 && abs(a.height - b.height) <= 1
+  }
+  /// Match exactly one focused AX window to visible Quartz metadata. At most one
+  /// same-app full-width auxiliary top strip may precede it, and only when AX
+  /// confirms full screen and does not expose the strip as a real window/dialog.
+  public static func focusedWindowID(pid: Int, title: String, frame: CGRect, fullScreenConfirmed: Bool,
+                                     display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?) -> Int? {
+    let matches = visible.indices.filter { visible[$0].pid == pid && visible[$0].title == title && sameFrame(visible[$0].frame, frame) }
+    guard matches.count == 1, let index = matches.first else { return nil }
+    if index == 0 { return visible[index].id }
+    guard index == 1, fullScreenConfirmed, DesktopSurfaceScope.fullScreenGeometry(window: frame, display: display),
+      let accessibleFrames else { return nil }
+    let strip = visible[0]
+    guard strip.pid == pid, strip.id != visible[index].id,
+      abs(strip.frame.minX - frame.minX) <= 1, abs(strip.frame.width - frame.width) <= 1,
+      abs(strip.frame.minY - frame.minY) <= 1, strip.frame.height > 0, strip.frame.height <= 80,
+      strip.frame.height <= frame.height * 0.12, frame.contains(strip.frame),
+      !accessibleFrames.contains(where: { sameFrame($0, strip.frame) }) else { return nil }
+    return visible[index].id
+  }
+}
+
+/// App switching can stay within a Space or enter another. A changed PID and
+/// stable independently observed window are required; desktop history is separate.
+public struct AppSwitchSettlement<Surface: Equatable> {
+  private let originPID: Int
+  private var settlement: DesktopSettlement<Surface>
+  private var lastEpoch: Int?
+  public init(originPID: Int, at: TimeInterval) { self.originPID = originPID; settlement = .init(at: at) }
+  public mutating func sample(_ surface: Surface?, pid: Int?, epoch: Int, at: TimeInterval) -> DesktopSettlement<Surface>.Decision {
+    if lastEpoch != epoch { _ = settlement.sample(nil, at: at); lastEpoch = epoch }
+    return settlement.sample(pid != nil && pid != originPID ? surface : nil, at: at)
   }
 }
 

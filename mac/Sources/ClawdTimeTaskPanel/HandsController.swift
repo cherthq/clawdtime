@@ -310,6 +310,12 @@ import TaskPanelCore
       if let refusal = await lastCheck() { return .failure(refusal) }
       return await desktop.activate(url: app, windowTitle: window, allowed: { [self] in await lastCheck() },
         observer: observer, pointer: { [self] in input.pointer })
+    case .switchPreviousApp:
+      defer { guide.rest() }
+      await say(label)
+      if let refusal = await lastCheck() { return .failure(refusal) }
+      return await desktop.switchPreviousApp(send: { [self] gate in await input.dispatchPreviousApp(allowed: gate) },
+        allowed: { [self] in await lastCheck() }, observer: observer, pointer: { [self] in input.pointer })
     case .switchDesktop(let direction):
       defer { guide.rest() }
       await say(label)
@@ -525,7 +531,7 @@ import TaskPanelCore
 
   /// The one menu item for the two rights. A click asks macOS for both; its second line shows each.
   func menuItem() -> NSMenuItem {
-    let item = NSMenuItem(title: "Computer use: grant access", action: #selector(grantAccess), keyEquivalent: "")
+    let item = NSMenuItem(title: "Computer use: access and navigation setup", action: #selector(grantAccess), keyEquivalent: "")
     item.target = self
     item.toolTip = "ClawdTime needs both to act on this Mac when you ask it to. After you allow screen recording, macOS may ask you to start ClawdTime again."
     menuItems.add(item)
@@ -541,7 +547,7 @@ import TaskPanelCore
     }
     let accessibility = rights?.accessibility == true, screenRecording = rights?.screenRecording == true
     let state = "Accessibility: \(accessibility ? "granted" : "not granted") · Screen recording: \(screenRecording ? "granted" : "not granted")"
-    if #available(macOS 14.4, *) { item.subtitle = state } else { item.title = "Computer use: grant access (" + state + ")" }
+    if #available(macOS 14.4, *) { item.subtitle = state } else { item.title = "Computer use: access and navigation setup (" + state + ")" }
     item.state = accessibility && screenRecording ? .on : .off
   }
   /// The person clicked the menu item. Only here may macOS show its prompts.
@@ -562,5 +568,32 @@ import TaskPanelCore
     }
     rights = nil
     refreshMenu()
+    if AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() { navigationSetup() }
+  }
+  /// A person opens this setup summary. Reading settings never changes them and
+  /// missing preference data is displayed as unknown, not a guessed default.
+  private func navigationSetup() {
+    let environment = ProcessInfo.processInfo.environment
+    let left = environment["CLAWDTIME_SPACE_LEFT_SHORTCUT"].flatMap { KeyCombo.parse($0) == nil ? nil : $0 }
+    let right = environment["CLAWDTIME_SPACE_RIGHT_SHORTCUT"].flatMap { KeyCombo.parse($0) == nil ? nil : $0 }
+    let shortcuts: String
+    if let left, let right, input.desktopShortcuts() != nil {
+      shortcuts = "Left: \(left) · Right: \(right). Both combinations are enabled. Confirm they are assigned to Move left/right a space in Keyboard → Keyboard Shortcuts → Mission Control."
+    } else {
+      shortcuts = "Desktop shortcuts are not ready. Enable Move left/right a space in Keyboard → Keyboard Shortcuts → Mission Control, then configure ClawdTime with those exact combinations and relaunch it."
+    }
+    let setting = CFPreferencesCopyAppValue("workspaces-auto-swoosh" as CFString, "com.apple.dock" as CFString)
+    let appSpaces: String
+    if let setting, CFGetTypeID(setting) == CFBooleanGetTypeID() {
+      appSpaces = (setting as! Bool) ? "The saved app-to-Space setting is enabled." : "The saved app-to-Space setting is disabled; activating an app may leave its window on another Space."
+    } else { appSpaces = "The app-to-Space setting could not be confirmed." }
+    let alert = NSAlert()
+    alert.messageText = "App and desktop switching"
+    alert.informativeText = "Accessibility and Screen Recording are granted.\n\n" + shortcuts + "\n\n" + appSpaces +
+      " Check Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application.\n\nPrevious app uses Command–Tab once. Named apps use their exact application/window identity. One display is supported; full-screen windows need verifiable window evidence. Split View and multiple displays remain unsupported."
+    alert.addButton(withTitle: "Done")
+    alert.addButton(withTitle: "Open System Settings")
+    if alert.runModal() == .alertSecondButtonReturn,
+      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") { NSWorkspace.shared.open(url) }
   }
 }

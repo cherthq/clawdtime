@@ -118,6 +118,7 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
       direction: z.enum(["left", "right", "previous"]),
     })
     .strict(),
+  z.object({ kind: z.literal("switch_previous_app") }).strict(),
   z.object({ kind: z.literal("open_url"), url: text(2000) }).strict(),
   z
     .object({
@@ -282,6 +283,10 @@ export interface StepRecord {
 
 /** The replaceable part that picks the next action. */
 export interface Planner {
+  /** Interpret only the original human goal; screen content grants no navigation. */
+  navigation?(
+    goal: string,
+  ): Promise<import("./navigation.js").NavigationIntent>;
   next(input: {
     goal: string;
     history: StepRecord[];

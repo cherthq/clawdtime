@@ -15,9 +15,10 @@ import TaskPanelCore
     let map: ScreenMap
     let ordinary: Bool
     let fullScreen: Bool
+    let fullScreenConfirmed: Bool
     static func == (lhs: Self, rhs: Self) -> Bool {
       lhs.pid == rhs.pid && CFEqual(lhs.window, rhs.window) && lhs.title == rhs.title && lhs.frame == rhs.frame
-        && lhs.windowID == rhs.windowID && lhs.displayID == rhs.displayID && lhs.map == rhs.map && lhs.ordinary == rhs.ordinary && lhs.fullScreen == rhs.fullScreen
+        && lhs.windowID == rhs.windowID && lhs.displayID == rhs.displayID && lhs.map == rhs.map && lhs.ordinary == rhs.ordinary && lhs.fullScreen == rhs.fullScreen && lhs.fullScreenConfirmed == rhs.fullScreenConfirmed
     }
   }
   private struct Target: @unchecked Sendable {
@@ -88,7 +89,7 @@ import TaskPanelCore
     }.value
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, let value,
       DesktopSurfaceScope.permits(window: value.frame, display: CGDisplayBounds(display.id), ordinary: value.ordinary,
-        fullScreen: value.fullScreen, activeDisplays: singleDisplay ? 1 : 2, transition: transition) else { return nil }
+        fullScreen: value.fullScreen, activeDisplays: singleDisplay ? 1 : 2, transition: transition, fullScreenConfirmed: value.fullScreenConfirmed) else { return nil }
     return value
   }
 
@@ -142,10 +143,11 @@ import TaskPanelCore
       let bundleID = Bundle(url: url)?.bundleIdentifier else { return .failure(.refused) }
     let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
     guard running.count <= 1 else { return .failure(.ambiguousTarget) }
-    // Never switch away from a known full-screen source in this first qualification scope.
+    // If the source is full screen, require the same affirmative AX/geometry
+    // evidence as destination verification. Split View is not qualified.
     if let front = NSWorkspace.shared.frontmostApplication {
       let full = await Task.detached { DesktopAX.frontIsFullScreen(pid: front.processIdentifier) }.value
-      if full { return .failure(.unsupportedDesktop) }
+      if full, await surface(transition: true) == nil { return .failure(.unsupportedDesktop) }
     }
     var dispatched = false
     var ready = false
@@ -229,6 +231,61 @@ import TaskPanelCore
         if let error = await allowed() { return failure(error) }
         guard case .success(let seen) = captured, let current = await surface(transition: true), current == matches,
           seen.surfaceEpoch == epoch else { return failure(.staleObservation) }
+        ready = true; phase(.ready)
+        return .success(seen)
+      }
+      try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+  }
+
+  /// The OS chooses its most recently used app. We never guess that app from
+  /// our own desktop history or cycle the switcher until something looks right.
+  func switchPreviousApp(send: (() async -> HandError?) async -> Result<Void, HandError>,
+                         allowed: @escaping () async -> HandError?, observer: HandsObserver,
+                         pointer: () -> CGPoint) async -> Result<Observation?, HandError> {
+    guard enabled else { return .failure(.desktopDisabled) }
+    guard singleDisplay else { return .failure(.unsupportedDesktop) }
+    if let error = await allowed() { return .failure(error) }
+    let beforeEpoch = epoch
+    guard let origin = await surface(transition: true), beforeEpoch == epoch else { return .failure(.unsupportedDesktop) }
+    let initialEnvironment = environmentChanges, initialSpaces = spaceChanges
+    let began = now
+    var dispatched = false, ready = false
+    history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
+    defer { switching = false; if !ready { invalidate(); phase(.blocked) } }
+    func failure(_ error: HandError) -> Result<Observation?, HandError> {
+      .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
+    }
+    let dispatchEpoch = epoch
+    switch await send({ [self] in
+      if let error = await allowed() { return error }
+      guard dispatchEpoch == epoch, environmentChanges == initialEnvironment, spaceChanges == initialSpaces,
+        await surface(transition: true) == origin, dispatchEpoch == epoch else { return .staleObservation }
+      return nil
+    }) {
+    case .failure(let error): return failure(error)
+    case .success: dispatched = true
+    }
+    phase(.waiting)
+    var settling = AppSwitchSettlement<Surface>(originPID: Int(origin.pid), at: began)
+    while true {
+      if let error = await allowed() { return failure(error) }
+      guard singleDisplay, environmentChanges == initialEnvironment, spaceChanges - initialSpaces <= 1 else { return failure(.unsupportedDesktop) }
+      let sampleEpoch = epoch
+      let candidate = await surface(transition: true)
+      let stable = candidate.flatMap { value -> Surface? in
+        sampleEpoch == epoch && value.displayID == origin.displayID && value.map == origin.map ? value : nil
+      }
+      switch settling.sample(stable, pid: stable.map { Int($0.pid) }, epoch: epoch, at: now) {
+      case .expired: return failure(.targetNotVisible)
+      case .waiting: break
+      case .ready:
+        if let error = await allowed() { return failure(error) }
+        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        if let error = await allowed() { return failure(error) }
+        guard now - began < 5, environmentChanges == initialEnvironment, spaceChanges - initialSpaces <= 1,
+          case .success(let seen) = captured, let current = await surface(transition: true), current == stable,
+          current.pid != origin.pid, seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)
       }
@@ -336,9 +393,8 @@ import TaskPanelCore
       return CGRect(origin: point, size: size)
     }
     static func fullScreen(_ window: AXUIElement) -> Bool {
-      // AXFullScreen is a defensive optional observation, not a public Space
-      // classifier. Missing it does not qualify full-screen support. Full-display
-      // geometry is also excluded; physical full-screen acceptance is pending.
+      // A full-display frame without affirmative AXFullScreen remains unqualified.
+      // Explicit full-screen support also requires the sole-display geometry gate.
       (value(window, "AXFullScreen") as? Bool) == true || frame(window) == CGDisplayBounds(CGMainDisplayID())
     }
     static func frontIsFullScreen(pid: pid_t) -> Bool {
@@ -360,7 +416,10 @@ import TaskPanelCore
       guard candidates.count <= 1 else { return .failure(.ambiguousTarget) }
       guard let window = candidates.first else { return .failure(.targetNotVisible) }
       AXUIElementSetMessagingTimeout(window, 0.15)
-      guard !fullScreen(window), let bounds = frame(window), CGDisplayBounds(CGMainDisplayID()).contains(bounds) else { return .failure(.unsupportedDesktop) }
+      guard let bounds = frame(window), DesktopSurfaceScope.permits(window: bounds,
+        display: CGDisplayBounds(CGMainDisplayID()), ordinary: true, fullScreen: fullScreen(window),
+        activeDisplays: 1, transition: true, fullScreenConfirmed: (value(window, "AXFullScreen") as? Bool) == true)
+        else { return .failure(.unsupportedDesktop) }
       guard let minimized = value(window, kAXMinimizedAttribute) as? Bool,
         let title = value(window, kAXTitleAttribute) as? String else { return .failure(.targetNotVisible) }
       return .success(Target(pid: pid, window: window, title: title, minimized: minimized))
@@ -377,16 +436,30 @@ import TaskPanelCore
           let raw = row[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: raw) else { return false }
         return !CGDisplayBounds(display.id).intersection(frame).isEmpty
       }
-      func matching(_ row: [String: Any]) -> Bool {
-        guard (row[kCGWindowOwnerPID as String] as? Int) == Int(pid), (row[kCGWindowName as String] as? String) == title,
-          let raw = row[kCGWindowBounds as String] as? NSDictionary,
-          let frame = CGRect(dictionaryRepresentation: raw) else { return false }
-        return abs(frame.minX - bounds.minX) <= 1 && abs(frame.minY - bounds.minY) <= 1 && abs(frame.width - bounds.width) <= 1 && abs(frame.height - bounds.height) <= 1
+      let evidence = ordinary.compactMap { row -> DesktopWindowEvidence? in
+        guard let owner = row[kCGWindowOwnerPID as String] as? Int, let id = row[kCGWindowNumber as String] as? Int,
+          let raw = row[kCGWindowBounds as String] as? NSDictionary, let bounds = CGRect(dictionaryRepresentation: raw) else { return nil }
+        return .init(id: id, pid: owner, title: row[kCGWindowName as String] as? String, frame: bounds)
       }
-      guard let first = ordinary.first, matching(first), ordinary.filter(matching).count == 1,
-        let windowID = first[kCGWindowNumber as String] as? Int else { return nil }
+      // Dropping an incomplete leading row must not expose the window behind it.
+      guard evidence.count == ordinary.count else { return nil }
+      let confirmed = (value(focused, "AXFullScreen") as? Bool) == true
+      // Only the auxiliary-strip case needs an additional AX window inventory.
+      // Ordinary focused windows avoid extra off-Space reads and their latency.
+      var frames: [CGRect]?
+      if confirmed, evidence.first?.frame != bounds {
+        let axWindows = value(app, kAXWindowsAttribute) as? [AXUIElement]
+        frames = axWindows.flatMap { windows in
+          guard windows.count <= 32 else { return nil }
+          let frames = windows.compactMap(frame)
+          return frames.count == windows.count ? frames : nil
+        }
+      }
+      guard let windowID = DesktopWindowVisibility.focusedWindowID(pid: Int(pid), title: title, frame: bounds,
+        fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames) else { return nil }
       return Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
-        ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole, fullScreen: fullScreen(focused))
+        ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
+        fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed)
     }
   }
 }

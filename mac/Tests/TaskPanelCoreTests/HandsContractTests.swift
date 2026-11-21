@@ -40,6 +40,7 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"key","combo":"cmd+shift+4"}"#, .key(combo: "cmd+shift+4")),
       (#"{"kind":"open_app","name":"Safari"}"#, .openApp(name: "Safari")),
       (#"{"kind":"open_app","name":"TextEdit","window":"Disposable note"}"#, .openApp(name: "TextEdit", window: "Disposable note")),
+      (#"{"kind":"switch_previous_app"}"#, .switchPreviousApp),
       (#"{"kind":"switch_desktop","direction":"left"}"#, .switchDesktop(direction: .left)),
       (#"{"kind":"switch_desktop","direction":"right"}"#, .switchDesktop(direction: .right)),
       (#"{"kind":"switch_desktop","direction":"previous"}"#, .switchDesktop(direction: .previous)),
@@ -47,7 +48,7 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"wait","ms":250}"#, .wait(ms: 250)),
     ]
     XCTAssertEqual(Set(cases.map { $0.1.kind }),
-      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "open_url", "wait"])
+      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "wait"])
     for (json, expected) in cases {
       let decoded = try command(json)
       XCTAssertEqual(decoded, expected, json)
@@ -61,6 +62,8 @@ final class HandsContractTests: XCTestCase {
   func testACommandOutsideTheContractIsRefusedAndNeverRun() {
     let long = String(repeating: "a", count: 4001), wave = String(repeating: "👋", count: 2001)
     let refused = [
+      #"{"kind":"switch_previous_app","direction":"left"}"#,
+      #"{"kind":"switch_previous_app","count":2}"#,
       #"{"kind":"shell","command":"ls"}"#,
       #"{"image":true,"elements":true}"#,
       #"{"kind":"move","x":1,"y":2,"z":3}"#,
@@ -217,6 +220,8 @@ final class HandsContractTests: XCTestCase {
     for command in [HandCommand.openURL(url: "https://example.com"), .wait(ms: 5)] {
       XCTAssertNil(command.missingRight(accessibility: false, screenRecording: false), command.kind)
     }
+    XCTAssertEqual(HandCommand.switchPreviousApp.missingRight(accessibility: false, screenRecording: true), .noAccessibility)
+    XCTAssertEqual(HandCommand.switchPreviousApp.missingRight(accessibility: true, screenRecording: false), .noScreenRecording)
     XCTAssertEqual(HandCommand.openApp(name: "Safari").missingRight(accessibility: false, screenRecording: true), .noAccessibility)
     XCTAssertEqual(HandCommand.openApp(name: "Safari").missingRight(accessibility: true, screenRecording: false), .noScreenRecording)
     XCTAssertEqual(HandCommand.switchDesktop(direction: .right).missingRight(accessibility: false, screenRecording: true), .noAccessibility)
