@@ -824,6 +824,24 @@ a tunnel and get its link, find something out: all of these are jobs.
   with such a word ("actually, find the big files") starts at once, as
   before. This rule only decides the wait: your words still pass the same
   gate before anything starts.
+- A change of mind about the job that your last message started, said as
+  an instruction about the thing, is started by the code itself as a job
+  that waits: "nah make the buttons bigger instead", "change the mode
+  instead", "actually make that a cafe instead of a bakery". The list is
+  short on purpose. It must be your next message after the request; it
+  opens (after "nah", "no", "actually" and the like) with make, add,
+  change, use, fix, update, remove, rename, replace, write, build or
+  create; right after that verb it names a thing of software with "the",
+  "its", "that", "this", "these" or "those" (the buttons, that header), or
+  it holds a word that is the job's own (the bakery of a bakery page); and
+  nothing in it stops, delays or gives a time ("make it stop", "do it
+  later", "after lunch"). Everything else is read by the language model:
+  "set an alarm instead", "write a text to my mom instead" and "use a
+  serif font instead". A job that the model starts for such a message
+  waits too. A job that starts this way goes through the same gate as
+  every job, and ClawdTime says that it starts when the job before it is
+  done. The first job is not stopped: no tool does that, and ClawdTime
+  never says that a job was cancelled or changed.
 - A job that waits opens its terminal window at once and shows that it
   waits. ClawdTime says that it waits, and the state says so until it starts.
   It starts when the job before it wrote its answer, or when you press Return

@@ -5723,6 +5723,203 @@ describe("a correction to a job that still works waits for that job", () => {
     expect(got.jobs === 1 || got.waits, words).toBe(true);
   });
 
+  it.each([
+    // "Instead" at the end: this replaces what the job that runs was asked to do.
+    "nah make the buttons bigger instead",
+    "make the buttons bigger instead",
+    "no, use a serif font instead.",
+    "ok do a cafe page instead please",
+  ])("makes a replacement wait for the job that runs: %j", async (words) => {
+    const got = await then(words);
+    expect(got.jobs, words).toBe(2);
+    expect(got.waits, words).toBe(true);
+    expect(got.answer, words).toContain(waiting);
+  });
+
+  it.each([
+    "nah make the buttons bigger instead",
+    "make the buttons bigger instead",
+    "actually make that a cafe instead of a bakery",
+    // "The" thing, as an instruction right after a coding request.
+    "no, use the other form",
+    "change the mode instead",
+    "write the text of the invitation instead",
+    "update the file on my desktop instead",
+    "remove the background instead",
+    "wait, make the buttons bigger instead",
+  ])(
+    "starts the change of mind %j itself, as a job that waits, when the model would only talk",
+    async (words) => {
+      // A model that starts nothing and says what is not true. The code reads
+      // the instruction and starts it through the same gate.
+      const made = mac([
+        session({ name: "deploy fix" }),
+        session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      ]);
+      const history: ChatMessage[] = [];
+      expect(await talk(made.world, wantsJob().model, history, request)).toBe(
+        started,
+      );
+      const first = made.ids()[0]!;
+      // A later second: the id of a job holds the time of its start.
+      made.clock.now += 30_000;
+      const talks = scripted([
+        "The buttons job runs now and the first job got canceled.",
+      ]);
+      expect(
+        await talk(made.world, talks.model, history, words),
+        words,
+      ).toContain(waiting);
+      expect(made.ids(), words).toHaveLength(2);
+      expect(made.file("start.command"), words).toContain(
+        `[[ ! -e '${join(made.folder, first, "result.md")}' && `,
+      );
+      // The model was never asked.
+      expect(talks.seen, words).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    // A statement, not an instruction: the model decides, as before.
+    "wait no, it's a cafe not a bakery",
+    // Other work.
+    "actually, find the big files in my home folder",
+    // Words that the gate reads as taking work back.
+    "no wait, make it for a cafe",
+    // The opposite of work: to stop, to pause, to do it later.
+    "no, make it stop",
+    "no no make it stop",
+    "wait, make it stop",
+    "wait, put it on hold",
+    "no, set it aside",
+    "no, do it later",
+    "actually do it tomorrow",
+    "no, make the page later",
+    // No work for a coding agent: nothing of software is named.
+    "actually put it on my calendar",
+    "no, find it for me online",
+    "sorry, try it again",
+    "wait, run it again",
+    "actually, try it yourself",
+    "set an alarm instead",
+    "put some music on instead",
+    "check the weather instead",
+    "check my email instead",
+    "find a restaurant near me instead",
+    "find a cafe near me instead",
+    "make a reservation instead",
+    "make an appointment instead",
+    "write an email to the landlord instead",
+    "add it to my calendar instead",
+    "use the other card instead",
+    "no, write it down for me",
+    // A time that the person gave: not now.
+    "make the header blue after lunch instead",
+    "make the header blue when I'm back instead",
+    "make the header blue in an hour instead",
+    "make the header blue at 5 instead",
+    "no, make the header blue next week",
+    // A word for a thing of software in its everyday sense: a new thing, begun with "a".
+    "write a text to my mom instead",
+    "write a page in my diary instead",
+    "make a menu for dinner instead",
+    "write a title for my talk instead",
+    "add a link to my bio instead",
+    "make a photo collage of the images instead",
+    "make a playlist with the songs from the file instead",
+    // Software, but a new thing: the model decides, and a job that it starts still waits.
+    "no, use a serif font instead.",
+    "make a form for signups instead",
+    "sorry, make it a cafe page",
+    // "The" thing goes to a person or to a place of the person's own: no work in the project.
+    "add the link to my calendar instead",
+    "add the page to my bookmarks instead",
+    "write the text to mom instead",
+    "use the text as my status instead",
+    // A stop before the instruction.
+    "hold on, make the header blue",
+    "no stop, make the header blue",
+    "stop, make the header blue instead",
+  ])("does not start %j by itself", async (words) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    expect(await talk(made.world, wantsJob().model, history, request)).toBe(
+      started,
+    );
+    const talks = scripted(["Okay."]);
+    await talk(made.world, talks.model, history, words);
+    // The model was asked, and it started nothing: one job.
+    expect(talks.seen.length, words).toBeGreaterThan(0);
+    expect(made.ids(), words).toHaveLength(1);
+  });
+
+  it.each([
+    // A contrast that names a word of the job's request, some turns later: the code starts nothing by itself then.
+    "find a cafe not a bakery near me",
+    "find the best price for flour, not for the bakery",
+    "set a timer, not for the bakery",
+    "put some music on, not the bakery playlist",
+    "check the page, not the menu",
+    "make that a cafe instead of a bakery",
+  ])("does not start %j by itself some turns later", async (words) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    const say = async (model: ModelClient, sentence: string) => {
+      const at = made.clock.now;
+      const reply = await new Supervisor(made.world, model).reply(
+        [...history],
+        sentence,
+        "chat",
+      );
+      history.push(
+        { ...said("user", sentence), at },
+        { ...said("assistant", reply), at },
+      );
+      return reply;
+    };
+    expect(await say(wantsJob().model, request)).toBe(started);
+    made.clock.now += 30_000;
+    await say(scripted(["docs is idle."]).model, "what is docs doing?");
+    made.clock.now += 30_000;
+    const talks = scripted(["Okay."]);
+    await say(talks.model, words);
+    expect(talks.seen.length, words).toBeGreaterThan(0);
+    expect(made.ids(), words).toHaveLength(1);
+  });
+
+  it("does not start a change of mind by itself while a request of an agent waits", async () => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    expect(await talk(made.world, wantsJob().model, history, request)).toBe(
+      started,
+    );
+    waits(made.world);
+    await talk(
+      made.world,
+      scripted(["Okay."]).model,
+      history,
+      "nah make the buttons bigger instead",
+    );
+    expect(made.ids()).toHaveLength(1);
+  });
+
+  it("starts a replacement at once some turns later: what it replaces is not known then", async () => {
+    const got = await then("make the buttons bigger instead", {
+      between: ["what is docs doing?", "docs is idle."],
+    });
+    expect(got.jobs).toBe(2);
+    expect(got.waits).toBe(false);
+  });
+
   it("makes it wait also some turns later, when the correction names a word of the job's request", async () => {
     const got = await then("oh wait, the page should say cafe, not bakery", {
       between: ["what is docs doing?", "docs is idle."],
@@ -5739,6 +5936,8 @@ describe("a correction to a job that still works waits for that job", () => {
     "no rush, count the files in my downloads folder too",
     "sorry, one more thing: list the big files in my home folder",
     "not a big deal but please update the readme of the api",
+    // "Instead of that" opens other work: the word does not end the message.
+    "instead of waiting, find the big files in my home folder",
   ])("starts other work at once: %j", async (words) => {
     const got = await then(words);
     expect(got.jobs, words).toBe(2);
@@ -6472,6 +6671,19 @@ describe("a job that is done: more work on what it made is a new job", () => {
     made.clock.now += 60_000;
     expect((await made.jobs.start("count the files")).ok).toBe(true);
     expect(await facts(made)).not.toContain("session is over");
+  });
+
+  it("says in the facts, while the newest job still works, that more work on it is a job that waits and that no job is cancelled", async () => {
+    const made = mac([session({ name: "deploy fix" })]);
+    expect((await made.jobs.start("build a landing page")).ok).toBe(true);
+    expect(await facts(made)).toContain(
+      'newest job has its answer=false; that job still works and no tool changes or cancels it, so more work on what it makes, or a change of mind about it ("make the buttons bigger instead"), is a new job: call start_job, and never say that a job was cancelled, stopped or changed;',
+    );
+    writeFileSync(
+      join(made.folder, made.ids().at(-1)!, "result.md"),
+      "The page is at /work/app/index.html.\n",
+    );
+    expect(await facts(made)).not.toContain("no tool changes or cancels it");
   });
 
   it("holds no text of a session: the facts stay flags and fixed words", async () => {
