@@ -56,6 +56,7 @@ import {
   transitionUnknownText,
   verifiedActivation,
 } from "./desktop.js";
+import { handErrors } from "./ports.js";
 import type {
   Action,
   BrowserPage,
@@ -664,9 +665,18 @@ export class ComputerWorker implements DesktopExecutorPort {
       !result.ok &&
       (result.error === "no_accessibility" ||
         result.error === "no_screen_recording")
-    )
-      this.finish(run, "blocked", result.error, grantText[result.error]);
-    else if (!result.ok && result.error === "stopped_by_person")
+    ) {
+      const initialDesktopRead =
+        command.kind === "observe" && desktopDirection(run.goal) !== undefined;
+      this.finish(
+        run,
+        "blocked",
+        result.error,
+        initialDesktopRead
+          ? `The initial desktop observation failed (${result.error}). No switch was attempted. ${grantText[result.error]}`
+          : grantText[result.error],
+      );
+    } else if (!result.ok && result.error === "stopped_by_person")
       // The person stopped it at the hands. After Stop here, they know already.
       this.finish(run, "canceled", "stopped", stoppedText, !run.stop);
     if (this.halted(run)) return { sent: true, over: true, result };
@@ -781,16 +791,32 @@ export class ComputerWorker implements DesktopExecutorPort {
     );
     if (looked.over) return;
     const before = looked.result?.observation;
-    if (
-      run.takeover ||
-      !looked.result?.ok ||
-      before?.surfaceEpoch === undefined
-    )
+    if (run.takeover)
       return this.finish(
         run,
         "blocked",
         "desktop_not_ready",
-        "The desktop could not be checked or you took over. No switch was attempted. Ask again when ready.",
+        "You moved the mouse or pressed a key during the initial desktop observation. No switch was attempted. Ask again when ready.",
+      );
+    if (!looked.result?.ok) {
+      // Only the bounded wire error vocabulary may enter this diagnostic. Do
+      // not reflect a panel payload, screenshot, title, or field content.
+      const error = handErrors.find((known) => known === looked.result?.error);
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_ready",
+        error
+          ? `The initial desktop observation failed (${error}). No switch was attempted. Check the panel and ask again when ready.`
+          : "The initial desktop observation failed without a recognized error code. No switch was attempted. Check the panel and ask again when ready.",
+      );
+    }
+    if (before?.surfaceEpoch === undefined)
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_ready",
+        "The initial observation did not include a verified desktop surface epoch. No switch was attempted. Check that the panel supports desktop verification, then ask again.",
       );
     run.observation = before;
     run.step++;

@@ -38,9 +38,9 @@ Run in an isolated worktree using Node 24.22.1, Apple Swift 6.2.4, and Python
 
 | Check                                                                                  | Result                                               |
 | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `npm run check`                                                                        | 3,843 tests in 124 files; typecheck and build passed |
+| `npm run check`                                                                        | 3,852 tests in 124 files; typecheck and build passed |
 | `npm --prefix line test`                                                               | 92 tests passed                                      |
-| `cd mac && swift test`                                                                 | 281 tests passed                                     |
+| `cd mac && swift test`                                                                 | 284 tests passed                                     |
 | `cd mac && swift build --product ClawdTimeTaskPanel`                                   | Passed                                               |
 | `media/.venv/bin/python -m unittest discover -s media -p 'test_task_presentation*.py'` | 36 tests passed                                      |
 | Actual line agent import and JavaScript syntax                                         | Passed without starting the agent                    |
@@ -129,3 +129,23 @@ receipts, unknown outcomes, and rollback. Never run two owners for the line.
 Use the full matrices in [desktop acceptance](DESKTOP_SPACES.md) and
 [zoom acceptance](AUTOMATIC_CALL_ZOOM.md). Full-screen, Split View, multi-display,
 and actual phone display-follow behavior remain unqualified until tested.
+
+## Initial physical preflight findings
+
+The first arranged Mac run exposed a real shortcut mismatch: the public Carbon
+inventory includes `kEventKeyModifierFnMask` on the enabled Control–Left/Right
+arrows. Commit `9ce7880` resolves that bit only for named adjacent arrows and
+preserves it in dispatch flags. Unknown modifiers and unsupported explicit Fn
+configurations remain refused; final inventory validation is still exact.
+
+A separate window-sharing session exposed an AX dialog containing
+`WindowSharingSessionButton` ahead of TextEdit's ordinary window. Exact-window
+verification conservatively refused that arrangement. The control subsequently
+disappeared; no exclusion for arbitrary dialogs was added. The person reconciled
+the observed window activation. Subsequent initial-observation failures coincided
+with externally observed Space/application changes and sent no desktop shortcut.
+
+Initial observation failures now report bounded error codes, takeover, or missing
+surface evidence separately. These diagnostics retain Stop/unknown safeguards.
+No successful physical left/right/previous move or phone-video acceptance is
+claimed by these preflight findings. Resume only with a stable, exclusive fixture.

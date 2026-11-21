@@ -122,6 +122,73 @@ describe("explicit directional navigation", () => {
     expect(f.hands.sent).toHaveLength(1);
     expect(f.planner.inputs).toHaveLength(0);
   });
+  it.each([
+    ["no_accessibility", "no_accessibility"],
+    ["no_screen_recording", "no_screen_recording"],
+    ["stale_observation", "desktop_not_ready"],
+    ["failed", "desktop_not_ready"],
+    ["refused", "desktop_not_ready"],
+  ] as const)(
+    "reports the initial observation's %s without sending a switch",
+    async (error, reason) => {
+      const f = setup();
+      f.hands.answer = () => ({ ok: false, error });
+      await f.worker.submit("one", "Move one desktop left");
+      await f.worker.idle();
+      expect(f.hands.commands).toEqual([
+        { kind: "observe", image: true, elements: true },
+      ]);
+      expect(f.hands.sent).toHaveLength(0);
+      expect(f.planner.inputs).toHaveLength(0);
+      expect(f.worker.status()).toMatchObject({
+        state: "blocked",
+        step: 0,
+      });
+      expect(f.worker.status().message).toContain(`failed (${error})`);
+      expect(f.worker.status().message).toContain("No switch was attempted.");
+      expect(f.journal.get("one")?.reason).toBe(reason);
+    },
+  );
+  it.each([undefined, "untrusted fixture detail"])(
+    "does not reflect an absent or unrecognized initial observation error: %s",
+    async (error) => {
+      const f = setup();
+      f.hands.answer = () => ({
+        ok: false,
+        error: error as HandResult["error"],
+      });
+      await f.worker.submit("one", "Move one desktop left");
+      await f.worker.idle();
+      expect(f.hands.sent).toHaveLength(0);
+      expect(f.planner.inputs).toHaveLength(0);
+      expect(f.worker.status().state).toBe("blocked");
+      expect(f.worker.status().message).toContain(
+        "without a recognized error code",
+      );
+      expect(f.worker.status().message).toContain("No switch was attempted.");
+      expect(f.worker.status().message).not.toContain(
+        "untrusted fixture detail",
+      );
+      expect(f.journal.get("one")?.reason).toBe("desktop_not_ready");
+    },
+  );
+  it.each([undefined, observation()])(
+    "distinguishes missing desktop readiness evidence from a failed observation",
+    async (seen) => {
+      const f = setup();
+      f.hands.answer = () => ({ observation: seen });
+      await f.worker.submit("one", "Move one desktop left");
+      await f.worker.idle();
+      expect(f.hands.sent).toHaveLength(0);
+      expect(f.planner.inputs).toHaveLength(0);
+      expect(f.worker.status().state).toBe("blocked");
+      expect(f.worker.status().message).toContain(
+        "did not include a verified desktop surface epoch",
+      );
+      expect(f.worker.status().message).toContain("No switch was attempted.");
+      expect(f.journal.get("one")?.reason).toBe("desktop_not_ready");
+    },
+  );
   it("does not resume a directional attempt after takeover before dispatch", async () => {
     const f = setup();
     f.hands.answer = () => ({ interrupted: true });
@@ -129,6 +196,11 @@ describe("explicit directional navigation", () => {
     await f.worker.idle();
     expect(f.hands.sent).toHaveLength(0);
     expect(f.worker.status().state).toBe("blocked");
+    expect(f.worker.status().message).toContain(
+      "You moved the mouse or pressed a key",
+    );
+    expect(f.worker.status().message).toContain("No switch was attempted.");
+    expect(f.journal.get("one")?.reason).toBe("desktop_not_ready");
     await f.worker.answer("continue");
     expect(f.hands.sent).toHaveLength(0);
   });
