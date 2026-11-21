@@ -741,6 +741,19 @@ a tunnel and get its link, find something out: all of these are jobs.
 
 - The job is your own sentence. The language model chooses the tool. It does
   not choose the words.
+- "Build me a status page", "make us a pricing page" and "and build me a
+  small dashboard" start at once, as "build a landing page" does. In this
+  form only a short list of things starts by itself: a site, an app, a
+  dashboard, a bot, a CLI, an API, an endpoint, a landing page; and a page,
+  a script, a test, a file, a config, a tool or code only with a software
+  word beside it ("a status page", "a config file", "a unit test", "a cli
+  tool") or, for a script, with what it does ("a script that renames the
+  files"). Only the thing itself counts, not what stands after it. Any other
+  request of this form is read by ClawdTime as before, and can still start:
+  "build me a library for parsing dates". "Make me a table of the tests",
+  "write me a script for my presentation", "make us a hiring workflow",
+  "write me the status", "update me" and "build me a page when you have
+  time" start nothing by themselves.
 - Name the agent and it gets the job: "open Claude and build a landing page",
   "use Codex to fix the tests", "fix the tests with Codex". "Not with Codex"
   gives the job to the other one, and so do "no Codex" and "avoid Codex". The

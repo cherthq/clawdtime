@@ -1657,6 +1657,159 @@ describe("a coding agent that the person names for work", () => {
   });
 });
 
+describe('"build me a ..." is a direct instruction, as "build a ..." is', () => {
+  const board2 = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+  ];
+  /** One turn with a model that would only ask back: what the code started before the model. */
+  const direct = async (
+    words: string,
+    history: ChatMessage[] = [],
+    before?: (world: SupervisorWorld) => void,
+  ) => {
+    const made = mac(board2());
+    before?.(made.world);
+    const { model, seen } = scripted(["Should I type that into a session?"]);
+    const answer = await new Supervisor(made.world, model).reply(
+      history,
+      words,
+      "chat",
+    );
+    return { answer, windows: made.windows, seen, job: made.jobs.recent()[0] };
+  };
+
+  it.each([
+    "build me a small status page for the team in one html file",
+    "and um yeah build me a small status page for the team you know in one html file",
+    "make us a pricing page with three tiers",
+    "ok so create me a cli tool for the logs",
+    "write me a script that renames the files",
+    "yeah build us a dashboard for the deploys",
+    "and build a landing page for the bakery",
+    "write me a script to rename the files",
+    "build me a landing page",
+    "make me a config file for the linter",
+    "write me a unit test for the parser",
+    "build me a bot",
+    "create me a travel app",
+    "make me a budget dashboard",
+    "make me an api for the shop",
+    "make me a wedding site",
+  ])("starts %j at once, with no question of the model", async (words) => {
+    const got = await direct(words);
+    expect(got.windows, words).toHaveLength(1);
+    expect(got.seen, words).toHaveLength(0);
+    expect(got.answer, words).toContain("On it.");
+    // The job is the person's whole sentence.
+    expect(got.job!.job, words).toBe(words);
+  });
+
+  it("starts it at once right after talk about a session, too", async () => {
+    const got = await direct(
+      "and um yeah build me a small status page for the team you know in one html file",
+      [
+        said("user", "ok so uh can you like go back to the deploy fix one"),
+        said(
+          "assistant",
+          "I'm back at the deploy fix session for you. What next?",
+        ),
+      ],
+    );
+    expect(got.windows).toHaveLength(1);
+    expect(got.seen).toHaveLength(0);
+  });
+
+  it.each([
+    // Not something to build for the person.
+    "make me a sandwich",
+    "build me up",
+    "make me sure the page works",
+    "make me proud",
+    "write me a note about the build",
+    "write me a reminder for the meeting",
+    // The state or words, not work.
+    "update me on the status page",
+    "give me a status page",
+    "write me the status of the tests",
+    "write me a status of the tests",
+    "write me a summary of the failing tests",
+    "make me a list of the test files",
+    "write me a short description of the api",
+    "build me the landing page",
+    // The thing itself is no software, whatever stands after it.
+    "make me a table of the tests",
+    "write me a paragraph about the site",
+    "make me a quick paragraph on the site",
+    "write me a haiku about the server",
+    "build me a server rack",
+    "make us a service plan",
+    "make me a test plan",
+    "make us a reservation on the booking site",
+    "create me a account on the site",
+    "build me a picture of the files",
+    "design me a logo for the site",
+    "make me a coffee and check the site",
+    "make me a copy of the file",
+    // A word that is also an everyday thing: the model reads it.
+    "make us a workflow for onboarding hires",
+    "make us a hiring workflow",
+    "build me a pipeline of leads",
+    "build me a sales pipeline",
+    "make me a library of quotes",
+    "make me a cleaning service",
+    "create me a package for the trip",
+    "make me a care package",
+    "build me a lego server",
+    "make us a plugin for the lamp",
+    "make me a module for my course",
+    "write me a documentation of my trip",
+    "build us a component of the speech",
+    "make me a function for the party",
+    "write me a README for my thesis",
+    "build me a library for parsing dates",
+    // A page, a script, a test or a code that is text, not software.
+    "write me a page on the history of rome",
+    "make me a cover page for my essay",
+    "make me a title page for the report",
+    "write me a script for my presentation",
+    "write me a script for the video",
+    "write me a test for my students",
+    "make me a code for the door",
+    "write me a one page summary",
+    // The person puts it off.
+    "build me a status page when you have time",
+    "build me a status page later",
+    "build me a status page tomorrow",
+    // A question, a take-back, a delay.
+    "build me a status page?",
+    "can you build me a status page?",
+    "build me a status page, never mind",
+    "build me a status page, not yet",
+    "should I build me a status page",
+    // What another person said, or a what-if.
+    "he said build me a status page",
+    "if I asked you to build me a status page",
+    // Words for a session, or work that names a session.
+    "tell deploy fix to build me a status page",
+    "build me a status page in the docs session",
+    "build me a status page with deploy fix",
+  ])("starts nothing before the model for %j", async (words) => {
+    const got = await direct(words);
+    expect(got.windows, words).toHaveLength(0);
+    expect(got.seen.length, words).toBeGreaterThan(0);
+  });
+
+  it("starts nothing before the model while a request of an agent waits", async () => {
+    const got = await direct(
+      "build me a small status page in one html file",
+      [],
+      (world) => void waits(world),
+    );
+    expect(got.windows).toHaveLength(0);
+  });
+});
+
 describe("what starts no session", () => {
   // The model is asked, and it wants a job: only the gate in code stands between.
   it.each([
@@ -4582,7 +4735,7 @@ describe("an answer that offers words to type that the person did not say", () =
     // After "go back to the deploy fix one", the person asks for work. The
     // draft offers a sentence for that session, with words of the model.
     const got = await turn(
-      "and um yeah build me a small status page for the team you know in one html file",
+      "and um yeah put together a small status thing for the team you know",
       [
         'Say "tell deploy fix: create a simple single HTML file for a team status page" and I type it.',
         [call("start_job")],
@@ -4697,7 +4850,7 @@ describe("an answer that offers words to type that the person did not say", () =
     // question of the model: it is said as it is. Which messages ask for
     // new work is not for this check to say.
     const work =
-      "and um yeah build me a small status page for the team you know in one html file";
+      "and um yeah put together a small status thing for the team you know";
     for (const history of [
       [],
       [said("user", "thanks"), said("assistant", "Any time.")],
