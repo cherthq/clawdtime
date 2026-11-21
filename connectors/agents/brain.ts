@@ -1169,26 +1169,38 @@ const toldForms = (spoken: string) => {
   return forms;
 };
 /**
- * One clause: no mark that ends or splits a sentence stands before more
- * words. "Delete the branch, never mind", "push to main. Actually no" and
- * "deploy now - scratch that" are more than one. A mark at the very end and
- * a point inside a name ("index.html") split nothing.
+ * One clause of plain words: letters and digits, with one space between
+ * words, and only ' . _ - / inside a word ("index.html", "re-run"). Every
+ * other mark can end or split a sentence, so it is not one clause: "delete
+ * the branch, never mind", "push to main. Actually no", "deploy now - scratch
+ * that". Marks at the very end split nothing. A final question mark counts
+ * only for words that open as a question: "delete the release branch?" asks
+ * ClawdTime, it is not words for a session.
  */
-const oneClause = (text: string) =>
-  !/[,;:!?\n\r()\u2013\u2014]|\.(?=\s)|\s-+\s|--/.test(
-    text.trim().replace(/[.!?]+$/, ""),
+const oneClause = (text: string) => {
+  const whole = text.trim();
+  const body = whole.replace(/[.!?]+$/, "");
+  const word = "[\\p{L}\\p{N}]+(?:['._\\-/][\\p{L}\\p{N}]+)*";
+  return (
+    new RegExp(`^${word}(?: +${word})*$`, "u").test(body) &&
+    (!whole.endsWith("?") ||
+      /^(?:did|do|does|is|are|was|were|has|have|had|can|could|will|would|should|what|why|how|when|where|which|who|whose)\b/i.test(
+        body,
+      ))
   );
+};
 /**
- * A word that can take the words back, stop them, turn them around or hedge
- * them, or a question to ClawdTime that hangs on them. No list of such words
- * is complete: the code types by itself only words that are one clause, and
- * this reader guards that one clause. It only sends a message to the slower
- * way, where the model reads it as before, so it can be wide.
+ * A word that can take the words back, stop them, turn them around, hedge
+ * them or tie them to the person ("when I say so"), or a question to
+ * ClawdTime that hangs on them. No list of such words is complete: the code
+ * types by itself only words that are one clause, and this reader guards that
+ * one clause. It only sends a message to the slower way, where the model
+ * reads it as before, so it can be wide.
  */
 const mayTakeBack = (text: string) =>
   takesBack(text) ||
   asksAtTheEnd(text) ||
-  /(?:\b(?:no|not|never|nope|nah|nvm|nm|nevermind|cancel|wait|undo|ignore|disregard|oops|whoops|instead|actually|sorry|mistake|wrong|stop|abort|hold|hang on|thoughts?|rather|unless|maybe|perhaps|probably|kidding|joking|jk|lol|haha|mind|back|forget|scrap|scratch|strike|belay|drop|skip|bad|ok|okay|right|or|if|but|though|however|except|think|guess|just|psych|oh|hmm|uh|um|eh)\b|n['\u2019\u2018\u00b4\u02bc\u2032`]t\b)/i.test(
+  /(?:\b(?:no|not|never|nope|nah|nvm|nm|nevermind|oops|whoops|instead|actually|sorry|mistake|wrong|hang on|thoughts?|rather|unless|maybe|perhaps|probably|jk|lol|lmao|haha|mind|back|bad|ok|okay|right|or|if|but|though|however|except|think|guess|just|sike|psych|psyche|oh|hmm|uh|um|eh|sec|second|minute|moment|i|me|my|mine|myself)\b|\b(?:cancel|scrap|scratch|abort|stop|wait|ignor|disregard|forget|forgot|skip|drop|hold|leav|paus|retract|revert|undo|undid|strike|belay|jok|kidd)\w*|n['\u2019\u2018\u00b4\u02bc\u2032`]t\b)/i.test(
     text,
   );
 /**

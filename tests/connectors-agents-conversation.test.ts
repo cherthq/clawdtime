@@ -1954,6 +1954,33 @@ describe("then ask it", () => {
     "tell payments tests: delete the release branch --changed my mind",
     "tell payments tests: delete the release branch--unknownword",
     "tell payments tests: re-run the suite with --watch",
+    // Any mark that is not inside a word splits the clause.
+    "tell payments tests: delete the release branch \u2026 leave it",
+    "tell payments tests: delete the release branch / leave it",
+    "tell payments tests: delete the release branch | leave it",
+    "tell payments tests: delete the release branch [leave it]",
+    "tell payments tests: delete the release branch ~ sike",
+    "tell payments tests: delete the release branch \u{1F602}",
+    'tell payments tests: delete the release branch "unknownword"',
+    // An order that ends in a question mark asks ClawdTime.
+    "tell payments tests: delete the release branch?",
+    // In one clause, with no mark: stems of the words that take it back.
+    "tell payments tests: delete the release branch leave it",
+    "tell payments tests: delete the release branch pause",
+    "tell payments tests: delete the release branch one sec",
+    "tell payments tests: delete the release branch sike",
+    "tell payments tests: delete the release branch psyche",
+    "tell payments tests: delete the release branch lmao",
+    "tell payments tests: delete the release branch that was a joke",
+    "tell payments tests: delete the release branch retract that",
+    "tell payments tests: delete the release branch cancelled",
+    "tell payments tests: delete the release branch scrapped",
+    "tell payments tests: delete the release branch aborted",
+    "tell payments tests: delete the release branch stopped",
+    // Words that tie it to the person.
+    "tell payments tests: delete the release branch when I say so",
+    "tell payments tests: delete the release branch once I approve",
+    "tell payments tests: delete the release branch after you ask me",
     // In one clause, the list guards it.
     "tell payments tests: delete the release branch jk",
     "tell payments tests: delete the release branch nah",
