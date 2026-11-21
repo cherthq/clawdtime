@@ -15,6 +15,8 @@ import TaskPanelCore
 ///   command that waits is answered and not run.
 /// - ClawdTime's own windows are not in the picture, a click never lands on
 ///   them, and typed keys never go to them.
+/// - Before a click, a scroll, a drag or typed keys, the guided cursor glides
+///   to the place with the label of the command. A screen share shows it.
 @MainActor final class HandsController: NSObject {
   private let pet: PetController
   private let input = HandsInput()
@@ -153,7 +155,7 @@ import TaskPanelCore
     let screenRecording = !command.needsScreenRecording || CGPreflightScreenCaptureAccess()
     if let missing = command.missingRight(accessibility: accessibility, screenRecording: screenRecording) { return .failure(seq, missing) }
     input.beginCommand()
-    let outcome = await act(command, accessibility: accessibility)
+    let outcome = await act(command, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
     let interrupted = input.watching && input.personActed
     switch outcome {
@@ -166,7 +168,7 @@ import TaskPanelCore
     }
   }
 
-  private func act(_ command: HandCommand, accessibility: Bool) async -> Result<Observation?, HandError> {
+  private func act(_ command: HandCommand, label: String, accessibility: Bool) async -> Result<Observation?, HandError> {
     if case .wait(let ms) = command {
       var left = Double(ms) / 1000
       while left > 0 {
@@ -183,10 +185,15 @@ import TaskPanelCore
       shield(true)
       return await observer.observe(image: image, elements: elements, accessibility: accessibility, pointer: input.pointer).map { Optional($0) }
     case .move, .click, .drag, .scroll:
-      return await point(command)
+      return await point(command, label: label)
     case .type(let text):
       // The hands never type into ClawdTime itself, and never into a password field.
       guard await keyboardFree(), !(await focusIsSecure()) else { return .failure(.refused) }
+      // The guided cursor goes to the field first. That takes a moment, so the two checks run again after it.
+      defer { guide.rest() }
+      await pointAtKeyboard(label)
+      if stop.stopped { return .failure(.stoppedByPerson) }
+      guard await mayType() else { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       // A Tab or a Return in the text can move the keyboard, so the same two checks run again on the way.
       switch await input.type(text, allowed: { [self] in await mayType() }) {
@@ -198,13 +205,20 @@ import TaskPanelCore
       guard let keys = KeyCombo.parse(combo), await keyboardFree() else { return .failure(.refused) }
       // A key that prints a character is text: it stays out of a password field too. Return, Tab and shortcuts may go.
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
-      // Stop may have come during the waits above.
+      defer { guide.rest() }
+      await pointAtKeyboard(label)
+      // Stop may have come during the waits above, and the keyboard may be in another place now.
       if stop.stopped { return .failure(.stoppedByPerson) }
+      guard NSApp.keyWindow == nil else { return .failure(.refused) }
+      if keys.typesText, await focusIsSecure() { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       return await input.key(keys) ? .success(nil) : .failure(.stoppedByPerson)
     case .openApp(let name):
       guard let safe = HandsTarget.appName(name) else { return .failure(.refused) }
       guard let app = Self.application(named: safe) else { return .failure(.notFound) }
+      defer { guide.rest() }
+      await say(label)
+      if stop.stopped { return .failure(.stoppedByPerson) }
       let settings = NSWorkspace.OpenConfiguration()
       settings.activates = true
       do { _ = try await NSWorkspace.shared.openApplication(at: app, configuration: settings); return .success(nil) }
@@ -212,21 +226,41 @@ import TaskPanelCore
     case .openURL(let text):
       // Only a web address. Another scheme can start a program or a call.
       guard let url = HandsTarget.webURL(text) else { return .failure(.refused) }
+      defer { guide.rest() }
+      await say(label)
+      if stop.stopped { return .failure(.stoppedByPerson) }
       return NSWorkspace.shared.open(url) ? .success(nil) : .failure(.failed)
     case .wait:
       return .success(nil)
     }
   }
 
-  /// A pointing command: the guided cursor travels from the mascot to the target, then the real event goes.
-  private func point(_ command: HandCommand) async -> Result<Observation?, HandError> {
+  /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
+  /// with the label of the command. With no field known it stays where it last pointed.
+  private func pointAtKeyboard(_ label: String) async {
+    guard let map = HandsDisplay.main?.map else { return }
+    // The Accessibility tree is read off the main thread, as everywhere here. It counts from the top.
+    let focus = await Task.detached(priority: .userInitiated) { HandsTree.focusFrame() }.value
+    let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
+    let target = GuidedFocus.place(focus: focus.map(map.flip), shown: guide.place, pointer: map.flip(input.pointer), screen: screen)
+    await guide.travel(to: target, label: label)
+  }
+  /// A command with no place of its own, such as opening an app: the cursor says it where it is.
+  private func say(_ label: String) async {
+    guard let map = HandsDisplay.main?.map else { return }
+    let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
+    await guide.travel(to: GuidedFocus.place(focus: nil, shown: guide.place, pointer: map.flip(input.pointer), screen: screen), label: label)
+  }
+
+  /// A pointing command: the guided cursor glides to the target with the label of the command, then the real event goes.
+  private func point(_ command: HandCommand, label: String) async -> Result<Observation?, HandError> {
     guard let map = HandsDisplay.main?.map, !command.places.isEmpty, command.places.allSatisfy(map.contains) else { return .failure(.refused) }
     let places = command.places.map(map.clamp)
     // ClawdTime's windows are not in the picture that the worker saw. A click on
     // one of them goes through to what is behind it, which is what the worker meant.
     var restore = passThrough(places.map(map.flip))
     defer { restore.forEach { $0() }; guide.rest() }
-    await guide.travel(to: map.flip(places[0]))
+    await guide.travel(to: map.flip(places[0]), label: label)
     guard !stop.stopped, await input.move(to: places[0]) else { return .failure(.stoppedByPerson) }
     // A window of ClawdTime that came up on the way, for example a request with Approve on it, gets no click either.
     restore += passThrough(places.map(map.flip))
@@ -279,7 +313,8 @@ import TaskPanelCore
     return secure == true || input.secureInput
   }
   /// While the worker runs, every window of this app has a sharing type that
-  /// keeps it out of captures. The bar and the guided cursor always have it.
+  /// keeps it out of captures. The bar always has it. The guided cursor never
+  /// has it: a screen share shows where ClawdTime acts.
   private func shield(_ on: Bool) {
     for window in NSApp.windows where window !== bar.window && window !== guide.window {
       let type: NSWindow.SharingType = on ? .none : .readOnly

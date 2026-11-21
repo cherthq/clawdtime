@@ -141,6 +141,16 @@ enum HandsTree {
     return ElementCleaner.isSecure(role: role, subrole: text(values[1]))
   }
 
+  /// The frame of the element that has the keyboard, in screen points from the top left. Nil when the tree does not say.
+  static func focusFrame() -> CGRect? {
+    let system = AXUIElementCreateSystemWide()
+    AXUIElementSetMessagingTimeout(system, 0.3)
+    guard let focused = element(one(system, kAXFocusedUIElementAttribute)) else { return nil }
+    let values = many(focused, [kAXPositionAttribute, kAXSizeAttribute])
+    guard let origin = point(values[0]), let size = size(values[1]) else { return nil }
+    return CGRect(origin: origin, size: size)
+  }
+
   private static func one(_ node: AXUIElement, _ name: String) -> AnyObject? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success else { return nil }

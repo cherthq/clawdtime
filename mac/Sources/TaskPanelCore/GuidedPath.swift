@@ -6,7 +6,7 @@ import Foundation
 /// the screen, and the real pointer follows a short straight one. A view only
 /// draws what this gives.
 public struct GuidedPath: Equatable, Sendable {
-  /// Seconds that the guided cursor takes from the mascot to its target.
+  /// Seconds for a way when the caller names no time. The guided cursor takes `glideDuration`.
   public static let travel = 0.30
   /// The middle of the way bends off the straight line by this share of its length, and never by more points than `maxBend`.
   public static let arc = 0.10, maxBend = 36.0
@@ -55,6 +55,32 @@ public struct GuidedPath: Equatable, Sendable {
   public static func moveDuration(length: Double) -> Double { min(0.18, 0.06 + max(0, length) / 6000) }
   /// Seconds for a drag: slow enough that an app follows it.
   public static func dragDuration(length: Double) -> Double { min(0.60, 0.25 + max(0, length) / 3000) }
+  /// Seconds for the guided cursor to glide `length` points. A glide is slow enough to follow on a
+  /// phone that shows the screen, and a long way takes longer than a short one, up to a limit.
+  public static let shortestGlide = 0.35, longestGlide = 0.70
+  public static func glideDuration(length: Double) -> Double {
+    guard length.isFinite else { return shortestGlide }
+    return min(longestGlide, shortestGlide + max(0, length) / 2400)
+  }
+  /// Seconds that the cursor waits at the target before the click or the first key, so the eye
+  /// is there before the hand and the label can be read. Reduce Motion had no glide to lead the
+  /// eye, so its wait is longer.
+  public static func dwell(still: Bool) -> Double { still ? 0.35 : 0.20 }
+  /// Seconds that the cursor stays after a command, before it fades. A command that comes in this
+  /// time takes the cursor on from where it is.
+  public static let rest = 1.5
+  /// Where the cursor leaves from. While it is on the screen it goes on from where it is, so its
+  /// way from one action to the next is one line. It first comes out of the mascot. With the
+  /// mascot put away it starts at the real pointer.
+  public static func origin(shown: CGPoint?, mascot: CGPoint?, pointer: CGPoint) -> CGPoint {
+    func real(_ point: CGPoint?) -> CGPoint? { point.flatMap { $0.x.isFinite && $0.y.isFinite ? $0 : nil } }
+    return real(shown) ?? real(mascot) ?? pointer
+  }
+  /// The way of the guided cursor to one target. `still` is Reduce Motion: a jump with no glide.
+  public static func glide(from start: CGPoint, to target: CGPoint, still: Bool) -> GuidedPath {
+    let length = hypot(Double(target.x - start.x), Double(target.y - start.y))
+    return GuidedPath(from: start, to: target, duration: glideDuration(length: length), still: still)
+  }
   /// How far the mascot leans toward a target, in radians. A positive lean is toward the left.
   public static func lean(from mascot: CGPoint, to target: CGPoint) -> Double {
     let offset = Double(target.x - mascot.x)

@@ -102,6 +102,55 @@ final class GuidedPathTests: XCTestCase {
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: .leastNonzeroMagnitude).count, 600)
   }
 
+  func testTheGlideIsSlowEnoughToFollowAndALongWayTakesLonger() {
+    // Never shorter than a third of a second: a picture of the screen at 30 frames a second shows ten of its places.
+    XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.35)
+    XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.35)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 600), 0.60, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.70)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.35)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.35)
+    var before = 0.0
+    for length in stride(from: 0.0, through: 4000, by: 50) {
+      let now = GuidedPath.glideDuration(length: length)
+      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.35); XCTAssertLessThanOrEqual(now, 0.70)
+      before = now
+    }
+    // The way to one target takes the time of its length, and ends on the target.
+    for (start, target) in ways {
+      let path = GuidedPath.glide(from: start, to: target, still: false)
+      XCTAssertEqual(path.duration, GuidedPath.glideDuration(length: path.length))
+      XCTAssertEqual(path.point(at: 0), start); XCTAssertEqual(path.point(at: path.duration), target)
+      XCTAssertFalse(path.done(at: path.duration - 0.01)); XCTAssertTrue(path.done(at: path.duration))
+    }
+  }
+
+  func testWithReduceMotionTheGlideIsAJump() {
+    for (start, target) in ways {
+      let path = GuidedPath.glide(from: start, to: target, still: true)
+      XCTAssertEqual(path.duration, 0); XCTAssertEqual(path.bend, 0)
+      // No place between the start and the target is ever shown.
+      for time in [0, 0.001, 0.2, 0.7, 5] { XCTAssertEqual(path.point(at: time), target) }
+      XCTAssertTrue(path.done(at: 0))
+    }
+    // With no glide to lead the eye, the cursor waits longer at the target before the hands act.
+    XCTAssertGreaterThan(GuidedPath.dwell(still: true), GuidedPath.dwell(still: false))
+    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false), 0.15)
+    XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 0.5)
+  }
+
+  func testTheCursorGoesOnFromWhereItIsAndFirstComesOutOfTheMascot() {
+    let shown = CGPoint(x: 400, y: 300), mascot = CGPoint(x: 1300, y: 120), pointer = CGPoint(x: 20, y: 880)
+    XCTAssertEqual(GuidedPath.origin(shown: shown, mascot: mascot, pointer: pointer), shown)
+    XCTAssertEqual(GuidedPath.origin(shown: nil, mascot: mascot, pointer: pointer), mascot)
+    XCTAssertEqual(GuidedPath.origin(shown: nil, mascot: nil, pointer: pointer), pointer)
+    // A place with no meaning is skipped.
+    XCTAssertEqual(GuidedPath.origin(shown: CGPoint(x: CGFloat.nan, y: 0), mascot: mascot, pointer: pointer), mascot)
+    XCTAssertEqual(GuidedPath.origin(shown: nil, mascot: CGPoint(x: 0, y: CGFloat.infinity), pointer: pointer), pointer)
+    // The cursor stays long enough after a command for the next one to take it on.
+    XCTAssertGreaterThanOrEqual(GuidedPath.rest, 1.0)
+  }
+
   func testTheMascotLeansTowardTheTarget() {
     let mascot = CGPoint(x: 800, y: 300)
     // A positive lean is toward the left, as the lean of a tucked mascot is.
