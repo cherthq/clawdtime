@@ -329,8 +329,6 @@ describe("words for a session that runs are never a job", () => {
     "ask deploy fix to run the tests again does that make sense",
     "tell deploy fix to run the tests again sound good",
     // More than one clause, or a word that can take the words back, hedge them or begin something else.
-    "tell deploy fix to run the tests again and push",
-    "tell deploy fix to run the tests again, then push",
     "tell deploy fix to run the tests again if docs is done",
     "tell deploy fix to run the tests again and wait for me",
     "tell deploy fix to run the tests again, never mind",
@@ -939,7 +937,6 @@ describe("words for a session that runs are never a job", () => {
       "should I tell it to run the tests again",
       "tell it to stop",
       "tell it to run the tests again, never mind",
-      "tell it to run the tests again and push",
       "tell them to run the tests again",
       "tell everyone to run the tests again",
       "tell it",
@@ -1069,6 +1066,300 @@ describe("words for a session that runs are never a job", () => {
         aboutDeploy(),
       );
       expect(turn.typed).toEqual([]);
+    });
+  });
+
+  describe("two verbs for one session", () => {
+    const said2 = (first: string, rest: string, name = "deploy fix") =>
+      `Typed into ${name}: "${first}". I did not send "${rest}": say "tell it to ${rest}" to send that too, or say it alone to start it as new work.`;
+
+    it.each([
+      [
+        "tell deploy fix to run the tests and push the branch",
+        "run the tests",
+        "push the branch",
+      ],
+      [
+        "tell deploy fix to run the tests again and push",
+        "run the tests again",
+        "push",
+      ],
+      [
+        "ask the deploy one to run the tests again, then push the branch.",
+        "run the tests again",
+        "push the branch",
+      ],
+      [
+        "Um, tell deploy fix to run the tests, and to commit the result please",
+        "run the tests",
+        "commit the result",
+      ],
+      [
+        "tell deploy fix to rebase and write the changelog",
+        "rebase",
+        "write the changelog",
+      ],
+      [
+        "tell deploy fix to run the tests and push to origin main",
+        "run the tests",
+        "push to origin main",
+      ],
+      [
+        "tell deploy fix to commit the fix and then push the branch",
+        "commit the fix",
+        "push the branch",
+      ],
+    ])(
+      "types the first part of %j, and neither sends nor starts the rest",
+      async (words, first, rest) => {
+        // The model would start a job: it is not asked.
+        const turn = await run(words, [[call("start_job")], "unused"]);
+        expect(turn.typed, words).toEqual([["deploy fix", first]]);
+        expect(turn.windows, words).toHaveLength(0);
+        expect(turn.answer, words).toBe(said2(first, rest));
+        expect(turn.results, words).toEqual([]);
+      },
+    );
+
+    it('takes a word that points for the session, and the rest goes with "tell it to ..." after it', async () => {
+      const made = mac(two());
+      const typed: string[][] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        send: async (item, text) => {
+          typed.push([String(item.name), text]);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      const history: ChatMessage[] = [
+        said("user", "how is deploy fix?"),
+        said("assistant", "deploy fix is idle."),
+      ];
+      const first = await talk(
+        world,
+        scripted(["unused"]).model,
+        history,
+        "tell it to run the tests and push the branch",
+      );
+      expect(first).toBe(said2("run the tests", "push the branch"));
+      expect(typed).toEqual([["deploy fix", "run the tests"]]);
+      // The sentence that the answer gave: the record of that turn says which session.
+      await talk(
+        world,
+        scripted(["Okay."]).model,
+        history,
+        "tell it to push the branch",
+      );
+      expect(typed).toEqual([
+        ["deploy fix", "run the tests"],
+        ["deploy fix", "push the branch"],
+      ]);
+      expect(made.windows).toHaveLength(0);
+    });
+
+    it("starts the rest as new work when the person says it alone", async () => {
+      const made = mac(two());
+      const world: SupervisorWorld = {
+        ...made.world,
+        send: async () => ({ ok: true, route: "tmux" }),
+      };
+      const history: ChatMessage[] = [];
+      await talk(
+        world,
+        scripted(["unused"]).model,
+        history,
+        "tell deploy fix to rebase and write the changelog",
+      );
+      expect(made.windows).toHaveLength(0);
+      const answer = await talk(
+        world,
+        wantsJob().model,
+        history,
+        "write the changelog",
+      );
+      expect(answer).toContain("On it.");
+      expect(made.windows).toHaveLength(1);
+    });
+
+    it.each([
+      // The rest asks, hedges, takes back or speaks to ClawdTime.
+      "tell deploy fix to run the tests and what do you think",
+      "tell deploy fix to run the tests and push if they pass",
+      "tell deploy fix to run the tests, or should I wait",
+      "tell deploy fix to run the tests and push, never mind",
+      "tell deploy fix to run the tests and push?",
+      "tell deploy fix to run the tests and show you the logs",
+      "tell deploy fix to run the tests and report back",
+      // The rest is a request to see, or words for another session.
+      "tell deploy fix to run the tests and show me docs",
+      "tell deploy fix to run the tests and tell docs to push the branch",
+      // The first part is not plain.
+      "tell deploy fix to wait and push the branch",
+      "tell deploy fix to the team and push the branch",
+      // Something stands before it.
+      "show me docs and tell deploy fix to run the tests and push the branch",
+      "build a page, tell deploy fix to run the tests and push the branch",
+      "let me tell deploy fix to run the tests and push the branch",
+      // No single session.
+      "tell it to run the tests and push the branch",
+      "tell claude to run the tests and push the branch",
+      // The rest puts the first part off.
+      "tell deploy fix to run the tests, but only after lunch",
+      "tell deploy fix to run the tests, tomorrow",
+      "tell deploy fix to run the tests, in an hour",
+      "tell deploy fix to run the tests, later",
+      "tell deploy fix to run the tests, after docs is done",
+      "tell deploy fix to run the tests, once I say go",
+      "tell deploy fix to run the tests and only then push",
+      // The rest is for ClawdTime itself.
+      "tell deploy fix to run the tests and make it bigger",
+      "tell deploy fix to run the tests and maximize the window",
+      "tell deploy fix to run the tests and remember that",
+      "tell deploy fix to run the tests and note that we chose postgres",
+      "tell deploy fix to run the tests and approve it",
+      "tell deploy fix to run the tests and open the browser",
+      // The rest corrects or adds a session.
+      "tell deploy fix to run the tests, the other one",
+      "tell deploy fix to run the tests and docs too",
+      "tell deploy fix to run the tests and another one",
+      // A quote in the rest.
+      'tell deploy fix to run the tests and fix the "login" bug',
+      // A rest after a bare comma: a time or a condition in any words.
+      "tell deploy fix to run the tests, provided the build passes",
+      "tell deploy fix to run the tests, given the build passes",
+      "tell deploy fix to run the tests, straight after lunch",
+      "tell deploy fix to run the tests, around noon",
+      "tell deploy fix to run the tests, end of day",
+      "tell deploy fix to run the tests, eod",
+      "tell deploy fix to run the tests, push the branch, and write the notes",
+      "tell deploy fix to run the tests and push the branch, tomorrow",
+      // A rest that a tool of ClawdTime itself does.
+      "tell deploy fix to run the tests and look at the screen",
+      "tell deploy fix to run the tests and refresh the page",
+      "tell deploy fix to run the tests and switch to the browser",
+      "tell deploy fix to run the tests and open safari",
+      "tell deploy fix to run the tests and I'm away",
+      "tell deploy fix to run the tests and take a screenshot",
+      // A rest that points back at the first part.
+      "tell deploy fix to run the tests and schedule it for tonight",
+      "tell deploy fix to run the tests and make that happen at noon",
+      "tell deploy fix to run the tests and save it for later",
+      "tell deploy fix to run the tests and get it done by friday",
+      "tell deploy fix to run the tests and then delay it",
+      "tell deploy fix to run the tests and defer it",
+      "tell deploy fix to run the tests and then sleep on it",
+      "tell deploy fix to run the tests and save that to memory",
+      "tell deploy fix to run the tests and write that down",
+      "tell deploy fix to run the tests and log it in the trove",
+      "tell deploy fix to run the tests and mark it done",
+      "tell deploy fix to run the tests and push it once green",
+      // A rest that names the first part again.
+      "tell deploy fix to run the tests and move the tests to tomorrow",
+      "tell deploy fix to run the tests and halt the tests",
+      "tell deploy fix to run the tests and then terminate the tests",
+      "tell deploy fix to run the tests and fix the tests that fail",
+      "tell deploy fix to run the tests and postpone the whole thing",
+      // A rest for ClawdTime's memory or trove, by a noun.
+      "tell deploy fix to run the tests and keep a note of the port",
+      "tell deploy fix to run the tests and store the port in memory",
+      "tell deploy fix to run the tests and save the port to memory",
+      "tell deploy fix to run the tests and add the port to the trove",
+      "tell deploy fix to run the tests and write the release notes",
+      "tell deploy fix to run the tests and write down the port",
+      "tell deploy fix to run the tests and add a reminder",
+      "tell deploy fix to run the tests and add a calendar event",
+      // A rest that opens with no verb of software work: the model reads it.
+      "tell deploy fix to run the tests and kill the job",
+      "tell deploy fix to run the tests and freeze the branch",
+      "tell deploy fix to run the tests and park the push",
+      "tell deploy fix to run the tests and queue the push for monday",
+      "tell deploy fix to run the tests and confirm the prompt",
+      "tell deploy fix to run the tests and call the team",
+      "tell deploy fix to run the tests and done",
+      "tell deploy fix to run the tests and go home",
+      "tell deploy fix to run the tests and take a break",
+      "tell deploy fix to run the tests and stuff",
+    ])("leaves %j to the model, with no answer of the code", async (words) => {
+      const turn = await run(words, ["Model."]);
+      expect(turn.answer, words).not.toContain("I did not send");
+      // And the code typed nothing by itself: the model reads the whole message.
+      expect(turn.typed, words).toEqual([]);
+    });
+
+    it("never says a secret that stands in the rest", async () => {
+      const secret = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
+      const turn = await run(
+        `tell deploy fix to run the tests and use the token ${secret}`,
+        ["I do not repeat a key."],
+      );
+      expect(turn.answer).not.toContain(secret);
+      expect(turn.answer).toBe("I do not repeat a key.");
+      expect(turn.typed).toEqual([]);
+    });
+
+    it("starts no job for a message whose words the code typed", async () => {
+      // The follow-up: the code types it, and the model then asks for a job.
+      const made = mac(two());
+      const typed: string[][] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        send: async (item, text) => {
+          typed.push([String(item.name), text]);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      const history: ChatMessage[] = [];
+      await talk(
+        world,
+        scripted(["unused"]).model,
+        history,
+        "tell deploy fix to run the tests and push the branch",
+      );
+      await talk(
+        world,
+        scripted([[call("start_job")], "Okay."]).model,
+        history,
+        "tell it to push the branch",
+      );
+      expect(typed).toEqual([
+        ["deploy fix", "run the tests"],
+        ["deploy fix", "push the branch"],
+      ]);
+      expect(made.windows).toHaveLength(0);
+      // The same for the plain form with a name.
+      const plain = await run("ask the deploy one to run the tests again", [
+        [call("start_job")],
+        "Okay.",
+      ]);
+      expect(plain.typed).toEqual([["deploy fix", "run the tests again"]]);
+      expect(plain.windows).toHaveLength(0);
+    });
+
+    it("leaves it to the model while a request of an agent waits, and when the session cannot take text", async () => {
+      const words = "tell deploy fix to run the tests and push the branch";
+      const elsewhere = () => [
+        session({ name: "deploy fix", cwd: "/work/other", pid: 7 }),
+        session({ id: "101-def", pid: 101, name: "docs", cwd: "/work/docs" }),
+      ];
+      const waiting = await run(
+        words,
+        ["A request waits."],
+        elsewhere(),
+        (world) => void waits(world),
+      );
+      expect(waiting.typed).toEqual([]);
+      expect(waiting.answer).toBe("A request waits.");
+      // The terminal takes no text: no claim that it was typed.
+      const made = mac(two());
+      const world: SupervisorWorld = {
+        ...made.world,
+        send: async () => ({ ok: false, route: "none" }),
+      };
+      const answer = await new Supervisor(
+        world,
+        scripted(["It cannot take text from here."]).model,
+      ).reply([], words, "chat");
+      expect(answer).toBe("It cannot take text from here.");
     });
   });
 
