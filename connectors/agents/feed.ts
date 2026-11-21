@@ -27,6 +27,8 @@ import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { openApp } from "./apps.js";
+import { browse, type BrowserAction } from "./browsing.js";
+import { lookAtScreen } from "./eyes.js";
 import { Jobs } from "./jobs.js";
 import { title } from "./render.js";
 import { realSystem, type System } from "./system.js";
@@ -247,6 +249,21 @@ export class BoardFeed implements AgentBoardPort {
               }),
               openApp: (name: string | null, url: URL | null) =>
                 openApp(files, name, url, options.runner ?? realRunner),
+              browse: (
+                action: BrowserAction,
+                choice: { browser?: string; tab?: number },
+              ) => browse(files, options.runner ?? realRunner, action, choice),
+              look: (question: string) =>
+                lookAtScreen(
+                  {
+                    run: options.runner ?? realRunner,
+                    key:
+                      process.env.CLAWDTIME_OPENAI_API_KEY ||
+                      process.env.OPENAI_API_KEY,
+                    model: process.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+                  },
+                  question,
+                ),
             }
           : {}),
         // A session of a remote Mac shows its title there: only its name is known here.

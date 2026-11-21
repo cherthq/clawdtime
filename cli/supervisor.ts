@@ -67,6 +67,8 @@ import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { openApp } from "../connectors/agents/apps.js";
+import { browse } from "../connectors/agents/browsing.js";
+import { lookAtScreen } from "../connectors/agents/eyes.js";
 import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
 import {
   checkTexts,
@@ -521,6 +523,20 @@ export async function supervisorCli(
               ),
             jobs: jobsFor(system, root, runner),
             openApp: (name, url) => openApp(system, name, url, runner),
+            browse: (action, options) =>
+              browse(system, runner, action, options),
+            look: (question) =>
+              lookAtScreen(
+                {
+                  run: runner,
+                  key:
+                    system.env.CLAWDTIME_OPENAI_API_KEY ||
+                    system.env.OPENAI_API_KEY,
+                  model: system.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+                  ...(deps.request ? { request: deps.request } : {}),
+                },
+                question,
+              ),
           },
           key ? supervisorModel(system.env, key) : null,
         );
@@ -824,6 +840,19 @@ export async function supervisorCli(
           ),
         jobs: jobsFor(system, root, runner),
         openApp: (name, url) => openApp(system, name, url, runner),
+        browse: (action, options) => browse(system, runner, action, options),
+        look: (question) =>
+          lookAtScreen(
+            {
+              run: runner,
+              key:
+                system.env.CLAWDTIME_OPENAI_API_KEY ||
+                system.env.OPENAI_API_KEY,
+              model: system.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+              ...(deps.request ? { request: deps.request } : {}),
+            },
+            question,
+          ),
       },
       deps.model !== undefined
         ? deps.model
