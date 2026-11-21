@@ -1587,6 +1587,9 @@ export function agentNamed(spoken: string): JobAgent | null {
   const out = excluded ? agentOf(excluded[1]!) : null;
   return out ? otherAgent(out) : null;
 }
+/** A part of a page or an app, as a person names it in a change of mind. */
+const softwareThing =
+  /\b(?:pages?|buttons?|headers?|footers?|fonts?|colou?rs?|layouts?|menus?|forms?|logos?|images?|texts?|titles?|themes?|modes?|styles?|backgrounds?|sections?|links?|files?)\b/i;
 /**
  * A word that opens a correction, with the fillers before it and what
  * separates it from the rest. "Wait for ..." is an instruction and "no rush"
@@ -3427,6 +3430,96 @@ export class Supervisor {
     };
   }
   /**
+   * What the CODE starts by itself as a change of mind: a short list, and
+   * everything else goes to the model. All of these must hold.
+   * - It is the next message after the request that started the job, and
+   *   that job is not done. Never the contrast at a later time.
+   * - It passes `correctsARunningJob` (a word of correction, a contrast, or
+   *   "instead" at its end), so the new job waits.
+   * - After the words of correction and the lead-ins it opens with a verb
+   *   that changes a thing: make, add, change, use, fix, update, remove,
+   *   rename, replace, write, build, create.
+   * - Right after the verb stands a thing of software with a definite word
+   *   ("the buttons", "that header", "its background", at most two words
+   *   between), or the message holds a word of the running job's request.
+   *   "A text to my mom" begins a new thing, and "it" alone names nothing.
+   * - Nothing in it stops, delays or gives a time: stop, pause, hold, wait,
+   *   later, tomorrow, after lunch, when I'm back, in an hour, at 5.
+   * A model reads "set an alarm instead", "make a reservation instead" and
+   * "find a cafe not a bakery near me": those are no work for a coding agent.
+   */
+  private changesTheRunningJob(spoken: string, turn: Turn): boolean {
+    const newest = this.jobsNow(1)[0];
+    const before = [...turn.history]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (
+      !newest ||
+      newest.done ||
+      !before ||
+      newest.startedAt < Math.floor(before.at / 1000) * 1000
+    )
+      return false;
+    if (!this.correctsARunningJob(spoken, turn)) return false;
+    let rest = spoken.trim();
+    for (let step = 0; step < 4; step++) {
+      const opens = correctionWord.exec(rest);
+      if (!opens) break;
+      rest = rest.slice(opens[0].length);
+    }
+    rest = rest.replace(
+      /^(?:(?:ok|okay|so|and|then|also|now|next|please|pls|just)[,.!\s]+)+/i,
+      "",
+    );
+    const verb =
+      /^(?:make|add|change|use|fix|update|remove|rename|replace|write|build|create)\s+(.+)$/i.exec(
+        rest,
+      );
+    if (!verb) return false;
+    // A stop, a delay or a time that the person gave: not now, so not by code.
+    if (
+      /\b(?:stop|pause|hold|wait|later|tomorrow|tonight|aside|after|when|until|next|morning|evening|weekend)\b|\bin\s+an?\s+(?:hour|minute)|\bin\s+\d+|\bat\s+\d/i.test(
+        rest,
+      ) ||
+      putsOff(rest)
+    )
+      return false;
+    // The thing goes to a person or to a place of the person's own: "add the
+    // link to my calendar", "write the text to mom", "use the text as my
+    // status". That is no work in the project.
+    if (
+      /\b(?:to|as|into|onto)\s+(?:my|me|mom|dad|him|her|them|his|our)\b/i.test(
+        rest,
+      )
+    )
+      return false;
+    const thing = verb[1]!;
+    // A word of the job's request that is its own: "bakery". A word that
+    // any page has ("page", "file") says nothing by itself: "write a page in
+    // my diary instead".
+    const requested = new Set(
+      (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) =>
+          !correctionStop.has(word) &&
+          !softwareThing.test(word) &&
+          !softwareNoun.test(word),
+      ),
+    );
+    // "The buttons", "that header", "its background": a thing of the work
+    // that runs is named with a definite word. "A text to my mom" and "a
+    // menu for dinner" begin a new thing, and are no software.
+    const definite =
+      /^(?:the|its|that|this|these|those)\s+(\S+(?:\s+\S+){0,2})/i.exec(thing);
+    return (
+      (definite !== null &&
+        (softwareNoun.test(definite[1]!) ||
+          softwareThing.test(definite[1]!))) ||
+      (thing.toLowerCase().match(/\p{L}{4,}/gu) ?? []).some((word) =>
+        requested.has(word),
+      )
+    );
+  }
+  /**
    * The message corrects a job that still works: "wait no, it's a cafe not a
    * bakery". A job that runs cannot be changed, so the correction is a job of
    * its own, and it must wait for the first: two sessions that change the
@@ -3437,7 +3530,9 @@ export class Supervisor {
    * ("cafe, not bakery", "instead of a bakery"), at any time while the job
    * works. And, right after the request that started the job, a word of
    * correction ("wait", "no", "sorry", "I meant") before a statement about
-   * the thing ("it's a cafe", "the name is ...", "make it ..."). Other work
+   * the thing ("it's a cafe", "the name is ...", "make it ..."), or a
+   * message that ends with "instead" ("make the buttons bigger instead"):
+   * it replaces what that job was asked to do. Other work
    * that opens with such a word ("actually, find the big files") starts at
    * once, as before: a wait costs the person time.
    */
@@ -3471,6 +3566,10 @@ export class Supervisor {
       .find((message) => message.role === "user");
     if (!before || newest.startedAt < Math.floor(before.at / 1000) * 1000)
       return false;
+    // "Make the buttons bigger instead": the message ends with "instead",
+    // so it replaces what that job was asked to do.
+    if (/\binstead(?:\s+(?:please|pls|plz|now|then))?[.!?\s]*$/i.test(words))
+      return true;
     let rest = words;
     let corrected = false;
     for (let step = 0; step < 4; step++) {
@@ -5110,6 +5209,27 @@ export class Supervisor {
       if (turn.refused === undefined) return said;
       turn.refused = undefined;
     }
+    // A change of mind about the job that the person's last message started
+    // and that still works: "nah make the buttons bigger instead". It is an
+    // instruction, and it corrects or replaces that job, so it is a job of
+    // its own that waits for the first. A model that is asked often starts
+    // nothing and says that the first job was cancelled. The code starts
+    // it, through the same gate as every job. Not while a task is live (an
+    // instruction then answers the task), a request waits, a computer action
+    // waits, or the words are for a session.
+    if (
+      !directGoal &&
+      this.world.jobs &&
+      (!current || taskIsOver(current)) &&
+      this.world.desk.pending().length === 0 &&
+      !this.world.execution?.snapshot().pendingAction &&
+      !this.forSession(words) &&
+      this.changesTheRunningJob(words, turn)
+    ) {
+      const said = await this.startJob(turn, words);
+      if (turn.refused === undefined) return said;
+      turn.refused = undefined;
+    }
     const execution = this.world.execution;
     if (execution?.snapshot().configured) {
       if (
@@ -5538,7 +5658,7 @@ export class Supervisor {
         // Flags only: what a job answered is data from a session, and stays behind job_result.
         const newestJob = this.jobsNow(1)[0];
         const jobFacts = this.world.jobs
-          ? `jobs that you started in the last 24 hours=${this.jobsNow(20).filter((job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000).length}; newest job has its answer=${!!newestJob?.done};${newestJob?.done ? ' that job\'s session is over, so more work on what it made ("now make the header blue", "add a footer") is a new job: call start_job, and do not look for a session to type into;' : ""}`
+          ? `jobs that you started in the last 24 hours=${this.jobsNow(20).filter((job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000).length}; newest job has its answer=${!!newestJob?.done};${newestJob?.done ? ' that job\'s session is over, so more work on what it made ("now make the header blue", "add a footer") is a new job: call start_job, and do not look for a session to type into;' : newestJob && !newestJob.waiting && this.world.now() - newestJob.startedAt < 24 * 60 * 60 * 1000 ? ' that job still works and no tool changes or cancels it, so more work on what it makes, or a change of mind about it ("make the buttons bigger instead"), is a new job: call start_job, and never say that a job was cancelled, stopped or changed;' : ""}`
           : "";
         // The kind of each agent, from a fixed list: a label is text that
         // another Mac can send, and has no place in an instruction.
