@@ -177,19 +177,23 @@ greets you when FaceTime is ready. Things to say:
 | "Approve it." "Deny it."                            | The request that an agent waits on is answered             |
 | "Zoom in on the terminal that runs the tests."      | The video shows only that window                           |
 | "Show the whole screen."                            | The video shows the whole screen again                     |
-| "My phone is sideways."                             | The picture uses its whole width                           |
+| "The sides of the picture are cut."                 | Everything is drawn in the middle of the picture           |
 | "Hide the screen."                                  | The video is the mascot again                              |
 
 How the call looks:
 
-- A phone held upright with its video set to fill shows only the middle of
-  the picture. So the mascot, and a shared screen, are drawn in that middle
-  strip: nothing is cut. A shared screen shows whole, and small.
+- What the caller sees is the Video framing of your line, on the line's page
+  in the Chert dashboard. It is fixed for a call. Fit, the default, shows the
+  whole picture. Fill turns the video upright and shows only the middle of the
+  picture, so that it fills a phone held upright.
+- With Fill, put `CLAWDTIME_LINE_FRAMING=fill` in `.env.local`. The mascot,
+  and a shared screen, are then drawn in that middle strip: nothing is cut. A
+  shared screen shows whole, and small.
 - "Zoom in on the session that builds the page" shows only that one window on
   the video. "Show the whole screen" goes back.
-- Turn the phone sideways and say "my phone is sideways": the picture then
-  uses its whole width. `CLAWDTIME_LINE_PHONE=wide` in `.env.local` makes that
-  the start.
+- With Fit, the picture uses its whole width. If your phone cuts its sides,
+  say so: everything is then drawn in the middle. "Make it wide again" goes
+  back.
 - Hang up and call back: ClawdTime knows what you said in the last day, and
   goes on from there.
 
@@ -202,8 +206,9 @@ How the call sounds:
   mark alone.
 - While the agent waits for a call it sends nothing: its picture is ready, and
   goes out as the first thing of a call.
-- The wide picture turns on only when your own words ask for it ("my phone is
-  sideways", "make it wide"). The voice model alone cannot turn it on.
+- After you asked for the middle picture, the wide one comes back only when
+  your own words ask for it ("make it wide"). The voice model alone cannot
+  turn it on.
 - ClawdTime does not listen while it speaks, nor for half a second after. On a
   phone line its own voice comes back, and it would stop itself or answer
   itself. Its answers are short: wait for the end of the sentence, then speak.
