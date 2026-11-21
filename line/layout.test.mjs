@@ -12,6 +12,8 @@ const {
   screenLayout,
   seenBox,
   STONE_ROOM,
+  framingName,
+  startLayout,
 } = await import("./layout.mjs");
 
 test("a phone held upright with the video set to fill sees the middle strip of the picture", () => {
@@ -97,4 +99,20 @@ test("the filter fits the whole screen, or one window of it, into the box of the
       view: { x: 0, y: 0, w: 0, h: 0 },
     }).includes("crop"),
   );
+});
+
+test("the layout of a call follows the line's Video framing: fit is whole and wide, fill is the middle strip", () => {
+  assert.equal(framingName("fill"), "fill");
+  assert.equal(framingName("FILL"), "fill");
+  assert.equal(framingName("fit"), "fit");
+  // Chert's default is fit, so that is what an unset or unknown value means.
+  for (const value of [undefined, null, "", "cover", 3])
+    assert.equal(framingName(value), "fit");
+  // The first name of the setting spoke of the phone. It still counts when the new one is not set.
+  assert.equal(framingName(undefined, "upright"), "fill");
+  assert.equal(framingName(undefined, "wide"), "fit");
+  assert.equal(framingName("fit", "upright"), "fit");
+  assert.equal(startLayout("fill"), "upright");
+  assert.equal(startLayout("fit"), "wide");
+  assert.equal(startLayout(framingName(undefined)), "wide");
 });

@@ -1,9 +1,26 @@
 // Where things go on the picture of the call.
 //
-// The picture is 16 by 9. A phone held upright with the video set to fill shows only the middle of it: a strip
-// as wide as the phone is narrow. What is outside that strip is cut on the caller's screen. So the layout
-// "upright" keeps the stone, and a shared screen, inside that strip. The layout "wide" uses the whole picture:
-// for a phone held sideways, or a video set to fit.
+// The picture is 16 by 9, the size of the line's camera. What the caller sees of it is the line's Video framing,
+// a setting of the line in Chert that is fixed for a whole call:
+//  - "fit", Chert's default, sends the whole picture.
+//  - "fill" turns the video upright and sends only the middle of the picture, so that it fills a phone held
+//    upright. What is outside that middle strip is cut on the caller's screen.
+// The agent cannot change the framing, so it draws for it. The layout "upright" keeps the stone, and a shared
+// screen, inside the strip. The layout "wide" uses the whole picture.
+
+export const FRAMINGS = ["fit", "fill"];
+/**
+ * The line's Video framing, from the setting of the agent. Anything else is "fit", as in Chert.
+ * `phone` is the first name of this setting, which spoke of the phone: "upright" was the fill case.
+ */
+export function framingName(value, phone) {
+  const named = String(value ?? "").toLowerCase();
+  if (FRAMINGS.includes(named)) return named;
+  return String(phone ?? "").toLowerCase() === "upright" ? "fill" : "fit";
+}
+/** The layout that a call starts with on a line of this framing. */
+export const startLayout = (framing) =>
+  framing === "fill" ? "upright" : "wide";
 
 export const LAYOUTS = ["upright", "wide"];
 /** A phone screen held upright: about 9 wide for 19.5 tall. */

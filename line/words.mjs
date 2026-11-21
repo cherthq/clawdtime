@@ -4,7 +4,7 @@
 // caller's own words asked for it. The words of a sentence often arrive a moment after the model has acted on
 // its sound, so a check can wait for them. The words stay in memory for a short time and go nowhere.
 
-/** Words of a caller who holds the phone sideways, or who asks for a wide or a large picture. */
+/** Words of a caller who asks for a wide or a large picture, or who holds the phone sideways. */
 export const WIDE_WORDS =
   /\b(?:side\s?ways|landscape|horizontal(?:ly)?|rotat\w*|turn\w* (?:the|my|this) phone|wide\w*|full width|bigger|larger|large)\b/i;
 
