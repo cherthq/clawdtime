@@ -68,10 +68,10 @@ const SHOWN = new Set(["listening", "thinking", "speaking"]);
 const agent = defineAgent({
   entry: async (ctx) => {
     await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
-    // Chert prepares a room before a caller exists. Join at once, but open no model session and no capture yet.
-    const caller = await ctx.waitForParticipant();
-    const callStarted = Date.now();
-    log("call_started");
+    // Chert prepares a room before a caller exists. Join at once, but open no model session and no screen
+    // capture yet. The picture is sent from now on: when the call comes, its first frame is already there, so
+    // the caller sees the stone as soon as the line shows video.
+    let callStarted = 0;
 
     // One camera track from this agent: the line shows video only from the participant that speaks.
     const source = new VideoSource(WIDTH, HEIGHT);
@@ -110,6 +110,12 @@ const agent = defineAgent({
       source: TrackSource.SOURCE_CAMERA,
     });
     const timer = setInterval(frame, 1000 / FPS);
+    // A room that ends before a caller came must leave no timer behind.
+    ctx.addShutdownCallback(async () => clearInterval(timer));
+
+    const caller = await ctx.waitForParticipant();
+    callStarted = Date.now();
+    log("call_started");
 
     const showScreen = async (on) => {
       if (!on) {
@@ -305,12 +311,27 @@ const agent = defineAgent({
     // the caller speaks first.
     stopGreeting = greetOnBridgeReady(
       ctx.room,
-      () => {
-        log("greeting");
+      (signal) => {
+        log("greeting", { signal });
         ears.ready();
         say(greeting);
       },
-      { event: RoomEvent.RoomMetadataChanged },
+      {
+        event: RoomEvent.RoomMetadataChanged,
+        // The line publishes its audio track when FaceTime is ready, about two seconds before the ready mark
+        // reaches the room. CLAWDTIME_LINE_GREET_ON=mark waits for the mark alone.
+        ...(process.env.CLAWDTIME_LINE_GREET_ON === "mark"
+          ? {}
+          : {
+              trackEvents: [
+                RoomEvent.TrackPublished,
+                RoomEvent.TrackSubscribed,
+              ],
+            }),
+        // Both signals are in the log with their time, so the gain shows in the records of each call.
+        onSignal: (kind) =>
+          log("ready_signal", { kind, ms: Date.now() - callStarted }),
+      },
     );
     // Say the result of a job as soon as it is done: the caller must not have to ask at the right moment.
     jobs = watchJobs({
