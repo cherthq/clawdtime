@@ -821,6 +821,13 @@ const seeLead =
  */
 const toldLead =
   /^(?:(?:please|ok|okay|so|then|now|and|also|hey|hi|clawdtime|just|well|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+/**
+ * What a second instruction for a session opens with, in "tell deploy fix to
+ * run the tests and push the branch": a verb of software work, and nothing
+ * else. Only such a rest lets the code type the first part by itself.
+ */
+const restVerb =
+  /^(?:push|commit|merge|rebase|deploy|release|tag|build|lint|format|test|fix|update|write|add|review|clean\s+up|refactor)\b/i;
 /** Words that point at a session to tell, with no name: "tell it to ...", "ask that one to ...". */
 const tellPointer =
   /^(?:it|that\s+one|this\s+one|that\s+session|this\s+session|the\s+session|that\s+agent)$/i;
@@ -1797,6 +1804,11 @@ interface Turn {
    * and without the full name of the session: a call of the model never does.
    */
   ownTyping?: ToolCall;
+  /**
+   * The code itself typed words of this message into a session: the message
+   * was words for that session. No job and no task starts for it too.
+   */
+  typedByCode?: boolean;
 }
 /** What the model reads when it asks for new work with words that are for a session that runs. */
 const forThatSession = (session: AgentSession) =>
@@ -2171,6 +2183,141 @@ export class Supervisor {
     return readings;
   }
   /**
+   * "Tell deploy fix to run the tests and push the branch": the clause that
+   * speaks to the session is followed by more. The first part is words for
+   * the session for sure. The rest can be more words for it, or work of its
+   * own ("tell docs to rebase and build a landing page"): nothing in the
+   * sentence says which. So the code types the first part only, starts
+   * nothing, and says how to send or to start the rest. This reader gives the
+   * session, the first part and the rest, in the person's words, when the
+   * message reads that way in one way only: only a filler stands before the
+   * clause, the first part passes every condition of the plain form, and the
+   * rest is joined by "and" or "then" and each part of it opens with a verb
+   * of software work (`restVerb`): a short list of what is taken, because no
+   * list of what must not be taken is ever complete. On top of that: no
+   * question, nothing that takes back or hedges, no time or condition, no
+   * name of a session, no word of the first part again, and nothing that a
+   * tool of ClawdTime itself does. Any other message goes to the model, as
+   * before, and the code then types nothing by itself.
+   */
+  private toldAndMore(spoken: string, turn?: Turn) {
+    if (/\?/.test(spoken) || takesBack(spoken) || takenBackAtTheEnd(spoken))
+      return null;
+    const clauses = clausesOf(spoken);
+    const at = clauses.findIndex(
+      (clause) => clause.replace(toldLead, "").trim() !== "",
+    );
+    if (at < 0 || at >= clauses.length - 1) return null;
+    const told = /^(?:tell|ask)\s+(.+)$/i.exec(
+      clauses[at]!.replace(toldLead, "").trim(),
+    );
+    if (!told) return null;
+    const readings: { session: AgentSession; text: string }[] = [];
+    for (const found of told[1]!.matchAll(/\s+to\s+/gi)) {
+      const session = this.toldWho(told[1]!.slice(0, found.index), turn);
+      const text = told[1]!.slice(found.index + found[0].length).trim();
+      if (session && text) readings.push({ session, text });
+    }
+    const [only] = readings;
+    if (readings.length !== 1 || !only || !this.plainWords(only.text))
+      return null;
+    // The rest, as the person said it: what follows the clause in the
+    // message. Only a rest that "and" or "then" joins is more of the same
+    // kind: after a bare comma, a time or a condition can follow in any
+    // words ("..., provided the build passes", "..., end of day"). No mark
+    // stands inside the rest for the same reason.
+    const from = spoken.indexOf(clauses[at]!);
+    if (from < 0) return null;
+    const joined = /^\s*,?\s*(?:and\s+then|and|then)\s+(?:to\s+)?(.+)$/is.exec(
+      spoken.slice(from + clauses[at]!.length),
+    );
+    if (!joined) return null;
+    const rest = joined[1]!
+      .replace(/(?:\s+(?:please|pls))?[\s.!]*$/i, "")
+      .trim();
+    if (/[,;:.!?\n]/.test(rest)) return null;
+    const more = clauses
+      .slice(at + 1)
+      // "... and then push", "..., and to commit": the joining words are no
+      // part of the instruction.
+      .map((clause) => clause.replace(/^(?:then\s+)?(?:to\s+)?/i, "").trim());
+    return rest &&
+      rest.length <= 200 &&
+      // The answer says the rest aloud: no quote in it, and never a secret.
+      !/["\u201c\u201d]/.test(rest) &&
+      !looksSecret(rest) &&
+      // A rest that passes the gate of one of ClawdTime's own tools is for
+      // ClawdTime: "... and make it bigger", "... and look at the screen",
+      // "... and refresh the page", "... and I'm away". The model, which
+      // has those tools, reads the message then.
+      !asksForSize(rest) &&
+      !asksToLook(rest) &&
+      !/\b(?:screen\s*shots?|screen|picture|photo)\b/i.test(rest) &&
+      !speaksOfBrowser(rest) &&
+      !asksToOpen(rest) &&
+      !saysAway(rest) &&
+      // A rest that points back ("... and schedule it for tonight", "...
+      // and save that to memory") speaks of the first part: it can put it
+      // off or hand it to ClawdTime. It adds no instruction of its own.
+      !/\b(?:it|that|this|them|those|these)\b/i.test(rest) &&
+      // A session's name in the rest corrects or adds a session ("... and
+      // docs too").
+      !(this.world.board()?.sessions ?? []).some((session) =>
+        saidAsWords(title(session), rest),
+      ) &&
+      // A word of ClawdTime's own: its memory, its notes, its trove, away,
+      // and what a person asks it to keep ("... and write down the port",
+      // "... and add a reminder").
+      !/\b(?:memory|notes?|trove|decisions?|away|reminders?|calendar|write\s+down)\b/i.test(
+        rest,
+      ) &&
+      // A content word of the first part in the rest speaks of the first
+      // part again ("... and halt the tests", "... and move the tests to
+      // tomorrow"): it can stop it or put it off.
+      !spokenWords(only.text)
+        .filter((word) => word.length >= 4)
+        .some((word) => new Set<string>(spokenWords(rest)).has(word)) &&
+      more.every(
+        (clause) =>
+          // Each part of the rest opens with a verb of software work. The
+          // list is short on purpose: a rest that it does not know goes to
+          // the model, as before, and the first part is then not typed by
+          // the code. No list of what a rest must not say is ever complete.
+          restVerb.test(clause) &&
+          // Each part of the rest is a plain instruction, as the first part
+          // is: no word that takes back, hedges or names an audience.
+          this.plainWords(clause) &&
+          this.seeAsked(clause) === null &&
+          // Not a time or a condition, which puts the first part off ("...,
+          // but only after lunch", "..., tomorrow").
+          !seeLater(clause) &&
+          !/^(?:only|later|tomorrow|tonight|today|in|at|on|after|before|when|whenever|once|until|unless|if|while|as|by|first|next|soon|now)\b/i.test(
+            clause,
+          ) &&
+          // Not words for ClawdTime itself, or for another session.
+          !/^(?:tell|ask|say|type|send|remember|note|forget|recall|approve|deny|allow|accept|cancel|open|show|close|another|other)\b/i.test(
+            clause,
+          ),
+      )
+      ? { ...only, rest }
+      : null;
+  }
+  /** Words for a session that the code can type by itself: one clause, with no word that takes it back, hedges it, begins something else or names an audience. */
+  private plainWords(text: string) {
+    return (
+      oneClause(text) &&
+      !mayTakeBack(text) &&
+      !maySayMore(text) &&
+      // "Tell it to the team", "tell docs to everyone", "tell it to Marketing":
+      // an audience, not an instruction for the session. A first word with
+      // a capital is a name.
+      !/^(?:an?|the|my|our|your|their|his|her|every(?:one|body)|all|us|them|him|me|both|who(?:m)?ever|any(?:one|body)|some(?:one|body)|no(?:body|\s+one)|people|others)\b/i.test(
+        text,
+      ) &&
+      !/^\p{Lu}/u.test(text)
+    );
+  }
+  /**
    * The plain form that the code types by itself, and the only one for which
    * the tool that types needs no cue word and no full name: the message takes
    * nothing back, it reads as that form in one way, and the words for the
@@ -2181,19 +2328,7 @@ export class Supervisor {
     if (takesBack(spoken) || takenBackAtTheEnd(spoken)) return null;
     const readings = this.toldPlainly(spoken, turn);
     const only = readings.length === 1 ? readings[0]! : null;
-    return only &&
-      oneClause(only.text) &&
-      !mayTakeBack(only.text) &&
-      !maySayMore(only.text) &&
-      // "Tell it to the team", "tell docs to everyone", "tell it to Marketing":
-      // an audience, not an instruction for the session. A first word with
-      // a capital is a name.
-      !/^(?:an?|the|my|our|your|their|his|her|every(?:one|body)|all|us|them|him|me|both|who(?:m)?ever|any(?:one|body)|some(?:one|body)|no(?:body|\s+one)|people|others)\b/i.test(
-        only.text,
-      ) &&
-      !/^\p{Lu}/u.test(only.text)
-      ? only
-      : null;
+    return only && this.plainWords(only.text) ? only : null;
   }
   /**
    * True when a sentence that opens with an agent can be about a session that
@@ -2263,6 +2398,11 @@ export class Supervisor {
     // Words for a session that runs are no task either.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
+    if (turn.typedByCode)
+      return refuse(
+        turn,
+        "The person's message was words for a session, and they are typed. No job and no task starts for the same message.",
+      );
     // The person's own last words must ask for a task. The model alone cannot start one.
     if (!asksToStart(spoken))
       return refuse(
@@ -2418,6 +2558,13 @@ export class Supervisor {
     // runs are not work for a new one.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
+    // The code typed words of this message into a session already: those
+    // words were what the person asked for.
+    if (turn.typedByCode)
+      return refuse(
+        turn,
+        "The person's message was words for a session, and they are typed. No job and no task starts for the same message.",
+      );
     // The whole sentence is read, never a part of it: a question, a remark
     // and a sentence that takes the work back start nothing.
     if (!asksForWork(spoken)) {
@@ -3481,7 +3628,9 @@ export class Supervisor {
         // and only in the code's own call: where something else waits for an
         // answer, the code makes no such call.
         const plainly =
-          turn.ownTyping === call ? this.plainlyTold(spoken, turn) : null;
+          turn.ownTyping === call
+            ? (this.plainlyTold(spoken, turn) ?? this.toldAndMore(spoken, turn))
+            : null;
         const told =
           plainly !== null &&
           plainly.session === session &&
@@ -4224,13 +4373,18 @@ export class Supervisor {
         !hasDecisionTarget() &&
         computerApproval() === null &&
         !(waitingTask && !taskIsOver(waitingTask));
+      const plainly =
+        fits.length === 0 && nothingWaits && toldForms(words).length === 0;
+      // "Tell deploy fix to run the tests and push the branch": the first
+      // part is typed, and the rest is not sent and not started.
+      const andMore = plainly ? this.toldAndMore(words, turn) : null;
       const toType =
         fits.length === 1 &&
         oneClause(fits[0]!.text) &&
         !mayTakeBack(fits[0]!.text)
           ? fits[0]!
-          : fits.length === 0 && nothingWaits && toldForms(words).length === 0
-            ? this.plainlyTold(words, turn)
+          : plainly
+            ? (this.plainlyTold(words, turn) ?? andMore)
             : null;
       if (toType) {
         const call: ToolCall = {
@@ -4250,6 +4404,13 @@ export class Supervisor {
         } finally {
           turn.ownTyping = undefined;
         }
+        if (typed.startsWith("Typed into ")) turn.typedByCode = true;
+        // The first part went to the session: the answer is the code's own,
+        // so that the rest is neither sent nor started behind the person's
+        // back, and no model rewords it. When the tool refused, the model
+        // answers as before.
+        if (toType === andMore && andMore && typed.startsWith("Typed into "))
+          return `Typed into ${title(andMore.session)}: "${andMore.text}". I did not send "${andMore.rest}": say "tell it to ${andMore.rest}" to send that too, or say it alone to start it as new work.`;
         messages.push(
           { role: "assistant", content: "", toolCalls: [call] },
           { role: "tool", toolCallId: call.id, content: typed.slice(0, 6000) },

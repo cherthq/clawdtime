@@ -387,6 +387,25 @@ These rules are in the code, not in the model's instructions:
   team" and "tell it to Marketing" are not typed: words that open with "the", "my",
   "everyone", "both" or a capital letter are an audience, not an instruction.
 
+- "Tell deploy fix to run the tests and push the branch": ClawdTime types
+  the first part ("run the tests") into deploy fix, and neither sends nor
+  starts the rest. The rest can be more words for that session, or work of
+  its own: the sentence does not say which. The answer names the rest and
+  says how to go on: "tell it to push the branch" sends it to the same
+  session, and the rest alone starts it as new work. This holds only for a
+  narrow form: only a filler stands before "tell", the first part passes the
+  conditions above, the rest is joined by "and" or "then", and each part of
+  the rest opens with a verb of software work from a short list (push,
+  commit, merge, rebase, deploy, release, tag, build, lint, format, test,
+  fix, update, write, add, review, clean up, refactor). The list says what is
+  taken, because a list of what must not be taken is never complete. A rest
+  with a time or a condition, with a word that points back or a word of the
+  first part again, with the name of a session, with something of ClawdTime
+  itself (a size, the screen, the browser, memory, notes, the trove, away),
+  with a quote or with something that looks like a key is not taken either.
+  For every other message of this kind, ClawdTime types nothing by itself
+  and reads the whole message as before. Once ClawdTime typed words of a
+  message by itself, no job starts for that same message.
 - Words for a session that runs never start a job or a task: "show me docs
   and tell deploy fix to run the tests again" opens docs and types into
   deploy fix, and "ask deploy fix if the tests pass" starts nothing. Work of
