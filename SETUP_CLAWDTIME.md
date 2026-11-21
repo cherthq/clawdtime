@@ -177,6 +177,16 @@ greets you when FaceTime is ready. Things to say:
 | "Approve it." "Deny it."                            | The request that an agent waits on is answered             |
 | "Hide the screen."                                  | The video is the mascot again                              |
 
+How the call sounds:
+
+- FaceTime needs about ten seconds to connect after you call. ClawdTime greets
+  you when FaceTime is ready, not before.
+- ClawdTime does not listen while it speaks, nor for half a second after. On a
+  phone line its own voice comes back, and it would stop itself or answer
+  itself. Its answers are short: wait for the end of the sentence, then speak.
+  For a line that brings no voice back, `CLAWDTIME_LINE_BARGE_IN=on` in
+  `.env.local` lets you cut in.
+
 ## 6. Text it (optional)
 
 The same number takes text messages. ClawdTime reads your texts every few
@@ -243,17 +253,19 @@ Say it plainly to yourself before you start:
 
 ## When something fails
 
-| What you see                           | What to do                                                                 |
-| -------------------------------------- | -------------------------------------------------------------------------- |
-| The call is declined                   | Join your phone to the line first (step 1). Call with FaceTime             |
-| The call ends after ten seconds        | The agent said nothing: look in terminal 1 for a model key or credit error |
-| No video                               | Call with FaceTime Video, not Audio                                        |
-| "ClawdTime did not answer on this Mac" | `clawdtime agents` must work in a terminal. Run `npm link` again           |
-| The screen video is black              | Grant Screen Recording to your terminal app, then restart the agent        |
-| The wrong screen is shown              | Set `CLAWDTIME_LINE_SCREEN_DEVICE` (see `.env.example`)                    |
-| `line_in_use` from `chert dev`         | Another session holds the line. Stop it there, or wait                     |
-| A job starts but no answer comes       | Look at its terminal window. `clawdtime jobs` lists every job              |
-| `clawdtime texts check` is refused     | Make a new key with read and write access. Check the project id            |
+| What you see                                                   | What to do                                                                          |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| The call is declined                                           | Join your phone to the line first (step 1). Call with FaceTime                      |
+| The call ends after ten seconds                                | The agent said nothing: look in terminal 1 for a model key or credit error          |
+| ClawdTime stops in the middle of a sentence, or answers itself | Take the newest `main` (`./host.sh update`), and keep `CLAWDTIME_LINE_BARGE_IN` off |
+| The greeting never comes                                       | The same update: sound at pickup no longer cancels the greeting                     |
+| No video                                                       | Call with FaceTime Video, not Audio                                                 |
+| "ClawdTime did not answer on this Mac"                         | `clawdtime agents` must work in a terminal. Run `npm link` again                    |
+| The screen video is black                                      | Grant Screen Recording to your terminal app, then restart the agent                 |
+| The wrong screen is shown                                      | Set `CLAWDTIME_LINE_SCREEN_DEVICE` (see `.env.example`)                             |
+| `line_in_use` from `chert dev`                                 | Another session holds the line. Stop it there, or wait                              |
+| A job starts but no answer comes                               | Look at its terminal window. `clawdtime jobs` lists every job                       |
+| `clawdtime texts check` is refused                             | Make a new key with read and write access. Check the project id                     |
 
 More: [the supervisor guide](docs/SUPERVISOR.md), [the agent board](docs/AGENT_BOARD.md),
 and `chert guide` for the line itself.
