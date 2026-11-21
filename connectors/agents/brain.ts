@@ -1158,12 +1158,13 @@ const followsUp = (spoken: string) => {
   );
 };
 /**
- * "Start it now", "don't wait": the person ends the wait of a job that waits
- * for the job before it. Whole messages only, so that no other sentence with
- * these words starts a job early.
+ * "Start it now": the person ends the wait of a job that waits for the job
+ * before it. Whole messages only, so that no other sentence with these words
+ * starts a job early. "Don't wait" alone is not one: it can answer another
+ * question, and a "don't" can read as a no to a request.
  */
 const startsNow = (text: string) =>
-  /^(?:(?:ok|okay|so|then|please|just|no|well)[,\s]+)*(?:(?:start|begin)\s+(?:it|that|that one|that job|the job|this one)\s+(?:now|right now|at once|anyway|without waiting)|start now|begin now|(?:do\s+not|don['\u2019]?t)\s+wait(?:\s+for\s+(?:it|that|the\s+(?:first|other)\s+(?:one|job)))?(?:[,\s]+start (?:it )?now)?)(?:[,\s]+please)?[\s.!]*$/i.test(
+  /^(?:(?:ok|okay|so|then|please|just|well|yes|no)[,\s]+)*(?:(?:do\s+not|don['\u2019]?t)\s+wait[,\s]+)?(?:(?:start|begin)\s+(?:it|that|that one|that job|the job|this one)\s+(?:now|right now|at once|anyway|without waiting)|start now|begin now)(?:[,\s]+please)?[\s.!]*$/i.test(
     text.trim(),
   );
 const pointsBack = (spoken: string) =>
@@ -1656,6 +1657,12 @@ export class Supervisor {
     const before = turn.done.get("job");
     if (before !== undefined) return before;
     if (this.ownedByRequest(turn, spoken)) return refuse(turn, requestOwns);
+    // "Start it now" ends the wait of a job. It is no work of its own.
+    if (startsNow(spoken))
+      return refuse(
+        turn,
+        "That sentence starts a job that waits, and no job waits now. It names no work. Ask the person what to start.",
+      );
     // The whole sentence is read, never a part of it: a question, a remark
     // and a sentence that takes the work back start nothing.
     if (!asksForWork(spoken)) {
@@ -2489,22 +2496,45 @@ export class Supervisor {
       current.canAnswer &&
       !!current.question;
     // "Start it now": a job that the person asked for waits for the job
-    // before it, and the person ends that wait. Only where nothing else can
-    // own the sentence: no request and no task waits for an answer, and the
-    // turn is open.
+    // before it, and the person ends that wait. These words are no work and
+    // no answer to anything else, so the code owns them whenever a job was
+    // started lately: they never reach a task, a request or the model.
+    // A choice of the task that asks is the task's own text: a click on it
+    // answers the task, as before.
+    const isChoice =
+      !!current &&
+      !taskIsOver(current) &&
+      current.choices.some(
+        (choice) =>
+          spokenWords(choice).join(" ") === spokenWords(words).join(" "),
+      );
     if (
       startsNow(words) &&
       !turn.closed &&
-      !taskWaits &&
-      this.world.desk.pending().length === 0 &&
-      this.world.jobs?.release &&
-      this.jobsNow(20).some((job) => job.waiting)
+      !isChoice &&
+      this.world.jobs?.release
     ) {
-      try {
-        return this.world.jobs.release().said;
-      } catch {
-        return "I could not start that job from here. Press Return in its terminal window.";
+      const lately = this.jobsNow(20).filter(
+        (job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000,
+      );
+      if (lately.some((job) => job.waiting)) {
+        // A request of an agent or a question of a task waits too: the words
+        // could be taken as its answer. Nothing is passed on, and both are named.
+        if (this.world.desk.pending().length > 0)
+          return `${this.waitingRequest()} A job also waits for the job before it. I did nothing with that sentence: answer the request first, then say it again.`;
+        if (taskWaits)
+          return `Your task asks: ${clean(current!.question!, 200)} A job also waits for the job before it. I did nothing with that sentence: answer the task first, then say it again.`;
+        try {
+          return this.world.jobs.release().said;
+        } catch {
+          return "I could not start that job from here. Press Return in its terminal window.";
+        }
       }
+      // No job waits, jobs ran lately, and nothing else waits for an answer:
+      // the sentence is about the jobs, and it starts no new job.
+      const newest = lately[0];
+      if (newest && !taskWaits && this.world.desk.pending().length === 0)
+        return `No job waits now. The job "${clean(newest.job, 80)}" ${newest.done ? "is done: ask me for its answer" : "works already"}.`;
     }
     // "Then ask it", after the person's question about one session. Nothing
     // is typed: the code says the sentence that sends that question, with the

@@ -129,6 +129,8 @@ const quoted = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 const waitsFile = "waits";
 const startNowFile = "start-now";
 const waitOverFile = "wait-over";
+/** Written when the wait ran out: a job that waits for this one gives up too. */
+const gaveUpFile = "gave-up";
 /** How many times the wait of a job looks for the answer of the job before it: two seconds each, two hours in all. */
 const waitSteps = 3600;
 const neverFinished =
@@ -139,31 +141,46 @@ const neverFinished =
  * The wait also ends when the person says to start it now (the file `now`),
  * and in a terminal when a key is pressed. When the job before never wrote
  * an answer in two hours, this job writes that as its own answer and starts
- * nothing: work that begins hours late, with no one there, is a surprise.
+ * nothing: work that begins hours late, with no one there, is a surprise. A
+ * job that waits for a job that gave up gives up too.
  */
 export const waitBlock = (
-  paths: { answer: string; now: string; over: string; result: string },
+  paths: {
+    /** The answer of the job before this one, and the mark that it gave up its own wait. */
+    answer: string;
+    beforeGaveUp: string;
+    /** In this job's own folder. */
+    now: string;
+    over: string;
+    result: string;
+    gaveUp: string;
+  },
   steps = waitSteps,
 ) => {
   const answer = quoted(paths.answer);
   const now = quoted(paths.now);
   const over = quoted(paths.over);
+  const result = quoted(paths.result);
+  const gaveUp = quoted(paths.gaveUp);
   return [
+    "released=",
     `if [[ ! -e ${answer} && ! -e ${now} ]]; then`,
     "  print -r -- 'This job waits for the job before it. Press Return to start it now.'",
     "  waited=0",
-    "  released=",
     `  while [[ ! -e ${answer} && ! -e ${now} && $waited -lt ${Math.max(1, Math.floor(steps))} ]]; do`,
     "    if [[ -t 0 ]]; then read -t 2 -k 1 && { released=1; break; }; else sleep 2; fi",
     "    waited=$((waited + 1))",
     "  done",
-    `  if [[ ! -e ${answer} && ! -e ${now} && -z $released ]]; then`,
-    `    print -r -- ${quoted(neverFinished)} > ${quoted(paths.result)}`,
-    "    exit 0",
-    "  fi",
     "fi",
-    // The wait is over: the state of the job says "works" from here. A link
-    // in that place is not written through.
+    // The job before wrote no answer in time, or it gave up its own wait:
+    // this job gives up too, unless the person started it. A link in the
+    // place of a file is not written through.
+    `if [[ ! -e ${now} && -z $released ]] && [[ ! -e ${answer} || -e ${quoted(paths.beforeGaveUp)} ]]; then`,
+    `  [[ -L ${result} ]] || print -r -- ${quoted(neverFinished)} > ${result}`,
+    `  [[ -L ${gaveUp} ]] || : > ${gaveUp}`,
+    "  exit 0",
+    "fi",
+    // The wait is over: the state of the job says "works" from here.
     `[[ -L ${over} ]] || : > ${over}`,
     "",
   ].join("\n");
@@ -348,7 +365,7 @@ export class Jobs implements JobPort {
     // job then ends with a true sentence, and holds no place for two hours.
     writeFileSync(
       script,
-      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor ? waitBlock({ answer: waitsFor, now: join(directory, startNowFile), over: join(directory, waitOverFile), result }) : ""}${agents[agent](quoted(prompt))}\n`,
+      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor && newest ? waitBlock({ answer: waitsFor, beforeGaveUp: join(this.folder, newest.id, gaveUpFile), now: join(directory, startNowFile), over: join(directory, waitOverFile), result, gaveUp: join(directory, gaveUpFile) }) : ""}${agents[agent](quoted(prompt))}\n`,
       { mode: 0o700 },
     );
     chmodSync(script, 0o700);

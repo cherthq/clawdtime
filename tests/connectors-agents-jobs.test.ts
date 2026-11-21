@@ -608,9 +608,11 @@ describe("a job that follows up on a job that still runs", () => {
     /** The paths that the wait of the job `id` uses, when it waits for `before`. */
     const paths = (id: string, before: string) => ({
       answer: join(folder, before, "result.md"),
+      beforeGaveUp: join(folder, before, "gave-up"),
       now: join(folder, id, "start-now"),
       over: join(folder, id, "wait-over"),
       result: join(folder, id, "result.md"),
+      gaveUp: join(folder, id, "gave-up"),
     });
     return { jobs, clock, calls, folder, ids, file, paths };
   };
@@ -780,9 +782,11 @@ describe("a job that follows up on a job that still runs", () => {
         const directory = mkdtempSync(join(tmpdir(), "clawdtime wait's-"));
         return {
           answer: join(directory, "answer.md"),
+          beforeGaveUp: join(directory, "before-gave-up"),
           now: join(directory, "start-now"),
           over: join(directory, "wait-over"),
           result: join(directory, "result.md"),
+          gaveUp: join(directory, "gave-up"),
         };
       };
       const line =
@@ -816,6 +820,29 @@ describe("a job that follows up on a job that still runs", () => {
         "The job before this one did not finish in two hours, so this job did not start. Ask for it again.\n",
       );
       expect(existsSync(c.over)).toBe(false);
+      expect(existsSync(c.gaveUp)).toBe(true);
+      // 4b. The job before gave up its own wait, and wrote that as its
+      //     answer: this job gives up too, and does not start hours late.
+      const e = fresh();
+      writeFileSync(e.answer, "The job before this one did not finish.");
+      writeFileSync(e.beforeGaveUp, "");
+      expect(zsh(`${waitBlock(e, 1)}print -r -- started`)).toBe("");
+      expect(readFileSync(e.result, "utf8")).toContain("did not start");
+      expect(existsSync(e.gaveUp)).toBe(true);
+      // 4c. The person started it: it starts, also after a job that gave up.
+      const f = fresh();
+      writeFileSync(f.answer, "The job before this one did not finish.");
+      writeFileSync(f.beforeGaveUp, "");
+      writeFileSync(f.now, "");
+      expect(zsh(`${waitBlock(f, 1)}print -r -- started`)).toBe("started\n");
+      // 4d. At the end of the wait, a link in the place of this job's answer
+      //     is not written through.
+      const g = fresh();
+      const kept = `${g.answer}.kept`;
+      writeFileSync(kept, "keep");
+      symlinkSync(kept, g.result);
+      expect(zsh(`${waitBlock(g, 1)}print -r -- started`)).toBe(line);
+      expect(readFileSync(kept, "utf8")).toBe("keep");
       // 5. A link in the place of the wait-over file is not written through.
       const d = fresh();
       const outside = `${d.answer}.outside`;

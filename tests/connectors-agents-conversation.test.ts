@@ -1806,6 +1806,7 @@ describe("more work on a job that still runs", () => {
 
 describe("start it now", () => {
   const work = "build a small landing page for my bakery in one html file";
+  const released = 'Okay. The job "also add a contact form to it" starts now.';
   const waitingJob = async () => {
     const made = mac();
     expect((await made.jobs.start(work)).ok).toBe(true);
@@ -1821,14 +1822,40 @@ describe("start it now", () => {
     const go = () => existsSync(join(made.folder, made.ids()[1]!, "start-now"));
     return { ...made, go };
   };
+  /** A task that asks the person something, with what it was answered. */
+  const asking = (world: SupervisorWorld, choices: string[] = []) => {
+    const answered: string[] = [];
+    const withTask: SupervisorWorld = {
+      ...world,
+      tasks: {
+        current: () => ({
+          id: "t1",
+          goal: "ship the site",
+          state: "waiting",
+          summary: "",
+          question: "Deploy now?",
+          choices,
+          canAnswer: true,
+          canAccept: false,
+        }),
+        canStart: () => false,
+        start: async () => ({ ok: true, message: "started" }),
+        answer: async (text: string) => {
+          answered.push(text);
+          return { ok: true, message: "answered" };
+        },
+        accept: async () => ({ ok: true, message: "accepted" }),
+        cancel: async () => ({ ok: true, message: "cancelled" }),
+      } as unknown as NonNullable<SupervisorWorld["tasks"]>,
+    };
+    return { world: withTask, answered };
+  };
 
   it.each([
     "start it now",
     "ok start it now please",
     "start that job now",
     "start now",
-    "don't wait",
-    "do not wait for it",
     "no, don\u2019t wait, start it now",
     "just start it anyway",
   ])(
@@ -1838,7 +1865,7 @@ describe("start it now", () => {
       const { model, seen } = scripted(["Okay."]);
       expect(
         await new Supervisor(made.world, model).reply([], words, "chat"),
-      ).toBe('Okay. The job "also add a contact form to it" starts now.');
+      ).toBe(released);
       expect(seen).toHaveLength(0);
       expect(made.go()).toBe(true);
       // No new job: the one that waited starts.
@@ -1854,6 +1881,9 @@ describe("start it now", () => {
     "start it now, never mind",
     "wait, why does it not start now",
     "start the deploy fix session now",
+    // "Don't wait" alone can answer another question, and reads as a no.
+    "don't wait",
+    "do not wait for it",
   ])("leaves %j to the model: nothing is released", async (words) => {
     const made = await waitingJob();
     const { model } = scripted(["Which one?"]);
@@ -1861,23 +1891,90 @@ describe("start it now", () => {
     expect(made.go()).toBe(false);
   });
 
-  it("releases nothing when no job waits, or while a request of an agent waits", async () => {
-    // No job waits: the model reads the message.
-    const idle = mac();
-    expect((await idle.jobs.start(work)).ok).toBe(true);
-    const { model, seen } = scripted(["Start what?"]);
-    expect(
-      await new Supervisor(idle.world, model).reply([], "start it now", "chat"),
-    ).toBe("Start what?");
-    expect(seen).toHaveLength(1);
-    // A request waits for the person: the sentence may be about it.
+  it("passes nothing on while a task asks a question: it names both, with a model or without", async () => {
+    for (const model of [scripted(["Okay."]).model, null]) {
+      const made = await waitingJob();
+      const { world, answered } = asking(made.world);
+      expect(
+        await new Supervisor(world, model).reply([], "start it now", "chat"),
+      ).toBe(
+        "Your task asks: Deploy now? A job also waits for the job before it. I did nothing with that sentence: answer the task first, then say it again.",
+      );
+      // The task got no answer, and the job still waits.
+      expect(answered).toEqual([]);
+      expect(made.go()).toBe(false);
+    }
+  });
+
+  it("lets a click on the task's own choice through to the task, also when it has those words", async () => {
     const made = await waitingJob();
-    waits(made.world);
-    await new Supervisor(
-      made.world,
-      scripted(["A request waits."]).model,
-    ).reply([], "start it now", "chat");
+    const { world, answered } = asking(made.world, ["Start it now", "Later"]);
+    await new Supervisor(world, null).reply([], "Start it now", "chat");
+    expect(answered).toEqual(["Start it now"]);
     expect(made.go()).toBe(false);
+  });
+
+  it("passes nothing on while a request of an agent waits: it names both and decides nothing", async () => {
+    for (const model of [scripted(["Okay."]).model, null]) {
+      const made = await waitingJob();
+      const request = waits(made.world);
+      expect(
+        await new Supervisor(made.world, model).reply(
+          [],
+          "start it now",
+          "chat",
+        ),
+      ).toBe(
+        "One request waits for your answer: git push origin main. Say approve or deny to answer it. A job also waits for the job before it. I did nothing with that sentence: answer the request first, then say it again.",
+      );
+      expect(made.world.desk.take(request.id)).toBeNull();
+      expect(made.go()).toBe(false);
+    }
+  });
+
+  it("starts no job with those words when no job waits", async () => {
+    // A job runs, and none waits: the code says so. The model is not asked,
+    // so it cannot start a job named "start it now".
+    const running = mac();
+    expect((await running.jobs.start(work)).ok).toBe(true);
+    const asked = wantsJob();
+    expect(
+      await new Supervisor(running.world, asked.model).reply(
+        [],
+        "start it now",
+        "chat",
+      ),
+    ).toBe(`No job waits now. The job "${work}" works already.`);
+    expect(asked.seen).toHaveLength(0);
+    expect(running.ids()).toHaveLength(1);
+    // The job is done.
+    writeFileSync(
+      join(running.folder, running.ids()[0]!, "result.md"),
+      "The page is at /work/app/bakery.html.\n",
+    );
+    expect(
+      await new Supervisor(running.world, asked.model).reply(
+        [],
+        "start it now",
+        "chat",
+      ),
+    ).toBe(
+      `No job waits now. The job "${work}" is done: ask me for its answer.`,
+    );
+    // No job at all: the model reads the message, and the job tool refuses
+    // those words as work.
+    const none = mac();
+    const eager = wantsJob();
+    await new Supervisor(none.world, eager.model).reply(
+      [],
+      "start it now",
+      "chat",
+    );
+    expect(none.windows).toHaveLength(0);
+    expect(
+      eager.seen[1]!.messages.find((message) => message.role === "tool")!
+        .content,
+    ).toContain("It names no work");
   });
 });
 
