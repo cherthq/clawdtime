@@ -197,6 +197,7 @@ describe("words for a session that runs are never a job", () => {
     steps: (ToolCall[] | string)[],
     sessions = two(),
     before?: (world: SupervisorWorld) => void,
+    history: ChatMessage[] = [],
   ) => {
     const made = mac(sessions);
     const typed: string[][] = [];
@@ -209,7 +210,11 @@ describe("words for a session that runs are never a job", () => {
     };
     before?.(world);
     const { model, seen } = scripted(steps);
-    const answer = await new Supervisor(world, model).reply([], words, "chat");
+    const answer = await new Supervisor(world, model).reply(
+      history,
+      words,
+      "chat",
+    );
     const results = seen.flatMap((asked) =>
       asked.messages
         .filter(
@@ -614,6 +619,457 @@ describe("words for a session that runs are never a job", () => {
       modelTypes("run the tests again", "deploy fix"),
     );
     expect(plain.typed).toEqual([["docs", "run the tests again"]]);
+  });
+
+  describe('"tell it to ...": the session that ClawdTime just acted on or spoke of', () => {
+    const aboutDeploy = () => [
+      said("user", "how long has deploy fix been running?"),
+      said("assistant", "deploy fix has been running for 3 minutes."),
+    ];
+    /** Two turns on one Mac: the first with its own script, then `words` with a model that only answers. */
+    const afterATurn = async (
+      first: string,
+      steps: (ToolCall[] | string)[],
+      words: string,
+      between: ChatMessage[] = [],
+      sessions = two(),
+    ) => {
+      const made = mac(sessions);
+      const typed: string[][] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async () => ({ ok: true }),
+        send: async (item, text) => {
+          typed.push([String(item.name), text]);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      const history: ChatMessage[] = [];
+      await talk(world, scripted(steps).model, history, first);
+      const before = typed.length;
+      history.push(...between);
+      await talk(world, scripted(["Okay."]).model, history, words);
+      return { typed: typed.slice(before), windows: made.windows };
+    };
+    const opensDeploy = [
+      [call("open_session", { session: "deploy fix" })],
+      "It is in front now.",
+    ];
+
+    it("types into the session that ClawdTime opened in the turn before, whatever the answer said", async () => {
+      for (const words of [
+        "tell it to also run the linter",
+        "ask it to also run the linter",
+        "ok tell that one to also run the linter",
+        "and tell that session to also run the linter please",
+        "Um, tell it to also run the linter.",
+      ]) {
+        const turn = await afterATurn("show me deploy fix", opensDeploy, words);
+        expect(turn.typed, words).toEqual([
+          ["deploy fix", "also run the linter"],
+        ]);
+        expect(turn.windows, words).toHaveLength(0);
+      }
+    });
+
+    it("types nothing when the answer of that turn then speaks of another session, or when the channel is another", async () => {
+      // "Opened docs. By the way, deploy fix is stuck.": "it" can be deploy fix.
+      for (const answer of [
+        "Opened docs. By the way, deploy fix is stuck.",
+        "docs is up front. deploy fix still waits for you.",
+      ]) {
+        const turn = await afterATurn(
+          "show me docs",
+          [[call("open_session", { session: "docs" })], answer],
+          "tell it to restart the server",
+        );
+        expect(turn.typed, answer).toEqual([]);
+      }
+      // A call opened a session for the same words, in the same seconds: the
+      // chat's "it" is not that session.
+      const made = mac(two());
+      const typed: string[][] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async () => ({ ok: true }),
+        send: async (item, text) => {
+          typed.push([String(item.name), text]);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      await new Supervisor(
+        world,
+        scripted([
+          [call("open_session", { session: "deploy fix" })],
+          "It is in front now.",
+        ]).model,
+      ).reply([], "show me deploy fix", "call");
+      await new Supervisor(world, scripted(["Okay."]).model).reply(
+        [
+          said("user", "show me deploy fix"),
+          said("assistant", "Which one do you mean?"),
+        ],
+        "tell it to restart the server",
+        "chat",
+      );
+      expect(typed).toEqual([]);
+    });
+
+    it('does not take "open" for the state of a session', async () => {
+      const turn = await run(
+        "tell it to run the tests again",
+        ["Okay."],
+        two(),
+        undefined,
+        [
+          said("user", "where is the docs site?"),
+          said("assistant", "Docs is open in the browser."),
+        ],
+      );
+      expect(turn.typed).toEqual([]);
+    });
+
+    it("types into the session that ClawdTime typed into in the turn before", async () => {
+      const turn = await afterATurn(
+        "tell deploy fix to run the tests again",
+        ["Okay."],
+        "tell it to also push the branch",
+      );
+      expect(turn.typed).toEqual([["deploy fix", "also push the branch"]]);
+    });
+
+    it("types nothing when the turn before acted on two sessions, or when another exchange came between", async () => {
+      // Docs opened and deploy fix got words: "it" can be either.
+      const both = await afterATurn(
+        "show me docs and tell deploy fix to run the tests again",
+        ["Okay."],
+        "tell it to also push the branch",
+      );
+      expect(both.typed).toEqual([]);
+      // The person spoke of something else since.
+      const since = await afterATurn(
+        "show me deploy fix",
+        opensDeploy,
+        "tell it to also run the linter",
+        [said("user", "thanks"), said("assistant", "Any time.")],
+      );
+      expect(since.typed).toEqual([]);
+      // A notice came after the answer.
+      const notice = await afterATurn(
+        "show me deploy fix",
+        opensDeploy,
+        "tell it to also run the linter",
+        [said("assistant", "docs is done.")],
+      );
+      expect(notice.typed).toEqual([]);
+    });
+
+    it.each([
+      ["tell it to also run the linter", "also run the linter"],
+      ["ask it to run the tests again", "run the tests again"],
+      ["ok tell that one to run the tests again", "run the tests again"],
+    ])(
+      "types %j when the answer before opens with one session and its state",
+      async (words, text) => {
+        const turn = await run(
+          words,
+          ["Okay."],
+          two(),
+          undefined,
+          aboutDeploy(),
+        );
+        expect(turn.typed, words).toEqual([["deploy fix", text]]);
+      },
+    );
+
+    it("reads the state of one session only at the start of the answer", async () => {
+      for (const answer of [
+        "deploy fix is idle.",
+        "The deploy fix session is still working.",
+        "deploy fix was done a minute ago.",
+        "Deploy fix has been running for 3 minutes.",
+      ]) {
+        const turn = await run(
+          "tell it to run the tests again",
+          ["Okay."],
+          two(),
+          undefined,
+          [said("user", "how is deploy fix?"), said("assistant", answer)],
+        );
+        expect(turn.typed, answer).toEqual([
+          ["deploy fix", "run the tests again"],
+        ]);
+      }
+    });
+
+    it("starts no job for it, also when the model asks for one", async () => {
+      const turn = await run(
+        "tell it to also run the linter",
+        [[call("start_job")], "Okay."],
+        two(),
+        undefined,
+        aboutDeploy(),
+      );
+      expect(turn.windows).toHaveLength(0);
+      expect(turn.typed).toEqual([["deploy fix", "also run the linter"]]);
+      expect(turn.results[0]).toContain("deploy fix");
+    });
+
+    it("types nothing where neither says which session", async () => {
+      const cases: [ChatMessage[], string, AgentSession[]?][] = [
+        // Nothing before.
+        [[], "tell it to run the tests again"],
+        // A session that the person dismissed.
+        [
+          [
+            said("user", "forget docs, how is the build going?"),
+            said("assistant", "The build is green."),
+          ],
+          "tell it to deploy",
+        ],
+        [
+          [
+            said("user", "never mind docs. what about the release?"),
+            said("assistant", "The release is tagged."),
+          ],
+          "tell it to ship",
+        ],
+        // A job that is done.
+        [
+          [
+            said("user", "is the job done?"),
+            said("assistant", 'The job "write docs for the api" is done.'),
+          ],
+          "tell it to also add examples",
+        ],
+        // A name as a part of another thing.
+        [
+          [
+            said("user", "where are the docs and guides?"),
+            said("assistant", "The docs and guides are in the wiki."),
+          ],
+          "tell it to update the index",
+        ],
+        [
+          [
+            said("user", "which folder has the readme?"),
+            said("assistant", "docs is the folder with the readme."),
+          ],
+          "tell it to add a changelog",
+        ],
+        [
+          [
+            said("user", "what does the error say?"),
+            said("assistant", "The docs build fails on a missing import."),
+          ],
+          "tell it to retry the build",
+        ],
+        // A session that is named with a common word.
+        [
+          [
+            said("user", "is the build green?"),
+            said("assistant", "The build is green."),
+          ],
+          "tell it to deploy",
+          [
+            session({ name: "build" }),
+            session({ id: "101-def", name: "docs" }),
+          ],
+        ],
+        [
+          [
+            said("user", "are we green?"),
+            said("assistant", "Yes, all tests are green."),
+          ],
+          "tell it to push the branch",
+          [
+            session({ name: "tests" }),
+            session({ id: "101-def", name: "docs" }),
+          ],
+        ],
+        // Two sessions in the answer.
+        [
+          [
+            said("user", "what is everyone doing?"),
+            said("assistant", "deploy fix is working, and docs is idle."),
+          ],
+          "tell it to run the tests again",
+        ],
+        // The state of a session, not at the start of the answer.
+        [
+          [
+            said("user", "anything new?"),
+            said("assistant", "Nothing new: docs is idle."),
+          ],
+          "tell it to run the tests again",
+        ],
+        // Older than ten minutes.
+        [
+          aboutDeploy().map((message) => ({
+            ...message,
+            at: now - 11 * 60 * 1000,
+          })),
+          "tell it to run the tests again",
+        ],
+        // The last message is not an answer to the person's message.
+        [
+          [...aboutDeploy(), said("assistant", "docs is done.")],
+          "tell it to run the tests again",
+        ],
+      ];
+      for (const [history, words, sessions] of cases) {
+        const turn = await run(
+          words,
+          ["Which one?"],
+          sessions ?? two(),
+          undefined,
+          history,
+        );
+        expect(turn.typed, JSON.stringify(history.map((m) => m.text))).toEqual(
+          [],
+        );
+      }
+    });
+
+    it.each([
+      "tell it to run the tests again would that help",
+      "tell it to run the tests again?",
+      "don't tell it to run the tests again",
+      "let me tell it to run the tests again",
+      "should I tell it to run the tests again",
+      "tell it to stop",
+      "tell it to run the tests again, never mind",
+      "tell it to run the tests again and push",
+      "tell them to run the tests again",
+      "tell everyone to run the tests again",
+      "tell it",
+      // An audience, not an instruction.
+      "tell it to the team",
+      "tell it to everyone",
+      "tell it to the reviewers",
+      "tell it to my manager",
+      "tell it to Marketing",
+      "tell it to Finance and the others",
+      "tell it to both of them",
+      "tell it to whoever asks",
+      "tell it to people",
+      "tell it to anyone who asks",
+      "tell it to someone",
+      "tell it to nobody",
+      "tell it to me straight",
+      "tell it like it is",
+      "ask it nicely",
+    ])("types nothing by itself for %j", async (words) => {
+      const turn = await run(words, ["Okay."], two(), undefined, aboutDeploy());
+      expect(turn.typed, words).toEqual([]);
+    });
+
+    it("types nothing by itself for an audience after a name either", async () => {
+      for (const words of [
+        "tell deploy fix to the team",
+        "tell deploy fix to everyone",
+      ])
+        expect((await run(words, ["Okay."])).typed, words).toEqual([]);
+    });
+
+    it("types nothing by itself while a request of an agent waits, and the model's call is refused", async () => {
+      const elsewhere = () => [
+        session({ name: "deploy fix", cwd: "/work/other", pid: 7 }),
+        session({ id: "101-def", pid: 101, name: "docs", cwd: "/work/docs" }),
+      ];
+      const turn = await run(
+        "tell it to run the tests again",
+        [
+          [
+            call("type_into_session", {
+              session: "deploy fix",
+              text: "run the tests again",
+            }),
+          ],
+          "Okay.",
+        ],
+        elsewhere(),
+        (world) => void waits(world),
+        aboutDeploy(),
+      );
+      expect(turn.typed).toEqual([]);
+    });
+
+    it("means the job, not a session, right after a job started and while one runs", async () => {
+      // "Fix the failing test in deploy fix" starts a job, and its sentence
+      // names the session. "It" is then the job.
+      const made = mac(two());
+      const typed: string[][] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        send: async (item, text) => {
+          typed.push([String(item.name), text]);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      const history: ChatMessage[] = [];
+      await talk(
+        world,
+        wantsJob().model,
+        history,
+        "fix the failing test in deploy fix",
+      );
+      expect(made.windows).toHaveLength(1);
+      await talk(
+        world,
+        scripted(["Okay."]).model,
+        history,
+        "tell it to also add a test",
+      );
+      expect(typed).toEqual([]);
+      // The job still runs, and the next exchange spoke of a session.
+      made.clock.now += 60_000;
+      history.push(
+        { role: "user", text: "how is docs?", at: made.clock.now, via: "chat" },
+        {
+          role: "assistant",
+          text: "docs is idle.",
+          at: made.clock.now,
+          via: "chat",
+        },
+      );
+      await new Supervisor(world, scripted(["Okay."]).model).reply(
+        [...history],
+        "tell it to also add a dark mode",
+        "chat",
+      );
+      expect(typed).toEqual([]);
+    });
+
+    it("means the task, not a session, while a task is not over", async () => {
+      const turn = await run(
+        "tell it to run the tests again",
+        ["Okay."],
+        two(),
+        (world) => {
+          world.tasks = {
+            current: () => ({
+              id: "t1",
+              goal: "fix the docs readme",
+              state: "working",
+              summary: "",
+              question: null,
+              choices: [],
+              canAnswer: false,
+              canAccept: false,
+              canCancel: true,
+            }),
+            canStart: () => false,
+            start: async () => ({ ok: true, message: "started" }),
+            answer: async () => ({ ok: true, message: "answered" }),
+            accept: async () => ({ ok: true, message: "accepted" }),
+            cancel: async () => ({ ok: true, message: "cancelled" }),
+          } as unknown as NonNullable<SupervisorWorld["tasks"]>;
+        },
+        aboutDeploy(),
+      );
+      expect(turn.typed).toEqual([]);
+    });
   });
 
   it("starts no job through the task tool either", async () => {

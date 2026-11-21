@@ -80,6 +80,24 @@ export type DecisionAnswer = z.infer<typeof answerSchema>;
 const attendanceSchema = z
   .object({ version: z.literal(1), at: z.number().int().nonnegative() })
   .strict();
+const actedSchema = z
+  .object({
+    version: z.literal(1),
+    turn: z.string().max(200),
+    /** A digest of the person's message that the turn answered. Not the message. */
+    said: z.string().max(64),
+    /** The channel of that message: chat, voice or a call. */
+    via: z.string().max(40),
+    at: z.number().int().nonnegative(),
+    sessions: z.array(z.string().max(200)).max(20),
+  })
+  .strict();
+/** A short digest of a message, with its case and its spaces evened out. It ties a record to a message without a copy of it. */
+export const saidDigest = (text: string) =>
+  createHash("sha256")
+    .update(text.toLowerCase().replace(/\s+/g, " ").trim())
+    .digest("hex")
+    .slice(0, 32);
 const modeSchema = z
   .object({
     version: z.literal(1),
@@ -326,6 +344,29 @@ export class DecisionDesk {
       attendanceSchema,
     );
     return seen !== null && this.now() - seen.at < 10_000;
+  }
+  /**
+   * The sessions that ClawdTime opened or typed into in one turn of the
+   * conversation, with the channel and a digest of the person's message that
+   * the turn answered. The person's next message can then say "it" for that session
+   * ("tell it to run the tests"): what was done is known for sure, whatever
+   * words the answer used.
+   */
+  noteActed(turn: string, session: string, said: string, via: string) {
+    const before = this.lastActed();
+    const sessions = before?.turn === turn ? before.sessions : [];
+    secureWrite(join(this.directory, "acted.json"), {
+      version: 1,
+      turn: turn.slice(0, 200),
+      said: saidDigest(said),
+      via: via.slice(0, 40),
+      at: this.now(),
+      sessions: [...new Set([...sessions, session.slice(0, 200)])].slice(0, 20),
+    });
+  }
+  /** What `noteActed` wrote last, or null. */
+  lastActed() {
+    return this.read(join(this.directory, "acted.json"), actedSchema);
   }
   /** Away: the person is not at the Mac. Requests wait for a phone call. */
   setAway(away: boolean) {
