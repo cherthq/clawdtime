@@ -49,10 +49,12 @@ export function jobNews(job: JobFacts) {
 /**
  * ClawdTime's message waits for a word of the person: it asks something, or
  * it says which word it needs ("Say yes or no.", "Say approve or deny to
- * answer it.", 'Say "tell docs: ..." and I type it.').
+ * answer it.", 'Say "tell docs: ..." and I type it.', "Which one do you
+ * approve? Say a word of it.").
  */
 const waitsForAWord = (text: string) =>
-  /\?\s*$/.test(text) || /\bsay\s+(?:yes|no|approve|deny|allow|")/i.test(text);
+  /\?\s*$/.test(text) ||
+  /\bsay\s+(?:yes|no|approve|deny|allow|a word|")/i.test(text);
 
 export class JobNews {
   private readonly file: string;

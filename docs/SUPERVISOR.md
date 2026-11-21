@@ -327,10 +327,53 @@ These rules are in the code, not in the model's instructions:
   of your words is used on a call.
 - One message decides one request. The model names a request by its id, never
   by its place in a list, so an answer cannot move to another request when the
-  list changes. When more than one request waits, your words must say which
+  list changes. The facts of each turn give the model the ids of the requests
+  that wait, and never their texts: an agent writes the text of its request. When more than one request waits, your words must say which
   one: a word of what it asks, of its project or of its agent that the other
   requests do not have ("approve the npm test one"). Otherwise nothing is
   decided, and ClawdTime asks you which one.
+- When two requests wait and your message is a decision and nothing else
+  ("approve it", "yes, approve it", "deny that one"), ClawdTime asks which
+  one, in fixed words, and decides nothing. An agent writes the text of its
+  request, and you read or hear the question, so ClawdTime asks this only
+  where the question cannot mislead: two plain permission requests, each
+  text short, shown whole, and one simple command. A simple command has
+  parts between single spaces; each part is made of plain letters and
+  digits and of . _ / : = @ ~ + % -, and ends with a letter, a digit or
+  "/". So it holds no quote mark, no question mark, no comma and no mark of
+  the shell that joins two commands. Its first part is the bare name of a
+  program in one word of letters and digits, so the word that you say is
+  the whole name of the program that runs: "./git status", "PATH=/tmp/x git
+  status" and "git-status-x status" get no question. It also holds none of the words and,
+  then, also, plus, or, request, wait, which, approve, deny, allow, after,
+  before, next, with, and one bare number at most. "git push origin main"
+  and "chmod +x run.sh" are simple commands; "make build && git status"
+  and "ls | grep x" are not. ClawdTime does not ask while a task is live.
+  In every other case the model answers, as before, and you say the
+  decision and the request in one message.
+- Your next message can then name one request: "the push one". The
+  decision is the one that you said in the message before the question. A
+  request is named by a word of the head of its text: its first two parts
+  that are no flags ("git push", "rm dist"), each only when it is one word
+  of letters and digits ("x.sh" and "node_modules" are named by no word),
+  and where the other text does not hold that word. What follows the head can be written by an agent
+  to sound like another request, so a word from there names nothing. Each
+  of the two requests must have such a word, or ClawdTime does not ask. A
+  word that says a place in the list or an opinion ("the main one", "the
+  latter", "the safe one") names no request. The folder, the agent and the
+  id of a request are not a name here, because the question does not show
+  them.
+- That name decides only when the question is the last message, your
+  decision is the message just before it, both are on the same channel and
+  the question is younger than five minutes; when the requests that wait
+  are exactly the two of the question; and when your message is a name and
+  nothing else: words of that one text, with "the", "that" or "this" before
+  them, and "one", "request", "command" or "thing" and "please" after
+  them. Any other word or mark decides nothing there: a word of decision or
+  of stopping ("stop the push one", "ok the push one"), a hedge, a "not", a
+  question, a time, both requests, "!push". The model and the usual gate
+  read such a message, as always. A request that must be answered in its
+  terminal gets no such question.
 - Text is typed into a terminal only when your own last message asks for it
   ("type", "tell", "send", "say", "reply" or "answer"), names the session, and
   holds the text as whole words, one after the other ("Tell deploy fix: run the

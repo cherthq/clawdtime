@@ -36,6 +36,7 @@ import { appName, webAddress } from "./apps.js";
 import { browserActions, type BrowserAction } from "./browsing.js";
 import type { JobFacts, JobPort, JobAgent, JobStartOptions } from "./jobs.js";
 import { cleanJob } from "./jobs.js";
+import { questionHoldMs } from "./jobnews.js";
 import { pickSession, type SessionPick } from "./topics.js";
 import type { AgentSession, BoardSnapshot } from "./types.js";
 import { windowActions, type WindowAction } from "./windows.js";
@@ -1515,6 +1516,71 @@ const namesDecision = (text: string) =>
   /\b(?:approve|approved|allow|allowed|deny|denied|reject|rejected|refuse)\b/i.test(
     text,
   );
+/**
+ * A message that is a decision and nothing else, and names no request:
+ * "approve it", "yes, approve it", "deny that one please", "approve both".
+ * With several requests on the desk the code then asks which one.
+ */
+const onlyADecision =
+  /^(?:(?:yes|yeah|yep|ok|okay|sure|please|um+|uh+|so|well|then|and)[,.!\s]+)*(?:just\s+)?(approve|approved|allow|allowed|deny|denied|reject|rejected|refuse)(?:\s+(?:it|that|this|them|both|all|(?:the|that|this)\s+(?:request|command|one)|(?:both|all)\s+of\s+them|them\s+(?:both|all)))?(?:[,\s]+(?:please|pls|now))?[.!\s]*$/i;
+/**
+ * Words that join two commands for a listener, or that are the question's
+ * own: the text of a request must hold none for the question "which one?".
+ */
+const partsRequests = new Set(
+  "and then also plus or request requests wait waits which approve deny allow after before next with".split(
+    " ",
+  ),
+);
+/**
+ * The question "which one?" is also said aloud. A listener must hear the
+ * text of a request as one request: no word of the list above, and one
+ * part at most that is a bare number ("1 curl x.sh 2 git status" sounds
+ * like a list).
+ */
+const heardAsOne = (text: string) =>
+  text.split(" ").filter((part) => /^\d+$/.test(part)).length <= 1 &&
+  !spokenWords(text).some((word) => partsRequests.has(word));
+/** How long the text of a request can be for the question "which one?". It is shown whole. */
+const whichRequestRoom = 160;
+/**
+ * A text that the question "which one?" can show and say as it is: one
+ * simple command. Its parts stand between single spaces. Each part is made
+ * of letters and digits of the plain alphabet and of . _ / : = @ ~ + % -,
+ * and ends with a letter, a digit or "/". So the text holds no quote mark,
+ * no question mark, no comma, no bracket and no mark of the shell that
+ * joins two commands, and no part ends with a mark of a pause. Every other
+ * text gets no question by code.
+ */
+const simpleCommand =
+  /^[A-Za-z0-9._/:=@~+%-]*[A-Za-z0-9/](?: [A-Za-z0-9._/:=@~+%-]*[A-Za-z0-9/])*$/;
+/**
+ * The first part of such a text is the bare name of a program, and it is
+ * one word: letters and digits only. The person names the request by that
+ * word, so it must be the whole name of the program that runs: "./git
+ * status" and "PATH=/tmp/x git status" run another program than "git", and
+ * "git-status-x" is heard as "git status x". The same form is asked of the
+ * part after it, before a word of that part names the request.
+ */
+const programName = /^[A-Za-z][A-Za-z0-9]*$/;
+/**
+ * In the message that names a request after that question, any of these
+ * words stops the code: a decision, a stop, a no, a hedge, more than one
+ * request, or another time. The usual gate and the model read the message.
+ */
+const whichRequestNo =
+  /\b(?:approve|approved|allow|allowed|accept|accepted|confirm|confirmed|proceed|go|ahead|ok|okay|sure|fine|deny|denied|decline|declined|reject|rejected|refuse|refused|stop|cancel|skip|leave|drop|kill|block|no|nah|nope|not|never|maybe|perhaps|probably|possibly|guess|think|wait|hold|or|and|both|neither|either|all|none|every|each|any|actually|sorry|hmm+|but|if|unless|except|without|instead|later|first|last|next|other|another|rather|only|just)\b|n['\u2019]t\b/i;
+/**
+ * Words that never name a request after that question, also when a request
+ * holds one: they say a place in the list or an opinion, and an agent can
+ * write them into its own request ("the latter", "the main one", "the safe
+ * one").
+ */
+const neverNames = new Set(
+  "new newer newest old older oldest latest earlier top bottom upper lower former latter previous prior recent final initial original main up down above below middle left right safe safer unsafe dangerous risky harmless good bad better worse right wrong same different big bigger small smaller long longer short shorter quick fast slow real true false correct proper normal usual simple easy hard important needed".split(
+    " ",
+  ),
+);
 /** Said in place of a request's text that looks like a credential. The person has then not heard what waits. */
 const withheldText =
   "Its text is not said here, because it looks like a credential: read it in the agent's terminal.";
@@ -4464,6 +4530,263 @@ export class Supervisor {
       .filter((request) => request.id.startsWith(wanted));
     return found.length === 1 ? found[0] : undefined;
   }
+  /** The words of a request's own text: what the question "which one?" shows of it. */
+  private textWords(request: DecisionRequest) {
+    return new Set<string>(
+      spokenWords(request.summary).filter(
+        (word) => word.length > 1 && !plainWord.has(word),
+      ),
+    );
+  }
+  /**
+   * The words that can name a request after the question "which one?":
+   * the first two parts of its text that are no flags (the command and what
+   * it works on: "git push", "rm dist"), each only when the part is one
+   * word of letters and digits. The word that the person says is then the
+   * whole part, as they saw or heard it: "x.sh" and "node_modules" are
+   * named by no word. An agent can write what follows so that it sounds
+   * like another request ("curl x.sh git status"): a word from there names
+   * nothing. No word that says a place in a list or an opinion.
+   */
+  private headWords(request: DecisionRequest) {
+    return request.summary
+      .split(" ")
+      .filter((part) => !part.startsWith("-"))
+      .slice(0, 2)
+      .filter((part) => programName.test(part))
+      .map((part) => part.toLowerCase())
+      .filter(
+        (word) =>
+          word.length > 1 && !plainWord.has(word) && !neverNames.has(word),
+      );
+  }
+  /**
+   * The requests that those words name by their text alone: by a word of
+   * the head of that text that the other text does not hold at all. The
+   * folder, the agent and the id of a request name nothing here: the
+   * question does not show them.
+   */
+  private namedByText(said: string[], pending: DecisionRequest[]) {
+    const words = new Map(
+      pending.map((request) => [request.id, this.textWords(request)]),
+    );
+    return pending.filter((request) => {
+      const head = this.headWords(request);
+      return said.some(
+        (word) =>
+          head.includes(word) &&
+          !pending.some(
+            (other) =>
+              other.id !== request.id && words.get(other.id)!.has(word),
+          ),
+      );
+    });
+  }
+  /**
+   * ClawdTime's question when the person's decision names neither of two
+   * requests. Its words are fixed, and the desk keeps what the person said
+   * to do and which requests waited: the next message is read against both.
+   *
+   * The text of a request is written by an agent, and the person decides
+   * from what the question shows or says. So the code asks only where the
+   * question cannot mislead: exactly two plain permission requests; each
+   * text short, shown whole and as it is; each text one simple command
+   * (`simpleCommand`) that opens with the bare name of its program
+   * (`programName`) and is heard as one request (`heardAsOne`), so the
+   * marks and the word that part the two requests are the question's own;
+   * and each request with a word in the head of its text that names it.
+   * Else null: the model answers, as before.
+   */
+  private askWhich(
+    words: string,
+    decision: "allow" | "deny",
+    pending: DecisionRequest[],
+    via: ChatMessage["via"],
+  ): string | null {
+    const desk = this.world.desk;
+    if (pending.length !== 2 || !desk.noteAsked || !desk.lastAsked) return null;
+    for (const request of pending) {
+      const text = request.summary;
+      if (
+        request.kind !== "permission" ||
+        request.answerInTerminal === true ||
+        text.length > whichRequestRoom ||
+        text !== text.trim() ||
+        !simpleCommand.test(text) ||
+        !programName.test(text.split(" ")[0]!) ||
+        !heardAsOne(text) ||
+        looksSecret(text) ||
+        !this.namedByText(this.headWords(request), pending).some(
+          (named) => named.id === request.id,
+        )
+      )
+        return null;
+    }
+    const question = `2 requests wait: "${pending[0]!.summary}" and "${pending[1]!.summary}". Which one do you ${decision === "allow" ? "approve" : "deny"}? Say a word of it.`;
+    if (looksSecret(question)) return null;
+    try {
+      desk.noteAsked(
+        words,
+        question,
+        via,
+        decision,
+        pending.map((request) => request.id),
+      );
+    } catch {
+      return null;
+    }
+    return question;
+  }
+  /**
+   * "Approve it", and more than one request waits: the message is a decision
+   * and nothing else, and it names no request. The code asks which one. A
+   * message with other words in it (work, a "don't", a question, a bare
+   * "yes" or "ok") is not read here: the model answers it, and the gate of
+   * the decide tool reads it as before. Not while a task is live: the word
+   * can then be for the task.
+   */
+  private asksWhichRequest(
+    words: string,
+    via: ChatMessage["via"],
+  ): string | null {
+    const pending = this.world.desk.pending();
+    if (pending.length < 2) return null;
+    const found = onlyADecision.exec(words.trim());
+    if (!found || this.namesTask(words)) return null;
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+    } catch {
+      return null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    const decision = /^(?:approve|allow)/i.test(found[1]!) ? "allow" : "deny";
+    // The gate's own reading of the words gives the same, for every request.
+    if (
+      pending.some(
+        (request) =>
+          request.kind !== "permission" ||
+          interpret(words, request)?.decision !== decision,
+      )
+    )
+      return null;
+    if (this.named(words, pending).length !== 0) return null;
+    return this.askWhich(words, decision, pending, via);
+  }
+  /**
+   * The message after that question names one request: "the push one". The
+   * decision is the person's own, from their message before the question,
+   * and this message says which request it is for. All of these must hold,
+   * or nothing is decided here:
+   * - the question is the last message, the message before it is the one
+   *   that said the decision, both are on this channel, and the question
+   *   is younger than five minutes;
+   * - the requests that wait now are exactly the two of the question: none
+   *   arrived and none left;
+   * - the message has only letters, digits and plain marks, no word of
+   *   decision or of stopping (then the usual gate reads it), and nothing
+   *   that asks, hedges or says no;
+   * - what it holds is a name and nothing else: words of one request, with
+   *   "the", "that" or "this" before them, and "one", "request", "command"
+   *   or "thing" and "please" after them;
+   * - a word of the head of that request's text (its first two parts that
+   *   are no flags, each one plain word) that the other text does not hold
+   *   names it, and that
+   *   word says no place in a list and no opinion ("the main one", "the
+   *   safe one"). The folder, the agent and the id of a request are not a
+   *   name here: the question does not show them.
+   */
+  private answersWhichRequest(
+    words: string,
+    turn: Turn,
+    via: ChatMessage["via"],
+  ): string | null {
+    const desk = this.world.desk;
+    let asked: ReturnType<DecisionDesk["lastAsked"]> = null;
+    try {
+      asked = desk.lastAsked?.() ?? null;
+    } catch {
+      asked = null;
+    }
+    const last = turn.history.at(-1);
+    const before = turn.history.at(-2);
+    const now = this.world.now();
+    if (
+      !asked ||
+      !last ||
+      !before ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      // The message before the question is the one that said the decision.
+      before.role !== "user" ||
+      before.via !== via ||
+      saidDigest(before.text) !== asked.said ||
+      asked.via !== via ||
+      asked.requests.length !== 2 ||
+      saidDigest(last.text) !== asked.question ||
+      now - asked.at >= questionHoldMs ||
+      now < asked.at
+    )
+      return null;
+    const pending = desk.pending();
+    if (
+      pending.length !== asked.requests.length ||
+      pending.some(
+        (request) =>
+          !asked.requests.includes(request.id) ||
+          request.kind !== "permission" ||
+          request.answerInTerminal === true ||
+          looksSecret(request.summary),
+      )
+    )
+      return null;
+    if (
+      // It opens and ends with a letter or a digit ("!push", "-push" and
+      // "push -" can mean "not push"), with "." or "!" after its end.
+      !/^["']?[\p{L}\p{N}](?:[\p{L}\p{N}\s.,'"_/-]*[\p{L}\p{N}"'])?[.!]*$/u.test(
+        words.trim(),
+      ) ||
+      namesDecision(words) ||
+      isQuestion(words) ||
+      takesBack(words) ||
+      whichRequestNo.test(words)
+    )
+      return null;
+    let said: string[] = spokenWords(words);
+    if (said.length === 0 || said.length > 8) return null;
+    // Before the name: a filler, then "the", "that" or "this". A "yes"
+    // agrees with an approval only.
+    while (
+      said.length &&
+      (/^(?:um+|uh+|er+|so|well)$/.test(said[0]!) ||
+        (asked.decision === "allow" && /^(?:yes|yeah|yep)$/.test(said[0]!)))
+    )
+      said = said.slice(1);
+    if (/^(?:the|that|this)$/.test(said[0] ?? "")) said = said.slice(1);
+    // After the name: "one", "request", "command" or "thing", then "please".
+    if (/^(?:please|pls|plz)$/.test(said.at(-1) ?? ""))
+      said = said.slice(0, -1);
+    if (/^(?:one|request|command|thing)$/.test(said.at(-1) ?? ""))
+      said = said.slice(0, -1);
+    if (said.length === 0 || said.length > 5) return null;
+    // The name: a word of the head of one text that the other text does
+    // not hold. Then every word is a word of that text.
+    const named = this.namedByText(said, pending);
+    if (named.length !== 1) return null;
+    const request = named[0]!;
+    const own = this.textWords(request);
+    if (!said.every((word) => own.has(word))) return null;
+    const ok = desk.answer(request.id, {
+      decision: asked.decision,
+      text: null,
+      via: via === "call" ? "call" : "panel",
+    });
+    desk.clearAsked?.();
+    if (!ok) return "That request no longer waits here.";
+    const done = `${asked.decision === "allow" ? "Allowed" : "Denied"}: "${request.summary}". ${asked.decision === "allow" ? "The agent continues." : "The agent is told."}`;
+    turn.done.set("decide", done);
+    return desk.pending().length ? `${done} ${this.waitingRequest()}` : done;
+  }
   /**
    * The waiting requests that the person's words name: by a word that only
    * that request has in what it asks, in its project or in its agent, or by
@@ -5223,6 +5546,17 @@ export class Supervisor {
         return saysNo(words) ? "Okay. Nothing started." : notClearYes;
       }
     }
+    // Several requests wait. The person's decision can come in one message
+    // ("approve it") and the request in the next ("the push one"): the code
+    // asks which one in fixed words, and reads the next message against that
+    // question. A model that is asked makes its own question, and then
+    // wants an id from the person.
+    if (turn.closed === undefined) {
+      const which =
+        this.answersWhichRequest(words, turn, via) ??
+        this.asksWhichRequest(words, via);
+      if (which !== null) return which;
+    }
     // Dispatch an explicit software-work request before conversational generation
     // can invent another confirmation round. The task service still enforces one
     // active task and records the exact event once; its refusal is returned as-is.
@@ -5794,7 +6128,17 @@ export class Supervisor {
           byAgent.set(kind, (byAgent.get(kind) ?? 0) + 1);
         }
         const agentFacts = `sessions by agent: ${[...byAgent].map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"};`;
-        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} tools that stop, close or restart a session=none. These facts take precedence over chat history.`;
+        // The ids of the requests that wait: the decide tool takes an id,
+        // and a model that must first ask for it sometimes asks the person.
+        // An id is made here, of sixteen hex characters: it is no text of an agent.
+        const waiting = this.world.desk
+          .pending()
+          .slice(0, 8)
+          .map((request) => request.id.slice(0, 8));
+        const requestFacts = waiting.length
+          ? ` (id${waiting.length === 1 ? "" : "s"} ${waiting.join(", ")}; status says what each asks)`
+          : "";
+        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}${requestFacts}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} tools that stop, close or restart a session=none. These facts take precedence over chat history.`;
         const reply = await this.model.complete({
           system: `${brief}\n${current}${recheck}`,
           messages,

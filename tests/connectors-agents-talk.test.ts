@@ -340,11 +340,21 @@ describe("the ClawdTime agent", () => {
       `- ${wipe.id.slice(0, 8)}: claude-code in app asks to run: rm -rf /work/app/build`,
     );
     // Two wait, and the person did not say which one: nothing is decided.
+    // The code asks which one, in fixed words, and no model is asked.
     run = scripted([[decide(tests.id, "c1")], "Which one?"]);
-    await new Supervisor(value, run.model).reply([], "yes, approve it", "chat");
-    expect(results(run)).toEqual([
-      "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.",
-    ]);
+    expect(
+      await new Supervisor(value, run.model).reply(
+        [],
+        "yes, approve it",
+        "chat",
+      ),
+    ).toMatch(
+      // Both requests are of the same moment here: their order follows their ids.
+      /^2 requests wait: "(?:npm test" and "rm -rf \/work\/app\/build|rm -rf \/work\/app\/build" and "npm test)"\. Which one do you approve\? Say a word of it\.$/,
+    );
+    expect(run.seen).toHaveLength(0);
+    expect(desk.take(tests.id)).toBeNull();
+    expect(desk.take(wipe.id)).toBeNull();
     // The person named one, and the model gives the other: refused.
     run = scripted([[decide(wipe.id, "c1")], "ok"]);
     await new Supervisor(value, run.model).reply(
