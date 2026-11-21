@@ -175,7 +175,23 @@ greets you when FaceTime is ready. Things to say:
 | "Open a tunnel for port 3000 and give me the link." | A new coding session does it. ClawdTime says the answer    |
 | "What did it find?"                                 | The answer of the newest job                               |
 | "Approve it." "Deny it."                            | The request that an agent waits on is answered             |
+| "Zoom in on the terminal that runs the tests."      | The video shows only that window                           |
+| "Show the whole screen."                            | The video shows the whole screen again                     |
+| "My phone is sideways."                             | The picture uses its whole width                           |
 | "Hide the screen."                                  | The video is the mascot again                              |
+
+How the call looks:
+
+- A phone held upright with its video set to fill shows only the middle of
+  the picture. So the mascot, and a shared screen, are drawn in that middle
+  strip: nothing is cut. A shared screen shows whole, and small.
+- "Zoom in on the session that builds the page" shows only that one window on
+  the video. "Show the whole screen" goes back.
+- Turn the phone sideways and say "my phone is sideways": the picture then
+  uses its whole width. `CLAWDTIME_LINE_PHONE=wide` in `.env.local` makes that
+  the start.
+- Hang up and call back: ClawdTime knows what you said in the last day, and
+  goes on from there.
 
 How the call sounds:
 
