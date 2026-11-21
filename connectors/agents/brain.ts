@@ -1526,6 +1526,23 @@ const asksAboutADenial =
  */
 const offerToDeny =
   /^(?:so[,\s]+)?(?:should i|shall i|can i|may i|do you want me to|want me to|would you like me to)\s+(?:just\s+)?(?:deny|reject|refuse|decline)\s+(.+?)(?:\s+(?:now|for you))?\?$/i;
+/**
+ * ClawdTime's offer to approve a request, as the whole sentence: "Should I
+ * approve it?", "Want me to allow the push one now?", "Do you want to
+ * approve it?", "Approve it?", "Should I let it run?". What it offers to
+ * approve is the first group that matched.
+ */
+const offerToApprove =
+  /^(?:so[,\s]+)?(?:(?:should i|shall i|can i|may i|do you want me to|want me to|would you like me to|do you want to|would you like to|want to)\s+(?:just\s+)?)?(?:(?:approve|allow)\s+(.+?)|let\s+(.+?)\s+(?:run|through))(?:\s+(?:now|for you))?\?$/i;
+/** A verb that people use for any work: as a word of a request's text it names that request only with "the ... one". */
+const commonVerb = new RegExp(
+  `^(?:${workVerb.slice(3, -1)}|open|see|show|look|keep|let|go|start|stop|get|give|take|send|read|save|load|call|ask|tell|help|watch|wait|time|sleep|ship|kill|touch|sort|head|tail|cut|link|print|say|play|pass|yes|true|false)$`,
+);
+/** What the gate answers for a bare word that follows no question of ClawdTime about the request. */
+const bareYesHasNoQuestion =
+  'A "yes" approves a request only as the answer to my own question about that request. Nothing is approved. The request still waits: say "approve" or "deny".';
+const bareNoHasNoQuestion =
+  'A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny".';
 /** What such an offer can name with no word of the request: the request itself. */
 const offeredThing =
   /^(?:it|that|this|(?:this|that) one|(?:the|that|this) (?:request|command))$/;
@@ -4938,20 +4955,32 @@ export class Supervisor {
     turn: Turn,
     request: DecisionRequest,
   ) {
-    if (
-      turn.closed !== undefined ||
-      this.namesTask(spoken) ||
-      !yesAndNothingElse.test(spoken.trim())
-    )
-      return false;
-    // Not while a task is live: "it" in the offer can be the task's question.
+    return (
+      turn.closed === undefined &&
+      !this.namesTask(spoken) &&
+      yesAndNothingElse.test(spoken.trim()) &&
+      this.offeredFor(via, turn, request, offerToDeny)
+    );
+  }
+  /**
+   * ClawdTime's last message, when it can be about this one request: no
+   * task is live ("it" can be the task's question); the request is the
+   * only one that waits and a plain permission; and the message is the
+   * last one, ClawdTime's, on this channel and younger than five minutes.
+   * Else null.
+   */
+  private lastMessageFor(
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+  ): ChatMessage | null {
     let task: TaskFacts | null = null;
     try {
       task = this.world.tasks?.current() ?? null;
     } catch {
-      return false;
+      return null;
     }
-    if (task && !taskIsOver(task)) return false;
+    if (task && !taskIsOver(task)) return null;
     const pending = this.world.desk.pending();
     const last = turn.history.at(-1);
     const now = this.world.now();
@@ -4963,29 +4992,140 @@ export class Supervisor {
       last.role !== "assistant" ||
       last.via !== via ||
       now - last.at >= questionHoldMs ||
-      now < last.at ||
-      request.createdAt >= last.at
+      now < last.at
     )
-      return false;
+      return null;
+    return last;
+  }
+  /**
+   * ClawdTime's last message ends with its own offer about this request
+   * (`offerToDeny` or `offerToApprove`, the whole last sentence). What it
+   * offers to decide is this request by a word of the head of its text
+   * ("the rm one"), or "it", "the request" or the like: then the sentence
+   * right before the offer speaks of this request, by a word of its text
+   * (for an offer to approve: by a word of the head of its text). A word of
+   * it somewhere else in the message does not tie "it" to the request.
+   */
+  private offeredFor(
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+    offer: RegExp,
+  ) {
+    const last = this.lastMessageFor(via, turn, request);
+    // The model worded the offer: the request must have waited before it.
+    if (!last || request.createdAt >= last.at) return false;
     const sentences = last.text.trim().split(/(?<=[.?!])\s+/);
-    const question = sentences.at(-1) ?? "";
-    // The question is ClawdTime's offer to deny. What it offers to deny is
-    // this request by a word of the head of its text ("the rm one"), or
-    // "it", "the request" or the like: then the sentence right before the
-    // offer speaks of this request, by a word of its text. A word of it
-    // somewhere else in the message does not tie "it" to the request.
-    const offered = offerToDeny.exec(question)?.[1]?.toLowerCase();
+    const found = offer.exec(sentences.at(-1) ?? "");
+    const offered = (found?.[1] ?? found?.[2])?.toLowerCase();
     if (offered === undefined) return false;
     if (offeredThing.test(offered)) {
       const before = new Set(spokenWords(sentences.at(-2) ?? ""));
-      return [...this.textWords(request)].some(
-        (word) => word.length >= 3 && before.has(word),
-      );
+      // An offer to approve must say what runs: the sentence before it
+      // holds a word of the head of the text (the program, or what it
+      // works on). "The branch is main. Should I approve it?" does not.
+      // For a denial, any word of the text ties "it" to the request.
+      return offer === offerToApprove
+        ? this.headWords(request).some((word) => before.has(word))
+        : [...this.textWords(request)].some(
+            (word) => word.length >= 3 && before.has(word),
+          );
     }
     const named = /^(?:the\s+)?(\S+)(?:\s+(?:one|request|command))?$/.exec(
       offered,
     )?.[1];
     return !!named && this.headWords(request).includes(named);
+  }
+  /**
+   * ClawdTime said something before the person's message: its message is
+   * the last one of the conversation, or one of its messages is younger
+   * than five minutes (a message of the person can stand after it). News of
+   * a job is not in the history that the code reads.
+   */
+  private saidLately(turn: Turn) {
+    const now = this.world.now();
+    return turn.history.some(
+      (message, at) =>
+        message.role === "assistant" &&
+        (at === turn.history.length - 1 || now - message.at < questionHoldMs),
+    );
+  }
+  /**
+   * The person's message decides only by a bare word: it holds no word of
+   * that decision of its own ("approve", "allow"; "deny", "reject",
+   * "refuse", "decline"), and it does not name the request by a word of
+   * the head of its text ("ok, push it" names the push). "Yes", "ok",
+   * "sure", "go ahead", "do it"; "no", "nope", "don't".
+   */
+  private isBareWord(
+    spoken: string,
+    decision: "allow" | "deny",
+    request: DecisionRequest,
+  ) {
+    if (
+      (decision === "allow"
+        ? /\b(?:approve|approved|allow|allowed)\b/i
+        : /\b(?:deny|denied|reject|rejected|refuse|decline|declined)\b/i
+      ).test(spoken)
+    )
+      return false;
+    // A word of the head of the text names the request: "ok, push it". A
+    // common verb does not ("ok, make it so", "yes test it", with "make
+    // build" or "npm test" on the desk): the person can mean other work.
+    // With "the ... one", "request" or "command" every head word names it.
+    const head = this.headWords(request);
+    const words = spokenWords(spoken);
+    return !words.some(
+      (word, at) =>
+        head.includes(word) &&
+        (!commonVerb.test(word) ||
+          (words[at - 1] === "the" &&
+            /^(?:one|request|command)$/.test(words[at + 1] ?? ""))),
+    );
+  }
+  /**
+   * ClawdTime's last message put this one request before the person, so a
+   * bare "yes" or "no" answers it. Two forms count, and nothing else:
+   * - the message ends with the code's own sentence about the request ("One
+   *   request waits for your answer: ... Say approve or deny to answer
+   *   it."), and no question stands before it in the message;
+   * - the message ends with ClawdTime's offer to approve it ("Should I
+   *   approve it?"), bound to the request as above; the text is then one
+   *   short simple command.
+   * After any other message of ClawdTime
+   * ("Should I keep an eye on the tests?", "docs is idle."), a bare word
+   * decides nothing: the model can call the tool for it, and the reader of
+   * the gate would take "ok" as an approval.
+   */
+  private putBefore(
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+  ) {
+    const text = request.summary;
+    if (turn.closed !== undefined || looksSecret(text)) return false;
+    const last = this.lastMessageFor(via, turn, request);
+    if (!last) return false;
+    // The code's own sentence, at the end, with no question before it in
+    // the message: a model can copy the sentence after a question of its
+    // own. A text with a full stop, a question mark or the sentence's own
+    // words in it could make the sentence read as two requests.
+    const said = clean(last.text, 2000);
+    const waits = this.waitingRequest();
+    if (
+      said.endsWith(waits) &&
+      !said.slice(0, -waits.length).includes("?") &&
+      !/[.?!]\s|\?|say\s+approve/i.test(text)
+    )
+      return true;
+    // ClawdTime's offer to approve it, bound to the request. The model
+    // worded that message, so the text must be one short simple command.
+    return (
+      text.length <= whichRequestRoom &&
+      simpleCommand.test(text) &&
+      heardAsOne(text) &&
+      this.offeredFor(via, turn, request, offerToApprove)
+    );
   }
   /**
    * The answer says that ClawdTime started work ("I started a job to push
@@ -5178,6 +5318,25 @@ export class Supervisor {
       if (named.length !== 1 || named[0]!.id !== request.id)
         return "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.";
     }
+    // A bare word answers what was said last. When ClawdTime said
+    // something before it (its message is the last one, or it is younger
+    // than five minutes) and one request waits, the word decides that
+    // request only when ClawdTime's message is the last one and put the
+    // request before the person. A "yes" to another question ("Should I
+    // keep an eye on the tests?") approves nothing. With no message of
+    // ClawdTime before it, the word belongs to the one request that waits,
+    // as before.
+    if (
+      pending.length === 1 &&
+      said === read &&
+      said.decision !== "answer" &&
+      this.saidLately(turn) &&
+      this.isBareWord(spoken, said.decision, request) &&
+      !this.putBefore(via, turn, request)
+    )
+      return said.decision === "allow"
+        ? bareYesHasNoQuestion
+        : bareNoHasNoQuestion;
     // What the person could not see whole is allowed only in its terminal.
     if (said.decision === "allow" && request.answerInTerminal)
       return answerInTerminalText;

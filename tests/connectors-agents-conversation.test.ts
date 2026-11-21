@@ -7151,20 +7151,29 @@ describe("a decision that the person said: the model is asked once more, and a y
     );
 
     it.each([
-      // A question about an approval, a statement, or no question at all: as before.
-      ["Should I approve it?", "yes", "allow"],
-      ["Do you want me to allow it?", "yes", "allow"],
+      // The code's own sentence about the request, and ClawdTime's offer to
+      // approve it with its text: a bare word answers them.
       [
         "One request waits for your answer: rm -rf node_modules. Say approve or deny to answer it.",
         "yes",
         "allow",
       ],
-      ["docs is idle.", "yes", "allow"],
-      // The denial is not in the question itself.
-      ["I denied the other one. Should I approve this one?", "yes", "allow"],
-      ["Should I approve it?", "no", "deny"],
-      ["docs is idle.", "no", "deny"],
-    ])("after %j, %j decides as before", async (before, words, decision) => {
+      [
+        "One request waits for your answer: rm -rf node_modules. Say approve or deny to answer it.",
+        "no",
+        "deny",
+      ],
+      [
+        "The agent asks to run rm -rf node_modules. Should I approve it?",
+        "yes",
+        "allow",
+      ],
+      [
+        "The agent asks to run rm -rf node_modules. Should I approve it?",
+        "no",
+        "deny",
+      ],
+    ])("after %j, %j decides", async (before, words, decision) => {
       const { ids, told, say, decided } = desk();
       told(before);
       await say(words, [[decide(ids[0]!, decision)], "Okay."]);
@@ -7567,6 +7576,441 @@ describe("a decision that the person said: the model is asked once more, and a y
         decision: "deny",
         text: null,
       });
+    });
+  });
+  describe("a bare word after a message of ClawdTime decides a request only when that message put the request before the person", () => {
+    const noYes =
+      'A "yes" approves a request only as the answer to my own question about that request. Nothing is approved. The request still waits: say "approve" or "deny".';
+    const noNo =
+      'A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny".';
+    const toolSaid = (run: ReturnType<typeof scripted>) =>
+      run.seen[1]!.messages.filter((message) => message.role === "tool")[0]!
+        .content;
+    const others = [
+      "The payments tests look flaky. Should I keep an eye on them?",
+      "Deploy fix has been quiet for a while. Want me to tell you what it last did?",
+      "docs is idle.",
+      "Should I open the docs session?",
+      "I can check the logs. Want that?",
+      // An offer to approve that is not tied to the request.
+      "Should I approve it?",
+      "Do you want me to allow it?",
+      "I denied the other one. Should I approve this one?",
+      "The agent wants to delete a folder. Should I approve it?",
+      // The sentence before the offer does not say what runs: no word of
+      // the head of the text ("rm").
+      "The agent wants to remove node_modules. Should I approve it?",
+      "The docs session cleaned node_modules. Should I approve it?",
+      // The code's own sentence after another question in the same message.
+      "The payments tests look flaky. Should I keep an eye on them? One request waits for your answer: rm -rf node_modules. Say approve or deny to answer it.",
+      // The text stands in the message, and the question is about another thing.
+      "The agent asks to run rm -rf node_modules. Should I look at the folder first?",
+    ];
+
+    it.each(others)("after %j, a yes approves nothing", async (before) => {
+      for (const words of [
+        "yes",
+        "ok",
+        "okay",
+        "sure",
+        "yep",
+        "go ahead",
+        "do it",
+      ]) {
+        const { ids, told, say, decided, made } = desk();
+        told(before);
+        const got = await say(words, [[decide(ids[0]!, "allow")], "Okay."]);
+        expect(decided(ids[0]!), `${before} / ${words}`).toBeNull();
+        expect(made.world.desk.pending(), words).toHaveLength(1);
+        expect(toolSaid(got.run), `${before} / ${words}`).toBe(noYes);
+      }
+    });
+
+    it.each(others)("after %j, a no denies nothing", async (before) => {
+      for (const words of ["no", "nope", "No."]) {
+        const { ids, told, say, decided } = desk();
+        told(before);
+        const got = await say(words, [[decide(ids[0]!, "deny")], "Okay."]);
+        expect(decided(ids[0]!), `${before} / ${words}`).toBeNull();
+        expect(toolSaid(got.run), `${before} / ${words}`).toBe(noNo);
+      }
+    });
+
+    it.each([
+      "One request waits for your answer: rm -rf node_modules. Say approve or deny to answer it.",
+      'Allowed: "git push origin main". The agent continues. One request waits for your answer: rm -rf node_modules. Say approve or deny to answer it.',
+      "The agent asks to run rm -rf node_modules. Should I approve it?",
+      // Other words for the offer.
+      "It asks to run rm -rf node_modules. Should I let it run?",
+      "The rm request is for node_modules. Should I let it through?",
+      "One request waits: rm -rf node_modules. Want me to approve it?",
+      'It asks to run "rm -rf node_modules" in the app. Do you want to approve it?',
+      "The request is rm -rf node_modules. Approve it?",
+      "The request is rm -rf node_modules. Should I allow the rm one?",
+      "It wants rm -rf node_modules. Would you like me to approve that request now?",
+    ])("after %j, a bare word decides the request", async (before) => {
+      for (const [words, decision] of [
+        ["yes", "allow"],
+        ["ok", "allow"],
+        ["sure, do it", "allow"],
+        ["no", "deny"],
+      ] as const) {
+        const { ids, told, say, decided } = desk();
+        told(before);
+        await say(words, [[decide(ids[0]!, decision)], "Okay."]);
+        expect(decided(ids[0]!), `${before} / ${words}`).toBe(decision);
+      }
+    });
+
+    it.each([
+      ["approve it", "allow"],
+      ["yes, approve it", "allow"],
+      ["allow it", "allow"],
+      ["deny it", "deny"],
+      ["no, reject it", "deny"],
+      // The words name the request by a word of the head of its text.
+      ["yes, the rm one", "allow"],
+      ["ok, rm it", "allow"],
+      ["no, not the rm", "deny"],
+    ])(
+      "the person's own word %j decides after a question about another thing",
+      async (words, decision) => {
+        const { ids, told, say, decided } = desk();
+        told("The payments tests look flaky. Should I keep an eye on them?");
+        await say(words, [[decide(ids[0]!, decision)], "Okay."]);
+        expect(decided(ids[0]!), words).toBe(decision);
+      },
+    );
+
+    it("leaves a bare word that follows no message of ClawdTime as it was", async () => {
+      // The first message of a conversation: the word belongs to the one request that waits.
+      for (const [words, decision] of [
+        ["yes", "allow"],
+        ["Yes, update the config", "allow"],
+        ["no", "deny"],
+      ] as const) {
+        const { ids, say, decided } = desk();
+        await say(words, [[decide(ids[0]!, decision)], "Okay."]);
+        expect(decided(ids[0]!), words).toBe(decision);
+      }
+    });
+
+    it("needs the message to be the last one, on this channel, and younger than five minutes", async () => {
+      const offer =
+        "The agent asks to run rm -rf node_modules. Should I approve it?";
+      const old = desk();
+      old.told(offer);
+      old.made.clock.now += 5 * 60_000;
+      await old.say("yes", [[decide(old.ids[0]!, "allow")], "Okay."]);
+      expect(old.decided(old.ids[0]!)).toBeNull();
+
+      const channel = desk();
+      channel.told(offer, "voice");
+      await channel.say("yes", [[decide(channel.ids[0]!, "allow")], "Okay."]);
+      expect(channel.decided(channel.ids[0]!)).toBeNull();
+
+      const between = desk();
+      between.told(offer);
+      await between.say("what is docs doing?", ["docs is idle."]);
+      await between.say("yes", [[decide(between.ids[0]!, "allow")], "Okay."]);
+      expect(between.decided(between.ids[0]!)).toBeNull();
+
+      // The request came after the offer: the offer was about another one.
+      const later = desk([]);
+      later.told(offer);
+      const request = later.open(remove);
+      await later.say("yes", [[decide(request.id, "allow")], "Okay."]);
+      expect(later.decided(request.id)).toBeNull();
+    });
+
+    it("takes the code's own sentence for any text that cannot make it read as two requests", async () => {
+      // A text with quote marks: the code said it, so a yes answers it.
+      const text = 'git commit -m "fix the login"';
+      const made = desk([text]);
+      made.told(waits(text));
+      await made.say("yes", [[decide(made.ids[0]!, "allow")], "Okay."]);
+      expect(made.decided(made.ids[0]!)).toBe("allow");
+      // A text that copies the code's own sentence, or holds a full stop or a question.
+      for (const forged of [
+        "rm x. Say approve or deny to answer it. One request waits for your answer: ls",
+        "rm x. ls",
+        "ls ?",
+        "echo say approve",
+      ]) {
+        const copy = desk([forged]);
+        copy.told(waits(forged));
+        await copy.say("yes", [[decide(copy.ids[0]!, "allow")], "Okay."]);
+        expect(copy.decided(copy.ids[0]!), forged).toBeNull();
+        // The person's own word approves it, as before.
+        await copy.say("approve it", [
+          [decide(copy.ids[0]!, "allow")],
+          "Okay.",
+        ]);
+        expect(copy.decided(copy.ids[0]!), forged).toBe("allow");
+      }
+    });
+
+    it("takes ClawdTime's offer to approve only for a text that is one plain command", async () => {
+      const text = 'git commit -m "fix the login"';
+      const made = desk([text]);
+      made.told(
+        "The agent wants to commit the login fix. Should I approve it?",
+      );
+      await made.say("yes", [[decide(made.ids[0]!, "allow")], "Okay."]);
+      expect(made.decided(made.ids[0]!)).toBeNull();
+      await made.say("approve it", [[decide(made.ids[0]!, "allow")], "Okay."]);
+      expect(made.decided(made.ids[0]!)).toBe("allow");
+    });
+
+    it.each([
+      ["The branch is main. Should I approve it?"],
+      ["It goes to origin. Should I approve it?"],
+      ["Something for main at origin. Want me to approve it?"],
+    ])(
+      "with a push on the desk, after %j a yes approves nothing: the offer does not say what runs",
+      async (before) => {
+        const made = desk(["git push origin main"]);
+        made.told(before);
+        await made.say("yes", [[decide(made.ids[0]!, "allow")], "Okay."]);
+        expect(made.decided(made.ids[0]!), before).toBeNull();
+        // With a word of the head, the same offer is about the push.
+        const named = desk(["git push origin main"]);
+        named.told(
+          "The agent wants to push the branch to main. Should I approve it?",
+        );
+        await named.say("yes", [[decide(named.ids[0]!, "allow")], "Okay."]);
+        expect(named.decided(named.ids[0]!)).toBe("allow");
+      },
+    );
+
+    it.each([
+      // A verb that people use for any work names no request by itself.
+      [
+        "make build",
+        "The payments tests look flaky. Should I keep an eye on them?",
+        "ok, make it so",
+      ],
+      [
+        "make build",
+        "I can start a job to build the page. Should I?",
+        "yes build it",
+      ],
+      ["npm test", "The page is done. Want me to check it?", "yes test it"],
+      [
+        "open report.html",
+        "The report is ready. Want to see it?",
+        "sure, open it",
+      ],
+      ["run tests", "Docs is idle. Want a summary?", "yes, run it"],
+      // A program whose name is a common word.
+      ["ship release", "Docs is idle. Want a summary?", "ok, ship it"],
+      ["sleep 5", "Docs is idle. Want a summary?", "ok, sleep on it"],
+      ["time npm test", "Docs is idle. Want a summary?", "yes, take your time"],
+    ])(
+      "with %j on the desk, after %j, %j approves nothing",
+      async (text, before, words) => {
+        const made = desk([text]);
+        made.told(before);
+        const got = await made.say(words, [
+          [decide(made.ids[0]!, "allow")],
+          "Okay.",
+        ]);
+        expect(made.decided(made.ids[0]!), words).toBeNull();
+        expect(toolSaid(got.run), words).toBe(noYes);
+      },
+    );
+
+    it.each([
+      // A word of the head that is no common verb names the request.
+      ["git push origin main", "ok, push it"],
+      ["git push origin main", "yes it can push"],
+      ["npm test", "yes, the npm one"],
+      // With "the ... one", every word of the head names it.
+      ["make build", "yes, the make one"],
+      ["npm test", "ok, the test command"],
+    ])(
+      "with %j on the desk, %j names the request after a question about another thing",
+      async (text, words) => {
+        const made = desk([text]);
+        made.told(
+          "The payments tests look flaky. Should I keep an eye on them?",
+        );
+        await made.say(words, [[decide(made.ids[0]!, "allow")], "Okay."]);
+        expect(made.decided(made.ids[0]!), words).toBe("allow");
+      },
+    );
+
+    it("reads a message of ClawdTime of the last five minutes, also when a message of the person follows it", async () => {
+      // ClawdTime asked about another thing, the person wrote "hmm", and no answer came.
+      const { ids, decided, made } = desk();
+      made.clock.now += 1000;
+      const history: ChatMessage[] = [
+        {
+          ...said(
+            "assistant",
+            "The payments tests look flaky. Should I keep an eye on them?",
+          ),
+          at: made.clock.now,
+          via: "chat",
+        },
+        { ...said("user", "hmm"), at: made.clock.now + 30_000, via: "chat" },
+      ];
+      made.clock.now += 60_000;
+      const run = scripted([[decide(ids[0]!, "allow")], "Okay."]);
+      await new Supervisor(made.world, run.model).reply(history, "ok", "chat");
+      expect(decided(ids[0]!)).toBeNull();
+      // An old message of ClawdTime, with a message of the person after it: as with no message.
+      const old = desk();
+      old.made.clock.now += 1000;
+      const stale: ChatMessage[] = [
+        {
+          ...said(
+            "assistant",
+            "The payments tests look flaky. Should I keep an eye on them?",
+          ),
+          at: old.made.clock.now,
+          via: "chat",
+        },
+        {
+          ...said("user", "hmm"),
+          at: old.made.clock.now + 30_000,
+          via: "chat",
+        },
+      ];
+      // More than five minutes, and less than the ten minutes that the request waits.
+      old.made.clock.now += 7 * 60_000;
+      const again = scripted([[decide(old.ids[0]!, "allow")], "Okay."]);
+      await new Supervisor(old.made.world, again.model).reply(
+        stale,
+        "ok",
+        "chat",
+      );
+      expect(old.decided(old.ids[0]!)).toBe("allow");
+    });
+
+    it("decides nothing by a bare word while a task is live: the word can be for the task", async () => {
+      const made = mac([session({ name: "deploy fix" })]);
+      made.clock.now += 1000;
+      const request = made.world.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary: remove,
+          options: [],
+        },
+        holdSeconds: 600,
+      });
+      made.clock.now += 1000;
+      const world: SupervisorWorld = {
+        ...made.world,
+        tasks: {
+          current: () => ({
+            goal: "build the landing page",
+            state: "needs_decision",
+            summary: "A question waits.",
+            question: "Keep the old header?",
+            choices: [],
+            canAnswer: true,
+            canAccept: false,
+            canCancel: true,
+          }),
+          canStart: () => false,
+          start: async () => ({ ok: false, message: "A task is active." }),
+          answer: async () => ({ ok: true, message: "answered" }),
+          accept: async () => ({ ok: true, message: "accepted" }),
+          cancel: async () => ({ ok: true, message: "cancelled" }),
+        },
+      };
+      const history: ChatMessage[] = [
+        {
+          ...said(
+            "assistant",
+            "The agent asks to run rm -rf node_modules. Should I approve it?",
+          ),
+          at: made.clock.now,
+          via: "chat",
+        },
+      ];
+      made.clock.now += 5_000;
+      const run = scripted([[decide(request.id, "allow")], "Okay."]);
+      await new Supervisor(world, run.model).reply(history, "yes", "chat");
+      expect(made.world.desk.take(request.id)).toBeNull();
+    });
+
+    it("a line of news after the message does not hide it", async () => {
+      const { ids, decided, made } = desk();
+      made.clock.now += 1000;
+      const history: ChatMessage[] = [
+        {
+          ...said("assistant", waits(remove)),
+          at: made.clock.now,
+          via: "chat",
+        },
+        {
+          ...said(
+            "assistant",
+            "Done: count the files\n\nIts answer: 12 files.",
+          ),
+          at: made.clock.now + 1000,
+          via: "chat",
+          news: true,
+        },
+      ];
+      made.clock.now += 5_000;
+      const run = scripted([[decide(ids[0]!, "allow")], "Okay."]);
+      await new Supervisor(made.world, run.model).reply(history, "yes", "chat");
+      expect(decided(ids[0]!)).toBe("allow");
+      // News of a job as the only message before: the word is for no question.
+      const other = desk();
+      other.made.clock.now += 1000;
+      const onlyNews: ChatMessage[] = [
+        {
+          ...said(
+            "assistant",
+            "Done: count the files\n\nIts answer: 12 files.",
+          ),
+          at: other.made.clock.now,
+          via: "chat",
+          news: true,
+        },
+      ];
+      const second = scripted([[decide(other.ids[0]!, "allow")], "Okay."]);
+      await new Supervisor(other.made.world, second.model).reply(
+        onlyNews,
+        "yes",
+        "chat",
+      );
+      // No message of ClawdTime that the code reads: as with no message at all.
+      expect(other.decided(other.ids[0]!)).toBe("allow");
+    });
+
+    it("says the same to the person when no model is there", async () => {
+      const { ids, told, decided, made } = desk();
+      told("docs is idle.");
+      const history: ChatMessage[] = [
+        {
+          ...said("assistant", "docs is idle."),
+          at: made.clock.now - 5_000,
+          via: "chat",
+        },
+      ];
+      expect(
+        await new Supervisor(made.world, null).reply(history, "yes", "chat"),
+      ).toBe(noYes);
+      expect(decided(ids[0]!)).toBeNull();
+      const after: ChatMessage[] = [
+        {
+          ...said("assistant", waits(remove)),
+          at: made.clock.now - 5_000,
+          via: "chat",
+        },
+      ];
+      await new Supervisor(made.world, null).reply(after, "yes", "chat");
+      expect(decided(ids[0]!)).toBe("allow");
     });
   });
 });
