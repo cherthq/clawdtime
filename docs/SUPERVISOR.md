@@ -930,7 +930,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   A complaint about the time ("why is this taking so long?", "this is
   taking forever") is read as a question about the state: the code reads
   the state and the job before the language model answers, so the answer
-  starts from the time the job has run. An answer about a job that was read
+  starts from the time the job has run. Only when a job is not done and
+  the thing that takes long is that job: a word that points is the subject
+  ("this", "it"), or the words name the job by a word of its own ("hows
+  the downloads thing coming along"). "Look into why the login is slow" is
+  work to do, and the state is not read for it. A question that names a
+  job by a word of its own counts as a turn about that job, so its answer
+  is checked. An answer about a job that was read
   in that turn is checked in code. When it says what the job does now ("it
   is going through the logs"), how far it is ("almost done"), another time
   than the job has run, or no time when you asked how long, or when it

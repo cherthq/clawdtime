@@ -2366,7 +2366,7 @@ const wrongTimeOfAJob = (
 };
 /** The person asks how long it takes: the answer to that is a time. */
 const asksHowLong = (spoken: string) =>
-  /\b(?:how\s+long|so\s+long|too\s+long|taking\s+(?:forever|ages|long|so)|forever|ages|slow|stuck)\b/i.test(
+  /\b(?:how\s+long|so\s+long|too\s+long|taking\s+(?:forever|ages|long|so)|forever|ages|slow|stuck|coming\s+along|how\s+far)\b/i.test(
     spoken,
   );
 /**
@@ -3198,6 +3198,70 @@ export class Supervisor {
     }
     turn.done.set(key, said);
     return said;
+  }
+  /**
+   * The words that are an unfinished job's own: four letters or more, and
+   * none that many requests share: no stop word, no word that any software
+   * has ("page", "file"), no verb of work ("find", "make"), no number word,
+   * no superlative ("biggest"), and not "folder", "home" or "desktop". Of
+   * "find the three biggest files in my downloads folder" that leaves
+   * "downloads".
+   */
+  private ownWordsOfJobs(): Set<string> {
+    const now = this.world.now();
+    const verbs = new RegExp(`^${workVerb}$`, "i");
+    return new Set(
+      this.jobsNow(jobsListed)
+        .filter((job) => !job.done && now - job.startedAt < 24 * 60 * 60 * 1000)
+        .flatMap((job) =>
+          (job.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+            (word) =>
+              !correctionStop.has(word) &&
+              !softwareThing.test(word) &&
+              !softwareNoun.test(word) &&
+              !verbs.test(word) &&
+              !/^(?:zero|three|four|five|seven|eight|nine|eleven|twelve|twenty|thirty|forty|fifty|hundred|thousand|first|second|third|fourth|fifth|folder|folders|home|desktop)$/.test(
+                word,
+              ) &&
+              !/est$/.test(word),
+          ),
+        ),
+    );
+  }
+  /** The text names a job that is not done by a word that is the job's own. */
+  private namesAJobAtWork(text: string): boolean {
+    const own = this.ownWordsOfJobs();
+    return (text.toLowerCase().match(/\p{L}{4,}/gu) ?? []).some((word) =>
+      own.has(word),
+    );
+  }
+  /**
+   * A complaint about how long a job takes: a job is not done, and the thing
+   * that takes long is that job. Either the words name it by a word of its
+   * own, or a word that points is the subject of the time ("this is taking
+   * forever", "why is it so slow", "how long will it take"), or the message
+   * is four words at most ("so slow", "taking ages"): with a job at work,
+   * that is about it. In "the checkout is too slow, profile it" the slow
+   * thing is the checkout, and the sentence is work to do.
+   */
+  private complainsAboutAJob(words: string): boolean {
+    const now = this.world.now();
+    if (
+      !this.jobsNow(jobsListed).some(
+        (job) => !job.done && now - job.startedAt < 24 * 60 * 60 * 1000,
+      )
+    )
+      return false;
+    return (
+      this.namesAJobAtWork(words) ||
+      words.trim().split(/\s+/).length <= 4 ||
+      /\b(?:this|it|that|it['\u2019]s|that['\u2019]s|this\s+one|that\s+one|the\s+jobs?)\b[^.,;!?]{0,40}?\b(?:taking|slow|stuck|long|forever|ages|coming\s+along|far)\b/i.test(
+        words,
+      ) ||
+      /\bhow\s+(?:long|far)\b[^.,;!?]{0,30}\b(?:it|this|that|the\s+jobs?)\b/i.test(
+        words,
+      )
+    );
   }
   /** What the job tool answers: no job, the one job, or the list of the last day. */
   private jobsReport(now: number): string {
@@ -5362,10 +5426,16 @@ export class Supervisor {
     // A message about sessions, agents or what waits is answered from the
     // state, so the state is read first and the model starts with it. It is
     // the same tool, called by the code: one answer of the model less, and
-    // no state from memory. A complaint about how long something takes
-    // ("why is this taking so long", "this is taking forever") is such a
-    // message too: with no state before it, the model makes one up.
-    if (asksAboutState(words) || asksHowLong(words)) {
+    // no state from memory. A complaint about how long a job takes ("why is
+    // this taking so long", "this is taking forever") is such a message
+    // too: with no state before it, the model makes one up. Only when it
+    // is about a job that is not done: "look into why the login is slow" is
+    // work to do, and with the state in front of it the model answers from
+    // the state and asks before it starts.
+    if (
+      asksAboutState(words) ||
+      (asksHowLong(words) && this.complainsAboutAJob(words))
+    ) {
       // When the state cannot be read here, the model reads it as before.
       try {
         const state = this.status().slice(0, 6000);
@@ -5869,7 +5939,22 @@ export class Supervisor {
                 message.role === "tool" &&
                 message.toolCallId === "job_first" &&
                 message.content !== noJobYet,
-            );
+            ) ||
+            // The code read the job list or the state, which shows the jobs,
+            // the person's words name a job by a word of its own ("hows the
+            // downloads thing coming along"), AND the answer itself speaks of
+            // the job: the word "job", a word of its own, or "it". An answer
+            // about the sessions ("Two sessions run their tests.") is not
+            // about the job, whatever the question shares with it.
+            (messages.some(
+              (message) =>
+                message.role === "tool" &&
+                (message.toolCallId === "jobs_first" ||
+                  message.toolCallId === "state_first"),
+            ) &&
+              this.namesAJobAtWork(words) &&
+              (/\bjobs?\b|\bit(?:['\u2019]s)?\b/i.test(reply.text) ||
+                this.namesAJobAtWork(reply.text)));
           // The turn read the state, which shows the jobs too.
           const stateRead =
             ran.has("status") ||
