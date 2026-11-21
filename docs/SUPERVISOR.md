@@ -842,6 +842,23 @@ a tunnel and get its link, find something out: all of these are jobs.
   next message after you started a job, is about that job. The answer is data:
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
+- When a job is done, the chat of the desktop panel says its answer by
+  itself, once: a line "Done:" with your request, then the answer. The
+  desktop service writes it into the conversation on its own rhythm, and
+  the panel shows it while the chat is in view. The line waits while a
+  question of ClawdTime, or a message of yours, waits for its answer, for
+  at most five minutes, so that "the second one" still follows its
+  question on the screen. The line is marked as news: no rule in code reads
+  it as ClawdTime's answer to something, so a "yes" after it still answers
+  the question before it, and the language model gets it as data from a
+  session. A job that started before the service first kept this record
+  is not said. An answer that holds a password or a key is not said, as
+  before. In `clawdtime chat` with no desktop service nothing runs between
+  your messages: ask "is it done?" there.
+- After a job is done, its session is over. More work on what it made
+  ("now make the header blue") is a new job, which reads the answer of the
+  job before it. ClawdTime starts it and does not ask for a session to type
+  into.
 - While a job still works, ClawdTime knows its request and how long it has
   run, and nothing else: a job reports nothing until it writes its answer.
   A complaint about the time ("why is this taking so long?", "this is

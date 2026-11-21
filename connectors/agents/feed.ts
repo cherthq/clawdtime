@@ -31,6 +31,7 @@ import { browse, type BrowserAction } from "./browsing.js";
 import { lookAtScreen } from "./eyes.js";
 import { showOnCall, ViewStore } from "./view.js";
 import { Jobs } from "./jobs.js";
+import { JobNews } from "./jobnews.js";
 import { title } from "./render.js";
 import { realSystem, type System } from "./system.js";
 import { tabTitles, titleReader } from "./topics.js";
@@ -227,6 +228,24 @@ export class BoardFeed implements AgentBoardPort {
       options.speech !== undefined
         ? options.speech
         : speechSettings(process.env);
+    // The jobs exist where a new coding session has a folder to work in.
+    const jobs = options.project
+      ? new Jobs(this.root, {
+          project: options.project,
+          now: options.now ?? Date.now,
+          run: options.runner ?? realRunner,
+          agent:
+            process.env.CLAWDTIME_JOB_AGENT === "codex" ? "codex" : "claude",
+          terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
+        })
+      : undefined;
+    this.news = jobs
+      ? new JobNews(this.root, {
+          jobs: () => jobs.recent(10),
+          log: this.log,
+          now: options.now ?? Date.now,
+        })
+      : undefined;
     this.supervisor = new Supervisor(
       {
         now: options.now ?? Date.now,
@@ -238,16 +257,7 @@ export class BoardFeed implements AgentBoardPort {
         ...(options.project
           ? {
               jobsForTasks: options.jobsForTasks === true,
-              jobs: new Jobs(this.root, {
-                project: options.project,
-                now: options.now ?? Date.now,
-                run: options.runner ?? realRunner,
-                agent:
-                  process.env.CLAWDTIME_JOB_AGENT === "codex"
-                    ? "codex"
-                    : "claude",
-                terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
-              }),
+              jobs: jobs!,
               openApp: (name: string | null, url: URL | null) =>
                 openApp(files, name, url, options.runner ?? realRunner),
               browse: (
@@ -294,6 +304,8 @@ export class BoardFeed implements AgentBoardPort {
     );
   }
   private readonly root: string;
+  /** Says a finished job in the chat. Absent where the service has no jobs. */
+  private readonly news: JobNews | undefined;
   private readonly watchStore: WatchStore;
   private readonly watcher: Watcher;
 
@@ -396,6 +408,15 @@ export class BoardFeed implements AgentBoardPort {
       via: "chat",
     });
   }
+  /**
+   * Says in the chat the answer of each job that finished, once. ClawdTime
+   * promises that when it starts a job. The service calls this on its own
+   * rhythm, and the panel reads the chat while it is in view. Public for
+   * tests.
+   */
+  tellJobs(): ChatMessage[] {
+    return this.news?.tell() ?? [];
+  }
   setMemory(enabled: boolean) {
     this.desk.memory.setEnabled(enabled);
   }
@@ -489,6 +510,8 @@ export class BoardFeed implements AgentBoardPort {
         } catch {
           // A fault here never costs the board. The next turn tries again.
         }
+        // A job that finished is said in the chat, with no question first.
+        this.tellJobs();
       }, 2000);
       this.awayTimer.unref();
     }
