@@ -107,16 +107,19 @@ final class GuidedPathTests: XCTestCase {
     XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.45)
     XCTAssertGreaterThanOrEqual((GuidedPath.shortestGlide * 10).rounded(.down), 4)
     XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.45)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 600), 0.75, accuracy: 0.000_001)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.90)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 300), 0.575, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.70)
     XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.45)
     XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.45)
     var before = 0.0
     for length in stride(from: 0.0, through: 4000, by: 50) {
       let now = GuidedPath.glideDuration(length: length)
-      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.45); XCTAssertLessThanOrEqual(now, 0.90)
+      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.45); XCTAssertLessThanOrEqual(now, 0.70)
       before = now
     }
+    // The screen can change between the worker's last look and the event: the glide and the wait stay at one second or under.
+    XCTAssertLessThanOrEqual(GuidedPath.longestGlide + GuidedPath.dwell(still: false), 1.0)
+    XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 1.0)
     // The way to one target takes the time of its length, and ends on the target.
     for (start, target) in ways {
       let path = GuidedPath.glide(from: start, to: target, still: false)

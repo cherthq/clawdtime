@@ -251,7 +251,7 @@ so does a person who watches the shared screen on a phone.
   label of a key names the key, and the label of a click names the element as
   the screen names it.
 - **The glide.** The cursor goes on from where it is. The first time it comes
-  out of the mascot. A glide takes 0.45 to 0.90 seconds, longer for a longer
+  out of the mascot. A glide takes 0.45 to 0.70 seconds, longer for a longer
   way, and the cursor then waits 0.3 seconds at the target. It stays 1.5
   seconds after the command and then fades. The picture of a call has 10
   frames a second, so the shortest glide is in four of them or more.
@@ -422,7 +422,10 @@ Not tested, and so not proven:
 - The worker does not judge where a link leads, or what a page does with a
   click on a plain name.
 - Between the look just before an input and the input itself, the screen can
-  still change. The hands are the last place that can refuse.
+  still change. The hands are the last place that can refuse. The glide of the
+  cursor and its wait add up to one second to that time. A command for the
+  hands names a point, not an element, so the hands cannot check what is under
+  the point just before the click.
 - A question reaches you in the chat only. On a phone call nothing says it by
   itself: ask "computer status".
 - Two tools of the supervisor overlap with the worker: the browser tool and

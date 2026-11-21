@@ -58,10 +58,12 @@ public struct GuidedPath: Equatable, Sendable {
   /// Seconds for the guided cursor to glide `length` points. A glide is slow enough to follow on a
   /// phone that shows the screen: the picture of a call has 10 frames a second, so the shortest
   /// glide is in four of them or more. A long way takes longer than a short one, up to a limit.
-  public static let shortestGlide = 0.45, longestGlide = 0.90
+  /// The limit is low, because the screen can change between the worker's last look and the
+  /// event: the glide and the wait together stay at one second or under.
+  public static let shortestGlide = 0.45, longestGlide = 0.70
   public static func glideDuration(length: Double) -> Double {
     guard length.isFinite else { return shortestGlide }
-    return min(longestGlide, shortestGlide + max(0, length) / 2000)
+    return min(longestGlide, shortestGlide + max(0, length) / 2400)
   }
   /// Seconds that the cursor waits at the target before the click or the first key, so the eye
   /// is there before the hand and the label can be read: three frames of a call's picture. Reduce
