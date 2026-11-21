@@ -883,7 +883,7 @@ const seeState =
   /\s+(?:that|which)(?:\s+(?:is|was)|['\u2019]s)?\s+(?:still\s+|currently\s+)?(?:working|running|idle|done|waiting|finished|stuck|busy)(?:\s+(?:now|right\s+now))?$/i;
 /** Words that point at a session without its name, and nothing else. "One" counts only after "the", "that", "this" or "other". */
 const seePointer =
-  /^(?:it|that|this|them|(?:the|that|this)\s+(?:other\s+)?(?:one|session|window|terminal|tab)|the\s+other(?:\s+one)?|another\s+one)$/i;
+  /^(?:it|that|this|them|(?:the|that|this)\s+(?:other\s+)?(?:one|session|window|terminal|tab)|the\s+other(?:\s+one)?|another\s+one|a\s+different\s+one)$/i;
 /**
  * A session that is described, as people say it on a call: "the Terminal
  * session with the Claude Code checking the lines", "the one that fixes the
@@ -2446,6 +2446,32 @@ export class Supervisor {
       named.every((clause) => this.namesOnlyASession(clause))
     );
   }
+  /**
+   * The sessions that a correction rules out: the message says "the other
+   * one", "another one", "not that one" or "a different one", it has no
+   * request of its own to see a session, and the person's message just before
+   * asked to see exactly one session. That session is not the one they mean
+   * now.
+   */
+  private otherThan(turn: Turn, spoken: string): AgentSession[] {
+    if (
+      !/\b(?:the\s+other|another|not\s+that|a\s+different|the\s+different)\b/i.test(
+        spoken,
+      ) ||
+      this.seeAsked(spoken)
+    )
+      return [];
+    const before = [...turn.history]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (!before || !this.seeRequest(before.text)) return [];
+    try {
+      const named = this.pick("", this.seeWords(before.text).words);
+      return named.kind === "one" ? [named.session] : [];
+    } catch {
+      return [];
+    }
+  }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
     return pick.kind === "many"
@@ -2651,6 +2677,9 @@ export class Supervisor {
         const { session } = pick;
         if (see.ruledOut.includes(session))
           return `The person took ${title(session)} back in the same message. Ask them which session they mean.`;
+        // "No wait, the other one": not the session of the request before.
+        if (this.otherThan(turn, spoken).includes(session))
+          return `The person asks for another session than ${title(session)}: that one was the request before. Open the other one that their words fit, or ask them which one.`;
         // One message opens a session once.
         const opened = `opened ${session.id}`;
         if (turn.done.has(opened)) return `${title(session)} is open already.`;
