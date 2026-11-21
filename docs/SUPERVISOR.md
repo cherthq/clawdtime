@@ -562,6 +562,29 @@ ClawdTime cannot stop, close or restart a session: it has no tool for that.
 "Stop all my sessions" gets that answer, and the offer to open a session so
 that you stop it there.
 
+When you asked for no action, ClawdTime still checks one thing in its
+answer: a sentence that says that work started or is under way ("I started a
+job to push the branch", "On it", "I'll start a job for that"), in a turn
+where no tool acted. It reads the sentence against the work that did start.
+Work that runs is a job that still works or that started in the last hour,
+and the live task. Work of the day is that, and a job of the last day that
+is done. A sentence that claims new work and names it ("a job to push the
+branch", "a new session for the tests") must share a word with work that
+runs, by its first five letters, with a last "s" left out. Every other
+sentence can speak of work that exists, and is said as it is while work
+runs: "I kicked off the homepage work", "Yes, I started it", "On it". A job
+of the day that is done makes only a word about the past true ("I started
+the landing page job this morning, and it is done"), never a word about now
+or later ("On it", "I'll start it", "Job started", "I started it a minute
+ago"). Such a report must also name that job when it names work: "I started
+the push" is not the landing page job. With no work of the
+day, every such sentence is sent back: an older job that is done makes no
+claim true. A sentence that is sent back goes to the model once more,
+with no tool named, because you asked for none. When the second answer says
+it again, you get plain words: "Nothing was started or changed for that
+message. Say what I should do, and I do it." "I started to look at that"
+and "I started with the header" are a way to speak, and no start of work.
+
 ClawdTime checks its own answer when you asked for work, for a window to
 change, or to see a session. When the answer says
 that it did something ("I added that to the job") and no tool that acts ran in
