@@ -311,3 +311,30 @@ restored and independently verified as sole connected owner. Test computer use
 is off; normal control is restored. Continue from the comprehensive
 [phone and zoom handoff](PHONE_ZOOM_TEST_HANDOFF.md), which records the runtime
 paths, investigation boundary, rollback rules and remaining acceptance matrix.
+
+## Startup lifecycle investigation and regression protection
+
+The afternoon November 21 investigation reproduced successful actual SDK
+entrypoint startup when a synthetic caller joins, and reproduced the historical
+`call_ended`-without-`call_started` shape when an empty room disconnects. The
+retained failed phone call has no bridge-ready event and ended remotely; its
+historical root cause remains unresolved. Provider `call_media` alone is only a
+media assessment, not caller readiness.
+
+Startup now verifies the caller remains in the connected room after the wait,
+prevents publication/model startup after an immediate departure, awaits shared
+cleanup completion, and refuses to proceed after a failed initial avatar frame.
+Bounded stage/room-count/error-source diagnostics make a subsequent provider
+boundary failure distinguishable without retaining private content. The complete
+transcript/provider-turn speech design is unchanged.
+
+An opt-in isolated LiveKit room smoke exercised the real worker, receiving avatar
+frames and audible greeting samples from the same publisher, then confirming
+caller-disconnect cleanup, room deletion and worker exit. It used no phone line,
+Mac input or screen capture; its bridge-ready mark was synthetic. Physical
+avatar/audio, sharing and the remaining matrix still require observation.
+
+Current checks: 3,946 backend/combined tests across 127 files, typecheck/build,
+and 113 standalone line tests passed. Eight new startup cases use the actual
+SDK waiter and real RTC video classes. Native/Python code remains unchanged.
+See the [latest handoff](PHONE_ZOOM_TEST_HANDOFF.md) for scope and remaining gaps.

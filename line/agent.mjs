@@ -42,6 +42,7 @@ import {
 } from "./desktop-intent.mjs";
 import { makeCallerTools } from "./caller-tools.mjs";
 import { bindCallEnd } from "./call-end.mjs";
+import { startupError, startupRoom } from "./startup-diagnostics.mjs";
 import { makePicture } from "./picture.mjs";
 import { HEIGHT, WIDTH } from "./screen.mjs";
 import { makeCallVideo } from "./call-video.mjs";
@@ -77,17 +78,35 @@ const log = (event, detail = {}) =>
   );
 const SHOWN = new Set(["listening", "thinking", "speaking"]);
 
-const agent = defineAgent({
-  entry: async (ctx) => {
+export async function callEntry(ctx) {
+  let stage = "entry";
+  const mark = (code) => {
+    stage = code;
+    log("startup", { code, ...startupRoom(ctx.room) });
+  };
+  let source = null,
+    track = null;
+  let cleanup = async () => {
+    try {
+      await track?.close();
+    } catch {}
+    try {
+      await source?.close();
+    } catch {}
+  };
+  mark("entry");
+  try {
+    mark("room_connecting");
     await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
+    mark("room_connected");
     // Chert prepares a room before a caller exists. Join at once, and make the picture ready, but send nothing
     // and open no model session and no screen capture yet. A video track that is sent to an empty room used
     // 7 percent of a processor core around the clock, at any frame rate, for a gain that could not be measured.
     let callStarted = 0;
 
     // One camera track from this agent: the line shows video only from the participant that speaks.
-    const source = new VideoSource(WIDTH, HEIGHT);
-    const track = LocalVideoTrack.createVideoTrack("agent-video", source);
+    source = new VideoSource(WIDTH, HEIGHT);
+    track = LocalVideoTrack.createVideoTrack("agent-video", source);
     // The line's Video framing in Chert is fixed for a call. On "fill" the caller sees only the middle strip of
     // the picture, so the layout is "upright" for the whole call. On "fit" the caller sees all of it: "wide".
     const framing = framingName(
@@ -135,15 +154,17 @@ const agent = defineAgent({
     const state = () =>
       heard === "speaking" ? "speaking" : busy > 0 ? "thinking" : heard;
     const frame = () => {
-      if (ended) return;
+      if (ended) return false;
       try {
         const pixels = picture.frame(tick++, state(), video?.frame());
         source.captureFrame(
           new VideoFrame(pixels, WIDTH, HEIGHT, VideoBufferType.RGBA),
         );
+        return true;
       } catch {
         if (!frameFailed) log("frame_failed");
         frameFailed = true;
+        return false;
       }
     };
     const quiet = async (step) => {
@@ -153,8 +174,21 @@ const agent = defineAgent({
         /* the rest must still close */
       }
     };
-    const cleanup = async () => {
-      if (ended) return;
+    const participantJoined = () =>
+      log("startup_room", {
+        code: "participant_joined",
+        ...startupRoom(ctx.room),
+      });
+    const participantLeft = () =>
+      log("startup_room", {
+        code: "participant_left",
+        ...startupRoom(ctx.room),
+      });
+    ctx.room.on(RoomEvent.ParticipantConnected, participantJoined);
+    ctx.room.on(RoomEvent.ParticipantDisconnected, participantLeft);
+    let closing;
+    cleanup = () => {
+      if (ended) return closing ?? Promise.resolve();
       ended = true;
       clearInterval(timer);
       clearInterval(settingsTimer);
@@ -162,23 +196,42 @@ const agent = defineAgent({
       ears?.stop();
       callerRequest.stop();
       callEnd?.detach();
+      ctx.room.off(RoomEvent.ParticipantConnected, participantJoined);
+      ctx.room.off(RoomEvent.ParticipantDisconnected, participantLeft);
       jobs?.stop();
       video?.close();
-      await quiet(() => session?.close());
-      await quiet(() => track.close());
-      await quiet(() => source.close());
-      log("call_ended");
+      closing = (async () => {
+        await quiet(() => session?.close());
+        await quiet(() => track.close());
+        await quiet(() => source.close());
+        log("call_ended");
+      })();
+      return closing;
     };
     ctx.addShutdownCallback(cleanup);
+    mark("video_prepared");
     let caller;
+    mark("caller_waiting");
     try {
       caller = await ctx.waitForParticipant();
-    } catch {
+    } catch (error) {
+      log("caller_wait_ended", { code: stage, ...startupError(error) });
       // Chert makes a new waiting room every few minutes. A room that ends before a caller came is no error.
       await cleanup();
       return;
     }
     if (ended) return;
+    mark("caller_resolved");
+    // A join can resolve the SDK waiter immediately before departure in the
+    // same event turn. Do not start media for that obsolete participant.
+    if (
+      !ctx.room.isConnected ||
+      ctx.room.remoteParticipants.get(caller.identity) !== caller
+    ) {
+      log("caller_departed_before_start");
+      await cleanup();
+      return;
+    }
     callEnd = bindCallEnd({
       room: ctx.room,
       callerIdentity: caller.identity,
@@ -187,6 +240,7 @@ const agent = defineAgent({
       binding: callerRequest,
       cleanup,
     });
+    mark("call_bound");
     callStarted = Date.now();
     video = makeCallVideo({
       since: callStarted,
@@ -197,11 +251,13 @@ const agent = defineAgent({
       device: process.env.CLAWDTIME_LINE_SCREEN_DEVICE,
       onExit: (code) => log("screen_capture_stopped", { code }),
     });
+    mark("video_created");
     // Preferences only: no events/media are persisted. Local controls apply during a call.
     settingsTimer = setInterval(() => video.settings(zoomSettings.read()), 500);
     log("call_started");
     // The picture goes out as the first thing of a call: it is ready, so this is one frame and one publish.
-    frame();
+    if (!frame()) throw new Error("Initial video frame unavailable");
+    mark("first_frame");
     try {
       await ctx.room.localParticipant.publishTrack(track, {
         source: TrackSource.SOURCE_CAMERA,
@@ -211,6 +267,7 @@ const agent = defineAgent({
       throw error;
     }
     if (ended) return;
+    mark("camera_published");
     timer = setInterval(frame, 1000 / fps);
 
     const showScreen = async (on) => {
@@ -308,6 +365,7 @@ const agent = defineAgent({
         /* the call ended first */
       }
     };
+    mark("session_starting");
     try {
       await session.start({
         room: ctx.room,
@@ -335,6 +393,7 @@ const agent = defineAgent({
       throw error;
     }
     if (ended) return;
+    mark("session_started");
     // The agent listens only when the call is ready and it does not speak itself (ears.mjs): sound of a call
     // that still connects is not the caller, and its own voice comes back through the phone.
     ears = makeEars({
@@ -350,6 +409,7 @@ const agent = defineAgent({
     });
     // Greet once when chert dev reports that FaceTime is ready. Without the signal there is no greeting, and
     // the caller speaks first.
+    mark("ready_waiting");
     stopGreeting = greetOnBridgeReady(
       ctx.room,
       (signal) => {
@@ -382,9 +442,15 @@ const agent = defineAgent({
         say(jobDoneInstructions(job));
       },
     });
-  },
-});
+  } catch (error) {
+    log("startup_failed", { code: stage, ...startupError(error) });
+    await cleanup();
+    // Do not let the SDK's generic error logger retain arbitrary provider text.
+    throw new Error(`Call startup failed at ${stage}`);
+  }
+}
 
+const agent = defineAgent({ entry: callEntry });
 export default agent;
 
 /** True when this file is the program that node runs. A call's own process only imports it, for `entry`. */

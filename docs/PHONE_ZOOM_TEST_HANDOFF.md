@@ -399,3 +399,67 @@ unit-test success proves any handset acceptance item.
 - Conduct the arranged physical matrix, record passes/failures/remaining limits,
   and always restore/reconcile line ownership. Never claim “ready to call” from
   health/registration alone if the actual media-startup defect remains unresolved.
+
+## Startup investigation continuation — November 21, afternoon ET
+
+Fresh read-only preflight found one connected active normal owner, no active
+call, test computer disabled/idle at step zero, and normal computer enabled in
+its prior blocked state. No phone ownership or native-control switch changed
+while investigating.
+
+The retained provider record for the 12:41:57 call reports `remote_ended`, with
+incoming/answered/active/ended/cleanup events and **no bridge-ready event**. It
+contains no failure explanation for the missing bridge. The discarded historical
+`call_media.state` cannot be recovered from the wrapper log. In the installed
+provider CLI, `call_media` is a delayed track assessment and can mean `no_audio`;
+it is not evidence that the bridge joined.
+
+The actual exported agent entrypoint, installed SDK `JobContext` participant
+waiter, native RTC video source/track, picture renderer, and call-end hook were
+exercised together. A standard caller joining reaches avatar publication. An
+empty waiting room disconnect produces `call_ended` with no `call_started`, the
+same historical log shape. **This identifies a plausible path, not the proved
+historical root cause.** No deterministic failure in the new call-end hook or
+video constructor reproduced.
+
+A separate, reproduced startup race is fixed: a caller that joins and leaves
+before the waiter continuation must not start video or a model session. Startup
+now rechecks the exact participant object in the connected room. Repeated cleanup
+awaits the same teardown, and an initial frame failure cannot proceed as if a
+valid avatar frame existed. None of these findings justify claiming that the
+12:41 missing-avatar cause has been fixed.
+
+New bounded diagnostics cover entry, connection, resource preparation, caller
+wait/resolution, call binding, first frame, camera publication, session start,
+and bridge-signal wait. Room observations contain only connection/count fields.
+Failures retain an allowlisted error class and source basename/line, never raw
+error messages, identities, speech, screen pixels or credentials. The private
+test launcher now preserves these fields and provider media verdicts. Startup
+and health remain distinct from physical caller readiness.
+
+`line/startup-smoke.mjs --env-file /absolute/protected.env` explicitly creates
+one uniquely named LiveKit room/worker and a synthetic subscribing caller. It
+uses isolated configuration, disables desktop CLI effects, publishes no caller
+audio, and never claims a phone line. The real worker generated moving avatar
+frames and greeting audio from the same publisher after a **synthetic** bridge
+mark. Caller disconnect produced cleanup; the exact room was removed and the
+worker exited. No frames/audio were recorded. This covers the lifecycle omitted
+by the previous speech smoke; it still does not test FaceTime bridge arrival or
+handset visibility. The smoke is opt-in and is not part of normal unit tests.
+
+Validation: `npm run check` passed **3,946 tests in 127 files**, typecheck and
+build. Standalone line tests passed **113 tests**. The eight new cases exercise
+real SDK waiting/joining and RTC video construction, publication failure,
+immediate/late departures, exactly-once cleanup and diagnostic sanitization.
+Native/Python source is unchanged from the previously recorded passing checks.
+
+Remote main advanced to `f495919` during this session (job conversation changes).
+It has not been merged into this test branch or installed. Keep the startup
+investigation on the pinned isolated version; reassess main integration separately.
+
+The remaining prerequisite is an instrumented incoming-call observation of the
+provider bridge/room boundary. Do not label it a fixed-startup acceptance run or
+claim the full matrix passed. Begin with avatar/audio and no computer input;
+only after observed startup proceed to the hands-off screen/control matrix.
+If it fails, retain the stage and provider verdict, stop the run, and restore the
+normal owner. Do not replay the call or computer requests automatically.
