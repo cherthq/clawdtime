@@ -147,5 +147,16 @@ with externally observed Space/application changes and sent no desktop shortcut.
 
 Initial observation failures now report bounded error codes, takeover, or missing
 surface evidence separately. These diagnostics retain Stop/unknown safeguards.
-No successful physical left/right/previous move or phone-video acceptance is
-claimed by these preflight findings. Resume only with a stable, exclusive fixture.
+The person subsequently confirmed three single-dispatch physical moves: right,
+left, then right. Automatic arrival verification returned unknown each time;
+no shortcut was retried, and each outcome was reconciled with the person before
+new work. Read-only AX checks identified full-screen destination windows on the
+left and final right attempts. These results establish physical directional input,
+not verified arrival or safe continuation on the destination.
+
+The fixture inventory then contained only one ordinary TextEdit window. The next
+pass requires two distinct ordinary windows on adjacent ordinary desktops, with
+full-screen Spaces outside that pair. The isolated test computer switch is off;
+the installed Supervisor switch was restored to its recorded prior enabled state.
+Receipts remain intact. Verified left/right/previous, destination editing, zoom,
+and phone-video acceptance remain pending.
