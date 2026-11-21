@@ -5063,7 +5063,7 @@ export class Supervisor {
         // Flags only: what a job answered is data from a session, and stays behind job_result.
         const newestJob = this.jobsNow(1)[0];
         const jobFacts = this.world.jobs
-          ? `jobs that you started in the last 24 hours=${this.jobsNow(20).filter((job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000).length}; newest job has its answer=${!!newestJob?.done};`
+          ? `jobs that you started in the last 24 hours=${this.jobsNow(20).filter((job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000).length}; newest job has its answer=${!!newestJob?.done};${newestJob?.done ? ' that job\'s session is over, so more work on what it made ("now make the header blue", "add a footer") is a new job: call start_job, and do not look for a session to type into;' : ""}`
           : "";
         // The kind of each agent, from a fixed list: a label is text that
         // another Mac can send, and has no place in an instruction.
