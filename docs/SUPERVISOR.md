@@ -328,10 +328,12 @@ These rules are in the code, not in the model's instructions:
   before the colon, is typed at once, by the same rules. ClawdTime does not
   ask you again. This holds only while no task, request or computer action
   waits for your answer, and only when the words after the colon are one
-  clause: no comma, full stop, dash or question mark stands before more
-  words, and no word in it can take it back or hedge it ("no", "not", "wait",
-  "stop", "never mind", "actually", "ok?"). Any other message is read as
-  before, and ClawdTime can ask you.
+  clause of plain words: no comma, full stop, dash, bracket or other mark
+  stands before more words, and no word in it can take it back, hedge it or
+  tie it to you ("no", "not", "wait", "stop", "never mind", "actually",
+  "when I say so"). A question mark at the end counts only for a question
+  ("did the tests pass?"). Any other message is read as before, and ClawdTime
+  can ask you.
 - One message types the same words into a session once. A choice of a task
   is never typed into a session: a click on it answers the task.
 - "Then ask it", after your question about one session, types nothing.
