@@ -15,6 +15,7 @@ import {
   STATES,
   styleName,
 } from "./mascot.mjs";
+import { layoutName, screenLayout, seenBox } from "./layout.mjs";
 import { FPS, HEIGHT, WIDTH } from "./screen.mjs";
 
 export const BACKGROUND = 0x111317;
@@ -38,7 +39,8 @@ function boxAt(style, cx, cy, size) {
  * so it stays clear on any content. It has the same life as the large one. Call it on a copy of the screen
  * frame, once for each frame. It changes pixels only inside the plate, and the plate stays inside the frame.
  * @param {Uint8Array} pixels width * height * 4 RGBA bytes
- * @param {{ tick?: number, state?: string, style?: string, size?: number, margin?: number, fps?: number }} [options]
+ * @param {{ tick?: number, state?: string, style?: string, size?: number, margin?: number, fps?: number, x?: number, y?: number }} [options]
+ *   `x` and `y` put the plate at one place. Without them it sits in the bottom right corner.
  * @returns {{ x: number, y: number, width: number, height: number }} the plate
  */
 export function drawOverlay(pixels, width, height, options = {}) {
@@ -52,8 +54,17 @@ export function drawOverlay(pixels, width, height, options = {}) {
     0,
     Math.min(options.margin ?? 24, (width - side) / 2, (height - side) / 2),
   );
-  const x = Math.round(width - margin - side),
-    y = Math.round(height - margin - side);
+  // A given place is kept inside the frame.
+  const inside = (value, room) =>
+    Math.round(Math.min(Math.max(0, value), room));
+  const x =
+      typeof options.x === "number"
+        ? inside(options.x, width - side)
+        : Math.round(width - margin - side),
+    y =
+      typeof options.y === "number"
+        ? inside(options.y, height - side)
+        : Math.round(height - margin - side);
   drawPlate(pixels, width, height, x, y, side, side, side * 0.22, PLATE_EDGE);
   drawPlate(
     pixels,
@@ -83,13 +94,18 @@ export function drawOverlay(pixels, width, height, options = {}) {
  * The picture of the call. `frame(tick, state, shot)` gives the same buffer each time, width * height * 4 RGBA.
  * `tick` counts frames. `state` is idle, listening, thinking or speaking. With `shot` (a full screen frame),
  * the frame is that screen with the small stone on it. `shot` itself is not changed.
- * @param {{ width?: number, height?: number, fps?: number, style?: string }} [options]
+ * @param {{ width?: number, height?: number, fps?: number, style?: string, layout?: string }} [options]
+ *   `layout` is "upright" (the default: everything stays in the strip that a phone held upright shows when its
+ *   video is set to fill) or "wide" (the whole picture).
  */
 export function makePicture(options = {}) {
   const width = options.width ?? WIDTH,
     height = options.height ?? HEIGHT,
     fps = options.fps ?? FPS;
   const style = styleName(options.style);
+  const layout = layoutName(options.layout);
+  const seen = seenBox(width, height, layout);
+  const share = screenLayout(width, height, layout);
   const [red, green, blue] = channels(BACKGROUND);
   const base = new Uint8Array(width * height * 4);
   for (let i = 0; i < base.length; i += 4) {
@@ -99,7 +115,7 @@ export function makePicture(options = {}) {
     base[i + 3] = 255;
   }
   const bar = {
-    wide: Math.round(width * 0.25),
+    wide: Math.round(Math.min(width * 0.25, seen.w * 0.7)),
     tall: Math.max(2, Math.round(height / 180)),
     y: Math.round(height * 0.93),
   };
@@ -118,7 +134,14 @@ export function makePicture(options = {}) {
   );
   const pixels = Uint8Array.from(base);
 
-  const size = Math.round(Math.min(width, height) * 0.78);
+  // The stone is as large as the picture allows, and never wider than what the caller sees.
+  const shape = bounds(style);
+  const size = Math.round(
+    Math.min(
+      Math.min(width, height) * 0.78,
+      (seen.w * 0.9 * 200) / Math.max(1, shape.right - shape.left),
+    ),
+  );
   const at = boxAt(style, width / 2, height * 0.47, size);
   const inside = (x0, y0, x1, y1) => ({
     x0: Math.max(0, Math.floor(x0)),
@@ -147,12 +170,21 @@ export function makePicture(options = {}) {
   return {
     width,
     height,
+    layout,
     frame(tick = 0, state = "idle", shot = null) {
       const now = known(state);
       if (shot && shot.length === pixels.length) {
         pixels.set(shot);
         screenShown = true;
-        drawOverlay(pixels, width, height, { tick, state: now, style, fps });
+        drawOverlay(pixels, width, height, {
+          tick,
+          state: now,
+          style,
+          fps,
+          size: share.stone.size,
+          x: share.stone.x,
+          y: share.stone.y,
+        });
         return pixels;
       }
       if (screenShown) {
