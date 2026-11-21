@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentsCli } from "../cli/agents.js";
@@ -54,7 +55,7 @@ describe("a job for a coding session", () => {
       "Open a tunnel for port 3000 and give me the link; $(rm -rf ~) `whoami` 'x'";
     expect(await jobs.start(job)).toEqual({
       ok: true,
-      said: "I started a new session for that job in a terminal window. I will have its answer when it is done.",
+      said: "I requested a terminal session for that job. Its progress is unverified until the session reports a result.",
     });
     const folder = join(directory, "agents", "jobs");
     const [id] = readdirSync(folder);
@@ -65,8 +66,12 @@ describe("a job for a coding session", () => {
     ).toBe(true);
     expect(prompt).toContain(join(folder, id!, "result.md"));
     const script = readFileSync(join(folder, id!, "start.command"), "utf8");
-    expect(script).toBe(
-      `#!/bin/zsh\ncd '/work/app' || exit 1\ncommand -v claude >/dev/null 2>&1 || { print -r -- 'The coding agent claude is not installed on this Mac, so the job did not start.' > '${join(folder, id!, "result.md")}'; exit 1; }\nexec claude "$(cat '${join(folder, id!, "prompt.txt")}')"\n`,
+    expect(script).toContain("setopt NO_CLOBBER");
+    expect(script).toContain("launched.json");
+    expect(script).toContain("exited.json");
+    expect(script).toContain("trap job_exit_receipt EXIT");
+    expect(script).toContain(
+      `claude "$(cat '${join(folder, id!, "prompt.txt")}')"`,
     );
     // No word of the job is in the script: nothing spoken can become a command.
     for (const word of ["tunnel", "rm -rf", "whoami"])
@@ -97,7 +102,7 @@ describe("a job for a coding session", () => {
       "utf8",
     );
     expect(script).toContain(`cd '/work/it'\\''s here' || exit 1`);
-    expect(script).toContain("exec codex ");
+    expect(script).toContain("codex ");
   });
 
   it("starts nothing for an unclear job, for a credential, when the window does not open, and past the limit", async () => {
@@ -128,7 +133,9 @@ describe("a job for a coding session", () => {
           run: failing.run,
         }).start("Build the landing page of the app")
       ).said,
-    ).toBe("The terminal window for the job did not open on this Mac.");
+    ).toBe(
+      "The terminal launch failed. Whether the agent started is unverified; inspect this job before retrying.",
+    );
     let clock = now;
     const limited = new Jobs(directory, {
       project: "/work/app",
@@ -147,10 +154,17 @@ describe("a job for a coding session", () => {
     const third = await limited.start("Open a tunnel for port 3000");
     expect(third).toEqual({
       ok: false,
-      said: "2 jobs still run. Ask for a result, or wait for one to finish.",
+      said: "2 jobs have unresolved outcomes. Inspect them before starting another job; missing answers do not prove they are running.",
     });
-    // A job with no answer after two hours no longer counts as running.
+    // Time alone cannot reconcile an unknown external effect.
     clock += 3 * 60 * 60 * 1000;
+    expect((await limited.start("Open a tunnel for port 3000")).ok).toBe(false);
+    expect(
+      limited.retire(
+        limited.recent()[0]!.id,
+        "Operator reviewed the stopped session; completion remains unknown.",
+      ),
+    ).toContain("did not stop");
     expect((await limited.start("Open a tunnel for port 3000")).ok).toBe(true);
   });
 
@@ -232,7 +246,8 @@ describe("a job for a coding session", () => {
     });
     lines.length = 0;
     await cli([]);
-    expect(lines[0]).toContain("WORKING");
+    expect(lines[0]).toContain("LAUNCH_REQUESTED");
+    expect(lines[0]).toContain("has not acknowledged starting");
     expect(lines[0]).toContain("Build the landing page of the app");
   });
 });
@@ -342,7 +357,7 @@ describe("the brain hands work to a job", () => {
     expect(started).toEqual(["Build the landing page and run its tests"]);
   });
 
-  it("says the answer of the newest job, or that it still works", async () => {
+  it("says the answer of the newest job, or preserves unverified progress without model reassurance", async () => {
     const working: JobFacts = {
       id: "20261121T005500-ab12",
       job: "Open a tunnel for port 3000 and give me the link",
@@ -352,14 +367,16 @@ describe("the brain hands work to a job", () => {
     };
     let { value } = world([working]);
     let run = scripted([[call("job_result")], "Still working."]);
-    await new Supervisor(value, run.model).reply(
+    const unresolved = await new Supervisor(value, run.model).reply(
       [],
       "is the tunnel up?",
       "call",
     );
-    expect(run.results[0]).toBe(
-      'Job "Open a tunnel for port 3000 and give me the link", started 5m ago, still works.',
+    expect(unresolved).toBe(
+      'Job "Open a tunnel for port 3000 and give me the link", started 5m ago. No result has arrived. Whether the session is working, waiting, or stuck is unverified.',
     );
+    expect(run.systems).toHaveLength(1);
+    expect(run.results).toEqual([]);
     ({ value } = world([
       {
         ...working,
@@ -573,11 +590,240 @@ describe("the files of a job, after an independent review", () => {
     const [id] = readdirSync(folder);
     const script = readFileSync(join(folder, id!, "start.command"), "utf8");
     // The check stands before the agent starts, and writes the answer file of this job.
-    const check = script.split("\n")[2]!;
+    const check = script
+      .split("\n")
+      .find((line) => line.startsWith("command -v claude"))!;
     expect(check.startsWith("command -v claude >/dev/null 2>&1 || {")).toBe(
       true,
     );
     expect(check).toContain(`> '${join(folder, id!, "result.md")}'`);
     expect(check).toContain("is not installed on this Mac");
+  });
+});
+
+describe("job launch receipts and explicit retirement", () => {
+  it("keeps older unresolved jobs blocking and addressable beyond the display limit", async () => {
+    const directory = root();
+    const oldest = "20261120T235959-abcd";
+    const oldFolder = join(directory, "agents", "jobs", oldest);
+    mkdirSync(oldFolder, { recursive: true });
+    writeFileSync(
+      join(oldFolder, "prompt.txt"),
+      "Unresolved older fixture work.",
+    );
+    for (let i = 0; i < 60; i++) {
+      const id = `20261121T00${String(i).padStart(2, "0")}00-abcd`;
+      const folder = join(directory, "agents", "jobs", id);
+      mkdirSync(folder);
+      writeFileSync(join(folder, "prompt.txt"), "Newer fixture work.");
+      if (i % 2 === 0)
+        writeFileSync(join(folder, "result.md"), "Finished fixture.");
+      else
+        writeFileSync(
+          join(folder, "retired.json"),
+          JSON.stringify({
+            version: 1,
+            outcome: "unknown",
+            reason: "Retired test fixture.",
+            at: now,
+          }),
+        );
+    }
+    const launcher = recorder();
+    const jobs = new Jobs(directory, {
+      project: directory,
+      now: () => now,
+      run: launcher.run,
+      limit: 1,
+    });
+    expect(jobs.recent(100)).toHaveLength(50);
+    expect(jobs.recent(100).some((job) => job.id === oldest)).toBe(false);
+    expect(
+      await jobs.start("Another isolated fixture operation"),
+    ).toMatchObject({
+      ok: false,
+      said: expect.stringContaining("1 jobs have unresolved outcomes"),
+    });
+    expect(launcher.calls).toEqual([]);
+    expect(
+      jobs.retire(oldest, "Manually reviewed older unknown fixture."),
+    ).toContain("outcome remains unknown");
+    expect(
+      JSON.parse(readFileSync(join(oldFolder, "retired.json"), "utf8")),
+    ).toMatchObject({ outcome: "unknown" });
+    expect(
+      await jobs.start("Another isolated fixture operation"),
+    ).toMatchObject({ ok: true });
+    expect(launcher.calls).toHaveLength(1);
+    expect(readFileSync(join(oldFolder, "prompt.txt"), "utf8")).toBe(
+      "Unresolved older fixture work.",
+    );
+  });
+
+  it("records the actual launcher and exit, and refuses to replay a script", async () => {
+    const directory = root();
+    const jobs = new Jobs(directory, {
+      project: directory,
+      now: () => now,
+      run: recorder().run,
+    });
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    const counter = join(directory, "invocations");
+    writeFileSync(
+      join(bin, "claude"),
+      '#!/bin/sh\nprintf invoked >> "$FIXTURE_COUNT"\nexit 7\n',
+      { mode: 0o700 },
+    );
+    await jobs.start("Perform the isolated fixture operation");
+    const [job] = jobs.recent();
+    expect(job!.status).toBe("launch_requested");
+    const folder = join(directory, "agents", "jobs", job!.id);
+    const script = join(folder, "start.command");
+    const run = () =>
+      spawnSync("/bin/zsh", [script], {
+        env: { PATH: `${bin}:/usr/bin:/bin`, FIXTURE_COUNT: counter },
+        encoding: "utf8",
+      });
+    expect(run().status).toBe(7);
+    expect(jobs.recent()[0]).toMatchObject({
+      status: "exited_without_result",
+      done: false,
+      result: null,
+    });
+    expect(jobs.recent()[0]!.statusDetail).toContain("code 7");
+    const receipt = readFileSync(join(folder, "exited.json"), "utf8");
+    expect(
+      JSON.parse(readFileSync(join(folder, "launched.json"), "utf8")).pid,
+    ).toBeGreaterThan(0);
+    expect(run().status).toBe(1);
+    expect(readFileSync(counter, "utf8")).toBe("invoked");
+    expect(readFileSync(join(folder, "exited.json"), "utf8")).toBe(receipt);
+  });
+
+  it("retirement prevents a requested launch and cannot erase late-result ambiguity", async () => {
+    const directory = root();
+    const jobs = new Jobs(directory, {
+      project: directory,
+      now: () => now,
+      run: recorder().run,
+    });
+    await jobs.start("Perform the isolated fixture operation");
+    const [job] = jobs.recent();
+    const folder = join(directory, "agents", "jobs", job!.id);
+    const original = readFileSync(join(folder, "prompt.txt"), "utf8");
+    expect(
+      jobs.retire(job!.id, "Do not resume this obsolete test job."),
+    ).toContain("outcome remains unknown");
+    const retired = readFileSync(join(folder, "retired.json"), "utf8");
+    expect(jobs.retire(job!.id, "A different later explanation.")).toContain(
+      "already retired",
+    );
+    expect(readFileSync(join(folder, "retired.json"), "utf8")).toBe(retired);
+    const result = spawnSync("/bin/zsh", [join(folder, "start.command")], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("will not be replayed");
+    expect(existsSync(join(folder, "launched.json"))).toBe(false);
+    writeFileSync(join(folder, "result.md"), "A late answer claimed success.");
+    expect(jobs.recent()[0]).toMatchObject({
+      status: "retired_unknown",
+      done: false,
+      result: null,
+    });
+    expect(jobs.recent()[0]!.statusDetail).toContain(
+      "later answer is preserved",
+    );
+    expect(readFileSync(join(folder, "result.md"), "utf8")).toBe(
+      "A late answer claimed success.",
+    );
+    expect(readFileSync(join(folder, "prompt.txt"), "utf8")).toBe(original);
+  });
+
+  it("identifies legacy records as unknown, preserves launch failures, and refuses unsafe retirement", async () => {
+    const directory = root();
+    const folder = join(directory, "agents", "jobs", "20261121T005959-abcd");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, "prompt.txt"),
+      "Old work with no recorded outcome.",
+    );
+    const jobs = new Jobs(directory, {
+      project: directory,
+      now: () => now,
+      run: recorder(1).run,
+    });
+    expect(jobs.recent()[0]).toMatchObject({ status: "unknown", done: false });
+    expect(() => jobs.retire("../../elsewhere", "Not a job record")).toThrow();
+    expect(() =>
+      jobs.retire(
+        "20261121T005959-abcd",
+        "Use sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+      ),
+    ).toThrow();
+    await jobs.start("An isolated fixture launch that fails");
+    expect(jobs.recent()[0]).toMatchObject({
+      status: "launch_failed",
+      done: false,
+    });
+    writeFileSync(join(folder, "result.md"), "An answer arrived.");
+    expect(() =>
+      jobs.retire("20261121T005959-abcd", "Do not overwrite completed work."),
+    ).toThrow("already has a result");
+  });
+
+  it("does not treat linked or malformed launch receipts as evidence", async () => {
+    const directory = root();
+    const folder = join(directory, "agents", "jobs", "20261121T005959-abcd");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, "prompt.txt"),
+      "Old work with no recorded outcome.",
+    );
+    writeFileSync(
+      join(directory, "outside.json"),
+      JSON.stringify({ version: 1, pid: 42 }),
+    );
+    symlinkSync(join(directory, "outside.json"), join(folder, "launched.json"));
+    writeFileSync(
+      join(folder, "exited.json"),
+      JSON.stringify({ version: 1, exitCode: "not a number" }),
+    );
+    const jobs = new Jobs(directory, { project: directory, now: () => now });
+    expect(jobs.recent()[0]!.status).toBe("unknown");
+  });
+
+  it("exposes retirement as an explicit CLI command without invoking a process", async () => {
+    const directory = root();
+    const system = fakeSystem({
+      now,
+      home: directory,
+      env: { CLAWDTIME_CONFIG_HOME: directory },
+    });
+    const launcher = recorder();
+    const jobs = new Jobs(directory, {
+      project: directory,
+      now: () => now,
+      run: launcher.run,
+    });
+    await jobs.start("Old fixture work whose result is unknown");
+    const [job] = jobs.recent();
+    const runner = recorder();
+    const lines: string[] = [];
+    await agentsCli(
+      [
+        "--supervisor",
+        "jobs",
+        "retire",
+        job!.id,
+        "--reason",
+        "Stopped old fixture manually; outcome not verified.",
+      ],
+      { system, runner: runner.run, print: (line) => lines.push(line) },
+    );
+    expect(lines.join(" ")).toContain("did not stop the terminal process");
+    expect(runner.calls).toEqual([]);
+    expect(jobs.recent()[0]!.status).toBe("retired_unknown");
   });
 });

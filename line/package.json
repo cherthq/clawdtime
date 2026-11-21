@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --env-file=.env.local agent.mjs start",
-    "test": "node --test line.test.mjs"
+    "test": "node --test line.test.mjs runtime.test.mjs update-hold.test.mjs window-video.test.mjs runtime-window.test.mjs"
   },
   "dependencies": {
     "@livekit/agents": "1.8.0",

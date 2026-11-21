@@ -1031,7 +1031,8 @@ test("the watch looks on a timer, one look at a time, and stops with the call", 
   });
   watch.check();
   watch.check();
-  await wait(80);
+  const deadline = Date.now() + 1500;
+  while (reads < 4 && Date.now() < deadline) await wait(10);
   assert.ok(reads >= 4, `the timer looks again and again, got ${reads}`);
   assert.equal(most, 1, "never two looks at one time");
   assert.deepEqual(

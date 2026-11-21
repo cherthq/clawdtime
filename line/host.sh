@@ -39,10 +39,14 @@ start() {
   [ -f "$DIR/.env.local" ] || { echo "No .env.local in $DIR. Copy .env.example to .env.local and fill it in." >&2; exit 1; }
   [ -d "$DIR/node_modules" ] || { echo "No node_modules in $DIR. Run: npm install" >&2; exit 1; }
   if running; then echo "Already running. See: ./host.sh status"; return 0; fi
+  # A private installed release may pin the agent code while credentials remain here.
+  code=$(setting CLAWDTIME_LINE_RELEASE); code=${code:-$DIR}
+  case "$code" in /*) ;; *) echo "Agent release must be an absolute directory." >&2; exit 1 ;; esac
+  [ -f "$code/agent.mjs" ] && [ -d "$code/node_modules" ] || { echo "The selected agent release is incomplete." >&2; exit 1; }
   agent=$(setting AGENT_NAME); agent=${agent:-clawdtime}
   project=$(setting CLAWDTIME_LINE_CHERT_PROJECT)
   # tee -i ignores Ctrl+C, so the last records of chert dev still reach the file.
-  tmux new-session -d -s "$SESSION" -n agent "cd '$DIR' && node --env-file=.env.local agent.mjs start 2>&1 | tee -i -a '$STATE/agent.log'"
+  tmux new-session -d -s "$SESSION" -n agent "cd '$DIR' && node --env-file=.env.local '$code/agent.mjs' start 2>&1 | tee -i -a '$STATE/agent.log'"
   sleep 3
   tmux new-window -t "$SESSION" -n dev "cd '$DIR' && chert dev --agent '$agent' --env-file .env.local ${project:+--project '$project'} --json 2>&1 | tee -i -a '$STATE/dev.jsonl'"
   echo "Started in the tmux session $SESSION. Records: $STATE/dev.jsonl"
@@ -69,6 +73,12 @@ status() {
 
 # Takes the newest main. It changes nothing when the checkout is not a clean main, and it never restarts during a call.
 update() {
+  # A locally qualified release must not be replaced by scheduled source updates.
+  # Presence alone is fail-closed, including an unreadable file or a dangling link.
+  if [ -e "$STATE/update-hold" ] || [ -L "$STATE/update-hold" ]; then
+    say "local release hold is active: nothing done"
+    return 0
+  fi
   cd "$ROOT"
   branch=$(git rev-parse --abbrev-ref HEAD)
   [ "$branch" = main ] || { say "not on main ($branch): nothing done"; return 0; }

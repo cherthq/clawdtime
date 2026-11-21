@@ -108,9 +108,9 @@ extension DeviceApp {
     let next = ComputerControlPolicy.allCases[index]
     guard next != policy.preferences.policy else { return }
     // Stop our path immediately, even when an unresolved outcome prevents widening.
-    stop()
+    stopWork(reason: .policyUpdated)
     do {
-      if (ledger.unresolvedActionCount + localLedger.unresolvedActions) > 0 && next != .viewOnly {
+      if (unresolvedInputCount) > 0 && next != .viewOnly {
         throw HelperError(409, "Reconcile outstanding input before changing computer-control mode. Sharing is stopped.")
       }
       try policy.updatePreferences(preferences.set(next))

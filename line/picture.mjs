@@ -16,6 +16,7 @@ import {
   styleName,
 } from "./mascot.mjs";
 import { FPS, HEIGHT, WIDTH } from "./screen.mjs";
+import { composeWindow } from "./window-video.mjs";
 
 export const BACKGROUND = 0x111317;
 const TRACK = 0x1f232a;
@@ -147,6 +148,15 @@ export function makePicture(options = {}) {
   return {
     width,
     height,
+    // The caller must obtain a fresh layout from WindowPresentation for every
+    // frame. Original source pixels remain separate from planner observations.
+    windowFrame(tick, state, source, layout) {
+      return this.frame(
+        tick,
+        state,
+        composeWindow(source, layout, width, height),
+      );
+    },
     frame(tick = 0, state = "idle", shot = null) {
       const now = known(state);
       if (shot && shot.length === pixels.length) {

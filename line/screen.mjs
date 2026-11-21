@@ -38,6 +38,14 @@ export function splitFrames(pending, chunk, size = FRAME_BYTES) {
  */
 export function startScreen(options = {}) {
   const size = options.frameBytes ?? FRAME_BYTES;
+  const now = options.now ?? Date.now;
+  const maxFrameAgeMs = options.maxFrameAgeMs ?? 1500;
+  if (
+    !Number.isFinite(maxFrameAgeMs) ||
+    maxFrameAgeMs <= 0 ||
+    maxFrameAgeMs > 5000
+  )
+    throw Error("Invalid frame freshness bound.");
   const child = (options.start ?? spawn)(
     options.command || "ffmpeg",
     [
@@ -65,6 +73,7 @@ export function startScreen(options = {}) {
     { stdio: ["ignore", "pipe", "ignore"] },
   );
   let frame = null,
+    capturedAt = null,
     pending = Buffer.alloc(0),
     stopped = false,
     ended = false;
@@ -74,11 +83,12 @@ export function startScreen(options = {}) {
     waiting.clear();
   };
   child.stdout.on("data", (chunk) => {
-    if (stopped) return;
+    if (stopped || ended) return;
     const cut = splitFrames(pending, chunk, size);
     // The frame is a copy: the next chunk must not change a picture that is on its way to the call.
     if (cut.newest) {
       frame = new Uint8Array(cut.newest);
+      capturedAt = now();
       settle(true);
     }
     pending = cut.rest;
@@ -93,7 +103,19 @@ export function startScreen(options = {}) {
   child.on("exit", (code) => end(code));
   child.on("error", () => end(null));
   return {
-    latest: () => frame,
+    latest: () => {
+      const at = now();
+      if (
+        capturedAt === null ||
+        !Number.isFinite(at) ||
+        at < capturedAt ||
+        at - capturedAt > maxFrameAgeMs
+      ) {
+        frame = null;
+        return null;
+      }
+      return frame;
+    },
     started(ms = 4000) {
       if (frame) return Promise.resolve(true);
       if (stopped || ended) return Promise.resolve(false);

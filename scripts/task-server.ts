@@ -35,6 +35,13 @@ import { BoardFeed } from "../connectors/agents/feed.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
+import { BackgroundRuntime } from "../src/control/background-runtime.js";
+import { QualifiedBackgroundWorker } from "../src/control/background-worker.js";
+import { backgroundConfigSchema } from "../src/control/background-config.js";
+import {
+  LineRuntime,
+  lineRuntimeConfigSchema,
+} from "../src/control/line-runtime.js";
 import { BundledCuaNative } from "../src/control/bundled-cua-native.js";
 import { bundledCuaConfigSchema } from "../src/control/cua-contracts.js";
 import { BundledCuaBrowser } from "../connectors/agents/bundled-cua-browser.js";
@@ -356,27 +363,59 @@ if (
   throw Error(
     "Select exactly one desktop executor, with no phone/presentation actors.",
   );
-const bundled = bundledConfig
-  ? new BundledCuaRuntime(
+const backgroundPath = join(directory, "background-cua.json");
+const backgroundConfig =
+  desktop && existsSync(backgroundPath)
+    ? backgroundConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(backgroundPath).toString("utf8")),
+      )
+    : undefined;
+if (
+  backgroundConfig &&
+  (executorConfig || calls || presentation || flags.get("--agents") === "false")
+)
+  throw Error(
+    "Background execution requires exclusive local runtime selection.",
+  );
+const background = backgroundConfig
+  ? new BackgroundRuntime(
       store,
       vault,
-      bundledConfig,
-      openAiBundledCuaPlanner({
-        apiKey:
-          process.env.CLAWDTIME_OPENAI_API_KEY ??
-          process.env.OPENAI_API_KEY ??
-          "",
-        model: bundledConfig.model,
-        reasoningEffort: bundledConfig.reasoningEffort,
-      }),
       () =>
-        bundledConfig.mode === "browser"
-          ? new BundledCuaBrowser(bundledConfig.browser!)
-          : new BundledCuaNative(bundledConfig.native!),
+        new QualifiedBackgroundWorker(
+          backgroundConfig,
+          join(directory, "background-driver-owner.json"),
+          process.env.CLAWDTIME_OPENAI_API_KEY ??
+            process.env.OPENAI_API_KEY ??
+            "",
+        ),
+      backgroundConfig.timeoutMs,
       (text) => agentBoard?.appendExecutionResult(text),
     )
   : undefined;
+const bundled =
+  bundledConfig && !backgroundConfig
+    ? new BundledCuaRuntime(
+        store,
+        vault,
+        bundledConfig,
+        openAiBundledCuaPlanner({
+          apiKey:
+            process.env.CLAWDTIME_OPENAI_API_KEY ??
+            process.env.OPENAI_API_KEY ??
+            "",
+          model: bundledConfig.model,
+          reasoningEffort: bundledConfig.reasoningEffort,
+        }),
+        () =>
+          bundledConfig.mode === "browser"
+            ? new BundledCuaBrowser(bundledConfig.browser!)
+            : new BundledCuaNative(bundledConfig.native!),
+        (text) => agentBoard?.appendExecutionResult(text),
+      )
+    : undefined;
 const executor =
+  background ??
   bundled ??
   (executorConfig
     ? new DesktopExecutor(
@@ -394,6 +433,30 @@ const executor =
         (text) => agentBoard?.appendExecutionResult(text),
       )
     : undefined);
+const lineRuntimePath = join(directory, "line-runtime.json");
+const lineRuntimeConfig = existsSync(lineRuntimePath)
+  ? lineRuntimeConfigSchema.parse(
+      JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
+    )
+  : undefined;
+if (
+  lineRuntimeConfig &&
+  !background &&
+  (!bundled || bundledConfig?.mode !== "native")
+)
+  throw Error("Phone computer control requires the app-owned native runtime.");
+const lineRuntime =
+  lineRuntimeConfig && (background ?? bundled)
+    ? new LineRuntime(
+        store,
+        vault,
+        lineRuntimeConfig.token,
+        (background ?? bundled)!,
+      )
+    : undefined;
+const lineRuntimeWatch = lineRuntime
+  ? setInterval(() => lineRuntime.expire(), 1000)
+  : undefined;
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -425,6 +488,7 @@ const app = createTaskApp(
   calls,
   agentBoard,
   executor,
+  lineRuntime,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
@@ -438,7 +502,7 @@ const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
       desktopSetup.descriptor,
     );
   console.log(
-    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${bundled ? "App-owned computer runtime configured; task input and exact action permissions remain required. No phone." : calls ? "Desktop calls configured but dormant; each exact prepared result requires fresh operator authorization." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${background ? "Qualified background runtime configured; admitted call and local Enable required." : bundled ? "App-owned computer runtime configured; task input and exact action permissions remain required. No phone." : calls ? "Desktop calls configured but dormant; each exact prepared result requires fresh operator authorization." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
   );
 });
 let shuttingDown = false;
@@ -447,8 +511,11 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     if (shuttingDown) return;
     shuttingDown = true;
     if (presentationWatch) clearInterval(presentationWatch);
+    if (lineRuntimeWatch) clearInterval(lineRuntimeWatch);
+    lineRuntime?.close();
     agentBoard?.close();
     void (async () => {
+      await background?.close();
       await bundled?.close();
       await calls?.close();
       await presentation?.close();

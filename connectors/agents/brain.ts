@@ -32,7 +32,7 @@ import {
   type TaskPort,
 } from "./tasks.js";
 import { appName, webAddress } from "./apps.js";
-import type { JobFacts, JobPort } from "./jobs.js";
+import { jobStatusDetail, type JobFacts, type JobPort } from "./jobs.js";
 import { pickSession, type SessionPick } from "./topics.js";
 import type { AgentSession, BoardSnapshot } from "./types.js";
 import { windowActions, type WindowAction } from "./windows.js";
@@ -478,7 +478,7 @@ const jobTools: ToolSpec[] = [
   {
     name: "job_result",
     description:
-      "The answer of the newest job that ClawdTime started, or that it still works. Use it when the person asks what a job found or whether it is done.",
+      "The answer or observed launch status of the newest job. Missing results do not prove progress; never infer that a job is working or not stuck. Use it when the person asks what a job found or whether it is done.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
@@ -780,7 +780,7 @@ function jobLine(job: JobFacts, now: number) {
   const head = `Job "${clean(job.job, 120)}", started ${elapsed(job.startedAt, now)} ago`;
   return job.done
     ? `${head}, is done. Its answer: ${clean(job.result ?? "", 600)}`
-    : `${head}, still works.`;
+    : `${head}. ${jobStatusDetail(job)}`;
 }
 const requestOwns =
   "An agent's request waits for the person's answer, and this sentence names no task. It starts no work. Answer the request first.";
@@ -1377,9 +1377,12 @@ export class Supervisor {
         return this.startJob(turn, spoken);
       case "job_result": {
         const job = this.jobsNow(1)[0];
-        return job
+        const said = job
           ? jobLine(job, this.world.now())
           : "ClawdTime started no job yet.";
+        // Do not let a model turn missing evidence into an assurance of progress.
+        if (job && !job.done) turn.done.set("job_unverified", said);
+        return said;
       }
       case "session_window": {
         if (!this.world.window)
@@ -1839,6 +1842,8 @@ export class Supervisor {
           if (executionResult !== undefined) return executionResult;
           const jobStarted = turn.done.get("job_started");
           if (jobStarted !== undefined) return jobStarted;
+          const jobUnverified = turn.done.get("job_unverified");
+          if (jobUnverified !== undefined) return jobUnverified;
         }
       }
       return "That took too many steps. Ask me again in a simpler way.";

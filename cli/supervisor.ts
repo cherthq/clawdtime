@@ -66,7 +66,12 @@ import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { openApp } from "../connectors/agents/apps.js";
-import { Jobs, jobAgents, type JobAgent } from "../connectors/agents/jobs.js";
+import {
+  Jobs,
+  jobAgents,
+  jobStatusDetail,
+  type JobAgent,
+} from "../connectors/agents/jobs.js";
 import {
   checkTexts,
   TextChannel,
@@ -160,6 +165,7 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   chat [TEXT]                          talk to ClawdTime in text: it answers and can act
   talk                                 the same by voice: you speak, it speaks back
   jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
+  jobs retire ID --reason TEXT         retire an unresolved record; does not stop its process or replay it
   texts run | check                    answer your text messages on your Chert line (check sends nothing)
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
   agents call check                    ask the backend whether a call would work now; no call is placed
@@ -343,13 +349,22 @@ export async function supervisorCli(
   const command = args[0] ?? "";
 
   if (group === "jobs") {
+    const jobs = jobsFor(system, root, runner);
+    if (command === "retire") {
+      const { flags, rest } = split(args.slice(1), [], ["reason"]);
+      if (rest.length !== 1 || !flags.reason)
+        throw new Error(
+          "Use: clawdtime jobs retire ID --reason TEXT. This retires bookkeeping only; it does not stop a process or verify its outcome.",
+        );
+      return print(jobs.retire(rest[0]!, flags.reason));
+    }
     const { flags } = split(args, ["json"], []);
-    const list = jobsFor(system, root, runner).recent(20);
+    const list = jobs.recent(20);
     if (flags.json) return print(JSON.stringify(list, null, 2));
     if (!list.length) return print("ClawdTime started no job yet.");
     for (const job of list)
       print(
-        `${job.done ? "DONE   " : "WORKING"}  ${job.id}  ${job.job.slice(0, 80)}${job.done ? `\n         ${(job.result ?? "").slice(0, 300)}` : ""}`,
+        `${(job.status ?? (job.done ? "completed" : "unknown")).toUpperCase()}  ${job.id}  ${job.job.slice(0, 80)}\n         ${job.done ? (job.result ?? "").slice(0, 300) : jobStatusDetail(job)}`,
       );
     return;
   }

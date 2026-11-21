@@ -75,6 +75,10 @@ esac`,
   mkdirSync(join(upstream, "line"));
   copyFileSync(script, join(upstream, "line", "host.sh"));
   chmodSync(join(upstream, "line", "host.sh"), 0o755);
+  writeFileSync(
+    join(upstream, "line", "agent.mjs"),
+    "// fixture agent; never executed\n",
+  );
   writeFileSync(join(upstream, "package-lock.json"), "{}\n");
   writeFileSync(join(upstream, "line", "package-lock.json"), "{}\n");
   writeFileSync(join(upstream, "line", "package.json"), "{}\n");

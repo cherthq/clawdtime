@@ -14,11 +14,16 @@ private struct LocalStatus: Encodable {
   let localEnabled: Bool
   let armed: Bool
   let available: Bool
+  let lastStopReason: LocalStopReason?
+  let lastStopAt: Date?
+  let ignoredStableScreenNotifications: Int
   let screenPermission: Bool
   let controlPermission: Bool
   let policyRevision: Int
   let activeSessionId: String?
   let unresolvedActions: Int
+  let backgroundProtocol: Int
+  let backgroundUnresolvedActions: Int
 }
 
 extension DeviceApp {
@@ -37,18 +42,21 @@ extension DeviceApp {
       return try .json(LocalStatus(deviceId: config.deviceId,
         localEnabled: !(config.localExecutors ?? []).isEmpty,
         armed: policy.armed, available: localExecutionAvailable,
+        lastStopReason: policy.lastStopReason, lastStopAt: policy.lastStopAt,
+        ignoredStableScreenNotifications: ignoredStableScreenNotifications,
         screenPermission: CGPreflightScreenCaptureAccess(), controlPermission: AXIsProcessTrusted(),
         policyRevision: policy.preferences.revision, activeSessionId: localPolicy.lease?.id,
-        unresolvedActions: ledger.unresolvedActionCount + localLedger.unresolvedActions))
+        unresolvedActions: unresolvedInputCount, backgroundProtocol: 1, backgroundUnresolvedActions: backgroundLedger.unresolvedActions))
     }
     guard !(config.localExecutors ?? []).isEmpty else { throw HelperError(403, "Local execution is not configured.") }
+    if request.method == "POST", request.path == "/local/v1/background-driver" { return try backgroundDriver(request) }
     let parts = request.path.split(separator: "/").map(String.init)
     if request.method == "POST", request.path == "/local/v1/sessions" {
       let value = try decode(LocalExecutionLease.self, request.body)
       guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(value.displayId) != 0 else {
         throw HelperError(403, "Screen Recording and the exact active display are required.")
       }
-      guard ledger.unresolvedActionCount + localLedger.unresolvedActions == 0 else {
+      guard unresolvedInputCount == 0 else {
         throw HelperError(409, "Reconcile outstanding input before starting local work.")
       }
       let existing = localPolicy.lease?.id == value.id
@@ -65,6 +73,9 @@ extension DeviceApp {
       throw HelperError(404, "Unknown local route.")
     }
     let id = parts[3]
+    if parts.count >= 5, ["background-actions", "background-target", "background-application"].contains(parts[4]) {
+      return try handleBackground(request, parts: parts, leaseId: id)
+    }
     if parts.count == 6, parts[4] == "actions", request.method == "GET", validID(parts[5]) {
       return try .json(localLedger.get(parts[5], leaseId: id))
     }
@@ -102,7 +113,7 @@ extension DeviceApp {
     if parts.count == 5, parts[4] == "actions", request.method == "POST" {
       let action = try decode(InputAction.self, request.body)
       if let existing = try localLedger.existing(action, leaseId: id) { return try .json(existing) }
-      guard ledger.unresolvedActionCount == 0 else { throw HelperError(409, "Call input outcome remains unresolved.") }
+      guard ledger.unresolvedActionCount == 0, backgroundLedger.unresolvedActions == 0 else { throw HelperError(409, "Call input outcome remains unresolved.") }
       // Establish exact identity before emitting the definite-no-input code.
       let lease = try localPolicy.boundActionLease(action, id: id, now: Date(), available: localExecutionAvailable, accessibility: AXIsProcessTrusted())
       let applications = config.localExecutors?.first { $0.executorId == lease.executorId && $0.displayId == lease.displayId }?.allowedApplications ?? []

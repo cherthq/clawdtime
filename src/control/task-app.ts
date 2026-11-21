@@ -11,7 +11,9 @@ import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
 import type { TaskDesktopCalls } from "./task-desktop-calls.js";
 import type { DesktopExecutor } from "./desktop-executor.js";
+import type { BackgroundRuntime } from "./background-runtime.js";
 import type { BundledCuaRuntime } from "./bundled-cua-runtime.js";
+import type { LineRuntime } from "./line-runtime.js";
 
 /**
  * The agent board as the panel routes see it. The board is built in a separate
@@ -82,7 +84,8 @@ export function createTaskApp(
   desktop?: TaskDesktopService,
   calls?: TaskDesktopCalls,
   agents?: AgentBoardPort,
-  executor?: DesktopExecutor | BundledCuaRuntime,
+  executor?: DesktopExecutor | BundledCuaRuntime | BackgroundRuntime,
+  lineRuntime?: LineRuntime,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -158,6 +161,41 @@ export function createTaskApp(
       control: false,
     }),
   );
+  if (lineRuntime) {
+    app.get("/line/frame", async (c) => {
+      const frame = await lineRuntime.preview(
+        bearer(c.req.header("authorization")),
+        c.req.query("callId") ?? "",
+      );
+      if (
+        !frame ||
+        !frame.valid() ||
+        Date.now() >= frame.expiresAt ||
+        !frame.layout.visible
+      )
+        return c.body(null, 204, { "cache-control": "no-store" });
+      return c.body(Buffer.from(frame.rgba), 200, {
+        "content-type": "application/octet-stream",
+        "cache-control": "no-store",
+        "x-clawdtime-frame": JSON.stringify({
+          width: frame.width,
+          height: frame.height,
+          frameId: frame.frameId,
+          capturedAt: frame.capturedAt,
+          expiresAt: frame.expiresAt,
+          layout: frame.layout,
+        }),
+      });
+    });
+    app.post("/line/command", async (c) =>
+      c.json(
+        await lineRuntime.command(
+          bearer(c.req.header("authorization")),
+          await c.req.json(),
+        ),
+      ),
+    );
+  }
   if (desktop) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
     if (executor) {

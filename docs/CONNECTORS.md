@@ -1156,3 +1156,305 @@ trimmed and checked for duplicates. Free-text questions and older results withou
 choices remain supported. Choices without a decision are not exposed, and malformed
 choice output is blocked without replaying the run. The panel must display the
 recorded choices as-is; it must not invent defaults or infer a human selection.
+
+## Background workflow admission (staged, November 21)
+
+`connectors/agents/background-workflow-policy.ts` adds a separate positive-capability
+admission gate for the proposed background backend. It does not weaken the existing
+native adapter's global-focus contract and is not yet connected to the installed
+controller. Passing its tests does not qualify a real app or establish phone readiness.
+
+Only a trusted, physically qualified app adapter may create a grant. A model's
+classification, a screenshot label, an accessibility role, or a claimed qualification
+ID cannot establish which controls are safe. The controller supplies the qualification
+records binding each qualification to its workflow, app bundle and driver release,
+and binds the selected account/conversation/project independently. The gate
+compares the call, task, stable tool call, driver instance and generation, bundle ID,
+PID and process start identity, exact window, observation ID and fingerprint against
+both the requested action and fresh native evidence. Grants expire within five seconds;
+Stop, clock rollback, changed identity or destination, and unqualified mappings refuse.
+
+Capabilities name exact observation-scoped element tokens for tested navigation,
+search, draft editing, or reading scroll operations. Text must exactly equal the
+trusted grant's bounded text. Read-only Messages/email grants cannot create draft
+capabilities. A native key adapter must independently prove keyboard focus belongs
+to the granted element token before delivering a key; a window-only key API does
+not establish this. There are no pixel-click, send, submit, Return/Enter, shortcut, arbitrary
+launch, script or shell capabilities. Strict schemas reject extra arguments and action
+sequences. The only accepted delivery is explicit background. Each action still needs
+the service's live lease, exclusive execution owner, durable receipt and duplicate
+checks, plus driver admission at dispatch. An admitted action is permission to attempt
+input, never evidence that input succeeded. Receipts and uncertainty handling remain
+the controller's responsibility; this pure policy does not execute or retry anything.
+
+Integrate this gate immediately before dispatch, using an independent re-observation
+of the destination and identity. Do not create grants by feeding untrusted labels into
+a generic "safe control" classifier. Real Messages conversation navigation and the
+installed Codex composer still need qualified mappings and observed postconditions.
+Email additionally needs its own selected signed-in account and qualification.
+
+A separately qualified `pixel-draft` capability covers the documented Electron
+text route: one `pixel-type` plan becomes one explicitly background `type_text`
+call that focuses the exact editor point and types. It does not grant generic pixel
+clicks. Admission requires `pixelDraft:true` on the matching qualification, exact
+trusted draft text, independently matching current editor geometry, and the exact
+center of that editor in the original screenshot. Zero-size, non-finite, off-image,
+changed or model-supplied geometry refuses. The qualification must establish that
+this point belongs only to the composer, with no overlapping submit control.
+The positive gate alone cannot establish that visual fact.
+
+Release `0.55.0`'s generated `TypeTextInput` omits `delivery_mode`, element tokens
+and pixel fields. A production adapter must use a fixed `callTool("type_text", ... )`
+wrapper with locally validated, bounded arguments; passing extra JavaScript fields
+to `typeText` may silently drop them. Never expose that generic method directly to
+a planner. Official scroll `amount` is wheel notches, not the policy's abstract
+`deltaY`; any adapter must define and qualify that conversion explicitly.
+
+The official [Cua SDK documentation](https://cua.ai/docs/cua-driver/guides/use-the-sdk)
+documents `CuaDriver.connect(socketPath)` as the explicit daemon connection without
+embedded fallback. Input must name the exact window, use the current element token,
+and request background delivery. `ActionInterrupted` distinguishes `NotStarted`,
+`Completed` and `Unknown`; an unknown or timed-out effect must not be replayed. A
+fresh post-action observation establishes the workflow outcome separately from the
+returned driver action status.
+
+### Codex handoff boundary
+
+The prior native-tool denial of the Codex app is historical evidence for that tool,
+not proof of a Cua Driver denial. Preserve any actual driver refusal; do not substitute
+private desktop sockets or a different controller to bypass it.
+
+The official [Codex App Server documentation](https://developers.openai.com/codex/app-server)
+provides an owned stdio service with initialization, `thread/start`, and a separate
+`turn/start` that begins agent work. It also documents authenticated WebSocket
+configuration, while labeling that transport experimental. The installed CLI reports
+`0.166.0-alpha.5.1` and advertises the stdio and authentication flags. No task was
+submitted during this documentation/preflight check. The existing
+`connectors/codex/task-worker.ts` already uses an isolated owned stdio process and
+checks its sandbox before a model turn. This is a possible separately authorized
+coding-task integration, not evidence that the desktop application's New chat draft
+can be populated or that an existing desktop chat can be taken over. The reviewed
+public API does not establish a desktop-composer draft endpoint; that capability
+remains unqualified until the actual supported UI or an explicitly documented route
+is verified.
+
+### Isolated daemon diagnostic
+
+`cli/cua-driver-probe.ts` takes one absolute path to a private JSON configuration
+with `sdkDirectory`, `socketPath`, `executablePath`, `expectedPid`,
+`manifestSha256`, `policySha256`, and explicit `targets` records containing
+`bundleId`, `pid`, and `executablePath`. It loads only
+`@trycua/cua-driver` version `0.55.0` from that isolated SDK directory. This package
+is not a production dependency yet.
+
+The diagnostic verifies the current-user private socket, pinned package metadata,
+exact executable path, bounded CLI status and loaded policy hashes before calling
+`connect`. It checks daemon permission attribution, PID, executable and bundle;
+missing Accessibility or Screen Recording returns `permissions_required` without
+app enumeration. With both present, it checks the configured process executable and app bundle
+identity, then calls `list_windows(pid)` only for those exact processes, returning
+IDs and availability flags without window titles. It never calls `list_apps`: in
+this release that API requires desktop display scope, which is intentionally absent.
+It does not request permissions, capture images, inspect conversation content,
+launch an app, invoke input, stop the daemon, or submit Codex work. A permission
+preflight is explicitly not direct capture or app workflow qualification.
+
+The only generic SDK call is the fixed `check_permissions` tool with `prompt:false`
+and `probe_direct_capture:false`, because this release has no typed permission
+method. The caller cannot supply a tool name or arbitrary arguments. The driver
+client is shut down and its native handle destroyed after success or failure.
+Unit tests cover wrong topology, release, permission owner, hashes, unverified processes,
+foreign windows, cancellation, missing permissions and cleanup without retries.
+
+### Fixed-call background port and intent planner
+
+`CuaDriverBackgroundPort` exposes named-session start/end, exact configured app
+launch, original window observations, display-only previews, element clicks,
+qualified navigation-point clicks, element text, qualified pixel draft text and
+bounded element scrolling. Input always requests `scope:window` and explicit
+background delivery. Launch accepts only an allowed bundle ID; there are no URLs,
+application arguments, shells, arbitrary tools, foreground fallback or key shortcuts.
+The SDK is private to the port. Each effect gets one bounded attempt, with in-memory
+same-client duplicate protection supplementing the service's required encrypted
+receipts. A returned action never establishes workflow completion.
+
+Protected `allowedApps` contains bundle IDs and exact executable paths independently
+of optional read-only `targets` probe snapshots. A newly launched PID and its window
+IDs are only candidates. The required supervisor `host.withLease` must independently
+verify the new process kernel lifetime, exact window and observation, positive
+workflow permission, and durable reservation. The port supplies the expected
+executable from protected configuration. It checks the socket identity and remote
+SDK metadata's actual daemon PID/version before requesting the final host lease.
+After the host's final witness, only synchronous Stop/admission checks precede
+the single SDK dispatch. These checks alone
+are not an atomic generation guarantee: the supervisor must hold its lifecycle and
+execution ownership until the effect and cleanup outcomes are known.
+
+The pinned driver's session implementation creates missing public labels on first
+admitted use; its lifecycle records and tombstones are process-local. A label is
+therefore **not** a daemon restart barrier. The release's `end_session` reports
+pending/partial cleanup separately; the port requires the exact session's
+`active:false` receipt. Abort signals request cancellation but cannot undo input
+already posted to macOS. Unknown input poisons the port, remains unknown after
+cleanup, and must keep the shared durable unresolved-input barrier in place. An
+in-flight read-only `get_window_state` cancellation does not by itself poison
+quiescence: the port waits for it and still requires exact session closure and
+successful SDK shutdown. This does not clear any unknown launch/input/session
+mutation or any unresolved host receipt. Host
+cleanup admission must remain available for this exact reserved session after
+Stop/hangup without authorizing new input. None of these interfaces independently
+qualifies physical Stop or driver-crash recovery.
+
+`capturePreview` uses `display_only:true` and `include_accessibility_tree:false`,
+which the pinned driver implements without replacing planner tokens or its pixel
+frame. Both preview and original observations remain transient. Preview capture is
+serialized with input; callers must show an unavailable/stale state when it cannot
+capture, rather than reuse an old frame as live.
+
+`BackgroundIntentPlanner` accepts only a Messages-read intent, an unsent Codex draft,
+or a blocked result. It cannot choose controls, app paths, recipients, projects or
+actions. Exact supplied draft text is compared byte-for-byte after classification;
+control characters and multiline text refuse. A conservative precheck blocks clear
+send/submit/execute requests before generation. This improves intent handling but
+does not replace deterministic runtime permission checks. Verification receives the
+original observation, expected destination and draft text; it limits Messages
+summaries to the selected right-hand conversation pane and distinguishes an unsent
+composer from submitted agent work. Existing configured model/reasoning settings
+are retained; storage and automatic model retries remain disabled.
+
+### Deterministic qualified workflows
+
+`QualifiedBackgroundWorkflow` is a single-use worker for the two explicitly
+configured app/version mappings. Private configuration supplies contact and project
+names; neither comes from model-generated actions. The classifier receives those
+authorized destinations and blocks requests for a different contact or project.
+The runner starts the named daemon session, reserves the exact bundle launch,
+then calls `verifyLaunchedApplication` for an independent signed running-app witness
+matching the configured version/path and a correctly owned returned window before
+verifying the launch receipt. This proves launch only and does not require the app
+window to be on the current Space or uniquely eligible for input. Those stricter
+checks remain in `bindFreshTarget` before observation and every action. An off-Space
+or ambiguous input window, or later unavailable/truncated observation, blocks the
+workflow without changing a known app-launch outcome back to uncertain. A failed
+signed-app witness leaves the original launch unresolved.
+
+If Messages already shows the configured conversation, an exact `AXWindow` title
+plus one enabled `AXPopUpButton` header beginning with that contact and a comma-space,
+inside the top quarter of the original screenshot, allows a read without clicking.
+Independent screenshot corroboration must confirm that the right pane is selected;
+a sidebar label or body text does not establish selection. This handles a selected
+conversation whose sidebar row has scrolled out of view.
+
+Otherwise, Messages selection accepts one `AXStaticText` row whose label begins with the
+configured contact followed by a comma. It uses the screenshot rectangle's center,
+not AXPress, after independent original-image corroboration. Codex accepts only the
+native `AXMenuItem` named `New Chat` with `AXPress`; sidebar buttons are not equivalent.
+A fresh observation must then contain one empty `AXTextArea` labelled `Do anything`
+in the configured project before a single background pixel-targeted draft insertion.
+The draft remains one line of at most 512 characters. There is no Send, Return,
+shortcut, shell, submit, or task-start operation in this runner.
+
+Original observations request `full_output:true`, at most 10,000 AX nodes, depth
+40, and a two-second walk budget. The pinned release collapses native menus unless
+full output or a query is requested; a larger node cap alone does not expose New Chat.
+The runner still rejects truncated/degraded snapshots, malformed frame metadata,
+more than 4 MB of structured content, or frames five seconds old. It does not infer
+control uniqueness from a partial tree. `summarizeBackgroundObservation` and
+`QualifiedBackgroundObservationError.flags` report fixed boolean failure reasons
+without image data, labels, text, process IDs, or snapshot identifiers.
+
+The pinned driver's element `frame` is in screen points while `screenshot_frame`
+is in delivered screenshot pixels. The runner independently cross-checks their
+conversion using original window bounds and delivered width, rejects degenerate or
+out-of-frame rectangles, and passes only the exact qualified rectangle center.
+The model's `verifySurface` output is one corroboration boolean; it cannot mint a
+grant, choose a coordinate, or choose an app. After vision finishes, a fresh target
+binding and observation must show the same native control signature. Every coordinate
+action retains its full non-token signature and requires unchanged original image bytes. The only
+image-equality exception is the configured Codex draft workflow's unique native
+`AXMenuItem` named `New Chat`: old and fresh controls must both be explicitly enabled,
+include `AXPress`, and retain every semantic attribute, exact process lifetime,
+window, app version and driver binding. For this native control only, snapshot-local
+`element_index` and `parent_index` may change. Each snapshot must independently
+resolve unique indexes through the exact qualified ancestor shape: New Chat →
+unlabelled `AXMenu` → `AXMenuBarItem` labelled/titled File → unlabelled `AXMenuBar`
+root. Missing or duplicate indexes, cycles or a different menu shape refuse input.
+Control and ancestor semantics are compared after excluding only tokens and those
+two local enumeration indexes. `QualifiedNativeMenuError.diagnostics` reports fixed
+flags and allowlisted changed-field names, never native values or arbitrary keys. This tolerates unrelated pixels changing in
+the current chat without granting any general token-click exemption. A fresh empty
+composer and selected project must still be independently verified before typing.
+The runner uses the new token and grant, expiring within five seconds; mismatches
+block without retrying input. Coordinate actions can still reject dynamic or
+blinking surfaces and do not relax their original-image postconditions.
+
+The host owns final live-call/helper/lifecycle fencing. `armGrant` installs exactly
+one transient capability, and `admitQualifiedGrant` compares its action ID, target,
+operation, exact action, generation and time at dispatch. It supplements the host's
+trusted version qualification and durable ownership checks. `present` receives the
+original observation, optional exact pixel rectangle, and explicit action/typing
+phase. Previews use JPEG quality 85 with `max_dimension:1280`, display-only mode;
+the integrating host serializes preview calls with workflow calls and gives workflow
+calls priority. Preview frames do not replace the original action observation.
+
+Every input receipt remains returned/unresolved until a separate fresh AX and
+original-screenshot postcondition passes. Messages summaries cover only the selected
+right conversation pane. Codex verifies the exact text remains in the unsent composer.
+Unknown outcomes are never retried or erased by cleanup. `stop` closes admission;
+`close` only ends the exact driver session, leaving the host responsible for retaining
+or releasing the durable ownership fence based on all receipts. Unit tests exercise
+these contracts but do not establish physical acceptance, multi-Space support,
+process-crash recovery or phone-path readiness.
+
+The pinned macOS source does not make a menu AXPress a reliable New Chat
+postcondition. `click` resolves the observed token and applies the explicit
+background AX-semantic gate; `scope:"window"` does not convert this native action
+into a coordinate click. An application-menu descendant is accepted by the driver's
+ancestry gate even when it has no own AXWindow. Generic click does not establish
+that the requested window is both the application's focused and main menu context,
+and the driver's background key-window priming explicitly excludes Electron apps.
+A returned native menu action is normally `effect:"unverifiable"`, not evidence
+that navigation occurred. The runner therefore keeps the independent fresh empty
+composer/project check and retains an unresolved navigation receipt on failure.
+After exactly one returned New Chat press, it allows at most four fresh observation
+reads within three seconds, with bounded cancellable delays. Only valid same-target
+frames with no expected empty composer are eligible for another read; ambiguity,
+stale/degraded evidence, changed identity, Stop or expired call authority stop the
+loop. The exact empty-composer labels remain unchanged. Once a candidate appears,
+the existing independently bounded screenshot/project verification must pass before
+navigation is resolved or typing can begin. This is observation settling, never an
+input retry. Renderer IPC finishing after a native AX return is a timing hypothesis,
+not a proven explanation of any failed physical run.
+
+The official `invoke_menu` API is not an interchangeable background-only remedy in
+0.55.0. Its background implementation uniquely resolves a live menu path, checks
+both AXFocusedWindow and AXMainWindow before dispatch, and still reports ordinary
+menu effects as unverifiable. However, the pinned macOS implementation accepts but
+does not consult its `delivery_mode` field: it selects a foreground route when the
+app is already frontmost on the current Space, where it can focus/raise the target
+window and open menus. The generated SDK documentation explicitly describes this
+platform limitation. Consequently this connector does not add `invoke_menu`, switch
+to AXPick, or retry a returned New Chat command as recovery. Such changes require
+separate qualification and cannot resolve the original unknown result.
+
+Surface-verifier diagnostics are optional and content-free. The planner factory's
+`onSurfaceDiagnostic` callback receives only a fixed phase and one fixed result:
+`corroborated`, `negative_model_verdict`, `provider_failure`,
+`invalid_model_output`, `aborted`, or `invalid_observation`. Unsupported phases
+are reported as `unknown`; image data, native labels, destination names, model
+responses and exception details never enter this event. A callback exception cannot
+change the verification result. A negative verdict may additionally carry one closed
+reason: `application_mismatch`, `native_control_mismatch`, `destination_mismatch`,
+`geometry_mismatch`, `draft_not_empty`, `already_submitted_or_running`,
+`ambiguous_or_unreadable`, `stale`, or `other`. The model's strict Responses schema requires the reason field but accepts `null`;
+a negative `null` becomes `other`. Omitted or free-text reasons fail parsing and
+are not reported. Positive verdicts do not expose
+a refusal reason. These diagnostics distinguish an explicit negative visual verdict
+from an unavailable or invalid model result without authorizing input.
+
+The `codex-new-chat` visual phase checks the intended Codex app and qualified native
+menu control only. It omits the expected project from the model request and does
+not require a project to be selected or visible before global New Chat navigation.
+The `codex-empty` and `codex-draft` phases still require the exact configured project;
+all Messages phases still require the configured conversation. This phase distinction
+does not add a new action or relax the independent checks before text insertion.
