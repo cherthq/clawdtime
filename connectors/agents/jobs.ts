@@ -44,6 +44,8 @@ export interface JobFacts {
   text?: string | null;
   /** The job has not started its agent yet: it waits for the job before it. */
   waiting?: boolean;
+  /** The job waited for the job before it, now or earlier: the person heard how to start it at once. */
+  waited?: boolean;
 }
 
 /** What one job may carry besides its words. */
@@ -384,7 +386,7 @@ export class Jobs implements JobPort {
     return {
       ok: true,
       said: waitsFor
-        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" if it must not wait.`
+        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" to start it at once.`
         : `On it. ${jobAgentLabels[agent]} is working on that in a new terminal window, and I will tell you its answer when it is done.`,
     };
   }
@@ -583,6 +585,7 @@ export class Jobs implements JobPort {
         ),
         startedAt: Number.isFinite(startedAt) ? startedAt : 0,
         done: answer !== null,
+        ...(there(waitsFile) ? { waited: true } : {}),
         ...(answer === null &&
         read(waitsFile, 1) !== null &&
         !there(waitOverFile) &&

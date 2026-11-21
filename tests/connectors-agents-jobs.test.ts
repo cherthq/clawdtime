@@ -588,7 +588,7 @@ describe("a job that follows up on a job that still runs", () => {
   const first = "build a small landing page for my bakery in one html file";
   const second = "also add a contact form to it";
   const waiting =
-    'On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" if it must not wait.';
+    'On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" to start it at once.';
   const atOnce =
     "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
   const follows = { refersBack: true, followsUp: true };
@@ -654,6 +654,11 @@ describe("a job that follows up on a job that still runs", () => {
     ]);
     writeFileSync(join(folder, two!, "wait-over"), "");
     expect(jobs.recent(1)[0]!.waiting ?? false).toBe(false);
+    // It still counts as a job that waited: the person heard how to start it.
+    expect(jobs.recent(2).map((job) => job.waited ?? false)).toEqual([
+      true,
+      false,
+    ]);
   });
 
   it("starts the job that waits when the person says so, once, and through no link", async () => {

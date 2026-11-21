@@ -1720,7 +1720,7 @@ describe("more work on a job that still runs", () => {
   const started =
     "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
   const waiting =
-    'On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" if it must not wait.';
+    'On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" to start it at once.';
 
   it("waits for that job when the message points back at it, and says so", async () => {
     const made = mac();
@@ -1821,6 +1821,21 @@ describe("start it now", () => {
     ).toBe(true);
     const go = () => existsSync(join(made.folder, made.ids()[1]!, "start-now"));
     return { ...made, go };
+  };
+  /**
+   * A job waited and its wait is over: the job before it ended, and the
+   * script of the second job wrote that the wait is over.
+   */
+  const waitOver = async () => {
+    const made = await waitingJob();
+    writeFileSync(
+      join(made.folder, made.ids()[0]!, "result.md"),
+      "The page is at /work/app/bakery.html.\n",
+    );
+    writeFileSync(join(made.folder, made.ids()[1]!, "wait-over"), "");
+    made.clock.now += 5 * 60_000;
+    expect(made.jobs.recent(5).some((job) => job.waiting)).toBe(false);
+    return made;
   };
   /** A task that asks the person something, with what it was answered. */
   const asking = (world: SupervisorWorld, choices: string[] = []) => {
@@ -1933,14 +1948,9 @@ describe("start it now", () => {
   });
 
   it("owns the sentence after the wait is over too: it answers no request and no task", async () => {
-    // A job started lately and none waits: the job before it ended, and the
+    // A job waited and none waits now: the job before it ended, and the
     // agent of the new job asks for a permission.
-    const lately = async () => {
-      const made = mac();
-      expect((await made.jobs.start(work)).ok).toBe(true);
-      made.clock.now += 5 * 60_000;
-      return made;
-    };
+    const lately = waitOver;
     for (const words of [
       "start it now",
       "yes, start it now",
@@ -2000,17 +2010,30 @@ describe("start it now", () => {
     "no, don't start it now",
     "yes begin that job",
     "sure, go on and start the job",
+    // The short form, another object, "it" as the subject.
+    "yeah, start now",
+    "sure start now",
+    "yep begin now",
+    "yes, start",
+    "ok start",
+    "yes please start",
+    "alright start now",
+    "yes start this job now",
+    "yes start the waiting job",
+    "yes start them now",
+    "yes, let it start now",
+    "yes it should start now",
+    // Words about the wait.
+    "don't wait",
+    "no, don't wait",
+    "no waiting",
+    "it must not wait",
+    "yes, starting it is fine",
   ])(
-    "%j answers no request and no task while a job started lately",
+    "%j answers no request and no task for one day after a job waited",
     async (words) => {
       for (const waitsNow of [true, false]) {
-        const state = async () => {
-          if (waitsNow) return waitingJob();
-          const made = mac();
-          expect((await made.jobs.start(work)).ok).toBe(true);
-          made.clock.now += 5 * 60_000;
-          return { ...made, go: () => false };
-        };
+        const state = async () => (waitsNow ? waitingJob() : waitOver());
         const head = waitsNow
           ? "A job also waits for the job before it."
           : "No job waits now.";
@@ -2040,7 +2063,7 @@ describe("start it now", () => {
             `One request waits for your answer: git push origin main. Say approve or deny to answer it. ${head} I did nothing with that sentence`,
           );
           expect(made.world.desk.take(request.id), words).toBeNull();
-          expect(made.go(), words).toBe(false);
+          if (waitsNow) expect(made.go(), words).toBe(false);
         }
         // A task asks.
         for (const model of [scripted(["Okay."]).model, null]) {
@@ -2055,11 +2078,24 @@ describe("start it now", () => {
             `Your task asks: Deploy now? ${head} I did nothing with that sentence`,
           );
           expect(answered, words).toEqual([]);
-          expect(made.go(), words).toBe(false);
+          if (waitsNow) expect(made.go(), words).toBe(false);
         }
       }
     },
   );
+
+  it("leaves the lead's rule as it is when no job ever waited: the sentence was not taught", async () => {
+    // A job runs, and none waited. A request waits. A yes answers it, as on
+    // main: this batch changes that only after it taught the sentence.
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 5 * 60_000;
+    const request = waits(made.world);
+    expect(
+      await new Supervisor(made.world, null).reply([], "yes, start it", "chat"),
+    ).toBe("Allowed. The agent continues.");
+    expect(made.world.desk.take(request.id)?.decision).toBe("allow");
+  });
 
   it("releases nothing in the turn after ClawdTime's own question about other work: it names both", async () => {
     const made = await waitingJob();

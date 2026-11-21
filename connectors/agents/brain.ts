@@ -1164,14 +1164,14 @@ const followsUp = (spoken: string) => {
  * question, and a "don't" can read as a no to a request.
  */
 /**
- * The message holds "start it", "begin that job" or the like, in any
- * sentence. Wide on purpose: it only keeps such a message from being read as
- * an answer to a request or a task while a job started lately.
+ * The message holds a form of "start", "begin" or "wait". Wide on purpose:
+ * after ClawdTime told the person how to start a job that waits, a message
+ * with one of these words can be meant as that ("yes, start", "sure, start it
+ * now", "don't wait"). This reader only keeps such a message from being read
+ * as an answer to a request or to a task.
  */
 const mentionsStart = (text: string) =>
-  /\b(?:start|begin)\w*\s+(?:it|that|that one|that job|the job|this one)\b/i.test(
-    text,
-  );
+  /\b(?:start|begin|wait)\w*\b/i.test(text);
 const startsNow = (text: string) =>
   /^(?:(?:ok|okay|so|then|please|just|well|yes|no)[,\s]+)*(?:(?:do\s+not|don['\u2019]?t)\s+wait[,\s]+)?(?:(?:start|begin)\s+(?:it|that|that one|that job|the job|this one)\s+(?:now|right now|at once|anyway|without waiting)|start now|begin now)(?:[,\s]+please)?[\s.!]*$/i.test(
     text.trim(),
@@ -2519,8 +2519,8 @@ export class Supervisor {
       );
     // The strict reader finds the sentence that releases a job. The wide
     // reader finds every message that can be meant as that sentence ("sure,
-    // start it now", "yes, start it", "no, don't start it now"): none of
-    // them is an answer to something else while a job started lately.
+    // start it now", "yes, start", "don't wait"): none of them is an answer
+    // to something else for one day after a job waited.
     const releases = startsNow(words);
     const namesRelease = releases || mentionsStart(words);
     if (namesRelease && !isChoice && this.world.jobs?.release) {
@@ -2537,10 +2537,14 @@ export class Supervisor {
         const job = waits
           ? "A job also waits for the job before it."
           : "No job waits now.";
-        // Something else waits for an answer: nothing is passed on, and both are named.
-        if (this.world.desk.pending().length > 0)
+        // A job waited in the last day, so the person heard the sentence that
+        // starts it. Something else waits for an answer: nothing is passed
+        // on, and both are named. With no such job the sentence was not
+        // taught, and a message is read as before.
+        const taught = lately.some((job) => job.waited);
+        if (taught && this.world.desk.pending().length > 0)
           return `${this.waitingRequest()} ${job} I did nothing with that sentence${waits ? ": answer the request first, then say it again" : ""}.`;
-        if (taskWaits)
+        if (taught && taskWaits)
           return `Your task asks: ${clean(current!.question!, 200)} ${job} I did nothing with that sentence: answer the task in its own words${waits ? ", then say it again" : ""}.`;
         if (releases && waits) {
           // ClawdTime's own question about other work is the last message:

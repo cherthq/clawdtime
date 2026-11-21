@@ -501,12 +501,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   its answer, and a job that waits for that one does the same. A job that
   waits counts as one of the four jobs.
 - "Start it now" is only that: it starts no new job. For one day after a job
-  started, a message with "start it" or "begin it" in it is never an answer
-  to anything else: "yes, start it now" and "sure, start it" do not approve a
-  request of an agent, and they do not answer a question of your task. While
-  one of those waits, ClawdTime does nothing with the sentence and names what
-  waits: say "approve" or "deny" for the request, or answer the task in its
-  own words. A click on a choice of your task always answers the task.
+  waited, a message with a form of "start", "begin" or "wait" in it is never
+  an answer to anything else: "yes, start it now", "sure, start" and "don't
+  wait" do not approve or deny a request of an agent, and they do not answer
+  a question of your task. While one of those waits, ClawdTime does nothing
+  with the sentence and names what waits: say "approve" or "deny" for the
+  request, or answer the task in its own words. A click on a choice of your
+  task always answers the task.
 - The job is written to a file and is never part of a shell command. No spoken
   word can become one. The start script holds only paths that ClawdTime made.
   The job reaches the agent as one argument: other users of this Mac can see
