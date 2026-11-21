@@ -28,6 +28,7 @@ import {
 } from "@livekit/rtc-node";
 import { z } from "zod";
 import { ask, jobDoneInstructions, watchJobs } from "./desk.mjs";
+import { makeEars } from "./ears.mjs";
 import { greetOnBridgeReady } from "./greet.mjs";
 import { makePicture } from "./picture.mjs";
 import { FPS, HEIGHT, startScreen, WIDTH } from "./screen.mjs";
@@ -72,6 +73,7 @@ const agent = defineAgent({
       screen = null,
       jobs = null,
       stopGreeting = null,
+      ears = null,
       frameFailed = false,
       ended = false;
     // The stone shows what the agent does: it speaks, it works on a request, it listens.
@@ -155,10 +157,25 @@ const agent = defineAgent({
       llm: new realtime.RealtimeModel({
         model: "gpt-realtime",
         voice: process.env.CLAWDTIME_LINE_VOICE || "marin",
+        // A phone line is noisy: a higher threshold than the default 0.5, so line noise is not a turn of the
+        // caller, and half a second of silence ends a turn.
+        turnDetection: {
+          type: "server_vad",
+          threshold: 0.7,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+        },
+        // The caller often holds the phone away from the mouth, as on a video call.
+        inputAudioNoiseReduction: { type: "far_field" },
       }),
+      // The realtime model decides the turns. Saying so keeps the session from loading a second detector.
+      turnHandling: { turnDetection: "realtime_llm" },
     });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (event) => {
       heard = SHOWN.has(event.newState) ? event.newState : "idle";
+      // The state is in the log, never the words: it shows when the agent spoke and when it listened.
+      log("state", { state: String(event.newState) });
+      ears?.state(event.newState);
     });
     const say = (words) => {
       try {
@@ -178,6 +195,7 @@ const agent = defineAgent({
       ended = true;
       clearInterval(timer);
       stopGreeting?.();
+      ears?.stop();
       jobs?.stop();
       screen?.stop();
       screen = null;
@@ -201,12 +219,26 @@ const agent = defineAgent({
       outputOptions: { audioEnabled: true, transcriptionEnabled: false },
     });
     if (ended) return;
+    // The agent listens only when the call is ready and it does not speak itself (ears.mjs): sound of a call
+    // that still connects is not the caller, and its own voice comes back through the phone.
+    ears = makeEars({
+      bargeIn: process.env.CLAWDTIME_LINE_BARGE_IN === "on",
+      setListening: (on) => {
+        try {
+          session.input.setAudioEnabled(on);
+          log("listening", { on });
+        } catch {
+          /* the call ended first */
+        }
+      },
+    });
     // Greet once when chert dev reports that FaceTime is ready. Without the signal there is no greeting, and
     // the caller speaks first.
     stopGreeting = greetOnBridgeReady(
       ctx.room,
       () => {
         log("greeting");
+        ears.ready();
         say(greeting);
       },
       { event: RoomEvent.RoomMetadataChanged },
