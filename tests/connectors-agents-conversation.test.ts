@@ -1866,6 +1866,11 @@ describe("a session opens only when the person asks to see it", () => {
     // A word that points at a session, with a word after it.
     "ok open it after all",
     "show it again please",
+    // Speech on a call, with its fillers.
+    "um show me the uh payments one please",
+    "ok so uh can you like go back to the payments one",
+    "hmm like you know open payments",
+    "umm kinda just bring up the payments session",
     // A session that is described, as on a call.
     "show the payments session with the claude code that checks the webhooks",
     "open the one that runs payments",
@@ -1967,6 +1972,9 @@ describe("a session opens only when the person asks to see it", () => {
     "show me the one with the most errors",
     // Words for a session.
     "tell payments: open the file",
+    // A filler is no request.
+    "like the payments one",
+    "you know, payments is kinda slow",
     // Work, a remark, a bare name: nothing asks to see it.
     "add a contact form to the payments page",
     "thanks, payments looks good",
@@ -2150,6 +2158,91 @@ describe("a session opens only when the person asks to see it", () => {
       await new Supervisor(world, model).reply([], words, "chat");
       expect(opened, words).toEqual(["payments", "docs"]);
     }
+  });
+
+  it('asks the model once more when the answer left "open it" out', async () => {
+    const run = async (steps: (ToolCall[] | string)[], words: string) => {
+      const opened: string[] = [];
+      const made = mac([
+        session({ name: "deploy fix" }),
+        session({ id: "2", name: "docs" }),
+      ]);
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async (item) => {
+          opened.push(String(item.name));
+          return { ok: true };
+        },
+      };
+      const { model, seen } = scripted(steps);
+      const answer = await new Supervisor(world, model).reply(
+        [],
+        words,
+        "chat",
+      );
+      return { answer, opened, seen };
+    };
+    // The first answer speaks only of what waits. After the note the model opens it.
+    const helped = await run(
+      [
+        "The deploy fix session waits for you. Want me to approve it?",
+        [call("open_session", { session: "deploy fix" })],
+        "The deploy fix session waits for you, and it is in front now.",
+      ],
+      "what's waiting on me? open it",
+    );
+    expect(helped.opened).toEqual(["deploy fix"]);
+    expect(helped.answer).toBe(
+      "The deploy fix session waits for you, and it is in front now.",
+    );
+    expect(helped.seen[1]!.system).toContain("also asks to see a session");
+    expect(helped.seen[0]!.system).not.toContain("also asks to see a session");
+    // The model cannot tell which one: its second answer is said as it is.
+    const unsure = await run(
+      [
+        "Nothing waits for you.",
+        "Nothing waits, so I do not know which one to open.",
+      ],
+      "what's waiting on me? open it",
+    );
+    expect(unsure.opened).toEqual([]);
+    expect(unsure.answer).toBe(
+      "Nothing waits, so I do not know which one to open.",
+    );
+    expect(unsure.seen).toHaveLength(2);
+    // The model opened it by itself: no second request.
+    const direct = await run(
+      [[call("open_session", { session: "deploy fix" })], "It is in front."],
+      "what's waiting on me? open it",
+    );
+    expect(direct.seen).toHaveLength(2);
+    expect(direct.opened).toEqual(["deploy fix"]);
+    // A request that describes a session can get a question back: no second request.
+    const asked = await run(
+      ["Which one do you mean?"],
+      "show me the one that you started",
+    );
+    expect(asked.seen).toHaveLength(1);
+    // "Open it" with nothing before it in the message: no second request.
+    const bare = await run(["Which one?"], "open it");
+    expect(bare.seen).toHaveLength(1);
+    // "It" after a statement can be a file, not the session: no second request.
+    const file = await run(
+      ["I cannot open a file from here."],
+      "docs wrote a summary file, open it",
+    );
+    expect(file.seen).toHaveLength(1);
+    expect(file.opened).toEqual([]);
+    // Another question about the sessions before the request: the model is asked once more.
+    const done = await run(
+      [
+        "Docs is done.",
+        [call("open_session", { session: "docs" })],
+        "Docs is done, and it is in front now.",
+      ],
+      "is docs done? show it",
+    );
+    expect(done.opened).toEqual(["docs"]);
   });
 
   it("opens no session that the request rules out", async () => {

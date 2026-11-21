@@ -811,7 +811,7 @@ const cannotStopSessions =
   'I cannot stop or close a session: no tool of mine does that. I can open one, so that you stop it there. Say "show me" and its name.';
 /** What can stand before a request to see a session, in its clause. */
 const seeLead =
-  /^(?:(?:please|ok|okay|so|then|now|and|hey|hi|clawdtime|just|also|well|hmm|uh|um|yes|yeah|yep|no|nope|not|wait|sorry|oops|actually|instead|rather|alright|right|sure|first|next|quickly|i\s+mean|i\s+meant|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|let['\u2019]?s|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+  /^(?:(?:please|ok|okay|so|then|now|and|hey|hi|clawdtime|just|also|well|h+m+|u+h+|u+m+|e+r+m*|like|kinda|kind\s+of|sort\s+of|basically|you\s+know|y['\u2019]?know|yes|yeah|yep|no|nope|not|wait|sorry|oops|actually|instead|rather|alright|right|sure|first|next|quickly|i\s+mean|i\s+meant|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|let['\u2019]?s|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
 /**
  * A clause that opens with words that ask to see something, and what it asks
  * to see. The words must open the clause: "the show must go on", "in my
@@ -3682,6 +3682,32 @@ export class Supervisor {
                   ? "open_session"
                   : "start_job";
             recheck = `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`;
+            continue;
+          }
+          // "What's waiting on me? Open it": the person asks to see what the
+          // message just spoke of, and the answer left that part out: the
+          // tool that opens a session did not run. The model answers once
+          // more and can call it then: its gate decides as always. A second
+          // answer is said as it is. Only after a question about the sessions
+          // in the same message: a request that names a session needs no such
+          // help (the code opened it), one that describes a session can
+          // rightly get a question back, and "it" after a statement can be
+          // another thing.
+          const seeAsked = this.seeAsked(words);
+          const pointsBackToSee =
+            names.has("open_session") &&
+            !ran.has("open_session") &&
+            this.seeRequest(words) &&
+            this.seeWords(words).pronoun === true &&
+            !!seeAsked &&
+            // The part before the request is a question about the sessions:
+            // "it" is then a session. After "docs wrote a summary file", it
+            // can be the file.
+            asksAboutState(seeAsked.clauses.slice(0, seeAsked.at).join(". "));
+          if (pointsBackToSee && !rechecked) {
+            rechecked = true;
+            recheck =
+              '\nA check of your last draft: the person\'s last message also asks to see a session ("open it", "show it"), and open_session did not run in this turn. Call it now for the session that their message speaks of. If you cannot tell which one, say that in one sentence.';
             continue;
           }
           // The answer is ready. What the message teaches is written after it.
