@@ -814,6 +814,16 @@ a tunnel and get its link, find something out: all of these are jobs.
   one time lose work. The word must stand at the start of the sentence, before
   any "and", "then", "that" or comma: "find the big files and list them" is
   other work and starts beside the running job, as before.
+- A correction to a job that still runs waits for it too: "wait no, it's a
+  cafe not a bakery". A job that runs cannot be changed, so the correction
+  is a job of its own that starts after the first. Two forms count: a
+  contrast that names a word of the job's request ("cafe, not bakery",
+  "instead of a bakery"), and, as your next message after the request, a
+  word of correction ("wait", "no", "sorry", "I meant") before a statement
+  about the thing ("it's a cafe", "the name is ..."). Other work that opens
+  with such a word ("actually, find the big files") starts at once, as
+  before. This rule only decides the wait: your words still pass the same
+  gate before anything starts.
 - A job that waits opens its terminal window at once and shows that it
   waits. ClawdTime says that it waits, and the state says so until it starts.
   It starts when the job before it wrote its answer, or when you press Return

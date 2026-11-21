@@ -1587,6 +1587,46 @@ export function agentNamed(spoken: string): JobAgent | null {
   const out = excluded ? agentOf(excluded[1]!) : null;
   return out ? otherAgent(out) : null;
 }
+/**
+ * A word that opens a correction, with the fillers before it and what
+ * separates it from the rest. "Wait for ..." is an instruction and "no rush"
+ * is none of this. "I meant" leaves the thing that was meant.
+ */
+const correctionWord =
+  /^(?:(?:um+|uh+|oh|hmm+|ok|okay|so|well)[,.!\s]+)*(?:wait(?!\s+(?:for|until|till)\b)|no(?!\s+(?:rush|problem|worries|need|hurry|big\s+deal)\b)|nope|nah|oops|sorry|hold\s+on|hang\s+on|scratch\s+that|correction|my\s+bad|actually|i\s+meant?)\b[\s,.!:;-]*/i;
+/** Words of a job's request that say nothing about its thing. */
+const correctionStop = new Set([
+  "with",
+  "from",
+  "into",
+  "that",
+  "this",
+  "these",
+  "those",
+  "then",
+  "them",
+  "small",
+  "some",
+  "file",
+  "files",
+  "make",
+  "build",
+  "create",
+  "please",
+  "also",
+  "just",
+  "have",
+  "want",
+  "need",
+  "should",
+  "would",
+  "could",
+  "about",
+  "there",
+  "their",
+  "your",
+  "mine",
+]);
 /** The person's sentence can be about something from before: it has a word that points back. */
 /**
  * The sentence is more work on a thing from before: "add a form to it",
@@ -3146,8 +3186,71 @@ export class Supervisor {
         .slice(-6)
         .map((message) => message.text),
       refersBack: pointsBack(spoken),
-      followsUp: followsUp(spoken),
+      // More work on the thing of the job before, or a correction to a job
+      // that still works: the new job then waits for that job.
+      followsUp: followsUp(spoken) || this.correctsARunningJob(spoken, turn),
     };
+  }
+  /**
+   * The message corrects a job that still works: "wait no, it's a cafe not a
+   * bakery". A job that runs cannot be changed, so the correction is a job of
+   * its own, and it must wait for the first: two sessions that change the
+   * same files at one time lose work. This only decides whether a new job
+   * waits. It starts nothing: the person's words still pass the gate.
+   *
+   * Two forms count. A contrast that names a word of the job's request
+   * ("cafe, not bakery", "instead of a bakery"), at any time while the job
+   * works. And, right after the request that started the job, a word of
+   * correction ("wait", "no", "sorry", "I meant") before a statement about
+   * the thing ("it's a cafe", "the name is ...", "make it ..."). Other work
+   * that opens with such a word ("actually, find the big files") starts at
+   * once, as before: a wait costs the person time.
+   */
+  private correctsARunningJob(spoken: string, turn: Turn): boolean {
+    const newest = this.jobsNow(1)[0];
+    if (
+      !newest ||
+      newest.done ||
+      this.world.now() - newest.startedAt > 2 * 60 * 60 * 1000
+    )
+      return false;
+    const words = spoken.trim();
+    // The words of the job's request that carry meaning.
+    const requested = new Set(
+      (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) => !correctionStop.has(word),
+      ),
+    );
+    if (
+      [
+        ...words.matchAll(
+          /\b(?:not|instead\s+of|rather\s+than)\s+(?:(?:a|an|the|for|in|on|with|my|our|your)\s+)*(\p{L}+)/giu,
+        ),
+      ].some((match) => requested.has(match[1]!.toLowerCase()))
+    )
+      return true;
+    // Right after the request that started the job. A job's start time has
+    // whole seconds.
+    const before = [...turn.history]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (!before || newest.startedAt < Math.floor(before.at / 1000) * 1000)
+      return false;
+    let rest = words;
+    let corrected = false;
+    for (let step = 0; step < 4; step++) {
+      const opens = correctionWord.exec(rest);
+      if (!opens) break;
+      corrected = true;
+      rest = rest.slice(opens[0].length);
+    }
+    return (
+      corrected &&
+      (followsUp(rest) ||
+        /^(?:it|it['\u2019]s|its|that|that['\u2019]s|this|the|a|an|not|for|with|should|must|is|was|make\s+it|call\s+it|name\s+it|change\s+it|use)\b/i.test(
+          rest,
+        ))
+    );
   }
   /** What the person hears in a turn that decides no request. */
   private closedAnswer(turn: Turn) {

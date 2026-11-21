@@ -5636,6 +5636,130 @@ describe("a job that still works: only what is known of it is said", () => {
   });
 });
 
+describe("a correction to a job that still works waits for that job", () => {
+  const request = "build a small landing page for my bakery in one html file";
+  const waiting =
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done";
+  /**
+   * The request starts a job. Then `words`, with a model that starts a job
+   * for them: the answer, and whether the new job waits for the first.
+   */
+  const then = async (
+    words: string,
+    options: { finish?: boolean; between?: [string, string] } = {},
+  ) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    /** One turn, kept with the time of the clock: a later message is later than the job's start. */
+    const say = async (model: ModelClient, sentence: string) => {
+      const at = made.clock.now;
+      const reply = await new Supervisor(made.world, model).reply(
+        [...history],
+        sentence,
+        "chat",
+      );
+      history.push(
+        { ...said("user", sentence), at },
+        { ...said("assistant", reply), at },
+      );
+      return reply;
+    };
+    expect(await say(wantsJob().model, request)).toBe(started);
+    const first = made.ids()[0]!;
+    made.clock.now += 30_000;
+    if (options.finish)
+      writeFileSync(
+        join(made.folder, first, "result.md"),
+        "The page is at /work/app/bakery.html.\n",
+      );
+    if (options.between) {
+      await say(scripted([options.between[1]]).model, options.between[0]);
+      made.clock.now += 30_000;
+    }
+    const answer = await say(wantsJob().model, words);
+    const waits =
+      made.ids().length === 2 &&
+      made
+        .file("start.command")
+        .includes(`[[ ! -e '${join(made.folder, first, "result.md")}' && `);
+    return { answer, waits, jobs: made.ids().length };
+  };
+
+  it.each([
+    // Right after the request: a word of correction, then a statement about the thing.
+    "wait no, it's a cafe not a bakery",
+    "sorry, I meant a cafe",
+    "no, a cafe",
+    "oops, the name is Cafe Luna",
+    "actually it should say cafe, not bakery",
+    "hold on, that is for my cafe",
+    "I meant a cafe",
+    // A contrast that names a word of the job's request, with no word of correction.
+    "it's a cafe, not a bakery",
+    "cafe not bakery",
+    "make that a cafe instead of a bakery",
+  ])("makes the new job wait for %j", async (words) => {
+    const got = await then(words);
+    // Two sessions that change the same files at one time lose work.
+    expect(got.jobs, words).toBe(2);
+    expect(got.waits, words).toBe(true);
+    expect(got.answer, words).toContain(waiting);
+  });
+
+  it.each([
+    // The gate reads these as words that take work back: it may start nothing. A job that starts must wait.
+    "no wait, make it for a cafe",
+    "scratch that, it's for a cafe",
+    "never mind the bakery, it's a cafe",
+  ])("never starts a second job beside the first for %j", async (words) => {
+    const got = await then(words);
+    expect(got.jobs === 1 || got.waits, words).toBe(true);
+  });
+
+  it("makes it wait also some turns later, when the correction names a word of the job's request", async () => {
+    const got = await then("oh wait, the page should say cafe, not bakery", {
+      between: ["what is docs doing?", "docs is idle."],
+    });
+    expect(got.jobs).toBe(2);
+    expect(got.waits).toBe(true);
+  });
+
+  it.each([
+    // Other work, also with a word that can open a correction.
+    "find the big files in my home folder and list them",
+    "actually, find the big files in my home folder",
+    "wait, also count the files in my downloads folder",
+    "no rush, count the files in my downloads folder too",
+    "sorry, one more thing: list the big files in my home folder",
+    "not a big deal but please update the readme of the api",
+  ])("starts other work at once: %j", async (words) => {
+    const got = await then(words);
+    expect(got.jobs, words).toBe(2);
+    expect(got.waits, words).toBe(false);
+    expect(got.answer, words).toBe(started);
+  });
+
+  it("starts a correction at once when the job before it is done: nothing runs beside it", async () => {
+    const got = await then("wait no, it's a cafe not a bakery", {
+      finish: true,
+    });
+    expect(got.jobs).toBe(2);
+    expect(got.waits).toBe(false);
+    expect(got.answer).toBe(started);
+  });
+
+  it("does not take a word of correction some turns later for a correction of the job", async () => {
+    // The job was not started by the person's last message, and no word of its request is named.
+    const got = await then("sorry, I meant the big files in my home folder", {
+      between: ["what is docs doing?", "docs is idle."],
+    });
+    expect(got.waits).toBe(false);
+  });
+});
+
 describe("the job tool gives each job of the last day, not only the newest", () => {
   const still =
     "still works. It has run 3 minutes. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.";
