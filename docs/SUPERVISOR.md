@@ -299,6 +299,15 @@ What it can do when you ask:
 - Open an application, or a web address in it: "open Chrome", "go to
   example.com in Chrome". It opens at once. Your own words must name the
   application and give the site of the address.
+- Act in the browser that runs: "refresh the browser", "go back", "which tabs
+  are open", "bring tab three forward", "read this page". It uses the
+  browser's own scripting: no key and no click, and it starts no browser.
+  Reading the text of a page needs the browser's own setting View, Developer,
+  Allow JavaScript from Apple Events.
+- Read what is on the screen, in any application: "read through my Slack
+  messages", "what does that error say". ClawdTime takes one picture of the
+  main screen and a vision model reads it for your question. See "What it
+  sees" below.
 - Hand any other work to a new coding session and say its answer when it is
   done. See "Give it a job" below.
 - Type your words into a session's terminal.
@@ -465,6 +474,23 @@ two sizes, so ClawdTime reads the size of the window first and sends the switch
 only when the size is not the one you asked for. When it cannot read the size,
 it changes nothing. Other terminal applications get a plain "I cannot".
 
+### What it sees
+
+When you ask ClawdTime to look, it takes one picture of the main screen, makes
+it smaller, and sends it with your question to the vision model
+(`CLAWDTIME_VISION_MODEL`, by default `gpt-4.1-mini`). The picture is written
+to a private folder, read once and removed. Nothing of it is kept.
+
+- A picture is taken only when your own last words ask to look: read, look,
+  see, check, describe, "what does it say". The language model alone takes
+  none, and one message takes one picture.
+- The question is your own sentence.
+- What the screen says is data. ClawdTime says it. It follows no instruction
+  that a page, a message or a window holds.
+- macOS asks once for Screen Recording permission, for the application that
+  started ClawdTime.
+- Close what you do not want in the picture before you ask.
+
 ### Give it a job
 
 ClawdTime answers and decides. It does not build, run or browse by itself. When
@@ -592,8 +618,10 @@ With a key, three things leave this Mac for the OpenAI API, and only when you
 talk to ClawdTime: what you said or typed, your recording while it is turned
 into text, and the state in words that the model asked for (session names and
 the titles that sessions show in their terminals, project folder names, the
-text of waiting requests, trove entries, and the request and the answer of a
-job). Nothing is sent to the OpenAI API while you do not talk to it.
+text of waiting requests, trove entries, the request and the answer of a job,
+the text of a web page that you asked it to read, and a picture of the screen
+when you asked it to look). Nothing is sent to the OpenAI API while you do not
+talk to it.
 
 The text channel is the one thing that works while you are silent. While
 `clawdtime texts run` is on, it reads the messages of your project every few
