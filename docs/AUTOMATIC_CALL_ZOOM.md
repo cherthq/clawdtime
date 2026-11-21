@@ -30,10 +30,14 @@ from Accessibility rather than extrapolating a caret or reading text.
 | “Resume automatic zoom”                 | Explicitly releases overview/manual framing and enables auto |
 | Existing “zoom in on [session]” request | Uses the existing manual terminal-window view                |
 
-Final caller transcripts matching these commands apply immediately, without
-waiting for a model to act. The `call_zoom` voice tool only accepts an action
-corroborated by the latest final caller request. Questions, quoted typing
-requests, negation and ambiguous phrases do not change the preference.
+These phrases are examples, not a required vocabulary. The voice model selects
+a bounded `call_zoom` action from natural speech; the tool must belong to the
+current finalized provider input and its SDK response handle. No exact wording
+comparison or fixed phrase recognizer gates the runtime action. The prompt
+requires caller intent and excludes negated or quoted requests; this remains
+model interpretation, not a guarantee of semantic accuracy. Persistent overview
+still requires an explicit resume action to release it. Proactive responses
+cannot change presentation through these tools.
 
 Local controls require no call, model, or screen permission:
 

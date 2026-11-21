@@ -68,8 +68,8 @@ Run in an isolated worktree using Node 24.22.1, Apple Swift 6.2.4, and Python
 
 | Check                                                                                  | Result                                               |
 | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `npm run check`                                                                        | 3,931 tests in 126 files; typecheck and build passed |
-| `npm --prefix line test`                                                               | 98 tests passed                                      |
+| `npm run check`                                                                        | 3,938 tests in 126 files; typecheck and build passed |
+| `npm --prefix line test`                                                               | 105 tests passed                                     |
 | `cd mac && swift test`                                                                 | 295 tests passed                                     |
 | `cd mac && swift build --product ClawdTimeTaskPanel`                                   | Passed                                               |
 | `media/.venv/bin/python -m unittest discover -s media -p 'test_task_presentation*.py'` | 36 tests passed                                      |
@@ -253,3 +253,46 @@ truncating a trailing prohibition. A refusal cannot fall back to another
 executor. Direct task-service software goals retain their existing complete
 8,000-character limit and cannot fall through into navigation when oversized.
 The updated backend/typecheck/build and 98 line tests passed.
+
+## First phone test and speech validation correction
+
+The November 21 call ran from 11:46:58 to 11:49:09 America/New_York. The sharing
+tool was invoked at 11:47:19; five Mac-request tool invocations followed. None
+reached the desktop chat journal, and the computer worker remained idle at step
+zero. The person reported repeated generic processing failures and recalls a
+request to type a short word into the Codex textbox. Phone typing and zoom were
+therefore not qualified.
+
+The exact-text binder independently rejected harmless punctuation and case
+differences between the separate transcription and voice model tool argument.
+This is the leading explanation, not a proven per-request diagnosis: the
+historical test log omitted binder/transport result codes. The correction removes
+model-written request text from the tool and binds the complete final transcript
+to its provider utterance and SDK response instead. See the updated
+[navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md). No speech-recognition phrase
+list or fuzzy wording match replaces the removed comparison.
+
+The test line released with zero retained calls. The original phone agent was
+restored and independently confirmed as the sole connected owner; the test
+computer switch is off and the installed Supervisor's prior switch is restored.
+The correction needs a separately arranged repeat call; earlier local app and
+desktop round-trip evidence remains valid.
+
+For the repeat phone test, use a disposable unsent textbox or TextEdit document.
+Ask naturally to show the screen, then ask to type a short test word without
+pressing Enter or submitting it. Verify the actual text independently and inspect
+the new reason codes if forwarding fails. Also exercise sharing followed by
+typing within one utterance, natural zoom/overview/resume wording, a correction
+during speech, and Stop. Do not replay an uncertain typing request automatically.
+The implementation removes model-text comparison for every Mac request, not
+only navigation; native post-action verification remains required.
+
+The speech correction passed 105 line tests, including 22 runtime-wiring cases
+using the actual SDK tool wrappers and response handles. A separate headless
+smoke fed locally synthesized speech through the real `gpt-realtime` provider
+and LiveKit SDK 1.8.0, with all Mac and sharing effects stubbed. Both the direct
+Codex typing request and sharing-then-typing continuation forwarded the complete
+provider transcript exactly once, retaining the no-submission constraint. This
+used no phone call or computer input and is not handset/zoom acceptance.
+The full backend/typecheck/build passed 3,938 tests; native and Python
+presentation source are unchanged by this speech correction.

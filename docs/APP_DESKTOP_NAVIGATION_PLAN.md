@@ -30,9 +30,13 @@ not prove semantic accuracy for every utterance.
 1. Route native navigation semantically through the supervisor and worker.
    Remove the fixed directional phrase grammar from production paths.
 2. Bind phone requests to one fresh, finalized caller transcript from the same
-   call. Forward the actual transcript, not a model-created paraphrase. Consume
-   that request before dispatch, including delivery failures. New/interim speech,
-   duplicate/stale events, and call end must not revive it. Stop remains immediate.
+   call using provider utterance identity and the SDK response handle. Never
+   require exact wording, punctuation, capitalization, fuzzy similarity, or a
+   phrase list to match a model-generated request. The request tool takes no
+   model-written instruction; it forwards the complete stored human transcript.
+   Consume that request before dispatch, including delivery failures. New speech,
+   duplicate/stale events, transcription failure, interruption and call end must
+   not revive it. Local Stop remains available independently of transcription.
 3. Resolve a worker navigation intent once, then perform at most one transition.
    Do not expose directional/previous-app commands to the screenshot planner.
 4. Require permissions, exclusive control, fresh source evidence and local Stop
@@ -107,3 +111,30 @@ proof of automatic arrival verification or shared-video behavior.
 Record implementation, automated results and remaining physical gaps in
 [the integration record](SPACES_ZOOM_INTEGRATION.md). Open a reviewable PR targeting
 main; do not merge or replace the installed application during this step.
+
+## Speech validation correction after the first phone test
+
+The November 21 phone test reached sharing and invoked the Mac request tool five
+times, but delivered no requests to the desktop service. The exact-text binder
+was independently reproduced rejecting punctuation/case changes between the
+voice model and the separate transcript. Historical logs did not retain enough
+reason metadata to prove each call's individual refusal.
+
+The correction must bind identity rather than wording: wait for a successful
+provider final for the current input item, explicitly generate its response, and
+bind that SDK response handle (and its tool continuations) to the stored complete
+transcript. Automatic VAD response creation must be disabled so a response cannot
+race ahead of that binding. Failed transcription cannot authorize the SDK's
+partial-text fallback. Proactive/greeting responses have no computer authority.
+Use the same turn identity for screen sharing, zoom and picture framing, with
+separate one-use capabilities so sharing can precede a computer request in the
+same turn. Interpret zoom/framing dynamically rather than through phrase lists;
+hide and emergency Stop remain authority-reducing operations. Log bounded
+outcome/rejection codes, never transcripts, audio, or screen content.
+
+Regression coverage must include the reported Codex textbox typing request,
+free phrasing, punctuation/case variations, preservation of trailing negations,
+SDK event ordering, duplicate callbacks/tools, late older finals, interruption,
+call teardown, and delayed or failed transcription. No exact text-matching
+requirement may be reintroduced as a shortcut for turn identity. A new physical
+phone/typing/zoom test is still required after automated validation.

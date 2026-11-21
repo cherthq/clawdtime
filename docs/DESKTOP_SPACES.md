@@ -267,8 +267,9 @@ The supported sharing route is the existing `line/agent.mjs` full-display share
 with its local desktop service selecting this native ComputerWorker. The separate
 v2 actors/conversation screen-control path does not instantiate this worker and
 is **not** covered. Other execution engines are refused rather than substituted.
-Directional phone tool calls must match a one-use final caller transcript; the
-line forwards those original words, not a model's rewritten direction.
+Phone tool calls must bind to a one-use final caller turn by provider identity
+and SDK response handle, never by matching the model's wording. The line forwards
+the complete original transcript; the model supplies no replacement instruction.
 Neither branch expands a window-scoped grant to desktop capture. Use only an
 already authorized full-main-display sharing session for the directional test.
 For the legacy line, explicitly set `CLAWDTIME_LINE_SCREEN_DEVICE` to the sole
