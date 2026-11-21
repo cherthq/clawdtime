@@ -1710,7 +1710,7 @@ const mayTakeBack = (text: string) =>
  * `mayTakeBack` is: it only keeps the code from typing by itself.
  */
 const maySayMore = (text: string) =>
-  /\b(?:would|could|should|shall|will|can|may|might|must|do|does|did|is|are|was|were|am|be|been|has|have|had|what|why|how|when|where|which|who|whose|whether|you|your|yours|u|ur|he|she|thanks?|thx|ty|cheers|idea|sense|sounds?|fine|good|great|cool|nice|yes|yeah|yep|yup|sure|alright|bro|man|dude|worth|correct|huh|lmk|naw|meh|whatever|like|so|said|says|say|told|reckon|hopefully|innit|u+h+|u+m+|e+r+m*|h+m+|a+h+|e+h+|o+h+)\b|['\u2019\u2018\u00b4\u02bc\u2032`](?:s|ll|re|ve|d|m)\b/i.test(
+  /\b(?:would|could|should|shall|will|can|may|might|must|do|does|did|is|are|was|were|am|be|been|has|have|had|what|why|how|when|where|which|who|whose|whether|you|your|yours|u|ur|he|she|thanks?|thx|ty|cheers|idea|sense|sounds?|fine|good|great|cool|nice|yes|yeah|yep|yup|sure|alright|bro|man|dude|idk|dunno|suppose|thoughts|jk|tbh|imo|eventually|someday|sometime|worth|correct|huh|lmk|naw|meh|whatever|like|so|said|says|say|told|reckon|hopefully|innit|u+h+|u+m+|e+r+m*|h+m+|a+h+|e+h+|o+h+)\b|['\u2019\u2018\u00b4\u02bc\u2032`](?:s|ll|re|ve|d|m)\b/i.test(
     text,
   );
 /**
@@ -1722,6 +1722,119 @@ const putsOff = (text: string) =>
   /\b(?:later|tomorrow|tonight|today|eod|noon|midnight|this\s+(?:evening|afternoon|morning|weekend|week)|next\s+(?:week|month|time|sprint)|end\s+of\s+(?:the\s+)?(?:day|week)|in\s+(?:\d+|an?|a\s+few|some|half\s+an)\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|bit|while|moment)|(?:after|before)\s+(?:lunch|dinner|breakfast|work|standup|the\s+(?:meeting|call|standup|demo|release))|at\s+\d|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i.test(
     text,
   );
+/**
+ * Why words for a session must not be typed, or null. The person's message
+ * hedges the request before the words ("maybe tell deploy fix to push",
+ * "don't tell deploy fix to push", "should I tell ..."), it goes on after
+ * them with a question, a hedge or a take-back ("push the branch, or should
+ * I wait?", "run the tests never mind", "push the branch maybe"), or the
+ * words themselves end with one ("run the tests, or should I wait", "push
+ * the branch, would that help"). A polite word after the words ("please",
+ * "thanks") is nothing. A question that is for the session ("why is it
+ * failing?", "when can you push?") is typed: only a question about the
+ * person ("should I", "can we") or about the words ("would that help") is
+ * one to ClawdTime.
+ */
+const unsureWords = (
+  text: string,
+  spoken: string,
+  name: string,
+): string | null => {
+  const even = (value: string) => value.toLowerCase().replace(/\s+/g, " ");
+  const all = even(spoken);
+  const words = even(text).trim();
+  const at = all.lastIndexOf(words);
+  // What stands before the words: without the word that asks to type, the
+  // session's name and what joins them, only a hedge or a negation is left.
+  // Only the clause that holds the request: what stands after the last
+  // mark before the words ("do not wait, tell deploy fix to push now" is a
+  // plain request). A mark right before the words is the colon of the form.
+  // The session's name goes out first: a mark inside a name ("api.v2") is
+  // no end of a clause.
+  const clauses = (at < 0 ? "" : all.slice(0, at))
+    .replace(
+      new RegExp(
+        name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "g",
+      ),
+      " ",
+    )
+    .replace(/[\s,;:.!?\u2014-]+$/, "")
+    .split(/[,;:.!?\u2014\n]/);
+  // A clause made only of words that hedge, say no or put off hedges the
+  // request that follows it: "maybe, tell deploy fix to push", "not yet.
+  // tell ...", "I don't think you should, tell ...". A clause with another
+  // word in it is the person's own business ("do not wait, tell ..."), and
+  // "no" alone corrects ClawdTime: the request stands.
+  const earlier = (clauses.at(-2) ?? "")
+    .replace(/[^\p{L}'\u2019\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const hedges =
+    /^(?:maybe|perhaps|possibly|probably|not|never|don['\u2019]?t|yet|later|idk|dunno|wonder|should|shall)$/;
+  if (
+    earlier.length > 0 &&
+    earlier.every(
+      (word) =>
+        hedges.test(word) ||
+        /^(?:um+|uh+|hmm+|well|so|ok|okay|and|but|oh|no|nope|nah|yeah|i|i['\u2019]?m|am|you|we|do|what|think|sure|now)$/.test(
+          word,
+        ),
+    ) &&
+    (earlier.some((word) => hedges.test(word)) ||
+      /\bdo you think\b/.test(earlier.join(" ")))
+  )
+    return "The person's message hedges that request, asks about it or says not to. Type nothing. Ask one short question.";
+  const before = clauses
+    .at(-1)!
+    .replace(
+      /\b(?:tell|ask|type|send|say|reply|answer|to|into|in|the|session|one|agent|that|it)\b/g,
+      " ",
+    );
+  if (
+    /\b(?:maybe|perhaps|possibly|probably|i\s+wonder|wonder|should\s+(?:i|we)|shall\s+(?:i|we)|do\s+you\s+think|don['\u2019]?t|do\s+not|never|not|if|unless|whether)\b/i.test(
+      before,
+    )
+  )
+    return "The person's message hedges that request, asks about it or says not to. Type nothing. Ask one short question.";
+  // What follows the words in the message, without what is only polite.
+  const tail = (at < 0 ? "" : all.slice(at + words.length))
+    .replace(
+      /\b(?:please|pls|plz|thanks|thank\s+you|thx|ty|cheers|bro|bruh|dude|man)\b/g,
+      " ",
+    )
+    .replace(/^[\s,;:.!\u2014-]+|[\s.!]+$/g, "");
+  // A question, a word that begins one or a second thought (`maySayMore`),
+  // or a word that hedges or takes back. More plain words for the session
+  // ("..., and to report back") are none of these.
+  if (
+    tail &&
+    (/\?/.test(tail) ||
+      maySayMore(tail) ||
+      putsOff(tail) ||
+      /\b(?:maybe|perhaps|probably|possibly|eventually|i\s+think|i\s+guess|i\s+suppose|i\s+dunno|dunno|idk|not\s+sure|thoughts|or\s+not|or\s+no|if|unless|though|wait|hold\s+on|never\s*mind|nevermind|nvm|nm|jk|actually|no|nope|nah|scratch|forget|cancel|stop|don['\u2019]?t|not\s+yet|not\s+now|sorry|oops)\b/i.test(
+        tail,
+      ))
+  )
+    return "The person's message goes on after those words, and it asks about them, hedges them or takes them back. Type nothing. Ask one short question.";
+  // The words end with a take-back, with a question about the person after
+  // "or" or a mark ("..., or should I wait"), or with a question about the
+  // words ("... would that help", "... is that a good idea").
+  if (
+    takenBackAtTheEnd(text) ||
+    /\b(?:never\s*mind|nevermind|nvm|nm|actually,?\s+no|no,?\s+wait|scratch\s+that|forget\s+(?:it|that))[\s.!]*$/i.test(
+      text,
+    ) ||
+    /(?:[,;:.\u2014-]\s*(?:or\s+)?|\s+or\s+)(?:should|shall|can|could|would|will|do|does|may|must)\s+(?:i|we)\b[^,;:.]*[\s.!?]*$/i.test(
+      text,
+    ) ||
+    /\s(?:would|could|will|does|is|was)\s+(?:that|this|it)\s+(?:help|work|do|be\s+(?:ok|okay|fine|safe|enough|better|wise|smart|right|wrong|possible|a\s+(?:good|bad)\s+idea)|ok|okay|fine|safe|enough|better|wise|smart|right|wrong|possible|make\s+sense|a\s+(?:good|bad)\s+idea)\b[^,;:.]*[\s.!?]*$/i.test(
+      text,
+    )
+  )
+    return "Those words end with a question to you, or they take themselves back. Type nothing. Ask one short question.";
+  return null;
+};
 /**
  * The words end with a clause that takes them back: "delete the release
  * branch, never mind", "push to main. Actually no, wait", "run it - scratch
@@ -3889,6 +4002,26 @@ export class Supervisor {
           return "The person did not name that session. Ask them which session.";
         if (!saidAsWords(text, spoken))
           return "Only the person's own words are typed. Ask them for the exact text.";
+        // The person asks about the words, hedges them or takes them back:
+        // "tell deploy fix to push the branch, or should I wait?", "... never
+        // mind", "... would that help". Nothing is typed then, whoever calls:
+        // a model has no way around it.
+        const unsure = unsureWords(text, spoken, title(session));
+        if (unsure) return unsure;
+        // "..., and the docs one too": words that add another session as a
+        // second target are not all for this one. "Copy the config from
+        // docs" only speaks of it.
+        if (
+          (this.world.board()?.sessions ?? []).some(
+            (other) =>
+              other !== session &&
+              new RegExp(
+                `(?:,|\\band)\\s+(?:the\\s+)?${title(other).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+(?:one|session))?(?:\\s+(?:too|also|as\\s+well))\\b|(?:,|\\band)\\s+(?:the\\s+)?${title(other).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+one\\b`,
+                "i",
+              ).test(text),
+          )
+        )
+          return "Those words name another session too. Type nothing. Ask the person which words are for which session.";
         // A choice of a task is text that an agent wrote. A message that is
         // such a choice answers the task, and is not words for a session.
         const asking = this.world.tasks?.current();
@@ -3908,6 +4041,17 @@ export class Supervisor {
         const typed = `typed ${session.id} ${text}`;
         if (turn.done.has(typed))
           return `That is typed into ${title(session)} already. Nothing more is typed.`;
+        // The code typed words of this message into this session already:
+        // a call of the model adds nothing to it.
+        if (
+          turn.typedByCode &&
+          turn.ownTyping !== call &&
+          [...turn.done.keys()].some((key) =>
+            key.startsWith(`typed ${session.id} `),
+          )
+        )
+          return `Words of this message are typed into ${title(session)} already. Nothing more is typed.`;
+
         const sent = await this.world.send(session, text);
         if (sent.ok) {
           turn.done.set(typed, "");
