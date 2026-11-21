@@ -1715,6 +1715,129 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("an answer that claims an action that no tool did", () => {
+  const work = "build a small landing page for my bakery in one html file";
+  const started =
+    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  const claim =
+    "I added the contact form request to the bakery landing page job and it's still working on it.";
+  const notDone =
+    "I have not done that: nothing was started or changed for it. Say it once more.";
+
+  it("asks the model once more, and the job then starts through its gate", async () => {
+    const made = mac();
+    // The model first only talks, then calls the tool.
+    const { model, seen } = scripted([claim, [call("start_job")], "Okay."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(started);
+    expect(made.jobs.recent()[0]!.job).toBe(
+      "add a contact form to the bakery page",
+    );
+    // The second request to the model says what was wrong with the draft.
+    expect(seen[0]!.system).not.toContain("A check of your last draft");
+    expect(seen[1]!.system).toContain(
+      "A check of your last draft: it said that you did something, but no tool did that in this turn.",
+    );
+    // The draft itself is not kept in the conversation.
+    expect(seen[1]!.messages.some((message) => message.content === claim)).toBe(
+      false,
+    );
+  });
+
+  it("says plainly that nothing was done when the model claims it twice", async () => {
+    const made = mac();
+    const { model, seen } = scripted([claim, "I've started that for you."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(seen).toHaveLength(2);
+    expect(made.windows).toHaveLength(0);
+  });
+
+  it("takes a true second answer as it is", async () => {
+    const made = mac();
+    const { model } = scripted([
+      claim,
+      "That is not started yet. Which page do you mean?",
+    ]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe("That is not started yet. Which page do you mean?");
+  });
+
+  it.each([
+    // The answer says the opposite, or asks, or speaks of an earlier time.
+    [
+      "add a contact form to the bakery page",
+      "I started no job for that. Which page do you mean?",
+    ],
+    ["add a contact form to the bakery page", "Which page do you mean?"],
+    [
+      "add a contact form to the bakery page",
+      "I already started that job two minutes ago, and it still works.",
+    ],
+    // The person asked for no work: an answer about what happened is not checked.
+    ["what did you do for the bakery page?", "I started a job for it."],
+    ["thanks, that is all", "I closed nothing, all good."],
+  ])(
+    "asks the model once only for %j answered with %j",
+    async (words, answer) => {
+      const made = mac();
+      const { model, seen } = scripted([answer, "A second answer."]);
+      expect(
+        await new Supervisor(made.world, model).reply([], words, "chat"),
+      ).toBe(answer);
+      expect(seen).toHaveLength(1);
+    },
+  );
+
+  it("does not check an answer after a tool that acts ran in the turn", async () => {
+    // The code typed the person's words: "I told ..." is true.
+    const sent: string[] = [];
+    const made = mac([session({ name: "docs" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, text) => {
+        sent.push(`${item.name}: ${text}`);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    const { model, seen } = scripted(["I told docs to run the linter."]);
+    expect(
+      await new Supervisor(world, model).reply(
+        [],
+        "tell docs: run the linter",
+        "chat",
+      ),
+    ).toBe("I told docs to run the linter.");
+    expect(seen).toHaveLength(1);
+    expect(sent).toEqual(["docs: run the linter"]);
+    // A tool that only reads does not count: the claim is checked.
+    const read = mac();
+    const twice = scripted([[call("job_result")], claim, claim]);
+    expect(
+      await new Supervisor(read.world, twice.model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(notDone);
+  });
+});
+
 describe("the state says when no job was started", () => {
   const stateOf = async (made: ReturnType<typeof mac>) => {
     const { model, seen } = scripted(["Okay."]);

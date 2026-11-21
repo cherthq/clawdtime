@@ -379,6 +379,13 @@ request that still waits, and does nothing more with those words.
 A job is only work that ClawdTime started. When you ask about jobs and it
 started none, it says so, and then says what your own sessions do.
 
+ClawdTime checks its own answer when you asked for work. When the answer says
+that it did something ("I added that to the job") and no tool did anything in
+that turn, the model answers once more and can then do it, through the same
+checks as always. When the second answer claims it again, you get plain words:
+"I have not done that: nothing was started or changed for it. Say it once
+more."
+
 ### Give it a task
 
 While the desktop service runs, you can hand ClawdTime a task in the same
