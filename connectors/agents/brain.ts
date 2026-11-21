@@ -801,6 +801,59 @@ const invitesApproval =
 // chooses a tool; these decide whether the tool acts.
 const startCue =
   /\b(?:start|begin|take|open|create|add|queue|launch|kick off|give (?:you|yourself|it|clawdtime))\b[^.?!]{0,40}\b(?:task|job)\b|\b(?:new|a|another|this|one)\s+(?:task|job)\s*[:,-]|^\s*(?:task|job)\s*[:,-]|\b(?:task|job)\s+for\s+you\b/i;
+/** The words that open a question to ClawdTime. */
+const questionWord =
+  "(?:did|has|have|had|is|are|was|were|what|wat|wut|whats|wats|why|how|hows|when|where|wheres|who|whos|which)";
+/**
+ * Words that can stand before the question word and change nothing about
+ * it: a word of correction ("wait", "sorry", "no wait"), or a word that
+ * joins the question to what came before ("and", "so", "but"). "Wait what
+ * did the first one say again" is a question, as "what did the first one
+ * say" is.
+ */
+const beforeTheQuestion =
+  "(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+|hmm+|oh|ah|er|wait|hold\\s+on|hang\\s+on|sorry|oops|actually|no|nah|yeah|yes|so|well|and|but|also|then|now|anyway|btw|right|alright)[,.!\\s]+)+";
+/**
+ * A clause of work after the question word: "so when you are done, run the
+ * tests", "yes is fine, start it", "now have a look at the header and fix
+ * it". The verb stands after a mark, "and" or "then", with a word for its
+ * thing after it. "Why did it fail and then run again" has none.
+ */
+const laterClauseOfWork =
+  /(?:[,:;]\s*(?:(?:and|then|please|just)\s+)*|\s+and\s+(?:then\s+)?|\s+then\s+)(?:build|make|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|move|run|deploy|test|check|find|install|upgrade|clean|set|put|try|use|do|start|merge|ship|push)\s+(?:the|a|an|it|that|this|these|those|them|one|my|our|all|some|every|another|its|their|\d)\b/i;
+/**
+ * A question behind such words. An instruction or a statement that only
+ * looks like one is none, so that it still starts work or is kept as what
+ * the person said:
+ * - a clause of work follows ("so when you are done, run the tests");
+ * - "have" that makes something do something ("then have it deploy"): it
+ *   asks only before you, we, they or I, or with a question mark at the end;
+ * - "what I want is ...", "where we deploy is ...", "how about you build
+ *   the page".
+ */
+const asksBehindALead = (spoken: string) => {
+  const found = new RegExp(
+    `^\\s*${beforeTheQuestion}(${questionWord})\\b(.*)$`,
+    "is",
+  ).exec(spoken);
+  if (!found) return false;
+  const word = found[1]!.toLowerCase();
+  const rest = found[2]!;
+  if (
+    word === "have" &&
+    !/^\s+(?:you|we|they|i)\b/i.test(rest) &&
+    !/\?\s*$/.test(spoken)
+  )
+    return false;
+  if (
+    /^(?:what|where|how)$/.test(word) &&
+    /^\s+(?:i|we|you)\s+(?:\w+\s+){1,3}?is\b/i.test(rest)
+  )
+    return false;
+  if (word === "how" && /^\s+about\s+(?:you|we)\s+\w+/i.test(rest))
+    return false;
+  return !laterClauseOfWork.test(rest);
+};
 /** A sentence that asks about something. It never changes the task. */
 const asksAbout = (spoken: string) =>
   // A filler can stand before the question word, and the word can be in
@@ -808,12 +861,15 @@ const asksAbout = (spoken: string) =>
   // "R" is "are" only where a question goes on ("r u", "r the tests done")
   // or the message ends with a question mark: "R script failed, fix it" is
   // work.
-  /^\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\s]+)*(?:did|has|have|had|is|are|was|were|what|wat|wut|whats|wats|why|how|hows|when|where|wheres|who|whos|which)\b/i.test(
-    spoken,
-  ) ||
+  new RegExp(
+    `^\\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\\s]+)*${questionWord}\\b`,
+    "i",
+  ).test(spoken) ||
   /^\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\s]+)*r\s+(?:(?:u|you|we|they|the|my|all)\b|[^?]*\?\s*$)/i.test(
     spoken,
-  );
+  ) ||
+  // The same behind a word of correction or a word that joins.
+  asksBehindALead(spoken);
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
 /**
