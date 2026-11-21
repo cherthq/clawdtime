@@ -1289,6 +1289,43 @@ const asksAboutState = (text: string) =>
   /\b(?:status|sessions?|agents?|working|idle|waiting|waits|running|busy|finished|done|ready|completed?|progress|everyone|everybody|up to|doing)\b/i.test(
     text,
   );
+/** Tools that only read. A turn in which only these ran did nothing. */
+const readingTools = new Set([
+  "status",
+  "search_trove",
+  "agent_commands",
+  "task_status",
+  "recall",
+  "job_result",
+]);
+/**
+ * The answer says, in the first person, that ClawdTime did something now: "I
+ * added the form to the job", "Done, I've also started it". The claim opens a
+ * clause: "the job I started is still running" speaks of an earlier job. "I
+ * started no job" says the opposite. A claim with a word about an earlier
+ * time in its own clause ("I started that two minutes ago") and "I already
+ * started it" are not about this turn. "Told", "asked" and "ran" are no
+ * claims: "as I told you", "I ran into a problem".
+ */
+const claimVerbs =
+  "added|started|opened|typed|sent|created|built|fixed|deployed|approved|denied|allowed|answered|closed|resized|moved|brought|launched|kicked off|queued|scheduled|updated|changed|deleted|removed|installed|restarted|stopped|cancell?ed|accepted|passed|forwarded|handed|put|set up";
+const claim = new RegExp(
+  `(?:^|[,;:\u2013\u2014]\\s*|\\s-+\\s+|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes|yep|yeah|yup|alright|right|great|perfect|well|got it)[,!.\\s]+)I(?:['\u2019]ve| have)?(?:\\s+(?:just|now|also))*\\s+(?:(?:gone|went)\\s+ahead\\s+and\\s+)?(?:${claimVerbs})\\b(?!\\s+(?:no|nothing|none|neither)\\b)([^,;.!?]*?)(?=$|[,;.!?]|\\s+(?:and|but)\\b)`,
+  "gi",
+);
+const claimsAction = (text: string) =>
+  text.split(/(?<=[.!?])\s+|\n+/).some((sentence) =>
+    // Every claim in the sentence is read: one that is about this turn is enough.
+    [...sentence.trim().matchAll(claim)].some(
+      (found) =>
+        !/\b(?:earlier|before|ago|previously|last time|yesterday)\b/i.test(
+          found[1] ?? "",
+        ),
+    ),
+  );
+/** Said in place of an answer that claims an action that no tool did, twice. */
+const notDone =
+  "I have not done that: nothing was started or changed for it. Say it once more.";
 /** What the job tool answers when ClawdTime started no job. The sessions of the person are not jobs. */
 const noJobYet =
   "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.";
@@ -2789,6 +2826,33 @@ export class Supervisor {
           },
         );
       }
+      // The tools that ran in this turn. A claim in the answer has something
+      // behind it only when one of them can act: a tool that this turn
+      // offered, that does more than read, and that is not the start of a
+      // job (a job that started ended the turn with its own sentence; one
+      // that was refused did nothing).
+      const ran = new Set<string>(
+        messages.some(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "tell_first",
+        )
+          ? ["type_into_session"]
+          : [],
+      );
+      const names = new Set(offered.map((tool) => tool.name));
+      // With no task service, the start of a task is handed to a job: the
+      // same holds for it as for the start of a job.
+      const startsJob = (name: string) =>
+        name === "start_job" || (name === "start_task" && !this.world.tasks);
+      const acted = () =>
+        [...ran].some(
+          (name) =>
+            names.has(name) && !readingTools.has(name) && !startsJob(name),
+        );
+      // The note for the model after an answer that claimed an action which no
+      // tool did. It is asked once in a turn, and the note goes when a tool ran.
+      let recheck = "";
+      let rechecked = false;
       for (let step = 0; step < 6; step++) {
         const task = this.world.tasks?.current();
         // Only authoritative flags/counts enter this instruction. Request text
@@ -2808,7 +2872,7 @@ export class Supervisor {
         const agentFacts = `sessions by agent: ${[...byAgent].map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"};`;
         const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} These facts take precedence over chat history.`;
         const reply = await this.model.complete({
-          system: `${brief}\n${current}`,
+          system: `${brief}\n${current}${recheck}`,
           messages,
           tools: offered,
         });
@@ -2819,6 +2883,18 @@ export class Supervisor {
             if (!hasDecisionTarget())
               return "There is no pending request to approve or deny.";
           }
+          // The person asked for work, the answer says that ClawdTime did
+          // something, and no tool that acts ran in this turn: the answer is
+          // not true. The model answers once more, and can call the tool
+          // then: its gates decide as always. A second such answer is
+          // replaced by plain words.
+          if (asksForWork(words) && claimsAction(reply.text) && !acted()) {
+            if (rechecked) return notDone;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that you did something, but no tool did that in this turn. If the person's last message asks for work that is not done, do it with the tool for that work. Else answer again with what is true, and do not say that it is done.";
+            continue;
+          }
           // The answer is ready. What the message teaches is written after it.
           if (memory) this.learning = this.learn(memory, words).catch(() => {});
           return clean(reply.text, 900) || "Done.";
@@ -2828,7 +2904,10 @@ export class Supervisor {
           content: reply.text,
           toolCalls: reply.toolCalls,
         });
+        // A tool runs now: what the note says is no longer true for the next answer.
+        recheck = "";
         for (const call of reply.toolCalls.slice(0, 6)) {
+          ran.add(call.name);
           messages.push({
             role: "tool",
             toolCallId: call.id,

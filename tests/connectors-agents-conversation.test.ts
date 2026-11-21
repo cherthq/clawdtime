@@ -1715,6 +1715,264 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("an answer that claims an action that no tool did", () => {
+  const work = "build a small landing page for my bakery in one html file";
+  const started =
+    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  const claim =
+    "I added the contact form request to the bakery landing page job and it's still working on it.";
+  const notDone =
+    "I have not done that: nothing was started or changed for it. Say it once more.";
+
+  it("asks the model once more, and the job then starts through its gate", async () => {
+    const made = mac();
+    // The model first only talks, then calls the tool.
+    const { model, seen } = scripted([claim, [call("start_job")], "Okay."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(started);
+    expect(made.jobs.recent()[0]!.job).toBe(
+      "add a contact form to the bakery page",
+    );
+    // The second request to the model says what was wrong with the draft.
+    expect(seen[0]!.system).not.toContain("A check of your last draft");
+    expect(seen[1]!.system).toContain(
+      "A check of your last draft: it said that you did something, but no tool did that in this turn.",
+    );
+    // The draft itself is not kept in the conversation.
+    expect(seen[1]!.messages.some((message) => message.content === claim)).toBe(
+      false,
+    );
+  });
+
+  it("says plainly that nothing was done when the model claims it twice", async () => {
+    const made = mac();
+    const { model, seen } = scripted([claim, "I've started that for you."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(seen).toHaveLength(2);
+    expect(made.windows).toHaveLength(0);
+  });
+
+  it("takes a true second answer as it is", async () => {
+    const made = mac();
+    const { model } = scripted([
+      claim,
+      "That is not started yet. Which page do you mean?",
+    ]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe("That is not started yet. Which page do you mean?");
+  });
+
+  it.each([
+    // The answer says the opposite, or asks, or speaks of an earlier time.
+    [
+      "add a contact form to the bakery page",
+      "I started no job for that. Which page do you mean?",
+    ],
+    ["add a contact form to the bakery page", "Which page do you mean?"],
+    [
+      "add a contact form to the bakery page",
+      "I already started that job two minutes ago, and it still works.",
+    ],
+    // The person asked for no work: an answer about what happened is not checked.
+    ["what did you do for the bakery page?", "I started a job for it."],
+    ["thanks, that is all", "I closed nothing, all good."],
+  ])(
+    "asks the model once only for %j answered with %j",
+    async (words, answer) => {
+      const made = mac();
+      const { model, seen } = scripted([answer, "A second answer."]);
+      expect(
+        await new Supervisor(made.world, model).reply([], words, "chat"),
+      ).toBe(answer);
+      expect(seen).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    // The claim does not open a clause: it speaks of an earlier job.
+    "The bakery page job I started is still running, so the form is not in it yet.",
+    // "Told", "asked" and "ran" are no claims of an action.
+    "As I told you, the bakery job is still running.",
+    "I ran into a problem: nothing started.",
+    "I asked which page you mean and got no answer.",
+    // A word about an earlier time in the claim's own clause.
+    "I started that job two minutes ago, and it still works.",
+    "I already started that job.",
+  ])("says a true answer as it is: %j", async (answer) => {
+    const made = mac();
+    const { model, seen } = scripted([answer, "A second answer."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "also add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(answer);
+    expect(seen).toHaveLength(1);
+  });
+
+  it.each([
+    "I've also added the contact form to the job.",
+    "I added the request to the job and it's already working on it.",
+    "Done, I started it.",
+    "Sure, I have now kicked off that work.",
+    "Okay. I created the form for you.",
+    // The second claim in a sentence, after one about an earlier time.
+    "I started the bakery job two minutes ago, and I added the contact form to it.",
+    // A dash opens a clause, and so do other short openers.
+    "Got it \u2014 I added the form to the job.",
+    "Got it - I added the form to the job.",
+    "Yep I added the form.",
+    "I've gone ahead and added the form to the job.",
+  ])("catches the claim %j", async (answer) => {
+    const made = mac();
+    const { model, seen } = scripted([answer, answer]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "also add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(seen).toHaveLength(2);
+    expect(made.windows).toHaveLength(0);
+  });
+
+  it("catches a claim after a job that did not start, and after a tool that does not exist", async () => {
+    // Four jobs run: the fifth is refused, and the model says that it started.
+    const full = mac();
+    for (const job of [
+      "build page one",
+      "build page two",
+      "build page three",
+      "build page four",
+    ])
+      expect((await full.jobs.start(job)).ok).toBe(true);
+    const liar = scripted([
+      [call("start_job")],
+      "I started that for you.",
+      "I've started it.",
+    ]);
+    expect(
+      await new Supervisor(full.world, liar.model).reply(
+        [],
+        "build a status page for the team",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(full.ids()).toHaveLength(4);
+    // With no task service, the start of a task is handed to a job. When
+    // that job does not start, nothing stands behind the claim.
+    const handed = mac();
+    for (const job of [
+      "build page one",
+      "build page two",
+      "build page three",
+      "build page four",
+    ])
+      expect((await handed.jobs.start(job)).ok).toBe(true);
+    const viaTask = scripted([
+      [call("start_task", { goal: "build a status page for the team" })],
+      "I started that for you.",
+      "I've started it.",
+    ]);
+    expect(
+      await new Supervisor(handed.world, viaTask.model).reply(
+        [],
+        "build a status page for the team",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(handed.ids()).toHaveLength(4);
+    // A tool name that this turn did not offer stands behind nothing.
+    const made = mac();
+    const unknown = scripted([[call("do_everything")], claim, claim]);
+    expect(
+      await new Supervisor(made.world, unknown.model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(notDone);
+  });
+
+  it("drops the note once a tool ran, and then takes the answer", async () => {
+    const opened: string[] = [];
+    const made = mac([session({ name: "payments" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+    };
+    const { model, seen } = scripted([
+      "I opened the payments session and added a retry.",
+      [call("open_session", { session: "payments" })],
+      "I opened the payments session.",
+    ]);
+    expect(
+      await new Supervisor(world, model).reply(
+        [],
+        "open the payments session and add a retry to the webhook test",
+        "chat",
+      ),
+    ).toBe("I opened the payments session.");
+    expect(opened).toEqual(["payments"]);
+    expect(seen[1]!.system).toContain("A check of your last draft");
+    expect(seen[2]!.system).not.toContain("A check of your last draft");
+  });
+
+  it("does not check an answer after a tool that acts ran in the turn", async () => {
+    // The code typed the person's words: "I told ..." is true.
+    const sent: string[] = [];
+    const made = mac([session({ name: "docs" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, text) => {
+        sent.push(`${item.name}: ${text}`);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    const { model, seen } = scripted(["I told docs to run the linter."]);
+    expect(
+      await new Supervisor(world, model).reply(
+        [],
+        "tell docs: run the linter",
+        "chat",
+      ),
+    ).toBe("I told docs to run the linter.");
+    expect(seen).toHaveLength(1);
+    expect(sent).toEqual(["docs: run the linter"]);
+    // A tool that only reads does not count: the claim is checked.
+    const read = mac();
+    const twice = scripted([[call("job_result")], claim, claim]);
+    expect(
+      await new Supervisor(read.world, twice.model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(notDone);
+  });
+});
+
 describe("the state says when no job was started", () => {
   const stateOf = async (made: ReturnType<typeof mac>) => {
     const { model, seen } = scripted(["Okay."]);
