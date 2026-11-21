@@ -596,6 +596,33 @@ to the deploy fix one" opens it. After a question about the sessions in the
 same message ("what's waiting on me? open it"), ClawdTime makes sure that the
 second part is not left out.
 
+"Ok show me", with nothing after it, can open one session only: the one that
+you and ClawdTime just spoke of. Your last message and its answer must name
+exactly one session, by its full name or as "the payments one". "Show me"
+can also ask for words ("what did the job find?", then "show me"), so
+ClawdTime decides from the conversation whether to open that session; no
+other session can open for it. Right after a job started, and while a task is
+not over, "show me" means that work and opens no session. A question mark
+makes it a question, and "no, show me" is not read this way. A bare "show me"
+never starts work.
+
+When a request to see fits more than one session ("show me the one that's
+still working", "open the payments one"), and it is your whole message,
+ClawdTime asks in a fixed form: "Which one: deploy fix or payments tests?".
+Answer with a name, or with its place: "the second one", "the first", "the
+last one", "the latter". A place is read only against that question, while it
+is the last message and at most ten minutes old. For a list in ClawdTime's
+free words, a place opens nothing, also with more words after it ("the
+second one you listed"): say the name. ClawdTime does not ask this
+question when you ask for several sessions ("the payments ones"), or when the
+exchange just before names one of them ("show me the payments one again").
+
+"No wait, the other one that's still working", after a request to see one
+session, opens the one other session in that state. With two sessions in all,
+"the other one" is the other. When two fit, ClawdTime works out which one you
+mean, or asks. Words that take it back at the end ("the other one, no wait")
+open nothing.
+
 Right after you asked to see a session, your next message can be only the
 session, within ten minutes: "no wait, the other one", "and the docs one",
 "the web one" as the answer to "which one?". A remark is none: "now the docs

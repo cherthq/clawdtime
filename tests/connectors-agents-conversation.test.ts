@@ -346,6 +346,10 @@ describe("words for a session that runs are never a job", () => {
     "tell everyone to run the tests again",
     "tell fix to run the tests again",
     "tell deploy to run the tests again",
+    // A place in a list names no session to type into.
+    "tell the second one to run the tests again",
+    "ask the first to run the tests again",
+    "tell the last one to run the tests again",
     // "A docs agent" can be a new one.
     "ask a docs agent to run the tests again",
     "ask another docs session to run the tests again",
@@ -365,6 +369,29 @@ describe("words for a session that runs are never a job", () => {
   ];
   it.each(unasked)("types nothing by itself for %j", async (words) => {
     expect((await run(words, ["Okay."])).typed, words).toEqual([]);
+  });
+
+  it("types nothing by itself for a place in a list, also with one session on the board", async () => {
+    for (const words of [
+      "tell the second one to run the tests again",
+      "tell the first one to run the tests again",
+      "ask the last one to run the tests again",
+    ]) {
+      const one = await run(
+        words,
+        ["Okay."],
+        [session({ name: "deploy fix" })],
+      );
+      expect(one.typed, words).toEqual([]);
+    }
+    // And it is still work for a new agent, as before.
+    const job = await run(
+      "tell the second one to build a landing page",
+      [[call("start_job")], "Okay."],
+      [session({ name: "deploy fix" })],
+    );
+    expect(job.typed).toEqual([]);
+    expect(job.windows).toHaveLength(1);
   });
 
   it('types nothing by itself for words with no instruction after "to"', async () => {
@@ -2232,11 +2259,12 @@ describe("a session opens only when the person asks to see it", () => {
   const refusal =
     "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
   /** A Mac with two sessions, and what was opened. The model always asks to open `wanted`. */
-  const opening = (wanted: string) => {
+  const opening = (wanted: string, more: AgentSession[] = []) => {
     const opened: string[] = [];
     const made = mac([
       session({ name: "payments" }),
       session({ id: "2", name: "docs" }),
+      ...more,
     ]);
     const world: SupervisorWorld = {
       ...made.world,
@@ -2945,7 +2973,10 @@ describe("a session opens only when the person asks to see it", () => {
       "hmm, a different one",
     ]) {
       // The model asks for payments again: the session that was just shown.
-      const stubborn = opening("payments");
+      // With three sessions, the code cannot say which other one is meant.
+      const stubborn = opening("payments", [
+        session({ id: "3", name: "login page" }),
+      ]);
       await new Supervisor(stubborn.world, stubborn.model).reply(
         asked,
         words,
@@ -2955,6 +2986,10 @@ describe("a session opens only when the person asks to see it", () => {
       expect(stubborn.results().join(" "), words).toContain(
         "The person asks for another session than payments",
       );
+      // With two sessions, the other one is docs: the code opens it, whatever the model asks for.
+      const two = opening("payments");
+      await new Supervisor(two.world, two.model).reply(asked, words, "chat");
+      expect(two.opened, words).toEqual(["docs"]);
       // The model takes the other one: it opens.
       const follows = opening("docs");
       await new Supervisor(follows.world, follows.model).reply(
@@ -3077,6 +3112,692 @@ describe("a session opens only when the person asks to see it", () => {
       "chat",
     );
     expect(echo.opened).toEqual([]);
+  });
+});
+
+describe("a request to see that points back at the conversation", () => {
+  const three = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "payments tests" }),
+    session({ id: "102-ghi", pid: 102, name: "docs", state: "idle" }),
+  ];
+  /** One turn after `history`. `steps` is the model's script. What opened is given back. */
+  const see = async (
+    history: ChatMessage[],
+    words: string,
+    steps: (ToolCall[] | string)[],
+    sessions = three(),
+    before?: (world: SupervisorWorld) => void,
+  ) => {
+    const made = mac(sessions);
+    const opened: string[] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+    };
+    before?.(world);
+    const { model, seen } = scripted(steps);
+    const answer = await new Supervisor(world, model).reply(
+      history,
+      words,
+      "chat",
+    );
+    return { opened, answer, seen, windows: made.windows };
+  };
+  /** A model that asks to open a session of its own choice. */
+  const opens = (name: string): (ToolCall[] | string)[] => [
+    [call("open_session", { session: name })],
+    "Okay.",
+  ];
+  const aboutPayments = () => [
+    said("user", "how long has the payments one been running?"),
+    said(
+      "assistant",
+      "The payments tests session has been running for 3 minutes.",
+    ),
+  ];
+  const whichOfTwo = () => [
+    said("user", "show me the one that's still working"),
+    said("assistant", "Which one: deploy fix or payments tests?"),
+  ];
+
+  describe('"ok show me", with nothing after it', () => {
+    it.each([
+      "ok show me",
+      "show me",
+      "show me then",
+      "yeah show me please",
+      "yeah, show me",
+      "ok so can you show me",
+      "can I see",
+      "show us",
+    ])(
+      "lets the model open the one session of the last exchange for %j, and no other",
+      async (words) => {
+        // The model asks for another session: the one in focus opens.
+        const turn = await see(aboutPayments(), words, opens("docs"));
+        expect(turn.opened, words).toEqual(["payments tests"]);
+      },
+    );
+
+    it('opens nothing by itself: "show me" can ask for words', async () => {
+      for (const history of [
+        aboutPayments(),
+        [
+          said("user", "what did the job find?"),
+          said(
+            "assistant",
+            "The job found two failing tests in the docs build.",
+          ),
+        ],
+        [
+          said("user", "what does the error say?"),
+          said("assistant", "The docs build fails on a missing import."),
+        ],
+        [
+          said("user", "what is the plan for docs?"),
+          said("assistant", "First the schema, then the api."),
+        ],
+      ]) {
+        const turn = await see(history, "ok show me", ["Here it is in words."]);
+        expect(turn.opened, JSON.stringify(history.map((m) => m.text))).toEqual(
+          [],
+        );
+        expect(turn.seen).toHaveLength(1);
+      }
+    });
+
+    it("knows a session by a part of its name with a word for a session, in either message", async () => {
+      for (const answer of [
+        "The payments session has been running for 3 minutes.",
+        "It has been running for 3 minutes.",
+        "That one has been running for 3 minutes.",
+      ]) {
+        const turn = await see(
+          [
+            said("user", "how long has the payments one been running?"),
+            said("assistant", answer),
+          ],
+          "ok show me",
+          opens("docs"),
+        );
+        expect(turn.opened, answer).toEqual(["payments tests"]);
+      }
+      // Two sessions fit "the payments one": none is named.
+      const two = await see(
+        [
+          said("user", "how long has the payments one been running?"),
+          said("assistant", "Which do you mean?"),
+        ],
+        "ok show me",
+        opens("payments tests"),
+        [
+          session({ name: "payments tests" }),
+          session({ id: "101-def", pid: 101, name: "payments web" }),
+        ],
+      );
+      expect(two.opened).toEqual([]);
+      // Words of an answer that fit a title, with no name: none is named.
+      const loose = await see(
+        [
+          said("user", "anything about payments?"),
+          said("assistant", "The tests for payments pass."),
+        ],
+        "ok show me",
+        opens("payments tests"),
+      );
+      expect(loose.opened).toEqual([]);
+    });
+
+    it("opens nothing where the last exchange names no single session, also when the model asks to", async () => {
+      for (const history of [
+        // The first message of a conversation.
+        [],
+        // "Show me" asks for words here.
+        [
+          said("user", "what did the job find?"),
+          said("assistant", "It found three files that are too large."),
+        ],
+        [
+          said("user", "what does the error say?"),
+          said("assistant", "It says that the port is in use."),
+        ],
+        // Two sessions.
+        [
+          said("user", "what is everyone doing?"),
+          said(
+            "assistant",
+            "deploy fix and payments tests work, and docs is idle.",
+          ),
+        ],
+        // Named two exchanges ago.
+        [
+          ...aboutPayments(),
+          said("user", "thanks"),
+          said("assistant", "Any time."),
+        ],
+        // Older than ten minutes.
+        aboutPayments().map((message) => ({
+          ...message,
+          at: now - 11 * 60 * 1000,
+        })),
+        // A notice came after the answer.
+        [...aboutPayments(), said("assistant", "docs is done.")],
+      ]) {
+        const turn = await see(history, "show me", opens("docs"));
+        expect(turn.opened, JSON.stringify(history.map((m) => m.text))).toEqual(
+          [],
+        );
+      }
+    });
+
+    it.each([
+      "can I see?",
+      "show me?",
+      "show me then, what is the plan",
+      "show me the money",
+      "show me how",
+      "show me later",
+      "show me, no wait",
+      "no show me",
+      "nope show me",
+      "not now, show me",
+      "wait show me",
+      "I see",
+      "let's see",
+      "showing off",
+      "you never show me",
+      "don't show me",
+    ])("opens nothing for %j, also when the model asks to", async (words) => {
+      const turn = await see(aboutPayments(), words, opens("payments tests"));
+      expect(turn.opened, words).toEqual([]);
+    });
+
+    it("means the job, not a session, right after a job started, also in the same second", async () => {
+      for (const late of [0, 800]) {
+        const made = mac(three());
+        made.clock.now = now + late;
+        const opened: string[] = [];
+        const world: SupervisorWorld = {
+          ...made.world,
+          focus: async (item) => {
+            opened.push(String(item.name));
+            return { ok: true };
+          },
+        };
+        const work = "fix the failing test in deploy fix";
+        const started = await new Supervisor(world, wantsJob().model).reply(
+          [],
+          work,
+          "chat",
+        );
+        expect(made.windows).toHaveLength(1);
+        const history: ChatMessage[] = [
+          { role: "user", text: work, at: now + late, via: "chat" },
+          { role: "assistant", text: started, at: now + late, via: "chat" },
+        ];
+        await new Supervisor(world, scripted(opens("deploy fix")).model).reply(
+          history,
+          "show me",
+          "chat",
+        );
+        expect(opened, String(late)).toEqual([]);
+      }
+    });
+
+    it("means the task, not a session, while a task is not over", async () => {
+      const turn = await see(
+        [
+          said("user", "start a task to fix the docs readme"),
+          said("assistant", "The task started."),
+        ],
+        "ok show me",
+        opens("docs"),
+        three(),
+        (world) => {
+          world.tasks = {
+            current: () => ({
+              id: "t1",
+              goal: "fix the docs readme",
+              state: "working",
+              summary: "",
+              question: null,
+              choices: [],
+              canAnswer: false,
+              canAccept: false,
+              canCancel: true,
+            }),
+            canStart: () => false,
+            start: async () => ({ ok: true, message: "started" }),
+            answer: async () => ({ ok: true, message: "answered" }),
+            accept: async () => ({ ok: true, message: "accepted" }),
+            cancel: async () => ({ ok: true, message: "cancelled" }),
+          } as unknown as NonNullable<SupervisorWorld["tasks"]>;
+        },
+      );
+      expect(turn.opened).toEqual([]);
+    });
+
+    it("asks for no work: no job starts for it, also through the claim check", async () => {
+      // The model calls the tool that starts a job: the gate refuses.
+      for (const history of [
+        [],
+        aboutPayments(),
+        [
+          said("user", "what is the plan for docs?"),
+          said("assistant", "First the schema, then the api."),
+        ],
+      ]) {
+        const direct = await see(history, "ok show me", [
+          [call("start_job")],
+          "Okay.",
+        ]);
+        expect(direct.windows).toHaveLength(0);
+        // An answer that claims an action, then a job: no job starts either.
+        const claimed = await see(history, "ok show me", [
+          "Sure, I showed you the plan above.",
+          [call("start_job")],
+          "Okay.",
+        ]);
+        expect(claimed.windows).toHaveLength(0);
+        for (const asked of claimed.seen)
+          expect(asked.system).not.toContain("so call start_job now");
+      }
+    });
+
+    it("has the claim check point at the session in focus, where there is one", async () => {
+      // The answer says that it opened something, and no tool ran: the note
+      // names the tool that opens, and the gate opens the session in focus.
+      const turn = await see(aboutPayments(), "ok show me", [
+        "I opened it for you.",
+        ...opens("docs"),
+      ]);
+      expect(turn.opened).toEqual(["payments tests"]);
+      expect(turn.seen[1]!.system).toContain("so call open_session now");
+    });
+
+    it("does not make the claim check ask for a session to open", async () => {
+      // "Show me" asked for words: an answer that says "I showed you" is not
+      // followed by a note to call open_session.
+      const turn = await see(
+        [
+          said("user", "what is the plan?"),
+          said("assistant", "The plan has three steps."),
+        ],
+        "show me",
+        ["Sure, I showed you the plan above.", ...opens("docs")],
+      );
+      expect(turn.opened).toEqual([]);
+      for (const asked of turn.seen)
+        expect(asked.system).not.toContain("so call open_session now");
+    });
+  });
+
+  describe("a request that fits more than one session", () => {
+    it("asks which one by itself, in a fixed form", async () => {
+      const state = await see([], "show me the one that's still working", [
+        "unused",
+      ]);
+      expect(state.answer).toBe("Which one: deploy fix or payments tests?");
+      expect(state.opened).toEqual([]);
+      expect(state.seen).toHaveLength(0);
+      const byName = await see(
+        [],
+        "open the payments one",
+        ["unused"],
+        [
+          session({ name: "payments api" }),
+          session({ id: "101-def", pid: 101, name: "payments web" }),
+          session({ id: "102-ghi", pid: 102, name: "payments docs" }),
+          session({ id: "103-jkl", pid: 103, name: "deploy fix" }),
+        ],
+      );
+      expect(byName.answer).toBe(
+        "Which one: payments api, payments web or payments docs?",
+      );
+      expect(byName.opened).toEqual([]);
+    });
+
+    it("asks nothing by itself for more than one session, or where the exchange before says which", async () => {
+      const payments = () => [
+        session({ name: "payments api" }),
+        session({ id: "101-def", pid: 101, name: "payments web" }),
+        session({ id: "102-ghi", pid: 102, name: "docs", state: "idle" }),
+      ];
+      // The person asks for more than one.
+      for (const words of [
+        "show me the payments ones",
+        "show me the payments sessions",
+        "open both payments sessions",
+      ]) {
+        const turn = await see([], words, ["Here are both."], payments());
+        expect(turn.answer, words).toBe("Here are both.");
+      }
+      // The exchange just before names one of them: the model knows which.
+      for (const history of [
+        [
+          said("user", "open payments web"),
+          said("assistant", "Opened payments web."),
+        ],
+        [
+          said("user", "payments web is the one I work on"),
+          said("assistant", "Noted."),
+        ],
+      ]) {
+        const turn = await see(
+          history,
+          "show me the payments one again",
+          opens("payments web"),
+          payments(),
+        );
+        expect(turn.answer).toBe("Okay.");
+      }
+    });
+
+    it("leaves it to the model when the message says more, when something waits, or when one fits", async () => {
+      // More than the request.
+      const more = await see(
+        [],
+        "show me the one that's still working and make it bigger",
+        ["Which of the two?"],
+      );
+      expect(more.answer).toBe("Which of the two?");
+      // A request of an agent waits.
+      const waiting = await see(
+        [],
+        "show me the one that's still working",
+        ["A request waits."],
+        three(),
+        (world) => void waits(world),
+      );
+      expect(waiting.answer).toBe("A request waits.");
+      // One session is in that state: the model opens it, as before.
+      const one = await see([], "show me the one that's idle", opens("docs"));
+      expect(one.opened).toEqual(["docs"]);
+      // A session with no name of its own is among them: the model asks.
+      const nameless = await see(
+        [],
+        "show me the one that's still working",
+        ["Which one do you mean?"],
+        [
+          session({ name: "deploy fix" }),
+          session({ id: "101-def", pid: 101, name: null, project: "app" }),
+        ],
+      );
+      expect(nameless.answer).toBe("Which one do you mean?");
+    });
+  });
+
+  describe("a place in the question that the code asked", () => {
+    it.each([
+      ["the second one", "payments tests"],
+      ["the second", "payments tests"],
+      ["second one please", "payments tests"],
+      ["the 2nd one", "payments tests"],
+      ["the last one", "payments tests"],
+      ["the latter", "payments tests"],
+      ["um the first one", "deploy fix"],
+      ["first one", "deploy fix"],
+      ["the first", "deploy fix"],
+      ["the former", "deploy fix"],
+      ["show me the second one", "payments tests"],
+      ["ok open the first one", "deploy fix"],
+    ])("opens by itself what %j means", async (words, name) => {
+      const turn = await see(whichOfTwo(), words, ["It is in front now."]);
+      expect(turn.opened, words).toEqual([name]);
+      expect(turn.windows, words).toHaveLength(0);
+    });
+
+    it("reads the names of the question in its order, also with a name that holds another", async () => {
+      const sessions = [
+        session({ name: "payments" }),
+        session({ id: "101-def", pid: 101, name: "payments web" }),
+        session({ id: "102-ghi", pid: 102, name: "build or deploy" }),
+      ];
+      const asked = [
+        said("user", "show me the one that's still working"),
+        said(
+          "assistant",
+          "Which one: payments web, build or deploy or payments?",
+        ),
+      ];
+      for (const [words, name] of [
+        ["the first one", "payments web"],
+        ["the second one", "build or deploy"],
+        ["the third one", "payments"],
+        ["the last one", "payments"],
+      ] as const) {
+        const turn = await see(asked, words, ["Okay."], sessions);
+        expect(turn.opened, words).toEqual([name]);
+      }
+    });
+
+    it("does not take the model's other choice", async () => {
+      const turn = await see(whichOfTwo(), "the second one", opens("docs"));
+      expect(turn.opened).toEqual(["payments tests"]);
+    });
+
+    it("opens nothing for a place that the question does not have, or for one that is taken back", async () => {
+      for (const words of [
+        "the third one",
+        "the fifth one",
+        "the second one, no wait",
+        "the second one, actually no",
+        "the second one, nope",
+        "um the second one, sorry no",
+        "the second one, never mind",
+        "the second one?",
+        "the second one later",
+        "the second one failed",
+        "the last one was better",
+      ]) {
+        const turn = await see(whichOfTwo(), words, opens("payments tests"));
+        expect(turn.opened, words).toEqual([]);
+      }
+    });
+
+    it("reads a place only against its own question, as the last message", async () => {
+      const place = "the second one";
+      for (const history of [
+        // A list in the model's own words.
+        [
+          said("user", "show me the one that's still working"),
+          said(
+            "assistant",
+            "The deploy fix session and the payments tests session are still working.",
+          ),
+        ],
+        // Another question of ClawdTime, after it opened a session.
+        [
+          said("user", "show me payments tests"),
+          said(
+            "assistant",
+            "Opened payments tests. Should I ask deploy fix or docs for a summary?",
+          ),
+        ],
+        // A session that is named as not meant.
+        [
+          said("user", "show me the one that waits"),
+          said(
+            "assistant",
+            "Not payments tests: docs and deploy fix wait for you.",
+          ),
+        ],
+        // A notice came after the question.
+        [...whichOfTwo(), said("assistant", "docs is done.")],
+        // The question is older than ten minutes.
+        whichOfTwo().map((message) => ({
+          ...message,
+          at: now - 11 * 60 * 1000,
+        })),
+        // Nobody asked to see a session.
+        [
+          said("user", "what is everyone doing?"),
+          said("assistant", "Which one: deploy fix or payments tests?"),
+        ],
+      ]) {
+        const turn = await see(history, place, opens("payments tests"));
+        expect(turn.opened, JSON.stringify(history.map((m) => m.text))).toEqual(
+          [],
+        );
+      }
+      // A session of the question is gone from the board.
+      const gone = await see(whichOfTwo(), place, opens("docs"), [
+        session({ name: "payments tests" }),
+        session({ id: "102-ghi", pid: 102, name: "docs", state: "idle" }),
+      ]);
+      expect(gone.opened).toEqual([]);
+    });
+
+    it("reads a place with more words after it the same way, and a name that opens with such a word as a name", async () => {
+      const listed = [
+        said("user", "what is running?"),
+        said("assistant", "deploy fix, payments tests and docs."),
+      ];
+      for (const words of [
+        "show me the second one you listed",
+        "show me the last one I asked about",
+        "open the first one you said",
+      ]) {
+        const turn = await see(listed, words, opens("docs"));
+        expect(turn.opened, words).toEqual([]);
+        const results = turn.seen.flatMap((asked) =>
+          asked.messages
+            .filter((message) => message.role === "tool")
+            .map((message) => String(message.content)),
+        );
+        expect(results.join(" "), words).toContain("the name of the session");
+        // No question of the code for it either.
+        expect(turn.answer, words).toBe("Okay.");
+      }
+      // A session that is named "first draft" or "last mile" opens by its name.
+      for (const name of ["first draft", "last mile"]) {
+        const turn = await see(
+          listed,
+          `show me ${name}`,
+          ["It is in front now."],
+          [
+            session({ name }),
+            session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+          ],
+        );
+        expect(turn.opened, name).toEqual([name]);
+      }
+    });
+
+    it("opens nothing for a place in a list of free words, also in a request of its own", async () => {
+      const listed = [
+        said("user", "what is everyone doing?"),
+        said(
+          "assistant",
+          "deploy fix and payments tests are working, and docs is idle.",
+        ),
+      ];
+      for (const words of [
+        "show me the second one",
+        "show me the last one",
+        "ok open the first one",
+      ]) {
+        // A model can read its own list wrongly: its choice does not open.
+        const turn = await see(listed, words, opens("docs"));
+        expect(turn.opened, words).toEqual([]);
+        const results = turn.seen.flatMap((asked) =>
+          asked.messages
+            .filter((message) => message.role === "tool")
+            .map((message) => String(message.content)),
+        );
+        expect(results.join(" "), words).toContain("the name of the session");
+      }
+    });
+  });
+
+  it("opens by itself the one other session that the words fit, after a request to see", async () => {
+    const four = () => [
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "payments tests" }),
+      session({ id: "102-ghi", pid: 102, name: "docs", state: "idle" }),
+      session({ id: "103-jkl", pid: 103, name: "login page", state: "idle" }),
+    ];
+    const shown = [
+      said("user", "show me the payments one"),
+      said("assistant", "I opened the payments tests session."),
+    ];
+    for (const words of [
+      "no wait, the other one that's still working",
+      "the other one that is working",
+      "not that one, the one that's still running",
+      "sorry, the other one which is busy",
+    ]) {
+      const turn = await see(shown, words, ["It is in front now."], four());
+      expect(turn.opened, words).toEqual(["deploy fix"]);
+    }
+    // The model's other choice does not stand against it.
+    const wrong = await see(
+      shown,
+      "no wait, the other one that's still working",
+      opens("docs"),
+      four(),
+    );
+    expect(wrong.opened).toEqual(["deploy fix"]);
+    // Two other sessions fit: the code opens nothing by itself.
+    for (const words of [
+      "no wait, the other one that's idle",
+      "no wait, the other one",
+      "another one",
+    ]) {
+      const turn = await see(shown, words, ["Which one?"], four());
+      expect(turn.opened, words).toEqual([]);
+    }
+    // No other session is in that state.
+    const none = await see(
+      shown,
+      "the other one that's waiting",
+      ["None of them waits."],
+      four(),
+    );
+    expect(none.opened).toEqual([]);
+    // Two sessions in all: "the other one" is the other.
+    const pair = () => [
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "payments tests" }),
+    ];
+    const two = await see(shown, "no, the other one", ["Okay."], pair());
+    expect(two.opened).toEqual(["deploy fix"]);
+    // A third session with no name of its own can be the one that is meant.
+    const nameless = await see(
+      shown,
+      "no, the other one",
+      ["Which one?"],
+      [
+        ...pair(),
+        session({ id: "104-mno", pid: 104, name: null, project: "app" }),
+      ],
+    );
+    expect(nameless.opened).toEqual([]);
+    // The person takes it back: nothing opens, also when the model asks to.
+    for (const words of [
+      "the other one, no wait",
+      "the other one, actually no",
+      "not that one, nope",
+    ]) {
+      const turn = await see(shown, words, opens("deploy fix"), pair());
+      expect(turn.opened, words).toEqual([]);
+    }
+    // Nobody asked to see a session before: nothing opens.
+    const asked = [
+      said("user", "how is the payments one doing?"),
+      said("assistant", "payments tests works."),
+    ];
+    const talked = await see(
+      asked,
+      "and the other one that's still working",
+      ["deploy fix works too."],
+      four(),
+    );
+    expect(talked.opened).toEqual([]);
   });
 });
 

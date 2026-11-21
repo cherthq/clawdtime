@@ -893,6 +893,97 @@ const seeState =
 const seePointer =
   /^(?:it|that|this|them|(?:the|that|this)\s+(?:other\s+)?(?:one|session|window|terminal|tab)|the\s+other(?:\s+one)?|another\s+one|a\s+different\s+one)$/i;
 /**
+ * A place in a list, as the thing to see: "the second one", "the last",
+ * "2nd one", "the latter". It means a session of the list that ClawdTime's
+ * last answer gave.
+ */
+const seePlace =
+  /^(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|former|latter)(?:\s+(?:one|session|window|terminal|tab))?$/i;
+/** The place that the words name and nothing else, or null. "First" at the end of other words is no place: "open docs first". */
+const placeOf = (words: string) =>
+  seePlace
+    .exec(
+      words
+        .trim()
+        .replace(/(?:\s+(?:please|pls|now|then|again|too|for\s+me))+$/i, "")
+        .trim(),
+    )?.[1]
+    ?.toLowerCase() ?? null;
+/** What can stand before a bare "show me": a filler, a yes or a polite opening. Not "no", "not" or "wait". */
+const bareLead =
+  /^(?:(?:please|ok|okay|so|then|now|and|also|hey|hi|clawdtime|just|well|yes|yeah|yep|yup|sure|alright|right|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+/** The bare request: "show me", with nothing after it. It points at what the conversation just spoke of. */
+const seeBare = /^(?:show(?:\s+(?:me|us))?|(?:can|could|may)\s+i\s+see)$/i;
+/**
+ * The whole message is a bare "show me": nothing after it, only a filler or
+ * a polite opening before it, and no question mark. It asks for no work, and
+ * it asks to see a session only where the conversation just spoke of one.
+ */
+const bareSeeWords = (spoken: string) => {
+  if (/\?/.test(spoken)) return false;
+  const clauses = clausesOf(spoken);
+  const last = clauses.at(-1);
+  if (
+    last === undefined ||
+    clauses.slice(0, -1).some((clause) => clause.replace(bareLead, "").trim())
+  )
+    return false;
+  return seeBare.test(
+    last
+      .replace(bareLead, "")
+      .replace(
+        /(?:\s+(?:please|pls|now|then|for\s+me|quickly|real\s+quick))+$/i,
+        "",
+      )
+      .trim(),
+  );
+};
+/** A thing to see that opens with a place word: "the second one", "the last one I asked about". */
+const placeWord =
+  /^(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|former|latter)\b/i;
+/** The state that the words say of a session: "that's still working", "which is idle". */
+const stateSaid = (words: string): AgentSession["state"] | null => {
+  const said =
+    /\b(?:that|which)(?:\s+(?:is|was)|['\u2019]s)?\s+(?:still\s+|currently\s+)?(working|running|busy|idle|done|finished|waiting|stuck)\b/i
+      .exec(words)?.[1]
+      ?.toLowerCase();
+  return said === undefined
+    ? null
+    : /^(?:working|running|busy)$/.test(said)
+      ? "working"
+      : /^(?:idle|done|finished)$/.test(said)
+        ? "idle"
+        : "needs_you";
+};
+/**
+ * The question that the code itself asks when a request to see fits more
+ * than one session: "Which one: deploy fix or payments tests?". Its form is
+ * fixed, so that "the second one" can be read against it for sure.
+ */
+const whichOne = (names: string[]) =>
+  `Which one: ${names.slice(0, -1).join(", ")} or ${names.at(-1)}?`;
+/** The names in that question, in its order, or null when the text is not that question for these names. */
+const namesOfWhichOne = (text: string, known: string[]): string[] | null => {
+  const found = /^Which one: (.+)\?$/.exec(text.trim());
+  if (!found) return null;
+  // Longest name first: a name can hold another one, a comma or an "or".
+  const byLength = [...known].sort((a, b) => b.length - a.length);
+  const names: string[] = [];
+  let rest = found[1]!;
+  while (rest) {
+    const name = byLength.find((known) => rest.startsWith(known));
+    if (!name) return null;
+    names.push(name);
+    rest = rest.slice(name.length);
+    if (!rest) break;
+    const mark = /^(?:, | or )/.exec(rest);
+    if (!mark) return null;
+    rest = rest.slice(mark[0].length);
+    if (!rest) return null;
+  }
+  return names.length >= 2 && whichOne(names) === text.trim() ? names : null;
+};
+/**
  * A session that is described, as people say it on a call: "the Terminal
  * session with the Claude Code checking the lines", "the one that fixes the
  * login bug", "the one you started". It opens with "the", "that", "this" or
@@ -1163,6 +1254,8 @@ function asksForWork(spoken: string, allow: { dont?: boolean } = {}): boolean {
       text,
     );
   return (
+    // "Ok show me": it asks to see something, never for work.
+    !bareSeeWords(text) &&
     !asksAbout(text) &&
     !/^(?:should|shall|does|am|may|might)\b|^do\s+(?:we|i|you|they|it)\b/i.test(
       text,
@@ -2517,7 +2610,13 @@ export class Supervisor {
         .find((found) => found);
       if (!thing || seeAsks.test(thing)) continue;
       // A name, a word that points at a session, or a session that is described.
-      if (this.namesOnlyASession(thing) || this.describesASession(thing))
+      // "Show me the second one": a place in a list points at a session, as
+      // "that one" does.
+      if (
+        this.namesOnlyASession(thing) ||
+        this.describesASession(thing) ||
+        placeOf(thing) !== null
+      )
         asked = { clauses, at, thing };
     }
     return asked;
@@ -2615,7 +2714,19 @@ export class Supervisor {
    * one is stuck" is a remark.
    */
   private asksToSeeNow(turn: Turn, spoken: string) {
-    if (this.seeRequest(spoken)) return true;
+    if (this.seeRequest(spoken)) {
+      // "Show me the second one": a place is read only against the question
+      // that the code itself asked. A list in free words cannot be read for
+      // sure, by the code or by a model.
+      const thing = this.seeAsked(spoken)?.thing ?? "";
+      return (
+        !this.pointsIntoAList(thing) ||
+        (placeOf(thing) !== null &&
+          this.placeReferent(turn, thing)?.kind === "one")
+      );
+    }
+    // "Ok show me", right after talk about one session.
+    if (this.bareSee(turn, spoken)) return true;
     const before = [...turn.history]
       .reverse()
       .find((message) => message.role === "user");
@@ -2627,13 +2738,217 @@ export class Supervisor {
       return false;
     if (isQuestion(spoken) || new RegExp(`\\b${workVerb}\\b`, "i").test(spoken))
       return false;
-    const named = clausesOf(spoken)
-      .map((clause) => clause.replace(seeLead, "").trim())
+    const clauses = clausesOf(spoken);
+    // "The other one, no wait", "the second one, sorry no": the last clause
+    // names nothing and takes the words back. Before a name such words open
+    // the correction ("no wait, the other one").
+    const last = clauses.at(-1) ?? "";
+    if (
+      last.replace(seeLead, "").trim() === "" &&
+      /\b(?:no|nope|not|wait|actually|oops)\b/i.test(last)
+    )
+      return false;
+    const named = clauses
+      // "First" can open a clause ("first show me docs"), and it is a place
+      // too: "first one" stays whole.
+      .map((clause) =>
+        placeOf(clause) !== null ? clause : clause.replace(seeLead, "").trim(),
+      )
       .filter(Boolean);
     return (
       named.length > 0 &&
-      named.every((clause) => this.namesOnlyASession(clause))
+      named.every((clause) =>
+        // A place answers only the question that the code itself asked.
+        placeOf(clause) !== null
+          ? this.placeReferent(turn, clause)?.kind === "one"
+          : this.namesOnlyASession(clause),
+      )
     );
+  }
+  /**
+   * The one session that the exchange just before speaks of: the person's
+   * last message and ClawdTime's answer to it, at most ten minutes old, name
+   * exactly one session. None when they name two sessions
+   * or none, when the last message is not an answer to the person, when a
+   * job started in that exchange ("it" is then the job), and while a task
+   * is not over.
+   */
+  private inFocus(turn: Turn): AgentSession | null {
+    const answer = turn.history.at(-1);
+    const asked = turn.history.at(-2);
+    if (
+      !answer ||
+      !asked ||
+      answer.role !== "assistant" ||
+      asked.role !== "user" ||
+      this.world.now() - answer.at > 10 * 60 * 1000 ||
+      // A job knows its start by the second.
+      this.jobsNow(1).some(
+        (job) => job.startedAt >= Math.floor(asked.at / 1000) * 1000,
+      )
+    )
+      return null;
+    // A task that is not over: "it" can be the task.
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+    } catch {
+      task = null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    // A session is named by its full name, or by a part of its name with a
+    // word for a session that fits no other: "the payments one", "the
+    // payments session". Other words of an answer name none, however well
+    // they fit a title.
+    const named = new Set<AgentSession>();
+    for (const text of [asked.text, answer.text]) {
+      for (const session of this.world.board()?.sessions ?? [])
+        if (saidAsWords(title(session), text)) named.add(session);
+      for (const found of text.matchAll(
+        /\b(?:the|that|this|my)\s+(?:[\p{L}\p{N}'-]+\s+){1,3}?(?:one|session|agent)\b/giu,
+      )) {
+        const session = this.namedToTell(found[0]);
+        if (session) named.add(session);
+      }
+    }
+    const [only] = [...named];
+    return named.size === 1 && only && only.name !== null ? only : null;
+  }
+  /**
+   * "Ok show me", with nothing after it: the session that the exchange just
+   * before speaks of, and only that one. "Show me" often asks for words
+   * ("what did the job find?", then "show me"), and the name of a session
+   * can stand in such an answer ("the docs build"). So the code never opens
+   * for it by itself: the model, which reads the conversation, calls the
+   * tool, and the gate lets it open this one session and no other. With no
+   * such session it is no request to see one. A question mark makes it a
+   * question, and "no show me" is none: only a filler or a polite opening
+   * can stand before it.
+   */
+  private bareSee(turn: Turn, spoken: string): AgentSession | null {
+    return bareSeeWords(spoken) ? this.inFocus(turn) : null;
+  }
+  /**
+   * The thing to see opens with a place word and is no name of a session:
+   * "the second one", "the last one I asked about", "the first one you
+   * listed". Such words point into a list. They are read only against the
+   * question that the code itself asked. "First draft", for a session of
+   * that name, is a name.
+   */
+  private pointsIntoAList(thing: string) {
+    return (
+      placeWord.test(thing.trim()) &&
+      !(this.world.board()?.sessions ?? []).some((session) =>
+        saidAsWords(title(session), thing),
+      )
+    );
+  }
+  /**
+   * The sessions that a request to see fits, when it fits more than one and
+   * the code can name them all: the words fit several names ("the payments
+   * one", with payments api and payments web), or they describe a session by
+   * its state ("the one that's still working") and several are in it. Two to
+   * four sessions, each with a name of its own; else none. None for a thing
+   * in the plural, and none where the exchange just before names one of them.
+   */
+  private seeCandidates(turn: Turn, spoken: string): AgentSession[] {
+    const asked = this.seeAsked(spoken);
+    if (!asked || !this.seeRequest(spoken)) return [];
+    const see = this.seeWords(spoken);
+    if (
+      see.pronoun ||
+      this.pointsIntoAList(asked.thing) ||
+      // "The payments ones", "both payments sessions": the person asks for
+      // more than one.
+      /\b(?:ones|sessions|agents|windows|terminals|tabs|both|all|every|each)\b/i.test(
+        asked.thing,
+      )
+    )
+      return [];
+    const sessions = this.world.board()?.sessions ?? [];
+    const state = stateSaid(asked.thing);
+    const core = asked.thing.replace(seeTail, "").replace(seeState, "").trim();
+    let fit: AgentSession[] = [];
+    if (state !== null && /^(?:the|that)\s+(?:one|session)$/i.test(core))
+      fit = sessions.filter((session) => session.state === state);
+    else if (state === null) {
+      try {
+        const picked = this.pick("", see.words);
+        fit = picked.kind === "many" ? picked.sessions : [];
+      } catch {
+        fit = [];
+      }
+    }
+    fit = fit.filter((session) => !see.ruledOut.includes(session));
+    const names = fit.map((session) => title(session).toLowerCase());
+    return fit.length >= 2 &&
+      fit.length <= 4 &&
+      fit.every((session) => session.name !== null) &&
+      new Set(names).size === names.length &&
+      // The exchange just before names one of them ("show me the payments
+      // one again", after "Opened payments web."): the model, which reads
+      // the conversation, knows which one.
+      !fit.includes(this.inFocus(turn) as AgentSession)
+      ? fit
+      : [];
+  }
+  /**
+   * What a place means ("the second one"): the session at that place in the
+   * question that the code itself asked ("Which one: deploy fix or payments
+   * tests?"). Null when the words name no place. "unsure" when the last
+   * message is not that question, is older than ten minutes, or names a
+   * session that is not on the board now: a list in free words cannot be
+   * read for sure. "none" when the question has no such place.
+   */
+  private placeReferent(
+    turn: Turn,
+    words: string,
+  ):
+    | { kind: "one"; session: AgentSession }
+    | { kind: "none" }
+    | { kind: "unsure" }
+    | null {
+    const place =
+      placeOf(words) ?? placeOf(words.replace(seeLead, "").trim()) ?? null;
+    if (place === null) return null;
+    const unsure = { kind: "unsure" } as const;
+    const last = turn.history.at(-1);
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      this.world.now() - last.at > 10 * 60 * 1000
+    )
+      return unsure;
+    const sessions = (this.world.board()?.sessions ?? []).filter(
+      (session) => session.name !== null,
+    );
+    const titles = sessions.map(title);
+    if (new Set(titles).size !== titles.length) return unsure;
+    const names = namesOfWhichOne(last.text, titles);
+    if (!names) return unsure;
+    const listed = names.map((name) =>
+      sessions.find((session) => title(session) === name)!,
+    );
+    const order: Record<string, number> = {
+      first: 0,
+      "1st": 0,
+      former: 0,
+      second: 1,
+      "2nd": 1,
+      third: 2,
+      "3rd": 2,
+      fourth: 3,
+      "4th": 3,
+      fifth: 4,
+      "5th": 4,
+      last: listed.length - 1,
+      latter: listed.length - 1,
+    };
+    // "The former" and "the latter" are for a list of two.
+    if ((place === "former" || place === "latter") && listed.length !== 2)
+      return unsure;
+    const found = listed[order[place] ?? -1];
+    return found ? { kind: "one", session: found } : { kind: "none" };
   }
   /**
    * The sessions that a correction rules out: the message says "the other
@@ -2660,6 +2975,24 @@ export class Supervisor {
     } catch {
       return [];
     }
+  }
+  /**
+   * "No wait, the other one that's still working", after a request to see
+   * one session: the one other session that those words fit. With a state
+   * in the words, it is the only other session in that state; without one,
+   * it is the only other session there is. When two fit, or none, the code
+   * names none: the model asks, or opens its own choice as before.
+   */
+  private otherReferent(turn: Turn, spoken: string): AgentSession | null {
+    const not = this.otherThan(turn, spoken);
+    if (not.length !== 1) return null;
+    const state = stateSaid(spoken);
+    const others = (this.world.board()?.sessions ?? []).filter(
+      (session) =>
+        !not.includes(session) && (state === null || session.state === state),
+    );
+    // A session with no name of its own can be the one that is meant.
+    return others.length === 1 && others[0]!.name !== null ? others[0]! : null;
   }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
@@ -2858,10 +3191,38 @@ export class Supervisor {
         // correction of such a request ("show me the payments one", then "no
         // wait, the other one"). The model alone opens nothing: a session
         // that comes to the front takes the screen.
+        const see = this.seeWords(spoken);
+        // "Ok show me": the session that the exchange just before speaks of,
+        // and no other. The model's choice does not stand against it.
+        const bare = this.bareSee(turn, spoken);
+        // "The second one": its place in the question that the code itself
+        // asked, and nowhere else.
+        const place = bare ? null : this.placeReferent(turn, see.words);
+        if (place?.kind === "none")
+          return "The person's words name a place that your question did not have. Ask them which session they mean.";
+        if (
+          place?.kind === "unsure" ||
+          // "The second one you listed", "the last one I asked about".
+          (!bare &&
+            place === null &&
+            this.pointsIntoAList(this.seeAsked(spoken)?.thing ?? ""))
+        )
+          return "The person's words name a place in a list, and that cannot be read for sure here. Open nothing. Ask them to say the name of the session.";
         if (!this.asksToSeeNow(turn, spoken))
           return "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
-        const see = this.seeWords(spoken);
-        const pick = this.pick(String(args.session ?? ""), see.words);
+        // "The other one that's still working", as a correction: the one
+        // other session that those words fit.
+        const other =
+          !bare && place === null && !this.seeRequest(spoken)
+            ? this.otherReferent(turn, spoken)
+            : null;
+        const pick: SessionPick = bare
+          ? { kind: "one", session: bare }
+          : place?.kind === "one"
+            ? { kind: "one", session: place.session }
+            : other
+              ? { kind: "one", session: other }
+              : this.pick(String(args.session ?? ""), see.words);
         if (pick.kind !== "one") return this.unclear(pick);
         const { session } = pick;
         if (see.ruledOut.includes(session))
@@ -3764,17 +4125,39 @@ export class Supervisor {
       // it, where nothing else can own the sentence. The gate of that tool
       // decides as for a call of the model. The model then words the answer
       // and does what else the message asks ("... and make it bigger").
+      // The whole message asks to see a session, and its words fit more
+      // than one: the code asks which one, in a form that it can read again
+      // ("the second one"). A message that says more goes to the model.
+      if (nothingWaits && clausesOf(words).length === 1) {
+        let several: AgentSession[] = [];
+        try {
+          several = this.seeCandidates(turn, words);
+        } catch {
+          // The board cannot be read: the model answers.
+        }
+        if (several.length) return whichOne(several.map(title));
+      }
       if (
-        !turn.closed &&
-        !hasDecisionTarget() &&
-        computerApproval() === null &&
-        !(waitingTask && !taskIsOver(waitingTask)) &&
-        this.seeRequest(words)
+        nothingWaits &&
+        (this.seeRequest(words) || this.asksToSeeNow(turn, words))
       ) {
         const see = this.seeWords(words);
         let named: SessionPick = { kind: "none" };
         try {
-          named = this.pick("", see.words);
+          // "The second one", also as the answer to the code's own
+          // question: its place there. "No wait, the other one that's still
+          // working": the one other session in that state. Any other answer
+          // to "which one?" is the model's to open, as before, and so is a
+          // bare "show me": that can ask for words.
+          const place = this.placeReferent(turn, see.words);
+          if (place?.kind === "one")
+            named = { kind: "one", session: place.session };
+          else if (place === null && this.seeRequest(words))
+            named = this.pick("", see.words);
+          else if (place === null && !this.bareSee(turn, words)) {
+            const other = this.otherReferent(turn, words);
+            if (other) named = { kind: "one", session: other };
+          }
         } catch {
           // The board cannot be read: the model opens it.
         }
@@ -3883,7 +4266,10 @@ export class Supervisor {
             // session to see.
             ((asksForWork(words) ||
               asksForSize(words) ||
-              this.seeRequest(words)) &&
+              this.seeRequest(words) ||
+              // "Ok show me", with one session in focus: the gate lets the
+              // model open that one and no other.
+              this.bareSee(turn, words) !== null) &&
               claimsAction(reply.text) &&
               !acted())
           ) {
@@ -3896,7 +4282,7 @@ export class Supervisor {
             const tool =
               sizeClaim || asksForSize(words)
                 ? "session_window"
-                : this.seeRequest(words)
+                : this.seeRequest(words) || this.bareSee(turn, words)
                   ? "open_session"
                   : "start_job";
             recheck = `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`;
