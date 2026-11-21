@@ -1130,6 +1130,37 @@ export function agentNamed(spoken: string): JobAgent | null {
   return out ? otherAgent(out) : null;
 }
 /** The person's sentence can be about something from before: it has a word that points back. */
+/**
+ * The sentence is more work on a thing from before: "add a form to it",
+ * "make them blue", "fix that one". A job that still runs on that thing is
+ * then waited for. It is narrow, because a wait costs the person time: the
+ * word must stand in the first clause, before any "and", "then", "that",
+ * "when" or comma. In "find the big files and list them" and "write a script
+ * and run it" the word names a thing of this sentence, and "it is" names
+ * nothing. "One html file" and "the same way" count no thing of a job.
+ */
+const followsUp = (spoken: string) => {
+  const words = spoken
+    .trim()
+    .replace(
+      /^(?:(?:ok|okay|so|and|then|also|now|next|please|great|nice|perfect|thanks|cool)[,.!\s]+)+/i,
+      "",
+    );
+  const first =
+    words.split(
+      /[,;:.!?\n]|\b(?:and|then|that(?!\s+one\b)|which|when|if|so|because|while|until|what|how|where|who|whether|but|or)\b/i,
+    )[0] ?? "";
+  return (
+    // "Those" and "these" count at the end of the clause only: in "close
+    // those windows" they stand before the thing that the sentence names.
+    /\b(?:it|them|that one|this one)\b|\b(?:those|these)(?:\s+(?:too|also|again|now|please|as well))*\s*$/i.test(
+      first,
+    ) &&
+    !/\bit\s+(?:is|was|will|would|has|had|can|could|should)\b|\bit['\u2019]s\b|\b(?:is|was|does|did|will|can)\s+it\b/i.test(
+      first,
+    )
+  );
+};
 const pointsBack = (spoken: string) =>
   /\b(?:it|that|this|those|these|them|one|ones|same|again|previous|last|earlier|before|above|there)\b/i.test(
     spoken,
@@ -1263,7 +1294,9 @@ function jobLine(job: JobFacts, now: number) {
   const head = `Job "${clean(job.job, 120)}", started ${elapsed(job.startedAt, now)} ago`;
   return job.done
     ? `${head}, is done. Its answer: ${clean(job.result ?? "", 600)}`
-    : `${head}, still works.`;
+    : job.waiting
+      ? `${head}, has not begun: it waits for the job before it.`
+      : `${head}, still works.`;
 }
 /** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
 const modelSilent =
@@ -1678,6 +1711,7 @@ export class Supervisor {
         .slice(-6)
         .map((message) => message.text),
       refersBack: pointsBack(spoken),
+      followsUp: followsUp(spoken),
     };
   }
   /** What the person hears in a turn that decides no request. */

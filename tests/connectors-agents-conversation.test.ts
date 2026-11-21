@@ -1715,6 +1715,101 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("more work on a job that still runs", () => {
+  const work = "build a small landing page for my bakery in one html file";
+  const started =
+    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  const waiting =
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.";
+
+  it("waits for that job when the message points back at it, and says so", async () => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, wantsJob().model).reply(
+        [said("user", work), said("assistant", started)],
+        "also add a contact form to it",
+        "chat",
+      ),
+    ).toBe(waiting);
+    expect(made.file("start.command")).toContain(
+      `[[ ! -e '${join(made.folder, made.ids()[0]!, "result.md")}' && `,
+    );
+    expect(made.file("prompt.txt")).toContain("also add a contact form to it");
+    // The state says that the second job waits, not that it works.
+    const { model, seen } = scripted(["One works, one waits."]);
+    await new Supervisor(made.world, model).reply(
+      [],
+      "what are my jobs doing?",
+      "chat",
+    );
+    const state = seen[0]!.messages.find(
+      (message) => message.role === "tool",
+    )!.content!;
+    expect(state).toContain(
+      'Job "also add a contact form to it", started 0s ago, has not begun: it waits for the job before it.',
+    );
+    expect(state).toContain(`Job "${work}", started 1m ago, still works.`);
+  });
+
+  it.each([
+    "check which lines are healthy and give me a short list",
+    // "One" counts no thing of the job before.
+    "bro just make one landing page for the cafe na, in one html file",
+    "build the same page for the cafe as last time",
+    "write tests for the login page before the release",
+    // The word names a thing of this sentence, after "and", or names nothing.
+    "find the big files in my home folder and list them",
+    "open a tunnel for port 3000 and send it to me",
+    "check the disk space and tell me how full it is",
+    "write a script that renames the photos and run it",
+    "find out what time it is in Tokyo",
+    "write a script that renames the photos when it runs",
+    "check if it is safe to upgrade node",
+    "build a page, then deploy it",
+    // "Those" and "these" before a noun name a thing of this sentence.
+    "move these screenshots into a folder",
+    "delete those old logs in my downloads",
+    "close those windows",
+  ])("starts beside it for other work: %j", async (words) => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, wantsJob().model).reply(
+        [said("user", work), said("assistant", started)],
+        words,
+        "chat",
+      ),
+    ).toBe(started);
+    expect(made.file("start.command")).not.toContain("waits for the job");
+  });
+
+  it.each([
+    "also add a contact form to it",
+    "then make them blue",
+    "now fix that one",
+    "add a footer to those",
+    "nice, now add a dark mode to it",
+    "make it bigger and add a footer",
+    "ok so fix this one please",
+    "add a footer to these too",
+    "now fix those",
+  ])("waits for it for more work on its thing: %j", async (words) => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, wantsJob().model).reply(
+        [said("user", work), said("assistant", started)],
+        words,
+        "chat",
+      ),
+    ).toBe(waiting);
+  });
+});
+
 describe("then ask it", () => {
   const sessions = () => [
     session({ name: "deploy fix" }),
