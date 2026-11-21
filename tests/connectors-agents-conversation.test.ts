@@ -7579,10 +7579,13 @@ describe("a decision that the person said: the model is asked once more, and a y
     });
   });
   describe("a bare word after a message of ClawdTime decides a request only when that message put the request before the person", () => {
-    const noYes =
+    /** What the person is told, and what the model is told behind it. */
+    const yesForThePerson =
       'A "yes" approves a request only as the answer to my own question about that request. Nothing is approved. The request still waits: say "approve" or "deny".';
-    const noNo =
-      'A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny".';
+    const forTheModel =
+      "(For you, the model: their word is the answer to your own last message, which was not about this request. Reply to that answer first, in words: say what your last message offered, and do not say that you did it. You may add one short sentence that the request still waits. Call no tool for this word.)";
+    const noYes = `${yesForThePerson} ${forTheModel}`;
+    const noNo = `A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny". ${forTheModel}`;
     const toolSaid = (run: ReturnType<typeof scripted>) =>
       run.seen[1]!.messages.filter((message) => message.role === "tool")[0]!
         .content;
@@ -8000,7 +8003,7 @@ describe("a decision that the person said: the model is asked once more, and a y
       ];
       expect(
         await new Supervisor(made.world, null).reply(history, "yes", "chat"),
-      ).toBe(noYes);
+      ).toBe(yesForThePerson);
       expect(decided(ids[0]!)).toBeNull();
       const after: ChatMessage[] = [
         {
@@ -8011,6 +8014,455 @@ describe("a decision that the person said: the model is asked once more, and a y
       ];
       await new Supervisor(made.world, null).reply(after, "yes", "chat");
       expect(decided(ids[0]!)).toBe("allow");
+    });
+  });
+  describe("what ClawdTime says after the gate refused a bare word", () => {
+    const other =
+      "The payments tests look flaky. Should I keep an eye on them?";
+    const steer =
+      'A "yes" approves a request only as the answer to my own question about that request. Nothing is approved. The request still waits: say "approve" or "deny". (For you, the model: their word is the answer to your own last message, which was not about this request. Reply to that answer first, in words: say what your last message offered, and do not say that you did it. You may add one short sentence that the request still waits. Call no tool for this word.)';
+    const pushDesk = () => {
+      const made = desk(["git push origin main"]);
+      made.told(other);
+      return made;
+    };
+    const waitsPush = waits("git push origin main");
+
+    it("tells the model that the word answered its own last message", async () => {
+      const made = pushDesk();
+      const got = await made.say("ok", [
+        [decide(made.ids[0]!, "allow")],
+        "Got it, I'll watch the payments tests.",
+      ]);
+      expect(got.reply).toBe("Got it, I'll watch the payments tests.");
+      expect(
+        got.run.seen[1]!.messages.filter(
+          (message) => message.role === "tool",
+        )[0]!.content,
+      ).toBe(steer);
+      expect(made.decided(made.ids[0]!)).toBeNull();
+    });
+
+    it("says only the person's sentence when no model is there", async () => {
+      const { ids, decided, made } = pushDesk();
+      const history: ChatMessage[] = [
+        {
+          ...said("assistant", other),
+          at: made.clock.now - 5_000,
+          via: "chat",
+        },
+      ];
+      expect(
+        await new Supervisor(made.world, null).reply(history, "ok", "chat"),
+      ).toBe(
+        'A "yes" approves a request only as the answer to my own question about that request. Nothing is approved. The request still waits: say "approve" or "deny".',
+      );
+      expect(decided(ids[0]!)).toBeNull();
+    });
+
+    it.each([
+      "I approved the push request for deploy fix, and I'll watch for flaky payments tests now.",
+      "I approved the fix deploy to push the code to main. The push is underway now.",
+      'I approved the "git push origin main" for deploy fix.',
+      "Approved. I'll watch the tests too.",
+      "Done, it's approved now.",
+      "I've allowed it.",
+      "The push is approved.",
+      // The work of the request said as done, or the approval said as the person's.
+      "I pushed origin main for deploy fix as you allowed, it should trigger the deployment now.",
+      "I pushed it to main.",
+      "The push is underway now.",
+      "The push goes ahead with your approval.",
+      "You approved the push, so it runs.",
+      // The claim stands in a clause of its own.
+      "I approved the push to main and will watch those payments tests for flakiness now.",
+      "Sure, I approved it, and I will keep an eye on the tests.",
+    ])(
+      "asks the model once more for %j, and then says what is true",
+      async (claim) => {
+        // A true second answer stands.
+        const first = pushDesk();
+        const got = await first.say("ok", [
+          [decide(first.ids[0]!, "allow")],
+          claim,
+          "Got it, I'll watch the payments tests.",
+        ]);
+        expect(got.reply, claim).toBe("Got it, I'll watch the payments tests.");
+        expect(
+          got.run.seen
+            .at(-1)!
+            .system.split("\n")
+            .find((line) => line.startsWith("A check of your last draft")),
+          claim,
+        ).toBe(
+          "A check of your last draft: it said that a request was approved or denied, and none was decided in this turn. Answer again with what is true: say what the person's message asks for, and do not say that anything was approved or denied.",
+        );
+        // The claim twice: fixed words.
+        const second = pushDesk();
+        const again = await second.say("ok", [
+          [decide(second.ids[0]!, "allow")],
+          claim,
+          claim,
+        ]);
+        expect(again.reply, claim).toBe(`Nothing was decided. ${waitsPush}`);
+        expect(second.decided(second.ids[0]!), claim).toBeNull();
+      },
+    );
+
+    it("catches a claim about the request that waits, also when the model called no tool", async () => {
+      const made = pushDesk();
+      const got = await made.say("ok", [
+        "I approved the git push for you.",
+        "I approved the git push for you.",
+      ]);
+      expect(got.reply).toBe(`Nothing was decided. ${waitsPush}`);
+      // A denial that was never made.
+      const denied = pushDesk();
+      expect(
+        (
+          await denied.say("no", [
+            [decide(denied.ids[0]!, "deny")],
+            "I denied the push.",
+            "I denied the push.",
+          ])
+        ).reply,
+      ).toBe(`Nothing was decided. ${waitsPush}`);
+    });
+
+    it.each([
+      "I have not approved anything.",
+      "I haven't approved the push: say approve for that.",
+      "Nothing is approved yet.",
+      "You approved the docs deploy earlier.",
+      "I approved the docs deploy earlier today.",
+      "I can approve it when you say approve.",
+      "If you say approve, it is approved at once.",
+      "The push still awaits your approval.",
+      "Deploy fix is running the staging script, and the push is not approved.",
+      "The payments tests session is in progress.",
+      "I have not pushed anything.",
+      "I will watch the tests, and I have not approved the push.",
+      "Should I approve the push?",
+      "Got it, I'll watch the payments tests.",
+    ])("lets %j stand: it claims no decision of this turn", async (answer) => {
+      // The draft comes twice: it can go back to the model once when it
+      // leaves the person's word with no reply, and it is never replaced.
+      const made = pushDesk();
+      const got = await made.say("ok", [
+        [decide(made.ids[0]!, "allow")],
+        answer,
+        answer,
+      ]);
+      expect(got.reply, answer).toBe(answer);
+    });
+
+    it("lets a true word about a decision stand", async () => {
+      // The decision was made in this turn.
+      const made = desk(["git push origin main"]);
+      made.told(waitsPush);
+      const got = await made.say("approve it", [
+        [decide(made.ids[0]!, "allow")],
+        "I approved the push.",
+      ]);
+      expect(got.reply).toBe("I approved the push.");
+      expect(made.decided(made.ids[0]!)).toBe("allow");
+      // A decision of an earlier turn, about a request that no longer waits.
+      const two = desk(["rm -rf node_modules"]);
+      two.told("docs is idle.");
+      const report = await two.say("what did you do with the push?", [
+        "I approved the push.",
+        "Second.",
+      ]);
+      expect(report.reply).toBe("I approved the push.");
+    });
+
+    it.each([
+      'Say "approve" to let it push.',
+      'Say "deny" to stop it.',
+      'Say "approve" or "deny" to let that push run or not.',
+      'Say "approve it" to run the push.',
+    ])("does not take %j for words to type into a session", async (answer) => {
+      const made = pushDesk();
+      const got = await made.say("ok", [
+        [decide(made.ids[0]!, "allow")],
+        answer,
+        answer,
+      ]);
+      expect(got.reply, answer).toBe(answer);
+    });
+
+    it.each([
+      "I let it through.",
+      "I gave it the green light.",
+      "Permission granted.",
+      "All set, the push goes out.",
+      "Done, the push is going out.",
+      "The push will go through now.",
+      "Okay, pushing.",
+      "I'll let the push run.",
+      "Okay, I'll let the push go.",
+      "Sure, the push will go ahead.",
+      "The push goes through now.",
+      "The push will run now.",
+      "The push is through.",
+      "The git push goes ahead.",
+      "Okay, the push runs now.",
+      // The request is the subject: whatever the verb.
+      "The push is going now.",
+      "The push is happening now.",
+      "The push is live.",
+      "The push is done.",
+      "The push proceeds.",
+      "The push continues.",
+      "The push gets through.",
+      "The push lands now.",
+      "The push is running.",
+      "The push ran.",
+      "The push went out.",
+      "The push request goes out now.",
+      "The push to main goes out now.",
+      "The push can go through now.",
+      "The push is underway.",
+      "Push goes out now.",
+      "Your push is out.",
+      "The git push is complete.",
+      "The branch is pushed.",
+      // The whole family: it went, it is done, or it may go.
+      "The push has gone through.",
+      "The push has finished.",
+      "The push has landed.",
+      "The push is good to go.",
+      "The push is ok to go.",
+      "The push is free to go.",
+      "The push is set to go.",
+      "The push is a go.",
+      "The push is cleared.",
+      "The push is unblocked.",
+      "The push is accepted.",
+      "The push is confirmed.",
+      "The push is all done.",
+      "The push is on.",
+      "The push succeeded.",
+      "The push worked.",
+      "The push is released.",
+      "The push is merged.",
+    ])(
+      "after a refused call, %j is a claim that it was approved",
+      async (claim) => {
+        const made = pushDesk();
+        const got = await made.say("ok", [
+          [decide(made.ids[0]!, "allow")],
+          claim,
+          claim,
+        ]);
+        expect(got.reply, claim).toBe(`Nothing was decided. ${waitsPush}`);
+        expect(made.decided(made.ids[0]!), claim).toBeNull();
+      },
+    );
+
+    it.each([
+      // It can answer the other offer: the tests.
+      "Consider it done.",
+      "Sure thing.",
+      "All set, I'll watch the tests.",
+      "It will go through once you say approve.",
+      "Nothing goes out until you say approve.",
+      // Words that are about the other work: the sentence names no request.
+      "I'll go through the logs and keep an eye on the tests.",
+      "I'll go through the payments tests.",
+      "Sure, I'll keep an eye on the tests and let them run.",
+      "I'll let it run and watch it.",
+      "The tests are going out to the CI.",
+      "I'll go ahead, it will go out now.",
+      // A word of the request's text in talk about other work.
+      "I'll keep an eye on the main branch tests and let them run.",
+      "The main tests are going out to CI.",
+      "I'll go through the git log for the flaky tests.",
+      "The push to staging goes out at noon in deploy fix.",
+      "I'll let the git log run.",
+      // The request is the subject, and it still waits, or the sentence says what it is.
+      "The push still waits for your approve or deny.",
+      "The push waits.",
+      "The push needs your approve.",
+      "The push is pending.",
+      "The push is waiting.",
+      "The push request is still open.",
+      "The push to main still waits.",
+      "Sure, I'll keep an eye on the payments tests. The push still waits.",
+      "The push is a request of the agent, and it waits.",
+      "The push asks to run git push origin main, and it waits for you.",
+      "Git is the tool that the request uses.",
+      // What the request is or does.
+      "The push updates main.",
+      "The push would overwrite the branch.",
+      "The push looks safe to me.",
+      "The push is safe.",
+      "The push targets main, say approve or deny.",
+      "Git is fine.",
+      "The push is going to need your approve.",
+      "The push runs only after you say approve.",
+      // What is possible is no claim that it happened.
+      "The push would go to origin main.",
+      "The push would run on main.",
+      "The push may run long.",
+      "The push should go out today.",
+      "The push is on hold.",
+      "The push is on the main branch.",
+    ])("after a refused call, %j stands", async (answer) => {
+      const made = pushDesk();
+      const got = await made.say("ok", [
+        [decide(made.ids[0]!, "allow")],
+        answer,
+        answer,
+      ]);
+      expect(got.reply, answer).toBe(answer);
+    });
+
+    it.each([
+      // "Test" is a word of the waiting request, and these are answers
+      // about the tests that ClawdTime asked about.
+      "Test results are in: two flaky ones.",
+      "The test results are in: two flaky ones.",
+      "I'll keep an eye on them. The test suite is slow today.",
+      "Npm is fine, and I'll watch the payments tests.",
+    ])(
+      "with npm test on the desk, the answer %j about the tests stands",
+      async (answer) => {
+        const made = desk(["npm test"]);
+        made.told(other);
+        const got = await made.say("ok", [
+          [decide(made.ids[0]!, "allow")],
+          answer,
+          answer,
+        ]);
+        expect(got.reply, answer).toBe(answer);
+        expect(made.decided(made.ids[0]!), answer).toBeNull();
+      },
+    );
+
+    it("asks the model once more when its draft leaves the person's word with no reply", async () => {
+      const check =
+        "A check of your last draft: it does not reply to the person's word. Their word answered your own last message, which was not about the request. Reply to that in words: say what your last message offered, and do not say that you did it. One short sentence about the request is enough.";
+      for (const draft of [
+        "The request still waits your decision; say approve or deny.",
+        "Approve the push command from deploy fix?",
+        'You need to say "approve" to let it push. Just "ok" won\'t do.',
+        "I said the deploy fix push request is the main thing waiting on you. It still waits your approval or denial.",
+      ]) {
+        const made = pushDesk();
+        const got = await made.say("ok", [
+          [decide(made.ids[0]!, "allow")],
+          draft,
+          "Got it, I'll watch the payments tests. The push still waits.",
+        ]);
+        expect(got.reply, draft).toBe(
+          "Got it, I'll watch the payments tests. The push still waits.",
+        );
+        expect(
+          got.run.seen
+            .at(-1)!
+            .system.split("\n")
+            .find((line) => line.startsWith("A check of your last draft")),
+          draft,
+        ).toBe(check);
+        // The same draft again stands: it is true.
+        const again = pushDesk();
+        expect(
+          (
+            await again.say("ok", [
+              [decide(again.ids[0]!, "allow")],
+              draft,
+              draft,
+              "A third answer that is never asked for.",
+            ])
+          ).reply,
+          draft,
+        ).toBe(draft);
+      }
+    });
+
+    it("does not ask again when the draft speaks to what ClawdTime asked, or when no word was refused", async () => {
+      for (const draft of [
+        "Got it, I'll watch the payments tests.",
+        "Okay, I'll keep an eye on those flaky tests. The push still waits for approve or deny.",
+      ]) {
+        const made = pushDesk();
+        const got = await made.say("ok", [
+          [decide(made.ids[0]!, "allow")],
+          draft,
+          "Second.",
+        ]);
+        expect(got.reply, draft).toBe(draft);
+        expect(got.run.seen, draft).toHaveLength(2);
+      }
+      // No call of decide: the model answered the word itself.
+      const made = pushDesk();
+      const got = await made.say("ok", [
+        "The request still waits your decision; say approve or deny.",
+        "Second.",
+      ]);
+      expect(got.reply).toBe(
+        "The request still waits your decision; say approve or deny.",
+      );
+      expect(got.run.seen).toHaveLength(1);
+    });
+
+    it("a refused call did not act: a start that is claimed after it is caught", async () => {
+      // ClawdTime offered work, the person said "ok", the gate refused the
+      // decision, and the model then asks for a job: its gate refuses too.
+      const made = desk(["git push origin main"]);
+      made.told("Want me to start a job for the footer?");
+      const got = await made.say("ok", [
+        [decide(made.ids[0]!, "allow")],
+        [call("start_job", { job: "build the footer" })],
+        "Started the footer job.",
+        "Started the footer job.",
+      ]);
+      expect(got.reply).toBe(
+        "Nothing was started or changed for that message. Say what I should do, and I do it.",
+      );
+      expect(made.made.windows).toHaveLength(0);
+      expect(made.decided(made.ids[0]!)).toBeNull();
+    });
+
+    it('takes a word of the head in another form as the request\'s name: "I pushed it"', async () => {
+      // No call at all.
+      const made = pushDesk();
+      const got = await made.say("ok", ["I pushed it.", "I pushed it."]);
+      expect(got.reply).toBe(`Nothing was decided. ${waitsPush}`);
+    });
+
+    it("lets a word about a session's own work stand", async () => {
+      const made = pushDesk();
+      const answer = "The push to staging is in progress in deploy fix.";
+      const got = await made.say("and deploy fix?", [answer, "Second."]);
+      expect(got.reply).toBe(answer);
+      // With no session named, the same words are about the request.
+      const other = pushDesk();
+      const claim = "The push is in progress.";
+      expect((await other.say("ok", [claim, claim])).reply).toBe(
+        `Nothing was decided. ${waitsPush}`,
+      );
+    });
+
+    it("still takes a word of decision for a session as an offer of words", async () => {
+      const made = pushDesk();
+      const offer = 'Say "yes" to deploy fix and I type it.';
+      const got = await made.say("hmm", [offer, offer]);
+      expect(got.reply).toBe(
+        'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.',
+      );
+    });
+
+    it("still takes an offer of words for a session as before", async () => {
+      const made = pushDesk();
+      const got = await made.say("hmm what about the tests", [
+        'Say "run the linter" to payments tests and I type it.',
+        'Say "run the linter" to payments tests and I type it.',
+      ]);
+      expect(got.reply).toBe(
+        'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.',
+      );
     });
   });
 });
