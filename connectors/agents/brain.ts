@@ -1141,11 +1141,38 @@ export function earlierSaid(history: ChatMessage[]): string[] {
     .slice(-earlierLines);
 }
 /**
+ * 'Tell payments tests: did the tests pass?': the form that ClawdTime itself
+ * offers for words to a session. The name stands before the colon and the
+ * words after it. Quotes around the whole message are not part of it.
+ */
+const toldForm = (spoken: string) => {
+  const whole = spoken.trim();
+  const inner = /^["'\u201c\u2018]([\s\S]*)["'\u201d\u2019]$/.exec(whole);
+  const found =
+    /^(?:(?:please|ok|okay|so|then|now)[,\s]+)*tell\s+([^:]{1,120}?)\s*:\s*(\S[\s\S]*)$/i.exec(
+      (inner ? inner[1]! : whole).trim(),
+    );
+  return found ? { name: found[1]!.trim(), text: found[2]!.trim() } : null;
+};
+/**
+ * "Then ask it", "tell it": the person wants a session asked or told, and
+ * this message holds no words for it and no name.
+ */
+const asksToAskIt = (text: string) =>
+  /^(?:(?:then|so|ok|okay|well|just|please|yes|yeah)[,\s]+)*(?:(?:can|could|would)\s+you\s+)?(?:ask|tell)\s+(?:it|that|that one|the session|that session|them)(?:\s+(?:then|please|directly))?[.!?]*$/i.test(
+    text.trim(),
+  );
+/**
  * The message is a question about the sessions, the agents, or what waits:
  * the state answers it. An instruction that names a session is not one.
  */
 const asksAboutState = (text: string) =>
   isQuestion(text) &&
+  // "Tell payments tests: did the tests pass?" is words for a session, not a
+  // question to ClawdTime.
+  !/^\s*(?:(?:ok|okay|so|then|please|yes|now)[,\s]+)*(?:tell|ask|say|send|type|reply|answer)\b/i.test(
+    text,
+  ) &&
   /\b(?:status|sessions?|agents?|working|idle|waiting|waits|running|busy|finished|done|ready|completed?|progress|everyone|everybody|up to|doing)\b/i.test(
     text,
   );
@@ -1935,7 +1962,12 @@ export class Supervisor {
         // Return in a terminal that shows a prompt answers that prompt.
         if (this.waitsOnDesk(session))
           return `${title(session)} has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.`;
+        // One message types the same words into a session once.
+        const typed = `typed ${session.id} ${text}`;
+        if (turn.done.has(typed))
+          return `That is typed into ${title(session)} already. Nothing more is typed.`;
         const sent = await this.world.send(session, text);
+        if (sent.ok) turn.done.set(typed, "");
         return sent.ok
           ? `Typed into ${title(session)}.`
           : `${title(session)} runs in a terminal that cannot take text from here.`;
@@ -2315,6 +2347,31 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    // "Then ask it", after the person's question about one session. Nothing
+    // is typed: the code says the sentence that sends that question, with the
+    // session's name and the person's own earlier words. The person then says
+    // it, and the gate for typing reads their message as always.
+    if (asksToAskIt(words)) {
+      const question = [...history]
+        .reverse()
+        .find((message) => message.role === "user");
+      if (
+        question &&
+        question.text !== credentialMarker &&
+        question.text.length <= 300 &&
+        isQuestion(question.text)
+      ) {
+        const asked = clean(question.text, 300);
+        let about: SessionPick = { kind: "none" };
+        try {
+          about = this.pick("", asked);
+        } catch {
+          // The board cannot be read: the model answers.
+        }
+        if (about.kind === "one")
+          return `Say "tell ${title(about.session)}: ${asked}" and I type it.`;
+      }
+    }
     // "Open Claude, and build a page": the person named a coding agent and
     // gave it an instruction for software work. It starts at once, as a
     // direct instruction does, under the same vetoes: the strict reader, no
@@ -2472,11 +2529,68 @@ export class Supervisor {
           },
           { role: "tool", toolCallId: "state_first", content: state },
         );
+        // "Is it done?", when the person's last message before this one
+        // started a job: "it" is that job. The code reads its line too, as
+        // the newest thing that the model sees. Words that fit a session
+        // ("the payments one, is it done?") are about that session.
+        const newest = this.jobsNow(1)[0];
+        const before = [...history]
+          .reverse()
+          .find((message) => message.role === "user");
+        if (
+          newest &&
+          before &&
+          pointsBack(words) &&
+          newest.startedAt >= before.at &&
+          this.pick("", words).kind === "none"
+        )
+          messages.push(
+            {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                { id: "job_first", name: "job_result", arguments: "{}" },
+              ],
+            },
+            {
+              role: "tool",
+              toolCallId: "job_first",
+              content: jobLine(newest, this.world.now()),
+            },
+          );
       } catch {
-        // Nothing is seeded.
+        // Nothing more is seeded.
       }
     }
     try {
+      // The person said the form that ClawdTime offers, with the full name of
+      // one session: the code calls the tool that types, with their words. The
+      // gates of that tool decide as for a call of the model, and the model
+      // words the answer. No second round of "should I type it?".
+      const told = toldForm(words);
+      if (told) {
+        const named = (this.world.board()?.sessions ?? []).filter(
+          (session) => title(session).toLowerCase() === told.name.toLowerCase(),
+        );
+        if (named.length === 1) {
+          const call: ToolCall = {
+            id: "tell_first",
+            name: "type_into_session",
+            arguments: JSON.stringify({
+              session: title(named[0]!),
+              text: told.text,
+            }),
+          };
+          messages.push(
+            { role: "assistant", content: "", toolCalls: [call] },
+            {
+              role: "tool",
+              toolCallId: call.id,
+              content: (await this.run(call, words, via, turn)).slice(0, 6000),
+            },
+          );
+        }
+      }
       for (let step = 0; step < 6; step++) {
         const task = this.world.tasks?.current();
         // Only authoritative flags/counts enter this instruction. Request text

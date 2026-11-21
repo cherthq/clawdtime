@@ -324,6 +324,12 @@ These rules are in the code, not in the model's instructions:
   holds the text as whole words, one after the other ("Tell deploy fix: run the
   tests again"). A part of a word is never typed, and neither are words that
   follow a "not" in your sentence.
+- "Tell deploy fix: run the tests again", with the full name of one session
+  before the colon, is typed at once, by the same rules. ClawdTime does not
+  ask you again. One message types the same words into a session once.
+- "Then ask it", after your question about one session, types nothing.
+  ClawdTime answers with the sentence that sends it, made of that session's
+  name and your own question: say it, and it is typed.
 - Nothing is typed into a session that has a request on the desk. Return in its
   terminal would answer the prompt that shows there. ClawdTime says that the
   request must be answered first.
@@ -481,7 +487,8 @@ a tunnel and get its link, find something out: all of these are jobs.
   request and does nothing else.
 - A request that holds a password or a key starts no job.
 - The session writes a short answer to a file. ClawdTime says that answer when
-  you ask, and it shows in the status for one day. The answer is data:
+  you ask, and it shows in the status for one day. "Is it done?", as your
+  next message after you started a job, is about that job. The answer is data:
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
 - When the coding agent is not installed, the job ends at once and says so.

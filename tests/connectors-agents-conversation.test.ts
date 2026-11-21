@@ -1712,6 +1712,201 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("then ask it", () => {
+  const sessions = () => [
+    session({ name: "deploy fix" }),
+    session({
+      id: "2",
+      name: "payments tests",
+      agent: "codex",
+      agentLabel: "Codex",
+    }),
+  ];
+  const question = "did the tests pass in the payments tests session?";
+
+  it.each([
+    "then ask it",
+    "ask it",
+    "ok then tell it",
+    "can you ask that one?",
+    "so ask that session please",
+  ])(
+    "says the sentence that sends the person's question, for %j, and types nothing",
+    async (words) => {
+      const sent: string[] = [];
+      const { world: base } = mac(sessions());
+      const world: SupervisorWorld = {
+        ...base,
+        send: async (item, text) => {
+          sent.push(`${item.name}: ${text}`);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      // A model that would answer with the state. It is not asked.
+      const { model, seen } = scripted(["It still works."]);
+      const answer = await new Supervisor(world, model).reply(
+        [said("user", question), said("assistant", "It still works.")],
+        words,
+        "chat",
+      );
+      expect(answer).toBe(
+        `Say "tell payments tests: ${question}" and I type it.`,
+      );
+      expect(seen).toHaveLength(0);
+      expect(sent).toEqual([]);
+    },
+  );
+
+  const typing = (list = sessions()) => {
+    const sent: string[] = [];
+    const made = mac(list);
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, text) => {
+        sent.push(`${item.name}: ${text}`);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    return { world, sent };
+  };
+  const toolResults = (
+    seen: { messages: { role: string; content?: string }[] }[],
+  ) =>
+    seen.flatMap((asked) =>
+      asked.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.content),
+    );
+
+  it("types the person's words when they say that sentence, with no choice of the model", async () => {
+    for (const words of [
+      `tell payments tests: ${question}`,
+      `Tell Payments Tests: ${question}`,
+      `"tell payments tests: ${question}"`,
+      `ok, please tell payments tests: ${question}`,
+    ]) {
+      const { world, sent } = typing();
+      // The model only words the answer.
+      const { model, seen } = scripted(["I asked it."]);
+      expect(await new Supervisor(world, model).reply([], words, "chat")).toBe(
+        "I asked it.",
+      );
+      expect(sent).toEqual([`payments tests: ${question}`]);
+      expect(toolResults(seen)).toEqual(["Typed into payments tests."]);
+    }
+  });
+
+  it("types the same words into a session once in one message", async () => {
+    const { world, sent } = typing();
+    // The model asks for the same typing again.
+    const { model, seen } = scripted([
+      [
+        call("type_into_session", {
+          session: "payments tests",
+          text: question,
+        }),
+      ],
+      "I asked it.",
+    ]);
+    await new Supervisor(world, model).reply(
+      [],
+      `tell payments tests: ${question}`,
+      "chat",
+    );
+    expect(sent).toEqual([`payments tests: ${question}`]);
+    expect(toolResults(seen).at(-1)).toBe(
+      "That is typed into payments tests already. Nothing more is typed.",
+    );
+  });
+
+  it.each([
+    // A part of a name is not the name.
+    "tell payments: did the tests pass?",
+    // No session of that name.
+    "tell the billing session: did the tests pass?",
+    // No colon: the model reads it, and the gates of the tool decide.
+    "tell payments tests to stop",
+    // It does not open the message.
+    "do not tell payments tests: stop now",
+    "why did you tell payments tests: stop now",
+    // No words after the colon.
+    "tell payments tests:",
+  ])("types nothing by itself for %j", async (words) => {
+    const { world, sent } = typing();
+    const { model, seen } = scripted(["Which one?"]);
+    await new Supervisor(world, model).reply([], words, "chat");
+    expect(sent).toEqual([]);
+    expect(toolResults(seen)).toEqual([]);
+  });
+
+  it("types nothing by itself when two sessions have that name", async () => {
+    const { world, sent } = typing([
+      session({ name: "payments tests" }),
+      session({ id: "2", name: "payments tests" }),
+    ]);
+    const { model } = scripted(["Which one?"]);
+    await new Supervisor(world, model).reply(
+      [],
+      `tell payments tests: ${question}`,
+      "chat",
+    );
+    expect(sent).toEqual([]);
+  });
+
+  it("keeps the gate of the typing tool: a session that waits for an answer gets no text", async () => {
+    const { world, sent } = typing([session({ name: "payments tests" })]);
+    waits(world);
+    const { model, seen } = scripted(["It waits for your answer first."]);
+    await new Supervisor(world, model).reply(
+      [],
+      `tell payments tests: ${question}`,
+      "chat",
+    );
+    expect(sent).toEqual([]);
+    expect(toolResults(seen).join(" ")).toContain("waits for an answer");
+  });
+
+  it.each([
+    // No question before it.
+    [
+      [
+        said("user", "open the payments tests session"),
+        said("assistant", "Opened."),
+      ],
+      "then ask it",
+    ],
+    // The question fits no single session.
+    [
+      [
+        said("user", "did the build pass?"),
+        said("assistant", "I do not know."),
+      ],
+      "then ask it",
+    ],
+    // The message holds words of its own: the model reads it.
+    [
+      [said("user", question), said("assistant", "It still works.")],
+      "ask it to stop and wait",
+    ],
+    [
+      [said("user", question), said("assistant", "It still works.")],
+      "then ask it why the retry fails",
+    ],
+    // Nothing was said before.
+    [[], "ask it"],
+  ] as const)(
+    "leaves it to the model when the code cannot be sure: %j",
+    async (history, words) => {
+      const { world } = mac(sessions());
+      const { model, seen } = scripted(["Which one?"]);
+      expect(
+        await new Supervisor(world, model).reply([...history], words, "chat"),
+      ).toBe("Which one?");
+      expect(seen).toHaveLength(1);
+    },
+  );
+});
+
 describe("praise, and praise that goes on with work", () => {
   it.each([
     "nice, now add a dark mode to it",
@@ -1839,6 +2034,78 @@ describe("a question about the state", () => {
     }
   });
 
+  it('reads the job first for "is it done?" right after the person started it', async () => {
+    const started =
+      "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+    const work = "build a small landing page for my bakery in one html file";
+    const jobSeed = (
+      messages: { role: string; toolCallId?: string; content?: string }[],
+    ) =>
+      messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "job_first",
+      );
+    const ask = async (
+      history: ChatMessage[],
+      question: string,
+      sessions = [
+        session({ name: "login page" }),
+        session({ id: "2", name: "payments" }),
+      ],
+    ) => {
+      const made = mac(sessions);
+      expect((await made.jobs.start(work)).ok).toBe(true);
+      made.clock.now += 4 * 60_000;
+      const { model, seen } = scripted(["It still works."]);
+      await new Supervisor(made.world, model).reply(history, question, "chat");
+      return seen[0]!.messages;
+    };
+    const justStarted = [said("user", work), said("assistant", started)];
+    for (const question of [
+      "is it done?",
+      "is that one finished?",
+      "is it ready yet?",
+    ]) {
+      const messages = await ask(justStarted, question);
+      // The state, then the job: the job is the newest thing that the model sees.
+      expect(messages.at(-2)).toMatchObject({
+        role: "assistant",
+        toolCalls: [{ name: "job_result", arguments: "{}" }],
+      });
+      expect(messages.at(-1)).toMatchObject({
+        role: "tool",
+        toolCallId: "job_first",
+      });
+      expect(messages.at(-1)!.content).toContain(`Job "${work}"`);
+      expect(messages.at(-1)!.content).toContain("still works");
+    }
+    // Words that fit a session are about that session.
+    expect(
+      jobSeed(await ask(justStarted, "the payments one, is it done?")),
+    ).toBeUndefined();
+    // Nothing points back.
+    expect(
+      jobSeed(await ask(justStarted, "is everyone done?")),
+    ).toBeUndefined();
+    // The person spoke of something else after the job started.
+    const later: ChatMessage = {
+      role: "user",
+      text: "what is the payments session doing?",
+      at: now + 60_000,
+      via: "chat",
+    };
+    expect(
+      jobSeed(
+        await ask(
+          [...justStarted, later, said("assistant", "It works.")],
+          "is it done?",
+        ),
+      ),
+    ).toBeUndefined();
+    // No message of the person before it.
+    expect(jobSeed(await ask([], "is it done?"))).toBeUndefined();
+  });
+
   it("still answers when the state cannot be read first, and offers no task choices by itself", async () => {
     const { world: base } = mac([session({ name: "deploy fix" })]);
     // The board fails once, at the read that the code makes first.
@@ -1887,14 +2154,20 @@ describe("a question about the state", () => {
     "build a small website",
     "thanks, that is all for now",
     "yo",
+    // Words for a session, with a question in them: not a question to ClawdTime.
+    "tell deploy fix: did the tests pass in this session?",
+    "ok ask deploy fix: is the build done?",
   ])("reads no state first for %j", async (sentence) => {
     const { world } = mac([session({ name: "deploy fix" })]);
     const { model, seen } = scripted(["Okay."]);
     await new Supervisor(world, model).reply([], sentence, "chat");
     for (const call of seen)
-      expect(call.messages.some((message) => message.role === "tool")).toBe(
-        false,
-      );
+      expect(
+        call.messages.some(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "state_first",
+        ),
+      ).toBe(false);
   });
 });
 
