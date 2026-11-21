@@ -336,6 +336,9 @@ These rules are in the code, not in the model's instructions:
   can ask you.
 - One message types the same words into a session once. A choice of a task
   is never typed into a session: a click on it answers the task.
+- Words that you take back at the end of the same message are not typed, and
+  ClawdTime says so: "tell deploy fix: delete the release branch, never mind"
+  gets "Okay. Nothing is typed into deploy fix."
 - "Then ask it", after your question about one session, types nothing.
   ClawdTime answers with the sentence that sends it, made of that session's
   name and your own question: say it, and it is typed. It offers that
@@ -364,7 +367,11 @@ message only. For what must last longer, turn [memory](#memory) on.
 A question about the sessions, the agents or what waits is answered from the
 state, which ClawdTime reads before the model answers. When the model service
 is busy or the connection drops, ClawdTime asks it once more before it falls
-back to the plain answer.
+back to the plain answer. A request with no answer after 15 seconds is stuck:
+ClawdTime ends it and asks once more, for 30 seconds at most. With a reasoning
+effort set, the one request keeps 45 seconds. When the model does not answer
+at all and your message was not about the state, ClawdTime says so, says that
+nothing was done, and gives the state.
 
 ### Give it a task
 
