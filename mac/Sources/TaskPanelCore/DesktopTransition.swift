@@ -71,8 +71,14 @@ public enum DesktopAppSelection {
 }
 
 public enum DesktopInputOutcome {
+  public static func invalidResult(command: HandCommand, submitted: Bool) -> HandError {
+    switch command {
+    case .openApp, .switchDesktop: return .transitionUnknown
+    default: return submitted ? .inputUnknown : .failed
+    }
+  }
   public static func failure(_ error: HandError, submitted: Bool, interrupted: Bool) -> HandError {
-    if submitted { return .inputUnknown }
+    if submitted && error != .transitionUnknown { return .inputUnknown }
     return error
   }
 }

@@ -104,8 +104,8 @@ final class DesktopTransitionTests: XCTestCase {
     XCTAssertEqual(DesktopInputOutcome.failure(.stoppedByPerson, submitted: false, interrupted: false), .stoppedByPerson)
     XCTAssertEqual(DesktopInputOutcome.failure(.staleObservation, submitted: false, interrupted: false), .staleObservation)
     for error in HandError.allCases {
-      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: false), .inputUnknown)
-      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: true), .inputUnknown)
+      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: false), error == .transitionUnknown ? .transitionUnknown : .inputUnknown)
+      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: true), error == .transitionUnknown ? .transitionUnknown : .inputUnknown)
     }
   }
   func testWindowSelectorIsExactAndBounded() throws {

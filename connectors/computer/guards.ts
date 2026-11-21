@@ -697,7 +697,7 @@ function checkScreen(
           /^[0-9]$/.test(parsed.key))
       )
         return refuse(
-          "Unverified desktop-navigation shortcuts are not supported. Use open_app with the intended window instead.",
+          "Unverified desktop-navigation shortcuts are not supported. For a specific window use open_app; for one desktop transition ask separately to switch the desktop left or right.",
         );
       return {
         verdict: "run",

@@ -299,6 +299,140 @@ describe("the brain opens an application", () => {
     expect(said).toBe(f.message);
   });
 
+  it.each([
+    ["Switch to the desktop on the left", "chat"],
+    ["Move one desktop right", "voice"],
+    ["Go back to the previous desktop", "call"],
+  ] as const)(
+    "routes %s directly to native hands on %s",
+    async (words, via) => {
+      const f = withExecution();
+      const run = scripted([
+        [call("open_app", { name: "TextEdit" })],
+        "Opened.",
+      ]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        [],
+        words,
+        via,
+      );
+      expect(f.submitted.map((item) => item.text)).toEqual([words]);
+      expect(f.opened).toEqual([]);
+      expect(f.started).toEqual([]);
+      expect(run.offered).toEqual([]);
+      expect(said).toBe(f.message);
+    },
+  );
+
+  it("preserves the original directional request without normalizing it into another command", async () => {
+    const f = withExecution();
+    const words = "  Switch to the desktop on the left  ";
+    await new Supervisor(f.value, null).reply([], words, "call");
+    expect(f.submitted.map((item) => item.text)).toEqual([words]);
+    expect(f.opened).toEqual([]);
+    expect(f.started).toEqual([]);
+  });
+
+  it.each(["running", "uncertain"])(
+    "returns the native %s fence without another route for a directional request",
+    async (state) => {
+      const f = withExecution(state);
+      const run = scripted([
+        [call("open_app", { name: "TextEdit" })],
+        "Opened.",
+      ]);
+      const words = "Move one desktop right";
+      expect(
+        await new Supervisor(f.value, run.model).reply([], words, "call"),
+      ).toBe(f.message);
+      expect(f.submitted.map((item) => item.text)).toEqual([words]);
+      expect(f.opened).toEqual([]);
+      expect(f.started).toEqual([]);
+      expect(run.offered).toEqual([]);
+    },
+  );
+
+  it.each([
+    { nativeWorker: false },
+    { mode: "browser" as const },
+    { configured: false },
+  ])(
+    "refuses unsupported directional execution instead of falling back %#",
+    async (options) => {
+      const f = withExecution("idle", options);
+      const run = scripted([
+        [call("open_app", { name: "TextEdit" })],
+        "Opened.",
+      ]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        [],
+        "Go back to the previous desktop",
+        "call",
+      );
+      expect(said).toBe(
+        "Desktop switching needs the native ClawdTime computer worker. Nothing was switched.",
+      );
+      expect(f.submitted).toEqual([]);
+      expect(f.opened).toEqual([]);
+      expect(f.started).toEqual([]);
+      expect(run.offered).toEqual([]);
+    },
+  );
+
+  it("does not retry or fall back when directional task delivery throws", async () => {
+    const f = withExecution();
+    const submitted: string[] = [];
+    f.value.execution!.submit = async (_id, text) => {
+      submitted.push(text);
+      throw new Error("Result unavailable after delivery");
+    };
+    const run = scripted([[call("open_app", { name: "TextEdit" })], "Opened."]);
+    const words = "Move one desktop right";
+    expect(
+      await new Supervisor(f.value, run.model).reply([], words, "call"),
+    ).toBe(
+      "Computer task delivery is uncertain. It was not retried; check execution status.",
+    );
+    expect(submitted).toEqual([words]);
+    expect(f.opened).toEqual([]);
+    expect(f.started).toEqual([]);
+    expect(run.offered).toEqual([]);
+  });
+
+  it("does not start a directional command while the native worker waits for a person's answer", async () => {
+    const f = withExecution("waiting_for_person");
+    const answered: string[] = [];
+    f.value.execution!.answer = async (text) => {
+      answered.push(text);
+      return { message: "Say continue or stop." };
+    };
+    const said = await new Supervisor(f.value, null).reply(
+      [],
+      "Move one desktop right",
+      "voice",
+    );
+    expect(said).toBe("Say continue or stop.");
+    expect(answered).toEqual(["Move one desktop right"]);
+    expect(f.submitted).toEqual([]);
+    expect(f.opened).toEqual([]);
+    expect(f.started).toEqual([]);
+  });
+
+  it("does not interpret questions or quoted directional phrases as a direct command", async () => {
+    for (const words of [
+      "What does switch to the desktop on the left mean?",
+      'Explain "Move one desktop right"',
+      "Do not go back to the previous desktop",
+    ]) {
+      const f = withExecution();
+      const run = scripted(["Nothing was switched."]);
+      await new Supervisor(f.value, run.model).reply([], words, "chat");
+      expect(f.submitted).toEqual([]);
+      expect(f.opened).toEqual([]);
+      expect(f.started).toEqual([]);
+    }
+  });
+
   it.each(["running", "uncertain"])(
     "does not fall back to Launch Services when the native worker is %s",
     async (state) => {

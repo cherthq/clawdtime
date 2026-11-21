@@ -220,21 +220,53 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// Carbon requires. It identifies combinations, never Mission Control actions.
   func keyIsPermitted(_ combo: KeyCombo) -> Bool {
     let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
+    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: enabledHotKeys())
+  }
+  private func enabledHotKeys() -> [DesktopHotKey]? {
     var array: Unmanaged<CFArray>?
-    var hotKeys: [DesktopHotKey]?
-    if CopySymbolicHotKeys(&array) == noErr, let raw = array?.takeRetainedValue() as? [[String: Any]] {
-      var parsed: [DesktopHotKey] = []
-      var valid = true
-      for item in raw {
-        guard let enabled = item[kHISymbolicHotKeyEnabled as String] as? Bool else { valid = false; break }
-        if !enabled { continue }
-        guard let key = item[kHISymbolicHotKeyCode as String] as? UInt16,
-          let modifiers = item[kHISymbolicHotKeyModifiers as String] as? UInt64 else { valid = false; break }
-        parsed.append(DesktopHotKey(code: key, carbonModifiers: modifiers))
-      }
-      if valid { hotKeys = parsed }
+    guard CopySymbolicHotKeys(&array) == noErr, let raw = array?.takeRetainedValue() as? [[String: Any]] else { return nil }
+    var parsed: [DesktopHotKey] = []
+    for item in raw {
+      guard let enabled = item[kHISymbolicHotKeyEnabled as String] as? Bool else { return nil }
+      if !enabled { continue }
+      guard let key = item[kHISymbolicHotKeyCode as String] as? UInt16,
+        let modifiers = item[kHISymbolicHotKeyModifiers as String] as? UInt64 else { return nil }
+      parsed.append(DesktopHotKey(code: key, carbonModifiers: modifiers))
     }
-    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: hotKeys)
+    return parsed
+  }
+  /// No defaults: the operator must attest both configured actions. Layout
+  /// resolution and public enabled-shortcut inventory are checked independently.
+  func desktopShortcuts() -> DesktopShortcutPair? {
+    let environment = ProcessInfo.processInfo.environment
+    let left = environment["CLAWDTIME_SPACE_LEFT_SHORTCUT"].flatMap(KeyCombo.parse)
+    let right = environment["CLAWDTIME_SPACE_RIGHT_SHORTCUT"].flatMap(KeyCombo.parse)
+    func code(_ combo: KeyCombo?) -> UInt16? {
+      guard let combo else { return nil }
+      if let character = combo.character { return Self.keyCode(printing: character) }
+      // A synthesized plus assumes a US layout; do not attest that assumption.
+      if combo.printing && combo.keyCode != 49 { return nil }
+      return combo.keyCode
+    }
+    return DesktopShortcutConfiguration.validate(left: left, right: right, leftCode: code(left), rightCode: code(right), enabled: enabledHotKeys())
+  }
+  /// Sole bypass of the generic reserved-hotkey guard. The desktop coordinator
+  /// owns qualification and sends exactly one pair; key-up always releases it.
+  func dispatchDesktopShortcut(_ shortcut: DesktopResolvedShortcut, allowed: () async -> HandError?) async -> Result<Void, HandError> {
+    guard let down = CGEvent(keyboardEventSource: source, virtualKey: shortcut.code, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: shortcut.code, keyDown: false) else { return .failure(.failed) }
+    if let refusal = await allowed() { return .failure(refusal) }
+    guard !halted, !Task.isCancelled else { return .failure(.stoppedByPerson) }
+    guard watching, !personActed else { return .failure(.refused) }
+    guard AXIsProcessTrusted() else { return .failure(.noAccessibility) }
+    guard CGPreflightScreenCaptureAccess() else { return .failure(.noScreenRecording) }
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+      session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
+    guard DesktopShortcutConfiguration.isEnabled(shortcut, in: enabledHotKeys()) else { return .failure(.desktopShortcutUnavailable) }
+    post(down, flags: CGEventFlags(rawValue: shortcut.flags))
+    await pause(0.02)
+    post(up, flags: CGEventFlags(rawValue: shortcut.flags))
+    return .success(())
   }
 
   /// The key that prints `character` with no modifier on the keyboard layout in use.

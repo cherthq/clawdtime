@@ -112,6 +112,12 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
       window: text(200).min(1).optional(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("switch_desktop"),
+      direction: z.enum(["left", "right", "previous"]),
+    })
+    .strict(),
   z.object({ kind: z.literal("open_url"), url: text(2000) }).strict(),
   z
     .object({
@@ -160,6 +166,8 @@ export const handErrors = [
   "refused",
   "failed",
   "desktop_disabled",
+  "desktop_shortcut_unavailable",
+  "desktop_history_unavailable",
   "ambiguous_target",
   "unsupported_desktop",
   "target_not_visible",

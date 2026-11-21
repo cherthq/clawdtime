@@ -49,6 +49,8 @@ import type {
 import { HandsTimeout } from "./panel-hands.js";
 import {
   desktopBlockedText,
+  desktopDirection,
+  verifiedDesktopSwitch,
   inputUnknownText,
   sameSurface,
   transitionUnknownText,
@@ -595,13 +597,15 @@ export class ComputerWorker implements DesktopExecutorPort {
     label: string,
   ): Promise<Handed> {
     if (this.halted(run)) return { sent: false, over: true, result: null };
+    const beforeTransition = run.observation;
     const effect = command.kind !== "observe" && command.kind !== "wait";
     // After anything but a look, the screen and the page may be other ones.
     // That holds for a wait too: it waits for the screen to change.
     if (command.kind !== "observe") {
       run.fresh = false;
       run.page = null;
-      if (command.kind === "open_app") run.observation = null;
+      if (command.kind === "open_app" || command.kind === "switch_desktop")
+        run.observation = null;
     }
     let result: HandResult;
     try {
@@ -622,7 +626,10 @@ export class ComputerWorker implements DesktopExecutorPort {
       this.finish(run, "uncertain", "input_unknown", inputUnknownText);
     } else if (
       result.error === "transition_unknown" ||
-      !verifiedActivation(command, result)
+      !verifiedActivation(command, result) ||
+      (command.kind === "switch_desktop" &&
+        result.ok &&
+        (!beforeTransition || !verifiedDesktopSwitch(beforeTransition, result)))
     ) {
       result = { ...result, ok: false, error: "transition_unknown" };
       this.finish(
@@ -679,6 +686,8 @@ export class ComputerWorker implements DesktopExecutorPort {
 
   private async loop(run: Run) {
     try {
+      const direction = desktopDirection(run.goal);
+      if (direction) return await this.navigateDesktop(run, direction);
       for (;;) {
         if (this.halted(run)) return;
         if (run.step >= this.maxSteps)
@@ -757,6 +766,65 @@ export class ComputerWorker implements DesktopExecutorPort {
       // A fault here is not proof that nothing was sent.
       this.finish(run, "uncertain", "fault", faultText);
     }
+  }
+
+  /** A user-authored direction is a one-shot operation outside the planner loop.
+   * Neither a model, a continuation, nor a failed verification can repeat it. */
+  private async navigateDesktop(
+    run: Run,
+    direction: "left" | "right" | "previous",
+  ) {
+    const looked = await this.hand(
+      run,
+      { kind: "observe", image: true, elements: true },
+      "Check desktop before switching",
+    );
+    if (looked.over) return;
+    const before = looked.result?.observation;
+    if (
+      run.takeover ||
+      !looked.result?.ok ||
+      before?.surfaceEpoch === undefined
+    )
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_ready",
+        "The desktop could not be checked or you took over. No switch was attempted. Ask again when ready.",
+      );
+    run.observation = before;
+    run.step++;
+    const handed = await this.hand(
+      run,
+      { kind: "switch_desktop", direction },
+      `Switch one desktop ${direction}`,
+    );
+    if (handed.over) return;
+    if (!handed.result?.ok)
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_sent",
+        "The panel refused the desktop switch before dispatch. No retry was attempted; check permissions and shortcut setup, then ask again.",
+      );
+    if (run.takeover || !verifiedDesktopSwitch(before, handed.result))
+      return this.finish(
+        run,
+        "uncertain",
+        "transition_unknown",
+        transitionUnknownText,
+      );
+    // Do not carry the old action target or start another planned action. A later
+    // user request always obtains its own full observation and native input lease.
+    run.observation = null;
+    run.page = null;
+    run.fresh = false;
+    return this.finish(
+      run,
+      "completed",
+      "desktop_switched",
+      `Verified one desktop transition ${direction}.`,
+    );
   }
 
   /** Checks one planned action and, when it may run, sends it. */

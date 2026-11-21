@@ -339,12 +339,15 @@ engine, with the switch off, with no key, and for one that a test started.
 
 ## Limits
 
-The native worker's `open_app` now uses [verified desktop activation](DESKTOP_SPACES.md)
-with optional exact window selection, bounded settling and old-coordinate retirement.
-Initial scope is ordinary windows on one main display; physical acceptance is
-pending. Unknown activation stops the task without retry. No shortcut cycling is
-enabled. The desktop feature's independent panel switch and zoom integration seam
-are documented in that guide.
+The native worker supports [desktop navigation and verified activation](DESKTOP_SPACES.md).
+`open_app` selects an exact window; separate complete requests such as “Move one
+desktop right” dispatch one `switch_desktop` action outside the planner loop.
+Directional navigation requires explicit enabled Mission Control shortcut mappings.
+Both paths settle and retire old coordinates; unverified transitions never retry.
+Initial switching scope is distinguishable ordinary desktops on one main display;
+physical acceptance remains pending. That restriction does not gate unrelated
+click/type input. The guide covers setup, previous-desktop history, full-display
+sharing, independent disable control, zoom integration and acceptance gaps.
 
 | Limit                          | Value                                       |
 | ------------------------------ | ------------------------------------------- |

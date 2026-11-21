@@ -70,9 +70,9 @@ import TaskPanelCore
     desktop.onTransition = { [weak self] phase, epoch in
       guard let self else { return }
       switch phase {
-      case .switching: self.label = "Switching to the requested window"; self.guide.hide()
-      case .waiting: self.label = "Waiting for the target window to settle"
-      case .ready: self.label = "Target window verified"
+      case .switching: self.label = "Switching the work surface"; self.guide.hide()
+      case .waiting: self.label = "Waiting for the work surface to settle"
+      case .ready: self.label = "Work surface verified"
       case .blocked: self.label = "Desktop switch blocked; no further input"
       }
       self.showBar()
@@ -107,13 +107,14 @@ import TaskPanelCore
             let result = await self.perform(pending)
             // Exactly one POST for this number. A failure is not sent again: the
             // worker reads a missing answer as an unknown outcome.
-            try? await client.handsResult(result)
+            do { try await client.handsResult(result) }
+            catch { self.desktop.invalidate() } // No replay; disconnected history is no longer usable.
             self.showBar()
           }
         } catch {
           failures += 1
           // A service that is gone commands nothing: the bar goes too.
-          if failures >= HandsPace.failuresBeforeQuiet { self.quiet() }
+          if failures >= HandsPace.failuresBeforeQuiet { self.desktop.invalidate(); self.quiet() }
         }
         try? await Task.sleep(nanoseconds: UInt64(HandsPace.delay(active: active, failures: failures) * 1_000_000_000))
       }
@@ -155,7 +156,7 @@ import TaskPanelCore
   private func quiet() {
     guard live || bar.isShown else { return }
     live = false; label = ""
-    desktop.invalidate()
+    desktop.retireObservation()
     bar.hide(); guide.hide(); guide.typing(false)
     input.unwatch()
     shield(false)
@@ -209,8 +210,12 @@ import TaskPanelCore
     switch outcome {
     case .success(let seen):
       let result = HandResult.done(seq, observation: seen, interrupted: interrupted)
-      // What the service would refuse is not sent: the worker hears that the command failed.
-      return (try? result.validate()) != nil ? result : .failure(seq, .failed, interrupted: interrupted)
+      // Contract failure cannot erase an already-submitted external effect.
+      guard (try? result.validate()) != nil else {
+        desktop.invalidate()
+        return .failure(seq, DesktopInputOutcome.invalidResult(command: command, submitted: input.submittedInput), interrupted: interrupted)
+      }
+      return result
     case .failure(let error):
       // A partially submitted click/type/scroll is never described as a refusal
       // that can be retried. A takeover before input still pauses the worker.
@@ -282,6 +287,13 @@ import TaskPanelCore
       if let refusal = await lastCheck() { return .failure(refusal) }
       return await desktop.activate(url: app, windowTitle: window, allowed: { [self] in await lastCheck() },
         observer: observer, pointer: { [self] in input.pointer })
+    case .switchDesktop(let direction):
+      defer { guide.rest() }
+      await say(label)
+      if let refusal = await lastCheck() { return .failure(refusal) }
+      return await desktop.switchDesktop(direction: direction, configuration: { [self] in input.desktopShortcuts() },
+        send: { [self] shortcut, gate in await input.dispatchDesktopShortcut(shortcut, allowed: gate) },
+        allowed: { [self] in await lastCheck() }, observer: observer, pointer: { [self] in input.pointer })
     case .openURL(let text):
       // Only a web address. Another scheme can start a program or a call.
       guard let url = HandsTarget.webURL(text) else { return .failure(.refused) }

@@ -107,6 +107,7 @@ public enum HandCommand: Equatable, Sendable {
   /// Keys joined by "+", modifiers first: "cmd+s", "cmd+shift+4", "return", "escape", "tab".
   case key(combo: String)
   case openApp(name: String, window: String? = nil)
+  case switchDesktop(direction: DesktopDirection)
   case openURL(url: String)
   case wait(ms: Int)
 
@@ -121,6 +122,7 @@ public enum HandCommand: Equatable, Sendable {
     case .type: return "type"
     case .key: return "key"
     case .openApp: return "open_app"
+    case .switchDesktop: return "switch_desktop"
     case .openURL: return "open_url"
     case .wait: return "wait"
     }
@@ -149,7 +151,7 @@ public enum HandCommand: Equatable, Sendable {
   public var needsAccessibility: Bool {
     switch self {
     case .observe(_, let elements): return elements
-    case .move, .click, .drag, .scroll, .type, .key, .openApp: return true
+    case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop: return true
     case .openURL, .wait: return false
     }
   }
@@ -157,6 +159,7 @@ public enum HandCommand: Equatable, Sendable {
   public var needsScreenRecording: Bool {
     if case .observe(let image, _) = self { return image }
     if case .openApp = self { return true }
+    if case .switchDesktop = self { return true }
     return false
   }
   /// The right that the command needs and macOS has not given. With one missing, nothing runs.
@@ -169,7 +172,7 @@ public enum HandCommand: Equatable, Sendable {
 
 extension HandCommand: Codable {
   private enum Key: String, CodingKey {
-    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, url, ms
+    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, ms
   }
   public init(from decoder: Decoder) throws {
     let box = try decoder.container(keyedBy: Key.self)
@@ -214,6 +217,9 @@ extension HandCommand: Codable {
       let window = try box.decodeIfPresent(String.self, forKey: .window)
       guard window.map({ HandsTarget.windowTitle($0) != nil }) ?? true else { throw PanelFailure.response }
       self = .openApp(name: try string(.name, 120), window: window)
+    case "switch_desktop":
+      try only(.direction)
+      self = .switchDesktop(direction: try box.decode(DesktopDirection.self, forKey: .direction))
     case "open_url":
       try only(.url)
       self = .openURL(url: try string(.url, 2000))
@@ -248,6 +254,7 @@ extension HandCommand: Codable {
     case .key(let combo): try box.encode(combo, forKey: .combo)
     case .openApp(let name, let window):
       try box.encode(name, forKey: .name); try box.encodeIfPresent(window, forKey: .window)
+    case .switchDesktop(let direction): try box.encode(direction, forKey: .direction)
     case .openURL(let url): try box.encode(url, forKey: .url)
     case .wait(let ms): try box.encode(ms, forKey: .ms)
     }
@@ -329,6 +336,8 @@ public enum HandError: String, Codable, CaseIterable, Error, Sendable {
   case refused
   case failed
   case desktopDisabled = "desktop_disabled"
+  case desktopShortcutUnavailable = "desktop_shortcut_unavailable"
+  case desktopHistoryUnavailable = "desktop_history_unavailable"
   case ambiguousTarget = "ambiguous_target"
   case unsupportedDesktop = "unsupported_desktop"
   case targetNotVisible = "target_not_visible"
