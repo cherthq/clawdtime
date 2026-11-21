@@ -1,5 +1,14 @@
 # ClawdTime: approved implementation and migration plan
 
+## Phone testing handoff — November 21, 2026
+
+The app/desktop/zoom integration and speech-turn correction are on draft PR #56.
+Local navigation and synthetic speech forwarding passed; physical phone
+acceptance remains blocked by the latest missing-avatar startup failure. Read
+[the current testing handoff](docs/PHONE_ZOOM_TEST_HANDOFF.md) before continuing.
+The normal line is restored and test control is off; verify fresh ownership
+before any further live work.
+
 ## App and desktop navigation — November 21, 2026
 
 Retain named app/window activation and adjacent desktop switching; add explicit

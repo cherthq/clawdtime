@@ -296,3 +296,18 @@ provider transcript exactly once, retaining the no-submission constraint. This
 used no phone call or computer input and is not handset/zoom acceptance.
 The full backend/typecheck/build passed 3,938 tests; native and Python
 presentation source are unchanged by this speech correction.
+
+## Second phone test: avatar startup remains blocked
+
+The corrected build was handed the idle line at 12:38:53 ET on November 21. The
+next call was accepted at 12:41:57, reported provider media at 12:42:14, and ended
+at 12:42:32. The person saw no avatar. No agent `call_started`, greeting, or
+speech-binding event was recorded, and no provider bridge-ready event appeared.
+This is an unresolved startup/media-readiness failure, not evidence that the
+synthetic speech-forwarding checks failed. The test worker remained idle.
+
+The test owner released with zero retained calls, and the normal owner was
+restored and independently verified as sole connected owner. Test computer use
+is off; normal control is restored. Continue from the comprehensive
+[phone and zoom handoff](PHONE_ZOOM_TEST_HANDOFF.md), which records the runtime
+paths, investigation boundary, rollback rules and remaining acceptance matrix.
