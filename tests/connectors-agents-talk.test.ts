@@ -411,9 +411,11 @@ describe("the ClawdTime agent", () => {
       [call("type_into_session", { session: "deploy fix", text: "rm -rf /" })],
       "I need the exact text.",
     ]);
+    // Two clauses: the code types nothing by itself, and the model's own
+    // words are refused.
     await new Supervisor(value, run.model).reply(
       [],
-      "tell deploy fix to clean up",
+      "tell deploy fix to clean up, and to report back",
       "voice",
     );
     expect(run.seen[1]!.messages.at(-1)!.content).toContain(
@@ -577,9 +579,10 @@ describe("the ClawdTime agent", () => {
       ),
     ).toBe("The person did not ask to type anything into a session. Ask them.");
     // The model picks another session than the one that the person named.
+    // (Two clauses, so that the code types nothing by itself.)
     expect(
       await result(
-        "tell docs to run the tests again",
+        "tell docs to run the tests again, and to report back",
         "deploy fix",
         "run the tests again",
       ),

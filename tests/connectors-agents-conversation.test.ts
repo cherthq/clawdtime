@@ -186,6 +186,419 @@ async function talk(
 const started =
   "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
 
+describe("words for a session that runs are never a job", () => {
+  const two = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+  ];
+  /** One turn on a Mac that writes down what was typed. */
+  const run = async (
+    words: string,
+    steps: (ToolCall[] | string)[],
+    sessions = two(),
+    before?: (world: SupervisorWorld) => void,
+  ) => {
+    const made = mac(sessions);
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, text) => {
+        typed.push([String(item.name), text]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    before?.(world);
+    const { model, seen } = scripted(steps);
+    const answer = await new Supervisor(world, model).reply([], words, "chat");
+    const results = seen.flatMap((asked) =>
+      asked.messages
+        .filter(
+          (message) =>
+            message.role === "tool" &&
+            (message.toolCallId === "c-start_job" ||
+              message.toolCallId === "c-start_task"),
+        )
+        .map((message) => String(message.content)),
+    );
+    return { answer, typed, windows: made.windows, results };
+  };
+  /** A model that asks for a job first, and types after that. */
+  const wantsJobThenTypes = (text: string, into = "deploy fix") => [
+    [call("start_job")],
+    [call("type_into_session", { session: into, text })],
+    "Done.",
+  ];
+
+  it.each([
+    "tell deploy fix to run the tests again",
+    "show me docs and tell deploy fix to run the tests again",
+    "ok can you ask deploy fix to run the tests again",
+    "please tell the deploy fix session to run the tests again",
+    "um so tell the deploy one to run the tests again",
+    "Tell Deploy Fix to run the tests again, and to report back",
+    "Tell deploy fix: run the tests again",
+  ])("starts no job for %j, and the words are typed", async (words) => {
+    const said = await run(words, wantsJobThenTypes("run the tests again"));
+    expect(said.windows, words).toHaveLength(0);
+    expect(said.typed, words).toEqual([["deploy fix", "run the tests again"]]);
+    expect(said.answer, words).toBe("Done.");
+    // What the model reads names the session. It does not tell the model to type.
+    expect(said.results[0], words).toContain("deploy fix");
+    expect(said.results[0], words).toContain("no job");
+    expect(said.results[0], words).not.toMatch(/\btype/i);
+  });
+
+  it.each([
+    // A question, a hedge, another connector: no job, and what is typed is the model's matter as before.
+    "ask deploy fix if the tests pass",
+    "tell deploy fix that the build is red",
+    "ask the deploy one what it did, never mind",
+  ])("starts no job for %j", async (words) => {
+    const said = await run(words, [[call("start_job")], "Okay."]);
+    expect(said.windows, words).toHaveLength(0);
+    expect(said.typed, words).toEqual([]);
+  });
+
+  it.each([
+    // Work of its own before the words for the session.
+    "build a pricing page and tell deploy fix to run the tests again",
+    // Work of its own after them.
+    "tell docs to wait and build a new landing page",
+    "ask docs to wait and start a new job to build the landing page",
+    // The person speaks to the session themselves.
+    "let me tell docs to wait myself, you build the landing page",
+    "let me ask docs first, then start a job for the landing page",
+    "I need to ask docs about the api, but first build the landing page",
+    // A coding agent is no session: the person can ask for a new one.
+    "tell claude to run the tests again in a new folder",
+    "ask codex to run the tests again",
+    // No session of that name, or only a part of a name.
+    "tell the release team to run the tests again",
+    "tell fix to rebuild the landing page",
+    // The session is what the work is about.
+    "fix the script that deploy fix wrote and run the tests again",
+  ])("still starts the job for %j, and types nothing", async (words) => {
+    const said = await run(words, [[call("start_job")], "Okay."]);
+    expect(said.windows, words).toHaveLength(1);
+    expect(said.answer, words).toContain("On it.");
+    expect(said.typed, words).toEqual([]);
+  });
+
+  it.each([
+    ["tell deploy fix to run the tests again", "deploy fix"],
+    ["Tell deploy fix to run the tests again.", "deploy fix"],
+    ["tell deploy fix to run the tests again please", "deploy fix"],
+    ["ask deploy fix to run the tests again", "deploy fix"],
+    ["ask the deploy one to run the tests again", "deploy fix"],
+    ["can you ask the deploy fix session to run the tests again", "deploy fix"],
+    ["ok so can you tell deploy fix to run the tests again", "deploy fix"],
+    ["Um, tell deploy fix to run the tests again", "deploy fix"],
+    ["Okay, tell deploy fix to run the tests again.", "deploy fix"],
+    ["show me docs and tell deploy fix to run the tests again", "deploy fix"],
+    ["and tell docs to run the tests again", "docs"],
+    ["please ask the docs session to run the tests again", "docs"],
+  ])("types the plain form %j by itself", async (words, into) => {
+    const said = await run(words, ["Okay."]);
+    expect(said.typed, words).toEqual([[into, "run the tests again"]]);
+    expect(said.windows, words).toHaveLength(0);
+  });
+
+  /** What nobody asked to send now. The model only answers, or asks to type the same words. */
+  const unasked = [
+    // The person does it, asks about it, or says not to.
+    "let me tell deploy fix to run the tests again",
+    "I want to tell deploy fix to run the tests again",
+    "I will tell deploy fix to run the tests again",
+    "should I tell deploy fix to run the tests again",
+    "don't tell deploy fix to run the tests again",
+    "do not ask deploy fix to run the tests again",
+    "never tell deploy fix to run the tests again",
+    "no tell deploy fix to run the tests again",
+    "wait tell deploy fix to run the tests again",
+    "tell deploy fix not to run the tests again",
+    // A question to ClawdTime, with a mark or without one.
+    "tell deploy fix to run the tests again?",
+    "did I tell deploy fix to run the tests again",
+    "tell deploy fix to run the tests again would that help",
+    "tell deploy fix to run the tests again is that a good idea",
+    "ask deploy fix to run the tests again does that make sense",
+    "tell deploy fix to run the tests again sound good",
+    // More than one clause, or a word that can take the words back, hedge them or begin something else.
+    "tell deploy fix to run the tests again and push",
+    "tell deploy fix to run the tests again, then push",
+    "tell deploy fix to run the tests again if docs is done",
+    "tell deploy fix to run the tests again and wait for me",
+    "tell deploy fix to run the tests again, never mind",
+    "tell deploy fix to run the tests again actually no",
+    "tell deploy fix to run the tests again uhh",
+    "tell deploy fix to run the tests again erm",
+    "tell deploy fix to run the tests again thanks",
+    "tell deploy fix to run the tests again it's fine",
+    "tell deploy fix to run the tests again is what she said",
+    "tell deploy fix to run the tests again and show you the logs",
+    // No single session is named.
+    "tell it to run the tests again",
+    "tell that one to run the tests again",
+    "tell claude to run the tests again",
+    "tell the codex session to run the tests again",
+    "tell the release team to run the tests again",
+    "tell me to run the tests again",
+    "tell everyone to run the tests again",
+    "tell fix to run the tests again",
+    "tell deploy to run the tests again",
+    // "A docs agent" can be a new one.
+    "ask a docs agent to run the tests again",
+    "ask another docs session to run the tests again",
+    "tell a new deploy fix session to run the tests again",
+    // More words that begin a second thought, with no mark before them.
+    "tell deploy fix to run the tests again worth it",
+    "tell deploy fix to run the tests again correct",
+    "tell deploy fix to run the tests again huh",
+    "tell deploy fix to run the tests again lmk",
+    "tell deploy fix to run the tests again naw",
+    "tell deploy fix to run the tests again meh",
+    "tell deploy fix to run the tests again whatever",
+    "tell deploy fix to run the tests again like",
+    "tell deploy fix to run the tests again so",
+    "tell deploy fix to run the tests again they said",
+    "tell deploy fix to run the tests again the lead said",
+  ];
+  it.each(unasked)("types nothing by itself for %j", async (words) => {
+    expect((await run(words, ["Okay."])).typed, words).toEqual([]);
+  });
+
+  it('types nothing by itself for words with no instruction after "to"', async () => {
+    for (const words of ["tell deploy fix to", "talk to deploy fix"])
+      expect((await run(words, ["Okay."])).typed, words).toEqual([]);
+  });
+
+  it("types nothing by itself when the words fit two sessions, can be read in two ways, or mean everyone", async () => {
+    const words = "tell the deploy one to run the tests again";
+    expect(
+      (
+        await run(
+          words,
+          ["Okay."],
+          [
+            session({ name: "deploy fix" }),
+            session({ id: "102-ghi", pid: 102, name: "deploy staging" }),
+          ],
+        )
+      ).typed,
+    ).toEqual([]);
+    // A name with "to" in it: the words for the session can begin at two places.
+    expect(
+      (
+        await run(
+          "tell move to prod to run the tests again",
+          ["Okay."],
+          [
+            session({ name: "move to prod" }),
+            session({ id: "103-jkl", pid: 103, name: "move" }),
+          ],
+        )
+      ).typed,
+    ).toEqual([]);
+    // A session that is named with a word for all.
+    for (const name of ["everyone", "all"])
+      expect(
+        (
+          await run(
+            `tell ${name} to run the tests again`,
+            ["Okay."],
+            [
+              session({ name }),
+              session({ id: "104-mno", pid: 104, name: "docs" }),
+            ],
+          )
+        ).typed,
+        name,
+      ).toEqual([]);
+  });
+
+  it('reads a name with care: a near name names none, and "the docs" can be a name', async () => {
+    // "The phase one", next to "phase" and "phase two".
+    expect(
+      (
+        await run(
+          "tell the phase one to run the tests again",
+          ["Okay."],
+          [
+            session({ name: "phase" }),
+            session({ id: "105-pqr", pid: 105, name: "phase two" }),
+          ],
+        )
+      ).typed,
+    ).toEqual([]);
+    // The full name with "session", next to a session that shares one word.
+    expect(
+      (
+        await run(
+          "tell the deploy fix session to run the tests again",
+          ["Okay."],
+          [
+            session({ name: "deploy fix" }),
+            session({ id: "106-stu", pid: 106, name: "deploy staging" }),
+          ],
+        )
+      ).typed,
+    ).toEqual([["deploy fix", "run the tests again"]]);
+    // A name that opens with "new", "other" or "fresh" is still a name.
+    for (const name of ["new api", "other tests", "fresh install"])
+      expect(
+        (
+          await run(
+            `tell ${name} to run the tests again`,
+            ["Okay."],
+            [
+              session({ name }),
+              session({ id: "108-yz", pid: 108, name: "docs" }),
+            ],
+          )
+        ).typed,
+        name,
+      ).toEqual([[name, "run the tests again"]]);
+    // A session that is named "the docs".
+    expect(
+      (
+        await run(
+          "tell the docs to run the tests again",
+          ["Okay."],
+          [
+            session({ name: "the docs" }),
+            session({ id: "107-vwx", pid: 107, name: "deploy fix" }),
+          ],
+        )
+      ).typed,
+    ).toEqual([["the docs", "run the tests again"]]);
+  });
+
+  it("lets the model type nothing for the plain form while something else waits for an answer", async () => {
+    // "Ask" is no word that asks to type, and "the deploy one" is no full
+    // name: only the code's own call goes without them, and the code makes
+    // none while a request of an agent waits. The request is of another
+    // folder, so it is not the session's own.
+    const elsewhere = () => [
+      session({ name: "deploy fix", cwd: "/work/other", pid: 7 }),
+      session({ id: "101-def", pid: 101, name: "docs", cwd: "/work/docs" }),
+    ];
+    for (const words of [
+      "ask deploy fix to run the tests again",
+      "ask the deploy one to run the tests again",
+      "tell the deploy one to run the tests again",
+    ]) {
+      const said = await run(
+        words,
+        modelTypes("run the tests again"),
+        elsewhere(),
+        (world) => void waits(world),
+      );
+      expect(said.typed, words).toEqual([]);
+      // With nothing that waits, the code types it by itself.
+      const free = await run(words, ["Okay."], elsewhere());
+      expect(free.typed, words).toEqual([
+        ["deploy fix", "run the tests again"],
+      ]);
+    }
+    // The form with a full name and "tell" is the model's to type, as before.
+    const before = await run(
+      "tell deploy fix to run the tests again",
+      modelTypes("run the tests again"),
+      elsewhere(),
+      (world) => void waits(world),
+    );
+    expect(before.typed).toEqual([["deploy fix", "run the tests again"]]);
+  });
+
+  it("types nothing by itself while a request of an agent waits", async () => {
+    expect(
+      (
+        await run(
+          "tell deploy fix to run the tests again",
+          ["Okay."],
+          undefined,
+          (world) => void waits(world),
+        )
+      ).typed,
+    ).toEqual([]);
+  });
+
+  /** A model that types at once: its words stand in the message, and the gate decides. */
+  const modelTypes = (text: string, into = "deploy fix") => [
+    [call("type_into_session", { session: into, text })],
+    "Okay.",
+  ];
+
+  it.each([
+    // "Ask" is no word that asks to type, and a part of a name is no name:
+    // only the plain form that the code itself types goes without them.
+    ["ask deploy fix to push the branch, or should I wait", "push the branch"],
+    ["ask deploy fix to push the branch, maybe", "push the branch"],
+    ["ask deploy fix to push the branch, what do you think", "push the branch"],
+    ["ask deploy fix to push the branch? is that smart", "push the branch"],
+    ["ask the deploy one to push the branch, or not", "push the branch"],
+    [
+      "tell the deploy one to push the branch, would that help",
+      "push the branch",
+    ],
+    ["ask deploy fix to push the branch would that help", "push the branch"],
+    [
+      "ask deploy fix to run the tests again, never mind",
+      "run the tests again",
+    ],
+    [
+      "ask deploy fix to run the tests again. actually no",
+      "run the tests again",
+    ],
+    ["did deploy fix ask to run the tests again?", "run the tests again"],
+    [
+      "I will ask deploy fix to run the tests again myself",
+      "run the tests again",
+    ],
+    ["don't ask deploy fix to run the tests again", "run the tests again"],
+    ["let me ask deploy fix to run the tests again", "run the tests again"],
+    ["ask it to run the tests again", "run the tests again"],
+    // Other words of the message than the ones for the session.
+    ["show me docs and ask deploy fix to run the tests again", "show me docs"],
+    ["ask the deploy one to run the tests again", "run the tests"],
+  ])("lets the model type nothing more for %j", async (words, text) => {
+    const said = await run(words, modelTypes(text));
+    // Nothing but what the code itself types for the plain form.
+    expect(
+      said.typed.filter(([, typed]) => typed !== "run the tests again"),
+      words,
+    ).toEqual([]);
+    expect(
+      said.typed.some(([, typed]) => typed === text) &&
+        text !== "run the tests again",
+      words,
+    ).toBe(false);
+  });
+
+  it("types into the session that the words name, not the one that the model chose", async () => {
+    // Two clauses, so that the code types nothing by itself.
+    const said = await run(
+      "ask docs to run the tests again, and to report back",
+      modelTypes("run the tests again", "deploy fix"),
+    );
+    expect(said.typed).toEqual([]);
+    const plain = await run(
+      "ask docs to run the tests again",
+      modelTypes("run the tests again", "deploy fix"),
+    );
+    expect(plain.typed).toEqual([["docs", "run the tests again"]]);
+  });
+
+  it("starts no job through the task tool either", async () => {
+    const said = await run("ask deploy fix if the tests pass", [
+      [call("start_task", { goal: "see if the tests pass" })],
+      "Okay.",
+    ]);
+    expect(said.windows).toHaveLength(0);
+    expect(said.results[0]).toContain("no job and no task");
+  });
+});
+
 describe("a coding agent that the person names for work", () => {
   it.each([
     [
@@ -3745,7 +4158,7 @@ describe("then ask it", () => {
     // Not about the state, and no tool ran: why, that nothing was done, and the state.
     for (const words of [
       "ok fix that one",
-      "tell payments tests to hurry up",
+      "tell payments tests about the retry that fails",
     ]) {
       const { world, sent } = typing();
       expect(await new Supervisor(world, silent).reply([], words, "chat")).toBe(
@@ -3785,6 +4198,16 @@ describe("then ask it", () => {
       ),
     ).toBe("Typed into payments tests.");
     expect(told.sent).toEqual(["payments tests: run the tests again"]);
+    // The same in plain speech.
+    const spoken = typing();
+    expect(
+      await new Supervisor(spoken.world, silent).reply(
+        [],
+        "tell payments tests to hurry up",
+        "chat",
+      ),
+    ).toBe("Typed into payments tests.");
+    expect(spoken.sent).toEqual(["payments tests: hurry up"]);
   });
 
   it("types nothing by itself while a request of an agent waits, for that session or another", async () => {

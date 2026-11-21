@@ -346,6 +346,33 @@ These rules are in the code, not in the model's instructions:
   "when I say so"). A question mark at the end counts only for a question
   ("did the tests pass?"). Any other message is read as before, and ClawdTime
   can ask you.
+- "Tell deploy fix to run the tests again", as you say it, is typed at once
+  too, with "tell" or "ask". The conditions are those of the form with a
+  colon, and some more, because speech has no marks:
+  - The clause that speaks to the session is the last one of your message.
+    Before it stands nothing but a filler ("um, ...", "ok so can you ...") or
+    a request to see a session ("show me docs and tell deploy fix to ...").
+  - The words before "to" are the full name of one session, or a part of its
+    name with "one" or "session" that fits no other session ("the deploy
+    one"). A part of a name alone ("fix"), "it", "everyone", "a docs agent"
+    and the name of a coding agent name no session here.
+  - The words after "to" are one clause of plain words, and no word in it can
+    take it back, hedge it, or begin a question or a second thought: "would
+    that help", "is that a good idea", "thanks", "uhh", "you". A "please" at
+    the end is not typed, and neither is the full stop of your sentence.
+  - The message has no question mark and takes nothing back.
+
+  Only for exactly these words, and only while nothing else waits for your
+  answer, "ask" counts as a request to type and a part of a name counts as
+  the name. "Let me tell docs to wait", "don't tell docs to wait" and "tell
+  docs to wait, or should I?" are not typed this way: ClawdTime reads them as
+  before, and can ask you.
+
+- Words for a session that runs never start a job or a task: "show me docs
+  and tell deploy fix to run the tests again" opens docs and types into
+  deploy fix, and "ask deploy fix if the tests pass" starts nothing. Work of
+  its own in another clause still starts: "build the page and tell docs to
+  wait", "tell docs to wait and build a landing page".
 - One message types the same words into a session once. A choice of a task
   is never typed into a session: a click on it answers the task.
 - Words that you take back at the end of the same message are not typed, and

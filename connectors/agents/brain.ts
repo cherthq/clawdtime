@@ -813,6 +813,14 @@ const cannotStopSessions =
 const seeLead =
   /^(?:(?:please|ok|okay|so|then|now|and|hey|hi|clawdtime|just|also|well|h+m+|u+h+|u+m+|e+r+m*|like|kinda|kind\s+of|sort\s+of|basically|you\s+know|y['\u2019]?know|yes|yeah|yep|no|nope|not|wait|sorry|oops|actually|instead|rather|alright|right|sure|first|next|quickly|i\s+mean|i\s+meant|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|let['\u2019]?s|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
 /**
+ * What can stand before "tell" or "ask" in a clause that speaks to a session,
+ * where words are typed: a filler or a polite opening. "Let me tell docs to
+ * wait" and "I want to ask docs ..." say what the person does, and "no", "not"
+ * and "wait" can turn the clause around, so none of them is here.
+ */
+const toldLead =
+  /^(?:(?:please|ok|okay|so|then|now|and|also|hey|hi|clawdtime|just|well|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+/**
  * A clause that opens with words that ask to see something, and what it asks
  * to see. The words must open the clause: "the show must go on", "in my
  * view" and "does payments show errors" ask to see nothing. "Look at",
@@ -1512,6 +1520,18 @@ const mayTakeBack = (text: string) =>
     text,
   );
 /**
+ * In speech with no marks, a question to ClawdTime or a second thought can
+ * follow the words for a session with nothing between: "run the tests would
+ * that help", "push it is that a good idea", "run the tests uhh", "run the
+ * tests thanks", "show you the logs". A word that can begin one sends the
+ * message to the slower way, where the model reads it. Wide on purpose, as
+ * `mayTakeBack` is: it only keeps the code from typing by itself.
+ */
+const maySayMore = (text: string) =>
+  /\b(?:would|could|should|shall|will|can|may|might|must|do|does|did|is|are|was|were|am|be|been|has|have|had|what|why|how|when|where|which|who|whose|whether|you|your|yours|u|ur|he|she|thanks?|thx|ty|cheers|idea|sense|sounds?|fine|good|great|cool|nice|yes|yeah|yep|yup|sure|alright|bro|man|dude|worth|correct|huh|lmk|naw|meh|whatever|like|so|said|says|say|told|reckon|hopefully|innit|u+h+|u+m+|e+r+m*|h+m+|a+h+|e+h+|o+h+)\b|['\u2019\u2018\u00b4\u02bc\u2032`](?:s|ll|re|ve|d|m)\b/i.test(
+    text,
+  );
+/**
  * The words end with a clause that takes them back: "delete the release
  * branch, never mind", "push to main. Actually no, wait", "run it - scratch
  * that". A mark must stand before that clause, and the clause runs to the
@@ -1674,7 +1694,16 @@ interface Turn {
    * model, such a sentence is never the answer: the turn goes on to the model.
    */
   refused?: string;
+  /**
+   * The call to type that the code itself makes for the plain form ("ask the
+   * deploy one to run the tests"). Only that call goes without a cue word
+   * and without the full name of the session: a call of the model never does.
+   */
+  ownTyping?: ToolCall;
 }
+/** What the model reads when it asks for new work with words that are for a session that runs. */
+const forThatSession = (session: AgentSession) =>
+  `The person's message speaks to the session ${title(session)}: those words are for that session, not work for a new agent, so no job and no task starts for them.`;
 /** Marks a gate's refusal, and gives its sentence back for the model. */
 const refuse = (turn: Turn, sentence: string) => {
   turn.refused = sentence;
@@ -1805,6 +1834,159 @@ export class Supervisor {
     );
   }
   /**
+   * The one session that these words name, as the one to tell or ask: its
+   * full name ("deploy fix", "the deploy fix session"), or a part of its name
+   * with a word for a session ("the deploy one"), when those words fit that
+   * session and no other. A part of a name alone names none ("fix"), and
+   * neither does a word that points ("it"), a word for all ("everyone") or a
+   * coding agent: "tell Claude to build a page" can ask for a new one.
+   */
+  private namedToTell(head: string): AgentSession | null {
+    const words = head.trim();
+    const kind = /\s+(?:one|session|agent|window|terminal|tab)$/i;
+    const core = words
+      .replace(/^(?:the|my|that|this)\s+/i, "")
+      .replace(kind, "")
+      .trim();
+    if (
+      !core ||
+      seePointer.test(words) ||
+      /^(?:claude(?:\s+code)?|codex|every(?:one|body)?|all|both|each|any(?:one|body)?|some(?:one|body)?|them|all\s+of\s+them)$/i.test(
+        core,
+      ) ||
+      !this.namesOnlyASession(words)
+    )
+      return null;
+    try {
+      const fit = this.pick("", words);
+      if (fit.kind !== "one" || fit.session.name === null) return null;
+      const name = title(fit.session).toLowerCase();
+      // The full name as it is: "deploy fix", "new api", and "the docs" for a
+      // session of that name.
+      if (name === words.toLowerCase()) return fit.session;
+      // "A docs agent", "another one", "a new docs session": not one that runs.
+      if (/^(?:an?|another|some|any|new|fresh|other)\b/i.test(words))
+        return null;
+      // The full name after "the", or with a word for a session. "The phase
+      // one" names no single session next to "phase" and "phase two".
+      if (name === core.toLowerCase())
+        return kind.test(words) && this.partOfAnotherName(core, fit.session)
+          ? null
+          : fit.session;
+      // A part of the name, with a word for a session: "the deploy one".
+      return kind.test(words) ? fit.session : null;
+    } catch {
+      return null;
+    }
+  }
+  /** True when the name of another session holds every word of these words. */
+  private partOfAnotherName(core: string, session: AgentSession) {
+    const said = [...spokenWords(core)];
+    return (this.world.board()?.sessions ?? []).some((other) => {
+      const words = new Set<string>(spokenWords(title(other)));
+      return other !== session && said.every((word) => words.has(word));
+    });
+  }
+  /**
+   * The session that the message speaks to, so that it is no work for a new
+   * agent: a clause opens with "tell" or "ask" (after a filler or a polite
+   * opening only), and what follows at once names one session and nothing
+   * else ("show me docs and tell deploy fix to run the tests again", "ask the
+   * payments one if the tests pass"), or the message has the form with a
+   * colon. Work of its own in another clause keeps the message what it was:
+   * "build the page and tell docs to wait", "tell docs to wait and build a
+   * landing page". After the clause, only more words for the session can
+   * follow ("..., and to report back").
+   */
+  private toldSession(spoken: string): AgentSession | null {
+    const sessions = this.world.board()?.sessions ?? [];
+    for (const form of toldForms(spoken)) {
+      const named = sessions.filter(
+        (session) => title(session).toLowerCase() === form.name.toLowerCase(),
+      );
+      if (named.length === 1) return named[0]!;
+    }
+    const clauses = clausesOf(spoken);
+    const work = (clause: string) =>
+      asksForWork(clause, { dont: true }) && this.seeAsked(clause) === null;
+    for (const [at, clause] of clauses.entries()) {
+      const told = /^(?:tell|ask)\s+(.+)$/i.exec(
+        clause.replace(toldLead, "").trim(),
+      );
+      if (!told) continue;
+      // The name ends where the words for the session begin.
+      const session = this.namedToTell(
+        /^(.+?)\s+(?:to|that|if|whether|about|what|why|how|when|where|which|who)\b/i.exec(
+          told[1]!,
+        )?.[1] ?? told[1]!,
+      );
+      if (!session) continue;
+      return clauses.slice(0, at).some(work) ||
+        clauses
+          .slice(at + 1)
+          .some((after) => !/^to\b/i.test(after) && work(after))
+        ? null
+        : session;
+    }
+    return null;
+  }
+  /**
+   * "Tell deploy fix to run the tests again", as people say it: the last
+   * clause of the message speaks to one session, and the words for it follow
+   * "to". Before that clause there is nothing but a filler ("um, ...") or a
+   * request to see a session ("show me docs and ..."). Each way to read it is
+   * given, as for the form with a colon: a session whose name holds "to" can
+   * be read in more than one way. A message with a question mark is none.
+   */
+  private toldPlainly(spoken: string) {
+    const readings: { session: AgentSession; text: string }[] = [];
+    if (/\?/.test(spoken)) return readings;
+    const clauses = clausesOf(spoken);
+    if (
+      clauses
+        .slice(0, -1)
+        .some(
+          (clause) =>
+            clause.replace(toldLead, "").trim() !== "" &&
+            this.seeAsked(clause) === null,
+        )
+    )
+      return readings;
+    const told = /^(?:tell|ask)\s+(.+)$/i.exec(
+      (clauses.at(-1) ?? "").replace(toldLead, "").trim(),
+    );
+    if (!told) return readings;
+    const rest = told[1]!;
+    for (const found of rest.matchAll(/\s+to\s+/gi)) {
+      const session = this.namedToTell(rest.slice(0, found.index));
+      // A "please" at the end is no part of the words for the session.
+      const text = rest
+        .slice(found.index + found[0].length)
+        .replace(/(?:\s+(?:please|pls))+$/i, "")
+        .trim();
+      if (session && text) readings.push({ session, text });
+    }
+    return readings;
+  }
+  /**
+   * The plain form that the code types by itself, and the only one for which
+   * the tool that types needs no cue word and no full name: the message takes
+   * nothing back, it reads as that form in one way, and the words for the
+   * session are one clause in which no word can take them back, hedge them or
+   * begin something else.
+   */
+  private plainlyTold(spoken: string) {
+    if (takesBack(spoken) || takenBackAtTheEnd(spoken)) return null;
+    const readings = this.toldPlainly(spoken);
+    const only = readings.length === 1 ? readings[0]! : null;
+    return only &&
+      oneClause(only.text) &&
+      !mayTakeBack(only.text) &&
+      !maySayMore(only.text)
+      ? only
+      : null;
+  }
+  /**
    * True when a sentence that opens with an agent can be about a session that
    * runs: a session carries the agent's name, or the verb speaks to the agent
    * while a session of that agent is on the board.
@@ -1869,6 +2051,9 @@ export class Supervisor {
     )
       return this.startJob(turn, spoken);
     if (this.ownedByRequest(turn, spoken)) return refuse(turn, requestOwns);
+    // Words for a session that runs are no task either.
+    const told = this.toldSession(spoken);
+    if (told) return refuse(turn, forThatSession(told));
     // The person's own last words must ask for a task. The model alone cannot start one.
     if (!asksToStart(spoken))
       return refuse(
@@ -2020,6 +2205,10 @@ export class Supervisor {
     const before = turn.done.get("job");
     if (before !== undefined) return before;
     if (this.ownedByRequest(turn, spoken)) return refuse(turn, requestOwns);
+    // "Tell deploy fix to run the tests again": words for a session that
+    // runs are not work for a new one.
+    const told = this.toldSession(spoken);
+    if (told) return refuse(turn, forThatSession(told));
     // The whole sentence is read, never a part of it: a question, a remark
     // and a sentence that takes the work back start nothing.
     if (!asksForWork(spoken)) {
@@ -2793,10 +2982,20 @@ export class Supervisor {
         const text = clean(String(args.text ?? ""), 2000);
         if (!session) return "No single session has that name.";
         // The person's own last words must ask for it, name the session and
-        // hold the text. The model alone chooses none of the three.
-        if (!typeCue.test(spoken))
+        // hold the text. The model alone chooses none of the three. The plain
+        // form that the code types by itself ("ask the deploy one to run the
+        // tests") asks for it and names the session, for exactly its words
+        // and only in the code's own call: where something else waits for an
+        // answer, the code makes no such call.
+        const plainly =
+          turn.ownTyping === call ? this.plainlyTold(spoken) : null;
+        const told =
+          plainly !== null &&
+          plainly.session === session &&
+          clean(plainly.text, 2000) === text;
+        if (!told && !typeCue.test(spoken))
           return "The person did not ask to type anything into a session. Ask them.";
-        if (!saidAsWords(title(session), spoken))
+        if (!told && !saidAsWords(title(session), spoken))
           return "The person did not name that session. Ask them which session.";
         if (!saidAsWords(text, spoken))
           return "Only the person's own words are typed. Ask them for the exact text.";
@@ -3491,7 +3690,9 @@ export class Supervisor {
     }
     try {
       // The person said the form that ClawdTime offers, with the full name of
-      // one session: the code calls the tool that types, with their words. The
+      // one session, or the same in plain speech ("tell deploy fix to run the
+      // tests again", one clause that names one session): the code calls the
+      // tool that types, with their words. The
       // gates of that tool decide as for a call of the model, and the model
       // words the answer. No second round of "should I type it?".
       // The code does this only where nothing else can own the sentence: no
@@ -3519,26 +3720,43 @@ export class Supervisor {
         return `Okay. Nothing is typed into ${title(fits[0]!.session)}.`;
       // The words after the colon are one clause, and no word in it can take
       // it back or hedge it. Anything more goes to the model.
-      if (
+      // "Tell deploy fix to run the tests again", as people say it: the same
+      // call, where the message has no colon form and nothing else can own
+      // the sentence. Its own reader holds the stricter conditions of speech.
+      const nothingWaits =
+        !turn.closed &&
+        !hasDecisionTarget() &&
+        computerApproval() === null &&
+        !(waitingTask && !taskIsOver(waitingTask));
+      const toType =
         fits.length === 1 &&
         oneClause(fits[0]!.text) &&
         !mayTakeBack(fits[0]!.text)
-      ) {
+          ? fits[0]!
+          : fits.length === 0 && nothingWaits && toldForms(words).length === 0
+            ? this.plainlyTold(words)
+            : null;
+      if (toType) {
         const call: ToolCall = {
           id: "tell_first",
           name: "type_into_session",
           arguments: JSON.stringify({
-            session: title(fits[0]!.session),
-            text: fits[0]!.text,
+            session: title(toType.session),
+            text: toType.text,
           }),
         };
+        // Only the plain form needs the mark: the form with a colon passes
+        // the gates of the tool as any call does.
+        if (toType !== fits[0]) turn.ownTyping = call;
+        let typed: string;
+        try {
+          typed = await this.run(call, words, via, turn);
+        } finally {
+          turn.ownTyping = undefined;
+        }
         messages.push(
           { role: "assistant", content: "", toolCalls: [call] },
-          {
-            role: "tool",
-            toolCallId: call.id,
-            content: (await this.run(call, words, via, turn)).slice(0, 6000),
-          },
+          { role: "tool", toolCallId: call.id, content: typed.slice(0, 6000) },
         );
       }
       // "Show me the payments one": the person asks to see a session, and
