@@ -464,11 +464,23 @@ ClawdTime also says how exactly it landed. "Opened" means the tab or the pane.
 When only the terminal application came forward, it says so.
 
 A session comes to the front only when your own words ask to see it: "show me
-the payments one", "open deploy fix", "switch to docs", "take me to it". A
-question about a session ("what's the payments one doing", "is docs done?")
-gets words, and opens nothing: a window that comes forward takes your screen.
-"Don't open it" opens nothing. After you asked to see a session, a correction
-with no such word still counts: "no wait, the other one".
+the payments one", "open deploy fix", "switch to docs", "can I see payments?",
+"bring it up". The words must open their part of the sentence, and what they
+ask to see must be a session: its name, a description that fits it, or "it",
+"that one", "the other one". So these open nothing:
+
+- A question about a session: "what's the payments one doing", "does it show
+  errors?". You get words. A window that comes forward takes your screen.
+- The same words in another sense: "in my view", "the show must go on", "open
+  a pull request".
+- "Show me the status" and "show me what waits": you asked for words.
+- "Don't open it", and a request that you take back in the same message:
+  "open payments, actually never mind".
+- Words for a session: "tell docs: open the file".
+
+Right after you asked to see a session, a correction with no such word still
+counts: "no wait, the other one", "and the docs one". It must be your next
+message, within ten minutes.
 
 ### The window of a session
 

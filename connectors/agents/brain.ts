@@ -790,28 +790,39 @@ const asksAbout = (spoken: string) =>
   );
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
-/** A word that asks to see a session: to open it, show it or go to it. */
-const seeCue =
-  /\b(?:open|show|bring\s+(?:up|back|it|that|the|me)|switch\s+(?:to|over|back)|go\s+(?:back\s+)?to|pull\s+up|take\s+me\s+to|jump\s+to|focus(?:\s+on)?|look\s+at|let\s+me\s+see|let['\u2019]?s\s+see|see\s+(?:the|that|it|what)|view|display|in\s+front|to\s+the\s+front)\b/i;
-/** "Don't open it", "no need to show me that": the person rules it out. */
-const rulesOutSeeing = (spoken: string) =>
-  /\b(?:do\s+not|don['\u2019\u2018\u00b4\u02bc\u2032`]?t|no\s+need\s+to|never|stop)\b[^.?!;]*\b(?:open|show|bring|switch|pull|display|view|see)\b/i.test(
-    spoken,
-  );
+/** What can stand before a request to see a session, in its clause. */
+const seeLead =
+  /^(?:(?:please|ok|okay|so|then|now|and|hey|hi|clawdtime|just|also|well|hmm|yes|yeah|yep|no|wait|actually|instead|rather|alright|right|sure|first|next|quickly|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|let['\u2019]?s|go\s+ahead\s+and)[,\s]+)+/i;
 /**
- * The person's own words ask to see a session: one sentence of the message
- * has a word for it, and that sentence is no question about something ("why
- * did you open it?"). A question about a session ("what's the payments one
- * doing") asks for words, not for a window: opening takes the screen.
+ * A clause that opens with words that ask to see something, and what it asks
+ * to see. The words must open the clause: "the show must go on", "in my
+ * view" and "does payments show errors" ask to see nothing.
  */
-const asksToSee = (spoken: string) =>
-  !rulesOutSeeing(spoken) &&
-  spoken
-    .split(/[.?!;]+\s*/)
-    .some((part) => seeCue.test(part) && !asksAbout(part));
-/** A word that can point at a session after a request to see one: "the other one", "that", "it". */
-const pointsAtSession =
-  /\b(?:one|ones|other|session|it|that|this|same|first|second|third|last|next|previous)\b/i;
+const seeForms = [
+  /^put\s+(.+?)\s+on\s+(?:the\s+|my\s+)?screen$/i,
+  /^(?:pull|bring)\s+(.+?)\s+(?:up|back|forward|to\s+the\s+front)$/i,
+  /^(?:open(?:\s+up)?|show(?:\s+(?:me|us))?|display|view|look\s+at|see|raise|surface|pull\s+up|bring\s+up|bring\s+back|back\s+to|switch(?:\s+(?:over|back))?\s+to|go(?:\s+(?:back|over))?\s+to|jump(?:\s+back)?\s+to|take\s+me(?:\s+back)?\s+to|(?:can|could|may)\s+i\s+see)\s+(.+)$/i,
+];
+/** The thing to see is asked about, not named: "show me what waits", "show me how it went". */
+const seeAsks = /^(?:what|how|which|why|who|whether|if|when|where)\b/i;
+/** Things that open and are no session: "open a pull request", "open the file". */
+const notASession =
+  /\b(?:pull\s+request|pr|issue|ticket|tunnel|file|folder|directory|link|url|browser|port|branch|source|socket)\b/i;
+/** Words that point at a session without its name: "it", "that one", "the other". */
+const seePointer =
+  /^(?:it|that|this|them)(?:\s+(?:after\s+all|again|now|please|too|then|for\s+me|instead|anyway|quickly|first|up|back))*$|\b(?:one|ones|session|sessions|window|terminal|tab)\b|\bthe\s+other\b/i;
+/** A later clause takes the request back: "open payments, actually never mind". */
+const seeTakenBack = (clause: string) =>
+  takesBack(clause) ||
+  /^(?:actually[,\s]+)?(?:no|nope|not\s+now|never\s*mind|wait|cancel|stop)\b/i.test(
+    clause,
+  );
+/** A message that opens as a correction: "no wait, ...", "and ...", "I mean ...". */
+const correctionLead =
+  /^(?:no|nope|not|wait|sorry|oops|i\s+mean|i\s+meant|actually|rather|instead|and|also|then|now|next|hmm|uh|um|ok|okay)\b/i;
+/** "The other one", "that one", "the docs one": words that name a session in a correction. */
+const correctionNames =
+  /\b(?:the\s+other(?:\s+one)?|another\s+one|that\s+one|this\s+one|the\s+\w+(?:\s+\w+)?\s+(?:one|session))\b/i;
 /** What comes before an instruction in speech: a filler, a greeting, a polite opening. */
 const opening =
   /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime)[,.!]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to)\s+)+/i;
@@ -1428,10 +1439,11 @@ const readingTools = new Set([
  * started no job" says the opposite. A claim with a word about an earlier
  * time in its own clause ("I started that two minutes ago") and "I already
  * started it" are not about this turn. "Told", "asked" and "ran" are no
- * claims: "as I told you", "I ran into a problem".
+ * claims: "as I told you", "I ran into a problem". "Made" is one ("I made
+ * the text bigger"), but not in "I made a mistake", "a list" or "sure".
  */
 const claimVerbs =
-  "added|started|opened|typed|sent|created|built|fixed|deployed|approved|denied|allowed|answered|closed|resized|moved|brought|launched|kicked off|queued|scheduled|updated|changed|deleted|removed|installed|restarted|stopped|cancell?ed|accepted|passed|forwarded|handed|put|set up|made|enlarged|shrunk|maximi[sz]ed|minimi[sz]ed|zoomed|increased|decreased|expanded|reduced|restored|switched|showed|displayed|focused|pulled up|selected|raised";
+  "added|started|opened|typed|sent|created|built|fixed|deployed|approved|denied|allowed|answered|closed|resized|moved|brought|launched|kicked off|queued|scheduled|updated|changed|deleted|removed|installed|restarted|stopped|cancell?ed|accepted|passed|forwarded|handed|put|set up|made(?!\\s+(?:a\\s+mistake|an\\s+error|a\\s+(?:\\w+\\s+)?(?:list|note|plan|summary)|sure|no\\b|it\\s+clear))|enlarged|shrunk|maximi[sz]ed|minimi[sz]ed|zoomed|increased|decreased|expanded|reduced|restored|switched|showed|displayed|focused|pulled up|selected|raised";
 const claim = new RegExp(
   `(?:^|[,;:\u2013\u2014]\\s*|\\s-+\\s+|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes|yep|yeah|yup|alright|right|great|perfect|well|got it)[,!.\\s]+)I(?:['\u2019]ve| have)?(?:\\s+(?:just|now|also))*\\s+(?:(?:gone|went)\\s+ahead\\s+and\\s+)?(?:${claimVerbs})\\b(?!\\s+(?:no|nothing|none|neither)\\b)([^,;.!?]*?)(?=$|[,;.!?]|\\s+(?:and|but)\\b)`,
   "gi",
@@ -2013,25 +2025,72 @@ export class Supervisor {
     return bySpoken.kind === "many" ? bySpoken : byModel;
   }
   /**
-   * The message asks to see a session. Or it has no such word, is no
-   * question, has no verb for work, points at a session, and one of the
-   * person's last two messages asked to see one: then it corrects that
-   * request.
+   * The person's own words ask to see a session. One clause opens with words
+   * for it ("show me", "open", "switch to", "can I see"), and what it asks to
+   * see is a session: its name or description, or a word that points at one
+   * ("it", "that one"). "Show me the status" asks for words. A clause after
+   * it that takes it back ends the request, and a message that is words for
+   * a session ("tell docs: open the file") asks ClawdTime to open nothing.
    */
-  private asksToSeeNow(turn: Turn, spoken: string) {
-    if (asksToSee(spoken)) return true;
+  private seeRequest(spoken: string) {
+    const clauses = spoken
+      .split(/[.?!;,:\n]+|\s+(?:and|then|but)\s+/i)
+      .map((clause) => clause.trim())
+      .filter(Boolean);
     if (
-      rulesOutSeeing(spoken) ||
-      isQuestion(spoken) ||
-      // A verb for work: "now fix the header in that one" asks for work.
-      new RegExp(`\\b${workVerb}\\b`, "i").test(spoken) ||
-      !pointsAtSession.test(spoken)
+      /^(?:tell|ask|type|say|send|reply|answer)\b/i.test(
+        (clauses[0] ?? "").replace(seeLead, ""),
+      )
     )
       return false;
-    return turn.history
-      .filter((message) => message.role === "user")
-      .slice(-2)
-      .some((message) => asksToSee(message.text));
+    let asked = -1;
+    for (const [at, clause] of clauses.entries()) {
+      const plain = clause.replace(seeLead, "");
+      const thing = seeForms
+        .map((form) => form.exec(plain)?.[1]?.trim())
+        .find((found) => found);
+      if (!thing || seeAsks.test(thing)) continue;
+      if (/^open\b/i.test(plain) && notASession.test(thing)) continue;
+      let fits = seePointer.test(thing);
+      if (!fits)
+        try {
+          fits = this.pick("", thing).kind !== "none";
+        } catch {
+          fits = false;
+        }
+      if (fits) asked = at;
+    }
+    return asked >= 0 && !clauses.slice(asked + 1).some(seeTakenBack);
+  }
+  /**
+   * The message asks to see a session. Or it corrects such a request: the
+   * person's message just before it, at most ten minutes old, asked to see
+   * one; this message opens as a correction, is no question, has no verb for
+   * work, and names a session or says "the other one" or "that one".
+   */
+  private asksToSeeNow(turn: Turn, spoken: string) {
+    if (this.seeRequest(spoken)) return true;
+    const before = [...turn.history]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (
+      !before ||
+      this.world.now() - before.at > 10 * 60 * 1000 ||
+      !this.seeRequest(before.text)
+    )
+      return false;
+    if (
+      isQuestion(spoken) ||
+      new RegExp(`\\b${workVerb}\\b`, "i").test(spoken) ||
+      !correctionLead.test(spoken.trim())
+    )
+      return false;
+    if (correctionNames.test(spoken)) return true;
+    try {
+      return this.pick("", spoken).kind !== "none";
+    } catch {
+      return false;
+    }
   }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
@@ -3123,7 +3182,9 @@ export class Supervisor {
           if (
             // The person asked for an action: work, a window to change, or a
             // session to see.
-            (asksForWork(words) || asksForSize(words) || asksToSee(words)) &&
+            (asksForWork(words) ||
+              asksForSize(words) ||
+              this.seeRequest(words)) &&
             claimsAction(reply.text) &&
             !acted()
           ) {
