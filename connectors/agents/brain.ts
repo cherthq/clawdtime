@@ -2156,6 +2156,29 @@ const jobProgress =
 /** An offer or a promise to look into a job, to hurry it or to stop it: no tool does that. */
 const jobOffer =
   /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:speed|hurry|rush|nudge|push|poke|ping|check|look|peek|inspect|dig|investigate|try|run|restart|redo|scan|test|debug|fix|cancel|stop|kill|abort)\b/i;
+/**
+ * The whole message tells ClawdTime to stop something, and gives what: "stop
+ * it", "actually cancel that", "kill the bakery job", "can you stop that?".
+ * "I want to cancel that" and "cancel it, thanks" are the same instruction.
+ * It gives the words that name the thing ("" for a bare "cancel"), or null
+ * when the message is no such instruction: a question about stopping ("what
+ * happens if I cancel it?", "should I cancel that?"), a "don't", or a stop
+ * with more work in the same breath ("cancel that and build a page").
+ */
+const stopsWhat = (spoken: string): string | null => {
+  const found =
+    /^(?:(?:actually|ok|okay|so|well|hmm+|um+|uh+|oh|no|nah|wait|please|pls|plz|hey|just|now|never\s*mind|nvm|forget\s+it|scratch\s+that|clawdtime)[,.!\s]+)*(?:(?:(?:can|could|would|will)\s+(?:you|u|we)|i\s+want\s+to|i['\u2019]?d\s+like\s+to|i\s+would\s+like\s+to|let['\u2019]?s)\s+(?:please\s+|pls\s+|just\s+)?)?(?:stop|cancel|abort|kill|halt|end|quit)\b([^,;:.!?]*?)(?:\s+(?:please|pls|plz|now|for\s+now|right\s+now|then|anyway))*(?:,\s*(?:thanks|thank\s+you|thx|please|sorry|my\s+bad|i\s+changed\s+my\s+mind))?[.!?\s]*$/i.exec(
+      spoken.trim(),
+    );
+  if (!found) return null;
+  const thing = found[1]!.trim().toLowerCase();
+  // More than a thing: "that and build a page", "it if the tests fail".
+  return /\b(?:and|then|but|if|when|unless|before|after|so|because|or)\b/.test(
+    thing,
+  )
+    ? null
+    : thing;
+};
 /** An offer or a promise to cancel, stop or restart: no tool does that for a job. */
 const jobCancelOffer =
   /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:cancel|stop|kill|abort|restart)\b/i;
@@ -3198,6 +3221,117 @@ export class Supervisor {
       .reverse()
       .slice(-jobsListed);
     return day.length < 2 ? this.jobsNow(1) : day;
+  }
+  /**
+   * The person tells ClawdTime to stop a job that still works or waits. No
+   * tool stops a job, and a model that is asked reaches for the task tool,
+   * which knows no job: it then says that nothing runs, and offers to start
+   * the work once more. So the code answers, with what is true: it cannot,
+   * and how the person can. Null when the message is no such instruction,
+   * when no job is unfinished, or when something else can be meant.
+   *
+   * The thing is the job when the words say so: "the job", or words of an
+   * unfinished job's request ("the bakery job", "the landing page one"). A
+   * thing that only points ("it", "that", "the build", or nothing) is the
+   * job only when ClawdTime's last message was about a job, and when
+   * nothing else waits for a stop: a request on the desk, a computer task.
+   * A task that is live owns every stop, and so does a session that the
+   * words fit.
+   */
+  private stopsAJob(words: string, turn: Turn): string | null {
+    if (!this.world.jobs) return null;
+    const thing = stopsWhat(words);
+    if (thing === null) return null;
+    const bare = thing.replace(/^(?:the|that|this|my|your)\s+/, "");
+    const points =
+      /^(?:|it|that|this|them|that\s+one|this\s+one)$/.test(thing) ||
+      /^(?:one|thing|build|run|work)$/.test(bare);
+    const last = (turn.whole ?? turn.history).at(-1);
+    // A stop belongs first to what runs: the task, or a computer task.
+    const task = this.world.tasks?.current();
+    const taskLive = !!task && !taskIsOver(task);
+    const execution = this.world.execution?.snapshot();
+    const computerBusy =
+      !!execution?.configured &&
+      (!!execution.pendingAction ||
+        !["idle", "completed", "canceled", "blocked"].includes(
+          execution.state,
+        ));
+    // "Cancel that" after ClawdTime's own yes or no question is a no to it.
+    // The question is used up by then. A bare "stop" or "cancel" has its own
+    // rule there, and so has a stop while something runs.
+    const afterOffer =
+      !taskLive &&
+      !computerBusy &&
+      last?.role === "assistant" &&
+      isOfferQuestion(last.text);
+    if (points && thing !== "" && afterOffer) return "Okay. Nothing started.";
+    const now = this.world.now();
+    const unfinished = this.jobsNow(3)
+      .filter((job) => !job.done && now - job.startedAt < 24 * 60 * 60 * 1000)
+      .reverse();
+    const requested = new Set(
+      unfinished.flatMap((job) =>
+        (job.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+          (word) => !correctionStop.has(word),
+        ),
+      ),
+    );
+    const saysJob = /\bjobs?\b/.test(thing);
+    const named = (bare.match(/\p{L}+/gu) ?? []).filter(
+      (word) => !/^(?:job|jobs|one|thing|build|run|work)$/.test(word),
+    );
+    const namesIt =
+      !points && named.length > 0 && named.every((word) => requested.has(word));
+    // "Cancel the job" after that question is the offered job, unless the
+    // words name a job that runs ("stop the bakery one").
+    if (afterOffer && saysJob && !namesIt) return "Okay. Nothing started.";
+    if (!unfinished.length) return null;
+    if (!points && !saysJob && !namesIt) return null;
+    // Something else that a stop can mean.
+    if (taskLive) return null;
+    if (points) {
+      // A bare "stop" goes to the computer engine wherever one is set up.
+      if (computerBusy || (execution?.configured && thing === "")) return null;
+      if (this.world.desk.pending().length > 0) return null;
+      // ClawdTime's last message was about a job: its start, its state, its
+      // answer, or this same sentence. After talk about a session ("deploy
+      // fix finished"), "kill it" is not about a job.
+      const saysAJob = !!last && /\bjobs?\b/i.test(last.text);
+      // A message that names a session is about that session ("deploy fix
+      // still works on the tests"), unless it also says "job".
+      const namesASession =
+        !!last &&
+        (this.world.board()?.sessions ?? []).some(
+          (session) =>
+            session.name !== null && saidAsWords(title(session), last.text),
+        );
+      const aboutAJob =
+        last?.role === "assistant" &&
+        (last.news === true ||
+          saysAJob ||
+          (!namesASession &&
+            (/^On it\. .* in a new terminal window\b/.test(last.text) ||
+              /\bstill works\b/.test(last.text) ||
+              (last.text.toLowerCase().match(/\p{L}{4,}/gu) ?? []).some(
+                (word) => requested.has(word),
+              ))));
+      if (!aboutAJob) return null;
+    }
+    if (this.pick("", words).kind !== "none") return null;
+    const head = "I cannot stop a job: no tool does that.";
+    if (unfinished.length === 1) {
+      const job = unfinished[0]!;
+      return job.waiting
+        ? `${head} ${requestSaid(job)} waits in its own terminal window for the job before it. To stop it, close that window. It then writes no answer, so I still list it for up to a day.`
+        : `${head} ${requestSaid(job)} has run ${ranFor(now - job.startedAt)} in its own terminal window. To stop it, close that window. It then writes no answer, so I still list it as working for up to a day.`;
+    }
+    return `${head} Each job runs in its own terminal window: to stop one, close its window. It then writes no answer, so I still list it for up to a day. Not done: ${unfinished
+      .map(
+        (job) =>
+          `${requestSaid(job)} (${job.waiting ? "waits for the job before it" : `works, ${ranFor(now - job.startedAt)}`})`,
+      )
+      .join(", ")}.`;
   }
   private jobsNow(limit: number): JobFacts[] {
     try {
@@ -4931,6 +5065,9 @@ export class Supervisor {
           return `Say "tell ${title(about.session)}: ${asked}" and I type it.`;
       }
     }
+    // "Cancel that", and a job still works: the code says what is true.
+    const cannotStop = this.stopsAJob(words, turn);
+    if (cannotStop !== null) return cannotStop;
     // "Open Claude, and build a page": the person named a coding agent and
     // gave it an instruction for software work. It starts at once, as a
     // direct instruction does, under the same vetoes: the strict reader, no

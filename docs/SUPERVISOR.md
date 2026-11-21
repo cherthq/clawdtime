@@ -857,6 +857,19 @@ a tunnel and get its link, find something out: all of these are jobs.
   answers, unless it read the state (which shows the jobs) or your words
   fit a session. With no answer in front of it, the model made one up
   ("the biggest file is large_video.mp4").
+- No tool stops a job. When you tell ClawdTime to stop one that still
+  works or waits ("actually cancel that", "stop it", "kill the bakery
+  job"), the code answers itself, with no language model: it cannot, the
+  job runs in its own terminal window, and you stop it by closing that
+  window. It also says that the job then writes no answer, so it stays
+  listed as working for up to a day. With several jobs it names each one
+  that is not done. Words that name the job count at any time ("the job",
+  "the bakery one"). A word that only points ("it", "that", "the build",
+  or a bare "cancel") counts only when ClawdTime's last message was about
+  a job and nothing else waits for a stop: a request of an agent, a
+  computer task. A task that is live owns every stop, and so does a
+  session that your words fit. After ClawdTime's own yes or no question,
+  "cancel that" is a no.
 - An offer to cancel, stop or restart a job is never said: no tool does
   that. When an answer about the jobs or the state makes such an offer
   while a job works or waits, the language model answers once more without
