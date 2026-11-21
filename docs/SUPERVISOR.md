@@ -325,6 +325,32 @@ These rules are in the code, not in the model's instructions:
 - A request is allowed or denied only when your own last message says so. "What
   does it want?" allows nothing. "Yes, approve it" allows it. The same reading
   of your words is used on a call.
+- A bare "yes" or "no" is read against ClawdTime's own last question. After
+  a question about a denial ("Should I deny it?", "Do you want to approve or
+  deny it?"), a "yes" approves nothing and a "no" denies nothing: only your
+  own word ("approve it", "deny it") decides there.
+- A "yes" is your denial in one case: ClawdTime offered to deny the one
+  request that waits. Its message is the last one, on the same channel and
+  younger than five minutes, and it ends with the offer itself: "Should I",
+  "Shall I", "Can I", "May I", "Do you want me to", "Want me to" or "Would
+  you like me to", then deny, reject, refuse or decline, then "it", "that",
+  "the request", "the command" or a word of the head of the request's text,
+  and "?". A question about the past, a reason or another thing is no offer
+  ("Did you deny it?", "Should I decline the meeting?"). When the offer
+  says "it" or "the request", the sentence right before it speaks of the
+  request, by a word of its text. The request waited before the message, and
+  no task is live. Your
+  message is a yes and nothing else ("yes", "ok, do it", "yes, deny it");
+  "go ahead" is not one, because it can mean that the command goes ahead.
+  The model still calls the tool with "deny": the yes alone decides nothing.
+- When your message decides the one request that waits and the model answers
+  with a question or a claim in place of the tool, ClawdTime asks the model
+  once more to call the tool. That happens only when ClawdTime's last message
+  ends with its own sentence about that request ("One request waits for your
+  answer: ... Say approve or deny to answer it.") and the text of the request
+  is one short simple command, or when your message is the yes above. The code decides nothing there. A second answer that claims
+  a decision that no tool made is replaced by "Nothing was decided." and
+  what waits.
 - One message decides one request. The model names a request by its id, never
   by its place in a list, so an answer cannot move to another request when the
   list changes. The facts of each turn give the model the ids of the requests

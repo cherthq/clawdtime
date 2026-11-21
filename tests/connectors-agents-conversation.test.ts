@@ -6777,6 +6777,800 @@ describe("two requests wait: the decision in one message, which one in the next"
   });
 });
 
+describe("a decision that the person said: the model is asked once more, and a yes is read against the question", () => {
+  const push = "git push origin main";
+  const remove = "rm -rf node_modules";
+  /** Requests on the desk, and a conversation that is kept with the time of the clock. */
+  const desk = (summaries = [remove]) => {
+    const made = mac([session({ name: "deploy fix" })]);
+    const open = (summary: string, extra: Record<string, unknown> = {}) => {
+      made.clock.now += 1000;
+      return made.world.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary,
+          options: [],
+          ...extra,
+        },
+        holdSeconds: 600,
+      });
+    };
+    const ids = summaries.map((summary) => open(summary).id);
+    const history: ChatMessage[] = [];
+    /** A message of ClawdTime that is already in the conversation. */
+    const told = (text: string, via: ChatMessage["via"] = "chat") => {
+      // ClawdTime speaks after the request arrived.
+      made.clock.now += 1_000;
+      history.push({ ...said("assistant", text), at: made.clock.now, via });
+      made.clock.now += 5_000;
+    };
+    const say = async (
+      words: string,
+      steps: (ToolCall[] | string)[],
+      via: ChatMessage["via"] = "chat",
+    ) => {
+      const at = made.clock.now;
+      const run = scripted(steps);
+      const reply = await new Supervisor(made.world, run.model).reply(
+        [...history],
+        words,
+        via,
+      );
+      history.push(
+        { ...said("user", words), at, via },
+        { ...said("assistant", reply), at, via },
+      );
+      made.clock.now += 5_000;
+      return { reply, run };
+    };
+    const decided = (id: string) =>
+      (made.world.desk.take(id) as { decision?: string } | null)?.decision ??
+      null;
+    return { made, ids, open, told, say, decided };
+  };
+  const waits = (summary: string) =>
+    `One request waits for your answer: ${summary}. Say approve or deny to answer it.`;
+  const decide = (id: string, decision: string) =>
+    call("decide", { request: id, decision });
+  /** The check that the model got with its second request, or "". */
+  const note = (run: ReturnType<typeof scripted>) =>
+    run.seen
+      .at(1)
+      ?.system.split("\n")
+      .find((line) => line.startsWith("A check of your last draft")) ?? "";
+
+  describe("the model answers a decision with a question: it is asked once more", () => {
+    it("asks the model again with the id, and the gate then decides from the person's words", async () => {
+      const { ids, told, say, decided } = desk();
+      told(`Allowed: "${push}". The agent continues. ${waits(remove)}`);
+      const got = await say("and deny the other one", [
+        "One request waits to confirm removing node_modules. Should I deny it?",
+        [decide(ids[0]!, "deny")],
+        "Denied.",
+      ]);
+      expect(got.reply).toBe("Denied.");
+      expect(decided(ids[0]!)).toBe("deny");
+      expect(note(got.run)).toBe(
+        `A check of your last draft: the person's last message says to deny the one request that waits (id ${ids[0]!.slice(0, 8)}), and your last message told them what it asks. Call decide for it now: its gate reads their words. Do not ask them again.`,
+      );
+      // The text of the request is written by an agent: it is not in the note.
+      expect(note(got.run)).not.toContain("node_modules");
+    });
+
+    it.each([
+      ["approve it", "allow"],
+      ["ok approve it", "allow"],
+      ["yes, approve that one", "allow"],
+      ["deny it", "deny"],
+      ["reject it please", "deny"],
+    ])("for %j the note says %s", async (words, decision) => {
+      const { ids, told, say, decided } = desk();
+      told(waits(remove));
+      const got = await say(words, [
+        "Shall I do that?",
+        [decide(ids[0]!, decision)],
+        "Done with it.",
+      ]);
+      expect(note(got.run), words).toContain(
+        `says to ${decision} the one request that waits`,
+      );
+      expect(decided(ids[0]!), words).toBe(decision);
+    });
+
+    it("asks only once: a second answer without the tool decides nothing", async () => {
+      const { ids, told, say, decided, made } = desk();
+      told(waits(remove));
+      const got = await say("deny it", [
+        "Should I deny it?",
+        "Do you want me to deny it?",
+        "A third answer that is never asked for.",
+      ]);
+      expect(got.reply).toBe("Do you want me to deny it?");
+      expect(got.run.seen).toHaveLength(2);
+      expect(decided(ids[0]!)).toBeNull();
+      expect(made.world.desk.pending()).toHaveLength(1);
+    });
+
+    it("says the truth when the second answer claims a decision that no tool made", async () => {
+      for (const claim of [
+        "Denied.",
+        "I denied it for you.",
+        "Done, it's rejected.",
+        "I approved it for you; the removal is going ahead now.",
+      ]) {
+        const { ids, told, say, decided } = desk();
+        told(waits(remove));
+        const got = await say("deny it", ["Should I deny it?", claim]);
+        expect(got.reply, claim).toBe(`Nothing was decided. ${waits(remove)}`);
+        expect(decided(ids[0]!), claim).toBeNull();
+      }
+    });
+
+    it.each([
+      // The message decides nothing by the gate's own reading.
+      "should I deny it?",
+      "maybe deny it",
+      "don't approve it yet",
+      "what happens if I deny it?",
+      // No word of decision: a bare word can answer something else.
+      "yes",
+      "ok",
+      "no",
+      "the rm one",
+    ])("does not ask again for %j", async (words) => {
+      const { ids, told, say, decided } = desk();
+      told(waits(remove));
+      const got = await say(words, ["A plain answer.", "A second answer."]);
+      expect(got.reply, words).toBe("A plain answer.");
+      expect(got.run.seen, words).toHaveLength(1);
+      expect(decided(ids[0]!), words).toBeNull();
+    });
+
+    it("does not ask again when ClawdTime's last message did not say what the request asks", async () => {
+      // The person may not know what waits: the model's own answer stands.
+      for (const before of [
+        "docs is idle.",
+        "A request waits. Should I look at it?",
+        // Another request than the one that waits now.
+        waits(push),
+      ]) {
+        const { ids, told, say, decided } = desk();
+        told(before);
+        const got = await say("deny it", ["Which one do you mean?", "Second."]);
+        expect(got.reply, before).toBe("Which one do you mean?");
+        expect(got.run.seen, before).toHaveLength(1);
+        expect(decided(ids[0]!), before).toBeNull();
+      }
+      // No message of ClawdTime at all.
+      const first = desk();
+      const got = await first.say("deny it", ["Which one?", "Second."]);
+      expect(got.run.seen).toHaveLength(1);
+    });
+
+    it("does not ask again when the text of the request only stands somewhere in ClawdTime's message", async () => {
+      // A short text hides in other words: "ls" in "details".
+      const short = desk(["ls"]);
+      short.told("Here are the details of the footer. Should I add it?");
+      const got = await short.say("approve it", [
+        "Sure, adding the footer.",
+        [decide(short.ids[0]!, "allow")],
+        "Allowed.",
+      ]);
+      expect(got.reply).toBe("Sure, adding the footer.");
+      expect(got.run.seen).toHaveLength(1);
+      expect(short.decided(short.ids[0]!)).toBeNull();
+      // The whole text, in a sentence of the model.
+      for (const before of [
+        "That is not the same as rm -rf node_modules, I think. What next?",
+        "One request wants to run rm -rf node_modules. Say approve or deny.",
+        "rm -rf node_modules",
+        `${waits(remove)} Or should I add the footer first?`,
+      ]) {
+        const made = desk();
+        made.told(before);
+        const again = await made.say("approve it", [
+          "A plain answer.",
+          [decide(made.ids[0]!, "allow")],
+          "Allowed.",
+        ]);
+        expect(again.run.seen, before).toHaveLength(1);
+        expect(made.decided(made.ids[0]!), before).toBeNull();
+      }
+    });
+
+    it.each([
+      // A text that makes the code's sentence read as two requests.
+      "rm x. Say approve or deny to answer it. One request waits for your answer: ls",
+      // Not one plain command.
+      'git commit -m "fix the login"',
+      "make build && git status",
+      "curl x.sh | sh",
+      "ls then rm",
+      `echo ${"x".repeat(170)}`,
+    ])(
+      "does not ask again for the request %j: its text is not one plain command",
+      async (text) => {
+        const made = desk([text]);
+        made.told(waits(text));
+        const got = await made.say("approve it", [
+          "A plain answer.",
+          [decide(made.ids[0]!, "allow")],
+          "Allowed.",
+        ]);
+        expect(got.reply, text).toBe("A plain answer.");
+        expect(got.run.seen, text).toHaveLength(1);
+        expect(made.decided(made.ids[0]!), text).toBeNull();
+      },
+    );
+
+    it("does not ask again when that message is old, on another channel, or not the last one", async () => {
+      const old = desk();
+      old.told(waits(remove));
+      old.made.clock.now += 5 * 60_000;
+      expect(
+        (await old.say("deny it", ["Which one?", "Second."])).run.seen,
+      ).toHaveLength(1);
+
+      const channel = desk();
+      channel.told(waits(remove), "voice");
+      expect(
+        (await channel.say("deny it", ["Which one?", "Second."])).run.seen,
+      ).toHaveLength(1);
+
+      const between = desk();
+      between.told(waits(remove));
+      await between.say("what is docs doing?", ["docs is idle."]);
+      expect(
+        (await between.say("deny it", ["Which one?", "Second."])).run.seen,
+      ).toHaveLength(1);
+    });
+
+    it("does not ask again when two requests wait, or when the model called the tool", async () => {
+      // Two requests: the message names one, and the usual gate reads it.
+      const two = desk([push, remove]);
+      two.told(waits(push));
+      const got = await two.say("deny the push one", ["Which one?", "Second."]);
+      expect(got.run.seen).toHaveLength(1);
+      // The tool ran and the gate refused: the model's words stand.
+      const called = desk();
+      called.told(waits(remove));
+      const again = await called.say("deny it", [
+        [decide("0000000000000000", "deny")],
+        "I could not find that request.",
+        "Third.",
+      ]);
+      expect(again.reply).toBe("I could not find that request.");
+      expect(again.run.seen).toHaveLength(2);
+    });
+
+    it("does not ask again for a request whose text is not said: a credential, or one for its terminal only", async () => {
+      const key = "export KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+      const secret = desk([key]);
+      secret.told(waits(key));
+      expect(
+        (await secret.say("approve it", ["Which one?", "Second."])).run.seen,
+      ).toHaveLength(1);
+      const terminal = desk([]);
+      terminal.open("terraform apply", { answerInTerminal: true });
+      terminal.told(waits("terraform apply"));
+      expect(
+        (await terminal.say("approve it", ["Which one?", "Second."])).run.seen,
+      ).toHaveLength(1);
+    });
+  });
+
+  describe("a bare yes or no after ClawdTime's own question about a denial", () => {
+    const asksToDeny =
+      "One request waits to confirm removing node_modules. Should I deny it?";
+    const toolSaid = (run: ReturnType<typeof scripted>) =>
+      run.seen[1]!.messages.filter((message) => message.role === "tool")[0]!
+        .content;
+    const noApproval =
+      'A "yes" after the question about a denial approves nothing. The request still waits: say "approve" or "deny".';
+    const noDenial =
+      'A "no" after the question about a denial denies nothing. The request still waits: say "approve" or "deny".';
+
+    it.each([
+      "yes",
+      "Yes.",
+      "yeah",
+      "yep",
+      "ok",
+      "okay",
+      "sure",
+      "go ahead",
+      "do it",
+      "yes please",
+      "proceed",
+      "confirm",
+      "yes do it",
+    ])(
+      "%j approves nothing, also when the model calls the tool with allow",
+      async (words) => {
+        const { ids, told, say, decided, made } = desk();
+        told(asksToDeny);
+        const got = await say(words, [[decide(ids[0]!, "allow")], "Okay."]);
+        expect(decided(ids[0]!), words).toBeNull();
+        expect(made.world.desk.pending(), words).toHaveLength(1);
+        expect(toolSaid(got.run), words).toBe(noApproval);
+      },
+    );
+
+    it.each([
+      "Should I deny it?",
+      "It deletes a folder. Do you want me to reject it?",
+      "Shall I refuse that one?",
+      "Want me to decline it?",
+      "Should I block it? It looks risky.",
+      "Do you want to deny it or approve it?",
+      "Should I approve or deny it?",
+      "Do you want me to turn it down?",
+      "Should I say no to it?",
+      "Should I stop it?",
+      "Do you want me to cancel that request?",
+    ])("after %j, a yes approves nothing", async (question) => {
+      const { ids, told, say, decided } = desk();
+      told(question);
+      await say("yes", [[decide(ids[0]!, "allow")], "Okay."]);
+      expect(decided(ids[0]!), question).toBeNull();
+    });
+
+    it.each(["no", "nope", "No.", "don't", "stop", "never"])(
+      "%j after that question denies nothing: it says not to deny",
+      async (words) => {
+        const { ids, told, say, decided, made } = desk();
+        told(asksToDeny);
+        const got = await say(words, [[decide(ids[0]!, "deny")], "Okay."]);
+        expect(decided(ids[0]!), words).toBeNull();
+        expect(made.world.desk.pending(), words).toHaveLength(1);
+        expect(toolSaid(got.run), words).toBe(noDenial);
+      },
+    );
+
+    it.each([
+      ["yes, approve it", "allow"],
+      ["approve it", "allow"],
+      ["allow it", "allow"],
+      ["ok approve", "allow"],
+      ["deny it", "deny"],
+      ["no, deny it", "deny"],
+      ["reject it", "deny"],
+    ])(
+      "the person's own word of decision still decides: %j",
+      async (words, decision) => {
+        const { ids, told, say, decided } = desk();
+        told(asksToDeny);
+        await say(words, [[decide(ids[0]!, decision)], "Okay."]);
+        expect(decided(ids[0]!), words).toBe(decision);
+      },
+    );
+
+    it.each([
+      // A question about an approval, a statement, or no question at all: as before.
+      ["Should I approve it?", "yes", "allow"],
+      ["Do you want me to allow it?", "yes", "allow"],
+      [
+        "One request waits for your answer: rm -rf node_modules. Say approve or deny to answer it.",
+        "yes",
+        "allow",
+      ],
+      ["docs is idle.", "yes", "allow"],
+      // The denial is not in the question itself.
+      ["I denied the other one. Should I approve this one?", "yes", "allow"],
+      ["Should I approve it?", "no", "deny"],
+      ["docs is idle.", "no", "deny"],
+    ])("after %j, %j decides as before", async (before, words, decision) => {
+      const { ids, told, say, decided } = desk();
+      told(before);
+      await say(words, [[decide(ids[0]!, decision)], "Okay."]);
+      expect(decided(ids[0]!), before).toBe(decision);
+    });
+
+    it("a line of news after the question does not hide it", async () => {
+      const { ids, decided, made } = desk();
+      const history: ChatMessage[] = [
+        {
+          ...said("assistant", asksToDeny),
+          at: made.clock.now - 5_000,
+          via: "chat",
+        },
+        {
+          ...said(
+            "assistant",
+            "Done: count the files\n\nIts answer: 12 files.",
+          ),
+          at: made.clock.now,
+          via: "chat",
+          news: true,
+        },
+      ];
+      const run = scripted([[decide(ids[0]!, "allow")], "Okay."]);
+      await new Supervisor(made.world, run.model).reply(history, "yes", "chat");
+      expect(decided(ids[0]!)).toBeNull();
+    });
+  });
+
+  describe("a yes to ClawdTime's question whether to deny the one request is the person's denial", () => {
+    const asksToDeny =
+      "That one deletes the node_modules folder of the app. Should I deny it?";
+
+    it.each([
+      "yes",
+      "Yes.",
+      "yeah",
+      "yep",
+      "sure",
+      "ok",
+      "okay, do it",
+      "yes please",
+      "yes, deny it",
+      "yes deny",
+      "ok deny it",
+      "um, yes",
+      "please do",
+      "do it",
+      "yes, thanks",
+    ])(
+      "%j denies it when the model calls the tool with deny",
+      async (words) => {
+        const { ids, told, say, decided, made } = desk();
+        told(asksToDeny);
+        const got = await say(words, [[decide(ids[0]!, "deny")], "Denied."]);
+        expect(decided(ids[0]!), words).toBe("deny");
+        expect(made.world.desk.pending(), words).toHaveLength(0);
+        expect(
+          got.run.seen[1]!.messages.filter(
+            (message) => message.role === "tool",
+          )[0]!.content,
+          words,
+        ).toBe("Denied. The agent is told.");
+      },
+    );
+
+    it.each([
+      "Should I deny it?",
+      "Shall I deny it?",
+      "So, should I deny it?",
+      "Do you want me to deny it?",
+      "Want me to reject it?",
+      "Would you like me to refuse it?",
+      "Can I decline that one?",
+      "Should I just deny that request?",
+      "Should I deny it now?",
+      "Should I deny the command for you?",
+      "Should I deny the rm one?",
+      "Should I deny rm?",
+    ])("after ClawdTime's offer %j, a yes denies it", async (offer) => {
+      const { ids, told, say, decided } = desk();
+      told(`It deletes the node_modules folder. ${offer}`);
+      await say("yes", [[decide(ids[0]!, "deny")], "Denied."]);
+      expect(decided(ids[0]!), offer).toBe("deny");
+    });
+
+    it.each([
+      // A question about the past, a reason, an opinion or a fact is no offer.
+      "Did you deny it?",
+      "Why did the agent refuse?",
+      "Want to know why I would deny it?",
+      "Does the agent deny access to modules?",
+      "Would you deny a command like that?",
+      "Have I denied it?",
+      // An offer to deny another thing.
+      "Should I decline the meeting?",
+      "Should I deny access to the folder?",
+      "Should I deny the push one?",
+      "Should I deny the request to delete node_modules?",
+      "Should I deny the node_modules one?",
+      // Not ClawdTime's own offer.
+      "Should we deny it?",
+      "Could you deny it?",
+      "Is it right to deny it?",
+      "Will you deny it?",
+      // More than the offer.
+      "Should I deny it and tell the agent?",
+      "Should I deny it, then approve the next?",
+      "Should I deny it first?",
+      "Should I deny it too?",
+    ])(
+      "after %j, a yes denies nothing: it is no offer to deny this request",
+      async (question) => {
+        const before = `That one deletes the node_modules folder of the app. ${question}`;
+        // The model answers with words: it is not asked again.
+        const plain = desk();
+        plain.told(before);
+        const got = await plain.say("yes", [
+          "A plain answer.",
+          [decide(plain.ids[0]!, "deny")],
+          "Okay.",
+        ]);
+        expect(got.reply, question).toBe("A plain answer.");
+        expect(got.run.seen, question).toHaveLength(1);
+        expect(plain.decided(plain.ids[0]!), question).toBeNull();
+        // The model calls the tool at once: the gate refuses.
+        const called = desk();
+        called.told(before);
+        const again = await called.say("yes", [
+          [decide(called.ids[0]!, "deny")],
+          "Okay.",
+        ]);
+        expect(called.decided(called.ids[0]!), question).toBeNull();
+        expect(called.made.world.desk.pending(), question).toHaveLength(1);
+        expect(
+          again.run.seen[1]!.messages.filter(
+            (message) => message.role === "tool",
+          )[0]!.content,
+          question,
+        ).toBe("The person did not clearly say that. Ask them.");
+      },
+    );
+
+    it.each([
+      // "It" is another thing: the word of the request stands in another sentence.
+      "Docs finished the node_modules cleanup. The deploy fix session wants to push. Should I deny it?",
+      "The node_modules request waits. The task asks whether to keep the old header. Should I refuse it?",
+      "I looked at node_modules. Nothing else is new. Should I deny it?",
+      // No sentence before the offer.
+      "Should I deny it?",
+    ])(
+      "after %j, a yes denies nothing: the sentence before the offer is not about the request",
+      async (before) => {
+        const plain = desk();
+        plain.told(before);
+        const got = await plain.say("yes", [
+          "A plain answer.",
+          [decide(plain.ids[0]!, "deny")],
+          "Okay.",
+        ]);
+        expect(got.run.seen, before).toHaveLength(1);
+        const called = desk();
+        called.told(before);
+        await called.say("yes", [[decide(called.ids[0]!, "deny")], "Okay."]);
+        expect(called.decided(called.ids[0]!), before).toBeNull();
+      },
+    );
+
+    it.each([
+      // The sentence right before the offer speaks of the request.
+      "The job wants to delete node_modules. Should I refuse it?",
+      "Docs is idle. The agent asks to remove node_modules. Should I deny it?",
+      // The offer names the request by a word of the head of its text.
+      "Docs is idle. Should I deny the rm one?",
+      "Should I deny the rm command?",
+    ])("after %j, a yes denies the request", async (before) => {
+      const { ids, told, say, decided } = desk();
+      told(before);
+      await say("yes", [[decide(ids[0]!, "deny")], "Denied."]);
+      expect(decided(ids[0]!), before).toBe("deny");
+    });
+
+    it("denies nothing by a yes while a task is live: the offer can be about the task", async () => {
+      const task = {
+        goal: "build the landing page",
+        state: "needs_decision",
+        summary: "A question waits.",
+        question: "Keep the old header?",
+        choices: [],
+        canAnswer: true,
+        canAccept: false,
+        canCancel: true,
+      };
+      const made = mac([session({ name: "deploy fix" })]);
+      made.clock.now += 1000;
+      const request = made.world.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary: remove,
+          options: [],
+        },
+        holdSeconds: 600,
+      });
+      made.clock.now += 1000;
+      const world: SupervisorWorld = {
+        ...made.world,
+        tasks: {
+          current: () => task,
+          canStart: () => false,
+          start: async () => ({ ok: false, message: "A task is active." }),
+          answer: async () => ({ ok: true, message: "answered" }),
+          accept: async () => ({ ok: true, message: "accepted" }),
+          cancel: async () => ({ ok: true, message: "cancelled" }),
+        },
+      };
+      const history: ChatMessage[] = [
+        {
+          ...said(
+            "assistant",
+            "The task asks whether to keep the old header. The agent wants to delete node_modules. Should I refuse it?",
+          ),
+          at: made.clock.now,
+          via: "chat",
+        },
+      ];
+      made.clock.now += 5_000;
+      for (const steps of [
+        ["A plain answer.", [decide(request.id, "deny")], "Okay."],
+        [[decide(request.id, "deny")], "Okay."],
+      ] as (ToolCall[] | string)[][]) {
+        const run = scripted(steps);
+        await new Supervisor(world, run.model).reply(history, "yes", "chat");
+        expect(made.world.desk.take(request.id)).toBeNull();
+        // No note that tells the model to deny.
+        expect(
+          run.seen.some((input) =>
+            input.system.includes("A check of your last draft"),
+          ),
+        ).toBe(false);
+      }
+    });
+
+    it("denies nothing for a request that arrived in the same moment as the question", async () => {
+      const { made, ids, say, decided } = desk();
+      // The message of ClawdTime has the time of the request.
+      const history: ChatMessage[] = [
+        {
+          ...said("assistant", asksToDeny),
+          at: made.world.desk.pending()[0]!.createdAt,
+          via: "chat",
+        },
+      ];
+      const run = scripted([[decide(ids[0]!, "deny")], "Okay."]);
+      await new Supervisor(made.world, run.model).reply(history, "yes", "chat");
+      expect(decided(ids[0]!)).toBeNull();
+      void say;
+    });
+
+    it("never approves by that yes, whatever the model calls", async () => {
+      const { ids, told, say, decided } = desk();
+      told(asksToDeny);
+      await say("yes", [
+        [decide(ids[0]!, "allow")],
+        [decide(ids[0]!, "allow")],
+        "Okay.",
+      ]);
+      expect(decided(ids[0]!)).toBeNull();
+    });
+
+    it("asks the model once more when it answers the yes with a question", async () => {
+      const { ids, told, say, decided } = desk();
+      told(asksToDeny);
+      const got = await say("yes", [
+        "You said yes, but was that for allowing or denying the deletion of node_modules?",
+        [decide(ids[0]!, "deny")],
+        "Denied.",
+      ]);
+      expect(got.reply).toBe("Denied.");
+      expect(decided(ids[0]!)).toBe("deny");
+      expect(note(got.run)).toBe(
+        `A check of your last draft: the person's last message is a yes to your own question whether to deny the one request that waits (id ${ids[0]!.slice(0, 8)}). Call decide with "deny" for it now: its gate reads their yes against your question. Do not ask them again.`,
+      );
+    });
+
+    it("says the truth when the model claims the denial and never calls the tool", async () => {
+      const { ids, told, say, decided } = desk();
+      told(asksToDeny);
+      const got = await say("yes", [
+        "You said yes to deny the request, so I denied it just now. Is that right?",
+        "You said yes, so I denied it.",
+      ]);
+      expect(got.reply).toBe(`Nothing was decided. ${waits(remove)}`);
+      expect(decided(ids[0]!)).toBeNull();
+    });
+
+    it.each([
+      // The question asks about more than a denial, or it is turned around.
+      "It deletes node_modules. Should I deny it or approve it?",
+      "It deletes node_modules. Should I deny it or wait?",
+      "It deletes node_modules. Shouldn't I deny it?",
+      "It deletes node_modules. Should I not deny it?",
+      "It deletes node_modules. Should I deny all of them?",
+      "It deletes node_modules. Should I deny it and approve the other one?",
+      "It deletes node_modules. Should I let it run?",
+      // A question about something else that can be stopped.
+      "It deletes node_modules. Should I stop it?",
+      "It deletes node_modules. Should I cancel it?",
+      "It deletes node_modules. Should I block it?",
+      // The question is not the end of the message.
+      "Should I deny it? It deletes node_modules.",
+      "Should I deny the node_modules one? Say approve or deny.",
+      // The message holds no word of the request: it can be about another one.
+      "Should I deny it?",
+      "A request waits. Should I deny it?",
+      // No question.
+      "I can deny the node_modules one.",
+    ])("after %j, a yes denies nothing", async (question) => {
+      const { ids, told, say, decided, made } = desk();
+      told(question);
+      const got = await say("yes", [[decide(ids[0]!, "deny")], "Okay."]);
+      expect(decided(ids[0]!), question).toBeNull();
+      expect(made.world.desk.pending(), question).toHaveLength(1);
+      expect(
+        got.run.seen[1]!.messages.filter(
+          (message) => message.role === "tool",
+        )[0]!.content,
+        question,
+      ).toBe("The person did not clearly say that. Ask them.");
+    });
+
+    it.each([
+      "yes but wait",
+      "yes?",
+      "yes or no",
+      "yes and approve the other one",
+      "yeah no",
+      "hmm yes maybe",
+      "yes later",
+      "yes, if the tests pass",
+      "yes I think so",
+      "not yes",
+      "yes, approve it",
+      "what",
+      "the node_modules one",
+      // It can mean that the command goes ahead.
+      "go ahead",
+      "yes, go ahead",
+    ])("%j after the question denies nothing by a yes", async (words) => {
+      const { ids, told, say, decided } = desk();
+      told(asksToDeny);
+      await say(words, [[decide(ids[0]!, "deny")], "Okay."]);
+      expect(decided(ids[0]!), words).toBeNull();
+    });
+
+    it("denies nothing when the question is old, on another channel, or not the last message", async () => {
+      const old = desk();
+      old.told(asksToDeny);
+      old.made.clock.now += 5 * 60_000;
+      await old.say("yes", [[decide(old.ids[0]!, "deny")], "Okay."]);
+      expect(old.decided(old.ids[0]!)).toBeNull();
+
+      const channel = desk();
+      channel.told(asksToDeny, "voice");
+      await channel.say("yes", [[decide(channel.ids[0]!, "deny")], "Okay."]);
+      expect(channel.decided(channel.ids[0]!)).toBeNull();
+
+      const between = desk();
+      between.told(asksToDeny);
+      await between.say("what is docs doing?", ["docs is idle."]);
+      await between.say("yes", [[decide(between.ids[0]!, "deny")], "Okay."]);
+      expect(between.decided(between.ids[0]!)).toBeNull();
+    });
+
+    it("denies nothing when another request waits too, or when the request came after the question", async () => {
+      // Two requests: the yes names none.
+      const two = desk([remove, push]);
+      two.told(asksToDeny);
+      await two.say("yes", [[decide(two.ids[0]!, "deny")], "Okay."]);
+      expect(two.decided(two.ids[0]!)).toBeNull();
+      expect(two.decided(two.ids[1]!)).toBeNull();
+      // The question was about a request that is gone; this one came after it.
+      const later = desk([]);
+      later.told(asksToDeny);
+      const request = later.open(remove);
+      await later.say("yes", [[decide(request.id, "deny")], "Okay."]);
+      expect(later.decided(request.id)).toBeNull();
+    });
+
+    it("the reason that the agent gets is not the word yes", async () => {
+      const { ids, told, say, made } = desk();
+      told(asksToDeny);
+      await say("yes", [[decide(ids[0]!, "deny")], "Denied."]);
+      expect(made.world.desk.take(ids[0]!)).toMatchObject({
+        decision: "deny",
+        text: null,
+      });
+    });
+  });
+});
+
 describe("a question after a word of correction or a lead-in starts no work", () => {
   /** A job runs. Then `words`, with a model that calls start_job for them: how many jobs exist after. */
   const jobsAfter = async (words: string) => {
