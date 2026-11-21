@@ -5963,6 +5963,162 @@ describe("a correction to a job that still works waits for that job", () => {
   });
 });
 
+describe("a complaint about the time reads the state only when it is about a job", () => {
+  const request = "build a small landing page for my bakery in one html file";
+  /** What the code read before the model's first answer: the id of each read. */
+  const reads = async (words: string, options: { job?: boolean } = {}) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    if (options.job !== false) {
+      expect(await talk(made.world, wantsJob().model, history, request)).toBe(
+        started,
+      );
+      made.clock.now += 3 * 60_000;
+    }
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(made.world, model).reply(history, words, "chat");
+    return (seen[0]?.messages ?? [])
+      .filter((message) => message.role === "tool")
+      .map((message) => message.toolCallId);
+  };
+
+  it.each([
+    // Work to do, with a word such as "slow" in it: no complaint about a job.
+    "look into why the login is slow on the staging site",
+    "find out why the build got stuck last night",
+    "the checkout is too slow, profile it",
+  ])(
+    "reads no state for %j, with a job at work or with none",
+    async (words) => {
+      // With the state in front of it, the model answers from the state and asks before it starts.
+      expect(await reads(words, { job: false }), words).toEqual([]);
+      expect(await reads(words), words).not.toContain("state_first");
+    },
+  );
+
+  it.each([
+    "bro why is this taking so long",
+    "this is taking forever",
+    "why is it so slow",
+    "is that stuck?",
+    // A word that is the job's own.
+    "why is the bakery thing so slow",
+    // Four words at most: with a job at work, that is about it.
+    "ugh so slow",
+    "so slow",
+    "taking ages",
+    "taking forever",
+  ])("still reads the state for %j while a job works", async (words) => {
+    expect(await reads(words), words).toContain("state_first");
+  });
+
+  it("reads no state for a complaint that points, when ClawdTime started no job", async () => {
+    // Nothing of ClawdTime's runs: the model looks, as before.
+    expect(await reads("why is this taking so long", { job: false })).toEqual(
+      [],
+    );
+  });
+});
+
+describe("a question that names a job by its own word is about that job", () => {
+  const request = "find the three biggest files in my downloads folder";
+  const turn = async (words: string, drafts: (ToolCall[] | string)[]) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    expect(await talk(made.world, wantsJob().model, history, request)).toBe(
+      started,
+    );
+    made.clock.now += 4 * 60_000;
+    const run = scripted(drafts);
+    const answer = await new Supervisor(made.world, run.model).reply(
+      history,
+      words,
+      "chat",
+    );
+    return { answer, seen: run.seen };
+  };
+  const known =
+    "It still works: 4 minutes so far. It runs in its own terminal window, where you can watch it. Ask me again for its answer.";
+
+  it.each([
+    // An offer to run it again, and no time, for a question about how far it is.
+    "The find job is still running, taking a bit longer than usual. Want me to try running it again in a different way?",
+    "It's still running. Want me to check if it's stuck or keep waiting?",
+    "It's still running, taking its time to find those largest files in Downloads.",
+  ])(
+    'checks the answer to "hows the downloads thing coming along": %j',
+    async (draft) => {
+      const got = await turn("hows the downloads thing coming along", [
+        draft,
+        draft,
+      ]);
+      expect(got.answer, draft).toBe(known);
+      expect(got.seen[1]!.system, draft).toContain(
+        "A check of your last draft: the job still works",
+      );
+    },
+  );
+
+  it("says a right answer to it as it is", async () => {
+    const draft = "Still running: 4 minutes so far.";
+    const got = await turn("hows the downloads thing coming along", [draft]);
+    expect(got.answer).toBe(draft);
+    expect(got.seen).toHaveLength(1);
+  });
+
+  it.each([
+    // The question shares a word with the job's request; the answer is about sessions, or about another thing.
+    ["how are things in downloads?", "Two sessions run their tests."],
+    ["which is the biggest session?", "The one that runs the tests."],
+    [
+      "are three sessions working?",
+      "Two sessions work and one runs its tests.",
+    ],
+    [
+      "is the folder open?",
+      "I cannot see folders; the sessions run their scripts.",
+    ],
+    [
+      "what is in my downloads folder?",
+      "I cannot read your folders, but the sessions run their scripts.",
+    ],
+    ["how far is the downloads server from here?", "About two kilometres."],
+  ])(
+    "leaves the answer to %j alone: it does not speak of the job",
+    async (words, draft) => {
+      const got = await turn(words, [draft, draft]);
+      expect(got.answer, words).toBe(draft);
+    },
+  );
+
+  it.each([
+    "It is almost done with the folder.",
+    "The downloads job still works: it is almost done.",
+  ])("still checks an answer that speaks of the job: %j", async (draft) => {
+    const got = await turn("hows the downloads thing coming along", [
+      draft,
+      draft,
+    ]);
+    expect(got.answer, draft).toBe(known);
+  });
+
+  it("does not check a question that names no word of the job", async () => {
+    // "How long does a build take" is about another thing: the job list is read, the answer is not checked.
+    const draft = "A clean build takes 10 minutes.";
+    const got = await turn("how long does a clean build take usually?", [
+      draft,
+      draft,
+    ]);
+    expect(got.answer).toBe(draft);
+  });
+});
+
 describe("a question while jobs of the last day exist starts from their answers", () => {
   const list = [
     "The jobs that ClawdTime started in the last day, in the order in which they started:",
