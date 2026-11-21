@@ -466,21 +466,32 @@ When only the terminal application came forward, it says so.
 A session comes to the front only when your own words ask to see it: "show me
 the payments one", "open deploy fix", "switch to docs", "can I see payments?",
 "bring it up". The words must open their part of the sentence, and what they
-ask to see must be a session: its name, a description that fits it, or "it",
-"that one", "the other one". So these open nothing:
+ask to see must be a session:
+
+- its name, and nothing else: "payments", "the deploy fix one";
+- a word that points at one: "it", "that one", "the other one that's still
+  working";
+- a description whose head is a word for a session: "the Terminal session
+  with the Claude Code checking the lines", "the one that fixes the login
+  bug".
+
+So these open nothing:
 
 - A question about a session: "what's the payments one doing", "does it show
   errors?". You get words. A window that comes forward takes your screen.
-- The same words in another sense: "in my view", "the show must go on", "open
-  a pull request".
+- The same words in another sense, and work: "in my view", "the show must go
+  on", "open a pull request", "open a new terminal and run the tests", "look
+  at the payments logs and fix the bug".
 - "Show me the status" and "show me what waits": you asked for words.
 - "Don't open it", and a request that you take back in the same message:
-  "open payments, actually never mind".
+  "open payments, actually never mind". "Open payments, no, docs" is a
+  correction, and "open payments but don't type anything" is still a request.
 - Words for a session: "tell docs: open the file".
 
-Right after you asked to see a session, a correction with no such word still
-counts: "no wait, the other one", "and the docs one". It must be your next
-message, within ten minutes.
+Right after you asked to see a session, your next message can be only the
+session, within ten minutes: "no wait, the other one", "and the docs one",
+"the web one" as the answer to "which one?". A remark is none: "now the docs
+one is stuck".
 
 ### The window of a session
 
