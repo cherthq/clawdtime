@@ -351,6 +351,37 @@ These rules are in the code, not in the model's instructions:
   the request ("ok, push it"; a verb for any work, such as "make" or "test",
   names it only as "the make one"). A bare word that follows no message of
   ClawdTime belongs to the one request that waits, as before.
+- When the gate refuses a bare word, the model is told that your word
+  answered its own last message, so that it answers that in words ("Got it,
+  I'll watch the tests") and does not ask you for "approve" in its place. It
+  is told to call no tool for that word and not to say that it did what it
+  offered. With no model you get the gate's sentence itself. A call that the
+  gate refused did nothing: an answer that then says that work started is
+  checked like any other. When the model's answer after such a refusal
+  speaks of nothing that its last message spoke of (the request alone,
+  mostly), it answers once more; a second such answer is said as it is.
+- ClawdTime checks its answer for a decision that no tool made. When the
+  answer says that a request was approved or denied now ("I approved the
+  push", "Approved.", "It's approved now", "as you allowed") or that the work
+  of a waiting request is done or under way ("I pushed it", "The push is
+  underway now"), and no request was decided in that turn, the model answers
+  once more. When the second answer says it
+  again, you get plain words: "Nothing was decided." and what waits. After a
+  call that the gate refused, every such sentence counts. With no call, a
+  sentence counts when it speaks of a request that still waits, by a word of
+  its text; "I approved the push" about an earlier turn is said as it is. A
+  sentence that says the opposite, that asks, or that speaks of an earlier
+  time is no such claim. After a call that the gate refused, other words
+  for an approval count too ("I let it through", "Permission granted",
+  "Okay, pushing", "I'll let the push run", "The branch is pushed"), and so
+  does a sentence whose subject is the request and that says that it went,
+  is done or may go ("The push goes out", "The push has landed", "The push
+  is live", "The push is good to go", "The push can go through now"). What
+  is only possible is no such claim ("The push would go to origin main"). A sentence that says what the request is or does, or that
+  it still waits, is said as it is ("The push updates main", "The push
+  still waits"), and so is one that names a session. 'Say "approve" to let it
+  push' in an answer asks you for a word of decision: it offers no words to
+  type into a session ('Say "yes" to docs' does, when docs is a session).
 - A "yes" is your denial in one case: ClawdTime offered to deny the one
   request that waits. Its message is the last one, on the same channel and
   younger than five minutes, and it ends with the offer itself: "Should I",
