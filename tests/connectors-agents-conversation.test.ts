@@ -2428,6 +2428,72 @@ describe("a session opens only when the person asks to see it", () => {
     }
   });
 
+  it('does not open the session of the request before for "the other one"', async () => {
+    const asked = [
+      said("user", "show me the payments one"),
+      said("assistant", "Opened payments."),
+    ];
+    for (const words of [
+      "no wait, the other one",
+      "not that one, another one",
+      "hmm, a different one",
+    ]) {
+      // The model asks for payments again: the session that was just shown.
+      const stubborn = opening("payments");
+      await new Supervisor(stubborn.world, stubborn.model).reply(
+        asked,
+        words,
+        "chat",
+      );
+      expect(stubborn.opened, words).toEqual([]);
+      expect(stubborn.results().join(" "), words).toContain(
+        "The person asks for another session than payments",
+      );
+      // The model takes the other one: it opens.
+      const follows = opening("docs");
+      await new Supervisor(follows.world, follows.model).reply(
+        asked,
+        words,
+        "chat",
+      );
+      expect(follows.opened, words).toEqual(["docs"]);
+    }
+    // The model is told, and opens the other one in the same turn.
+    const opened: string[] = [];
+    const made = mac([
+      session({ name: "payments" }),
+      session({ id: "2", name: "docs" }),
+    ]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+    };
+    const { model } = scripted([
+      [call("open_session", { session: "payments" })],
+      [call("open_session", { session: "docs" })],
+      "Here is docs.",
+    ]);
+    expect(
+      await new Supervisor(world, model).reply(
+        asked,
+        "no wait, the other one",
+        "chat",
+      ),
+    ).toBe("Here is docs.");
+    expect(opened).toEqual(["docs"]);
+    // A correction that names the same session again still opens it.
+    const again = opening("payments");
+    await new Supervisor(again.world, again.model).reply(
+      asked,
+      "hmm, the payments one",
+      "chat",
+    );
+    expect(again.opened).toEqual(["payments"]);
+  });
+
   it("opens nothing for what only looks like a correction", async () => {
     const asked = [
       said("user", "show me the payments one"),

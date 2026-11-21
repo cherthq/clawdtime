@@ -561,6 +561,9 @@ done" does not open payments. One message opens a session once. The common typos
 "shwo me the payments one", "opne docs", and a long name with one wrong letter
 ("the paymnts one").
 
+"The other one", "another one" and "a different one" never mean the session
+that you asked to see just before: that one does not open again.
+
 Right after you asked to see a session, your next message can be only the
 session, within ten minutes: "no wait, the other one", "and the docs one",
 "the web one" as the answer to "which one?". A remark is none: "now the docs
