@@ -4936,6 +4936,296 @@ describe("an answer that offers words to type that the person did not say", () =
   });
 });
 
+describe("shorthand and slang mean what the long form means", () => {
+  const board4 = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "payments tests" }),
+    session({ id: "102-ghi", pid: 102, name: "docs", state: "idle" }),
+    session({ id: "103-jkl", pid: 103, name: "login page", state: "idle" }),
+  ];
+  /** One turn with a model that only answers: what the code opened and typed by itself. */
+  const alone = async (words: string) => {
+    const made = mac(board4());
+    const opened: string[] = [];
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+      send: async (item, text) => {
+        typed.push([String(item.name), text]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    await new Supervisor(world, scripted(["Okay."]).model).reply(
+      [],
+      words,
+      "chat",
+    );
+    return { opened, typed, windows: made.windows };
+  };
+
+  it.each([
+    ["lemme see the payments one", "payments tests"],
+    ["yo pull up docs real quick", "docs"],
+    ["gimme the login page one", "login page"],
+    ["give me the docs session", "docs"],
+    ["k show me deploy fix", "deploy fix"],
+    ["kk can u show docs pls", "docs"],
+    ["bro open the payments one", "payments tests"],
+    ["aight bring up docs", "docs"],
+    ["yo lemme see docs rq", "docs"],
+    ["pls show docs", "docs"],
+    ["show docs plz", "docs"],
+    // "Nah" before a request opens it, as "no" does: it corrects what came before.
+    ["nah show me docs", "docs"],
+    ["ok cool show me the docs one pls", "docs"],
+  ])("opens the session for %j", async (words, name) => {
+    const got = await alone(words);
+    expect(got.opened, words).toEqual([name]);
+    expect(got.windows, words).toHaveLength(0);
+  });
+
+  it.each([
+    ["k can u tell deploy fix to push the branch pls", "push the branch"],
+    ["yo tell deploy fix to push the branch", "push the branch"],
+    ["bro ask the deploy one to push the branch plz", "push the branch"],
+    ["aight tell deploy fix to push the branch", "push the branch"],
+    ["kk tell deploy fix to push the branch thx", null],
+  ])(
+    "types the words of %j, or leaves them to the model",
+    async (words, text) => {
+      const got = await alone(words);
+      expect(got.typed, words).toEqual(text ? [["deploy fix", text]] : []);
+      expect(got.windows, words).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    "yo wats everyone doin rn",
+    "k hows docs doin",
+    "bro r the sessions done",
+    "hey whats everyone up to",
+    "yo wat is everyone doing",
+  ])(
+    "reads %j as a question about the state: the state is given, and no job starts",
+    async (words) => {
+      const made = mac(board4());
+      // A model that would start a job for it.
+      const { model, seen } = scripted([[call("start_job")], "Two work."]);
+      await new Supervisor(made.world, model).reply([], words, "chat");
+      expect(made.windows, words).toHaveLength(0);
+      expect(
+        seen[0]!.messages.some(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "state_first",
+        ),
+        words,
+      ).toBe(true);
+    },
+  );
+
+  it("asks for the names when an answer about everyone names no session that works", async () => {
+    const draft = "Two coding sessions are running fixes and tests now.";
+    const named = "deploy fix and payments tests are working.";
+    for (const words of [
+      "yo wats everyone doin rn",
+      "what's everyone up to right now?",
+      "what are my sessions doing?",
+    ]) {
+      const made = mac(board4());
+      const { model, seen } = scripted([draft, named]);
+      const answer = await new Supervisor(made.world, model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(answer, words).toBe(named);
+      expect(seen, words).toHaveLength(2);
+      expect(seen[1]!.system, words).toContain(
+        "by its name: deploy fix, payments tests.",
+      );
+    }
+    // An answer that names one of them is said as it is.
+    const made = mac(board4());
+    const one = scripted(["deploy fix works, and one more.", "unused"]);
+    expect(
+      await new Supervisor(made.world, one.model).reply(
+        [],
+        "yo wats everyone doin rn",
+        "chat",
+      ),
+    ).toBe("deploy fix works, and one more.");
+    expect(one.seen).toHaveLength(1);
+    // A second answer with no name is said as it is.
+    const twice = scripted([draft, draft]);
+    expect(
+      await new Supervisor(mac(board4()).world, twice.model).reply(
+        [],
+        "yo wats everyone doin rn",
+        "chat",
+      ),
+    ).toBe(draft);
+    // A count, a question about the agents, and a question about another
+    // thing than the sessions: no check.
+    for (const words of [
+      "how many sessions are working?",
+      "which agents are they?",
+      "what is deploy fix doing?",
+      "what is the job doing?",
+      "what are you doing?",
+      "whats happening with the build",
+    ]) {
+      const count = scripted(["Two work."]);
+      await new Supervisor(mac(board4()).world, count.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(count.seen, words).toHaveLength(1);
+    }
+    // A question about one session, and a board where nothing works: no check.
+    const about = scripted(["Yes, it is done."]);
+    await new Supervisor(mac(board4()).world, about.model).reply(
+      [],
+      "is docs done?",
+      "chat",
+    );
+    expect(about.seen).toHaveLength(1);
+    const idle = scripted(["Nothing runs."]);
+    await new Supervisor(
+      mac([session({ name: "docs", state: "idle" })]).world,
+      idle.model,
+    ).reply([], "what's everyone up to?", "chat");
+    expect(idle.seen).toHaveLength(1);
+  });
+
+  it.each([
+    "yo build me a small status page in one html file",
+    "k fix the failing test in the parser",
+    "bro write a script that renames the files",
+    // "R" is a letter here, not "are".
+    "R script failed, fix it",
+    "R tests are failing, fix them",
+    "r and d needs a landing page, build one",
+  ])("still starts the work for %j", async (words) => {
+    const made = mac(board4());
+    const answer = await new Supervisor(made.world, wantsJob().model).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(made.windows, words).toHaveLength(1);
+    expect(answer, words).toContain("On it.");
+  });
+
+  it.each([
+    "r u there",
+    "bro r the tests done",
+    "r docs done?",
+    "yo r we good",
+  ])("reads %j as a question: no job starts for it", async (words) => {
+    const made = mac(board4());
+    const { model } = scripted([[call("start_job")], "Yes."]);
+    await new Supervisor(made.world, model).reply([], words, "chat");
+    expect(made.windows, words).toHaveLength(0);
+  });
+
+  it('opens nothing for "give me that": it can be words, not a session', async () => {
+    const history = [
+      said("user", "what did the job find?"),
+      said(
+        "assistant",
+        "It found two failing tests. I can summarize them for you.",
+      ),
+    ];
+    for (const words of [
+      "give me that",
+      "gimme it",
+      "give me this",
+      "gimme that one",
+      "give me the second one",
+    ]) {
+      const made = mac(board4());
+      const opened: string[] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async (item) => {
+          opened.push(String(item.name));
+          return { ok: true };
+        },
+      };
+      // A model that would open a session for it.
+      const { model } = scripted([
+        [call("open_session", { session: "docs" })],
+        "Okay.",
+      ]);
+      await new Supervisor(world, model).reply(history, words, "chat");
+      expect(opened, words).toEqual([]);
+    }
+  });
+
+  it('takes "nvm" and "nm" as words that take a request back', async () => {
+    for (const words of [
+      "k show me docs, nvm",
+      "show me docs, nm",
+      "yo pull up docs, nevermind",
+      "lemme see docs, nah",
+    ]) {
+      const got = await alone(words);
+      expect(got.opened, words).toEqual([]);
+    }
+    // Words for a session that are taken back are not typed.
+    const typed = await alone("k tell deploy fix to push the branch, nvm");
+    expect(typed.typed).toEqual([]);
+  });
+
+  it('lets the model open the one session in focus for a bare "show me" in shorthand', async () => {
+    for (const words of ["yo show me", "k show me", "bro show me pls"]) {
+      const made = mac(board4());
+      const opened: string[] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async (item) => {
+          opened.push(String(item.name));
+          return { ok: true };
+        },
+      };
+      const { model } = scripted([
+        [call("open_session", { session: "deploy fix" })],
+        "It is in front.",
+      ]);
+      await new Supervisor(world, model).reply(
+        [said("user", "how is docs?"), said("assistant", "docs is idle.")],
+        words,
+        "chat",
+      );
+      // The session in focus, whatever the model asked for.
+      expect(opened, words).toEqual(["docs"]);
+    }
+  });
+
+  it.each([
+    // Shorthand for what the person does, asks or takes back opens and types nothing.
+    "lemme tell deploy fix to push the branch",
+    "gimme a sec",
+    "gimme a summary of docs",
+    "give me a minute with docs",
+    "give me the status",
+    "yo is docs done",
+    "nah dont show docs",
+    "k nvm docs",
+    "bro should i open docs",
+    "pls no docs",
+  ])("opens and types nothing by itself for %j", async (words) => {
+    const got = await alone(words);
+    expect(got.opened, words).toEqual([]);
+    expect(got.typed, words).toEqual([]);
+  });
+});
+
 describe("an answer that claims an action that no tool did", () => {
   const work = "build a small landing page for my bakery in one html file";
   const started =
@@ -6339,10 +6629,12 @@ describe("a question about the state", () => {
       "the payments one, is it done?",
       "is the deploy fix ready?",
     ]) {
-      const { model, seen } = scripted(["Two work."]);
+      // The answer names the sessions: an answer about what they do with no
+      // name would be asked for once more.
+      const { model, seen } = scripted(["deploy fix and payments work."]);
       expect(
         await new Supervisor(world, model).reply([], question, "chat"),
-      ).toBe("Two work.");
+      ).toBe("deploy fix and payments work.");
       expect(seen).toHaveLength(1);
       const [asked, read, state] = seen[0]!.messages;
       expect(asked).toEqual({ role: "user", content: question });
