@@ -29,6 +29,59 @@ final class DesktopSwitchTests: XCTestCase {
     XCTAssertNil(DesktopShortcutConfiguration.validate(left: left, right: right, leftCode: left.keyCode, rightCode: right.keyCode, enabled: enabled))
     XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(.init(code: 42, flags: left.flags), in: [.init(code: 42, carbonModifiers: UInt64(2304 | 65536))]))
   }
+  func testInventoryFunctionBitOnAdjacentArrowsIsPreservedForDispatch() throws {
+    let left = try XCTUnwrap(KeyCombo.parse("ctrl+left")), right = try XCTUnwrap(KeyCombo.parse("ctrl+right"))
+    // Observed public inventory: Control (4096) | kEventKeyModifierFnMask (131072).
+    let enabled = [UInt64(135680), 131072, 133120, 137728, 135168].flatMap { modifiers in
+      [DesktopHotKey(code: 123, carbonModifiers: modifiers), DesktopHotKey(code: 124, carbonModifiers: modifiers)]
+    }
+    let pair = try XCTUnwrap(DesktopShortcutConfiguration.validate(left: left, right: right,
+      leftCode: 123, rightCode: 124, enabled: enabled))
+    XCTAssertEqual(pair.left, .init(code: 123, flags: KeyCombo.control | KeyCombo.function))
+    XCTAssertEqual(pair.right, .init(code: 124, flags: KeyCombo.control | KeyCombo.function))
+    XCTAssertTrue(DesktopShortcutConfiguration.isEnabled(pair.left, in: enabled))
+    XCTAssertTrue(DesktopShortcutConfiguration.isEnabled(pair.right, in: enabled))
+    XCTAssertNil(DesktopShortcutConfiguration.validate(left: KeyCombo.parse("ctrl+fn+left"), right: right,
+      leftCode: 123, rightCode: 124, enabled: enabled))
+    // Extra modifiers still distinguish other enabled symbolic shortcuts.
+    let shifted = [DesktopHotKey(code: 123, carbonModifiers: 135680), DesktopHotKey(code: 124, carbonModifiers: 135680)]
+    XCTAssertNil(DesktopShortcutConfiguration.validate(left: left, right: right, leftCode: 123, rightCode: 124, enabled: shifted))
+    let custom = try XCTUnwrap(DesktopShortcutConfiguration.validate(left: KeyCombo.parse("ctrl+shift+left"),
+      right: KeyCombo.parse("ctrl+shift+right"), leftCode: 123, rightCode: 124, enabled: shifted))
+    XCTAssertEqual(custom.left.flags, KeyCombo.control | KeyCombo.shift | KeyCombo.function)
+  }
+  func testFunctionNormalizationRejectsPrintableKeysOtherArrowsAndUnknownBits() {
+    for (leftName, rightName, leftCode, rightCode) in [("ctrl+x", "ctrl+y", UInt16(7), UInt16(16)),
+                                                      ("ctrl+up", "ctrl+down", UInt16(126), UInt16(125))] {
+      let enabled = [DesktopHotKey(code: leftCode, carbonModifiers: 135168), DesktopHotKey(code: rightCode, carbonModifiers: 135168)]
+      XCTAssertNil(DesktopShortcutConfiguration.validate(left: KeyCombo.parse(leftName), right: KeyCombo.parse(rightName),
+        leftCode: leftCode, rightCode: rightCode, enabled: enabled))
+      XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(.init(code: leftCode, flags: KeyCombo.control | KeyCombo.function), in: enabled))
+    }
+    let unknown = [DesktopHotKey(code: 123, carbonModifiers: 135168 | 65536), DesktopHotKey(code: 124, carbonModifiers: 135168)]
+    XCTAssertNil(DesktopShortcutConfiguration.validate(left: KeyCombo.parse("ctrl+left"), right: KeyCombo.parse("ctrl+right"),
+      leftCode: 123, rightCode: 124, enabled: unknown))
+    XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(.init(code: 123, flags: KeyCombo.control | KeyCombo.function), in: unknown))
+  }
+  func testFinalInventoryMustRetainExactResolvedFunctionAndModifierFlags() throws {
+    let fn = [DesktopHotKey(code: 123, carbonModifiers: 135168), DesktopHotKey(code: 124, carbonModifiers: 135168)]
+    let plain = [DesktopHotKey(code: 123, carbonModifiers: 4096), DesktopHotKey(code: 124, carbonModifiers: 4096)]
+    func pair(_ inventory: [DesktopHotKey]) -> DesktopShortcutPair? {
+      DesktopShortcutConfiguration.validate(left: KeyCombo.parse("ctrl+left"), right: KeyCombo.parse("ctrl+right"),
+        leftCode: 123, rightCode: 124, enabled: inventory)
+    }
+    let resolvedFn = try XCTUnwrap(pair(fn)), resolvedPlain = try XCTUnwrap(pair(plain))
+    XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(resolvedFn.left, in: plain))
+    XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(resolvedPlain.left, in: fn))
+    XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(resolvedFn.left, in: []))
+    XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(resolvedFn.left, in: nil))
+    XCTAssertFalse(DesktopShortcutConfiguration.isEnabled(resolvedFn.left,
+      in: [.init(code: 123, carbonModifiers: 135680)]))
+    // If both representations are enabled, choose the exact non-Fn match
+    // deterministically instead of depending on inventory iteration order.
+    XCTAssertEqual(pair(fn + plain), resolvedPlain)
+    XCTAssertEqual(pair(plain + fn), resolvedPlain)
+  }
   func testPreviousIsOnlyInverseOfLastVerifiedMoveFromItsVerifiedDestination() {
     var history = DesktopSwitchHistory<String>()
     XCTAssertNil(history.previous(from: "B"))

@@ -49,25 +49,51 @@ public struct DesktopShortcutPair: Equatable, Sendable {
 /// Environment values attest the settings' meaning; public Carbon inventory can
 /// independently verify only that those distinct combinations are enabled.
 public enum DesktopShortcutConfiguration {
+  private static let standardFlags = KeyCombo.command | KeyCombo.shift | KeyCombo.option | KeyCombo.control
+  // Carbon kEventKeyModifierFnMask. CopySymbolicHotKeys can include this
+  // inherent arrow-key bit even when Settings displays only Control + Arrow.
+  private static let carbonFunction: UInt64 = 131072
+  private static func adjacentArrow(_ code: UInt16) -> Bool { code == 123 || code == 124 }
+
+  private static func resolved(_ key: DesktopHotKey) -> DesktopResolvedShortcut? {
+    let carbonMask: UInt64 = 256 | 512 | 2048 | 4096 | (adjacentArrow(key.code) ? carbonFunction : 0)
+    guard key.carbonModifiers & ~carbonMask == 0 else { return nil }
+    var flags: UInt64 = 0
+    if key.carbonModifiers & 256 != 0 { flags |= KeyCombo.command }
+    if key.carbonModifiers & 512 != 0 { flags |= KeyCombo.shift }
+    if key.carbonModifiers & 2048 != 0 { flags |= KeyCombo.option }
+    if key.carbonModifiers & 4096 != 0 { flags |= KeyCombo.control }
+    if key.carbonModifiers & carbonFunction != 0 { flags |= KeyCombo.function }
+    return .init(code: key.code, flags: flags)
+  }
+
+  private static func resolve(_ combo: KeyCombo, code: UInt16, enabled: [DesktopHotKey]) -> DesktopResolvedShortcut? {
+    // Explicit Fn combinations remain unsupported. Only the public inventory
+    // may supply the inherent Fn bit, and only for named left/right arrows.
+    guard combo.flags & ~standardFlags == 0 else { return nil }
+    let exact = DesktopResolvedShortcut(code: code, flags: combo.flags)
+    let candidates = enabled.compactMap(resolved)
+    if candidates.contains(exact) { return exact }
+    guard !combo.printing, combo.keyCode == code, adjacentArrow(code) else { return nil }
+    let inherentFunction = DesktopResolvedShortcut(code: code, flags: combo.flags | KeyCombo.function)
+    return candidates.contains(inherentFunction) ? inherentFunction : nil
+  }
+
   public static func validate(left: KeyCombo?, right: KeyCombo?, leftCode: UInt16?, rightCode: UInt16?,
                               enabled: [DesktopHotKey]?) -> DesktopShortcutPair? {
-    guard let left, let right, let leftCode, let rightCode, let enabled else { return nil }
-    let pair = DesktopShortcutPair(left: .init(code: leftCode, flags: left.flags), right: .init(code: rightCode, flags: right.flags))
-    guard pair.left != pair.right, isEnabled(pair.left, in: enabled), isEnabled(pair.right, in: enabled) else { return nil }
+    guard let left, let right, let leftCode, let rightCode, let enabled,
+      let resolvedLeft = resolve(left, code: leftCode, enabled: enabled),
+      let resolvedRight = resolve(right, code: rightCode, enabled: enabled) else { return nil }
+    let pair = DesktopShortcutPair(left: resolvedLeft, right: resolvedRight)
+    guard pair.left != pair.right else { return nil }
     return pair
   }
   public static func isEnabled(_ shortcut: DesktopResolvedShortcut, in enabled: [DesktopHotKey]?) -> Bool {
-    let mask = KeyCombo.command | KeyCombo.shift | KeyCombo.option | KeyCombo.control
+    let mask = standardFlags | (adjacentArrow(shortcut.code) ? KeyCombo.function : 0)
     guard shortcut.flags & ~mask == 0, let enabled else { return false }
-    return enabled.contains { key in
-      guard key.code == shortcut.code, key.carbonModifiers & ~UInt64(256 | 512 | 2048 | 4096) == 0 else { return false }
-      var flags: UInt64 = 0
-      if key.carbonModifiers & 256 != 0 { flags |= KeyCombo.command }
-      if key.carbonModifiers & 512 != 0 { flags |= KeyCombo.shift }
-      if key.carbonModifiers & 2048 != 0 { flags |= KeyCombo.option }
-      if key.carbonModifiers & 4096 != 0 { flags |= KeyCombo.control }
-      return flags == shortcut.flags
-    }
+    // Final dispatch verification is exact, including the resolved Fn bit:
+    // removing/changing an inventory entry must not silently retarget input.
+    return enabled.contains { resolved($0) == shortcut }
   }
 }
 
