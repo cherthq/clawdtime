@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
+import { desktopDirection } from "../computer/desktop.js";
 import {
   appendFileSync,
   chmodSync,
@@ -2962,6 +2963,19 @@ export class Supervisor {
         return "The person did not give that address. Ask them for it, or hand the search to a job.";
     }
     if (!name && !url) return "Say which application or address to open.";
+    // Plain app opening belongs to the native worker when it owns these hands:
+    // its activation verification, Stop, busy and unknown-outcome fences must
+    // not be bypassed by the supervisor's older Launch Services opener.
+    const execution = this.world.execution;
+    const snapshot = execution?.snapshot();
+    if (
+      name &&
+      !url &&
+      execution?.answer &&
+      snapshot?.configured &&
+      snapshot.mode === "native"
+    )
+      return this.delegate(turn, spoken);
     const key = `open:${name ?? ""}:${url?.href ?? ""}`;
     const before = turn.done.get(key);
     if (before !== undefined) return before;
@@ -3900,6 +3914,7 @@ export class Supervisor {
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
+      desktopDirection(spoken) !== undefined ||
       contextualUiRequest(spoken) ||
       /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show|refresh|reload|press)\b/i.test(
         spoken,
@@ -4709,6 +4724,18 @@ export class Supervisor {
           return "The computer task did not take that. Say it again.";
         }
       }
+    }
+    // Directional Space requests are literal native commands. A model must not
+    // turn one into app activation, a coding task, or the opposite direction.
+    if (desktopDirection(spoken) !== undefined) {
+      const selected = execution?.snapshot();
+      if (
+        execution?.answer &&
+        selected?.configured &&
+        selected.mode === "native"
+      )
+        return this.delegate(turn, spoken);
+      return "Desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
     }
     // Obvious UI instructions go directly to the configured app-owned engine;
     // a conversational model must not reinterpret window titles as agent names.

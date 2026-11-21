@@ -39,11 +39,15 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"type","text":"Grüße, 世界 👋\nline two"}"#, .type(text: "Grüße, 世界 👋\nline two")),
       (#"{"kind":"key","combo":"cmd+shift+4"}"#, .key(combo: "cmd+shift+4")),
       (#"{"kind":"open_app","name":"Safari"}"#, .openApp(name: "Safari")),
+      (#"{"kind":"open_app","name":"TextEdit","window":"Disposable note"}"#, .openApp(name: "TextEdit", window: "Disposable note")),
+      (#"{"kind":"switch_desktop","direction":"left"}"#, .switchDesktop(direction: .left)),
+      (#"{"kind":"switch_desktop","direction":"right"}"#, .switchDesktop(direction: .right)),
+      (#"{"kind":"switch_desktop","direction":"previous"}"#, .switchDesktop(direction: .previous)),
       (#"{"kind":"open_url","url":"https://example.com/a?b=1"}"#, .openURL(url: "https://example.com/a?b=1")),
       (#"{"kind":"wait","ms":250}"#, .wait(ms: 250)),
     ]
     XCTAssertEqual(Set(cases.map { $0.1.kind }),
-      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "open_url", "wait"])
+      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "open_url", "wait"])
     for (json, expected) in cases {
       let decoded = try command(json)
       XCTAssertEqual(decoded, expected, json)
@@ -76,6 +80,10 @@ final class HandsContractTests: XCTestCase {
       #"{"kind":"key","combo":"\#(String(repeating: "k", count: 41))"}"#,
       #"{"kind":"open_app","name":"\#(String(repeating: "n", count: 121))"}"#,
       #"{"kind":"open_url","url":"https://example.com/\#(String(repeating: "u", count: 2000))"}"#,
+      #"{"kind":"switch_desktop","direction":"up"}"#,
+      #"{"kind":"switch_desktop","direction":"left","steps":2}"#,
+      #"{"kind":"switch_desktop","direction":"left","shortcut":"ctrl+left"}"#,
+      #"{"kind":"switch_desktop"}"#,
       #"{"kind":"wait","ms":10001}"#,
       #"{"kind":"wait","ms":-1}"#,
       #"{"kind":"wait","ms":2.5}"#,
@@ -130,7 +138,8 @@ final class HandsContractTests: XCTestCase {
     XCTAssertEqual(try sorted(HandResult.failure(9, .failed, interrupted: true)), #"{"error":"failed","interrupted":true,"ok":false,"seq":9}"#)
     // The words for an error are the contract's own, in its order.
     XCTAssertEqual(HandError.allCases.map(\.rawValue),
-      ["no_accessibility", "no_screen_recording", "stopped_by_person", "not_found", "refused", "failed"])
+      ["no_accessibility", "no_screen_recording", "stopped_by_person", "not_found", "refused", "failed",
+       "desktop_disabled", "desktop_shortcut_unavailable", "desktop_history_unavailable", "ambiguous_target", "unsupported_desktop", "target_not_visible", "transition_unknown", "input_unknown", "stale_observation"])
     let read = try JSONDecoder().decode(HandResult.self, from: Data(#"{"seq":4,"ok":false,"error":"no_screen_recording"}"#.utf8))
     XCTAssertEqual(read, .failure(4, .noScreenRecording))
     XCTAssertNil(read.observation); XCTAssertNil(read.interrupted)
@@ -205,9 +214,13 @@ final class HandsContractTests: XCTestCase {
       XCTAssertEqual(command.missingRight(accessibility: false, screenRecording: true), .noAccessibility, command.kind)
       XCTAssertNil(command.missingRight(accessibility: true, screenRecording: false), command.kind)
     }
-    for command in [HandCommand.openApp(name: "Safari"), .openURL(url: "https://example.com"), .wait(ms: 5)] {
+    for command in [HandCommand.openURL(url: "https://example.com"), .wait(ms: 5)] {
       XCTAssertNil(command.missingRight(accessibility: false, screenRecording: false), command.kind)
     }
+    XCTAssertEqual(HandCommand.openApp(name: "Safari").missingRight(accessibility: false, screenRecording: true), .noAccessibility)
+    XCTAssertEqual(HandCommand.openApp(name: "Safari").missingRight(accessibility: true, screenRecording: false), .noScreenRecording)
+    XCTAssertEqual(HandCommand.switchDesktop(direction: .right).missingRight(accessibility: false, screenRecording: true), .noAccessibility)
+    XCTAssertEqual(HandCommand.switchDesktop(direction: .right).missingRight(accessibility: true, screenRecording: false), .noScreenRecording)
     // The guided cursor goes where a pointing command starts. Typing has no place.
     XCTAssertEqual(input.map { $0.pointsAt != nil }, [true, true, true, true, false, false])
     XCTAssertEqual(HandCommand.drag(fromX: 1, fromY: 2, toX: 3, toY: 4).pointsAt, CGPoint(x: 1, y: 2))

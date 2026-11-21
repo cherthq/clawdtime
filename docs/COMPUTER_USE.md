@@ -339,6 +339,16 @@ engine, with the switch off, with no key, and for one that a test started.
 
 ## Limits
 
+The native worker supports [desktop navigation and verified activation](DESKTOP_SPACES.md).
+`open_app` selects an exact window; separate complete requests such as “Move one
+desktop right” dispatch one `switch_desktop` action outside the planner loop.
+Directional navigation requires explicit enabled Mission Control shortcut mappings.
+Both paths settle and retire old coordinates; unverified transitions never retry.
+Initial switching scope is distinguishable ordinary desktops on one main display;
+physical acceptance remains pending. That restriction does not gate unrelated
+click/type input. The guide covers setup, previous-desktop history, full-display
+sharing, independent disable control, zoom integration and acceptance gaps.
+
 | Limit                          | Value                                       |
 | ------------------------------ | ------------------------------------------- |
 | Requests at one time           | 1                                           |

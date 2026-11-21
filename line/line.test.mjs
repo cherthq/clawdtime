@@ -1554,3 +1554,45 @@ test("the agent greets at once when the line's audio track is already in the roo
   assert.deepEqual(none, []);
   assert.equal(later.listenerCount("trackPublished"), 0);
 });
+
+test("display capture expires stalled frames and resumes from fresh frames without restarting", async () => {
+  const child = fakeFfmpeg();
+  let now = 1000,
+    starts = 0;
+  const screen = startScreen({
+    frameBytes: 4,
+    now: () => now,
+    start: () => {
+      starts++;
+      return child;
+    },
+  });
+  child.stdout.emit("data", Buffer.from([1, 1, 1, 1]));
+  assert.deepEqual([...screen.latest()], [1, 1, 1, 1]);
+  now += 501;
+  assert.equal(
+    screen.latest(),
+    null,
+    "old desktop must not remain live while capture stalls",
+  );
+  assert.equal(
+    await screen.started(1),
+    false,
+    "stale cached pixels are not readiness",
+  );
+  child.stdout.emit("data", Buffer.from([2, 2, 2, 2]));
+  assert.deepEqual(
+    [...screen.latest()],
+    [2, 2, 2, 2],
+    "fresh arrival replaces prior desktop",
+  );
+  assert.equal(starts, 1, "same-display transition does not restart capture");
+  child.emit("exit", 1);
+  child.stdout.emit("data", Buffer.from([3, 3, 3, 3]));
+  assert.equal(
+    screen.latest(),
+    null,
+    "late bytes cannot resurrect an ended capture",
+  );
+  screen.stop();
+});

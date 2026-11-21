@@ -32,8 +32,20 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   private let source: CGEventSource?
   /// Stop was pressed: nothing more is sent, and a held button is let go.
   var halted = false
+  /// Rechecked between event-loop waits; never suppresses a necessary button/key release.
+  var mayContinue: (() -> Bool)?
+  /// Recheck the independently observed window after pointer travel and before input.
+  var beforeInput: (() async -> Bool)?
+  private var interrupted: Bool { halted || personActed || mayContinue?() == false }
+  private func allowed() async -> Bool {
+    guard !interrupted else { return false }
+    let permitted = await beforeInput?() ?? true
+    return permitted && !interrupted
+  }
   /// The person moved the mouse or pressed a key since the command began.
   private(set) var personActed = false
+  /// Any meaningful input already submitted may have affected the UI.
+  private(set) var submittedInput = false
   /// The person held Escape for a moment.
   var onEscapeHold: (() -> Void)?
   private var tap: CFMachPort?
@@ -55,7 +67,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// A password field has the keyboard: macOS guards it, and the hands stay out.
   var secureInput: Bool { IsSecureEventInputEnabled() }
   /// A command begins: what the person did before it does not count.
-  func beginCommand() { personActed = false }
+  func beginCommand() { personActed = false; submittedInput = false }
 
   private func pause(_ seconds: Double) async {
     try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
@@ -63,6 +75,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   private func post(_ event: CGEvent?, flags: CGEventFlags = []) {
     guard let event else { return }
     // Only the modifiers that the command names: a key that the person holds does not join in.
+    if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .scrollWheel].contains(event.type) { submittedInput = true }
     event.flags = flags
     event.setIntegerValueField(.eventSourceUserData, value: Self.mark)
     event.post(tap: .cghidEventTap)
@@ -81,19 +94,21 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     let length = hypot(Double(target.x - from.x), Double(target.y - from.y))
     let path = GuidedPath(from: from, to: target, duration: GuidedPath.moveDuration(length: length), arc: 0)
     for point in path.points(every: 1.0 / 120) {
-      if halted { return false }
+      if interrupted { return false }
       mouse(.mouseMoved, at: point)
       await pause(1.0 / 120)
     }
-    return !halted
+    return !interrupted
   }
   /// One click or a double click, left or right. False when Stop came before the press.
   func click(at point: CGPoint, button: HandCommand.Button, count: Int) async -> Bool {
     guard await move(to: point) else { return false }
     await pause(0.04)
+    guard await allowed() else { return false }
     let right = button == .right
     for press in 1...max(1, min(2, count)) {
-      if halted { return false }
+      if interrupted { return false }
+      guard await allowed() else { return false }
       // A button that went down always comes up: nothing between the two can stop.
       mouse(right ? .rightMouseDown : .leftMouseDown, at: point, button: right ? .right : .left, clicks: Int64(press))
       await pause(0.03)
@@ -107,7 +122,8 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   func drag(from: CGPoint, to: CGPoint) async -> Bool {
     guard await move(to: from) else { return false }
     await pause(0.05)
-    if halted { return false }
+    if interrupted { return false }
+    guard await allowed() else { return false }
     mouse(.leftMouseDown, at: from, clicks: 1)
     held = from
     // An app starts a drag only after the button stays down for a moment.
@@ -115,13 +131,13 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     let length = hypot(Double(to.x - from.x), Double(to.y - from.y))
     let path = GuidedPath(from: from, to: to, duration: GuidedPath.dragDuration(length: length), arc: 0)
     for point in path.points(every: 1.0 / 60) {
-      if halted || held == nil { break }
+      if interrupted || held == nil { break }
       mouse(.leftMouseDragged, at: point)
       held = point
       await pause(1.0 / 60)
     }
     await pause(0.06)
-    let finished = !halted && held != nil
+    let finished = !interrupted && held != nil
     letGo()
     return finished
   }
@@ -136,7 +152,8 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   func scroll(at point: CGPoint, dx: Double, dy: Double) async -> Bool {
     guard await move(to: point) else { return false }
     for tick in ScrollPlan.ticks(dx: dx, dy: dy) {
-      if halted { return false }
+      guard await allowed() else { return false }
+      if interrupted { return false }
       let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: tick.vertical, wheel2: tick.horizontal, wheel3: 0)
       event?.location = point
       post(event)
@@ -162,7 +179,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     let steps = TypingPlan.steps(text)
     var unchecked = 0
     for (index, step) in steps.enumerated() {
-      if halted { return .stopped }
+      if interrupted { return .stopped }
       if unchecked >= 40 {
         guard await allowed() else { return .refused }
         unchecked = 0
@@ -191,13 +208,67 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   }
   /// One key with its modifiers. False when Stop came first.
   func key(_ combo: KeyCombo) async -> Bool {
-    if halted { return false }
+    if interrupted { return false }
+    guard await allowed(), keyIsPermitted(combo) else { return false }
     // The combo names a character. On a keyboard of another country that
     // character is on another key, so the key is found on the layout in use.
     let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
     await press(code, flags: CGEventFlags(rawValue: combo.flags))
     return true
   }
+  /// Inventory is read immediately before dispatch, on the main thread as
+  /// Carbon requires. It identifies combinations, never Mission Control actions.
+  func keyIsPermitted(_ combo: KeyCombo) -> Bool {
+    let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
+    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: enabledHotKeys())
+  }
+  private func enabledHotKeys() -> [DesktopHotKey]? {
+    var array: Unmanaged<CFArray>?
+    guard CopySymbolicHotKeys(&array) == noErr, let raw = array?.takeRetainedValue() as? [[String: Any]] else { return nil }
+    var parsed: [DesktopHotKey] = []
+    for item in raw {
+      guard let enabled = item[kHISymbolicHotKeyEnabled as String] as? Bool else { return nil }
+      if !enabled { continue }
+      guard let key = item[kHISymbolicHotKeyCode as String] as? UInt16,
+        let modifiers = item[kHISymbolicHotKeyModifiers as String] as? UInt64 else { return nil }
+      parsed.append(DesktopHotKey(code: key, carbonModifiers: modifiers))
+    }
+    return parsed
+  }
+  /// No defaults: the operator must attest both configured actions. Layout
+  /// resolution and public enabled-shortcut inventory are checked independently.
+  func desktopShortcuts() -> DesktopShortcutPair? {
+    let environment = ProcessInfo.processInfo.environment
+    let left = environment["CLAWDTIME_SPACE_LEFT_SHORTCUT"].flatMap(KeyCombo.parse)
+    let right = environment["CLAWDTIME_SPACE_RIGHT_SHORTCUT"].flatMap(KeyCombo.parse)
+    func code(_ combo: KeyCombo?) -> UInt16? {
+      guard let combo else { return nil }
+      if let character = combo.character { return Self.keyCode(printing: character) }
+      // A synthesized plus assumes a US layout; do not attest that assumption.
+      if combo.printing && combo.keyCode != 49 { return nil }
+      return combo.keyCode
+    }
+    return DesktopShortcutConfiguration.validate(left: left, right: right, leftCode: code(left), rightCode: code(right), enabled: enabledHotKeys())
+  }
+  /// Sole bypass of the generic reserved-hotkey guard. The desktop coordinator
+  /// owns qualification and sends exactly one pair; key-up always releases it.
+  func dispatchDesktopShortcut(_ shortcut: DesktopResolvedShortcut, allowed: () async -> HandError?) async -> Result<Void, HandError> {
+    guard let down = CGEvent(keyboardEventSource: source, virtualKey: shortcut.code, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: shortcut.code, keyDown: false) else { return .failure(.failed) }
+    if let refusal = await allowed() { return .failure(refusal) }
+    guard !halted, !Task.isCancelled else { return .failure(.stoppedByPerson) }
+    guard watching, !personActed else { return .failure(.refused) }
+    guard AXIsProcessTrusted() else { return .failure(.noAccessibility) }
+    guard CGPreflightScreenCaptureAccess() else { return .failure(.noScreenRecording) }
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+      session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
+    guard DesktopShortcutConfiguration.isEnabled(shortcut, in: enabledHotKeys()) else { return .failure(.desktopShortcutUnavailable) }
+    post(down, flags: CGEventFlags(rawValue: shortcut.flags))
+    await pause(0.02)
+    post(up, flags: CGEventFlags(rawValue: shortcut.flags))
+    return .success(())
+  }
+
   /// The key that prints `character` with no modifier on the keyboard layout in use.
   private static func keyCode(printing character: String) -> UInt16? {
     guard let layout = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),

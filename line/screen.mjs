@@ -38,10 +38,15 @@ export function splitFrames(pending, chunk, size = FRAME_BYTES) {
  * @param {string} [options.layout] "upright" or "wide": see layout.mjs
  * @param {{ x: number, y: number, w: number, h: number } | null} [options.view] one part of the screen, in shares
  * @param {number} [options.frameBytes] the size of one frame, for a test
+ * @param {() => number} [options.now] monotonic clock for freshness tests
  * @param {typeof spawn} [options.start] starts the program, for a test
  */
 export function startScreen(options = {}) {
   const size = options.frameBytes ?? FRAME_BYTES;
+  const now = options.now ?? (() => performance.now());
+  let frameAt = -Infinity;
+  const fresh = () =>
+    frame && now() >= frameAt && now() - frameAt <= 500 ? frame : null;
   const child = (options.start ?? spawn)(
     options.command || "ffmpeg",
     [
@@ -84,11 +89,12 @@ export function startScreen(options = {}) {
     waiting.clear();
   };
   child.stdout.on("data", (chunk) => {
-    if (stopped) return;
+    if (stopped || ended) return;
     const cut = splitFrames(pending, chunk, size);
     // The frame is a copy: the next chunk must not change a picture that is on its way to the call.
     if (cut.newest) {
       frame = new Uint8Array(cut.newest);
+      frameAt = now();
       settle(true);
     }
     pending = cut.rest;
@@ -103,9 +109,10 @@ export function startScreen(options = {}) {
   child.on("exit", (code) => end(code));
   child.on("error", () => end(null));
   return {
-    latest: () => frame,
+    // A stalled process must not replay the old desktop as a live view.
+    latest: fresh,
     started(ms = 4000) {
-      if (frame) return Promise.resolve(true);
+      if (fresh()) return Promise.resolve(true);
       if (stopped || ended) return Promise.resolve(false);
       return new Promise((resolve) => {
         const done = (value) => {

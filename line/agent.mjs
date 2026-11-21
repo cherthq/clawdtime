@@ -38,6 +38,7 @@ import { makeEars } from "./ears.mjs";
 import { greetOnBridgeReady } from "./greet.mjs";
 import { framingName, startLayout } from "./layout.mjs";
 import { makeWords, WIDE_WORDS } from "./words.mjs";
+import { makeDesktopIntent } from "./desktop-intent.mjs";
 import { makePicture } from "./picture.mjs";
 import { FPS, HEIGHT, startScreen, WIDTH } from "./screen.mjs";
 
@@ -95,6 +96,7 @@ const agent = defineAgent({
     let view = null;
     // The caller's own words of the last moments. They are kept in memory only, and never written down.
     const words = makeWords();
+    const desktopIntent = makeDesktopIntent();
     let tick = 0,
       heard = "idle",
       busy = 0,
@@ -194,7 +196,9 @@ const agent = defineAgent({
           log("ask_clawdtime");
           busy++;
           try {
-            const answer = await ask(request);
+            const bound = await desktopIntent.take(request);
+            if (!bound.ok) return bound.message;
+            const answer = await ask(bound.text);
             // The request may have changed what the call shows: zoom in on a window, or the whole screen.
             await syncView();
             return answer;
@@ -268,9 +272,10 @@ const agent = defineAgent({
       // The realtime model decides the turns. Saying so keeps the session from loading a second detector.
       turnHandling: { turnDetection: "realtime_llm" },
     });
-    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) =>
-      words.add(event.transcript, event.isFinal),
-    );
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) => {
+      words.add(event.transcript, event.isFinal);
+      desktopIntent.add(event.transcript, event.isFinal);
+    });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (event) => {
       heard = SHOWN.has(event.newState) ? event.newState : "idle";
       // The state is in the log, never the words: it shows when the agent spoke and when it listened.
@@ -297,6 +302,7 @@ const agent = defineAgent({
       stopGreeting?.();
       ears?.stop();
       words.stop();
+      desktopIntent.stop();
       jobs?.stop();
       screen?.stop();
       screen = null;

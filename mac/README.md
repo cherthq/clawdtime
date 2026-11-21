@@ -566,3 +566,63 @@ and checks each owning PID. An empty `AXWindows` array is not replaced by a
 fabricated window ID. Activation revalidation uses the same current membership
 and unchanged geometry/title/document checks. On-screen control discovery still
 requires its original on-screen CG window and complete AX semantic witness.
+
+## Verified desktop activation and one-step switching in native hands
+
+The native panel's `open_app` command accepts an optional exact `window` title.
+`HandsDesktop.swift` resolves one ordinary AX window, restores it if minimized,
+selects/raises that window with public Accessibility APIs, and activates its app.
+It then waits for stable AX identity/geometry corroborated by the frontmost
+on-screen Quartz window and fresh screenshot evidence. An API return alone is
+never success. See [desktop scope and acceptance](../docs/DESKTOP_SPACES.md).
+
+A separate `switch_desktop` command accepts `left`, `right`, or `previous`.
+It emits **one** configured shortcut and never cycles or retries. Configure both
+`CLAWDTIME_SPACE_LEFT_SHORTCUT` and `CLAWDTIME_SPACE_RIGHT_SHORTCUT` in the
+**test panel's** launch environment with the exact keys that the tester has
+independently checked in macOS Keyboard Shortcuts → Mission Control. There are
+no defaults. This attests their action meanings; public `CopySymbolicHotKeys`
+only verifies that the two distinct combinations are enabled, not what they do.
+The panel changes no settings. Missing, disabled, identical, unresolved-layout,
+or unsupported-modifier bindings return `desktop_shortcut_unavailable` before
+input. Generic key actions cannot bypass this path through system shortcuts.
+
+Readiness for a directional move requires one post-dispatch Space-change
+notification, a different stable ordinary surface, and fresh screenshot/AX
+verification within a five-second settling budget. Boundary/no-op moves, empty
+or identically pinned-window desktops, and missing evidence remain unknown
+rather than successful. `previous` reverses only the last verified step in this
+panel session and verifies arrival at its prior surface. It has no global macOS
+history: no record or a mismatched source returns `desktop_history_unavailable`.
+External desktop/display/session changes, Stop, and failed attempts retire the
+record; ordinary worker idle does not. Repeated app focus alone is not a Space
+address, so opening/closing the panel chat does not invent or erase history.
+
+Desktop transitions initially require an ordinary window wholly within the
+main display and one active display. Full-screen and multiple-display transitions
+are unsupported; physical ordinary-desktop qualification remains pending.
+The optional `AXFullScreen` observation is defensive, not a documented Space
+classifier. `CLAWDTIME_DESKTOP_SWITCHING=off` disables both transition commands
+independently of video zoom and the existing computer-use switch. Generic
+click/type freshness is separate: a visible full-screen or partly visible window
+on the main display, including a multiple-display setup, is not refused merely
+because it is outside the narrower transition scope. Input coordinates remain
+in the existing main-display coordinate space.
+
+Every native input requires a current observation lease. Space, app, display,
+window-identity and geometry changes retire old coordinates. The hands recheck
+identity after pointer travel and check Stop/takeover between events. A partially
+submitted input returns `input_unknown`; an unverified transition returns
+`transition_unknown`, including interruption after a shortcut was dispatched.
+Neither is automatically replayed. Enabled system symbolic hotkeys remain
+reserved from generic `key` commands; if that inventory cannot be read,
+modified/function shortcuts fail closed without changing system preferences.
+
+Validation remains `swift test` and `swift build --product ClawdTimeTaskPanel`
+from `mac/`. Deterministic tests cover contract decoding, explicit shortcut
+configuration and layout mapping, history inversion/invalidation, independent
+Space-event evidence, settling/expiry, Stop/unknown classification, and the
+separation of transition restrictions from generic input. These compile and
+test code only; they do not activate apps, switch desktops, or establish physical
+acceptance. Zoom owns its presentation API; the optional transition callback
+carries only phase/epoch and introduces no dependency on the zoom branch.

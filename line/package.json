@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --env-file=.env.local agent.mjs start",
-    "test": "node --test line.test.mjs ears.test.mjs layout.test.mjs words.test.mjs"
+    "test": "node --test line.test.mjs ears.test.mjs layout.test.mjs words.test.mjs desktop-intent.test.mjs"
   },
   "dependencies": {
     "@livekit/agents": "1.8.0",
