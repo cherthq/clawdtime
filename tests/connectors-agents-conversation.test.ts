@@ -29,6 +29,9 @@ import {
   type ToolCall,
   earlierSaid,
   OpenAIModel,
+  modelLongWaitMs,
+  modelSecondWaitMs,
+  modelWaitMs,
 } from "../connectors/agents/brain.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { Jobs, type JobAgent } from "../connectors/agents/jobs.js";
@@ -2004,6 +2007,122 @@ describe("then ask it", () => {
     },
   );
 
+  it.each([
+    "tell payments tests: delete the release branch, never mind",
+    "tell payments tests: push to main. actually no, wait",
+    "tell payments tests: push to main. Actually, no.",
+    "tell payments tests: run the migration - scratch that",
+    "tell payments tests: deploy now. no wait, don't send that",
+    "tell payments tests: delete the branch, oh never mind",
+    "tell payments tests: delete the branch; I changed my mind",
+    "tell payments tests: delete the branch, forget it.",
+    "tell payments tests: delete the branch\u2026 nvm",
+    "tell payments tests: delete the branch, on second thought",
+    "ok tell payments tests: delete the branch, sorry, cancel that",
+  ])(
+    "says that nothing is typed for %j, with no model and no offer",
+    async (words) => {
+      const { world, sent } = typing();
+      const { model, seen } = scripted([
+        'Say "tell payments tests: never mind" and I type it.',
+      ]);
+      expect(await new Supervisor(world, model).reply([], words, "chat")).toBe(
+        "Okay. Nothing is typed into payments tests.",
+      );
+      expect(seen).toHaveLength(0);
+      expect(sent).toEqual([]);
+    },
+  );
+
+  it.each([
+    // Words for the session, not a take-back at the end.
+    "tell payments tests: do not deploy until I say",
+    "tell payments tests: never mind the warnings, run the build",
+    "tell payments tests: delete the branch, then never mind the logs",
+    "tell payments tests: push to main. actually no rush on this",
+    "tell payments tests: never mind",
+    // No session of that name.
+    "tell billing: delete the branch, never mind",
+  ])(
+    "leaves %j to the model: the code does not answer for it",
+    async (words) => {
+      const { world, sent } = typing();
+      const { model, seen } = scripted(["What should I type?"]);
+      expect(await new Supervisor(world, model).reply([], words, "chat")).toBe(
+        "What should I type?",
+      );
+      expect(seen).toHaveLength(1);
+      expect(sent).toEqual([]);
+    },
+  );
+
+  it("does not answer for taken-back words while a request waits: the model reads the message", async () => {
+    const { world, sent } = typing();
+    waits(world);
+    const { model, seen } = scripted(["A request waits for your answer."]);
+    expect(
+      await new Supervisor(world, model).reply(
+        [],
+        "tell payments tests: delete the release branch, never mind",
+        "chat",
+      ),
+    ).toBe("A request waits for your answer.");
+    expect(seen).toHaveLength(1);
+    expect(sent).toEqual([]);
+  });
+
+  it("says what is true when the model does not answer", async () => {
+    const silent: ModelClient = {
+      complete: async () => {
+        throw new Error("The operation timed out.");
+      },
+    };
+    const state = "2 working.";
+    // Not about the state, and no tool ran: why, that nothing was done, and the state.
+    for (const words of [
+      "ok fix that one",
+      "tell payments tests to hurry up",
+    ]) {
+      const { world, sent } = typing();
+      expect(await new Supervisor(world, silent).reply([], words, "chat")).toBe(
+        `The language model did not answer, so nothing was done with that. Say it again in a moment. The state now: ${state}`,
+      );
+      expect(sent).toEqual([]);
+    }
+    // About the state: the state is the answer.
+    const asked = typing();
+    expect(
+      await new Supervisor(asked.world, silent).reply(
+        [],
+        "what is everyone doing?",
+        "chat",
+      ),
+    ).toBe(state);
+    // Something waits for the person: that answer stays as it is. (A message
+    // that opens with a yes would answer the request: this one does not.)
+    const waiting = typing();
+    waits(waiting.world);
+    expect(
+      await new Supervisor(waiting.world, silent).reply(
+        [],
+        "fix that one please",
+        "chat",
+      ),
+    ).toBe(
+      "One request waits for your answer: git push origin main. Say approve or deny to answer a request.",
+    );
+    // The code typed, and then the model did not answer: what was typed is said.
+    const told = typing();
+    expect(
+      await new Supervisor(told.world, silent).reply(
+        [],
+        "tell payments tests: run the tests again",
+        "chat",
+      ),
+    ).toBe("Typed into payments tests.");
+    expect(told.sent).toEqual(["payments tests: run the tests again"]);
+  });
+
   it("types nothing by itself while a request of an agent waits, for that session or another", async () => {
     for (const list of [
       [session({ name: "payments tests" })],
@@ -2463,21 +2582,29 @@ describe("the language model of this Mac's settings", () => {
       expect((await model.complete(ask)).text).toBe("Hey.");
       expect(calls).toBe(2);
     }
-    // A request that ran out of time is not tried again: the person does not wait twice.
-    let slow = 0;
-    const late = new OpenAIModel(
-      "key",
-      "m",
-      (async () => {
-        slow++;
-        const error = new Error("The operation timed out.");
-        error.name = "TimeoutError";
-        throw error;
-      }) as typeof fetch,
-      { retryWaitMs: 1 },
-    );
-    await expect(late.complete(ask)).rejects.toThrow("timed out");
-    expect(slow).toBe(1);
+    // A request that took the whole time is not tried again: the person does
+    // not wait that long twice. That is a request with a reasoning effort, or
+    // one with a set time and no second time.
+    for (const options of [
+      { reasoningEffort: "high" },
+      { timeoutMs: 45_000 },
+      { retryTimeoutMs: 0 },
+    ]) {
+      let slow = 0;
+      const late = new OpenAIModel(
+        "key",
+        "m",
+        (async () => {
+          slow++;
+          const error = new Error("The operation timed out.");
+          error.name = "TimeoutError";
+          throw error;
+        }) as typeof fetch,
+        { retryWaitMs: 1, ...options },
+      );
+      await expect(late.complete(ask)).rejects.toThrow("timed out");
+      expect(slow).toBe(1);
+    }
     // A refusal of the request itself is not tried again.
     let refused = 0;
     const bad = new OpenAIModel(
@@ -2504,6 +2631,61 @@ describe("the language model of this Mac's settings", () => {
     );
     await expect(down.complete(ask)).rejects.toThrow("answered 503");
     expect(busy).toBe(2);
+  });
+
+  it("gives a request that is stuck a short first wait, and one more request after it", async () => {
+    // The two waits together are as long as the one long wait.
+    expect(modelWaitMs + modelSecondWaitMs).toBe(modelLongWaitMs);
+    expect(modelWaitMs).toBeLessThanOrEqual(15_000);
+    const ask = { system: "s", messages: [], tools: [] };
+    // The first request never answers: it ends when its time is over. The
+    // second answers.
+    let calls = 0;
+    const stuckOnce = (async (_url: unknown, init?: RequestInit) => {
+      calls++;
+      if (calls > 1)
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "Hey." } }] }),
+        );
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () =>
+          reject(init!.signal!.reason),
+        );
+      });
+    }) as typeof fetch;
+    const model = new OpenAIModel("key", "m", stuckOnce, {
+      timeoutMs: 20,
+      retryTimeoutMs: 2_000,
+    });
+    expect((await model.complete(ask)).text).toBe("Hey.");
+    expect(calls).toBe(2);
+    // With no set times, a request that ran out of time is tried once more,
+    // and not a third time.
+    let slow = 0;
+    const late = new OpenAIModel("key", "m", (async () => {
+      slow++;
+      const error = new Error("The operation timed out.");
+      error.name = "TimeoutError";
+      throw error;
+    }) as typeof fetch);
+    await expect(late.complete(ask)).rejects.toThrow("timed out");
+    expect(slow).toBe(2);
+    // Busy, then out of time: no third request.
+    let mixed = 0;
+    const busyThenLate = new OpenAIModel(
+      "key",
+      "m",
+      (async () => {
+        mixed++;
+        if (mixed === 1) return new Response("busy", { status: 503 });
+        const error = new Error("The operation timed out.");
+        error.name = "TimeoutError";
+        throw error;
+      }) as typeof fetch,
+      { retryWaitMs: 1 },
+    );
+    await expect(busyThenLate.complete(ask)).rejects.toThrow("timed out");
+    expect(mixed).toBe(2);
   });
 
   const answered = () => {

@@ -137,6 +137,11 @@ export interface ModelClient {
 }
 
 /** OpenAI chat completions with function tools. */
+/** How long the first request to the model may take, and the one after it. */
+export const modelWaitMs = 15_000;
+export const modelSecondWaitMs = 30_000;
+/** How long the one request of a model with a reasoning effort may take. */
+export const modelLongWaitMs = 45_000;
 export class OpenAIModel implements ModelClient {
   constructor(
     private readonly key: string,
@@ -148,8 +153,13 @@ export class OpenAIModel implements ModelClient {
      */
     private readonly options: {
       reasoningEffort?: string;
-      /** How long one request may take, and how long to wait before the one retry. For tests. */
+      /**
+       * How long the first request may take, how long the one request after
+       * a first that ran out of time may take (0: none), and how long to wait
+       * before the one retry after a busy answer. For tests.
+       */
       timeoutMs?: number;
+      retryTimeoutMs?: number;
       retryWaitMs?: number;
     } = {},
   ) {}
@@ -184,7 +194,7 @@ export class OpenAIModel implements ModelClient {
     ];
     // The request, the same each time: it reads an answer and changes nothing,
     // so one more try is safe. A tool acts only after an answer came back.
-    const ask = () =>
+    const ask = (waitMs: number) =>
       this.request("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -207,27 +217,37 @@ export class OpenAIModel implements ModelClient {
               }
             : {}),
         }),
-        signal: AbortSignal.timeout(this.options.timeoutMs ?? 45_000),
+        signal: AbortSignal.timeout(waitMs),
       });
+    // An answer takes about one second. A request that still waits after the
+    // first wait is stuck, and a new one often passes: the two waits together
+    // are as long as the one long wait was. With a reasoning effort an answer
+    // can take long, so that request keeps the whole time and has no second.
+    const slow = !!this.options.reasoningEffort;
+    const firstWait =
+      this.options.timeoutMs ?? (slow ? modelLongWaitMs : modelWaitMs);
+    const secondWait =
+      this.options.retryTimeoutMs ??
+      (slow || this.options.timeoutMs !== undefined ? 0 : modelSecondWaitMs);
     // A busy service or a lost connection often passes at once: one more try,
     // after a short wait. A refusal of the request itself is not tried again.
     let response: Response;
     try {
-      response = await ask();
+      response = await ask(firstWait);
       if ([408, 429, 500, 502, 503, 504].includes(response.status))
         throw new Error("busy");
     } catch (error) {
-      // A request that ran out of time already took all of it: the person
-      // does not wait that long twice.
-      if (
+      const ranOut =
         error instanceof Error &&
-        (error.name === "TimeoutError" || error.name === "AbortError")
-      )
-        throw error;
-      await new Promise((done) =>
-        setTimeout(done, this.options.retryWaitMs ?? 600),
-      );
-      response = await ask();
+        (error.name === "TimeoutError" || error.name === "AbortError");
+      // A request that took the whole time is not tried again: the person
+      // does not wait that long twice.
+      if (ranOut && secondWait <= 0) throw error;
+      if (!ranOut)
+        await new Promise((done) =>
+          setTimeout(done, this.options.retryWaitMs ?? 600),
+        );
+      response = await ask(ranOut ? secondWait : firstWait);
     }
     // The body of a failure can echo the request: only the status is reported.
     if (!response.ok)
@@ -1204,6 +1224,17 @@ const mayTakeBack = (text: string) =>
     text,
   );
 /**
+ * The words end with a clause that takes them back: "delete the release
+ * branch, never mind", "push to main. Actually no, wait", "run it - scratch
+ * that". A mark must stand before that clause, and the clause runs to the
+ * end: "do not deploy until I say" and "never mind the warnings" are words
+ * for the session.
+ */
+const takenBackAtTheEnd = (text: string) =>
+  /(?:[,.;!?\u2026\u2013\u2014]|\s-+)\s*(?:(?:oh|ah|um|uh|hmm|wait|sorry|ok|okay)[,\s]+)*(?:never\s*mind|nevermind|nvm|actually,? no(?:[,\s]+wait)?|no,? wait(?:[,\s]+don['\u2019]?t\b[^.!?]*)?|scratch that|scrap that|forget (?:it|that|about it)|cancel that|ignore that|(?:i )?changed my mind|i take (?:that|it) back|on second thoughts?(?:[,\s]+(?:no|never\s*mind|don['\u2019]?t\b[^.!?]*))?)[\s.!]*$/i.test(
+    text,
+  );
+/**
  * "Then ask it", "tell it": the person wants a session asked or told, and
  * this message holds no words for it and no name.
  */
@@ -1232,6 +1263,9 @@ function jobLine(job: JobFacts, now: number) {
     ? `${head}, is done. Its answer: ${clean(job.result ?? "", 600)}`
     : `${head}, still works.`;
 }
+/** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
+const modelSilent =
+  "The language model did not answer, so nothing was done with that. Say it again in a moment. The state now:";
 const requestOwns =
   "An agent's request waits for the person's answer, and this sentence names no task. It starts no work. Answer the request first.";
 const needsDesktop =
@@ -1266,6 +1300,8 @@ interface Turn {
    * value says which: the person then hears the notice, or what waits.
    */
   closed?: "after work" | "after notice";
+  /** The plain answer of this turn was only the counts of the sessions: nothing took the sentence, and nothing waits for the person. */
+  plainState?: boolean;
   /**
    * A gate refused, with a sentence that is written for the model. Before the
    * model, such a sentence is never the answer: the turn goes on to the model.
@@ -2228,6 +2264,9 @@ export class Supervisor {
       : asks
         ? " Say your answer and I pass it to the task."
         : "";
+    // Nothing above took the sentence, and nothing waits for the person:
+    // this answer is only the counts of the sessions.
+    turn.plainState = !pending.length && !waiting.length && !about && !tail;
     return `${head}${about}${tail}`;
   }
 
@@ -2659,6 +2698,10 @@ export class Supervisor {
                 )
                 .map((session) => ({ session, text: form.text })),
             );
+      // Words that end with a clause that takes them back: nothing is typed,
+      // and the answer says so. No sentence to type is offered for them.
+      if (fits.length === 1 && takenBackAtTheEnd(fits[0]!.text))
+        return `Okay. Nothing is typed into ${title(fits[0]!.session)}.`;
       // The words after the colon are one clause, and no word in it can take
       // it back or hedge it. Anything more goes to the model.
       if (
@@ -2739,8 +2782,28 @@ export class Supervisor {
       }
       return "That took too many steps. Ask me again in a simpler way.";
     } catch {
+      // The code typed, and then the model did not answer: what was typed is said.
+      const typed = messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "tell_first",
+      );
+      if (typed?.role === "tool" && typed.content.startsWith("Typed into "))
+        return typed.content;
       // No model now: the plain answer still tells the state and takes a clear yes or no.
-      return this.plainly(words, via, turn);
+      const acted = messages.some(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId !== "state_first" &&
+          message.toolCallId !== "job_first",
+      );
+      turn.plainState = false;
+      const said = await this.plainly(words, via, turn);
+      // The message was not about the state, no tool ran, and the plain
+      // answer is only the counts: the person hears why, and that nothing was
+      // done. An answer that names what waits for them stays as it is.
+      return turn.plainState && !acted && !asksAboutState(words)
+        ? `${modelSilent} ${said}`
+        : said;
     }
   }
 }
