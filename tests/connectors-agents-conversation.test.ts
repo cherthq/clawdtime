@@ -4548,6 +4548,394 @@ describe("a request to see that points back at the conversation", () => {
   });
 });
 
+describe("an answer that offers words to type that the person did not say", () => {
+  const board2 = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+  ];
+  /** One turn. What was typed, the job windows, the answer and what the model saw. */
+  const turn = async (
+    words: string,
+    steps: (ToolCall[] | string)[],
+    history: ChatMessage[] = [],
+  ) => {
+    const made = mac(board2());
+    const typed: string[][] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, text) => {
+        typed.push([String(item.name), text]);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    const { model, seen } = scripted(steps);
+    const answer = await new Supervisor(world, model).reply(
+      history,
+      words,
+      "chat",
+    );
+    return { answer, typed, windows: made.windows, seen };
+  };
+  const note = "are not words that the person said";
+
+  it("asks the model once more, and the work that the person asked for starts", async () => {
+    // After "go back to the deploy fix one", the person asks for work. The
+    // draft offers a sentence for that session, with words of the model.
+    const got = await turn(
+      "and um yeah build me a small status page for the team you know in one html file",
+      [
+        'Say "tell deploy fix: create a simple single HTML file for a team status page" and I type it.',
+        [call("start_job")],
+        "unused",
+      ],
+      [
+        said("user", "ok so uh can you like go back to the deploy fix one"),
+        said("assistant", "I'm back at the deploy fix session for you."),
+      ],
+    );
+    expect(got.windows).toHaveLength(1);
+    expect(got.answer).toContain("On it.");
+    expect(got.typed).toEqual([]);
+    expect(got.seen[0]!.system).not.toContain("A check of your last draft");
+    expect(got.seen[1]!.system).toContain("A check of your last draft");
+    // The answer before named a session, so the note names no tool: the
+    // model chose the job by itself, and the gate of a job let it start.
+    expect(got.seen[1]!.system).not.toMatch(/call start_job now/i);
+    expect(got.seen[1]!.system).toContain("ask one short question");
+  });
+
+  it.each([
+    'Say "tell deploy fix: run tests --only-flaky" and I type it.',
+    'Say "tell deploy fix: npm test && git push" and I type it exactly.',
+    'Say "npm test && git push" to deploy fix, or give me the exact words.',
+    "Say \u201ctell deploy fix: rerun the flaky suite\u201d and I type it.",
+  ])("does not say the draft %j: the second answer is said", async (draft) => {
+    const got = await turn(
+      "tell deploy fix to run the tests if they are flaky",
+      [
+        draft,
+        'Say "tell deploy fix: run the tests if they are flaky" and I type it.',
+      ],
+    );
+    expect(got.answer, draft).toBe(
+      'Say "tell deploy fix: run the tests if they are flaky" and I type it.',
+    );
+    expect(got.seen, draft).toHaveLength(2);
+    expect(got.seen[1]!.system, draft).toContain(note);
+    // No work was asked: the note does not send the model to a job.
+    expect(got.seen[1]!.system, draft).not.toContain("call start_job now");
+    expect(got.typed, draft).toEqual([]);
+    expect(got.windows, draft).toHaveLength(0);
+  });
+
+  it("says the person's own words, or plain words, when the second answer offers words of the model again", async () => {
+    // The message speaks to a session by name, in plain words: the code offers the person's own words.
+    const named = await turn("tell deploy fix to pull main and run the tests", [
+      'Say "tell deploy fix: git pull && npm test" and I type it.',
+      'Say "tell deploy fix: git pull origin main" and I type it.',
+    ]);
+    expect(named.answer).toBe(
+      'Say "tell deploy fix: pull main and run the tests" and I type it.',
+    );
+    expect(named.seen).toHaveLength(2);
+    expect(named.seen[1]!.system).toContain("call type_into_session now");
+    expect(named.typed).toEqual([]);
+    // Its words hold a condition: plain words, and no offer of them.
+    const hedged = await turn(
+      "tell deploy fix to run the tests if they are flaky",
+      [
+        'Say "tell deploy fix: npm test" and I type it.',
+        'Say "tell deploy fix: npm run test:flaky" and I type it.',
+      ],
+    );
+    expect(hedged.answer).toBe(
+      'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.',
+    );
+    // It speaks to no session by name: plain words.
+    const plain = await turn("how do I get it to run only the flaky tests?", [
+      'Say "tell deploy fix: npm test -- --flaky" and I type it.',
+      'Say "tell deploy fix: npx vitest --flaky" and I type it.',
+    ]);
+    expect(plain.answer).toBe(
+      'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.',
+    );
+  });
+
+  it("types the person's own words when the model then calls the tool", async () => {
+    const got = await turn("tell deploy fix to pull main and run the tests", [
+      'Say "tell deploy fix: git pull origin main && npm test" and I type it.',
+      [
+        call("type_into_session", {
+          session: "deploy fix",
+          text: "pull main and run the tests",
+        }),
+      ],
+      "I told deploy fix.",
+    ]);
+    expect(got.typed).toEqual([["deploy fix", "pull main and run the tests"]]);
+    expect(got.answer).toBe("I told deploy fix.");
+    expect(got.windows).toHaveLength(0);
+    // A command of the model's own is refused by the tool, as always.
+    const refused = await turn(
+      "tell deploy fix to pull main and run the tests",
+      [
+        'Say "tell deploy fix: git pull origin main && npm test" and I type it.',
+        [
+          call("type_into_session", {
+            session: "deploy fix",
+            text: "git pull origin main && npm test",
+          }),
+        ],
+        "Tell me the exact words.",
+      ],
+    );
+    expect(refused.typed).toEqual([]);
+  });
+
+  it("never names the tool for a job, whatever the draft proposes", async () => {
+    // A draft that asks whether to type the person's own words is a
+    // question of the model: it is said as it is. Which messages ask for
+    // new work is not for this check to say.
+    const work =
+      "and um yeah build me a small status page for the team you know in one html file";
+    for (const history of [
+      [],
+      [said("user", "thanks"), said("assistant", "Any time.")],
+      [
+        said("user", "ok so uh can you like go back to the deploy fix one"),
+        said("assistant", "I'm back at the deploy fix session for you."),
+      ],
+    ]) {
+      const asked = await turn(
+        work,
+        [
+          "Should I type that into the deploy fix session?",
+          [call("start_job")],
+        ],
+        history,
+      );
+      expect(asked.answer).toBe(
+        "Should I type that into the deploy fix session?",
+      );
+      expect(asked.seen).toHaveLength(1);
+      expect(asked.windows).toHaveLength(0);
+    }
+    // A remark with a draft that offers to type: no note for a job, no job.
+    const remark = await turn("ok build passed", [
+      "Do you want me to type build passed into deploy fix?",
+      [call("start_job")],
+    ]);
+    expect(remark.windows).toHaveLength(0);
+    for (const seen of remark.seen)
+      expect(seen.system).not.toMatch(/call start_job now/i);
+    // A draft with words of the model's own, for a message that asks for
+    // work: the note names no tool either.
+    const invented = await turn(work, [
+      'Say "tell deploy fix: create a status page" and I type it.',
+      "Which one do you want?",
+    ]);
+    expect(invented.seen[1]!.system).not.toMatch(/call start_job now/i);
+    expect(invented.seen[1]!.system).toContain("ask one short question");
+  });
+
+  it("never tells the model to type words that the message hedges, asks about or takes back", async () => {
+    const draft = 'Say "tell deploy fix: npm test" and I type it.';
+    for (const words of [
+      "tell deploy fix to run the tests, or should I wait",
+      "tell deploy fix to run the tests never mind",
+      "tell deploy fix to push the branch, would that help",
+      "tell deploy fix to push, actually no",
+      "tell deploy fix to run the tests, and the docs one too",
+      "tell deploy fix to run the tests?",
+      "tell deploy fix to run the tests tomorrow maybe",
+      "maybe tell deploy fix to push",
+      "don't tell deploy fix to push",
+    ]) {
+      // A model that would obey a note to type: it is given none.
+      const got = await turn(words, [draft, "Which do you want?"]);
+      expect(got.seen[1]!.system, words).not.toContain(
+        "call type_into_session now",
+      );
+      expect(got.seen[1]!.system, words).not.toMatch(/call start_job now/i);
+      expect(got.seen[1]!.system, words).toContain("ask one short question");
+      expect(got.typed, words).toEqual([]);
+      expect(got.windows, words).toHaveLength(0);
+      expect(got.answer, words).toBe("Which do you want?");
+      // A second offer of the model's own words: plain words, and no offer
+      // of the hedged words either.
+      const twice = await turn(words, [draft, draft]);
+      expect(twice.answer, words).toBe(
+        'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.',
+      );
+    }
+  });
+
+  it("never tells the model to start a job for a message that asks for no work, or that is words for a session", async () => {
+    const draft = 'Say "tell deploy fix: npm test" and I type it.';
+    for (const words of [
+      // A request to see a session.
+      "show me docs",
+      "go back to the deploy fix one",
+      "open the docs one please",
+      // Words for a session, with a cue word or with none.
+      "tell it that the tests pass",
+      "get deploy fix to push",
+      "let docs know the api changed",
+      "docs needs to rebase onto main",
+      "have docs rebase",
+    ]) {
+      const made = mac(board2());
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async () => ({ ok: true }),
+      };
+      // A model that would obey a note to start a job.
+      const { model, seen } = scripted([draft, [call("start_job")], "Okay."]);
+      await new Supervisor(world, model).reply([], words, "chat");
+      for (const asked of seen)
+        expect(asked.system, words).not.toMatch(/call start_job now/i);
+    }
+  });
+
+  it("names no job when the person may be answering ClawdTime's own question about a session", async () => {
+    const draft =
+      'Say "tell deploy fix: push the release branch" and I type it.';
+    for (const history of [
+      [
+        said("user", "how is deploy fix?"),
+        said("assistant", "deploy fix waits: which branch should it push?"),
+      ],
+      // The answer names a session, with no question.
+      [
+        said("user", "how is deploy fix?"),
+        said("assistant", "deploy fix waits for a branch name."),
+      ],
+      // The answer asks something, with no session's name.
+      [said("user", "hello"), said("assistant", "Which branch do you mean?")],
+    ]) {
+      for (const words of [
+        "the release branch please",
+        "yes the main one",
+        "use the staging config instead",
+        "push to the release branch",
+      ]) {
+        // A model that would obey a note to start a job.
+        const made = mac(board2());
+        const { model, seen } = scripted([draft, [call("start_job")], "Okay."]);
+        await new Supervisor(made.world, model).reply(history, words, "chat");
+        for (const asked of seen)
+          expect(asked.system, words).not.toMatch(/call start_job now/i);
+      }
+    }
+  });
+
+  it("has the claim check name the tool that types, or no tool, for words to a session", async () => {
+    // Plain words for a session: the note names the tool that types, and a
+    // model that obeys types the person's own words. No job starts.
+    const plain = await turn("tell deploy fix to pull main and run the tests", [
+      "I typed it for you.",
+      [
+        call("type_into_session", {
+          session: "deploy fix",
+          text: "pull main and run the tests",
+        }),
+      ],
+      "Typed.",
+    ]);
+    expect(plain.seen[1]!.system).toContain("so call type_into_session now");
+    expect(plain.typed).toEqual([
+      ["deploy fix", "pull main and run the tests"],
+    ]);
+    expect(plain.windows).toHaveLength(0);
+    // Words that are not plain: no tool is named, and a model that would
+    // start a job is given no note for one.
+    const hedged = await turn(
+      "tell deploy fix to run the tests, or should I wait",
+      ["I typed it for you.", "Which do you want?"],
+    );
+    expect(hedged.seen[1]!.system).not.toMatch(/so call \w+ now/);
+    expect(hedged.seen[1]!.system).toContain("speaks to a session");
+    expect(hedged.answer).toBe("Which do you want?");
+    expect(hedged.windows).toHaveLength(0);
+  });
+
+  it("types no words with a time in them by itself", async () => {
+    for (const words of [
+      "tell deploy fix to run the tests tomorrow",
+      "tell deploy fix to run the tests after lunch",
+      "tell deploy fix to run the tests later",
+      "tell deploy fix to run the tests in an hour",
+      "tell deploy fix to run the tests at 5",
+      "tell deploy fix to run the tests tonight",
+      "tell deploy fix to run the tests on friday",
+      "tell deploy fix to run the tests end of day",
+    ]) {
+      const got = await turn(words, ["When exactly?"]);
+      expect(got.typed, words).toEqual([]);
+      expect(got.answer, words).toBe("When exactly?");
+    }
+    // Words with no time are typed as before.
+    const now1 = await turn("tell deploy fix to run the tests again", [
+      "Okay.",
+    ]);
+    expect(now1.typed).toEqual([["deploy fix", "run the tests again"]]);
+  });
+
+  it("offers no key and no words again after the code typed them", async () => {
+    // The code typed the plain form by itself. A draft with words of the
+    // model's own then gets plain words, not one more offer.
+    const got = await turn("tell deploy fix to run the tests again", [
+      'Say "tell deploy fix: npm test" and I type it.',
+      'Say "tell deploy fix: npm run test" and I type it.',
+    ]);
+    expect(got.typed).toEqual([["deploy fix", "run the tests again"]]);
+    expect(got.answer).not.toContain('Say "tell deploy fix: run the tests');
+    expect(got.seen[1]!.system).not.toContain("call type_into_session now");
+    // Words that look like a key are never offered back.
+    const secret = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
+    const key = await turn(`tell deploy fix to use the key ${secret}`, [
+      'Say "tell deploy fix: export TOKEN=x" and I type it.',
+      'Say "tell deploy fix: export TOKEN=y" and I type it.',
+    ]);
+    expect(key.answer).not.toContain(secret);
+    for (const asked of key.seen) expect(asked.system).not.toContain(secret);
+  });
+
+  it("leaves an offer of the person's own words as it is", async () => {
+    // Words of this message.
+    const own =
+      'Say "tell deploy fix: run the tests if they are flaky" and I type it.';
+    const now1 = await turn(
+      "tell deploy fix to run the tests if they are flaky",
+      [own],
+    );
+    expect(now1.answer).toBe(own);
+    expect(now1.seen).toHaveLength(1);
+    // Words of a message before, in other capitals and with other marks.
+    const before =
+      'Say "tell deploy fix: Did the tests pass in the deploy fix session" and I type it.';
+    const earlier = await turn(
+      "ask it that",
+      [before],
+      [
+        said("user", "did the tests pass in the deploy fix session?"),
+        said("assistant", "I do not know: the session has not got."),
+      ],
+    );
+    expect(earlier.answer).toBe(before);
+    expect(earlier.seen).toHaveLength(1);
+    // An answer that offers nothing.
+    const plain = await turn("how is deploy fix?", ["deploy fix works."]);
+    expect(plain.seen).toHaveLength(1);
+    // An answer that tells the person to say something that is no words for a session.
+    const other = await turn("what can I say to you?", [
+      'Say "status" and I tell you what runs.',
+    ]);
+    expect(other.answer).toBe('Say "status" and I tell you what runs.');
+    expect(other.seen).toHaveLength(1);
+  });
+});
+
 describe("an answer that claims an action that no tool did", () => {
   const work = "build a small landing page for my bakery in one html file";
   const started =

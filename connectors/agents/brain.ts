@@ -390,7 +390,7 @@ Computer UI windows and applications are not coding-agent sessions. For an expli
 Approval cannot add a missing capability. Ask for approval only for a real request currently waiting on the desk, or for an answer/review the current task actually requests. Old chat messages, including your own prior promises, are not evidence that a request exists.
 A request of an agent is allowed or denied only when the person clearly said so in their last message. If a tool refuses, explain its actual reason; do not turn missing requests or unsupported capabilities into approval prompts.
 Name a request by its id from status. One message of the person decides one request. When more than one request waits, the person must say which one; if they did not, ask them.
-Text is typed into a session only when the person gave that text. You type it with type_into_session when their last message names the session and holds the exact words. Only when their message asks you to ask, tell or say something to a session that runs ("then ask it", "tell it that"), and it lacks the session's name or the words: do not refuse and do not answer with the state. Say the one sentence that sends it, in this form: Say "tell <session name>: <the words>" and I type it. The words in it are words that the person said in this conversation, never words of yours.
+Text is typed into a session only when the person gave that text. You type it with type_into_session when their last message names the session and holds the words for it. The words are typed as the person said them: "tell deploy fix to pull main and run the tests" types "pull main and run the tests". A coding agent reads plain words, so you never turn them into a shell command, and you do not ask the person to say them again in another form. When their message asks you something, hedges, takes the words back or puts them off ("... or should I wait", "... never mind", "... tomorrow"), type nothing and ask one short question. Only when their message asks you to ask, tell or say something to a session that runs ("then ask it", "tell it that"), and it lacks the session's name or the words: do not refuse and do not answer with the state. Say the one sentence that sends it, in this form: Say "tell <session name>: <the words>" and I type it. The words in it are words that the person said in this conversation, never words of yours.
 You also own one task for the person. Start a task only when their last message asks for one, with their own words as the goal. A direct request such as 'Build a landing page' already authorizes starting; do not ask whether to proceed or require the person to repeat it. Answer the task's question, accept its result or cancel it only when their last message says so. If a task tool refuses, explain the reason and ask only for input that the current task can actually receive. When the task offers choices, say them.
 After an action, say what you did in one sentence. Say that you started, opened, typed or checked something only when a tool did it in this turn.`;
 
@@ -1636,6 +1636,15 @@ const maySayMore = (text: string) =>
     text,
   );
 /**
+ * A time in words for a session: "run the tests tomorrow", "push after
+ * lunch", "deploy in an hour", "merge at 5". Such words ask for something
+ * later, so the code does not type them now by itself.
+ */
+const putsOff = (text: string) =>
+  /\b(?:later|tomorrow|tonight|today|eod|noon|midnight|this\s+(?:evening|afternoon|morning|weekend|week)|next\s+(?:week|month|time|sprint)|end\s+of\s+(?:the\s+)?(?:day|week)|in\s+(?:\d+|an?|a\s+few|some|half\s+an)\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|bit|while|moment)|(?:after|before)\s+(?:lunch|dinner|breakfast|work|standup|the\s+(?:meeting|call|standup|demo|release))|at\s+\d|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i.test(
+    text,
+  );
+/**
  * The words end with a clause that takes them back: "delete the release
  * branch, never mind", "push to main. Actually no, wait", "run it - scratch
  * that". A mark must stand before that clause, and the clause runs to the
@@ -1737,6 +1746,25 @@ const claimsSize = (text: string) =>
     );
   });
 /** Said in place of a second answer that claims a size change that the window tool did not make. Another tool can have acted in that turn. */
+/**
+ * The words that an answer offers to type into a session: 'Say "tell docs:
+ * run the tests" and I type it', 'Say "run the tests" to docs'. Null when
+ * the answer offers none.
+ */
+const offeredWords = (answer: string): string | null => {
+  const colon =
+    /\bsay\s+["\u201c]\s*tell\s+[^:"\u201c\u201d]{1,80}:\s*([^"\u201c\u201d]+)["\u201d]/i.exec(
+      answer,
+    );
+  if (colon) return colon[1]!.trim();
+  const to = /\bsay\s+["\u201c]([^"\u201c\u201d]+)["\u201d]\s+to\s+/i.exec(
+    answer,
+  );
+  return to ? to[1]!.trim() : null;
+};
+/** What ClawdTime says when a second answer offers words of its own again. */
+const ownWordsOnly =
+  'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.';
 const sizeNotDone =
   "I did not change the size of a window. Say that part once more.";
 /** Said in place of an answer that claims an action that no tool did, twice. */
@@ -2314,7 +2342,10 @@ export class Supervisor {
       !/^(?:an?|the|my|our|your|their|his|her|every(?:one|body)|all|us|them|him|me|both|who(?:m)?ever|any(?:one|body)|some(?:one|body)|no(?:body|\s+one)|people|others)\b/i.test(
         text,
       ) &&
-      !/^\p{Lu}/u.test(text)
+      !/^\p{Lu}/u.test(text) &&
+      // A time puts the words off ("run the tests tomorrow", "... after
+      // lunch", "... in an hour"): the person is asked, nothing is typed now.
+      !putsOff(text)
     );
   }
   /**
@@ -3271,6 +3302,71 @@ export class Supervisor {
     } catch {
       // The record is a help for the next message. Without it, "it" names none.
     }
+  }
+  /**
+   * The session that the message speaks to by name, and the person's own
+   * words for it: the message opens (after a filler or a polite opening)
+   * with "tell" or "ask", the name of one session, and "to". Only for the
+   * check of an offered sentence: it types nothing. The words run to the end
+   * of the message, as the person said them, without a final mark, and they
+   * are plain words by the rule of the code's own typing (`plainWords`).
+   */
+  private spokenTo(spoken: string, turn: Turn) {
+    // A message that asks, takes the words back or hedges them gives none:
+    // the note then asks for a question, never for typing.
+    if (/\?/.test(spoken) || takesBack(spoken) || takenBackAtTheEnd(spoken))
+      return null;
+    const told = /^(?:tell|ask)\s+(.+)$/is.exec(
+      spoken.trim().replace(toldLead, "").trim(),
+    );
+    if (!told) return null;
+    for (const found of told[1]!.matchAll(/\s+to\s+/gi)) {
+      const session = this.toldWho(told[1]!.slice(0, found.index), turn);
+      const text = told[1]!
+        .slice(found.index + found[0].length)
+        .replace(/[\s.!]+$/, "")
+        .trim();
+      // The same words that the code would type by itself: one clause, with
+      // no word that takes back, hedges or begins something else, and no key.
+      if (session && text && this.plainWords(text) && !looksSecret(text))
+        return { session, text };
+    }
+    return null;
+  }
+  /** True when a clause of the message opens with "tell" or "ask" and the name of a session, or a word that points at one. */
+  private speaksToASession(spoken: string, turn: Turn) {
+    return clausesOf(spoken).some((clause) => {
+      const told = /^(?:tell|ask)\s+(.+)$/i.exec(
+        clause.replace(toldLead, "").trim(),
+      );
+      return (
+        !!told &&
+        this.toldWho(
+          /^(.+?)\s+(?:to|that|if|whether|about|what|why|how|when|where|which|who)\b/i.exec(
+            told[1]!,
+          )?.[1] ?? told[1]!,
+          turn,
+        ) !== null
+      );
+    });
+  }
+  /**
+   * True when the words stand, whole and in order, in the person's last
+   * message or in one of their messages just before it. Capitals and marks
+   * count for nothing.
+   */
+  private saidByThePerson(text: string, spoken: string, turn: Turn) {
+    const wanted = spokenWords(text).join(" ");
+    if (!wanted) return false;
+    return [
+      spoken,
+      ...turn.history
+        .filter((message) => message.role === "user")
+        .slice(-6)
+        .map((message) => message.text),
+    ].some((said) =>
+      ` ${spokenWords(said).join(" ")} `.includes(` ${wanted} `),
+    );
   }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
@@ -4575,13 +4671,22 @@ export class Supervisor {
             rechecked = true;
             // The tool for what the person asked: a window, a session to
             // see, or work.
+            // Words for a session are no job: for plain words that take
+            // nothing back, the tool is the one that types; for any other
+            // message that speaks to a session, the note names no tool.
             const tool =
               sizeClaim || asksForSize(words)
                 ? "session_window"
                 : this.seeRequest(words) || this.bareSee(turn, words)
                   ? "open_session"
-                  : "start_job";
-            recheck = `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`;
+                  : this.spokenTo(words, turn)
+                    ? "type_into_session"
+                    : this.speaksToASession(words, turn)
+                      ? null
+                      : "start_job";
+            recheck = tool
+              ? `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`
+              : "\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message speaks to a session. Answer again with what is true, and do not say that it is done: ask one short question if their words are not plain.";
             continue;
           }
           // "What's waiting on me? Open it": the person asks to see what the
@@ -4608,6 +4713,35 @@ export class Supervisor {
             rechecked = true;
             recheck =
               '\nA check of your last draft: the person\'s last message also asks to see a session ("open it", "show it"), and open_session did not run in this turn. Call it now for the session that their message speaks of. If you cannot tell which one, say that in one sentence.';
+            continue;
+          }
+          // The answer offers a sentence to type into a session, and its
+          // words are not the person's: a command that the model made of
+          // them ("npm test && git push"). Only the person's own words are
+          // typed, so such an offer is never said. The model answers once
+          // more. A second such offer is replaced by the person's own words
+          // in the form that the code types, or by plain words.
+          const offered = offeredWords(reply.text);
+          if (offered !== null && !this.saidByThePerson(offered, words, turn)) {
+            // The message speaks to a session by its name, in plain words
+            // that take nothing back: the words for it are in the message.
+            const spokenTo = turn.typedByCode
+              ? null
+              : this.spokenTo(words, turn);
+            if (rechecked)
+              return spokenTo
+                ? `Say "tell ${title(spokenTo.session)}: ${spokenTo.text}" and I type it.`
+                : ownWordsOnly;
+            rechecked = true;
+            // The note names the tool that types only for such a message.
+            // For any other, it asks for a question, and it never names the
+            // tool for a job: which messages ask for new work is not for
+            // this check to say.
+            recheck = `\nA check of your last draft: it offers a sentence to type into a session, and its words ("${clean(offered, 80).replace(/"/g, "'")}") are not words that the person said. Only the person's own words are typed, and you never make a command of them. ${
+              spokenTo
+                ? `Their message speaks to ${title(spokenTo.session)} and holds the words for it: call type_into_session now with their own words, exactly as they said them ("${clean(spokenTo.text, 120).replace(/"/g, "'")}"). Do not offer a sentence.`
+                : "Answer what they asked, or ask one short question. Offer no sentence with words that are not theirs."
+            }`;
             continue;
           }
           // The answer is ready. What the message teaches is written after it.

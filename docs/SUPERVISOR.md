@@ -411,6 +411,17 @@ These rules are in the code, not in the model's instructions:
   deploy fix, and "ask deploy fix if the tests pass" starts nothing. Work of
   its own in another clause still starts: "build the page and tell docs to
   wait", "tell docs to wait and build a landing page".
+- Your words are typed as you said them. "Tell deploy fix to pull main and
+  run the tests" types "pull main and run the tests": ClawdTime never turns
+  your words into a shell command. An answer that offers a sentence to type
+  with other words than yours ('Say "tell deploy fix: git pull && npm test"')
+  is not said: ClawdTime works it out once more, and if it still cannot, it
+  offers your own words or says so in plain words. A message that asks,
+  hedges, takes the words back or puts them off ("... or should I wait",
+  "... never mind", "... tomorrow") gets a question, and nothing is typed.
+- Words with a time in them ("tell deploy fix to run the tests tomorrow",
+  "... after lunch", "... in an hour") are not typed by ClawdTime by itself:
+  it asks you.
 - One message types the same words into a session once. A choice of a task
   is never typed into a session: a click on it answers the task.
 - Words that you take back at the end of the same message are not typed, and
