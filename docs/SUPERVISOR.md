@@ -645,6 +645,19 @@ to the deploy fix one" opens it. After a question about the sessions in the
 same message ("what's waiting on me? open it"), ClawdTime makes sure that the
 second part is not left out.
 
+Shorthand means what the long form means: "lemme see docs", "gimme the login
+page one", "yo pull up docs real quick", "show docs plz" open the session, and
+"k can u tell deploy fix to push the branch pls" types "push the branch". A
+question in shorthand is a question ("yo wats everyone doin", "bro r the
+tests done"): it gets the state, and it never starts work. "Lemme tell docs
+to wait" is what you do yourself, and "gimme a sec" asks for nothing: nothing
+opens and nothing is typed for those. "Give me that" can ask for words, so it
+opens no session: after "gimme" and "give me", say which session. "Nvm" and
+"nm" take a request back, as "never mind" does.
+
+When you ask what the sessions do ("what's everyone up to?"), the answer
+names each session that works or waits, so that you can ask for one of them.
+
 "Ok show me", with nothing after it, can open one session only: the one that
 you and ClawdTime just spoke of. Your last message and its answer must name
 exactly one session, by its full name or as "the payments one". "Show me"

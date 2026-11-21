@@ -792,7 +792,15 @@ const startCue =
   /\b(?:start|begin|take|open|create|add|queue|launch|kick off|give (?:you|yourself|it|clawdtime))\b[^.?!]{0,40}\b(?:task|job)\b|\b(?:new|a|another|this|one)\s+(?:task|job)\s*[:,-]|^\s*(?:task|job)\s*[:,-]|\b(?:task|job)\s+for\s+you\b/i;
 /** A sentence that asks about something. It never changes the task. */
 const asksAbout = (spoken: string) =>
-  /^\s*(?:did|has|have|had|is|are|was|were|what|why|how|when|where|who|which)\b/i.test(
+  // A filler can stand before the question word, and the word can be in
+  // shorthand: "yo wats everyone doin", "k hows docs", "bro r the tests done".
+  // "R" is "are" only where a question goes on ("r u", "r the tests done")
+  // or the message ends with a question mark: "R script failed, fix it" is
+  // work.
+  /^\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\s]+)*(?:did|has|have|had|is|are|was|were|what|wat|wut|whats|wats|why|how|hows|when|where|wheres|who|whos|which)\b/i.test(
+    spoken,
+  ) ||
+  /^\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\s]+)*r\s+(?:(?:u|you|we|they|the|my|all)\b|[^?]*\?\s*$)/i.test(
     spoken,
   );
 const isQuestion = (spoken: string) =>
@@ -812,7 +820,7 @@ const cannotStopSessions =
   'I cannot stop or close a session: no tool of mine does that. I can open one, so that you stop it there. Say "show me" and its name.';
 /** What can stand before a request to see a session, in its clause. */
 const seeLead =
-  /^(?:(?:please|ok|okay|so|then|now|and|hey|hi|clawdtime|just|also|well|h+m+|u+h+|u+m+|e+r+m*|like|kinda|kind\s+of|sort\s+of|basically|you\s+know|y['\u2019]?know|yes|yeah|yep|no|nope|not|wait|sorry|oops|actually|instead|rather|alright|right|sure|first|next|quickly|i\s+mean|i\s+meant|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|let['\u2019]?s|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+  /^(?:(?:please|pls|plz|ok|okay|okie|oki|k|kk|so|then|now|and|hey|hi|yo|bro|bruh|dude|aight|cool|clawdtime|just|also|well|h+m+|u+h+|u+m+|e+r+m*|like|kinda|kind\s+of|sort\s+of|basically|you\s+know|y['\u2019]?know|yes|yeah|yep|no|nope|nah|not|wait|sorry|oops|actually|instead|rather|alright|right|sure|first|next|quickly|i\s+mean|i\s+meant|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|i\s+want\s+to|i\s+need\s+to|i['\u2019]d\s+like\s+to|i\s+would\s+like\s+to|let\s+me|lemme|let['\u2019]?s|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
 /**
  * What can stand before "tell" or "ask" in a clause that speaks to a session,
  * where words are typed: a filler or a polite opening. "Let me tell docs to
@@ -820,7 +828,7 @@ const seeLead =
  * and "wait" can turn the clause around, so none of them is here.
  */
 const toldLead =
-  /^(?:(?:please|ok|okay|so|then|now|and|also|hey|hi|clawdtime|just|well|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+  /^(?:(?:please|pls|plz|ok|okay|okie|oki|k|kk|so|then|now|and|also|hey|hi|yo|bro|bruh|dude|aight|cool|clawdtime|just|well|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
 /**
  * What a second instruction for a session opens with, in "tell deploy fix to
  * run the tests and push the branch": a verb of software work, and nothing
@@ -841,7 +849,7 @@ const tellPointer =
 const seeForms = [
   /^(?:put|get)\s+(.+?)\s+on\s+(?:the\s+|my\s+)?screen$/i,
   /^(?:pull|bring)\s+(.+?)\s+(?:up|back|forward|to\s+the\s+front)$/i,
-  /^(?:open(?:\s+up)?|show(?:\s+(?:me|us))?|view|see|pull\s+up|put\s+up|bring\s+up|bring\s+back|back\s+to|switch(?:\s+(?:over|back))?\s+to|go(?:\s+(?:back|over))?\s+to|jump(?:\s+back)?\s+to|take\s+me(?:\s+back)?\s+to|(?:can|could|may)\s+i\s+see)\s+(.+)$/i,
+  /^(?:open(?:\s+up)?|show(?:\s+(?:me|us))?|gimme|give\s+me|view|see|pull\s+up|put\s+up|bring\s+up|bring\s+back|back\s+to|switch(?:\s+(?:over|back))?\s+to|go(?:\s+(?:back|over))?\s+to|jump(?:\s+back)?\s+to|take\s+me(?:\s+back)?\s+to|(?:can|could|may)\s+i\s+see)\s+(.+)$/i,
 ];
 /**
  * "Open" and "show" as people mistype them. Only forms that are no words of
@@ -896,7 +904,7 @@ const oneLetterApart = (a: string, b: string) => {
 const seeAsks = /^(?:what|how|which|why|who|whether|if|when|where)\b/i;
 /** Words at the end of a request that add nothing to the thing: "open it after all", "show it again please". */
 const seeTail =
-  /(?:\s+(?:after\s+all|again|now|please|pls|too|then|for\s+me|instead|anyway|quickly|first|up|back|real\s+quick))+$/i;
+  /(?:\s+(?:after\s+all|again|now|please|pls|plz|too|then|for\s+me|instead|anyway|quickly|first|up|back|real\s+quick|rq|asap))+$/i;
 /** "The one that's still working": a part that describes a session by its state. */
 const seeState =
   /\s+(?:that|which)(?:\s+(?:is|was)|['\u2019]s)?\s+(?:still\s+|currently\s+)?(?:working|running|idle|done|waiting|finished|stuck|busy)(?:\s+(?:now|right\s+now))?$/i;
@@ -922,7 +930,7 @@ const placeOf = (words: string) =>
     ?.toLowerCase() ?? null;
 /** What can stand before a bare "show me": a filler, a yes or a polite opening. Not "no", "not" or "wait". */
 const bareLead =
-  /^(?:(?:please|ok|okay|so|then|now|and|also|hey|hi|clawdtime|just|well|yes|yeah|yep|yup|sure|alright|right|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
+  /^(?:(?:please|pls|plz|ok|okay|okie|oki|k|kk|so|then|now|and|also|hey|hi|yo|bro|bruh|dude|aight|cool|clawdtime|just|well|yes|yeah|yep|yup|sure|alright|right|h+m+|u+h+|u+m+|e+r+m*|can\s+(?:you|u)|could\s+(?:you|u)|would\s+you|will\s+you|go\s+ahead\s+and)(?:[,\s]+|$))+/i;
 /** The bare request: "show me", with nothing after it. It points at what the conversation just spoke of. */
 const seeBare = /^(?:show(?:\s+(?:me|us))?|(?:can|could|may)\s+i\s+see)$/i;
 /**
@@ -1015,7 +1023,7 @@ const seeFiller =
  */
 const seeTakenBack = (clause: string) =>
   takeBackPhrase.test(clause) ||
-  /^(?:actually[,\s]+)?(?:no(?!\s+(?:rush|hurry|worries|problem|pressure)\b)|nope|not\s+now|never\s*mind|wait|cancel|stop)\b/i.test(
+  /^(?:actually[,\s]+)?(?:no(?!\s+(?:rush|hurry|worries|problem|pressure)\b)|nope|nah|not\s+now|never\s*mind|nevermind|nvm|nm|wait|cancel|stop)\b/i.test(
     clause,
   ) ||
   /\b(?:do\s+not|don['\u2019\u2018\u00b4\u02bc\u2032`]?t)\s+(?:open|show|bring|switch|pull)\b/i.test(
@@ -1654,7 +1662,7 @@ const putsOff = (text: string) =>
  * model reads those.
  */
 const takenBackAtTheEnd = (text: string) =>
-  /(?:[,.;!?\u2026\u2013\u2014]|\s-+)\s*(?:(?:oh|ah|um|uh|hmm|wait|sorry|ok|okay)[,\s]+)*(?:never\s*mind|nevermind|nvm|actually,? no(?:[,\s]+wait)?|no,? wait(?:[,\s]+don['\u2019]?t\b[^.!?]*)?|scratch that|scrap that|forget (?:it|that|about it)|i take (?:that|it) back|on second thoughts?(?:[,\s]+(?:no|never\s*mind|don['\u2019]?t\b[^.!?]*))?)[\s.!]*$/i.test(
+  /(?:[,.;!?\u2026\u2013\u2014]|\s-+)\s*(?:(?:oh|ah|um|uh|hmm|wait|sorry|ok|okay)[,\s]+)*(?:never\s*mind|nevermind|nvm|nm|actually,? no(?:[,\s]+wait)?|no,? wait(?:[,\s]+don['\u2019]?t\b[^.!?]*)?|scratch that|scrap that|forget (?:it|that|about it)|i take (?:that|it) back|on second thoughts?(?:[,\s]+(?:no|never\s*mind|don['\u2019]?t\b[^.!?]*))?)[\s.!]*$/i.test(
     text,
   );
 /**
@@ -1676,9 +1684,21 @@ const asksAboutState = (text: string) =>
   !/^\s*(?:(?:ok|okay|so|then|please|yes|now)[,\s]+)*(?:tell|ask|say|send|type|reply|answer)\b/i.test(
     text,
   ) &&
-  /\b(?:status|sessions?|agents?|working|idle|waiting|waits|running|busy|finished|done|ready|completed?|progress|everyone|everybody|up to|doing)\b/i.test(
+  /\b(?:status|sessions?|agents?|working|workin|idle|waiting|waitin|waits|running|runnin|busy|finished|done|ready|completed?|progress|everyone|everybody|up to|doing|doin|goin)\b/i.test(
     text,
   );
+/**
+ * A question about what the sessions do: "what's everyone up to", "yo wats
+ * everyone doin", "what are my sessions doing", "what's going on". A count
+ * ("how many sessions work?") and a question about the agents are none: a
+ * number or a kind answers those.
+ */
+const asksWhatTheyDo = (text: string) =>
+  asksAboutState(text) &&
+  /\b(?:doing|doin|up\s+to|going\s+on|goin\s+on|happening)\b/i.test(text) &&
+  !/\bhow\s+many\b/i.test(text) &&
+  // "What is the job doing?" and "what are you doing?" ask about another thing.
+  !/\b(?:jobs?|tasks?|builds?|deploys?|you|u)\b/i.test(text);
 /** Tools that only read. A turn in which only these ran did nothing. */
 const readingTools = new Set([
   "status",
@@ -2204,7 +2224,7 @@ export class Supervisor {
       // A "please" at the end is no part of the words for the session.
       const text = rest
         .slice(found.index + found[0].length)
-        .replace(/(?:\s+(?:please|pls))+$/i, "")
+        .replace(/(?:\s+(?:please|pls|plz))+$/i, "")
         .trim();
       if (session && text) readings.push({ session, text });
     }
@@ -2892,7 +2912,7 @@ export class Supervisor {
       const plain = clause
         .replace(seeLead, "")
         .replace(
-          /(?:\s+(?:please|pls|now|for\s+me|quickly|real\s+quick))+$/i,
+          /(?:\s+(?:please|pls|plz|now|for\s+me|quickly|real\s+quick|rq|asap))+$/i,
           "",
         )
         .replace(
@@ -2906,6 +2926,15 @@ export class Supervisor {
       // A name, a word that points at a session, or a session that is described.
       // "Show me the second one": a place in a list points at a session, as
       // "that one" does.
+      // "Give me that" asks for the thing that was just spoken of, which
+      // can be words (a summary, a result): after "gimme" and "give me",
+      // only the name or a description of a session is a request to see.
+      if (
+        /^(?:gimme|give\s+me)\b/i.test(plain) &&
+        (seePointer.test(thing.replace(seeTail, "").trim()) ||
+          placeOf(thing) !== null)
+      )
+        continue;
       if (
         this.namesOnlyASession(thing) ||
         this.describesASession(thing) ||
@@ -4721,6 +4750,33 @@ export class Supervisor {
           // typed, so such an offer is never said. The model answers once
           // more. A second such offer is replaced by the person's own words
           // in the form that the code types, or by plain words.
+          // The person asked what the sessions do, and the answer names no
+          // session that works or waits ("Two sessions are running fixes").
+          // Without a name the person cannot ask for one of them. The model
+          // answers once more; a second answer is said as it is.
+          if (
+            !rechecked &&
+            asksWhatTheyDo(words) &&
+            // The person named no session: they ask about all of them.
+            !(this.world.board()?.sessions ?? []).some((session) =>
+              saidAsWords(title(session), words),
+            )
+          ) {
+            const busy = (this.world.board()?.sessions ?? []).filter(
+              (session) =>
+                session.name !== null &&
+                (session.state === "working" || session.state === "needs_you"),
+            );
+            if (
+              busy.length > 0 &&
+              busy.length <= 6 &&
+              !busy.some((session) => saidAsWords(title(session), reply.text))
+            ) {
+              rechecked = true;
+              recheck = `\nA check of your last draft: it names no session. The person asked what runs, so call each session that works or waits by its name: ${busy.map(title).join(", ")}.`;
+              continue;
+            }
+          }
           const offered = offeredWords(reply.text);
           if (offered !== null && !this.saidByThePerson(offered, words, turn)) {
             // The message speaks to a session by its name, in plain words
