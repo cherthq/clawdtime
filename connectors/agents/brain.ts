@@ -921,14 +921,16 @@ const seeTakenBack = (clause: string) =>
 const seeLater = (clause: string) => {
   const plain = clause.replace(seeLead, "").trim();
   return (
-    /^(?:later|tomorrow|tonight|in\s+(?:\d+|an?|a\s+few|some)\s+(?:seconds?|secs?|minutes?|mins?|hours?|days?|bit|while|moment)|at\s+\d)\b/i.test(
+    /^(?:later|tomorrow|tonight|this\s+(?:evening|afternoon|morning|weekend)|in\s+(?:\d+|an?|a\s+few|some|half\s+an)\s+(?:seconds?|secs?|minutes?|mins?|hours?|days?|bit|while|moment)|at\s+\d|after\s+(?:lunch|dinner|breakfast|work|standup|the\s+(?:meeting|call|standup|demo)))\b/i.test(
       plain,
     ) ||
     (/^(?:when|whenever|once|after|before|until|unless|if|while|as\s+soon\s+as)\b/i.test(
       plain,
     ) &&
       !/\byou\b/i.test(plain) &&
-      /\b(?:done|finish(?:es|ed)?|complet(?:e|es|ed)|pass(?:es|ed)?|fail(?:s|ed)?|ready|stuck|ends?|ended|stops?|stopped|idle|green|red|breaks?|broken|crash(?:es|ed)?|errors?|waits?|waiting|free|over)\b/i.test(
+      // "While I wait" and "while I'm free" are about the person, now.
+      !/\bI(?:['\u2019]m|\s+am)?\s+(?:wait|free)\b/i.test(plain) &&
+      /\b(?:done|finish(?:es|ed)?|complet(?:e|es|ed)|pass(?:es|ed)?|fail(?:s|ed)?|ready|stuck|ends?|ended|stops?|stopped|idle|green|red|breaks?|broken|crash(?:es|ed)?|errors?|over|merged|deployed|released|shipped|landed|needs\s+me)\b/i.test(
         plain,
       ))
   );

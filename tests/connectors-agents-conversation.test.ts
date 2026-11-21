@@ -1890,6 +1890,8 @@ describe("a session opens only when the person asks to see it", () => {
     "show me payments, once more",
     "open payments, when you are ready",
     "open payments, after that make the text bigger",
+    "show me payments, while I wait",
+    "open payments, while I'm free",
     // A question, a remark or another instruction before it.
     "is payments done? open it",
     "no wait, show me the payments one",
@@ -1936,6 +1938,11 @@ describe("a session opens only when the person asks to see it", () => {
     "show me payments, later",
     "open payments, in 10 minutes",
     "open payments, until the build is green",
+    "show me payments, after lunch",
+    "show me payments, in half an hour",
+    "show me payments, this evening",
+    "open payments, once it's merged",
+    "show me payments, when it needs me",
     // Words are asked for, not a window.
     "show me the status",
     "show me what is waiting",
