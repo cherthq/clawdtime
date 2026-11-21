@@ -1516,6 +1516,30 @@ const namesDecision = (text: string) =>
   /\b(?:approve|approved|allow|allowed|deny|denied|reject|rejected|refuse)\b/i.test(
     text,
   );
+/** A question of ClawdTime that asks about a denial: a "yes" to it is no approval. */
+const asksAboutADenial =
+  /\b(?:deny|denied|denying|denial|reject|rejected|rejecting|refuse|refused|refusing|decline|declined|declining|block|blocked|blocking|stop|stopped|stopping|cancel|cancelled|canceled|cancelling|turn\s+(?:it|that|this|them)?\s*down|say\s+no|not\s+(?:approve|allow))\b/i;
+/**
+ * ClawdTime's offer to deny a request, as the whole sentence: "Should I
+ * deny it?", "Do you want me to just reject that request now?". What it
+ * offers to deny is the group.
+ */
+const offerToDeny =
+  /^(?:so[,\s]+)?(?:should i|shall i|can i|may i|do you want me to|want me to|would you like me to)\s+(?:just\s+)?(?:deny|reject|refuse|decline)\s+(.+?)(?:\s+(?:now|for you))?\?$/i;
+/** What such an offer can name with no word of the request: the request itself. */
+const offeredThing =
+  /^(?:it|that|this|(?:this|that) one|(?:the|that|this) (?:request|command))$/;
+/**
+ * A message that is a yes and nothing else: "yes", "ok, do it", "yes
+ * please", "yes, deny it". After ClawdTime's question whether to deny a
+ * request, it is the person's denial. "Go ahead" is not in it: it can mean
+ * that the command goes ahead.
+ */
+const yesAndNothingElse =
+  /^(?:(?:um+|uh+|oh|so|well)[,.!\s]+)*(?:yes|yeah|yep|yup|sure|ok|okay|please do|do it|do that)(?:[,.!\s]+(?:yes|please|do it|do that|deny it|deny that|deny|reject it|thanks|thank you))*[.!\s]*$/i;
+/** An answer that says a request was decided. */
+const claimsADecision =
+  /\b(?:approved|allowed|denied|rejected|declined|refused|blocked)\b/i;
 /**
  * A message that is a decision and nothing else, and names no request:
  * "approve it", "yes, approve it", "deny that one please", "approve both".
@@ -4812,6 +4836,189 @@ export class Supervisor {
       );
     });
   }
+  /** The last question in ClawdTime's last message, or "". News of a job is no such message. */
+  private lastQuestion(turn: Turn) {
+    const last = turn.history.at(-1);
+    if (!last || last.role !== "assistant") return "";
+    return (
+      last.text
+        .split(/(?<=[.?!])\s+/)
+        .filter((sentence) => /\?\s*$/.test(sentence))
+        .at(-1) ?? ""
+    );
+  }
+  /**
+   * The person's message decides only by a bare word, "yes" for an approval
+   * or "no" for a denial (it holds no "approve", "allow", "deny" or the
+   * like of its own), and the last question in ClawdTime's last message
+   * asks about a denial: "Should I deny it?", "Do you want to approve or
+   * deny it?". A yes to that is no approval, and a no to that is no denial.
+   * The model words such a question; the reader of the gate reads the
+   * person's message alone, and would take the yes as an approval and the
+   * no as a denial.
+   */
+  private bareWordAfterADenialQuestion(
+    spoken: string,
+    decision: "allow" | "deny",
+    turn: Turn,
+  ) {
+    if (
+      (decision === "allow"
+        ? /\b(?:approve|approved|allow|allowed)\b/i
+        : /\b(?:deny|denied|reject|rejected|refuse|decline|declined)\b/i
+      ).test(spoken)
+    )
+      return false;
+    return asksAboutADenial.test(this.lastQuestion(turn));
+  }
+  /**
+   * "Yes", after ClawdTime asked whether it should deny the one request
+   * that waits: the yes is the person's denial. All of this holds:
+   * - the message is a yes and nothing else ("yes", "ok, do it", "yes, deny
+   *   it");
+   * - ClawdTime's last message is the last message, on this channel and
+   *   younger than five minutes, and it ENDS with ClawdTime's offer to deny
+   *   (`offerToDeny`): "Should I deny it?", "Do you want me to reject that
+   *   request?". A question about the past, about a reason or about
+   *   another thing is no offer ("Did you deny it?", "Should I decline the
+   *   meeting?");
+   * - that request is the only one that waits, it is a plain permission,
+   *   and it waited before ClawdTime asked;
+   * - the question is about it: the offer names it by a word of the head
+   *   of its text, or the sentence right before the offer holds a word of
+   *   its text;
+   * - no task is live.
+   * The model still calls the tool, with "deny": the yes alone decides
+   * nothing.
+   */
+  private yesToTheDenial(
+    spoken: string,
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+  ) {
+    if (
+      turn.closed !== undefined ||
+      this.namesTask(spoken) ||
+      !yesAndNothingElse.test(spoken.trim())
+    )
+      return false;
+    // Not while a task is live: "it" in the offer can be the task's question.
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+    } catch {
+      return false;
+    }
+    if (task && !taskIsOver(task)) return false;
+    const pending = this.world.desk.pending();
+    const last = turn.history.at(-1);
+    const now = this.world.now();
+    if (
+      pending.length !== 1 ||
+      pending[0]!.id !== request.id ||
+      request.kind !== "permission" ||
+      !last ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      now - last.at >= questionHoldMs ||
+      now < last.at ||
+      request.createdAt >= last.at
+    )
+      return false;
+    const sentences = last.text.trim().split(/(?<=[.?!])\s+/);
+    const question = sentences.at(-1) ?? "";
+    // The question is ClawdTime's offer to deny. What it offers to deny is
+    // this request by a word of the head of its text ("the rm one"), or
+    // "it", "the request" or the like: then the sentence right before the
+    // offer speaks of this request, by a word of its text. A word of it
+    // somewhere else in the message does not tie "it" to the request.
+    const offered = offerToDeny.exec(question)?.[1]?.toLowerCase();
+    if (offered === undefined) return false;
+    if (offeredThing.test(offered)) {
+      const before = new Set(spokenWords(sentences.at(-2) ?? ""));
+      return [...this.textWords(request)].some(
+        (word) => word.length >= 3 && before.has(word),
+      );
+    }
+    const named = /^(?:the\s+)?(\S+)(?:\s+(?:one|request|command))?$/.exec(
+      offered,
+    )?.[1];
+    return !!named && this.headWords(request).includes(named);
+  }
+  /**
+   * The request that the person's message decides, where the model answered
+   * with words and called no tool: one plain permission request waits, the
+   * message holds a word of decision and the gate's reader gives allow or
+   * deny for it, and ClawdTime's last message told the person what that
+   * request asks: it ends with the code's own sentence about the request,
+   * it is the last message, on this channel and younger than five minutes. The model is then asked
+   * once more to call the tool. The code decides nothing: the gate of the
+   * tool reads the person's words as always.
+   */
+  private decisionSaid(
+    spoken: string,
+    via: ChatMessage["via"],
+    turn: Turn,
+  ): {
+    id: string;
+    decision: "allow" | "deny";
+    /** The decision is a yes to ClawdTime's own question about a denial. */
+    yes: boolean;
+    waits: string;
+  } | null {
+    if (turn.closed !== undefined || turn.done.has("decide")) return null;
+    const pending = this.world.desk.pending();
+    const request = pending[0];
+    if (pending.length !== 1 || !request || request.kind !== "permission")
+      return null;
+    // "Yes", after ClawdTime's own question whether to deny it.
+    if (this.yesToTheDenial(spoken, via, turn, request))
+      return {
+        id: request.id.slice(0, 8),
+        decision: "deny",
+        yes: true,
+        waits: this.waitingRequest(),
+      };
+    if (
+      request.answerInTerminal === true ||
+      looksSecret(request.summary) ||
+      // The text is one plain command: a text with a full stop and words in
+      // it can make the code's sentence read as two requests.
+      request.summary.length > whichRequestRoom ||
+      !simpleCommand.test(request.summary) ||
+      !heardAsOne(request.summary) ||
+      !namesDecision(spoken) ||
+      this.namesTask(spoken)
+    )
+      return null;
+    const said = interpret(spoken, request);
+    if (!said || said.decision === "answer") return null;
+    // A bare word after a question about a denial is not that decision.
+    if (this.bareWordAfterADenialQuestion(spoken, said.decision, turn))
+      return null;
+    // ClawdTime's last message ends with the code's own sentence about this
+    // request ("One request waits for your answer: ... Say approve or deny
+    // to answer it."): the person then knows what they decide. A message
+    // that only holds the text of the request somewhere does not count.
+    const last = turn.history.at(-1);
+    const waits = this.waitingRequest();
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      this.world.now() - last.at >= questionHoldMs ||
+      this.world.now() < last.at ||
+      !clean(last.text, 2000).endsWith(waits)
+    )
+      return null;
+    return {
+      id: request.id.slice(0, 8),
+      decision: said.decision,
+      yes: false,
+      waits: this.waitingRequest(),
+    };
+  }
   private decide(
     request: DecisionRequest | undefined,
     spoken: string,
@@ -4828,9 +5035,28 @@ export class Supervisor {
     if (this.namesTask(spoken))
       return "The person spoke about the task, not about this request. Use the task tools, or ask them.";
     // The person's own last words must say it. The model alone cannot decide.
-    const said = interpret(spoken, request);
+    const read = interpret(spoken, request);
+    // "Yes" after ClawdTime's own question whether to deny this request:
+    // the yes is the denial. The reader takes a yes as an approval, so it
+    // is asked first.
+    const said =
+      wanted.decision === "deny" &&
+      this.yesToTheDenial(spoken, via, turn, request)
+        ? { decision: "deny" as const, text: null }
+        : read;
     if (!said || said.decision !== wanted.decision)
       return "The person did not clearly say that. Ask them.";
+    // A bare word agrees with what was asked. After ClawdTime's own
+    // question about a denial ("Should I deny it?"), a yes approves nothing
+    // and a no denies nothing.
+    if (
+      said === read &&
+      said.decision !== "answer" &&
+      this.bareWordAfterADenialQuestion(spoken, said.decision, turn)
+    )
+      return said.decision === "allow"
+        ? 'A "yes" after the question about a denial approves nothing. The request still waits: say "approve" or "deny".'
+        : 'A "no" after the question about a denial denies nothing. The request still waits: say "approve" or "deny".';
     // With more than one request, the words must also say which one. The
     // model alone cannot choose it.
     const pending = this.world.desk.pending();
@@ -6223,6 +6449,26 @@ export class Supervisor {
           // rightly get a question back, and "it" after a statement can be
           // another thing.
           const seeAsked = this.seeAsked(words);
+          // The person's message decides the one request that waits, and
+          // the model answered with words: a question back ("Should I deny
+          // it?"), or a claim. It is asked once more to call the tool,
+          // whose gate reads the person's words. A second answer that
+          // claims a decision is replaced by what is true.
+          const decision =
+            names.has("decide") && !ran.has("decide")
+              ? this.decisionSaid(words, via, turn)
+              : null;
+          if (decision) {
+            if (!rechecked) {
+              rechecked = true;
+              recheck = decision.yes
+                ? `\nA check of your last draft: the person's last message is a yes to your own question whether to deny the one request that waits (id ${decision.id}). Call decide with "deny" for it now: its gate reads their yes against your question. Do not ask them again.`
+                : `\nA check of your last draft: the person's last message says to ${decision.decision} the one request that waits (id ${decision.id}), and your last message told them what it asks. Call decide for it now: its gate reads their words. Do not ask them again.`;
+              continue;
+            }
+            if (claimsADecision.test(reply.text))
+              return `Nothing was decided. ${decision.waits}`;
+          }
           const pointsBackToSee =
             names.has("open_session") &&
             !ran.has("open_session") &&
