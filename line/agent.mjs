@@ -65,15 +65,13 @@ const log = (event, detail = {}) =>
     }),
   );
 const SHOWN = new Set(["listening", "thinking", "speaking"]);
-// The time between two frames of the picture while no caller is there.
-const WAITING_FRAME_MS = 1000;
 
 const agent = defineAgent({
   entry: async (ctx) => {
     await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
-    // Chert prepares a room before a caller exists. Join at once, but open no model session and no screen
-    // capture yet. The picture is sent from now on: when the call comes, its first frame is already there, so
-    // the caller sees the stone as soon as the line shows video.
+    // Chert prepares a room before a caller exists. Join at once, and make the picture ready, but send nothing
+    // and open no model session and no screen capture yet. A video track that is sent to an empty room used
+    // 7 percent of a processor core around the clock, at any frame rate, for a gain that could not be measured.
     let callStarted = 0;
 
     // One camera track from this agent: the line shows video only from the participant that speaks.
@@ -110,28 +108,21 @@ const agent = defineAgent({
         frameFailed = true;
       }
     };
-    frame();
-    await ctx.room.localParticipant.publishTrack(track, {
-      source: TrackSource.SOURCE_CAMERA,
-    });
-    // While it waits for a call, one frame a second keeps the track alive at almost no cost: the agent waits
-    // all day, and a full rate there used a tenth of a processor core for nobody.
-    let timer = setInterval(frame, WAITING_FRAME_MS);
-    // A room that ends before a caller came must leave no timer behind.
-    ctx.addShutdownCallback(async () => clearInterval(timer));
-
     let caller;
     try {
       caller = await ctx.waitForParticipant();
     } catch {
       // Chert makes a new waiting room every few minutes. A room that ends before a caller came is no error.
-      clearInterval(timer);
       return;
     }
     callStarted = Date.now();
-    clearInterval(timer);
-    timer = setInterval(frame, 1000 / FPS);
     log("call_started");
+    // The picture goes out as the first thing of a call: it is ready, so this is one frame and one publish.
+    frame();
+    await ctx.room.localParticipant.publishTrack(track, {
+      source: TrackSource.SOURCE_CAMERA,
+    });
+    const timer = setInterval(frame, 1000 / FPS);
 
     const showScreen = async (on) => {
       if (!on) {
