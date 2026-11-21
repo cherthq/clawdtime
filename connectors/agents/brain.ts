@@ -2714,15 +2714,14 @@ export class Supervisor {
               content: jobLine(newest, this.world.now()),
             },
           );
-        // The person asks about jobs, and ClawdTime started none in the last
-        // day: the answer of the job tool is the newest thing that the model
-        // sees, so that the person's own sessions are not called jobs.
+        // The person asks about jobs, and ClawdTime has no job at all: the
+        // answer of the job tool is the newest thing that the model sees, so
+        // that the person's own sessions are not called jobs. With an older
+        // job the tool gives that job's line, so nothing is read here.
         else if (
           this.world.jobs &&
           /\bjobs?\b/i.test(words) &&
-          !this.jobsNow(3).some(
-            (job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000,
-          )
+          this.jobsNow(1).length === 0
         )
           messages.push(
             {
@@ -2847,10 +2846,16 @@ export class Supervisor {
       return "That took too many steps. Ask me again in a simpler way.";
     } catch {
       // A request was decided in this turn, and then the model did not
-      // answer: the person hears that decision. Nothing reads the same words
-      // again, so they decide and accept nothing more.
+      // answer: the person hears that decision, that nothing else was done,
+      // and what still waits. Nothing reads the same words again, so they
+      // decide and accept nothing more.
       const decided = turn.done.get("decide");
-      if (decided !== undefined) return decided;
+      if (decided !== undefined) {
+        const more = this.world.desk.pending().length
+          ? ` ${this.waitingRequest()}`
+          : "";
+        return `${decided} The language model stopped after that, so nothing else was done with that message.${more}`;
+      }
       // The code typed, and then the model did not answer: what was typed is said.
       const typed = messages.find(
         (message) =>

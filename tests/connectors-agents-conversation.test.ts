@@ -1763,6 +1763,16 @@ describe("the state says when no job was started", () => {
     expect(plain.some((message) => message.toolCallId === "job_first")).toBe(
       false,
     );
+    // A job from more than a day ago: the tool would give that job's line,
+    // so the code reads no "no job" answer. The state says "in the last day".
+    const old = mac([session({ name: "deploy fix" })]);
+    expect((await old.jobs.start("build a small landing page")).ok).toBe(true);
+    old.clock.now += 26 * 60 * 60 * 1000;
+    const older = await seeded(old, "is the job done?");
+    expect(older.some((message) => message.content === noJob)).toBe(false);
+    expect(older[0]!.content).toContain(
+      "ClawdTime started no job in the last day.",
+    );
     // A job started in the last day: its line is in the state, and no "no job" answer is read.
     const busy = mac([session({ name: "deploy fix" })]);
     expect((await busy.jobs.start("build a small landing page")).ok).toBe(true);
@@ -2301,7 +2311,9 @@ describe("then ask it", () => {
       expect(
         await new Supervisor(world, fails(request.id)).reply([], words, "chat"),
         words,
-      ).toBe("Allowed. The agent continues.");
+      ).toBe(
+        "Allowed. The agent continues. The language model stopped after that, so nothing else was done with that message.",
+      );
       expect(world.desk.take(request.id)?.decision, words).toBe("allow");
       // The same words accept no task after that.
       expect(accepted, words).toEqual([]);
@@ -2328,7 +2340,9 @@ describe("then ask it", () => {
         "approve the git push one",
         "chat",
       ),
-    ).toBe("Allowed. The agent continues.");
+    ).toBe(
+      "Allowed. The agent continues. The language model stopped after that, so nothing else was done with that message. One request waits for your answer: npm publish. Say approve or deny to answer it.",
+    );
     expect(two.world.desk.take(second.id)).toBeNull();
   });
 
