@@ -5963,6 +5963,91 @@ describe("a correction to a job that still works waits for that job", () => {
   });
 });
 
+describe("a question after a word of correction or a lead-in starts no work", () => {
+  /** A job runs. Then `words`, with a model that calls start_job for them: how many jobs exist after. */
+  const jobsAfter = async (words: string) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    const history: ChatMessage[] = [];
+    expect(
+      await talk(
+        made.world,
+        wantsJob().model,
+        history,
+        "build a small landing page for my bakery in one html file",
+      ),
+    ).toBe(started);
+    made.clock.now += 60_000;
+    await talk(made.world, wantsJob().model, history, words);
+    return made.ids().length;
+  };
+
+  it.each([
+    // The bench sentence: a job started with these words.
+    "wait what did the first one say again",
+    "wait, what did it say",
+    "hold on what does it do",
+    "sorry which one is done",
+    "no wait, why is it slow",
+    "and which file was the biggest",
+    "so how long did it take",
+    "well is it done",
+    "hmm did it finish",
+    "actually what was the name again",
+    "oh and where is the file",
+    "but why did it fail",
+    "then what happened",
+    "anyway how are the tests",
+    "ok so what did it find",
+    "ok so wait what did it say",
+    "Wait. What did it say",
+    // "Have" that asks.
+    "so have you finished the page",
+    "and have they deployed it",
+    "then have we lost the file?",
+    // A question that goes on with "and then": no clause of work.
+    "but why did it fail and then run again",
+  ])("starts no job for %j, whatever the model calls", async (words) => {
+    expect(await jobsAfter(words), words).toBe(1);
+  });
+
+  it.each([
+    // An instruction after the same words is still work.
+    "wait, make the buttons bigger instead",
+    "ok so add a contact form to it",
+    "and then fix the footer of the page",
+    "well, build a pricing page too",
+    // A clause of work after the question word.
+    "so when you are done, run the tests",
+    "now where the header is, add a logo",
+    "well which ever is faster, use it",
+    "yes is fine, start it",
+    "no is not an answer, build it",
+    "right is the wrong side, move the menu to the left",
+    "so is the plan: build the page",
+    "so who cares, build it anyway",
+    "and when it's done, deploy it",
+    "but when the tests pass, merge it",
+    "now when you're free, fix the login bug",
+    "ok so how about a footer, add one",
+    "now have a look at the header and fix it",
+    // "Have" that makes something do something.
+    "then have it deploy",
+    "and have the tests run first",
+    "also have it send me an email",
+    "so have the page use blue",
+    // A statement that opens with "what" or "how about".
+    "ok so what I want is a landing page for my cafe",
+    "actually, what we need is a login page",
+    "and what you should do is add a footer",
+    "and how about you build the page",
+  ])("still starts work for %j", async (words) => {
+    expect(await jobsAfter(words), words).toBe(2);
+  });
+});
+
 describe("a complaint about the time reads the state only when it is about a job", () => {
   const request = "build a small landing page for my bakery in one html file";
   /** What the code read before the model's first answer: the id of each read. */

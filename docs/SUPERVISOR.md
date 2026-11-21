@@ -861,6 +861,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   no job. One message starts one job. At most four jobs run at one time.
   Praise alone starts nothing, and praise that goes on with an instruction
   starts it: "nice, now add a dark mode to it".
+- A question stays a question behind a word of correction or a joining
+  word: "wait what did the first one say again", "and which file was the
+  biggest", "so how long did it take", "well is it done". Such a message
+  starts no work, whatever the language model chooses. An instruction
+  behind the same words is still work: "wait, make the buttons bigger
+  instead", "so when you are done, run the tests", "then have it deploy",
+  "ok so what I want is a landing page".
 - While an agent's request waits for your answer, a sentence starts no work
   unless it names a task or a job. "Yes, update the config" answers the
   request and does nothing else.
