@@ -5,17 +5,18 @@ requested by the user after the latest phone test showed no avatar.
 
 ## Start here
 
-**Latest result: two instrumented incoming calls passed startup; action acceptance is incomplete.**
+**Latest state: normal installation updated at the user’s request; action acceptance is incomplete.**
 The person confirmed avatar, audio and a visible shared screen. No native action
 was executed. The earlier missing-avatar cause remains historically unresolved;
 it did not reproduce. Read the latest physical continuation at the end of this
-file before another handoff. Normal ownership/control is restored and test control
-is off. Do not call the full feature accepted.
+file before another handoff. The normal Supervisor and phone host now run the
+corrected build, normal computer control is enabled, and test control is off.
+Do not call the full feature accepted.
 
 - Worktree: `/Users/garygao/clawdtime-spaces-zoom-integration`.
 - Branch: `spaces-zoom-integration` (do not use a `codex/` branch).
 - Draft integration PR: <https://github.com/cherthq/clawdtime/pull/56>.
-- Current implementation commit: `ecf9032bee5d1f31ec2668a614ad7b60a6b70b2c`.
+- Installed implementation commit: `ae56d947b71f5b6e7cd9cee22304c6c88b7e0cb3`.
 - This handoff may be committed after that implementation commit; use the actual
   current Git head when recording subsequent work.
 - Main incorporated through `fc2bfe4c2815b5acc1429b7f32059543da085658` (PRs #54/#55,
@@ -70,9 +71,11 @@ acceptance.
 
 The user prefers action over repetitive confirmations. Existing authorization
 covers isolated testing, reversible idle line handoff, fixing the branch,
-checks, push and PR updates. It does not authorize sending a draft, merging,
-replacing the normal installation, initiating outgoing calls, or overlapping
-line/control owners. Ask only for an actual new prerequisite or hands-off interval.
+checks, push and PR updates. The later explicit “push to prod” instruction also
+authorized updating the normal local Supervisor and phone installation; that
+rollout is recorded below. Sending drafts, merging, initiating outgoing calls and
+overlapping line/control owners remain unauthorized. Ask only for an actual new
+prerequisite or hands-off interval.
 
 ## Implementation and commits
 
@@ -489,10 +492,10 @@ before a future action test, and make the test phase unambiguous.
 On the second call, a successful final provider transcript and bound SDK response
 forwarded a question about missed messages to the desktop supervisor. The
 supervisor answered it as a status question rather than delegating computer work.
-No typing request reached the native worker. The person was asked whether they
-intended a Messages question or whether speech recognition misunderstood a typing
-request; that clarification is still pending. Do not claim a typing defect is
-fixed, or treat a general mailbox inquiry as a disposable typing acceptance test.
+No typing request reached the native worker. The person subsequently confirmed
+that they asked about messages. This provides no evidence of speech
+misrecognition. Do not claim a typing defect is fixed, or treat a general mailbox
+inquiry as a disposable typing acceptance test.
 Do not test against real customer/message content to fill this evidence gap.
 
 Both calls emitted agent cleanup on departure. A process-tree check after the
@@ -524,6 +527,56 @@ The normal native installation/service were not replaced or restarted.
 Private sanitized evidence is `phone/acceptance-ecf9032.json` under the existing
 fixture root. `phone/room-status.mjs` is a read-only diagnostic scoped to dispatches
 for the uniquely named integration agent; it emits counts and a room digest, no
-identities or media. Recheck fresh ownership before another test. Await the
-intended-request clarification, then arrange one fresh disposable typing request;
-proceed through the remaining matrix only after its observed outcome.
+identities or media. Recheck fresh ownership before any future live work. The user
+subsequently requested deployment to the normal installation, recorded below;
+do not restart the isolated test sequence automatically.
+
+
+## Normal installation rollout — November 21, 16:46 ET
+
+The user explicitly requested deployment to production after reporting that the
+separate test-control phases were confusing. The coordinating lead updated the
+normal local Supervisor and phone host to `ae56d947`; PR #56 remains draft and
+unmerged. No cloud deployment or outgoing call was performed.
+
+Fresh preflight found the old normal binding disconnected, its line idle, and no
+phone tmux session. Its retained logs showed earlier heartbeat/reconnect failures.
+The exact old binding had an empty, validated journal and zero retained calls.
+The supported release procedure reconciled that binding, then a fresh provider
+read confirmed zero active owners before starting the replacement. No receipt,
+cursor or uncertain action was erased or replayed.
+
+The installed source now uses `production-spaces-zoom-20261121` pinned to
+`ae56d947`. Its old main branch and unrelated untracked planning document remain
+intact. The normal app keeps its bundle identity and path, with version
+`20261121.2`. Previous app, compiled service and launcher code are retained in the
+private `rollout-spaces-zoom-20261121` directory beside the normal service state.
+Protected credentials remain in their existing files; no runtime/customer state
+was copied. Normal service configuration, journals and project routing remain in
+place. Screen capture uses the configured main-display device. The normal phone
+launcher now retains bounded diagnostics without arbitrary SDK text or speech.
+
+The new app supports a read-only `--check-access` mode that exits before GUI or
+controller startup. Running the actual installed executable confirmed
+Accessibility, Screen Recording and configured Control-arrow desktop shortcuts.
+This probe performs no input, capture, permission prompt or controller polling.
+The installed binary hash matched the candidate. Native validation passed **298
+Swift tests and the panel build**; backend/connector validation remains **3,946
+tests**, and line validation **113 tests**, with no subsequent changes to those
+sources. Python presentation source remains unchanged from its 36-test check.
+
+After restart, fresh checks confirmed one connected normal line owner, matching
+scope, an idle line, normal computer control enabled and idle, test control
+disabled, and the normal presentation endpoint available. The new normal phone
+session connected at 16:46:05 ET. These are operational deployment checks, not
+caller-visible media or action acceptance. No new phone call or native action
+was performed during rollout. The two earlier instrumented calls remain the
+physical avatar/audio/sharing evidence; the remaining matrix above is incomplete.
+
+The private normal runbook `RUN_MAIN.md` records launch commands and rollback
+locations. Rollback requires a fresh idle/exclusive-owner check and exact binding
+reconciliation, stopping the current phone/controller processes, restoring the
+saved code and prior nonsecret routing settings, and verifying a sole owner again.
+Keep all current journals and unknown outcomes; do not restore stale runtime
+state. Updates are not scheduled. The normal installation remains pinned to the
+reviewed implementation; later documentation-only commits need no reinstall.
