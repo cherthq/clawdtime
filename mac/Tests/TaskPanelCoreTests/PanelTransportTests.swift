@@ -237,6 +237,70 @@ final class PanelTransportTests: XCTestCase {
       do { _ = try await client.chat(); XCTFail("Invalid chat accepted") } catch {}
     }
   }
+  func testTheHandsReadTheNextCommandAndPostItsResultWithThePanelCredential() async throws {
+    let next = #"{"version":1,"command":{"seq":8,"command":{"kind":"click","x":640,"y":400,"button":"left","count":1},"label":"Click Save"},"run":{"active":true,"goal":"Save the note","step":3,"state":"running"}}"#
+    let server = try FixtureHTTP { request, _ in
+      request.hasPrefix("GET /desktop/hands/next?after=7 ") ? (200, ["Content-Type": "application/json"], Data(next.utf8))
+        : (200, ["Content-Type": "application/json"], Data("{\"ok\":true}".utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let read = try await client.handsNext(after: 7)
+    XCTAssertEqual(read.command, .init(seq: 8, command: .click(x: 640, y: 400, button: .left, count: 1), label: "Click Save"))
+    XCTAssertEqual(read.run, .init(active: true, goal: "Save the note", step: 3, state: "running"))
+    XCTAssertTrue(server.requests()[0].hasPrefix("GET /desktop/hands/next?after=7 "))
+    XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    XCTAssertFalse(server.requests()[0].contains("Origin:"))
+
+    try await client.handsResult(.done(8, interrupted: true))
+    XCTAssertTrue(server.requests()[1].hasPrefix("POST /desktop/hands/result "))
+    XCTAssertTrue(server.requests()[1].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    XCTAssertTrue(server.requests()[1].contains("Content-Type: application/json\r\n"))
+    // The body is exactly {"interrupted":true,"ok":true,"seq":8}: 38 bytes.
+    XCTAssertTrue(server.requests()[1].contains("Content-Length: 38\r\n"))
+
+    // What the hands saw goes as the contract writes it, and a slash in the picture is not escaped.
+    let seen = Observation(at: 1_795_170_939_254, screen: .init(width: 1512, height: 982, scale: 2), cursor: .init(x: 640.5, y: 300),
+      app: .init(name: "Notes", bundleId: "com.apple.Notes", window: "All iCloud"),
+      elements: [ScreenElement(id: 0, role: "AXButton", title: "Save", x: 100, y: 40, w: 64, h: 24, enabled: true, focused: false, secure: false)],
+      image: "/9j/4AAQ", imageWidth: 1280, imageHeight: 831)
+    let body = #"{"observation":{"app":{"bundleId":"com.apple.Notes","name":"Notes","window":"All iCloud"},"at":1795170939254,"cursor":{"x":640.5,"y":300},"elements":[{"enabled":true,"focused":false,"h":24,"id":0,"role":"AXButton","secure":false,"title":"Save","w":64,"x":100,"y":40}],"image":"/9j/4AAQ","imageHeight":831,"imageWidth":1280,"screen":{"height":982,"scale":2,"width":1512}},"ok":true,"seq":9}"#
+    try await client.handsResult(.done(9, observation: seen))
+    XCTAssertTrue(server.requests()[2].hasPrefix("POST /desktop/hands/result "))
+    XCTAssertTrue(server.requests()[2].contains("Content-Length: \(body.utf8.count)\r\n"))
+
+    // A number that cannot be a sequence, and a result outside the contract, are refused before any request.
+    do { _ = try await client.handsNext(after: -1); XCTFail("Negative sequence accepted") } catch {}
+    do { try await client.handsResult(HandResult(seq: 0, ok: true)); XCTFail("Sequence zero accepted") } catch {}
+    do { try await client.handsResult(HandResult(seq: 3, ok: true, error: .failed)); XCTFail("A done result with an error accepted") } catch {}
+    XCTAssertEqual(server.requests().count, 3)
+  }
+  func testAHandsResultIsPostedOnceAndNeverReplayedOrRedirected() async throws {
+    for status in [503, 302, 404] {
+      let server = try FixtureHTTP { _, port in (status, ["Location": "http://127.0.0.1:\(port)/other"], Data("{}".utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { try await client.handsResult(.failure(4, .stoppedByPerson)); XCTFail("Unconfirmed result accepted") } catch {}
+      XCTAssertEqual(server.requests().count, 1)
+      XCTAssertTrue(server.requests()[0].hasPrefix("POST /desktop/hands/result "))
+      do { _ = try await client.handsNext(after: 4); XCTFail("Failed read accepted") } catch {}
+      XCTAssertEqual(server.requests().count, 2)
+      XCTAssertTrue(server.requests()[1].hasPrefix("GET /desktop/hands/next?after=4 "))
+    }
+  }
+  func testAServiceWithNoWorkerAndCommandsOutsideTheContractAreRejected() async throws {
+    let run = #""run":{"active":true,"goal":"g","step":1,"state":"running"}"#
+    for body in ["{}", #"{"version":2,"command":null,\#(run)}"#, #"{"version":1,\#(run)}"#,
+                 #"{"version":1,"command":{"seq":1,"command":{"kind":"shell","command":"ls"},"label":"Run"},\#(run)}"#,
+                 #"{"version":1,"command":{"seq":1,"command":{"kind":"move","x":1,"y":2,"then":"click"},"label":"Move"},\#(run)}"#,
+                 #"{"version":1,"command":{"seq":0,"command":{"kind":"wait","ms":1},"label":"Wait"},\#(run)}"#] {
+      let server = try FixtureHTTP { _, _ in (200, ["Content-Type": "application/json"], Data(body.utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { _ = try await client.handsNext(after: 0); XCTFail("Invalid read accepted: " + body) } catch {}
+      XCTAssertEqual(server.requests().count, 1)
+    }
+  }
   func testMemoryIsSwitchedWithThePanelCredential() async throws {
     let server = try FixtureHTTP { _, _ in (200, ["Content-Type": "application/json"], Data(#"{"enabled":true}"#.utf8)) }
     try await server.start(); defer { server.close() }
