@@ -1833,6 +1833,13 @@ describe("an answer that claims an action that no tool did", () => {
     "Done, I started it.",
     "Sure, I have now kicked off that work.",
     "Okay. I created the form for you.",
+    // The second claim in a sentence, after one about an earlier time.
+    "I started the bakery job two minutes ago, and I added the contact form to it.",
+    // A dash opens a clause, and so do other short openers.
+    "Got it \u2014 I added the form to the job.",
+    "Got it - I added the form to the job.",
+    "Yep I added the form.",
+    "I've gone ahead and added the form to the job.",
   ])("catches the claim %j", async (answer) => {
     const made = mac();
     const { model, seen } = scripted([answer, answer]);
@@ -1870,6 +1877,29 @@ describe("an answer that claims an action that no tool did", () => {
       ),
     ).toBe(notDone);
     expect(full.ids()).toHaveLength(4);
+    // With no task service, the start of a task is handed to a job. When
+    // that job does not start, nothing stands behind the claim.
+    const handed = mac();
+    for (const job of [
+      "build page one",
+      "build page two",
+      "build page three",
+      "build page four",
+    ])
+      expect((await handed.jobs.start(job)).ok).toBe(true);
+    const viaTask = scripted([
+      [call("start_task", { goal: "build a status page for the team" })],
+      "I started that for you.",
+      "I've started it.",
+    ]);
+    expect(
+      await new Supervisor(handed.world, viaTask.model).reply(
+        [],
+        "build a status page for the team",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(handed.ids()).toHaveLength(4);
     // A tool name that this turn did not offer stands behind nothing.
     const made = mac();
     const unknown = scripted([[call("do_everything")], claim, claim]);

@@ -1310,19 +1310,19 @@ const readingTools = new Set([
 const claimVerbs =
   "added|started|opened|typed|sent|created|built|fixed|deployed|approved|denied|allowed|answered|closed|resized|moved|brought|launched|kicked off|queued|scheduled|updated|changed|deleted|removed|installed|restarted|stopped|cancell?ed|accepted|passed|forwarded|handed|put|set up";
 const claim = new RegExp(
-  `(?:^|[,;:]\\s*|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes)[,\\s]+)I(?:['\u2019]ve| have)?(?:\\s+(?:just|now|also))*\\s+(?:${claimVerbs})\\b(?!\\s+(?:no|nothing|none|neither)\\b)([^,;.!?]*?)(?=$|[,;.!?]|\\s+(?:and|but)\\b)`,
-  "i",
+  `(?:^|[,;:\u2013\u2014]\\s*|\\s-+\\s+|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes|yep|yeah|yup|alright|right|great|perfect|well|got it)[,!.\\s]+)I(?:['\u2019]ve| have)?(?:\\s+(?:just|now|also))*\\s+(?:(?:gone|went)\\s+ahead\\s+and\\s+)?(?:${claimVerbs})\\b(?!\\s+(?:no|nothing|none|neither)\\b)([^,;.!?]*?)(?=$|[,;.!?]|\\s+(?:and|but)\\b)`,
+  "gi",
 );
 const claimsAction = (text: string) =>
-  text.split(/(?<=[.!?])\s+|\n+/).some((sentence) => {
-    const found = claim.exec(sentence.trim());
-    return (
-      !!found &&
-      !/\b(?:earlier|before|ago|previously|last time|yesterday)\b/i.test(
-        found[1] ?? "",
-      )
-    );
-  });
+  text.split(/(?<=[.!?])\s+|\n+/).some((sentence) =>
+    // Every claim in the sentence is read: one that is about this turn is enough.
+    [...sentence.trim().matchAll(claim)].some(
+      (found) =>
+        !/\b(?:earlier|before|ago|previously|last time|yesterday)\b/i.test(
+          found[1] ?? "",
+        ),
+    ),
+  );
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
@@ -2840,10 +2840,14 @@ export class Supervisor {
           : [],
       );
       const names = new Set(offered.map((tool) => tool.name));
+      // With no task service, the start of a task is handed to a job: the
+      // same holds for it as for the start of a job.
+      const startsJob = (name: string) =>
+        name === "start_job" || (name === "start_task" && !this.world.tasks);
       const acted = () =>
         [...ran].some(
           (name) =>
-            names.has(name) && !readingTools.has(name) && name !== "start_job",
+            names.has(name) && !readingTools.has(name) && !startsJob(name),
         );
       // The note for the model after an answer that claimed an action which no
       // tool did. It is asked once in a turn, and the note goes when a tool ran.
