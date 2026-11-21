@@ -243,3 +243,80 @@ export function jobDoneInstructions(job) {
     .filter(Boolean)
     .join("\n");
 }
+
+/**
+ * What the video of the call shows: one part of the main screen in shares, or null for the whole screen, and
+ * when that was set. From `clawdtime view --json`. null when the command does not answer, as on an older build.
+ * @param {typeof run} [exec] runs the command, for a test
+ * @returns {Promise<{ view: { x: number, y: number, w: number, h: number } | null, at: number } | null>}
+ */
+export async function readView(exec = run) {
+  const result = await exec(settings.clawdtime, ["view", "--json"], {
+    env: environment(),
+    cwd: settings.project,
+    timeout: 8000,
+  });
+  if (!result.ok) return null;
+  try {
+    const value = JSON.parse(result.stdout);
+    if (!value || typeof value !== "object") return null;
+    const view = value.view;
+    const numbers = view && [view.x, view.y, view.w, view.h];
+    return {
+      view:
+        numbers &&
+        numbers.every((n) => typeof n === "number" && Number.isFinite(n))
+          ? { x: view.x, y: view.y, w: view.w, h: view.h }
+          : null,
+      at: typeof value.at === "number" ? value.at : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const HOUR = 60 * 60 * 1000;
+function ago(ms) {
+  const minutes = Math.max(0, Math.round(ms / 60000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  return `${Math.round(minutes / 60)} h ago`;
+}
+
+/**
+ * What the person and ClawdTime said to each other before this call, as a few lines for the voice model, newest
+ * last. A call that starts reads it, so a person who hangs up and calls back does not start from nothing.
+ * It is "" when there is nothing from the last day, and when the command does not answer.
+ * The lines are data from an earlier talk: the instructions around them say so.
+ * @param {typeof run} [exec] runs the command, for a test
+ * @param {() => number} [now]
+ */
+export async function recall(exec = run, now = Date.now) {
+  const result = await exec(settings.clawdtime, ["chat", "--recent", "12"], {
+    env: environment(),
+    cwd: settings.project,
+    timeout: 8000,
+  });
+  if (!result.ok) return "";
+  let messages;
+  try {
+    messages = JSON.parse(result.stdout);
+  } catch {
+    return "";
+  }
+  if (!Array.isArray(messages)) return "";
+  const lines = [];
+  for (const message of messages.slice(-10)) {
+    if (!message || typeof message.text !== "string") continue;
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const at = typeof message.at === "number" ? message.at : 0;
+    // A talk of an earlier day is not what the person is in the middle of.
+    if (!at || now() - at > 24 * HOUR) continue;
+    const text = spoken(message.text, 220);
+    if (!text) continue;
+    lines.push(
+      `- ${ago(now() - at)}, ${message.role === "user" ? "the person said" : "ClawdTime answered"}: ${text}`,
+    );
+  }
+  return lines.join("\n").slice(0, 2200);
+}
