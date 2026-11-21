@@ -1715,6 +1715,325 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("a session opens only when the person asks to see it", () => {
+  const refusal =
+    "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
+  /** A Mac with two sessions, and what was opened. The model always asks to open `wanted`. */
+  const opening = (wanted: string) => {
+    const opened: string[] = [];
+    const made = mac([
+      session({ name: "payments" }),
+      session({ id: "2", name: "docs" }),
+    ]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+    };
+    const { model, seen } = scripted([
+      [call("open_session", { session: wanted })],
+      "Okay.",
+    ]);
+    const results = () =>
+      seen.flatMap((asked) =>
+        asked.messages
+          .filter(
+            (message) =>
+              message.role === "tool" && message.toolCallId !== "state_first",
+          )
+          .map((message) => message.content),
+      );
+    return { world, model, opened, results, clock: made.clock };
+  };
+
+  it.each([
+    "show me the payments one",
+    "open payments",
+    "can you show me the payments session?",
+    "switch to payments",
+    "bring up the payments session",
+    "take me to payments",
+    "let me see the payments one",
+    "go back to the payments session",
+    // The request stands in another form.
+    "pull the payments one up",
+    "bring payments up",
+    "can I see payments?",
+    "put payments on screen",
+    "back to payments",
+    // A word that points at a session, with a word after it.
+    "ok open it after all",
+    "show it again please",
+    // A session that is described, as on a call.
+    "show the payments session with the claude code that checks the webhooks",
+    "open the one that runs payments",
+    "show me the session on payments",
+    // Only the conversation knows this one: the model's choice stands.
+    "show me the one you started",
+    "open the one I started this morning",
+    "show me the one we were working on",
+    // A "don't" about something else, and words that add nothing.
+    "open payments but don't type anything",
+    "show me payments and don't close it",
+    "show me payments, no rush",
+    "bring payments to the front please",
+    "get payments on screen",
+    "could you put up payments",
+    // A question, a remark or another instruction before it.
+    "is payments done? open it",
+    "no wait, show me the payments one",
+    "never mind the docs one, open payments",
+    "I don't see it, bring up payments",
+    "stop the tests, and show me payments",
+  ])("opens for %j", async (words) => {
+    const { world, model, opened } = opening("payments");
+    await new Supervisor(world, model).reply([], words, "chat");
+    expect(opened).toEqual(["payments"]);
+  });
+
+  it.each([
+    // A question about a session asks for words, not for a window.
+    "what's the one on payments doing",
+    "is the payments one done?",
+    "how long has payments been running?",
+    "does the payments one show any errors?",
+    "do you see the payments one stuck",
+    "hey, what does payments show right now",
+    // A question about the opening itself.
+    "why did you open the payments one?",
+    "did you show me payments before?",
+    "will the payments session open?",
+    // The person rules it out, or takes it back.
+    "don't open the payments one",
+    "no need to show me payments",
+    "open payments, actually never mind",
+    "show me payments, actually no, not now",
+    // The same words in another sense.
+    "the show must go on",
+    "in my view, payments is fine",
+    "we use open source for payments",
+    "focus on the payments tests first",
+    "fix the display bug in payments",
+    "open a pull request for payments",
+    "let me go to lunch",
+    // Words are asked for, not a window.
+    "show me the status",
+    "show me what is waiting",
+    "show me the progress on payments",
+    "show me the docs for the stripe api",
+    // Work that opens with such a word, or names more than a session.
+    "look at payments and tell me why it is stuck",
+    "look at the payments logs and fix the bug",
+    "raise the limit in payments to 100",
+    "display the total on the payments page",
+    "open a new terminal and run the tests",
+    "open a new tab",
+    "open the payments page",
+    "view the sessions",
+    "show me one way to fix the payments bug",
+    "show me the one thing I asked for about payments",
+    // A window, a tab or "the one" that fits no session.
+    "open the settings window",
+    "open my browser window",
+    "show me the tab with the invoice",
+    "show me the one that failed",
+    "show me the one with the most errors",
+    // Words for a session.
+    "tell payments: open the file",
+    // Work, a remark, a bare name: nothing asks to see it.
+    "add a contact form to the payments page",
+    "thanks, payments looks good",
+    "the payments one",
+    "payments please",
+  ])("opens nothing for %j, also when the model asks for it", async (words) => {
+    const { world, model, opened, results } = opening("payments");
+    await new Supervisor(world, model).reply([], words, "chat");
+    expect(opened).toEqual([]);
+    expect(results()).toContain(refusal);
+  });
+
+  it("takes a correction in the same message as a request, not as a take-back", async () => {
+    for (const words of [
+      "open payments, no, docs",
+      "open payments, wait, I mean docs",
+    ]) {
+      // The model follows the correction.
+      const { world, model, opened, results } = opening("docs");
+      await new Supervisor(world, model).reply([], words, "chat");
+      // The gate lets the request through: which session opens is the
+      // matter of the reader that picks it, as before.
+      expect(results(), words).not.toContain(refusal);
+      expect(opened.includes("payments"), words).toBe(false);
+    }
+  });
+
+  it("does not open the session that the person took back in the same message", async () => {
+    for (const words of [
+      "open payments, no, the other one",
+      "open payments, actually no, not that one",
+      "open payments, no wait, not payments",
+    ]) {
+      // The model asks for the session that was taken back.
+      const stubborn = opening("payments");
+      await new Supervisor(stubborn.world, stubborn.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(stubborn.opened, words).toEqual([]);
+    }
+    // The model follows the correction: the other session opens.
+    const follows = opening("docs");
+    await new Supervisor(follows.world, follows.model).reply(
+      [],
+      "open payments, no, the other one",
+      "chat",
+    );
+    expect(follows.opened).toEqual(["docs"]);
+    // The named session after the take-back opens, also when the model asks for the first.
+    const named = opening("payments");
+    await new Supervisor(named.world, named.model).reply(
+      [],
+      "open payments, no, docs",
+      "chat",
+    );
+    expect(named.opened).toEqual(["docs"]);
+  });
+
+  it("opens the session that the person names when ClawdTime asked which one", async () => {
+    const opened: string[] = [];
+    const made = mac([
+      session({ name: "payments api" }),
+      session({ id: "2", name: "payments web" }),
+    ]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(String(item.name));
+        return { ok: true };
+      },
+    };
+    const asked = [
+      said("user", "show me payments"),
+      said("assistant", "Which one: payments api or payments web?"),
+    ];
+    for (const words of [
+      "the web one",
+      "payments web",
+      "web",
+      "the other one",
+      "payments web instead",
+    ]) {
+      opened.length = 0;
+      const { model } = scripted([
+        [call("open_session", { session: "payments web" })],
+        "Okay.",
+      ]);
+      await new Supervisor(world, model).reply(asked, words, "chat");
+      expect(opened, words).toEqual(["payments web"]);
+    }
+  });
+
+  it("opens for a correction right after a request to see a session", async () => {
+    const asked = [
+      said("user", "show me the payments one"),
+      said("assistant", "Opened payments."),
+    ];
+    for (const words of [
+      "no wait, the other one",
+      "and the docs one",
+      "not that one, the docs session",
+      "hmm, the docs one again",
+      "ok, that one",
+    ]) {
+      const { world, model, opened } = opening("docs");
+      await new Supervisor(world, model).reply(asked, words, "chat");
+      expect(opened, words).toEqual(["docs"]);
+    }
+  });
+
+  it("opens nothing for what only looks like a correction", async () => {
+    const asked = [
+      said("user", "show me the payments one"),
+      said("assistant", "Opened payments."),
+    ];
+    // A remark, thanks, or work after a request to see a session.
+    for (const words of [
+      "ok, that one is fine",
+      "now the docs one is stuck",
+      "also the other one is idle",
+      "hmm, docs looks odd",
+      "thanks, that one is fine",
+      "it works now",
+      "ok, that's it",
+      "great, this is what I needed",
+      "thanks",
+      "now fix the header in that one",
+      "is that one done?",
+    ]) {
+      const { world, model, opened } = opening("docs");
+      await new Supervisor(world, model).reply(asked, words, "chat");
+      expect(opened, words).toEqual([]);
+    }
+    // A second correction: the message before it did not ask to see a session.
+    const twice = opening("docs");
+    await new Supervisor(twice.world, twice.model).reply(
+      [
+        ...asked,
+        said("user", "no wait, the other one"),
+        said("assistant", "Opened docs."),
+      ],
+      "hmm, the docs one again",
+      "chat",
+    );
+    expect(twice.opened).toEqual([]);
+    // After a question about a session, "and the docs one" asks for words too.
+    const after = opening("docs");
+    await new Supervisor(after.world, after.model).reply(
+      [
+        said("user", "what's the one on payments doing"),
+        said("assistant", "It still works."),
+      ],
+      "and the docs one",
+      "chat",
+    );
+    expect(after.opened).toEqual([]);
+    // After a request for a window, "no, the other one" opens nothing.
+    const sized = opening("docs");
+    await new Supervisor(sized.world, sized.model).reply(
+      [
+        said("user", "make the payments window bigger"),
+        said("assistant", "The window changed."),
+      ],
+      "no, the other one",
+      "chat",
+    );
+    expect(sized.opened).toEqual([]);
+    // The request to see a session is old.
+    const old = opening("docs");
+    old.clock.now += 2 * 24 * 60 * 60 * 1000;
+    await new Supervisor(old.world, old.model).reply(
+      asked,
+      "no wait, the other one",
+      "chat",
+    );
+    expect(old.opened).toEqual([]);
+    // Words of ClawdTime in the conversation open no gate.
+    const echo = opening("docs");
+    await new Supervisor(echo.world, echo.model).reply(
+      [
+        said("user", "how is payments?"),
+        said("assistant", "It works. Say show me the payments one to see it."),
+      ],
+      "and the docs one",
+      "chat",
+    );
+    expect(echo.opened).toEqual([]);
+  });
+});
+
 describe("an answer that claims an action that no tool did", () => {
   const work = "build a small landing page for my bakery in one html file";
   const started =
@@ -1937,6 +2256,71 @@ describe("an answer that claims an action that no tool did", () => {
     expect(opened).toEqual(["payments"]);
     expect(seen[1]!.system).toContain("A check of your last draft");
     expect(seen[2]!.system).not.toContain("A check of your last draft");
+  });
+
+  it("checks a claim about a window and about a session to see, too", async () => {
+    // "Make it bigger": the model says that it did, and no tool changed a window.
+    const acts: string[] = [];
+    const made = mac([session({ name: "deploy fix" })]);
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        acts.push(`focus ${String(item.name)}`);
+        return { ok: true };
+      },
+      window: async (item, action) => {
+        acts.push(`window ${String(item.name)} ${action}`);
+        return { ok: true, said: "The window changed." };
+      },
+    };
+    const liar = scripted([
+      "I made the staging deploy script fix session's text bigger for you.",
+      "Done, I made sure the deploy fix window is maximized.",
+    ]);
+    expect(
+      await new Supervisor(world, liar.model).reply(
+        [],
+        "make the deploy fix window bigger",
+        "chat",
+      ),
+    ).toBe(notDone);
+    expect(acts).toEqual([]);
+    // "Show me the deploy fix one": after the note, the model opens it.
+    const opens = scripted([
+      "I opened the deploy fix session for you.",
+      [call("open_session", { session: "deploy fix" })],
+      "I opened the deploy fix session.",
+    ]);
+    expect(
+      await new Supervisor(world, opens.model).reply(
+        [],
+        "show me the deploy fix one",
+        "chat",
+      ),
+    ).toBe("I opened the deploy fix session.");
+    expect(acts).toEqual(["focus deploy fix"]);
+  });
+
+  it.each([
+    "Sorry, I made a mistake: there is no payments session here.",
+    "Okay, I made a short list: one works, two wait.",
+    "I made sure nothing else runs, and nothing does.",
+    "I made no change to the page yet.",
+    "Sorry, I made a small mistake: that page is not there.",
+    "Sorry, I made a typo: it is the docs session.",
+    "Okay, I made the list below: one works, two wait.",
+    "Sorry, I made a mistake with the window size: nothing changed.",
+  ])('takes %j as it is: this "made" claims no action', async (answer) => {
+    const made = mac();
+    const { model, seen } = scripted([answer, "A second answer."]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [],
+        "add a contact form to the bakery page",
+        "chat",
+      ),
+    ).toBe(answer);
+    expect(seen).toHaveLength(1);
   });
 
   it("does not check an answer after a tool that acts ran in the turn", async () => {

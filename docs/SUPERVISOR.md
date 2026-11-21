@@ -391,7 +391,8 @@ request that still waits, and does nothing more with those words.
 A job is only work that ClawdTime started. When you ask about jobs and it
 started none, it says so, and then says what your own sessions do.
 
-ClawdTime checks its own answer when you asked for work. When the answer says
+ClawdTime checks its own answer when you asked for work, for a window to
+change, or to see a session. When the answer says
 that it did something ("I added that to the job") and no tool that acts ran in
 that turn, the model answers once more and can then do it, through the same
 checks as always. When the second answer claims it again, you get plain words:
@@ -461,6 +462,36 @@ When you ask for a session, your own words decide:
 
 ClawdTime also says how exactly it landed. "Opened" means the tab or the pane.
 When only the terminal application came forward, it says so.
+
+A session comes to the front only when your own words ask to see it: "show me
+the payments one", "open deploy fix", "switch to docs", "can I see payments?",
+"bring it up". The words must open their part of the sentence, and what they
+ask to see must be a session:
+
+- its name, and nothing else: "payments", "the deploy fix one";
+- a word that points at one: "it", "that one", "the other one that's still
+  working";
+- a description whose head is a word for a session: "the Terminal session
+  with the Claude Code checking the lines", "the one that fixes the login
+  bug".
+
+So these open nothing:
+
+- A question about a session: "what's the payments one doing", "does it show
+  errors?". You get words. A window that comes forward takes your screen.
+- The same words in another sense, and work: "in my view", "the show must go
+  on", "open a pull request", "open a new terminal and run the tests", "look
+  at the payments logs and fix the bug".
+- "Show me the status" and "show me what waits": you asked for words.
+- "Don't open it", and a request that you take back in the same message:
+  "open payments, actually never mind". "Open payments, no, docs" is a
+  correction, and "open payments but don't type anything" is still a request.
+- Words for a session: "tell docs: open the file".
+
+Right after you asked to see a session, your next message can be only the
+session, within ten minutes: "no wait, the other one", "and the docs one",
+"the web one" as the answer to "which one?". A remark is none: "now the docs
+one is stuck".
 
 ### The window of a session
 
