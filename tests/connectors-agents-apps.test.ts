@@ -241,6 +241,143 @@ function world() {
 }
 
 describe("the brain opens an application", () => {
+  function withExecution(
+    state = "idle",
+    options: {
+      nativeWorker?: boolean;
+      mode?: "native" | "browser";
+      configured?: boolean;
+    } = {},
+  ) {
+    const f = world();
+    const submitted: { id: string; text: string }[] = [];
+    const message =
+      state === "idle"
+        ? "Started. I will verify the requested window."
+        : state === "uncertain"
+          ? "An earlier computer task has an unknown result. Nothing new starts."
+          : "A computer task is already running. Stop it or wait.";
+    const snapshot = {
+      configured: options.configured ?? true,
+      mode: options.mode ?? "native",
+      state,
+      canStop: state === "running",
+      message,
+    };
+    f.value.execution = {
+      snapshot: () => snapshot,
+      submit: async (id, text) => {
+        submitted.push({ id, text });
+        return { message };
+      },
+      stop: () => snapshot,
+      ...(options.nativeWorker === false
+        ? {}
+        : { answer: async () => ({ message: "No question waits." }) }),
+    };
+    return { ...f, submitted, message };
+  }
+
+  it("hands plain app opening to the native worker once, in the person's original words", async () => {
+    const f = withExecution();
+    const run = scripted([
+      [
+        call("open_app", { name: "TextEdit" }, "first"),
+        call("open_app", { name: "TextEdit" }, "second"),
+      ],
+      "Started.",
+    ]);
+    const words = "please open TextEdit";
+    const said = await new Supervisor(f.value, run.model).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(f.submitted).toHaveLength(1);
+    expect(f.submitted[0]?.text).toBe(words);
+    expect(f.opened).toEqual([]);
+    expect(said).toBe(f.message);
+  });
+
+  it.each(["running", "uncertain"])(
+    "does not fall back to Launch Services when the native worker is %s",
+    async (state) => {
+      const f = withExecution(state);
+      const run = scripted([
+        [call("open_app", { name: "TextEdit" })],
+        "Nothing opened.",
+      ]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        [],
+        "open TextEdit",
+        "voice",
+      );
+      expect(f.submitted.map((s) => s.text)).toEqual(["open TextEdit"]);
+      expect(f.opened).toEqual([]);
+      expect(said).toBe(f.message);
+    },
+  );
+
+  it("keeps app names and user authorization checked before native delegation", async () => {
+    for (const words of [
+      "is TextEdit open?",
+      "do not open TextEdit",
+      "open Chrome",
+    ]) {
+      const f = withExecution();
+      const run = scripted([[call("open_app", { name: "TextEdit" })], "No."]);
+      await new Supervisor(f.value, run.model).reply([], words, "chat");
+      expect(f.submitted).toEqual([]);
+      expect(f.opened).toEqual([]);
+    }
+  });
+
+  it.each([
+    { nativeWorker: false },
+    { mode: "browser" as const },
+    { configured: false },
+  ])(
+    "leaves other execution engines' plain app opening unchanged %#",
+    async (options) => {
+      const f = withExecution("idle", options);
+      const run = scripted([
+        [call("open_app", { name: "Google Chrome" })],
+        "Chrome is open.",
+      ]);
+      await new Supervisor(f.value, run.model).reply([], "open chrome", "chat");
+      expect(f.submitted).toEqual([]);
+      expect(f.opened).toEqual(["Google Chrome -"]);
+    },
+  );
+
+  it("keeps validated web addresses on the existing opener even with native hands configured", async () => {
+    const f = withExecution();
+    const run = scripted([
+      [call("open_app", { name: "Google Chrome", url: "https://example.com" })],
+      "Opened.",
+    ]);
+    await new Supervisor(f.value, run.model).reply(
+      [],
+      "Open Chrome and go to example.com",
+      "call",
+    );
+    expect(f.submitted).toEqual([]);
+    expect(f.opened).toEqual(["Google Chrome https://example.com/"]);
+  });
+
+  it("preserves coding-job routing instead of treating an agent name as a desktop target", async () => {
+    const f = withExecution();
+    const run = scripted([[call("open_app", { name: "Claude" })], "Started."]);
+    await new Supervisor(f.value, run.model).reply(
+      [],
+      "Open Claude and build a landing page",
+      "chat",
+    );
+    expect(f.submitted).toEqual([]);
+    expect(f.opened).toEqual([]);
+    expect(f.started).toEqual(["build a landing page"]);
+  });
+
   it("opens Chrome for the two words that the person typed in the panel, and is told that it can", async () => {
     const { value, opened } = world();
     const run = scripted([

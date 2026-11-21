@@ -566,3 +566,39 @@ and checks each owning PID. An empty `AXWindows` array is not replaced by a
 fabricated window ID. Activation revalidation uses the same current membership
 and unchanged geometry/title/document checks. On-screen control discovery still
 requires its original on-screen CG window and complete AX semantic witness.
+
+## Verified desktop activation in native hands
+
+The native panel's `open_app` command now accepts an optional exact `window`
+title. `HandsDesktop.swift` resolves one ordinary AX window, restores it if
+minimized, selects/raises that window with public Accessibility APIs, and
+activates its application. It then waits for stable AX identity and geometry
+corroborated by the frontmost on-screen Quartz window and a fresh screenshot.
+An OS API return alone never establishes success. See
+[desktop scope and acceptance](../docs/DESKTOP_SPACES.md) for the qualification
+matrix, physical test arrangement, and automatic-zoom integration seam.
+
+Initial scope is an ordinary window fully within the main display with one
+active display. Full-screen and multiple-display operation are unsupported;
+physical ordinary-desktop qualification is still pending. The optional
+`AXFullScreen` observation is only a defensive signal, not a documented Space
+classifier. No private Space API or blind shortcut fallback is used.
+`CLAWDTIME_DESKTOP_SWITCHING=off` in the panel's environment disables this
+activation command independently of video zoom and the existing computer-use
+switch.
+
+Every native input requires a current observation lease. Space, app, display,
+window-identity and geometry changes retire old coordinates. The hands recheck
+identity after pointer travel and check Stop/takeover between input events.
+A partially submitted input returns `input_unknown`; an unverified activation
+returns `transition_unknown`. Both require reconciliation instead of replay.
+Enabled system symbolic hotkeys are reserved using public `CopySymbolicHotKeys`:
+the API cannot say which action a shortcut means, so all matches are refused.
+This also excludes some screen-capture/accessibility/navigation shortcuts.
+If its inventory cannot be read, modified/function shortcuts fail closed.
+No system preferences are changed.
+
+Validation remains `swift test` and `swift build --product ClawdTimeTaskPanel`
+from `mac/`. These compile the native implementation and run deterministic
+settlement, identity, freshness, shortcut, interruption and contract tests;
+they do not activate applications or establish physical acceptance.

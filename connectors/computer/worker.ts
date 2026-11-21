@@ -47,6 +47,13 @@ import type {
   RequestState,
 } from "./journal.js";
 import { HandsTimeout } from "./panel-hands.js";
+import {
+  desktopBlockedText,
+  inputUnknownText,
+  sameSurface,
+  transitionUnknownText,
+  verifiedActivation,
+} from "./desktop.js";
 import type {
   Action,
   BrowserPage,
@@ -214,19 +221,23 @@ const tidy = (page: BrowserPage): BrowserPage => ({
 });
 const clip = (text: string) => text.slice(0, 1900);
 const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
-const sameFront = (before: Observation, after: Observation) =>
-  before.app.bundleId === after.app.bundleId &&
-  before.app.window === after.app.window;
 /** How a step ended, in words for the planner and in one word for the journal. */
 const outcome = (handed: Handed): [string, string] =>
   !handed.result
     ? ["no result came back", "lost"]
     : handed.result.ok
       ? ["ok", "ok"]
-      : [
-          `did not run: ${handed.result.error ?? "failed"}`,
-          handed.result.error ?? "failed",
-        ];
+      : handed.result.error === "transition_unknown"
+        ? [
+            "activation was requested; the target was not verified",
+            "transition_unknown",
+          ]
+        : handed.result.error === "input_unknown"
+          ? ["input began; its outcome is unknown", "input_unknown"]
+          : [
+              `did not run: ${handed.result.error ?? "failed"}`,
+              handed.result.error ?? "failed",
+            ];
 
 /** A clear yes, a clear no, or null. The reader is the one that reads a yes on a call. */
 function readYes(words: string): boolean | null {
@@ -590,6 +601,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (command.kind !== "observe") {
       run.fresh = false;
       run.page = null;
+      if (command.kind === "open_app") run.observation = null;
     }
     let result: HandResult;
     try {
@@ -604,7 +616,44 @@ export class ComputerWorker implements DesktopExecutorPort {
       this.finish(run, "blocked", "hands_silent", silentText);
       return { sent: false, over: true, result: null };
     }
-    if (
+    // Unknown effects survive Stop and takeover. Never let the planner retry
+    // activation, or continue using its former observation after a transition.
+    if (result.error === "input_unknown") {
+      this.finish(run, "uncertain", "input_unknown", inputUnknownText);
+    } else if (
+      result.error === "transition_unknown" ||
+      !verifiedActivation(command, result)
+    ) {
+      result = { ...result, ok: false, error: "transition_unknown" };
+      this.finish(
+        run,
+        "uncertain",
+        "transition_unknown",
+        transitionUnknownText,
+      );
+    } else if (
+      !result.ok &&
+      result.error &&
+      result.error in desktopBlockedText
+    ) {
+      this.finish(
+        run,
+        "blocked",
+        result.error,
+        desktopBlockedText[result.error as keyof typeof desktopBlockedText],
+      );
+    } else if (
+      !result.ok &&
+      result.error === "not_found" &&
+      command.kind === "open_app"
+    ) {
+      this.finish(
+        run,
+        "blocked",
+        "not_found",
+        "The requested app or exact window was not found. Nothing was activated.",
+      );
+    } else if (
       !result.ok &&
       (result.error === "no_accessibility" ||
         result.error === "no_screen_recording")
@@ -931,7 +980,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           "clicked the field. The text was not typed.",
           "clicked",
         );
-      if (!seen || !before || !sameFront(before, seen))
+      if (!seen || !before || !sameSurface(before, seen))
         return this.note(
           run,
           action,

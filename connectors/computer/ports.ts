@@ -47,6 +47,8 @@ export type ScreenElement = z.infer<typeof elementSchema>;
 export const observationSchema = z
   .object({
     at: finite,
+    /** Native surface generation. A changed/missing generation retires old coordinates. */
+    surfaceEpoch: z.number().int().nonnegative().optional(),
     screen: z.object({ width: finite, height: finite, scale: finite }).strict(),
     cursor: z.object({ x: finite, y: finite }).strict(),
     /** The app and the window in front. */
@@ -103,7 +105,13 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("type"), text: text(4000) }).strict(),
   /** Keys joined by "+", modifiers first: "cmd+s", "cmd+shift+4", "return", "escape", "tab". */
   z.object({ kind: z.literal("key"), combo: text(40) }).strict(),
-  z.object({ kind: z.literal("open_app"), name: text(120) }).strict(),
+  z
+    .object({
+      kind: z.literal("open_app"),
+      name: text(120),
+      window: text(200).min(1).optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("open_url"), url: text(2000) }).strict(),
   z
     .object({
@@ -151,6 +159,13 @@ export const handErrors = [
   "not_found",
   "refused",
   "failed",
+  "desktop_disabled",
+  "ambiguous_target",
+  "unsupported_desktop",
+  "target_not_visible",
+  "transition_unknown",
+  "input_unknown",
+  "stale_observation",
 ] as const;
 
 /** What the panel posts to `POST /desktop/hands/result`. */
@@ -232,7 +247,8 @@ export type Action =
   | { kind: "type"; text: string; element?: number }
   | { kind: "key"; combo: string }
   | { kind: "scroll"; direction: "up" | "down"; element?: number }
-  | { kind: "open_app"; name: string }
+  /** Optional exact title disambiguates ordinary windows of the requested app. */
+  | { kind: "open_app"; name: string; window?: string }
   | { kind: "open_url"; url: string }
   | { kind: "browser_read" }
   | { kind: "browser_open"; url: string }

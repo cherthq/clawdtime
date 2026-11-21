@@ -339,6 +339,13 @@ engine, with the switch off, with no key, and for one that a test started.
 
 ## Limits
 
+The native worker's `open_app` now uses [verified desktop activation](DESKTOP_SPACES.md)
+with optional exact window selection, bounded settling and old-coordinate retirement.
+Initial scope is ordinary windows on one main display; physical acceptance is
+pending. Unknown activation stops the task without retry. No shortcut cycling is
+enabled. The desktop feature's independent panel switch and zoom integration seam
+are documented in that guide.
+
 | Limit                          | Value                                       |
 | ------------------------------ | ------------------------------------------- |
 | Requests at one time           | 1                                           |

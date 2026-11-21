@@ -2824,6 +2824,19 @@ export class Supervisor {
         return "The person did not give that address. Ask them for it, or hand the search to a job.";
     }
     if (!name && !url) return "Say which application or address to open.";
+    // Plain app opening belongs to the native worker when it owns these hands:
+    // its activation verification, Stop, busy and unknown-outcome fences must
+    // not be bypassed by the supervisor's older Launch Services opener.
+    const execution = this.world.execution;
+    const snapshot = execution?.snapshot();
+    if (
+      name &&
+      !url &&
+      execution?.answer &&
+      snapshot?.configured &&
+      snapshot.mode === "native"
+    )
+      return this.delegate(turn, spoken);
     const key = `open:${name ?? ""}:${url?.href ?? ""}`;
     const before = turn.done.get(key);
     if (before !== undefined) return before;
