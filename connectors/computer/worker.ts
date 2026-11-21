@@ -403,6 +403,11 @@ export class ComputerWorker implements DesktopExecutorPort {
     const status = this.status();
     return {
       configured: status.enabled,
+      // The worker acts on the screen of this Mac, as the native mode of the
+      // bundled runtime does. With this the supervisor hands a plain UI
+      // sentence to it before its language model reads the sentence, and the
+      // panel gives up the keyboard when the person sends a request.
+      mode: "native",
       state: status.state,
       canStop:
         status.enabled &&

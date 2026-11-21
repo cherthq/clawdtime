@@ -2013,7 +2013,7 @@ export class Supervisor {
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
       contextualUiRequest(spoken) ||
-      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show)\b/i.test(
+      /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show|refresh|reload|press)\b/i.test(
         spoken,
       );
     if (

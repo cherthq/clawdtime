@@ -100,6 +100,7 @@ describe("a task", () => {
     expect(hands.labels[2]).toBe('Click "Save"');
     expect(worker.snapshot()).toEqual({
       configured: true,
+      mode: "native",
       state: "completed",
       canStop: false,
       message: "Done. The note is saved.",
@@ -245,6 +246,7 @@ describe("stop", () => {
     expect(hands.sent).toHaveLength(1);
     expect(worker.snapshot()).toEqual({
       configured: true,
+      mode: "native",
       state: "canceled",
       canStop: false,
       message: "Stopped. An action that was already sent may have finished.",

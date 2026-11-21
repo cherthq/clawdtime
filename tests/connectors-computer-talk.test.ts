@@ -204,6 +204,171 @@ describe("the person talks to a computer worker that waits", () => {
   });
 });
 
+describe("a spoken or typed UI request reaches the computer worker", () => {
+  /** What the worker says about itself, with no request yet. */
+  const workerSnapshot = () =>
+    new ComputerWorker({
+      hands: new FakeHands(),
+      planner: new ScriptedPlanner([]),
+      journal: new ComputerJournal(home()),
+    }).snapshot();
+  /** A made-up engine that only keeps what it was handed. */
+  function engine(snapshot = workerSnapshot()) {
+    const execution = {
+      snapshot: () => snapshot,
+      submit: vi.fn(async (_id: string, _text: string) => ({
+        message: "Started on the screen.",
+      })),
+      stop: vi.fn(() => snapshot),
+    };
+    return execution;
+  }
+  /** A scripted model: it asks for the hand-off, with words of its own that must not be used. */
+  const inventing = () => ({
+    complete: vi.fn(async () => ({
+      text: "I did it.",
+      toolCalls: [
+        {
+          id: "a",
+          name: "delegate_computer_task",
+          arguments: '{"text":"words that the model made up"}',
+        },
+      ],
+    })),
+  });
+  function talk(execution = engine(), model: ModelClient = inventing()) {
+    const supervisor = new Supervisor(
+      {
+        now: Date.now,
+        board: () => null,
+        desk: new DecisionDesk(home()),
+        focus: async () => ({ ok: false }),
+        send: async () => ({ ok: false, route: "none" }),
+        clis: () => [],
+        execution,
+      },
+      model,
+    );
+    return {
+      supervisor,
+      execution,
+      model: model as ReturnType<typeof inventing>,
+    };
+  }
+
+  it("reports the mode that the supervisor sends a plain UI sentence to", () => {
+    expect(workerSnapshot()).toEqual({
+      configured: true,
+      mode: "native",
+      state: "idle",
+      canStop: false,
+      message: expect.stringMatching(/^Computer use is on\./),
+    });
+  });
+
+  it.each([
+    "click the blue Send button",
+    "type hello in the search field",
+    "Please click the Save button",
+    "Can you type hello in the search field?",
+  ])(
+    "hands this to the worker before the language model reads it: %s",
+    async (words) => {
+      const f = talk();
+      expect(await f.supervisor.reply([], words, "voice")).toBe(
+        "Started on the screen.",
+      );
+      expect(f.execution.submit).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/^talk_[0-9a-f]{16}_execution$/),
+        words,
+      );
+      expect(f.model.complete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "refresh the browser",
+    "scroll down in Slack",
+    "read my Slack messages",
+    "reload the page",
+    "press Return",
+    "Could you refresh the browser?",
+  ])(
+    "hands this to the worker when the language model asks for it, in the person's own words: %s",
+    async (words) => {
+      const f = talk();
+      expect(await f.supervisor.reply([], words, "chat")).toBe(
+        "Started on the screen.",
+      );
+      expect(f.model.complete).toHaveBeenCalledTimes(1);
+      // The tool that hands over was offered to the model.
+      const offered = (
+        f.model.complete.mock.calls[0] as unknown as [
+          { tools: { name: string }[] },
+        ]
+      )[0].tools.map((tool) => tool.name);
+      expect(offered).toContain("delegate_computer_task");
+      expect(f.execution.submit).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/^talk_[0-9a-f]{16}_execution$/),
+        words,
+      );
+    },
+  );
+
+  it.each([
+    "what does the blue Send button do?",
+    "is the browser refreshed?",
+    "computer progress",
+    "yes",
+  ])(
+    "hands nothing over for a question, a state or a bare yes, whatever the model asks: %s",
+    async (words) => {
+      const f = talk();
+      await f.supervisor.reply([], words, "chat");
+      expect(f.execution.submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("starts the real worker from a plain UI sentence, with those exact words as its goal", async () => {
+    const f = setup();
+    const model = f.model as ReturnType<typeof delegating>;
+    expect(
+      await f.supervisor.reply([], "click the blue Send button", "voice"),
+    ).toMatch(/^Started\./);
+    expect(model.complete).not.toHaveBeenCalled();
+    await f.waiting();
+    expect(f.worker.run()).toMatchObject({
+      active: true,
+      goal: "click the blue Send button",
+    });
+    // The guard still asks before the click, whoever started the request.
+    expect(f.said[0]).toMatch(/^Click "Send"\?/);
+    expect(f.hands.sent).toEqual([]);
+    f.worker.stop();
+  });
+
+  it("leaves an engine with no mode to the language model, as before", async () => {
+    const { mode: _mode, ...noMode } = workerSnapshot();
+    const f = talk(engine(noMode));
+    expect(
+      await f.supervisor.reply([], "click the blue Send button", "chat"),
+    ).toBe("Started on the screen.");
+    expect(f.model.complete).toHaveBeenCalledTimes(1);
+    expect(f.execution.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does the same for the bundled runtime in its browser mode", async () => {
+    const f = talk(engine({ ...workerSnapshot(), mode: "browser" }));
+    expect(await f.supervisor.reply([], "refresh the browser", "chat")).toBe(
+      "Started on the screen.",
+    );
+    expect(f.execution.submit).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      "refresh the browser",
+    );
+  });
+});
+
 describe("the chat of the panel", () => {
   it("shows the worker's state, its question and the reply to the person's answer", async () => {
     const root = home();
