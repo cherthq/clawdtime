@@ -478,7 +478,16 @@ that turn, the model answers once more and can then do it, through the same
 checks as always. When the second answer claims it again, you get plain words:
 "I have not done that: nothing was started or changed for it. Say it once
 more." An answer about an earlier time ("the job I started is still running",
-"I started that two minutes ago") is said as it is.
+"I started that two minutes ago") is said as it is. An answer that says it
+happens now counts too, with "I am" or with no "I" at all: "Starting a job to
+add a dark mode", "I'm opening docs", "On it, adding the form", "Started a job
+for that", "Job started", "Working on it". So does a promise with no
+condition: "I'll start a job for that", "Let me add the form". "Starting a
+job would need the page", "Adding a form is not possible from here", "I'll
+start it once you say go" and "Adding the form. Which page?" claim nothing,
+and are said as they are. When your message speaks of a session that runs
+("deploy fix needs a dark mode"), the check asks only for a true answer: it
+names no tool, so that no new agent starts for it.
 
 ### Give it a task
 
