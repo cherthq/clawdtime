@@ -96,6 +96,13 @@ application once; a launch that does not yield a verifiable window is
 an unknown outcome, not success. An app or exact target that cannot be resolved
 before any external effect gets a definite refusal.
 
+Some running background apps return a successful empty AX window inventory. For
+a named-app request without an exact window title, the panel may activate that
+app once to reveal its window metadata. It then only reads and verifies; it does
+not raise, restore, or activate a second time. Exact-window requests and failed
+inventory reads never use this path. If the revealed window is missing, ambiguous
+or unverifiable, the activation remains unknown and no further input follows.
+
 Readiness requires the same AX window to be focused, its app to be frontmost,
 and a unique matching on-screen Quartz window to agree on owner, title and
 geometry. The selected window must be the front verified window and wholly on

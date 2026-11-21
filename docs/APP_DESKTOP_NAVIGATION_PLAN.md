@@ -40,6 +40,11 @@ not prove semantic accuracy for every utterance.
    navigation begins. Preserve unknown effects and never retry them automatically.
 5. For a named app with multiple candidate windows, require an unambiguous exact
    window target; explain ambiguity without choosing arbitrarily.
+6. Some background apps expose an empty Accessibility window inventory until
+   activated. For a named running app with no exact window requested, a successful
+   empty inventory may permit one app activation, followed only by bounded window
+   discovery and verification. An unreadable inventory or exact-window request
+   must not use this path. Missing/ambiguous evidence after activation stays unknown.
 
 ## Native app and Space behavior
 

@@ -94,4 +94,37 @@ final class AppNavigationTests: XCTestCase {
     latch.reset()
     XCTAssertFalse(latch.receive(.ready, epoch: 2))
   }
+
+  func testEmptyInventoryRevealIsNamedRunningAppOnlyAndCanBeClaimedOnce() {
+    var reveal = DesktopAppReveal()
+    XCTAssertNoThrow(try reveal.claim(running: true, exactWindowRequested: false, inventory: .empty, refusal: nil).get())
+    XCTAssertTrue(reveal.claimed)
+    XCTAssertThrowsError(try reveal.claim(running: true, exactWindowRequested: false, inventory: .empty, refusal: nil).get())
+    // It cannot be claimed again after an unverified result or a repeated read.
+    XCTAssertThrowsError(try reveal.claim(running: true, exactWindowRequested: false, inventory: .nonempty, refusal: nil).get())
+    XCTAssertEqual(DesktopEffectOutcome.failure(.targetNotVisible, dispatched: reveal.claimed), .transitionUnknown)
+    XCTAssertEqual(DesktopEffectOutcome.failure(.ambiguousTarget, dispatched: reveal.claimed), .transitionUnknown)
+  }
+
+  func testEmptyInventoryRevealNeverWidensAnExactWindowOrAnUnreadableInventory() {
+    for (running, exact, inventory) in [(true, true, DesktopAppInventory.empty),
+      (false, false, .empty), (true, false, .nonempty), (true, false, .unavailable)] {
+      var reveal = DesktopAppReveal()
+      XCTAssertThrowsError(try reveal.claim(running: running, exactWindowRequested: exact, inventory: inventory, refusal: nil).get())
+      XCTAssertFalse(reveal.claimed)
+      XCTAssertEqual(DesktopEffectOutcome.failure(.targetNotVisible, dispatched: reveal.claimed), .targetNotVisible)
+    }
+  }
+
+  func testPendingStopOrPermissionRefusalPreventsRevealWithoutConsumingIt() {
+    for refusal in [HandError.stoppedByPerson, .refused, .noAccessibility, .noScreenRecording, .staleObservation] {
+      var reveal = DesktopAppReveal()
+      let result = reveal.claim(running: true, exactWindowRequested: false, inventory: .empty, refusal: refusal)
+      if case .failure(let error) = result { XCTAssertEqual(error, refusal) } else { XCTFail("Refusal must prevent activation") }
+      XCTAssertFalse(reveal.claimed)
+    }
+    // A Stop after submission must remain unknown rather than becoming safe to retry.
+    XCTAssertEqual(DesktopEffectOutcome.failure(.stoppedByPerson, dispatched: true), .transitionUnknown)
+  }
+
 }

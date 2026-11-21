@@ -27,6 +27,11 @@ import TaskPanelCore
     let title: String
     let minimized: Bool
   }
+  private enum WindowSelection {
+    case selected(Target)
+    case emptyInventory
+    case failure(HandError)
+  }
   private var lease = DesktopObservationLease<Surface>()
   private var tokens: [(NotificationCenter, NSObjectProtocol)] = []
   private var inputSurface: Surface?
@@ -166,50 +171,78 @@ import TaskPanelCore
     guard app.bundleIdentifier == bundleID, !app.isTerminated else { return failure(.notFound) }
     let pid = app.processIdentifier
     var selected = await Task.detached { DesktopAX.select(pid: pid, title: windowTitle) }.value
-    // A newly launched app may publish its first window a little later. Only read;
-    // never launch it a second time or replay an activation to compensate.
+    var reveal = DesktopAppReveal()
+    if case .emptyInventory = selected, !dispatched {
+      // Some running background apps publish no AX windows until activation.
+      // This is app-level authority only: exact window requests never widen.
+      let sourceEpoch = epoch
+      guard let source = await surface(transition: true), sourceEpoch == epoch else { return failure(.unsupportedDesktop) }
+      let refusal = await allowed()
+      if refusal == nil {
+        guard sourceEpoch == epoch, await surface(transition: true) == source, sourceEpoch == epoch else { return failure(.staleObservation) }
+        // Stop/takeover may arrive while that AX read is suspended.
+        if let interruption = await allowed() { return failure(interruption) }
+        guard sourceEpoch == epoch else { return failure(.staleObservation) }
+      }
+      switch reveal.claim(running: !running.isEmpty, exactWindowRequested: windowTitle != nil,
+                          inventory: .empty, refusal: refusal) {
+      case .failure(let error): return failure(error)
+      case .success: break
+      }
+      guard singleDisplay, app.bundleIdentifier == bundleID, !app.isTerminated else { return failure(.notFound) }
+      invalidate(); phase(.switching); dispatched = true
+      _ = app.activate(options: [])
+      phase(.waiting)
+    }
+    // Launch/reveal may publish the first window later. Bounded reads only:
+    // never launch/activate a second time or choose an arbitrary sibling.
     if dispatched {
-      for _ in 0..<6 {
-        if case .success = selected { break }
-        if case .failure(.targetNotVisible) = selected {} else { break }
+      let discoveryDeadline = now + 2
+      for _ in 0..<10 {
+        if case .selected = selected { break }
+        guard now < discoveryDeadline else { return failure(.targetNotVisible) }
+        if case .failure(let error) = selected, error != .targetNotVisible { break }
         if let error = await allowed() { return failure(error) }
         try? await Task.sleep(nanoseconds: 100_000_000)
         selected = await Task.detached { DesktopAX.select(pid: pid, title: windowTitle) }.value
+        guard now < discoveryDeadline else { return failure(.targetNotVisible) }
       }
     }
-    guard case .success(let target) = selected else {
+    guard case .selected(let target) = selected else {
       if case .failure(let error) = selected { return failure(error) }
       return failure(.targetNotVisible)
     }
     if let error = await allowed() { return failure(error) }
     guard singleDisplay else { return failure(.unsupportedDesktop) }
-    invalidate(); phase(.switching)
-    // A minimized target is explicitly restored once, never replaced by a sibling.
-    if target.minimized {
-      dispatched = true
-      let restored = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success }.value
-      guard restored else { return failure(.failed) }
+    if !reveal.claimed {
+      invalidate(); phase(.switching)
+      // A minimized target is explicitly restored once, never replaced by a sibling.
+      if target.minimized {
+        dispatched = true
+        let restored = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success }.value
+        guard restored else { return failure(.failed) }
+        if let error = await allowed() { return failure(error) }
+      }
+      // Prefer the exact main window before activating the application. Otherwise
+      // macOS may choose an unrelated sibling window on a different Space.
+      let settable = await Task.detached { () -> Bool in
+        var result = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(target.window, kAXMainAttribute as CFString, &result) == .success && result.boolValue
+      }.value
+      if settable {
+        if let error = await allowed() { return failure(error) }
+        dispatched = true
+        let selectedMain = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMainAttribute as CFString, kCFBooleanTrue) == .success }.value
+        guard selectedMain else { return failure(.failed) }
+      }
       if let error = await allowed() { return failure(error) }
-    }
-    // Prefer the exact main window before activating the application. Otherwise
-    // macOS may choose an unrelated sibling window on a different Space.
-    let settable = await Task.detached { () -> Bool in
-      var result = DarwinBoolean(false)
-      return AXUIElementIsAttributeSettable(target.window, kAXMainAttribute as CFString, &result) == .success && result.boolValue
-    }.value
-    if settable {
-      if let error = await allowed() { return failure(error) }
       dispatched = true
-      let selectedMain = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMainAttribute as CFString, kCFBooleanTrue) == .success }.value
-      guard selectedMain else { return failure(.failed) }
+      // Raise exactly the selected AX object, never all of the application's windows.
+      let raised = await Task.detached { AXUIElementPerformAction(target.window, kAXRaiseAction as CFString) == .success }.value
+      guard raised else { return failure(.failed) }
+      if let error = await allowed() { return failure(error) }
+      _ = app.activate(options: [])
     }
-    if let error = await allowed() { return failure(error) }
-    dispatched = true
-    // Raise exactly the selected AX object, never all of the application's windows.
-    let raised = await Task.detached { AXUIElementPerformAction(target.window, kAXRaiseAction as CFString) == .success }.value
-    guard raised else { return failure(.failed) }
-    if let error = await allowed() { return failure(error) }
-    _ = app.activate(options: [])
     phase(.waiting)
     var settlement = DesktopSettlement<Surface>(at: now)
     var settlementEpoch = epoch
@@ -401,9 +434,10 @@ import TaskPanelCore
       guard let window = element(value(app(pid), kAXFocusedWindowAttribute)) else { return false }
       return fullScreen(window)
     }
-    static func select(pid: pid_t, title: String?) -> Result<Target, HandError> {
+    static func select(pid: pid_t, title: String?) -> WindowSelection {
       guard let windows = value(app(pid), kAXWindowsAttribute) as? [AXUIElement] else { return .failure(.targetNotVisible) }
       guard windows.count <= 32 else { return .failure(.ambiguousTarget) }
+      if windows.isEmpty { return .emptyInventory }
       let deadline = ProcessInfo.processInfo.systemUptime + 2
       var ordinary: [AXUIElement] = []
       for window in windows {
@@ -422,7 +456,7 @@ import TaskPanelCore
         else { return .failure(.unsupportedDesktop) }
       guard let minimized = value(window, kAXMinimizedAttribute) as? Bool,
         let title = value(window, kAXTitleAttribute) as? String else { return .failure(.targetNotVisible) }
-      return .success(Target(pid: pid, window: window, title: title, minimized: minimized))
+      return .selected(Target(pid: pid, window: window, title: title, minimized: minimized))
     }
     static func visibleSurface(pid: pid_t, display: HandsDisplay) -> Surface? {
       let app = app(pid)

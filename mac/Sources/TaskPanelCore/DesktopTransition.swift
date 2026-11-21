@@ -70,6 +70,22 @@ public enum DesktopAppSelection {
   }
 }
 
+/// Successful empty AX inventory is distinct from an unreadable inventory or a
+/// nonempty inventory whose windows do not match. Only the first can justify a
+/// single app-level reveal for a named-app request without an exact window.
+public enum DesktopAppInventory: Equatable { case empty, nonempty, unavailable }
+public struct DesktopAppReveal {
+  public private(set) var claimed = false
+  public init() {}
+  public mutating func claim(running: Bool, exactWindowRequested: Bool, inventory: DesktopAppInventory,
+                             refusal: HandError?) -> Result<Void, HandError> {
+    if let refusal { return .failure(refusal) }
+    guard running, !exactWindowRequested, inventory == .empty, !claimed else { return .failure(.targetNotVisible) }
+    claimed = true
+    return .success(())
+  }
+}
+
 public enum DesktopInputOutcome {
   public static func invalidResult(command: HandCommand, submitted: Bool) -> HandError {
     switch command {

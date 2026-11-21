@@ -69,7 +69,7 @@ Run in an isolated worktree using Node 24.22.1, Apple Swift 6.2.4, and Python
 | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | `npm run check`                                                                        | 3,920 tests in 126 files; typecheck and build passed |
 | `npm --prefix line test`                                                               | 95 tests passed                                      |
-| `cd mac && swift test`                                                                 | 292 tests passed                                     |
+| `cd mac && swift test`                                                                 | 295 tests passed                                     |
 | `cd mac && swift build --product ClawdTimeTaskPanel`                                   | Passed                                               |
 | `media/.venv/bin/python -m unittest discover -s media -p 'test_task_presentation*.py'` | 36 tests passed                                      |
 | Actual line agent import and JavaScript syntax                                         | Passed without starting the agent                    |
@@ -199,3 +199,19 @@ full-screen Spaces outside that pair. The isolated test computer switch is off;
 the installed Supervisor switch was restored to its recorded prior enabled state.
 Receipts remain intact. Verified left/right/previous, destination editing, zoom,
 and phone-video acceptance remain pending.
+
+## Named-app physical preflight and follow-up
+
+The first PR #56 named-app attempt interpreted the request correctly but refused
+before activation: the running target had off-Space Quartz windows while its AX
+window inventory successfully returned empty. No Command–Tab follow-up was sent.
+The test controller was paused and normal Supervisor control restored.
+
+The native follow-up permits one activation of a specifically named running app
+only when no exact window was requested and its AX inventory was successfully
+empty. It then performs bounded read-only discovery and verification, with no
+second activation, restore or raise. AX errors, exact-window requests and
+ambiguity do not widen into this path. A final authority check follows the last
+AX read so takeover during that read prevents input. Three regression tests were
+added; 295 Swift tests and the panel build passed. Physical verification of this
+follow-up remains pending; prior backend/line/Python results are unchanged.
