@@ -29,6 +29,50 @@ swift test
 ./scripts/package.sh
 ```
 
+### Native automatic call-video presentation
+
+The panel sends transient presentation hints to the authenticated
+`POST /desktop/hands/presentation` route while its native hands run. These are
+outgoing-video hints only; input and observation coordinates remain main-display
+points measured from the top left. Click/scroll/drag targets are emitted before
+the guided cursor moves. Typing uses the focused field bounds, refreshed off the
+main thread every 350 ms while typing. No field values, labels, window titles,
+screenshots or credentials appear in presentation events or logs.
+
+Each hint carries a producer ID, monotonically increasing sequence, hands-command
+sequence, 1.4-second lifetime, display size/Retina scale, front application bundle
+ID, visible CG window ID and geometry, and the Reduce Motion preference. A changed
+app/window/display/geometry retires the old target. Stop, takeover, service errors
+and run completion reset presentation. One POST may be in flight; only the newest
+unsent hint is retained, and expired hints are dropped without retry. Presentation
+network failures do not delay input or alter its receipt.
+
+A first click target on a changed surface is held for at most 900 ms, bound to
+that command and exact geometry, until an independent matching observation
+establishes stability (an 80 ms settling probe or the regular heartbeat). The
+probe does not delay input. A changed command, moved window, Stop or expiry
+discards it. An ongoing
+typing command survives a geometry change as intent only: the next heartbeat
+must reacquire fresh nonsecure field bounds before it can frame typing again.
+
+`HandsController.presentationTransition()` is the presentation-only seam for
+desktop-switching integration. Existing app/URL activation and known app/window
+or possible Mission Control shortcuts call it before switching. It assumes no
+Space identifier, does not configure shortcuts, and never sends additional input.
+Observed surface changes also widen independently of a desktop-switching branch.
+
+The guided cursor window already opts into screen sharing; the video compositor
+transforms it with the captured pixels rather than creating a second cursor or
+label. Target regions include the action/field plus the planned painted pointer,
+pulse and label bounds, so a long label is not clipped by an action-centred zoom.
+Typing heartbeats read the currently visible painted bounds again; no label text
+is sent and no transparent window padding is used as the presentation target.
+Physical capture inclusion and handset readability still require an
+exclusive, arranged test. The new pure Swift and loopback HTTP tests cover event
+shape, coordinate bounds, Retina metadata, identity/geometry invalidation,
+transition policy, authentication, and no retry/redirect. They do not prove
+physical input, desktop switching or phone-video acceptance.
+
 The package script builds `build/ClawdTime Companion.app` and signs it ad hoc by
 default. Set `CLAWDTIME_SIGNING_IDENTITY` to an installed Developer ID identity
 for distribution signing; notarization is a separate release step. Neither build

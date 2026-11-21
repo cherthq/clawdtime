@@ -111,6 +111,23 @@ public struct GuidedLayout: Equatable, Sendable {
     pill = label.offsetBy(dx: -frame.minX, dy: -frame.minY)
     self.side = side; under = fitsUnder
   }
+
+  /// The painted pointer/pulse and label/shadow envelope, in bottom-left screen
+  /// points. This excludes transparent window padding. A video crop uses the
+  /// envelope, so the label stays attached even when its side flips at an edge.
+  public var paintedBounds: CGRect {
+    let at = CGPoint(x: window.minX + tip.x, y: window.minY + tip.y)
+    let radius = max((GuidedLook.ring + GuidedLook.ringLine) * GuidedLook.pulse / 2,
+                     (GuidedLook.ring + GuidedLook.ringLine + 3) / 2)
+    let ring = CGRect(x: at.x - radius, y: at.y - radius, width: radius * 2, height: radius * 2)
+    // The pointer outline is 15 units wide and 23.4 high. Its shadow fits in the
+    // same shade allowance as the pill; normally the pulse already encloses it.
+    let pointer = CGRect(x: at.x, y: at.y - GuidedLook.pointer,
+      width: GuidedLook.pointer * 15 / 23.4, height: GuidedLook.pointer).insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade)
+    let glyphs = ring.union(pointer)
+    guard !pill.isEmpty else { return glyphs }
+    return glyphs.union(pill.offsetBy(dx: window.minX, dy: window.minY).insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade))
+  }
 }
 
 /// Where the guided cursor goes before the hands type or press a key. Such a
