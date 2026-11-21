@@ -2238,6 +2238,47 @@ const sizeNotDone =
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
+/** Said in place of an answer that says twice that work started, when the person asked for none and none started. */
+const nothingStarted =
+  "Nothing was started or changed for that message. Say what I should do, and I do it.";
+/** A sentence of an answer that speaks of a start of work: "started", "kicked off", "on it", "working on it". */
+const startWord =
+  /\b(?:start(?:ed|ing|s)?|launch(?:ed|ing|es)?|kick(?:ed|ing|s)?\s+(?:(?:it|that|this|things)\s+)?off|queu(?:ed|e?ing|es?)|spun\s+up|spinning\s+up|on\s+it|working\s+on\s+(?:it|that|this))\b/i;
+/** "I started to look at that", "I started with the header", "I started reading": a way to speak, and no start of work. */
+const startOfNoWork =
+  /\bstarted\s+(?:with\b|(?:to\s+)?(?:look|read|think|wonder|check|see)\b|(?:looking|reading|thinking|wondering|checking)\b)/i;
+/** A sentence that claims new work: "a job", "another task", "a new session". "The job" is work that exists. */
+const claimsNewWork =
+  /\b(?:an?|another|one\s+more)\s+(?:new\s+)?(?:job|task|agent|session)\b|\ba\s+new\b/i;
+/**
+ * A sentence that reports a start in the past, in the first person: "I
+ * started it", "I kicked off the build this morning". Not with a word of
+ * now or of later in it.
+ */
+const reportsAPastStart = (sentence: string) =>
+  /\bI(?:['\u2019]ve|\s+have)?\s+(?:(?:also|already)\s+)?(?:started|launched|queued|kicked\s+(?:(?:it|that|this|things)\s+)?off)\b/i.test(
+    sentence,
+  ) &&
+  !/\b(?:now|just|right\s+away|about\s+to|going\s+to|shortly|soon|I['\u2019]ll|I\s+will|I['\u2019]m|I\s+am)\b/i.test(
+    sentence,
+  );
+/** "A minute ago", "a moment ago", "seconds ago": a start of now, as this check reads it. */
+const momentsAgo =
+  /\b(?:(?:a|one|a\s+few|few|some|a\s+couple\s+of)\s+)?(?:minute|moment|second|sec|min)s?\s+ago\b/gi;
+/** A word of work as it is compared: its first five letters, with a last "s" left out. */
+const workStem = (word: string) => word.replace(/s$/, "").slice(0, 5);
+/** Words of such a sentence that say nothing about which work it is. */
+const startFiller = new Set(
+  "started starting start starts launched launching launch kicked kicking kick queued queueing queuing queue spun spinning working work works job jobs task tasks agent agents session sessions claude code codex with then when done tell told will have just also that this your here there about them they what which while into from once after before soon right away now already okay sure great morning afternoon evening tonight today yesterday earlier later minute minutes moment moments hour hours second seconds back noon midnight three four five seven eight nine eleven twelve finished still should".split(
+    " ",
+  ),
+);
+/** The words of a text that say which work it is. */
+const workWords = (text: string) =>
+  spokenWords(text).filter(
+    (word) =>
+      word.length >= 4 && !plainWord.has(word) && !startFiller.has(word),
+  );
 /** What the job tool answers when ClawdTime started no job. The sessions of the person are not jobs. */
 const noJobYet =
   "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.";
@@ -4947,6 +4988,78 @@ export class Supervisor {
     return !!named && this.headWords(request).includes(named);
   }
   /**
+   * The answer says that ClawdTime started work ("I started a job to push
+   * the branch", "On it", "I'll kick that off"), and that is not true. The
+   * caller knows that nothing acted in this turn.
+   *
+   * Work that runs is a job that still works or that started in the last
+   * hour, and a live task. Work of the day is that, and a job of the last
+   * day that is done. An older job that is done makes no claim true.
+   * - A sentence that claims NEW work and names it ("a job to push the
+   *   branch", "a new session for the tests") must share a word with work
+   *   that runs: by its first five letters, with a last "s" left out
+   *   ("bakeries" and "bakery", "pages" and "page").
+   * - Every other sentence can speak of work that exists ("I kicked off
+   *   the homepage work", "Yes, I started it", "On it"): it stands while
+   *   work runs. A done job of the day makes only a word about the past
+   *   true ("I started the landing page job this morning"), never one
+   *   about now or later ("On it", "I'll start that", "Job started"), and
+   *   a sentence that names work must share a word with that job.
+   */
+  private startsNothing(answer: string): boolean {
+    // "A minute ago" is a word of now here: the detector of claims reads
+    // every "ago" as earlier work.
+    const text = answer.replace(momentsAgo, "just now");
+    if (!claimsAction(text)) return false;
+    const now = this.world.now();
+    // The words of work that runs, and of the done jobs of the day.
+    const running = new Set<string>();
+    const daily = new Set<string>();
+    let runs = false;
+    let ofTheDay = false;
+    for (const job of this.jobsNow(20)) {
+      const age = now - job.startedAt;
+      if (!job.done || age < 60 * 60 * 1000) {
+        runs = true;
+        for (const word of workWords(job.job)) running.add(workStem(word));
+      } else if (age < 24 * 60 * 60 * 1000) {
+        ofTheDay = true;
+        for (const word of workWords(job.job)) daily.add(workStem(word));
+      }
+    }
+    try {
+      const task = this.world.tasks?.current();
+      if (task && !taskIsOver(task)) {
+        runs = true;
+        for (const word of workWords(task.goal)) running.add(workStem(word));
+      }
+    } catch {
+      // No task is known: only the jobs count.
+    }
+    return text.split(/(?<=[.!?])\s+|\n+/).some((sentence) => {
+      if (
+        !startWord.test(sentence) ||
+        startOfNoWork.test(sentence) ||
+        !claimsAction(sentence)
+      )
+        return false;
+      const words = workWords(sentence);
+      if (claimsNewWork.test(sentence) && words.length > 0)
+        return !words.some((word) => running.has(workStem(word)));
+      // While work runs, the sentence can speak of it in other words.
+      if (runs) return false;
+      // A job that is done can make a word about the past true ("I started
+      // it this morning"), never a word about now or later ("On it", "I'll
+      // start that", "Job started"). And it names itself in a report: a
+      // sentence that names work must name that job ("I started the push"
+      // is not the landing page job).
+      if (!ofTheDay || !reportsAPastStart(sentence)) return true;
+      return (
+        words.length > 0 && !words.some((word) => daily.has(workStem(word)))
+      );
+    });
+  }
+  /**
    * The request that the person's message decides, where the model answered
    * with words and called no tool: one plain permission request waits, the
    * message holds a word of decision and the gate's reader gives allow or
@@ -6391,6 +6504,30 @@ export class Supervisor {
             names.has("session_window") &&
             !ran.has("session_window") &&
             claimsSize(reply.text);
+          // The person asked for no action, and the answer says that work
+          // started: a job for words that were a question ("tell deploy fix
+          // to push the branch, or should I wait?"). Nothing acted in this
+          // turn, and no job or task that ClawdTime started is that work.
+          // The person would wait for an answer that never comes. The model
+          // answers once more, with no tool named: the person asked for
+          // none. A second such answer is replaced by what is true.
+          if (
+            !sizeClaim &&
+            !(
+              asksForWork(words) ||
+              asksForSize(words) ||
+              this.seeRequest(words) ||
+              this.bareSee(turn, words) !== null
+            ) &&
+            !acted() &&
+            this.startsNothing(reply.text)
+          ) {
+            if (rechecked) return nothingStarted;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that you started work, but nothing was started in this turn, and no job or task that you started is that work. The person's last message asked you to start nothing. Answer it again with what is true, and do not say that something was started or is under way.";
+            continue;
+          }
           if (
             sizeClaim ||
             // The person asked for an action: work, a window to change, or a

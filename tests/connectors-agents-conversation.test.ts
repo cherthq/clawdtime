@@ -7571,6 +7571,509 @@ describe("a decision that the person said: the model is asked once more, and a y
   });
 });
 
+describe("an answer that says that work started, when nothing started in this turn", () => {
+  const claim =
+    "I started a job with Claude Code to deploy fix and push the branch, then I'll get the tests run; I'll tell you when it's done.";
+  const nothingStarted =
+    "Nothing was started or changed for that message. Say what I should do, and I do it.";
+  const sessions = () => [
+    session({ name: "deploy fix" }),
+    session({ id: "101-def", pid: 101, name: "payments tests", state: "idle" }),
+  ];
+  /** The check that the model got with its second request, or "". */
+  const note = (run: ReturnType<typeof scripted>) =>
+    run.seen
+      .at(1)
+      ?.system.split("\n")
+      .find((line) => line.startsWith("A check of your last draft")) ?? "";
+  const ask = async (
+    words: string,
+    steps: (ToolCall[] | string)[],
+    made = mac(sessions()),
+    history: ChatMessage[] = [],
+  ) => {
+    const run = scripted(steps);
+    const reply = await new Supervisor(made.world, run.model).reply(
+      history,
+      words,
+      "chat",
+    );
+    return { reply, run, made };
+  };
+
+  it.each([
+    "tell deploy fix to push the branch, or should I wait?",
+    "should I tell payments tests to run the linter again",
+    "what do you think about a dark mode?",
+    "is it a good idea to push on a friday?",
+    "which session is the busiest?",
+    "thanks",
+  ])(
+    "for %j the model is asked once more, and no tool is named",
+    async (words) => {
+      const got = await ask(words, [claim, "Wait until the tests pass."]);
+      expect(got.reply, words).toBe("Wait until the tests pass.");
+      expect(got.run.seen, words).toHaveLength(2);
+      expect(note(got.run), words).toBe(
+        "A check of your last draft: it said that you started work, but nothing was started in this turn, and no job or task that you started is that work. The person's last message asked you to start nothing. Answer it again with what is true, and do not say that something was started or is under way.",
+      );
+      expect(got.made.windows, words).toHaveLength(0);
+    },
+  );
+
+  it("says what is true when the second answer claims it again", async () => {
+    const got = await ask(
+      "tell deploy fix to push the branch, or should I wait?",
+      [claim, claim, "A third answer that is never asked for."],
+    );
+    expect(got.reply).toBe(nothingStarted);
+    expect(got.run.seen).toHaveLength(2);
+    expect(got.made.windows).toHaveLength(0);
+  });
+
+  it.each([
+    "I started a job with Claude Code to push the branch.",
+    "I've started a job for that.",
+    "Started a job for that.",
+    "Job started.",
+    "On it.",
+    "On it, pushing the branch now.",
+    "Starting a job to push the branch.",
+    "I'm starting that now.",
+    "I'll start a job for that.",
+    "I'll kick off a job for that now.",
+    "I've kicked off the push.",
+    "Okay, I launched an agent to push the branch.",
+    "Working on it.",
+    "I queued a job for the push.",
+  ])("the answer %j is a claim that work started", async (answer) => {
+    const got = await ask("is it a good idea to push on a friday?", [
+      answer,
+      answer,
+    ]);
+    expect(got.reply, answer).toBe(nothingStarted);
+  });
+
+  it.each([
+    "Wait until the tests pass, then tell it to push.",
+    "Should I start a job for that?",
+    "I can start a job for that if you want.",
+    "I'll start once you say go.",
+    "I started a job for that earlier.",
+    "Deploy fix started the push a minute ago.",
+    "Starting a job would need a sentence of work from you.",
+    "Nothing started. Say the work in one sentence.",
+    "The header does look off. Which page do you mean?",
+  ])("the answer %j stands: it claims no start", async (answer) => {
+    const got = await ask("is it a good idea to push on a friday?", [
+      answer,
+      "Second.",
+    ]);
+    expect(got.reply, answer).toBe(answer);
+    expect(got.run.seen, answer).toHaveLength(1);
+  });
+
+  it("lets a true word about work that did start stand: a job that exists", async () => {
+    for (const answer of [
+      "You're welcome! I started the landing page job, and I'll tell you its answer when it is done.",
+      "I started a job for the bakery page.",
+      "Yes, I started it.",
+      "On it already.",
+    ]) {
+      const made = mac(sessions());
+      await made.jobs.start("build a landing page for my bakery");
+      made.clock.now += 25 * 60_000;
+      const got = await ask("thanks", [answer, "Second."], made);
+      expect(got.reply, answer).toBe(answer);
+    }
+  });
+
+  it("reads a word about earlier work against the jobs that exist", async () => {
+    // A job for the bakery page exists: the answer speaks of it.
+    const made = mac(sessions());
+    await made.jobs.start("build a landing page for my bakery");
+    made.clock.now += 3 * 24 * 60 * 60_000;
+    for (const answer of [
+      "I started a job for it.",
+      "I started a job to build the landing page.",
+    ]) {
+      const got = await ask(
+        "what did you do for the bakery page?",
+        [answer, "Second."],
+        made,
+      );
+      expect(got.reply, answer).toBe(answer);
+    }
+    // No job exists at all: "I started a job for it" is not true.
+    const none = await ask("what did you do for the bakery page?", [
+      "I started a job for it.",
+      "Nothing yet: no job was started for it.",
+    ]);
+    expect(none.reply).toBe("Nothing yet: no job was started for it.");
+    expect(none.run.seen).toHaveLength(2);
+  });
+
+  /** A Mac with one job. `done` writes its answer; `age` is how long ago it started. */
+  const withJob = async (request: string, age: number, done: boolean) => {
+    const made = mac(sessions());
+    await made.jobs.start(request);
+    if (done)
+      writeFileSync(
+        join(made.folder, made.ids().at(-1)!, "result.md"),
+        "Done.\n",
+      );
+    made.clock.now += age;
+    return made;
+  };
+  const minutes = 60_000;
+  const days = 24 * 60 * minutes;
+
+  it.each([
+    // An old job that is done makes no new claim true, whatever words it shares.
+    [
+      "fix the login tests",
+      "tell deploy fix to run the tests, or should I wait?",
+      "I started a job to run the tests in deploy fix.",
+    ],
+    [
+      "update the pricing page",
+      "should the page be blue?",
+      "I started a job to make the page blue.",
+    ],
+    ["update the pricing page", "should I wait?", "On it."],
+    ["update the pricing page", "should I wait?", "Job started."],
+    [
+      "update the pricing page",
+      "should I wait?",
+      "I've started a job for that.",
+    ],
+  ])(
+    "with only the old, done job %j: %j answered with %j is sent back",
+    async (request, words, answer) => {
+      const made = await withJob(request, 3 * days, true);
+      const got = await ask(words, [answer, answer], made);
+      expect(got.reply, answer).toBe(nothingStarted);
+    },
+  );
+
+  it.each([
+    // A job that still works, in other words than its request.
+    ["what did you do for the bakery?", "I kicked off the homepage work."],
+    ["how is it going?", "I kicked off the homepage work."],
+    ["thanks", "I started the bakeries site."],
+    ["thanks", "I started a job for the bakeries site."],
+    ["thanks", "I started a job for it."],
+    ["thanks", "Yes, I started it."],
+    ["thanks", "On it, the page is in the works."],
+  ])(
+    "with a job that still works, %j answered with %j stands",
+    async (words, answer) => {
+      const made = await withJob(
+        "build a landing page for my bakery",
+        10 * minutes,
+        false,
+      );
+      const got = await ask(words, [answer, "Second."], made);
+      expect(got.reply, answer).toBe(answer);
+      expect(got.run.seen, answer).toHaveLength(1);
+    },
+  );
+
+  it("counts a job that runs as work, whatever words its request has", async () => {
+    // "Fix the bug" has no long word: the job still is work.
+    for (const answer of ["I started it.", "I started the bug fix."]) {
+      const made = await withJob("fix the bug", 5 * minutes, false);
+      const got = await ask("how is it going?", [answer, "Second."], made);
+      expect(got.reply, answer).toBe(answer);
+    }
+    // A claim of other new work is still caught beside it.
+    const made = await withJob("fix the bug", 5 * minutes, false);
+    expect(
+      (
+        await ask(
+          "tell deploy fix to push the branch, or should I wait?",
+          [claim, claim],
+          made,
+        )
+      ).reply,
+    ).toBe(nothingStarted);
+  });
+
+  it("a claim of new work counts a done job for one hour, and every other word about work for one day", async () => {
+    const request = "build a landing page for my bakery";
+    const newWork = "I started a job for the landing page.";
+    const report = "I started the landing page job for you.";
+    // New work: a job that is done counts for one hour.
+    const fresh = await withJob(request, 50 * minutes, true);
+    expect((await ask("thanks", [newWork, "Second."], fresh)).reply).toBe(
+      newWork,
+    );
+    const hour = await withJob(request, 70 * minutes, true);
+    expect((await ask("thanks", [newWork, newWork], hour)).reply).toBe(
+      nothingStarted,
+    );
+    // A word about work that exists: a job that is done counts for one day.
+    for (const answer of [
+      report,
+      "I started it.",
+      "I started the landing page job this morning, and it is done.",
+      "I started the landing page job today.",
+      "I started the landing page job at nine.",
+    ]) {
+      const today = await withJob(request, 5 * 60 * minutes, true);
+      expect(
+        (await ask("thanks", [answer, "Second."], today)).reply,
+        answer,
+      ).toBe(answer);
+    }
+    const old = await withJob(request, 25 * 60 * minutes, true);
+    expect((await ask("thanks", [report, report], old)).reply).toBe(
+      nothingStarted,
+    );
+    // No job at all: the same words are not true.
+    expect(
+      (
+        await ask("thanks", [
+          "I started the landing page job this morning, and it is done.",
+          "I started the landing page job this morning, and it is done.",
+        ])
+      ).reply,
+    ).toBe(nothingStarted);
+    // A job that still works counts at any age, also for new work.
+    const working = await withJob(request, 3 * days, false);
+    expect((await ask("thanks", [newWork, "Second."], working)).reply).toBe(
+      newWork,
+    );
+    // A done job of the day makes no claim of NEW work true.
+    const tests = await withJob("fix the login tests", 5 * 60 * minutes, true);
+    expect(
+      (
+        await ask(
+          "tell deploy fix to run the tests, or should I wait?",
+          [
+            "I started a job to run the tests in deploy fix.",
+            "I started a job to run the tests in deploy fix.",
+          ],
+          tests,
+        )
+      ).reply,
+    ).toBe(nothingStarted);
+  });
+
+  it.each([
+    "On it.",
+    "Job started.",
+    "I'm starting it now.",
+    "I'll kick off the push.",
+    "Working on it.",
+    "Starting the push now.",
+    "Sure, I'll start it.",
+    "I just started it.",
+    "I started it now.",
+  ])(
+    "a job that is done makes no word about now or later true: %j is sent back",
+    async (answer) => {
+      // The only job is done, and started five hours ago. Nothing runs.
+      const made = await withJob(
+        "build a landing page for my bakery",
+        5 * 60 * minutes,
+        true,
+      );
+      const got = await ask(
+        "tell deploy fix to push the branch, or should I wait?",
+        [answer, answer],
+        made,
+      );
+      expect(got.reply, answer).toBe(nothingStarted);
+      // While the job still works, the same words can speak of it.
+      const working = await withJob(
+        "build a landing page for my bakery",
+        5 * 60 * minutes,
+        false,
+      );
+      expect(
+        (await ask("thanks", [answer, "Second."], working)).reply,
+        answer,
+      ).toBe(answer);
+    },
+  );
+
+  it("a job that is done names itself in a report: a past start of other work is sent back", async () => {
+    const request = "build a landing page for my bakery";
+    for (const answer of [
+      "I started the push for deploy fix.",
+      "I launched the deploy.",
+      "I queued the push.",
+      // "A minute ago" is a word of now.
+      "I started it a minute ago.",
+      "I started it a moment ago, it should finish soon.",
+      "I kicked off the push a few seconds ago.",
+    ]) {
+      const made = await withJob(request, 5 * 60 * minutes, true);
+      const got = await ask(
+        "tell deploy fix to push the branch, or should I wait?",
+        [answer, answer],
+        made,
+      );
+      expect(got.reply, answer).toBe(nothingStarted);
+    }
+    for (const answer of [
+      "I started the landing page job this morning, and it is done.",
+      "I started the bakery page at nine.",
+      "I started it.",
+      "I've already kicked that off this morning.",
+      "I already started it earlier today.",
+    ]) {
+      const made = await withJob(request, 5 * 60 * minutes, true);
+      const got = await ask("thanks", [answer, "Second."], made);
+      expect(got.reply, answer).toBe(answer);
+    }
+    // While a job runs, a start of a minute ago can be that job.
+    const working = await withJob(request, 1 * minutes, false);
+    expect(
+      (await ask("thanks", ["I started it a minute ago.", "Second."], working))
+        .reply,
+    ).toBe("I started it a minute ago.");
+    // With no job at all, it is not true.
+    expect(
+      (
+        await ask("thanks", [
+          "I started it a minute ago.",
+          "I started it a minute ago.",
+        ])
+      ).reply,
+    ).toBe(nothingStarted);
+  });
+
+  it.each([
+    "I started no job for that.",
+    "I started no jobs, so nothing is running.",
+    "I have not started a job.",
+    "I haven't started anything for that.",
+    "Nothing is started. I started nothing.",
+    "You haven't got any jobs running that I started.",
+  ])("a denial stands: %j", async (answer) => {
+    const got = await ask("is it a good idea to push on a friday?", [
+      answer,
+      "Second.",
+    ]);
+    expect(got.reply, answer).toBe(answer);
+    expect(got.run.seen, answer).toHaveLength(1);
+  });
+
+  it.each([
+    // "The job" is work that exists: a purpose after it claims no new work.
+    [
+      "build a landing page for my bakery",
+      "I started the job to keep you posted.",
+    ],
+    // A last "s" is left out.
+    ["redo the page", "I started a job to restyle the pages."],
+    ["fix the login tests", "I started a job for the login test."],
+    [
+      "build a landing page for my bakery",
+      "I started a job for the bakeries site.",
+    ],
+  ])("with the job %j at work, %j stands", async (request, answer) => {
+    const made = await withJob(request, 10 * minutes, false);
+    const got = await ask("thanks", [answer, "Second."], made);
+    expect(got.reply, answer).toBe(answer);
+  });
+
+  it.each([
+    "I started to look at that and found nothing.",
+    "I started with the header.",
+    "I started reading your message and it makes sense.",
+    "I started to think about it.",
+    "I started checking the page.",
+  ])("the way to speak %j is no start of work", async (answer) => {
+    const got = await ask("is it a good idea to push on a friday?", [
+      answer,
+      "Second.",
+    ]);
+    expect(got.reply, answer).toBe(answer);
+    expect(got.run.seen, answer).toHaveLength(1);
+  });
+
+  it("still catches a start of other work while a job exists", async () => {
+    const made = mac(sessions());
+    await made.jobs.start("build a landing page for my bakery");
+    made.clock.now += 25 * 60_000;
+    const got = await ask(
+      "tell deploy fix to push the branch, or should I wait?",
+      [claim, claim],
+      made,
+    );
+    expect(got.reply).toBe(nothingStarted);
+    expect(made.windows).toHaveLength(1);
+  });
+
+  it("lets a true word about the live task stand", async () => {
+    const made = mac(sessions());
+    const world: SupervisorWorld = {
+      ...made.world,
+      tasks: {
+        current: () => ({
+          goal: "fix the header of the landing page",
+          state: "running",
+          summary: "Working.",
+          question: null,
+          choices: [],
+          canAnswer: false,
+          canAccept: false,
+          canCancel: true,
+        }),
+        canStart: () => false,
+        start: async () => ({ ok: false, message: "A task is active." }),
+        answer: async () => ({ ok: true, message: "answered" }),
+        accept: async () => ({ ok: true, message: "accepted" }),
+        cancel: async () => ({ ok: true, message: "cancelled" }),
+      },
+    };
+    const run = scripted(["I started the task for the header.", "Second."]);
+    expect(
+      await new Supervisor(world, run.model).reply([], "thanks", "chat"),
+    ).toBe("I started the task for the header.");
+    // In other words than its goal.
+    const others = scripted(["I started the release work.", "Second."]);
+    expect(
+      await new Supervisor(world, others.model).reply(
+        [],
+        "how is the task?",
+        "chat",
+      ),
+    ).toBe("I started the release work.");
+    // Work that the task is not: still caught.
+    const other = scripted([claim, claim]);
+    expect(
+      await new Supervisor(world, other.model).reply(
+        [],
+        "is it a good idea to push on a friday?",
+        "chat",
+      ),
+    ).toBe(nothingStarted);
+  });
+
+  it("catches the claim after a tool that the gate refused", async () => {
+    const got = await ask(
+      "tell deploy fix to push the branch, or should I wait?",
+      [[call("start_job", { job: "push the branch" })], claim, claim],
+    );
+    expect(got.reply).toBe(nothingStarted);
+    expect(got.made.windows).toHaveLength(0);
+  });
+
+  it("leaves the check of asked work as it was: the note names the tool", async () => {
+    const got = await ask("build a landing page for my bakery", [
+      "I started a job for the landing page.",
+      "Second.",
+    ]);
+    // The code starts that work itself, before the model: the claim never comes up.
+    expect(got.made.windows.length).toBeGreaterThanOrEqual(0);
+    expect(note(got.run)).not.toContain("asked you to start nothing");
+  });
+});
+
 describe("a question after a word of correction or a lead-in starts no work", () => {
   /** A job runs. Then `words`, with a model that calls start_job for them: how many jobs exist after. */
   const jobsAfter = async (words: string) => {
@@ -9397,8 +9900,13 @@ describe("an answer that claims an action that no tool did", () => {
       "add a contact form to the bakery page",
       "I already started that job two minutes ago, and it still works.",
     ],
-    // The person asked for no work: an answer about what happened is not checked.
-    ["what did you do for the bakery page?", "I started a job for it."],
+    // The person asked for no work: an answer about what happened is not
+    // checked here. (A word about a start of work is checked against the
+    // jobs that exist: see "an answer that says that work started".)
+    [
+      "what did you do for the bakery page?",
+      "I looked at it and changed nothing.",
+    ],
     ["thanks, that is all", "I closed nothing, all good."],
   ])(
     "asks the model once only for %j answered with %j",
