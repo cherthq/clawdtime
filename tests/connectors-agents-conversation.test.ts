@@ -1918,6 +1918,12 @@ describe("a session opens only when the person asks to see it", () => {
     "fix the display bug in payments",
     "open a pull request for payments",
     "let me go to lunch",
+    // The person asks for later: nothing here can open a session then.
+    "show me payments, when it is done",
+    "open payments, once the build passes",
+    "open payments, if it fails",
+    "show me payments, after the tests pass",
+    "show me payments as soon as it is done",
     // Words are asked for, not a window.
     "show me the status",
     "show me what is waiting",
@@ -2125,6 +2131,18 @@ describe("a session opens only when the person asks to see it", () => {
       await new Supervisor(world, model).reply([], words, "chat");
       expect(opened, words).toEqual(["payments", "docs"]);
     }
+  });
+
+  it("opens no session that the request rules out", async () => {
+    // The model asks for the session that the person ruled out.
+    const ruled = opening("docs");
+    await new Supervisor(ruled.world, ruled.model).reply(
+      [],
+      "show me payments, not docs",
+      "chat",
+    );
+    // The code opened payments, and docs stays closed.
+    expect(ruled.opened).toEqual(["payments"]);
   });
 
   it("says which session opened when the model does not answer after it", async () => {

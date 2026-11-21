@@ -911,6 +911,20 @@ const seeTakenBack = (clause: string) =>
   /\b(?:do\s+not|don['\u2019\u2018\u00b4\u02bc\u2032`]?t)\s+(?:open|show|bring|switch|pull)\b/i.test(
     clause,
   );
+/**
+ * A clause that puts the request off or ties it to something: "show me
+ * payments, when it is done", "open docs, once the build passes". Nothing
+ * here can open a session later, so such a request opens nothing now.
+ */
+const seeLater = (clause: string) =>
+  /^(?:when|whenever|once|after|before|until|unless|if|while|later|as\s+soon\s+as)\b/i.test(
+    clause.replace(seeLead, "").trim(),
+  );
+/** A clause that rules a session out of a request: "show me payments, not docs". */
+const seeNot = (clause: string) =>
+  /^(?:(?:and|but|just|only|so)[,\s]+)*(?:not|except|excluding|other\s+than|no)\b/i.test(
+    clause.trim(),
+  );
 /** The clauses of a message: at a mark, a line break, and "and", "then" or "but". */
 const clausesOf = (spoken: string) =>
   spoken
@@ -2313,6 +2327,8 @@ export class Supervisor {
     const asked = this.seeAsked(spoken);
     if (!asked) return false;
     const after = asked.clauses.slice(asked.at + 1);
+    // "..., when it is done": the person asks for later.
+    if (after.some(seeLater)) return false;
     const takenBack = after.findIndex(seeTakenBack);
     if (takenBack < 0) return true;
     return after
@@ -2371,15 +2387,20 @@ export class Supervisor {
     // and docs". A clause that says something else ends the list: "show me
     // the other one, payments is done" does not ask for payments.
     const more: string[] = [];
+    let ruledOut: AgentSession[] = [];
     for (const clause of after) {
+      // "..., not docs": that session is no part of the request.
+      if (seeNot(clause)) {
+        ruledOut = (this.world.board()?.sessions ?? []).filter((session) =>
+          saidAsWords(title(session), clause),
+        );
+        break;
+      }
       const named = clause.replace(seeLead, "").trim();
       if (!named || !this.namesOnlyASession(named)) break;
       more.push(named);
     }
-    return {
-      words: [asked.thing, ...more].join(", "),
-      ruledOut: [] as AgentSession[],
-    };
+    return { words: [asked.thing, ...more].join(", "), ruledOut };
   }
   /**
    * The message asks to see a session. Or it corrects such a request: the
