@@ -321,12 +321,12 @@ The tester verifies arrival and a harmless unsent edit, then exercises:
 9. Set `CLAWDTIME_DESKTOP_SWITCHING=off` for a separate fixture panel launch.
    Check directional/activation refusal and normal click/type still working.
 10. During an arranged already-authorized full-display share, verify the phone
-   follows both transitions, continues moving/live on arrival, widens during
-   transition when integrated with PR #53, and cannot reuse the old zoom target.
-   Pause disposable capture delivery to verify the old picture disappears after
-   500 ms; resume and verify a fresh destination view. No outgoing call is a test.
+    follows both transitions, continues moving/live on arrival, widens during
+    transition when integrated with PR #53, and cannot reuse the old zoom target.
+    Pause disposable capture delivery to verify the old picture disappears after
+    500 ms; resume and verify a fresh destination view. No outgoing call is a test.
 11. Full-screen, Split View, and multi-display refusal as separate cases. Successful
-   ordinary-window tests do not qualify these configurations.
+    ordinary-window tests do not qualify these configurations.
 
 Record app/OS/build identities, independently observed target/geometry, result
 classification, and whether the harmless edit landed correctly; retain no screen

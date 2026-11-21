@@ -288,6 +288,26 @@ final class PanelTransportTests: XCTestCase {
       XCTAssertTrue(server.requests()[1].hasPrefix("GET /desktop/hands/next?after=4 "))
     }
   }
+  func testPresentationIsAuthenticatedTransientAndNeverRetriedOrRedirected() async throws {
+    for status in [200, 503, 302] {
+      let server = try FixtureHTTP { _, port in (status, ["Location": "http://127.0.0.1:\(port)/other"], Data("{\"ok\":true}".utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      let event = CallPresentationEvent(producerId: "00000000-0000-4000-8000-000000000001", sequence: 1, commandSeq: 8,
+        at: 1000, kind: .reset, reducedMotion: true)
+      do {
+        try await client.handsPresentation(event)
+        XCTAssertEqual(status, 200)
+      } catch { XCTAssertNotEqual(status, 200) }
+      XCTAssertEqual(server.requests().count, 1)
+      XCTAssertTrue(server.requests()[0].hasPrefix("POST /desktop/hands/presentation "))
+      XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+      XCTAssertTrue(server.requests()[0].lowercased().contains("cache-control: no-store"))
+      var invalid = event; invalid.expiresAt = 4000
+      do { try await client.handsPresentation(invalid); XCTFail("Invalid hint sent") } catch {}
+      XCTAssertEqual(server.requests().count, 1)
+    }
+  }
   func testAServiceWithNoWorkerAndCommandsOutsideTheContractAreRejected() async throws {
     let run = #""run":{"active":true,"goal":"g","step":1,"state":"running"}"#
     for body in ["{}", #"{"version":2,"command":null,\#(run)}"#, #"{"version":1,\#(run)}"#,

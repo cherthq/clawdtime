@@ -29,6 +29,7 @@ import TaskPanelCore
   var onDesktopTransition: ((DesktopTransitionPhase, Int) -> Void)?
   private let bar = HandsBar()
   private let guide: GuidedCursor
+  private let presentation = HandsPresentation()
   private var client: PanelClient?
   private var loop: Task<Void, Never>?
   private var ledger = HandsLedger()
@@ -76,6 +77,11 @@ import TaskPanelCore
       case .blocked: self.label = "Desktop switch blocked; no further input"
       }
       self.showBar()
+      // Desktop verification owns readiness; presentation stays wide until that
+      // lifecycle releases it and a separate fresh context has been observed.
+      if let presentationPhase = CallPresentationTransitionPhase(rawValue: phase.rawValue) {
+        self.presentationTransition(phase: presentationPhase, epoch: epoch)
+      }
       self.onDesktopTransition?(phase, epoch)
     }
   }
@@ -86,6 +92,13 @@ import TaskPanelCore
   func start(client: PanelClient) {
     guard loop == nil else { return }
     self.client = client
+    presentation.connect(client, overlayBounds: { [weak self] in
+      guard let self, let map = HandsDisplay.main?.map, let bounds = self.guide.visiblePresentationBounds else { return nil }
+      return map.flip(bounds)
+    }) { [weak self] in
+      guard let self else { return false }
+      return self.live && !self.stop.stopped && !(self.input.watching && self.input.personActed) && self.sessionOpen
+    }
     loop = Task { [weak self] in
       var failures = 0
       while !Task.isCancelled {
@@ -108,11 +121,12 @@ import TaskPanelCore
             // Exactly one POST for this number. A failure is not sent again: the
             // worker reads a missing answer as an unknown outcome.
             do { try await client.handsResult(result) }
-            catch { self.desktop.invalidate() } // No replay; disconnected history is no longer usable.
+            catch { self.presentation.reset(); self.desktop.invalidate() } // No replay; disconnected history is no longer usable.
             self.showBar()
           }
         } catch {
           failures += 1
+          self.presentation.reset()
           // A service that is gone commands nothing: the bar goes too.
           if failures >= HandsPace.failuresBeforeQuiet { self.desktop.invalidate(); self.quiet() }
         }
@@ -130,7 +144,7 @@ import TaskPanelCore
   /// The task service that answers now. Another instance counts its commands from the start again.
   func service(instance: String) {
     // Another service can have another engine: read it again at once.
-    if instance != serviceInstance { serviceInstance = instance; engineRead = nil; desktop.invalidate() }
+    if instance != serviceInstance { presentation.reset(); serviceInstance = instance; engineRead = nil; desktop.invalidate() }
     ledger.service(instance)
   }
   private var serviceInstance: String?
@@ -147,6 +161,7 @@ import TaskPanelCore
       onRunStarted?()
     }
     if let pending = next.command { label = ElementCleaner.line(pending.label, limit: 120) }
+    if stop.stopped || next.run.state == "waiting_for_person" || next.run.state == "stopping" { presentation.reset() }
     shield(true)
     // The tap needs the Accessibility right. It starts as soon as the right is there.
     input.watch()
@@ -154,6 +169,7 @@ import TaskPanelCore
   }
   /// Nothing runs: the bar, the guided cursor and the tap go, and the windows show in captures again.
   private func quiet() {
+    presentation.reset()
     guard live || bar.isShown else { return }
     live = false; label = ""
     desktop.retireObservation()
@@ -179,6 +195,7 @@ import TaskPanelCore
   private func stopByPerson() {
     guard live, !stop.stopped else { return }
     stop.press()
+    presentation.reset()
     desktop.invalidate()
     input.halted = true
     guide.hide(); guide.typing(false)
@@ -204,19 +221,23 @@ import TaskPanelCore
     if let missing = command.missingRight(accessibility: accessibility, screenRecording: screenRecording) { return .failure(seq, missing) }
     input.beginCommand()
     inputRefusal = nil
+    presentation.begin(seq)
     let outcome = await act(command, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
     let interrupted = input.watching && input.personActed
+    if interrupted { presentation.reset() }
     switch outcome {
     case .success(let seen):
       let result = HandResult.done(seq, observation: seen, interrupted: interrupted)
       // Contract failure cannot erase an already-submitted external effect.
       guard (try? result.validate()) != nil else {
+        presentation.reset()
         desktop.invalidate()
         return .failure(seq, DesktopInputOutcome.invalidResult(command: command, submitted: input.submittedInput), interrupted: interrupted)
       }
       return result
     case .failure(let error):
+      presentation.reset()
       // A partially submitted click/type/scroll is never described as a refusal
       // that can be retried. A takeover before input still pauses the worker.
       let reported = DesktopInputOutcome.failure(error, submitted: input.submittedInput, interrupted: interrupted)
@@ -266,7 +287,9 @@ import TaskPanelCore
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
       if stop.stopped { return .failure(.stoppedByPerson) }
       defer { guide.rest() }
-      await pointAtKeyboard(label)
+      let changesSurface = CallPresentationKeyPolicy.mayChangeSurface(keys)
+      if changesSurface { presentationTransition() }
+      await pointAtKeyboard(label, presentTyping: !changesSurface)
       // Stop may have come during the waits above, and the keyboard may be in another place now.
       if let refusal = await lastCheck() { return .failure(refusal) }
       guard await desktop.beginInput() else { return .failure(.staleObservation) }
@@ -297,6 +320,7 @@ import TaskPanelCore
     case .openURL(let text):
       // Only a web address. Another scheme can start a program or a call.
       guard let url = HandsTarget.webURL(text) else { return .failure(.refused) }
+      presentationTransition()
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
@@ -340,12 +364,22 @@ import TaskPanelCore
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
   /// with the label of the command. With no field known it stays where it last pointed.
-  private func pointAtKeyboard(_ label: String) async {
+  private func pointAtKeyboard(_ label: String, presentTyping: Bool = true) async {
     guard let map = HandsDisplay.main?.map else { return }
+    let presentationGeneration = presentation.currentGeneration
+    let surface = presentTyping ? presentation.currentSurface : nil
     // The Accessibility tree is read off the main thread, as everywhere here. It counts from the top.
-    let focus = await Task.detached(priority: .userInitiated) { HandsTree.focusFrame() }.value
+    let field = await Task.detached(priority: .userInitiated) {
+      (frame: HandsTree.focusFrame(), safeForPresentation: !presentTyping || HandsTree.focusIsSecure() == false)
+    }.value
+    let focus = field.frame
     let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
     let target = GuidedFocus.place(focus: focus.map(map.flip), shown: guide.place, pointer: map.flip(input.pointer), screen: screen)
+    if presentTyping {
+      presentation.type(in: field.safeForPresentation ? focus : nil,
+        overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface,
+        observedGeneration: presentationGeneration)
+    }
     await guide.travel(to: target, label: label)
   }
   /// A command with no place of its own, such as opening an app: the cursor says it where it is.
@@ -361,6 +395,13 @@ import TaskPanelCore
     let places = command.places.map(map.clamp)
     var restore: [() -> Void] = []
     defer { restore.forEach { $0() }; guide.rest() }
+    // All geometry stays in the original top-left screen-point space. The
+    // renderer alone maps it into the outgoing call video.
+    let xs = places.map(\.x), ys = places.map(\.y)
+    let action = CGRect(x: xs.min()! - 1, y: ys.min()! - 1,
+      width: max(2, xs.max()! - xs.min()! + 2), height: max(2, ys.max()! - ys.min()! + 2))
+    let overlay = map.flip(guide.presentationBounds(at: map.flip(places[0]), label: label))
+    presentation.point(action.union(overlay))
     await guide.travel(to: map.flip(places[0]), label: label)
     if let refusal = await lastCheck() { return .failure(refusal) }
     // ClawdTime's windows are not in the picture that the worker saw. A click on
@@ -435,8 +476,18 @@ import TaskPanelCore
     return session[kCGSessionOnConsoleKey as String] as? Bool == true && session["CGSSessionScreenIsLocked"] as? Bool != true
   }
   private func showTyping() { typingMark += 1; guide.typing(true) }
+  /// Presentation-only transition seam for app/desktop activation. Call before
+  /// switching; fresh surface observations establish the next video context.
+  func presentationTransition() { presentation.transition() }
+  /// Optional persistent lifecycle seam. Bridge a monotonic desktop producer's
+  /// phase raw value to CallPresentationTransitionPhase; no desktop dependency
+  /// is needed for this branch to build. Stop/reset fence observed old epochs.
+  func presentationTransition(phase: CallPresentationTransitionPhase, epoch: Int) {
+    presentation.transition(phase: phase, epoch: epoch)
+  }
   /// The typing pose stays a moment after the last key, so one key press shows too.
   private func endTyping() {
+    presentation.endTyping()
     let mark = typingMark
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 240_000_000)

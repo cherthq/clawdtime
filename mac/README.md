@@ -29,6 +29,58 @@ swift test
 ./scripts/package.sh
 ```
 
+### Native automatic call-video presentation
+
+The panel sends transient presentation hints to the authenticated
+`POST /desktop/hands/presentation` route while its native hands run. These are
+outgoing-video hints only; input and observation coordinates remain main-display
+points measured from the top left. Click/scroll/drag targets are emitted before
+the guided cursor moves. Typing uses the focused field bounds, refreshed off the
+main thread every 350 ms while typing. No field values, labels, window titles,
+screenshots or credentials appear in presentation events or logs.
+
+Each hint carries a producer ID, monotonically increasing sequence, hands-command
+sequence, 1.4-second lifetime, display size/Retina scale, front application bundle
+ID, visible CG window ID and geometry, and the Reduce Motion preference. A changed
+app/window/display/geometry retires the old target. Stop, takeover, service errors
+and run completion reset presentation. One POST may be in flight; only the newest
+unsent hint is retained, and expired hints are dropped without retry. Presentation
+network failures do not delay input or alter its receipt.
+
+A first click target on a changed surface is held for at most 900 ms, bound to
+that command and exact geometry, until an independent matching observation
+establishes stability (an 80 ms settling probe or the regular heartbeat). The
+probe does not delay input. A changed command, moved window, Stop or expiry
+discards it. An ongoing
+typing command survives a geometry change as intent only: the next heartbeat
+must reacquire fresh nonsecure field bounds before it can frame typing again.
+
+`HandsController.presentationTransition()` remains a one-shot widening hint for
+existing app/URL activation and known app/window or possible Mission Control
+shortcuts. Desktop lifecycle integration instead calls
+`presentationTransition(phase: CallPresentationTransitionPhase, epoch: Int)`:
+switching, waiting and blocked hold repeated transition hints and suppress target
+and context events. Ready permits only a fresh context read first; it never
+restores old coordinates. Blocked requires a newer switching phase to reopen.
+The bridge must use one monotonic epoch producer for the panel lifetime. Stop
+and reset fence previously observed epochs; inactive callbacks are ignored.
+Neither seam assumes a Space identifier, configures shortcuts or sends input.
+Observed surface changes also widen independently of a desktop-switching branch.
+See [automatic call zoom integration](../docs/AUTOMATIC_CALL_ZOOM.md) for the
+phase bridge, freshness rules and remaining combined acceptance requirements.
+
+The guided cursor window already opts into screen sharing; the video compositor
+transforms it with the captured pixels rather than creating a second cursor or
+label. Target regions include the action/field plus the planned painted pointer,
+pulse and label bounds, so a long label is not clipped by an action-centred zoom.
+Typing heartbeats read the currently visible painted bounds again; no label text
+is sent and no transparent window padding is used as the presentation target.
+Physical capture inclusion and handset readability still require an
+exclusive, arranged test. The new pure Swift and loopback HTTP tests cover event
+shape, coordinate bounds, Retina metadata, identity/geometry invalidation,
+transition policy, authentication, and no retry/redirect. They do not prove
+physical input, desktop switching or phone-video acceptance.
+
 The package script builds `build/ClawdTime Companion.app` and signs it ad hoc by
 default. Set `CLAWDTIME_SIGNING_IDENTITY` to an installed Developer ID identity
 for distribution signing; notarization is a separate release step. Neither build
@@ -360,7 +412,6 @@ or receipt stores. Media supplies actual speaking/listening state for the exact
 call. Ended and muted status remain authoritative and are never replaced by a
 status from another media session.
 
-
 ## Independent task exact-window child
 
 `ClawdTimeTaskCapture` is a separate local presentation child, not the menu-bar
@@ -420,7 +471,7 @@ The sample's WindowServer `displayTime` must fall between the request's native
 host time and callback time. Its real host-clock age determines `capturedAt`;
 receipt time does not renew old pixels. Idle, started, blank, invalid, wrong-size,
 old, and future frames do not qualify. Apple's [frame-status documentation](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle)
-explains that an idle event contains no newly generated frame; [Core Media's host-time conversion](https://developer.apple.com/documentation/coremedia/cmclockmakehosttimefromsystemunits(_:))
+explains that an idle event contains no newly generated frame; [Core Media's host-time conversion](<https://developer.apple.com/documentation/coremedia/cmclockmakehosttimefromsystemunits(_:)>)
 converts the native `mach_absolute_time` units.
 
 A 600 ms soft frame deadline rejects a request that has no admissible frame.
@@ -460,15 +511,15 @@ and session loss revoke local work too; wake/unlock does not resume it.
 All routes require the existing private helper bearer; requests never arm the
 helper or prompt for macOS permissions:
 
-| Route | Result |
-| --- | --- |
-| `GET /local/v1/status` | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
-| `POST /local/v1/sessions` | Reserve a new exact local lease. |
-| `POST /local/v1/sessions/:id/renew` | Change only expiration, at most 30 seconds from the helper clock. |
-| `GET /local/v1/sessions/:id/frame` | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`. |
-| `POST /local/v1/sessions/:id/actions` | Reserve and submit one bounded action; return its durable receipt. |
-| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry. |
-| `POST /local/v1/sessions/:id/stop` | Idempotently stop that previously reserved lease; never stop a different current owner. |
+| Route                                          | Result                                                                                                                                                                                                                                  |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /local/v1/status`                         | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
+| `POST /local/v1/sessions`                      | Reserve a new exact local lease.                                                                                                                                                                                                        |
+| `POST /local/v1/sessions/:id/renew`            | Change only expiration, at most 30 seconds from the helper clock.                                                                                                                                                                       |
+| `GET /local/v1/sessions/:id/frame`             | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`.                                                                                                                                 |
+| `POST /local/v1/sessions/:id/actions`          | Reserve and submit one bounded action; return its durable receipt.                                                                                                                                                                      |
+| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry.                                                                                                                                                                        |
+| `POST /local/v1/sessions/:id/stop`             | Idempotently stop that previously reserved lease; never stop a different current owner.                                                                                                                                                 |
 
 A lease is `{id,deviceId,sessionId,taskId,executorId,executorEpoch,policyRevision,
 displayId,expiresAt}`. Expiration is ISO 8601; responses use the helper's existing
@@ -519,7 +570,6 @@ failure records `state: "rejected", evidence: "input_not_dispatched"`. These
 outcomes do not create an unresolved-input fence, but the rejected action ID is
 not replayable. After event posting begins, lost responses or persistence failure
 remain uncertain; they cannot become a definite refusal.
-
 
 ### Separate local-only helper bundle
 
