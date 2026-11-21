@@ -1460,3 +1460,97 @@ test("a call that starts reads what was said before, newest last, and nothing fr
   assert.equal(await recall(exec("{}"), () => now), "");
   assert.equal(await recall(exec("usage"), () => now), "");
 });
+
+const { LINE_AUDIO, lineAudioIn } = await import("./greet.mjs");
+
+test("the agent greets on the line's audio track in the room, before the ready mark reaches the room", () => {
+  const room = fakeRoom("");
+  const greetings = [],
+    signals = [];
+  greetOnBridgeReady(room, (signal) => greetings.push(signal), {
+    trackEvents: ["trackPublished", "trackSubscribed"],
+    onSignal: (kind) => signals.push(kind),
+  });
+  // The caller's video, or an audio track with another name, is not the signal.
+  room.emit(
+    "trackPublished",
+    { name: "camera", kind: 2 },
+    { identity: "chert-bridge-1" },
+  );
+  room.emit(
+    "trackSubscribed",
+    {},
+    { name: "some-audio" },
+    { identity: "chert-bridge-1" },
+  );
+  assert.deepEqual(greetings, []);
+  // The line's audio track: published, then subscribed. One greeting.
+  room.emit(
+    "trackPublished",
+    { name: LINE_AUDIO },
+    { identity: "chert-bridge-1" },
+  );
+  room.emit(
+    "trackSubscribed",
+    {},
+    { name: LINE_AUDIO },
+    { identity: "chert-bridge-1" },
+  );
+  assert.deepEqual(greetings, ["track"]);
+  // The mark comes two seconds later: it is recorded, and nobody greets again.
+  room.change('{"chert_bridge_ready":true}');
+  assert.deepEqual(greetings, ["track"]);
+  assert.deepEqual(signals, ["track", "mark"]);
+  assert.equal(
+    room.listenerCount("roomMetadataChanged"),
+    0,
+    "both signals came: it listens no more",
+  );
+  assert.equal(room.listenerCount("trackPublished"), 0);
+});
+
+test("the mark alone still greets, and without track events a track is no signal", () => {
+  const room = fakeRoom("");
+  const greetings = [];
+  greetOnBridgeReady(room, (signal) => greetings.push(signal));
+  room.emit("trackPublished", { name: LINE_AUDIO });
+  assert.deepEqual(greetings, []);
+  room.change('{"chert_bridge_ready":true}');
+  assert.deepEqual(greetings, ["mark"]);
+  // The mark first, the track after: one greeting, on the mark.
+  const second = fakeRoom("");
+  const order = [];
+  greetOnBridgeReady(second, (signal) => order.push(signal), {
+    trackEvents: ["trackPublished"],
+  });
+  second.change('{"chert_bridge_ready":true}');
+  second.emit("trackPublished", { name: LINE_AUDIO });
+  assert.deepEqual(order, ["mark"]);
+});
+
+test("the agent greets at once when the line's audio track is already in the room, and never after the stop", () => {
+  const room = fakeRoom("");
+  room.remoteParticipants = new Map([
+    [
+      "chert-bridge-1",
+      { trackPublications: new Map([["TR_1", { name: LINE_AUDIO }]]) },
+    ],
+  ]);
+  assert.equal(lineAudioIn(room), true);
+  assert.equal(lineAudioIn(fakeRoom("")), false);
+  const greetings = [];
+  greetOnBridgeReady(room, (signal) => greetings.push(signal), {
+    trackEvents: ["trackPublished"],
+  });
+  assert.deepEqual(greetings, ["track"]);
+  const later = fakeRoom("");
+  const none = [];
+  const stop = greetOnBridgeReady(later, (signal) => none.push(signal), {
+    trackEvents: ["trackPublished"],
+  });
+  stop();
+  later.emit("trackPublished", { name: LINE_AUDIO });
+  later.change('{"chert_bridge_ready":true}');
+  assert.deepEqual(none, []);
+  assert.equal(later.listenerCount("trackPublished"), 0);
+});

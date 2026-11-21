@@ -195,8 +195,13 @@ How the call looks:
 
 How the call sounds:
 
-- FaceTime needs about ten seconds to connect after you call. ClawdTime greets
-  you when FaceTime is ready, not before.
+- FaceTime needs some seconds to connect after you call. ClawdTime greets you
+  as soon as the line says that FaceTime is ready, not before. It takes that
+  from the line's own audio track in the room, which is there about two
+  seconds before the ready mark. `CLAWDTIME_LINE_GREET_ON=mark` waits for the
+  mark alone.
+- The picture is sent from the moment the agent waits for a call, so its first
+  frame is there when the line shows video.
 - ClawdTime does not listen while it speaks, nor for half a second after. On a
   phone line its own voice comes back, and it would stop itself or answer
   itself. Its answers are short: wait for the end of the sentence, then speak.
