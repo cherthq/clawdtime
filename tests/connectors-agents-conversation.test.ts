@@ -1796,6 +1796,48 @@ describe("then ask it", () => {
     }
   });
 
+  it.each([
+    ["tell payments tests: run the tests again", "run the tests again"],
+    ["tell payments tests: run the tests again.", "run the tests again."],
+    [
+      "tell payments tests: open index.html in the browser",
+      "open index.html in the browser",
+    ],
+    [
+      "tell payments tests: re-run the suite once more",
+      "re-run the suite once more",
+    ],
+  ])("types one clause by itself: %j", async (words, typed) => {
+    const { world, sent } = typing();
+    await new Supervisor(world, scripted(["Typed."]).model).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(sent).toEqual([`payments tests: ${typed}`]);
+  });
+
+  it("offers the sentence only for a question that the code then types by itself", async () => {
+    for (const asked of [
+      // More than one clause.
+      "the payments tests one, did it pass?",
+      // A word that the guard keeps for the model.
+      "why did the payments tests session not pass?",
+    ]) {
+      const { world, sent } = typing();
+      const { model, seen } = scripted(["Which words?"]);
+      expect(
+        await new Supervisor(world, model).reply(
+          [said("user", asked), said("assistant", "It still works.")],
+          "then ask it",
+          "chat",
+        ),
+      ).toBe("Which words?");
+      expect(seen).toHaveLength(1);
+      expect(sent).toEqual([]);
+    }
+  });
+
   it("types the same words into a session once in one message", async () => {
     const { world, sent } = typing();
     // The model asks for the same typing again.
@@ -1867,6 +1909,62 @@ describe("then ask it", () => {
     "tell payments tests: don\u2019t push",
     // A question to ClawdTime that hangs on it.
     "tell payments tests: run the migration, would that work?",
+    // No list of such words is complete: more than one clause is never typed
+    // by the code, whatever the words.
+    ...[
+      "changed my mind",
+      "I take that back",
+      "take it back",
+      "forget about it",
+      "on second thoughts",
+      "scrap that",
+      "strike that",
+      "belay that",
+      "abort",
+      "hold up",
+      "nah",
+      "jk",
+      "nm",
+      "my bad",
+      "whoops",
+      "just joking",
+      "drop it",
+      "skip that",
+      "ok?",
+      "right?",
+      "or should I",
+      "or is that a bad idea",
+      "if that is ok with you",
+      "perhaps",
+      "I think",
+      "a word that no list knows",
+    ].flatMap((tail) => [
+      `tell payments tests: delete the release branch, ${tail}`,
+      `tell payments tests: delete the release branch. ${tail}`,
+      `tell payments tests: delete the release branch - ${tail}`,
+      `tell payments tests: delete the release branch; ${tail}`,
+      `tell payments tests: delete the release branch\n${tail}`,
+    ]),
+    "tell payments tests: delete the release branch (not really)",
+    "tell payments tests: delete the release branch... wait",
+    "tell payments tests: delete the release branch? yes do it",
+    "tell payments tests: delete the release branch! lol",
+    "tell payments tests: delete the release branch \u2014 forget it",
+    // Two hyphens can be a dash as well as a flag of a command.
+    "tell payments tests: delete the release branch --changed my mind",
+    "tell payments tests: delete the release branch--unknownword",
+    "tell payments tests: re-run the suite with --watch",
+    // In one clause, the list guards it.
+    "tell payments tests: delete the release branch jk",
+    "tell payments tests: delete the release branch nah",
+    "tell payments tests: delete the release branch ok?",
+    "tell payments tests: delete the release branch right?",
+    "tell payments tests: delete the release branch I think",
+    "tell payments tests: delete the release branch or should I",
+    "tell payments tests: delete the release branch if that is fine",
+    "tell payments tests: delete the release branch but hold up",
+    "tell payments tests: delete the release branch my bad",
+    "tell payments tests: delete the release branch and take it back",
   ])(
     "leaves %j to the model: the code types nothing by itself",
     async (words) => {

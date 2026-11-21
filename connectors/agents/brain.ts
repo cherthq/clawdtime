@@ -1169,15 +1169,26 @@ const toldForms = (spoken: string) => {
   return forms;
 };
 /**
- * A word that can take the message back, stop it or turn it around, or a
- * question to ClawdTime that hangs on it. The code types nothing by itself
- * past this reader: the model reads such a message, as before. It only sends
- * a message to the slower way, so it can be wide.
+ * One clause: no mark that ends or splits a sentence stands before more
+ * words. "Delete the branch, never mind", "push to main. Actually no" and
+ * "deploy now - scratch that" are more than one. A mark at the very end and
+ * a point inside a name ("index.html") split nothing.
+ */
+const oneClause = (text: string) =>
+  !/[,;:!?\n\r()\u2013\u2014]|\.(?=\s)|\s-+\s|--/.test(
+    text.trim().replace(/[.!?]+$/, ""),
+  );
+/**
+ * A word that can take the words back, stop them, turn them around or hedge
+ * them, or a question to ClawdTime that hangs on them. No list of such words
+ * is complete: the code types by itself only words that are one clause, and
+ * this reader guards that one clause. It only sends a message to the slower
+ * way, where the model reads it as before, so it can be wide.
  */
 const mayTakeBack = (text: string) =>
   takesBack(text) ||
   asksAtTheEnd(text) ||
-  /(?:\b(?:no|not|never|nope|nvm|nevermind|cancel|wait|undo|ignore|disregard|oops|instead|actually|sorry|mistake|wrong|stop|hold on|hang on|second thought|rather|unless|maybe|kidding)\b|n['\u2019\u2018\u00b4\u02bc\u2032`]t\b)/i.test(
+  /(?:\b(?:no|not|never|nope|nah|nvm|nm|nevermind|cancel|wait|undo|ignore|disregard|oops|whoops|instead|actually|sorry|mistake|wrong|stop|abort|hold|hang on|thoughts?|rather|unless|maybe|perhaps|probably|kidding|joking|jk|lol|haha|mind|back|forget|scrap|scratch|strike|belay|drop|skip|bad|ok|okay|right|or|if|but|though|however|except|think|guess|just|psych|oh|hmm|uh|um|eh)\b|n['\u2019\u2018\u00b4\u02bc\u2032`]t\b)/i.test(
     text,
   );
 /**
@@ -2413,7 +2424,10 @@ export class Supervisor {
           about.kind === "one" &&
           plain(title(about.session)) &&
           !title(about.session).includes(":") &&
-          plain(asked)
+          plain(asked) &&
+          // Only a sentence that the code then types by itself is offered.
+          oneClause(asked) &&
+          !mayTakeBack(asked)
         )
           return `Say "tell ${title(about.session)}: ${asked}" and I type it.`;
       }
@@ -2617,12 +2631,10 @@ export class Supervisor {
       // The code does this only where nothing else can own the sentence: no
       // task, request or computer action waits for an answer (a choice of a
       // task is text of an agent, not words of the person), the turn is open,
-      // nothing in the message can take it back, and the message reads as
-      // that form in one way only.
+      // and the message reads as that form in one way only.
       const waitingTask = this.world.tasks?.current();
       const fits =
         turn.closed ||
-        mayTakeBack(words) ||
         hasDecisionTarget() ||
         computerApproval() !== null ||
         (waitingTask && !taskIsOver(waitingTask))
@@ -2635,7 +2647,13 @@ export class Supervisor {
                 )
                 .map((session) => ({ session, text: form.text })),
             );
-      if (fits.length === 1) {
+      // The words after the colon are one clause, and no word in it can take
+      // it back or hedge it. Anything more goes to the model.
+      if (
+        fits.length === 1 &&
+        oneClause(fits[0]!.text) &&
+        !mayTakeBack(fits[0]!.text)
+      ) {
         const call: ToolCall = {
           id: "tell_first",
           name: "type_into_session",
