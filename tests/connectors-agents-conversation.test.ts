@@ -1715,6 +1715,45 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("more work on a job that still runs", () => {
+  const work = "build a small landing page for my bakery in one html file";
+  const started =
+    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  const waiting =
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then.";
+
+  it("waits for that job when the message points back at it, and says so", async () => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, wantsJob().model).reply(
+        [said("user", work), said("assistant", started)],
+        "also add a contact form to it",
+        "chat",
+      ),
+    ).toBe(waiting);
+    expect(made.file("start.command")).toContain(
+      `[[ ! -e '${join(made.folder, made.ids()[0]!, "result.md")}' ]]`,
+    );
+    expect(made.file("prompt.txt")).toContain("also add a contact form to it");
+  });
+
+  it("starts beside it when the message does not point back", async () => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, wantsJob().model).reply(
+        [said("user", work), said("assistant", started)],
+        "check which lines are healthy and give me a short list",
+        "chat",
+      ),
+    ).toBe(started);
+    expect(made.file("start.command")).not.toContain("waits for the job");
+  });
+});
+
 describe("then ask it", () => {
   const sessions = () => [
     session({ name: "deploy fix" }),

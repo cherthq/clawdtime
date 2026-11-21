@@ -487,6 +487,12 @@ a tunnel and get its link, find something out: all of these are jobs.
   "it", "again") and the job before it finished in the last 30 minutes, the
   new job also gets the path of that job's answer. An answer that holds a
   password or a key is not passed on.
+- When your sentence points back and the job before it still runs, the new
+  job waits for it: two sessions that change the same files at one time lose
+  work. Its terminal window opens at once and shows that it waits. It starts
+  when the job before it wrote its answer, after two hours at the latest, or
+  when you press Return in that window. ClawdTime says that it waits. A
+  sentence that does not point back starts beside the running job, as before.
 - The job is written to a file and is never part of a shell command. No spoken
   word can become one. The start script holds only paths that ClawdTime made.
   The job reaches the agent as one argument: other users of this Mac can see

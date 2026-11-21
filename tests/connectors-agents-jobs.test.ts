@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,7 @@ import { DecisionDesk } from "../connectors/agents/decisions.js";
 import type { Runner } from "../connectors/agents/focus.js";
 import {
   Jobs,
+  waitBlock,
   type JobFacts,
   type JobPort,
 } from "../connectors/agents/jobs.js";
@@ -580,4 +582,154 @@ describe("the files of a job, after an independent review", () => {
     expect(check).toContain(`> '${join(folder, id!, "result.md")}'`);
     expect(check).toContain("is not installed on this Mac");
   });
+});
+
+describe("a job that follows up on a job that still runs", () => {
+  const first = "build a small landing page for my bakery in one html file";
+  const second = "also add a contact form to it";
+  const waiting =
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then.";
+  const atOnce =
+    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  const made = () => {
+    const directory = root();
+    const clock = { now };
+    const { calls, run } = recorder();
+    const jobs = new Jobs(directory, {
+      project: "/work/app",
+      now: () => clock.now,
+      run,
+    });
+    const folder = join(directory, "agents", "jobs");
+    const ids = () => readdirSync(folder).sort();
+    const file = (id: string, name: string) =>
+      readFileSync(join(folder, id, name), "utf8");
+    return { jobs, clock, calls, folder, ids, file };
+  };
+
+  it("waits in its own start script until that job wrote its answer, and says so", async () => {
+    const { jobs, clock, calls, folder, ids, file } = made();
+    expect((await jobs.start(first)).said).toBe(atOnce);
+    clock.now += 30_000;
+    expect(await jobs.start(second, { refersBack: true })).toEqual({
+      ok: true,
+      said: waiting,
+    });
+    const [one, two] = ids();
+    const answer = join(folder, one!, "result.md");
+    const script = file(two!, "start.command");
+    // The wait stands before the agent starts, and names only that answer file.
+    expect(script).toContain(waitBlock(answer));
+    expect(script.indexOf(waitBlock(answer))).toBeLessThan(
+      script.indexOf("exec claude "),
+    );
+    expect(script).toContain(`[[ ! -e '${answer}' ]]`);
+    // No word of the person stands in the script.
+    expect(script).not.toContain("contact form");
+    expect(script).not.toContain("bakery");
+    // The window of the second job opens at once: the wait shows there.
+    expect(calls).toHaveLength(2);
+    // The job is told that another job worked there. The answer of that job
+    // is not handed on: nothing could check it for a credential.
+    const prompt = file(two!, "prompt.txt");
+    expect(prompt).toContain(
+      "Another job worked in this folder just before you",
+    );
+    expect(prompt).not.toContain(answer);
+    // The first script has no wait.
+    expect(file(one!, "start.command")).not.toContain("waits for the job");
+  });
+
+  it("does not wait when the request does not point back, or when no job runs", async () => {
+    // The request does not point back: both run side by side, as before.
+    const side = made();
+    await side.jobs.start(first);
+    side.clock.now += 30_000;
+    expect((await side.jobs.start("check which lines are healthy")).said).toBe(
+      atOnce,
+    );
+    expect(side.file(side.ids()[1]!, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    // The job before it is done: no wait, and its answer is handed on as before.
+    const done = made();
+    await done.jobs.start(first);
+    writeFileSync(
+      join(done.folder, done.ids()[0]!, "result.md"),
+      "The page is at /work/app/bakery.html.\n",
+    );
+    done.clock.now += 60_000;
+    expect((await done.jobs.start(second, { refersBack: true })).said).toBe(
+      atOnce,
+    );
+    const later = done.ids()[1]!;
+    expect(done.file(later, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    expect(done.file(later, "prompt.txt")).toContain(
+      `The answer of the job before this one is in the file ${join(done.folder, done.ids()[0]!, "result.md")}.`,
+    );
+    // The job before it never wrote an answer and is older than two hours: it
+    // does not count as running, so nothing waits for it.
+    const old = made();
+    await old.jobs.start(first);
+    old.clock.now += 2 * 60 * 60 * 1000 + 1000;
+    expect((await old.jobs.start(second, { refersBack: true })).said).toBe(
+      atOnce,
+    );
+    expect(old.file(old.ids()[1]!, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    // No job before it at all.
+    const none = made();
+    expect((await none.jobs.start(second, { refersBack: true })).said).toBe(
+      atOnce,
+    );
+  });
+
+  it("waits in a chain: the third job waits for the second", async () => {
+    const { jobs, clock, folder, ids, file } = made();
+    await jobs.start(first);
+    clock.now += 30_000;
+    await jobs.start(second, { refersBack: true });
+    clock.now += 30_000;
+    expect(
+      (
+        await jobs.start("then make the header of it blue", {
+          refersBack: true,
+        })
+      ).said,
+    ).toBe(waiting);
+    const [, two, three] = ids();
+    expect(file(three!, "start.command")).toContain(
+      waitBlock(join(folder, two!, "result.md")),
+    );
+  });
+
+  it.skipIf(!existsSync("/bin/zsh"))(
+    "the wait lines run in zsh: they end when the answer file exists, and a path with a quote stays one word",
+    () => {
+      const directory = mkdtempSync(join(tmpdir(), "clawdtime wait's-"));
+      const answer = join(directory, "result.md");
+      const zsh = (script: string) =>
+        execFileSync("/bin/zsh", ["-c", script], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 20_000,
+        });
+      // The answer comes half a second later, from the same shell: the wait
+      // shows its line, then ends.
+      const began = Date.now();
+      const waited = zsh(
+        `( sleep 0.5; : > '${answer.replace(/'/g, `'\\''`)}' ) &\n${waitBlock(answer)}print -r -- started`,
+      );
+      expect(waited).toBe(
+        "This job waits for the job before it. Press Return to start it now.\nstarted\n",
+      );
+      expect(Date.now() - began).toBeLessThan(10_000);
+      // The answer is there already: no wait and no line.
+      expect(zsh(`${waitBlock(answer)}print -r -- started`)).toBe("started\n");
+    },
+    25_000,
+  );
 });
