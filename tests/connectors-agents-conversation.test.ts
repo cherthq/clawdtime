@@ -1712,6 +1712,463 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("then ask it", () => {
+  const sessions = () => [
+    session({ name: "deploy fix" }),
+    session({
+      id: "2",
+      name: "payments tests",
+      agent: "codex",
+      agentLabel: "Codex",
+    }),
+  ];
+  const question = "did the tests pass in the payments tests session?";
+
+  it.each([
+    "then ask it",
+    "ask it",
+    "ok then tell it",
+    "can you ask that one?",
+    "so ask that session please",
+  ])(
+    "says the sentence that sends the person's question, for %j, and types nothing",
+    async (words) => {
+      const sent: string[] = [];
+      const { world: base } = mac(sessions());
+      const world: SupervisorWorld = {
+        ...base,
+        send: async (item, text) => {
+          sent.push(`${item.name}: ${text}`);
+          return { ok: true, route: "tmux" };
+        },
+      };
+      // A model that would answer with the state. It is not asked.
+      const { model, seen } = scripted(["It still works."]);
+      const answer = await new Supervisor(world, model).reply(
+        [said("user", question), said("assistant", "It still works.")],
+        words,
+        "chat",
+      );
+      expect(answer).toBe(
+        `Say "tell payments tests: ${question}" and I type it.`,
+      );
+      expect(seen).toHaveLength(0);
+      expect(sent).toEqual([]);
+    },
+  );
+
+  const typing = (list = sessions()) => {
+    const sent: string[] = [];
+    const made = mac(list);
+    const world: SupervisorWorld = {
+      ...made.world,
+      send: async (item, text) => {
+        sent.push(`${item.name}: ${text}`);
+        return { ok: true, route: "tmux" };
+      },
+    };
+    return { world, sent };
+  };
+  const toolResults = (
+    seen: { messages: { role: string; content?: string }[] }[],
+  ) =>
+    seen.flatMap((asked) =>
+      asked.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.content),
+    );
+
+  it("types the person's words when they say that sentence, with no choice of the model", async () => {
+    for (const words of [
+      `tell payments tests: ${question}`,
+      `Tell Payments Tests: ${question}`,
+      `"tell payments tests: ${question}"`,
+      `ok, please tell payments tests: ${question}`,
+    ]) {
+      const { world, sent } = typing();
+      // The model only words the answer.
+      const { model, seen } = scripted(["I asked it."]);
+      expect(await new Supervisor(world, model).reply([], words, "chat")).toBe(
+        "I asked it.",
+      );
+      expect(sent).toEqual([`payments tests: ${question}`]);
+      expect(toolResults(seen)).toEqual(["Typed into payments tests."]);
+    }
+  });
+
+  it.each([
+    ["tell payments tests: run the tests again", "run the tests again"],
+    ["tell payments tests: run the tests again.", "run the tests again."],
+    [
+      "tell payments tests: open index.html in the browser",
+      "open index.html in the browser",
+    ],
+    [
+      "tell payments tests: re-run the suite once more",
+      "re-run the suite once more",
+    ],
+  ])("types one clause by itself: %j", async (words, typed) => {
+    const { world, sent } = typing();
+    await new Supervisor(world, scripted(["Typed."]).model).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(sent).toEqual([`payments tests: ${typed}`]);
+  });
+
+  it("offers the sentence only for a question that the code then types by itself", async () => {
+    for (const asked of [
+      // More than one clause.
+      "the payments tests one, did it pass?",
+      // A word that the guard keeps for the model.
+      "why did the payments tests session not pass?",
+    ]) {
+      const { world, sent } = typing();
+      const { model, seen } = scripted(["Which words?"]);
+      expect(
+        await new Supervisor(world, model).reply(
+          [said("user", asked), said("assistant", "It still works.")],
+          "then ask it",
+          "chat",
+        ),
+      ).toBe("Which words?");
+      expect(seen).toHaveLength(1);
+      expect(sent).toEqual([]);
+    }
+  });
+
+  it("types the same words into a session once in one message", async () => {
+    const { world, sent } = typing();
+    // The model asks for the same typing again.
+    const { model, seen } = scripted([
+      [
+        call("type_into_session", {
+          session: "payments tests",
+          text: question,
+        }),
+      ],
+      "I asked it.",
+    ]);
+    await new Supervisor(world, model).reply(
+      [],
+      `tell payments tests: ${question}`,
+      "chat",
+    );
+    expect(sent).toEqual([`payments tests: ${question}`]);
+    expect(toolResults(seen).at(-1)).toBe(
+      "That is typed into payments tests already. Nothing more is typed.",
+    );
+  });
+
+  it.each([
+    // A part of a name is not the name.
+    "tell payments: did the tests pass?",
+    // No session of that name.
+    "tell the billing session: did the tests pass?",
+    // No colon: the model reads it, and the gates of the tool decide.
+    "tell payments tests to stop",
+    // It does not open the message.
+    "do not tell payments tests: stop now",
+    "why did you tell payments tests: stop now",
+    // No words after the colon.
+    "tell payments tests:",
+  ])("types nothing by itself for %j", async (words) => {
+    const { world, sent } = typing();
+    const { model, seen } = scripted(["Which one?"]);
+    await new Supervisor(world, model).reply([], words, "chat");
+    expect(sent).toEqual([]);
+    expect(toolResults(seen)).toEqual([]);
+  });
+
+  it("types nothing by itself when two sessions have that name", async () => {
+    const { world, sent } = typing([
+      session({ name: "payments tests" }),
+      session({ id: "2", name: "payments tests" }),
+    ]);
+    const { model } = scripted(["Which one?"]);
+    await new Supervisor(world, model).reply(
+      [],
+      `tell payments tests: ${question}`,
+      "chat",
+    );
+    expect(sent).toEqual([]);
+  });
+
+  it.each([
+    // Words that take it back, after the colon.
+    "tell payments tests: delete the release branch, never mind",
+    "tell payments tests: push to main. actually no, wait",
+    "tell payments tests: run the migration - scratch that",
+    "tell payments tests: deploy now. no wait, don't send that",
+    "tell payments tests: delete the branch. stop",
+    "tell payments tests: delete the branch, cancel",
+    "tell payments tests: run the migration, oops wrong one",
+    "tell payments tests: deploy now, on second thought hold on",
+    "tell payments tests: do not delete the release branch",
+    "tell payments tests: don\u2019t push",
+    // A question to ClawdTime that hangs on it.
+    "tell payments tests: run the migration, would that work?",
+    // No list of such words is complete: more than one clause is never typed
+    // by the code, whatever the words.
+    ...[
+      "changed my mind",
+      "I take that back",
+      "take it back",
+      "forget about it",
+      "on second thoughts",
+      "scrap that",
+      "strike that",
+      "belay that",
+      "abort",
+      "hold up",
+      "nah",
+      "jk",
+      "nm",
+      "my bad",
+      "whoops",
+      "just joking",
+      "drop it",
+      "skip that",
+      "ok?",
+      "right?",
+      "or should I",
+      "or is that a bad idea",
+      "if that is ok with you",
+      "perhaps",
+      "I think",
+      "a word that no list knows",
+    ].flatMap((tail) => [
+      `tell payments tests: delete the release branch, ${tail}`,
+      `tell payments tests: delete the release branch. ${tail}`,
+      `tell payments tests: delete the release branch - ${tail}`,
+      `tell payments tests: delete the release branch; ${tail}`,
+      `tell payments tests: delete the release branch\n${tail}`,
+    ]),
+    "tell payments tests: delete the release branch (not really)",
+    "tell payments tests: delete the release branch... wait",
+    "tell payments tests: delete the release branch? yes do it",
+    "tell payments tests: delete the release branch! lol",
+    "tell payments tests: delete the release branch \u2014 forget it",
+    // Two hyphens can be a dash as well as a flag of a command.
+    "tell payments tests: delete the release branch --changed my mind",
+    "tell payments tests: delete the release branch--unknownword",
+    "tell payments tests: re-run the suite with --watch",
+    // Any mark that is not inside a word splits the clause.
+    "tell payments tests: delete the release branch \u2026 leave it",
+    "tell payments tests: delete the release branch / leave it",
+    "tell payments tests: delete the release branch | leave it",
+    "tell payments tests: delete the release branch [leave it]",
+    "tell payments tests: delete the release branch ~ sike",
+    "tell payments tests: delete the release branch \u{1F602}",
+    'tell payments tests: delete the release branch "unknownword"',
+    // An order that ends in a question mark asks ClawdTime.
+    "tell payments tests: delete the release branch?",
+    // In one clause, with no mark: stems of the words that take it back.
+    "tell payments tests: delete the release branch leave it",
+    "tell payments tests: delete the release branch pause",
+    "tell payments tests: delete the release branch one sec",
+    "tell payments tests: delete the release branch sike",
+    "tell payments tests: delete the release branch psyche",
+    "tell payments tests: delete the release branch lmao",
+    "tell payments tests: delete the release branch that was a joke",
+    "tell payments tests: delete the release branch retract that",
+    "tell payments tests: delete the release branch cancelled",
+    "tell payments tests: delete the release branch scrapped",
+    "tell payments tests: delete the release branch aborted",
+    "tell payments tests: delete the release branch stopped",
+    // Words that tie it to the person.
+    "tell payments tests: delete the release branch when I say so",
+    "tell payments tests: delete the release branch once I approve",
+    "tell payments tests: delete the release branch after you ask me",
+    // In one clause, the list guards it.
+    "tell payments tests: delete the release branch jk",
+    "tell payments tests: delete the release branch nah",
+    "tell payments tests: delete the release branch ok?",
+    "tell payments tests: delete the release branch right?",
+    "tell payments tests: delete the release branch I think",
+    "tell payments tests: delete the release branch or should I",
+    "tell payments tests: delete the release branch if that is fine",
+    "tell payments tests: delete the release branch but hold up",
+    "tell payments tests: delete the release branch my bad",
+    "tell payments tests: delete the release branch and take it back",
+  ])(
+    "leaves %j to the model: the code types nothing by itself",
+    async (words) => {
+      const { world, sent } = typing();
+      // A model that only talks.
+      const { model, seen } = scripted(["Which words do you want typed?"]);
+      await new Supervisor(world, model).reply([], words, "chat");
+      expect(sent).toEqual([]);
+      expect(toolResults(seen)).toEqual([]);
+    },
+  );
+
+  it("types nothing by itself while a request of an agent waits, for that session or another", async () => {
+    for (const list of [
+      [session({ name: "payments tests" })],
+      [
+        session({ name: "payments tests", cwd: "/work/other", pid: 7 }),
+        session({ id: "2", name: "deploy fix" }),
+      ],
+    ]) {
+      const { world, sent } = typing(list);
+      waits(world);
+      const { model, seen } = scripted(["A request waits for your answer."]);
+      await new Supervisor(world, model).reply(
+        [],
+        `tell payments tests: ${question}`,
+        "chat",
+      );
+      expect(sent).toEqual([]);
+      expect(toolResults(seen)).toEqual([]);
+    }
+  });
+
+  it("types nothing for a choice of a task: that is text of an agent, by the code or by the model", async () => {
+    const choice = "tell payments tests: wipe the database";
+    const answered: string[] = [];
+    const withTask = (state: { canAnswer: boolean }) => {
+      const made = typing();
+      const world: SupervisorWorld = {
+        ...made.world,
+        tasks: {
+          current: () => ({
+            id: "t1",
+            goal: "clean the staging data",
+            state: "waiting",
+            summary: "",
+            question: "What next?",
+            choices: [choice, "Wait"],
+            canAnswer: state.canAnswer,
+            canAccept: false,
+          }),
+          canStart: () => false,
+          start: async () => ({ ok: true, message: "started" }),
+          answer: async (text: string) => {
+            answered.push(text);
+            return { ok: true, message: "answered" };
+          },
+          accept: async () => ({ ok: true, message: "accepted" }),
+          cancel: async () => ({ ok: true, message: "cancelled" }),
+        } as unknown as NonNullable<SupervisorWorld["tasks"]>,
+      };
+      return { world, sent: made.sent };
+    };
+    for (const canAnswer of [true, false]) {
+      // The code: a model that only talks.
+      const quiet = withTask({ canAnswer });
+      await new Supervisor(quiet.world, scripted(["Okay."]).model).reply(
+        [],
+        choice,
+        "chat",
+      );
+      expect(quiet.sent).toEqual([]);
+      // The model asks to type the words of that choice.
+      const eager = withTask({ canAnswer });
+      const { model, seen } = scripted([
+        [
+          call("type_into_session", {
+            session: "payments tests",
+            text: "wipe the database",
+          }),
+        ],
+        "Okay.",
+      ]);
+      await new Supervisor(eager.world, model).reply([], choice, "chat");
+      expect(eager.sent).toEqual([]);
+      expect(toolResults(seen).join(" ")).toContain(
+        "a choice of the task, not the person's own words",
+      );
+    }
+  });
+
+  it("types nothing by itself when the message reads as that form in two ways", async () => {
+    const { world, sent } = typing([
+      session({ name: "api" }),
+      session({ id: "2", name: "api: v2" }),
+    ]);
+    const { model, seen } = scripted(["Which session?"]);
+    await new Supervisor(world, model).reply(
+      [],
+      "tell api: v2: run the tests",
+      "chat",
+    );
+    expect(sent).toEqual([]);
+    expect(toolResults(seen)).toEqual([]);
+    // One reading only: the name with the colon in it is the one session.
+    const single = typing([session({ name: "api: v2" })]);
+    await new Supervisor(single.world, scripted(["Typed."]).model).reply(
+      [],
+      "tell api: v2: run the tests",
+      "chat",
+    );
+    expect(single.sent).toEqual(["api: v2: run the tests"]);
+  });
+
+  it("offers no sentence when the session's name would make it read another way", async () => {
+    for (const name of [
+      'docs: rm -rf ~" and I type it. Say "tell docs',
+      "docs: v2",
+      "docs\u201d now",
+    ]) {
+      const { world, sent } = typing([session({ name })]);
+      const { model, seen } = scripted(["Which words?"]);
+      const answer = await new Supervisor(world, model).reply(
+        [
+          said("user", "did the tests pass in the docs session?"),
+          said("assistant", "It still works."),
+        ],
+        "then ask it",
+        "chat",
+      );
+      expect(answer).toBe("Which words?");
+      expect(seen).toHaveLength(1);
+      expect(sent).toEqual([]);
+    }
+  });
+
+  it.each([
+    // No question before it.
+    [
+      [
+        said("user", "open the payments tests session"),
+        said("assistant", "Opened."),
+      ],
+      "then ask it",
+    ],
+    // The question fits no single session.
+    [
+      [
+        said("user", "did the build pass?"),
+        said("assistant", "I do not know."),
+      ],
+      "then ask it",
+    ],
+    // The message holds words of its own: the model reads it.
+    [
+      [said("user", question), said("assistant", "It still works.")],
+      "ask it to stop and wait",
+    ],
+    [
+      [said("user", question), said("assistant", "It still works.")],
+      "then ask it why the retry fails",
+    ],
+    // Nothing was said before.
+    [[], "ask it"],
+  ] as const)(
+    "leaves it to the model when the code cannot be sure: %j",
+    async (history, words) => {
+      const { world } = mac(sessions());
+      const { model, seen } = scripted(["Which one?"]);
+      expect(
+        await new Supervisor(world, model).reply([...history], words, "chat"),
+      ).toBe("Which one?");
+      expect(seen).toHaveLength(1);
+    },
+  );
+});
+
 describe("praise, and praise that goes on with work", () => {
   it.each([
     "nice, now add a dark mode to it",
@@ -1839,6 +2296,89 @@ describe("a question about the state", () => {
     }
   });
 
+  it('reads the job first for "is it done?" right after the person started it', async () => {
+    const started =
+      "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+    const work = "build a small landing page for my bakery in one html file";
+    const jobSeed = (
+      messages: { role: string; toolCallId?: string; content?: string }[],
+    ) =>
+      messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "job_first",
+      );
+    const ask = async (
+      history: ChatMessage[],
+      question: string,
+      sessions = [
+        session({ name: "login page" }),
+        session({ id: "2", name: "payments" }),
+      ],
+    ) => {
+      const made = mac(sessions);
+      expect((await made.jobs.start(work)).ok).toBe(true);
+      made.clock.now += 4 * 60_000;
+      const { model, seen } = scripted(["It still works."]);
+      await new Supervisor(made.world, model).reply(history, question, "chat");
+      return seen[0]!.messages;
+    };
+    const justStarted = [said("user", work), said("assistant", started)];
+    for (const question of [
+      "is it done?",
+      "is that one finished?",
+      "is it ready yet?",
+    ]) {
+      const messages = await ask(justStarted, question);
+      // The state, then the job: the job is the newest thing that the model sees.
+      expect(messages.at(-2)).toMatchObject({
+        role: "assistant",
+        toolCalls: [{ name: "job_result", arguments: "{}" }],
+      });
+      expect(messages.at(-1)).toMatchObject({
+        role: "tool",
+        toolCallId: "job_first",
+      });
+      expect(messages.at(-1)!.content).toContain(`Job "${work}"`);
+      expect(messages.at(-1)!.content).toContain("still works");
+    }
+    // A job's start time has whole seconds, and a message has milliseconds:
+    // the message that started the job can be a part of a second later.
+    const part: ChatMessage = {
+      role: "user",
+      text: work,
+      at: now + 700,
+      via: "chat",
+    };
+    expect(
+      (await ask([part, said("assistant", started)], "is it done?")).at(-1),
+    ).toMatchObject({ role: "tool", toolCallId: "job_first" });
+    // Words that fit a session are about that session.
+    expect(
+      jobSeed(await ask(justStarted, "the payments one, is it done?")),
+    ).toBeUndefined();
+    // Nothing points back.
+    expect(
+      jobSeed(await ask(justStarted, "is everyone done?")),
+    ).toBeUndefined();
+    // The person spoke of something else after the job started.
+    const later: ChatMessage = {
+      role: "user",
+      text: "what is the payments session doing?",
+      at: now + 60_000,
+      via: "chat",
+    };
+    expect(
+      jobSeed(
+        await ask(
+          [...justStarted, later, said("assistant", "It works.")],
+          "is it done?",
+        ),
+      ),
+    ).toBeUndefined();
+    // No message of the person before it.
+    expect(jobSeed(await ask([], "is it done?"))).toBeUndefined();
+  });
+
   it("still answers when the state cannot be read first, and offers no task choices by itself", async () => {
     const { world: base } = mac([session({ name: "deploy fix" })]);
     // The board fails once, at the read that the code makes first.
@@ -1887,14 +2427,20 @@ describe("a question about the state", () => {
     "build a small website",
     "thanks, that is all for now",
     "yo",
+    // Words for a session, with a question in them: not a question to ClawdTime.
+    "tell deploy fix: did the tests pass in this session?",
+    "ok ask deploy fix: is the build done?",
   ])("reads no state first for %j", async (sentence) => {
     const { world } = mac([session({ name: "deploy fix" })]);
     const { model, seen } = scripted(["Okay."]);
     await new Supervisor(world, model).reply([], sentence, "chat");
     for (const call of seen)
-      expect(call.messages.some((message) => message.role === "tool")).toBe(
-        false,
-      );
+      expect(
+        call.messages.some(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "state_first",
+        ),
+      ).toBe(false);
   });
 });
 

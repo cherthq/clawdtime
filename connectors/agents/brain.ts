@@ -1141,11 +1141,87 @@ export function earlierSaid(history: ChatMessage[]): string[] {
     .slice(-earlierLines);
 }
 /**
+ * 'Tell payments tests: did the tests pass?': the form that ClawdTime itself
+ * offers for words to a session. The name stands before a colon and the
+ * words after it. Quotes around the whole message are not part of it. A
+ * message with more than one colon can be read in more than one way: each
+ * reading is given, and the caller takes the message only when one fits.
+ */
+const toldForms = (spoken: string) => {
+  const whole = spoken.trim();
+  const inner = /^["'\u201c\u2018]([\s\S]*)["'\u201d\u2019]$/.exec(whole);
+  const lead =
+    /^(?:(?:please|ok|okay|so|then|now)[,\s]+)*tell\s+([\s\S]+)$/i.exec(
+      (inner ? inner[1]! : whole).trim(),
+    );
+  const forms: { name: string; text: string }[] = [];
+  if (!lead) return forms;
+  const rest = lead[1]!;
+  for (
+    let at = rest.indexOf(":");
+    at >= 0 && at <= 120;
+    at = rest.indexOf(":", at + 1)
+  ) {
+    const name = rest.slice(0, at).trim();
+    const text = rest.slice(at + 1).trim();
+    if (name && text) forms.push({ name, text });
+  }
+  return forms;
+};
+/**
+ * One clause of plain words: letters and digits, with one space between
+ * words, and only ' . _ - / inside a word ("index.html", "re-run"). Every
+ * other mark can end or split a sentence, so it is not one clause: "delete
+ * the branch, never mind", "push to main. Actually no", "deploy now - scratch
+ * that". Marks at the very end split nothing. A final question mark counts
+ * only for words that open as a question: "delete the release branch?" asks
+ * ClawdTime, it is not words for a session.
+ */
+const oneClause = (text: string) => {
+  const whole = text.trim();
+  const body = whole.replace(/[.!?]+$/, "");
+  const word = "[\\p{L}\\p{N}]+(?:['._\\-/][\\p{L}\\p{N}]+)*";
+  return (
+    new RegExp(`^${word}(?: +${word})*$`, "u").test(body) &&
+    (!whole.endsWith("?") ||
+      /^(?:did|do|does|is|are|was|were|has|have|had|can|could|will|would|should|what|why|how|when|where|which|who|whose)\b/i.test(
+        body,
+      ))
+  );
+};
+/**
+ * A word that can take the words back, stop them, turn them around, hedge
+ * them or tie them to the person ("when I say so"), or a question to
+ * ClawdTime that hangs on them. No list of such words is complete: the code
+ * types by itself only words that are one clause, and this reader guards that
+ * one clause. It only sends a message to the slower way, where the model
+ * reads it as before, so it can be wide.
+ */
+const mayTakeBack = (text: string) =>
+  takesBack(text) ||
+  asksAtTheEnd(text) ||
+  /(?:\b(?:no|not|never|nope|nah|nvm|nm|nevermind|oops|whoops|instead|actually|sorry|mistake|wrong|hang on|thoughts?|rather|unless|maybe|perhaps|probably|jk|lol|lmao|haha|mind|back|bad|ok|okay|right|or|if|but|though|however|except|think|guess|just|sike|psych|psyche|oh|hmm|uh|um|eh|sec|second|minute|moment|i|me|my|mine|myself)\b|\b(?:cancel|scrap|scratch|abort|stop|wait|ignor|disregard|forget|forgot|skip|drop|hold|leav|paus|retract|revert|undo|undid|strike|belay|jok|kidd)\w*|n['\u2019\u2018\u00b4\u02bc\u2032`]t\b)/i.test(
+    text,
+  );
+/**
+ * "Then ask it", "tell it": the person wants a session asked or told, and
+ * this message holds no words for it and no name.
+ */
+const asksToAskIt = (text: string) =>
+  /^(?:(?:then|so|ok|okay|well|just|please|yes|yeah)[,\s]+)*(?:(?:can|could|would)\s+you\s+)?(?:ask|tell)\s+(?:it|that|that one|the session|that session|them)(?:\s+(?:then|please|directly))?[.!?]*$/i.test(
+    text.trim(),
+  );
+/**
  * The message is a question about the sessions, the agents, or what waits:
  * the state answers it. An instruction that names a session is not one.
  */
 const asksAboutState = (text: string) =>
   isQuestion(text) &&
+  // "Tell payments tests: did the tests pass?" is words for a session, not a
+  // question to ClawdTime.
+  !/^\s*(?:(?:ok|okay|so|then|please|yes|now)[,\s]+)*(?:tell|ask|say|send|type|reply|answer)\b/i.test(
+    text,
+  ) &&
   /\b(?:status|sessions?|agents?|working|idle|waiting|waits|running|busy|finished|done|ready|completed?|progress|everyone|everybody|up to|doing)\b/i.test(
     text,
   );
@@ -1932,10 +2008,27 @@ export class Supervisor {
           return "The person did not name that session. Ask them which session.";
         if (!saidAsWords(text, spoken))
           return "Only the person's own words are typed. Ask them for the exact text.";
+        // A choice of a task is text that an agent wrote. A message that is
+        // such a choice answers the task, and is not words for a session.
+        const asking = this.world.tasks?.current();
+        if (
+          asking &&
+          !taskIsOver(asking) &&
+          asking.choices.some(
+            (choice) =>
+              spokenWords(choice).join(" ") === spokenWords(spoken).join(" "),
+          )
+        )
+          return "That message is a choice of the task, not the person's own words for a session. Nothing is typed.";
         // Return in a terminal that shows a prompt answers that prompt.
         if (this.waitsOnDesk(session))
           return `${title(session)} has a request that waits for an answer. Answer that request first: nothing is typed into a session that waits.`;
+        // One message types the same words into a session once.
+        const typed = `typed ${session.id} ${text}`;
+        if (turn.done.has(typed))
+          return `That is typed into ${title(session)} already. Nothing more is typed.`;
         const sent = await this.world.send(session, text);
+        if (sent.ok) turn.done.set(typed, "");
         return sent.ok
           ? `Typed into ${title(session)}.`
           : `${title(session)} runs in a terminal that cannot take text from here.`;
@@ -2315,6 +2408,42 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    // "Then ask it", after the person's question about one session. Nothing
+    // is typed: the code says the sentence that sends that question, with the
+    // session's name and the person's own earlier words. The person then says
+    // it, and the gate for typing reads their message as always.
+    if (asksToAskIt(words)) {
+      const question = [...history]
+        .reverse()
+        .find((message) => message.role === "user");
+      if (
+        question &&
+        question.text !== credentialMarker &&
+        question.text.length <= 300 &&
+        isQuestion(question.text)
+      ) {
+        const asked = clean(question.text, 300);
+        let about: SessionPick = { kind: "none" };
+        try {
+          about = this.pick("", asked);
+        } catch {
+          // The board cannot be read: the model answers.
+        }
+        // A name or a question with a quote or a colon in it would make a
+        // sentence that reads another way: the model answers then.
+        const plain = (value: string) => !/["\u201c\u201d\n\r]/.test(value);
+        if (
+          about.kind === "one" &&
+          plain(title(about.session)) &&
+          !title(about.session).includes(":") &&
+          plain(asked) &&
+          // Only a sentence that the code then types by itself is offered.
+          oneClause(asked) &&
+          !mayTakeBack(asked)
+        )
+          return `Say "tell ${title(about.session)}: ${asked}" and I type it.`;
+      }
+    }
     // "Open Claude, and build a page": the person named a coding agent and
     // gave it an instruction for software work. It starts at once, as a
     // direct instruction does, under the same vetoes: the strict reader, no
@@ -2472,11 +2601,88 @@ export class Supervisor {
           },
           { role: "tool", toolCallId: "state_first", content: state },
         );
+        // "Is it done?", when the person's last message before this one
+        // started a job: "it" is that job. The code reads its line too, as
+        // the newest thing that the model sees. Words that fit a session
+        // ("the payments one, is it done?") are about that session.
+        const newest = this.jobsNow(1)[0];
+        const before = [...history]
+          .reverse()
+          .find((message) => message.role === "user");
+        if (
+          newest &&
+          before &&
+          pointsBack(words) &&
+          // A job's start time has whole seconds.
+          newest.startedAt >= Math.floor(before.at / 1000) * 1000 &&
+          this.pick("", words).kind === "none"
+        )
+          messages.push(
+            {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                { id: "job_first", name: "job_result", arguments: "{}" },
+              ],
+            },
+            {
+              role: "tool",
+              toolCallId: "job_first",
+              content: jobLine(newest, this.world.now()),
+            },
+          );
       } catch {
-        // Nothing is seeded.
+        // Nothing more is seeded.
       }
     }
     try {
+      // The person said the form that ClawdTime offers, with the full name of
+      // one session: the code calls the tool that types, with their words. The
+      // gates of that tool decide as for a call of the model, and the model
+      // words the answer. No second round of "should I type it?".
+      // The code does this only where nothing else can own the sentence: no
+      // task, request or computer action waits for an answer (a choice of a
+      // task is text of an agent, not words of the person), the turn is open,
+      // and the message reads as that form in one way only.
+      const waitingTask = this.world.tasks?.current();
+      const fits =
+        turn.closed ||
+        hasDecisionTarget() ||
+        computerApproval() !== null ||
+        (waitingTask && !taskIsOver(waitingTask))
+          ? []
+          : toldForms(words).flatMap((form) =>
+              (this.world.board()?.sessions ?? [])
+                .filter(
+                  (session) =>
+                    title(session).toLowerCase() === form.name.toLowerCase(),
+                )
+                .map((session) => ({ session, text: form.text })),
+            );
+      // The words after the colon are one clause, and no word in it can take
+      // it back or hedge it. Anything more goes to the model.
+      if (
+        fits.length === 1 &&
+        oneClause(fits[0]!.text) &&
+        !mayTakeBack(fits[0]!.text)
+      ) {
+        const call: ToolCall = {
+          id: "tell_first",
+          name: "type_into_session",
+          arguments: JSON.stringify({
+            session: title(fits[0]!.session),
+            text: fits[0]!.text,
+          }),
+        };
+        messages.push(
+          { role: "assistant", content: "", toolCalls: [call] },
+          {
+            role: "tool",
+            toolCallId: call.id,
+            content: (await this.run(call, words, via, turn)).slice(0, 6000),
+          },
+        );
+      }
       for (let step = 0; step < 6; step++) {
         const task = this.world.tasks?.current();
         // Only authoritative flags/counts enter this instruction. Request text
