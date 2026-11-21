@@ -59,7 +59,8 @@ const temporary = () => {
   return path;
 };
 
-const now = Date.UTC(2026, 10, 21, 12);
+/** The clock of the command in these tests. It is far from the real time, which the real service uses. */
+const now = Date.UTC(2020, 0, 1, 12);
 const credential = "c".repeat(48);
 const fingerprint = "a".repeat(64);
 
@@ -139,14 +140,28 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(value));
 };
-/** Answers the first read as the instance that the files name. */
+/**
+ * Answers the two reads that come first: the state, as the instance that the
+ * files name, and the chat, with or without a language model.
+ */
 const ready = (
   seen: Seen,
   response: ServerResponse,
-  instanceId = "instance-1",
+  values: { instanceId?: string; model?: boolean } = {},
 ) => {
   if (seen.method === "GET" && seen.path === "/desktop/state") {
-    json(response, 200, { version: 1, instanceId });
+    json(response, 200, {
+      version: 1,
+      instanceId: values.instanceId ?? "instance-1",
+    });
+    return true;
+  }
+  if (seen.method === "GET" && seen.path === "/desktop/chat") {
+    json(response, 200, {
+      version: 1,
+      model: values.model ?? true,
+      messages: [],
+    });
     return true;
   }
   return false;
@@ -166,7 +181,7 @@ const localBrain = () => {
 async function chat(
   env: Record<string, string | undefined>,
   words: string[],
-  model = localBrain(),
+  model: ReturnType<typeof localBrain> | null = localBrain(),
 ) {
   const lines: string[] = [];
   await agentsCli(["--supervisor", "chat", ...words], {
@@ -177,6 +192,8 @@ async function chat(
   });
   return { lines, model };
 }
+const paths = (requests: Seen[]) =>
+  requests.map((seen) => `${seen.method} ${seen.path}`);
 
 describe("where the chat command looks for the desktop service", () => {
   it("takes the named folder, or the folder desktop in the state folder", () => {
@@ -281,6 +298,8 @@ describe("where the chat command looks for the desktop service", () => {
 });
 
 describe("clawdtime chat TEXT with a desktop service", () => {
+  const own = "The command answered by itself.";
+
   it("hands the text to the service once, with the panel credential, and prints its answer", async () => {
     const service = await madeUpService((seen, response) => {
       if (ready(seen, response)) return;
@@ -302,19 +321,21 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       ["click", "the", "blue", "Send", "button"],
     );
     expect(lines).toEqual(["Started. I look at the screen."]);
-    expect(
-      service.requests.map((seen) => `${seen.method} ${seen.path}`),
-    ).toEqual(["GET /desktop/state", "POST /desktop/chat"]);
+    expect(paths(service.requests)).toEqual([
+      "GET /desktop/state",
+      "GET /desktop/chat",
+      "POST /desktop/chat",
+    ]);
     expect(
       service.requests.every(
         (seen) => seen.authorization === `Bearer ${credential}`,
       ),
     ).toBe(true);
-    expect(JSON.parse(service.requests[1]!.body)).toEqual({
+    expect(JSON.parse(service.requests[2]!.body)).toEqual({
       text: "click the blue Send button",
     });
     // The command's own brain did nothing, and kept no line of the conversation.
-    expect(model.complete).not.toHaveBeenCalled();
+    expect(model!.complete).not.toHaveBeenCalled();
     expect(existsSync(join(state, "agents", "chat.jsonl"))).toBe(false);
     // The credential is in nothing that was printed.
     expect(lines.join("\n")).not.toContain(credential);
@@ -333,7 +354,7 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       ["what needs me?"],
     );
     expect(lines).toEqual(["From the service."]);
-    expect(model.complete).not.toHaveBeenCalled();
+    expect(model!.complete).not.toHaveBeenCalled();
   });
 
   it("cuts the text at 2000 characters, as the route takes it", async () => {
@@ -349,10 +370,26 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       kind: "answered",
       text: "Taken.",
     });
-    expect(JSON.parse(service.requests[1]!.body).text).toHaveLength(2000);
+    expect(JSON.parse(service.requests[2]!.body).text).toHaveLength(2000);
     // Words that are empty go nowhere.
     expect(await sayToDesktop(system, "   ")).toEqual({ kind: "absent" });
-    expect(service.requests).toHaveLength(2);
+    expect(service.requests).toHaveLength(3);
+  });
+
+  it("never takes an option of the command for a message", async () => {
+    const service = await madeUpService((seen, response) => {
+      if (ready(seen, response)) return;
+      json(response, 200, { reply: { role: "assistant", text: "Taken." } });
+    });
+    for (const words of [["--recent", "12"], ["-x"], ["--help"]])
+      await chat(
+        {
+          CLAWDTIME_CONFIG_HOME: temporary(),
+          CLAWDTIME_DESKTOP_STATE: described(service.origin),
+        },
+        words,
+      );
+    expect(service.requests).toEqual([]);
   });
 
   it("answers by itself when no service is described", async () => {
@@ -360,8 +397,8 @@ describe("clawdtime chat TEXT with a desktop service", () => {
     const { lines, model } = await chat({ CLAWDTIME_CONFIG_HOME: state }, [
       "hello there",
     ]);
-    expect(lines).toEqual(["The command answered by itself."]);
-    expect(model.complete).toHaveBeenCalledTimes(1);
+    expect(lines).toEqual([own]);
+    expect(model!.complete).toHaveBeenCalledTimes(1);
     expect(existsSync(join(state, "agents", "chat.jsonl"))).toBe(true);
   });
 
@@ -378,15 +415,36 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       ["hello there"],
     );
     const took = Date.now() - started;
-    expect(lines).toEqual(["The command answered by itself."]);
-    expect(model.complete).toHaveBeenCalledTimes(1);
+    expect(lines).toEqual([own]);
+    expect(model!.complete).toHaveBeenCalledTimes(1);
     expect(took).toBeGreaterThanOrEqual(1900);
     expect(took).toBeLessThan(6000);
     // Only the first read went out. The message itself never left.
-    expect(
-      silent.requests.map((seen) => `${seen.method} ${seen.path}`),
-    ).toEqual(["GET /desktop/state"]);
+    expect(paths(silent.requests)).toEqual(["GET /desktop/state"]);
   }, 15000);
+
+  it("gives both first reads 2 seconds together, not 2 seconds each", async () => {
+    // The state comes at once. The chat never comes.
+    const half = await madeUpService((seen, response) => {
+      if (seen.path === "/desktop/state") ready(seen, response);
+    });
+    const started = Date.now();
+    expect(
+      await sayToDesktop(
+        {
+          env: { CLAWDTIME_DESKTOP_STATE: described(half.origin) },
+          home: "/Users/tester",
+        },
+        "hello there",
+        { connectMs: 300 },
+      ),
+    ).toEqual({ kind: "absent" });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(paths(half.requests)).toEqual([
+      "GET /desktop/state",
+      "GET /desktop/chat",
+    ]);
+  });
 
   it("answers by itself when nothing listens at the address, when the read is refused, and when another instance answers", async () => {
     // A port that was free a moment ago: the connection is refused at once.
@@ -401,7 +459,7 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       },
       ["hello there"],
     );
-    expect(closed.lines).toEqual(["The command answered by itself."]);
+    expect(closed.lines).toEqual([own]);
     const refusing = await madeUpService((_seen, response) =>
       json(response, 401, { error: "Desktop authorization required." }),
     );
@@ -412,10 +470,10 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       },
       ["hello there"],
     );
-    expect(refused.lines).toEqual(["The command answered by itself."]);
+    expect(refused.lines).toEqual([own]);
     expect(refusing.requests).toHaveLength(1);
     const other = await madeUpService((seen, response) => {
-      ready(seen, response, "another-instance");
+      ready(seen, response, { instanceId: "another-instance" });
     });
     const mismatch = await chat(
       {
@@ -424,13 +482,13 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       },
       ["hello there"],
     );
-    expect(mismatch.lines).toEqual(["The command answered by itself."]);
-    expect(other.requests.map((seen) => seen.path)).toEqual(["/desktop/state"]);
+    expect(mismatch.lines).toEqual([own]);
+    expect(paths(other.requests)).toEqual(["GET /desktop/state"]);
   });
 
-  it("answers by itself when the service has no chat", async () => {
+  it("answers by itself when the service has no chat, and the message never leaves", async () => {
     const boardOff = await madeUpService((seen, response) => {
-      if (ready(seen, response)) return;
+      if (seen.path === "/desktop/state") return void ready(seen, response);
       json(response, 404, {});
     });
     const { lines, model } = await chat(
@@ -440,8 +498,36 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       },
       ["hello there"],
     );
-    expect(lines).toEqual(["The command answered by itself."]);
-    expect(model.complete).toHaveBeenCalledTimes(1);
+    expect(lines).toEqual([own]);
+    expect(model!.complete).toHaveBeenCalledTimes(1);
+    expect(paths(boardOff.requests)).toEqual([
+      "GET /desktop/state",
+      "GET /desktop/chat",
+    ]);
+  });
+
+  it("answers by itself when the service has no language model and the command has one", async () => {
+    const plain = await madeUpService((seen, response) => {
+      if (ready(seen, response, { model: false })) return;
+      json(response, 200, {
+        reply: { role: "assistant", text: "A plain answer of the service." },
+      });
+    });
+    const env = () => ({
+      CLAWDTIME_CONFIG_HOME: temporary(),
+      CLAWDTIME_DESKTOP_STATE: described(plain.origin),
+    });
+    // The command has a language model: it answers better than a service that only tells the state.
+    const smart = await chat(env(), ["what is the worst bug today?"]);
+    expect(smart.lines).toEqual([own]);
+    expect(smart.model!.complete).toHaveBeenCalledTimes(1);
+    expect(plain.requests.filter((seen) => seen.method === "POST")).toEqual([]);
+    // The command has none either: the service has the task, so it answers.
+    const none = await chat(env(), ["how is the task?"], null);
+    expect(none.lines).toEqual(["A plain answer of the service."]);
+    expect(
+      plain.requests.filter((seen) => seen.method === "POST"),
+    ).toHaveLength(1);
   });
 
   it("says that no answer came, and does not say the message again, when the service took it and went silent", async () => {
@@ -462,7 +548,7 @@ describe("clawdtime chat TEXT with a desktop service", () => {
     expect(
       dropping.requests.filter((seen) => seen.method === "POST"),
     ).toHaveLength(1);
-    expect(dropped.model.complete).not.toHaveBeenCalled();
+    expect(dropped.model!.complete).not.toHaveBeenCalled();
     // The answer takes too long.
     const slow = await madeUpService((seen, response) => {
       ready(seen, response);
@@ -480,6 +566,7 @@ describe("clawdtime chat TEXT with a desktop service", () => {
     // An answer that the service refuses, or one of another shape.
     for (const reply of [
       (response: ServerResponse) => json(response, 400, { error: "Refused." }),
+      (response: ServerResponse) => json(response, 404, {}),
       (response: ServerResponse) => json(response, 200, { reply: null }),
       (response: ServerResponse) =>
         json(response, 200, { reply: { role: "assistant", text: "" } }),
@@ -582,6 +669,11 @@ it("real desktop service answers clawdtime chat TEXT, and the command answers by
           signal: AbortSignal.timeout(3000),
         })
       ).json();
+    type Kept = {
+      model: boolean;
+      messages: { role: string; text: string; via: string; at: number }[];
+    };
+    const kept = async () => (await read("/desktop/chat")) as Kept;
     // A service that a test started has no hands and no engine for computer work.
     expect(await read("/desktop/computer")).toMatchObject({
       enabled: false,
@@ -591,21 +683,20 @@ it("real desktop service answers clawdtime chat TEXT, and the command answers by
       command: null,
       run: { active: false },
     });
-    expect(
-      ((await read("/desktop/chat")) as { messages: unknown[] }).messages,
-    ).toEqual([]);
+    expect(await kept()).toMatchObject({ model: false, messages: [] });
 
-    // The folder by name, from a command with another state folder of its own.
+    // The folder by name, from a command with another state folder of its
+    // own. Neither side has a language model, so the service answers.
     const commandState = temporary();
     const named = await chat(
       { CLAWDTIME_CONFIG_HOME: commandState, CLAWDTIME_DESKTOP_STATE: desk },
       ["what", "needs", "me?"],
+      null,
     );
     expect(named.lines).toHaveLength(1);
-    expect(named.model.complete).not.toHaveBeenCalled();
+    // The command kept no line: the conversation is the service's.
     expect(existsSync(join(commandState, "agents", "chat.jsonl"))).toBe(false);
-    type Kept = { messages: { role: string; text: string; via: string }[] };
-    const first = (await read("/desktop/chat")) as Kept;
+    const first = await kept();
     expect(first.messages.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -616,46 +707,61 @@ it("real desktop service answers clawdtime chat TEXT, and the command answers by
     });
     // What the command printed is the answer of the service, word for word.
     expect(named.lines[0]).toBe(first.messages[1]!.text);
-    expect(named.lines[0]).not.toBe("The command answered by itself.");
     expect(named.lines[0]).not.toContain(token);
 
-    // With no name: the folder desktop in the state folder.
-    const found = await chat({ CLAWDTIME_CONFIG_HOME: serviceState }, [
-      "how is the task?",
-    ]);
-    expect(found.model.complete).not.toHaveBeenCalled();
-    const second = (await read("/desktop/chat")) as Kept;
+    // With no name: the folder desktop in the state folder. The lines have
+    // the time of the service, not the made-up time of the command.
+    const found = await chat(
+      { CLAWDTIME_CONFIG_HOME: serviceState },
+      ["how is the task?"],
+      null,
+    );
+    const second = await kept();
     expect(second.messages).toHaveLength(4);
     expect(second.messages[2]).toMatchObject({ text: "how is the task?" });
     expect(found.lines).toEqual([second.messages[3]!.text]);
+    for (const message of second.messages)
+      expect(Math.abs(message.at - Date.now())).toBeLessThan(120_000);
 
     // A UI request starts nothing in this service, and no command waits for hands.
-    const ui = await chat({ CLAWDTIME_CONFIG_HOME: serviceState }, [
-      "click the blue Send button",
-    ]);
+    const ui = await chat(
+      { CLAWDTIME_CONFIG_HOME: serviceState },
+      ["click the blue Send button"],
+      null,
+    );
     expect(ui.lines).toHaveLength(1);
     expect(ui.lines[0]).not.toMatch(/^Started\./);
+    expect((await kept()).messages).toHaveLength(6);
     expect(await read("/desktop/hands/next?after=0")).toMatchObject({
       command: null,
       run: { active: false },
     });
 
+    // A command with a language model of its own keeps the message: this
+    // service could only tell the state.
+    const smart = await chat(
+      { CLAWDTIME_CONFIG_HOME: commandState, CLAWDTIME_DESKTOP_STATE: desk },
+      ["hello there"],
+    );
+    expect(smart.lines).toEqual(["The command answered by itself."]);
+    expect((await kept()).messages).toHaveLength(6);
+
     // A command that a test runs, with no folder by name, stays with itself.
     const guarded = await chat(
-      { CLAWDTIME_CONFIG_HOME: serviceState, VITEST: "true" },
+      { CLAWDTIME_CONFIG_HOME: temporary(), VITEST: "true" },
       ["hello there"],
     );
     expect(guarded.lines).toEqual(["The command answered by itself."]);
-    expect(guarded.model.complete).toHaveBeenCalledTimes(1);
+    expect(guarded.model!.complete).toHaveBeenCalledTimes(1);
 
     // The service stops. The command answers by itself again.
     await Promise.all(children.map(closeOwned));
     const after = await chat(
-      { CLAWDTIME_CONFIG_HOME: commandState, CLAWDTIME_DESKTOP_STATE: desk },
+      { CLAWDTIME_CONFIG_HOME: temporary(), CLAWDTIME_DESKTOP_STATE: desk },
       ["hello there"],
     );
     expect(after.lines).toEqual(["The command answered by itself."]);
-    expect(after.model.complete).toHaveBeenCalledTimes(1);
+    expect(after.model!.complete).toHaveBeenCalledTimes(1);
   } finally {
     for (const [name, value] of Object.entries(previous))
       if (value === undefined) delete process.env[name];

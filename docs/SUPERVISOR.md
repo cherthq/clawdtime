@@ -455,18 +455,33 @@ How the command finds the service:
    only, in a folder for its owner only. The files must agree, the address
    must be `http://127.0.0.1` with a port, and the process that wrote them must
    run.
-3. It reads `GET /desktop/state` with the panel credential and waits 2 seconds
-   at most. The answer must name the same instance as the files.
+3. It reads `GET /desktop/state` and `GET /desktop/chat` with the panel
+   credential, and waits 2 seconds at most for both. The state must name the
+   same instance as the files. The chat says whether the service has a
+   language model.
 4. It sends the text once, to `POST /desktop/chat`, and prints the answer. The
    text is cut at 2,000 characters.
 
-The command answers by itself, as it does with no service, when one of the
-steps 1 to 3 fails, and when the service has no chat (`--agents false`).
+The command answers by itself, as it does with no service, in these cases:
+
+- One of the steps 1 to 3 fails.
+- The service has no chat (`--agents false`).
+- The service has no language model and the command has a key for one. Such a
+  service could only tell the state, so the command alone answers better.
+  Start the desktop service with `CLAWDTIME_OPENAI_API_KEY` in its
+  environment and it takes the messages.
+
+Words that start with a dash are an option of the command, such as
+`clawdtime chat --recent 12`. They are never sent as a message.
 
 After step 3 the message may be with the service. When no answer comes back
 then, within 110 seconds, the command says so and stops. It does not send the
 message again and it does not answer it by itself: two brains must not act on
 one sentence.
+
+What changes for a call when the service answers: a job that the caller asks
+for runs in the project of the desktop service, not in the folder of the line,
+and the language model is the one of the service.
 
 The credential goes to the loopback address of the service and nowhere else.
 It is never printed.

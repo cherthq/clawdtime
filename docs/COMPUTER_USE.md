@@ -373,10 +373,10 @@ the real screen, draws the cursor or calls a language model.
   board.
 - `hands` (10), `journal` (12), `planner` (12), `cli` (9).
 
-12 tests in `tests/connectors-agents-desktop-chat.test.ts`: where
+15 tests in `tests/connectors-agents-desktop-chat.test.ts`: where
 `clawdtime chat TEXT` looks for the service, each reason to answer by itself,
-the message that is never said twice, and one real desktop service that this
-test started.
+an option that is never sent as a message, the message that is never said
+twice, and one real desktop service that this test started.
 
 50 pure tests of the panel's side in `mac/Tests/TaskPanelCoreTests/`: the
 contract, the key plans, the picture and the elements, and for the cursor the

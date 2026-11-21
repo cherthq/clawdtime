@@ -811,14 +811,22 @@ export async function supervisorCli(
     return;
   }
 
-  if (group === "chat" && args.length) {
+  if (group === "chat" && args.length && !args[0]!.startsWith("-")) {
     // One message: when the desktop service runs, it answers. It has the
     // task, the engine for computer work and the conversation of the panel,
     // and this command has none of them. With no service, or one that does
-    // not answer its first read in two seconds, this command answers as
-    // before. A message that may be with the service is never said again
-    // here: two brains must not act on one sentence.
+    // not answer its first reads in two seconds, this command answers as
+    // before. So it does when the service has no language model and this
+    // command has one. A message that may be with the service is never said
+    // again here: two brains must not act on one sentence. Words that start
+    // with a dash are an option of this command, never a message.
     const said = await sayToDesktop(system, args.join(" "), {
+      ownModel:
+        deps.model !== undefined
+          ? deps.model !== null
+          : !!(
+              system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY
+            ),
       ...(deps.request ? { request: deps.request } : {}),
     });
     if (said.kind !== "absent") return print(said.text);

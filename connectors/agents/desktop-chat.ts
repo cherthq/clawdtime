@@ -13,6 +13,10 @@
  * or else the folder `desktop` in the state folder of ClawdTime
  * (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`).
  *
+ * A service with no language model does not get the message of a command
+ * that has one: it could only tell the state, and the command alone answers
+ * better, as it did before.
+ *
  * The rule for a message that may already be with the service: it is never
  * sent a second time and never answered by the command's own brain. Two
  * brains must not act on one sentence.
@@ -26,7 +30,7 @@ import { readDesktopPrivateJSON } from "../../src/control/task-desktop-config.js
 import { stateRoot } from "./hooks.js";
 import type { System } from "./system.js";
 
-/** How long the service has to answer the first read. After that the command answers by itself. */
+/** How long the service has to answer the two reads that come first. After that the command answers by itself. */
 export const desktopConnectMs = 2000;
 /** How long the answer to the message may take. The language model of the service is in it. */
 export const desktopAnswerMs = 110_000;
@@ -57,6 +61,7 @@ const ownerSchema = z.object({ pid: z.number().int().positive() }).strict();
 const stateSchema = z
   .object({ instanceId: z.string().min(1).max(200) })
   .passthrough();
+const chatSchema = z.object({ model: z.boolean() }).passthrough();
 const replySchema = z
   .object({
     reply: z
@@ -145,8 +150,9 @@ export type DesktopAnswer =
 
 /**
  * Hands one message to the desktop service that runs, and gives its answer.
- * `absent` when no service runs, when it does not answer its first read
- * within `connectMs`, or when it has no chat. It never throws.
+ * `absent` when no service runs, when it does not answer its two first reads
+ * within `connectMs`, when it has no chat, and when it has no language model
+ * while the command has one. It never throws.
  */
 export async function sayToDesktop(
   system: Pick<System, "env" | "home">,
@@ -156,6 +162,8 @@ export async function sayToDesktop(
     connectMs?: number;
     answerMs?: number;
     exists?: (pid: number) => boolean;
+    /** The command has a language model of its own. */
+    ownModel?: boolean;
   } = {},
 ): Promise<DesktopAnswer> {
   const absent: DesktopAnswer = { kind: "absent" };
@@ -167,18 +175,27 @@ export async function sayToDesktop(
   if (!service) return absent;
   const request = options.request ?? fetch;
   const headers = { authorization: `Bearer ${service.token}` };
-  // The first read shows that the service is there, that it takes this
-  // credential and that it is the instance that wrote the files. It changes
-  // nothing, so with no answer in time the command can answer by itself.
-  try {
-    const response = await request(`${service.origin}/desktop/state`, {
+  // Two reads come first, within one time limit. They show that the service
+  // is there, that it takes this credential, that it is the instance that
+  // wrote the files, and that it has a chat. They change nothing, so with no
+  // answer in time the command can answer by itself.
+  const until = Date.now() + (options.connectMs ?? desktopConnectMs);
+  const read = (path: string) =>
+    request(`${service.origin}${path}`, {
       headers,
       redirect: "error",
-      signal: AbortSignal.timeout(options.connectMs ?? desktopConnectMs),
+      signal: AbortSignal.timeout(Math.max(1, until - Date.now())),
     });
-    if (!response.ok) return absent;
-    const state = stateSchema.parse(await response.json());
-    if (state.instanceId !== service.instanceId) return absent;
+  try {
+    const state = await read("/desktop/state");
+    if (!state.ok) return absent;
+    if (stateSchema.parse(await state.json()).instanceId !== service.instanceId)
+      return absent;
+    // A service with its agent board off has no chat: the route is not there.
+    const chat = await read("/desktop/chat");
+    if (!chat.ok) return absent;
+    const { model } = chatSchema.parse(await chat.json());
+    if (!model && options.ownModel) return absent;
   } catch {
     return absent;
   }
@@ -192,9 +209,6 @@ export async function sayToDesktop(
       redirect: "error",
       signal: AbortSignal.timeout(options.answerMs ?? desktopAnswerMs),
     });
-    // A service with its agent board off has no chat: the route is not there,
-    // so nothing took the message.
-    if (response.status === 404) return absent;
     if (!response.ok) return lost;
     const answer = replySchema.parse(await response.json()).reply.text.trim();
     return answer ? { kind: "answered", text: answer } : lost;
