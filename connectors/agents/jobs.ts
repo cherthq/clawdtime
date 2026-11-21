@@ -42,6 +42,8 @@ export interface JobFacts {
   result: string | null;
   /** The same answer with its lines kept, for a text message. */
   text?: string | null;
+  /** The job has not started its agent yet: it waits for the job before it. */
+  waiting?: boolean;
 }
 
 /** What one job may carry besides its words. */
@@ -57,6 +59,12 @@ export interface JobStartOptions {
   said?: string[];
   /** The request has a word that points back ("that one", "it", "again"): the answer of the job before can help. */
   refersBack?: boolean;
+  /**
+   * The request is more work on the thing of the job before ("add a form to
+   * it", "make them blue"). When that job still runs, this one waits for it.
+   * It is narrower than refersBack: a wait costs the person time.
+   */
+  followsUp?: boolean;
 }
 
 /** One job that waits for the person's yes. */
@@ -108,6 +116,9 @@ const contextLineLength = 400;
 
 /** One word of a shell script, in single quotes. A quote in a path cannot end them. */
 const quoted = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+/** In the folder of a job that waits for the job before it: written at the start, and when its script ended the wait. */
+const waitsFile = "waits";
+const waitOverFile = "wait-over";
 /** How many times the wait of a job looks for the answer of the job before it: two seconds each, two hours in all. */
 const waitSteps = 3600;
 /**
@@ -116,7 +127,7 @@ const waitSteps = 3600;
  * In a terminal, a key ends the wait: the person can start the job at once.
  * The wait ends by itself after two hours, as long as a job counts as running.
  */
-export const waitBlock = (answer: string) =>
+export const waitBlock = (answer: string, over: string) =>
   [
     `if [[ ! -e ${quoted(answer)} ]]; then`,
     "  print -r -- 'This job waits for the job before it. Press Return to start it now.'",
@@ -126,6 +137,8 @@ export const waitBlock = (answer: string) =>
     "    waited=$((waited + 1))",
     "  done",
     "fi",
+    // The wait is over: the state of the job says "works" from here.
+    `: > ${quoted(over)}`,
     "",
   ].join("\n");
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -228,19 +241,25 @@ export class Jobs implements JobPort {
     // request such as "fix that one" can be about it.
     // Only when the request points back, and never an answer that holds a
     // credential: ClawdTime does not say such an answer, and does not hand it on.
-    const last = options.refersBack ? this.recent(1)[0] : undefined;
+    const newest =
+      options.refersBack || options.followsUp ? this.recent(1)[0] : undefined;
+    const last = options.refersBack ? newest : undefined;
     const lastAnswer =
       last?.done && this.now() - last.startedAt < beforeMs
         ? join(this.folder, last.id, "result.md")
         : null;
     const before =
       lastAnswer && !this.holdsSecret(lastAnswer) ? lastAnswer : null;
-    // The job before this one still runs, and this request points back at
-    // it. Two sessions that change the same files at one time lose work, so
-    // this job waits in its own window until that job wrote its answer.
+    // The job before this one still runs, and this request is more work on
+    // its thing. Two sessions that change the same files at one time lose
+    // work, so this job waits in its own window until that job wrote its
+    // answer.
     const waitsFor =
-      last && !last.done && this.now() - last.startedAt < runningMs
-        ? join(this.folder, last.id, "result.md")
+      options.followsUp &&
+      newest &&
+      !newest.done &&
+      this.now() - newest.startedAt < runningMs
+        ? join(this.folder, newest.id, "result.md")
         : null;
     const stamp = new Date(this.now())
       .toISOString()
@@ -293,13 +312,16 @@ export class Jobs implements JobPort {
       `${text}\n\nWhen you are done, write your answer to the file ${result} as plain text, six short lines at most. It is read aloud on a phone call or sent as a text message, so use plain words and no table. When the job makes something to open, such as a link, put it on a line of its own.\n${refers}`,
       { mode: 0o600 },
     );
+    // A job that waits says so in its state, until its script ends the wait.
+    if (waitsFor)
+      writeFileSync(join(directory, waitsFile), "", { mode: 0o600 });
     const script = join(directory, "start.command");
     // Only paths that this program made stand in the script. The job stays in its file.
     // When the agent is missing, the script writes that as the answer: the
     // job then ends with a true sentence, and holds no place for two hours.
     writeFileSync(
       script,
-      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor ? waitBlock(waitsFor) : ""}${agents[agent](quoted(prompt))}\n`,
+      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor ? waitBlock(waitsFor, join(directory, waitOverFile)) : ""}${agents[agent](quoted(prompt))}\n`,
       { mode: 0o700 },
     );
     chmodSync(script, 0o700);
@@ -354,6 +376,7 @@ export class Jobs implements JobPort {
         ...(options.agent ? { agent: options.agent } : {}),
         said: (options.said ?? []).filter((line) => !looksSecret(line)),
         refersBack: options.refersBack === true,
+        followsUp: options.followsUp === true,
       },
       at: this.now(),
     };
@@ -372,7 +395,12 @@ export class Jobs implements JobPort {
       const value = JSON.parse(readFileSync(this.offerFile, "utf8")) as {
         job?: unknown;
         at?: unknown;
-        options?: { agent?: unknown; said?: unknown; refersBack?: unknown };
+        options?: {
+          agent?: unknown;
+          said?: unknown;
+          refersBack?: unknown;
+          followsUp?: unknown;
+        };
       };
       const age = this.now() - Number(value.at);
       if (
@@ -399,6 +427,7 @@ export class Jobs implements JobPort {
             ? said.filter((line): line is string => typeof line === "string")
             : [],
           refersBack: value.options?.refersBack === true,
+          followsUp: value.options?.followsUp === true,
         },
       };
     };
@@ -474,6 +503,11 @@ export class Jobs implements JobPort {
         ),
         startedAt: Number.isFinite(startedAt) ? startedAt : 0,
         done: answer !== null,
+        ...(answer === null &&
+        read(waitsFile, 1) !== null &&
+        read(waitOverFile, 1) === null
+          ? { waiting: true }
+          : {}),
         result:
           answer === null
             ? null

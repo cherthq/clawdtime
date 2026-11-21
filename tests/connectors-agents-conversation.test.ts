@@ -1737,20 +1737,58 @@ describe("more work on a job that still runs", () => {
       `[[ ! -e '${join(made.folder, made.ids()[0]!, "result.md")}' ]]`,
     );
     expect(made.file("prompt.txt")).toContain("also add a contact form to it");
+    // The state says that the second job waits, not that it works.
+    const { model, seen } = scripted(["One works, one waits."]);
+    await new Supervisor(made.world, model).reply(
+      [],
+      "what are my jobs doing?",
+      "chat",
+    );
+    const state = seen[0]!.messages.find(
+      (message) => message.role === "tool",
+    )!.content!;
+    expect(state).toContain(
+      'Job "also add a contact form to it", started 0s ago, has not begun: it waits for the job before it.',
+    );
+    expect(state).toContain(`Job "${work}", started 1m ago, still works.`);
   });
 
-  it("starts beside it when the message does not point back", async () => {
+  it.each([
+    "check which lines are healthy and give me a short list",
+    // "One" counts no thing of the job before.
+    "bro just make one landing page for the cafe na, in one html file",
+    "build the same page for the cafe as last time",
+    "write tests for the login page before the release",
+  ])("starts beside it for other work: %j", async (words) => {
     const made = mac();
     expect((await made.jobs.start(work)).ok).toBe(true);
     made.clock.now += 60_000;
     expect(
       await new Supervisor(made.world, wantsJob().model).reply(
         [said("user", work), said("assistant", started)],
-        "check which lines are healthy and give me a short list",
+        words,
         "chat",
       ),
     ).toBe(started);
     expect(made.file("start.command")).not.toContain("waits for the job");
+  });
+
+  it.each([
+    "also add a contact form to it",
+    "then make them blue",
+    "now fix that one",
+    "add a footer to those",
+  ])("waits for it for more work on its thing: %j", async (words) => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, wantsJob().model).reply(
+        [said("user", work), said("assistant", started)],
+        words,
+        "chat",
+      ),
+    ).toBe(waiting);
   });
 });
 

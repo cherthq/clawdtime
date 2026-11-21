@@ -1130,6 +1130,15 @@ export function agentNamed(spoken: string): JobAgent | null {
   return out ? otherAgent(out) : null;
 }
 /** The person's sentence can be about something from before: it has a word that points back. */
+/**
+ * The sentence is more work on a thing from before: "add a form to it",
+ * "make them blue", "fix that one". A job that still runs on that thing is
+ * then waited for. Narrower than pointsBack: "one html file", "the last
+ * step" and "the same way" point at nothing that a job makes, and a wait
+ * costs the person time.
+ */
+const followsUp = (spoken: string) =>
+  /\b(?:it|them|those|these|that one|this one)\b/i.test(spoken);
 const pointsBack = (spoken: string) =>
   /\b(?:it|that|this|those|these|them|one|ones|same|again|previous|last|earlier|before|above|there)\b/i.test(
     spoken,
@@ -1263,7 +1272,9 @@ function jobLine(job: JobFacts, now: number) {
   const head = `Job "${clean(job.job, 120)}", started ${elapsed(job.startedAt, now)} ago`;
   return job.done
     ? `${head}, is done. Its answer: ${clean(job.result ?? "", 600)}`
-    : `${head}, still works.`;
+    : job.waiting
+      ? `${head}, has not begun: it waits for the job before it.`
+      : `${head}, still works.`;
 }
 /** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
 const modelSilent =
@@ -1678,6 +1689,7 @@ export class Supervisor {
         .slice(-6)
         .map((message) => message.text),
       refersBack: pointsBack(spoken),
+      followsUp: followsUp(spoken),
     };
   }
   /** What the person hears in a turn that decides no request. */

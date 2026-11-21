@@ -611,7 +611,9 @@ describe("a job that follows up on a job that still runs", () => {
     const { jobs, clock, calls, folder, ids, file } = made();
     expect((await jobs.start(first)).said).toBe(atOnce);
     clock.now += 30_000;
-    expect(await jobs.start(second, { refersBack: true })).toEqual({
+    expect(
+      await jobs.start(second, { refersBack: true, followsUp: true }),
+    ).toEqual({
       ok: true,
       said: waiting,
     });
@@ -619,10 +621,18 @@ describe("a job that follows up on a job that still runs", () => {
     const answer = join(folder, one!, "result.md");
     const script = file(two!, "start.command");
     // The wait stands before the agent starts, and names only that answer file.
-    expect(script).toContain(waitBlock(answer));
-    expect(script.indexOf(waitBlock(answer))).toBeLessThan(
+    const over = join(folder, two!, "wait-over");
+    expect(script).toContain(waitBlock(answer, over));
+    expect(script.indexOf(waitBlock(answer, over))).toBeLessThan(
       script.indexOf("exec claude "),
     );
+    // Its state says that it waits, until its script ended the wait.
+    expect(jobs.recent(2).map((job) => job.waiting ?? false)).toEqual([
+      true,
+      false,
+    ]);
+    writeFileSync(over, "");
+    expect(jobs.recent(1)[0]!.waiting ?? false).toBe(false);
     expect(script).toContain(`[[ ! -e '${answer}' ]]`);
     // No word of the person stands in the script.
     expect(script).not.toContain("contact form");
@@ -641,6 +651,22 @@ describe("a job that follows up on a job that still runs", () => {
   });
 
   it("does not wait when the request does not point back, or when no job runs", async () => {
+    // The request points back with a word that names no thing of a job
+    // ("one html file"): it gets no wait.
+    const loose = made();
+    await loose.jobs.start(first);
+    loose.clock.now += 30_000;
+    expect(
+      (
+        await loose.jobs.start(
+          "make one landing page for the cafe in one html file",
+          { refersBack: true },
+        )
+      ).said,
+    ).toBe(atOnce);
+    expect(loose.file(loose.ids()[1]!, "start.command")).not.toContain(
+      "waits for the job",
+    );
     // The request does not point back: both run side by side, as before.
     const side = made();
     await side.jobs.start(first);
@@ -659,9 +685,10 @@ describe("a job that follows up on a job that still runs", () => {
       "The page is at /work/app/bakery.html.\n",
     );
     done.clock.now += 60_000;
-    expect((await done.jobs.start(second, { refersBack: true })).said).toBe(
-      atOnce,
-    );
+    expect(
+      (await done.jobs.start(second, { refersBack: true, followsUp: true }))
+        .said,
+    ).toBe(atOnce);
     const later = done.ids()[1]!;
     expect(done.file(later, "start.command")).not.toContain(
       "waits for the job",
@@ -674,35 +701,41 @@ describe("a job that follows up on a job that still runs", () => {
     const old = made();
     await old.jobs.start(first);
     old.clock.now += 2 * 60 * 60 * 1000 + 1000;
-    expect((await old.jobs.start(second, { refersBack: true })).said).toBe(
-      atOnce,
-    );
+    expect(
+      (await old.jobs.start(second, { refersBack: true, followsUp: true }))
+        .said,
+    ).toBe(atOnce);
     expect(old.file(old.ids()[1]!, "start.command")).not.toContain(
       "waits for the job",
     );
     // No job before it at all.
     const none = made();
-    expect((await none.jobs.start(second, { refersBack: true })).said).toBe(
-      atOnce,
-    );
+    expect(
+      (await none.jobs.start(second, { refersBack: true, followsUp: true }))
+        .said,
+    ).toBe(atOnce);
   });
 
   it("waits in a chain: the third job waits for the second", async () => {
     const { jobs, clock, folder, ids, file } = made();
     await jobs.start(first);
     clock.now += 30_000;
-    await jobs.start(second, { refersBack: true });
+    await jobs.start(second, { refersBack: true, followsUp: true });
     clock.now += 30_000;
     expect(
       (
         await jobs.start("then make the header of it blue", {
           refersBack: true,
+          followsUp: true,
         })
       ).said,
     ).toBe(waiting);
     const [, two, three] = ids();
     expect(file(three!, "start.command")).toContain(
-      waitBlock(join(folder, two!, "result.md")),
+      waitBlock(
+        join(folder, two!, "result.md"),
+        join(folder, three!, "wait-over"),
+      ),
     );
   });
 
@@ -711,6 +744,7 @@ describe("a job that follows up on a job that still runs", () => {
     () => {
       const directory = mkdtempSync(join(tmpdir(), "clawdtime wait's-"));
       const answer = join(directory, "result.md");
+      const over = join(directory, "wait-over");
       const zsh = (script: string) =>
         execFileSync("/bin/zsh", ["-c", script], {
           encoding: "utf8",
@@ -718,17 +752,20 @@ describe("a job that follows up on a job that still runs", () => {
           timeout: 20_000,
         });
       // The answer comes half a second later, from the same shell: the wait
-      // shows its line, then ends.
+      // shows its line, then ends, and writes that it is over.
       const began = Date.now();
       const waited = zsh(
-        `( sleep 0.5; : > '${answer.replace(/'/g, `'\\''`)}' ) &\n${waitBlock(answer)}print -r -- started`,
+        `( sleep 0.5; : > '${answer.replace(/'/g, `'\\''`)}' ) &\n${waitBlock(answer, over)}print -r -- started`,
       );
       expect(waited).toBe(
         "This job waits for the job before it. Press Return to start it now.\nstarted\n",
       );
       expect(Date.now() - began).toBeLessThan(10_000);
+      expect(existsSync(over)).toBe(true);
       // The answer is there already: no wait and no line.
-      expect(zsh(`${waitBlock(answer)}print -r -- started`)).toBe("started\n");
+      expect(zsh(`${waitBlock(answer, over)}print -r -- started`)).toBe(
+        "started\n",
+      );
     },
     25_000,
   );
