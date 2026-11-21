@@ -91,6 +91,11 @@ export interface JobPort {
   offered?(): JobOffer | null;
   /** Ends the question: one question gets one answer. */
   clearOffer?(): void;
+  /**
+   * Ends the wait of the newest job that waits for the job before it: its
+   * agent begins at once. `said` is one sentence that can be spoken.
+   */
+  release?(): { ok: boolean; said: string };
 }
 
 /** The coding agents that can take a job, and how each takes its first message. */
@@ -116,31 +121,53 @@ const contextLineLength = 400;
 
 /** One word of a shell script, in single quotes. A quote in a path cannot end them. */
 const quoted = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-/** In the folder of a job that waits for the job before it: written at the start, and when its script ended the wait. */
+/**
+ * In the folder of a job that waits for the job before it: written at the
+ * start, when the person said to start it now, and when its script ended the
+ * wait.
+ */
 const waitsFile = "waits";
+const startNowFile = "start-now";
 const waitOverFile = "wait-over";
 /** How many times the wait of a job looks for the answer of the job before it: two seconds each, two hours in all. */
 const waitSteps = 3600;
+const neverFinished =
+  "The job before this one did not finish in two hours, so this job did not start. Ask for it again.";
 /**
  * The lines of a start script that wait until the answer file of the job
- * before this one exists. Only a path that this program made stands in them.
- * In a terminal, a key ends the wait: the person can start the job at once.
- * The wait ends by itself after two hours, as long as a job counts as running.
+ * before this one exists. Only paths that this program made stand in them.
+ * The wait also ends when the person says to start it now (the file `now`),
+ * and in a terminal when a key is pressed. When the job before never wrote
+ * an answer in two hours, this job writes that as its own answer and starts
+ * nothing: work that begins hours late, with no one there, is a surprise.
  */
-export const waitBlock = (answer: string, over: string) =>
-  [
-    `if [[ ! -e ${quoted(answer)} ]]; then`,
+export const waitBlock = (
+  paths: { answer: string; now: string; over: string; result: string },
+  steps = waitSteps,
+) => {
+  const answer = quoted(paths.answer);
+  const now = quoted(paths.now);
+  const over = quoted(paths.over);
+  return [
+    `if [[ ! -e ${answer} && ! -e ${now} ]]; then`,
     "  print -r -- 'This job waits for the job before it. Press Return to start it now.'",
     "  waited=0",
-    `  while [[ ! -e ${quoted(answer)} && $waited -lt ${waitSteps} ]]; do`,
-    "    if [[ -t 0 ]]; then read -t 2 -k 1 && break; else sleep 2; fi",
+    "  released=",
+    `  while [[ ! -e ${answer} && ! -e ${now} && $waited -lt ${Math.max(1, Math.floor(steps))} ]]; do`,
+    "    if [[ -t 0 ]]; then read -t 2 -k 1 && { released=1; break; }; else sleep 2; fi",
     "    waited=$((waited + 1))",
     "  done",
+    `  if [[ ! -e ${answer} && ! -e ${now} && -z $released ]]; then`,
+    `    print -r -- ${quoted(neverFinished)} > ${quoted(paths.result)}`,
+    "    exit 0",
+    "  fi",
     "fi",
-    // The wait is over: the state of the job says "works" from here.
-    `: > ${quoted(over)}`,
+    // The wait is over: the state of the job says "works" from here. A link
+    // in that place is not written through.
+    `[[ -L ${over} ]] || : > ${over}`,
     "",
   ].join("\n");
+};
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 /** Plain text for speech and for a text message: no terminal colors, no control characters. */
 export function plainAnswer(text: string, limit = 1200) {
@@ -321,7 +348,7 @@ export class Jobs implements JobPort {
     // job then ends with a true sentence, and holds no place for two hours.
     writeFileSync(
       script,
-      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor ? waitBlock(waitsFor, join(directory, waitOverFile)) : ""}${agents[agent](quoted(prompt))}\n`,
+      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor ? waitBlock({ answer: waitsFor, now: join(directory, startNowFile), over: join(directory, waitOverFile), result }) : ""}${agents[agent](quoted(prompt))}\n`,
       { mode: 0o700 },
     );
     chmodSync(script, 0o700);
@@ -338,8 +365,33 @@ export class Jobs implements JobPort {
     return {
       ok: true,
       said: waitsFor
-        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then.`
+        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" if it must not wait.`
         : `On it. ${jobAgentLabels[agent]} is working on that in a new terminal window, and I will tell you its answer when it is done.`,
+    };
+  }
+
+  /**
+   * The person said to start the job that waits. Its script sees the file
+   * within two seconds and begins the agent. The file is made new: a link in
+   * its place is never written through.
+   */
+  release(): { ok: boolean; said: string } {
+    const waiting = this.recent(20).find((job) => job.waiting);
+    if (!waiting) return { ok: false, said: "No job waits now." };
+    try {
+      writeFileSync(join(this.folder, waiting.id, startNowFile), "", {
+        mode: 0o600,
+        flag: "wx",
+      });
+    } catch {
+      return {
+        ok: false,
+        said: "I could not start that job from here. Press Return in its terminal window.",
+      };
+    }
+    return {
+      ok: true,
+      said: `Okay. The job "${waiting.job.slice(0, 80)}" starts now.`,
     };
   }
 
@@ -483,6 +535,15 @@ export class Jobs implements JobPort {
           return null;
         }
       };
+      /** Something has that name in the folder, whatever it is. A link is not followed. */
+      const there = (name: string) => {
+        try {
+          lstatSync(join(directory, name));
+          return true;
+        } catch {
+          return false;
+        }
+      };
       const prompt = read("prompt.txt", 8000);
       if (prompt === null) continue;
       const written = read("result.md", 40_000);
@@ -505,7 +566,8 @@ export class Jobs implements JobPort {
         done: answer !== null,
         ...(answer === null &&
         read(waitsFile, 1) !== null &&
-        read(waitOverFile, 1) === null
+        !there(waitOverFile) &&
+        !there(startNowFile)
           ? { waiting: true }
           : {}),
         result:

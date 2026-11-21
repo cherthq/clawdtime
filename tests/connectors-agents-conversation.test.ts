@@ -1720,7 +1720,7 @@ describe("more work on a job that still runs", () => {
   const started =
     "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
   const waiting =
-    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then.";
+    'On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. Say "start it now" if it must not wait.';
 
   it("waits for that job when the message points back at it, and says so", async () => {
     const made = mac();
@@ -1734,7 +1734,7 @@ describe("more work on a job that still runs", () => {
       ),
     ).toBe(waiting);
     expect(made.file("start.command")).toContain(
-      `[[ ! -e '${join(made.folder, made.ids()[0]!, "result.md")}' ]]`,
+      `[[ ! -e '${join(made.folder, made.ids()[0]!, "result.md")}' && `,
     );
     expect(made.file("prompt.txt")).toContain("also add a contact form to it");
     // The state says that the second job waits, not that it works.
@@ -1759,6 +1759,15 @@ describe("more work on a job that still runs", () => {
     "bro just make one landing page for the cafe na, in one html file",
     "build the same page for the cafe as last time",
     "write tests for the login page before the release",
+    // The word names a thing of this sentence, after "and", or names nothing.
+    "find the big files in my home folder and list them",
+    "open a tunnel for port 3000 and send it to me",
+    "check the disk space and tell me how full it is",
+    "write a script that renames the photos and run it",
+    "find out what time it is in Tokyo",
+    "write a script that renames the photos when it runs",
+    "check if it is safe to upgrade node",
+    "build a page, then deploy it",
   ])("starts beside it for other work: %j", async (words) => {
     const made = mac();
     expect((await made.jobs.start(work)).ok).toBe(true);
@@ -1778,6 +1787,9 @@ describe("more work on a job that still runs", () => {
     "then make them blue",
     "now fix that one",
     "add a footer to those",
+    "nice, now add a dark mode to it",
+    "make it bigger and add a footer",
+    "ok so fix this one please",
   ])("waits for it for more work on its thing: %j", async (words) => {
     const made = mac();
     expect((await made.jobs.start(work)).ok).toBe(true);
@@ -1789,6 +1801,83 @@ describe("more work on a job that still runs", () => {
         "chat",
       ),
     ).toBe(waiting);
+  });
+});
+
+describe("start it now", () => {
+  const work = "build a small landing page for my bakery in one html file";
+  const waitingJob = async () => {
+    const made = mac();
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 60_000;
+    expect(
+      (
+        await made.jobs.start("also add a contact form to it", {
+          refersBack: true,
+          followsUp: true,
+        })
+      ).ok,
+    ).toBe(true);
+    const go = () => existsSync(join(made.folder, made.ids()[1]!, "start-now"));
+    return { ...made, go };
+  };
+
+  it.each([
+    "start it now",
+    "ok start it now please",
+    "start that job now",
+    "start now",
+    "don't wait",
+    "do not wait for it",
+    "no, don\u2019t wait, start it now",
+    "just start it anyway",
+  ])(
+    "ends the wait of the job that waits, for %j, with no model",
+    async (words) => {
+      const made = await waitingJob();
+      const { model, seen } = scripted(["Okay."]);
+      expect(
+        await new Supervisor(made.world, model).reply([], words, "chat"),
+      ).toBe('Okay. The job "also add a contact form to it" starts now.');
+      expect(seen).toHaveLength(0);
+      expect(made.go()).toBe(true);
+      // No new job: the one that waited starts.
+      expect(made.ids()).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    // Not the whole message.
+    "start it now and then deploy the site",
+    "should I start it now?",
+    "do not start it now",
+    "start it now, never mind",
+    "wait, why does it not start now",
+    "start the deploy fix session now",
+  ])("leaves %j to the model: nothing is released", async (words) => {
+    const made = await waitingJob();
+    const { model } = scripted(["Which one?"]);
+    await new Supervisor(made.world, model).reply([], words, "chat");
+    expect(made.go()).toBe(false);
+  });
+
+  it("releases nothing when no job waits, or while a request of an agent waits", async () => {
+    // No job waits: the model reads the message.
+    const idle = mac();
+    expect((await idle.jobs.start(work)).ok).toBe(true);
+    const { model, seen } = scripted(["Start what?"]);
+    expect(
+      await new Supervisor(idle.world, model).reply([], "start it now", "chat"),
+    ).toBe("Start what?");
+    expect(seen).toHaveLength(1);
+    // A request waits for the person: the sentence may be about it.
+    const made = await waitingJob();
+    waits(made.world);
+    await new Supervisor(
+      made.world,
+      scripted(["A request waits."]).model,
+    ).reply([], "start it now", "chat");
+    expect(made.go()).toBe(false);
   });
 });
 

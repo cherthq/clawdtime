@@ -1133,12 +1133,39 @@ export function agentNamed(spoken: string): JobAgent | null {
 /**
  * The sentence is more work on a thing from before: "add a form to it",
  * "make them blue", "fix that one". A job that still runs on that thing is
- * then waited for. Narrower than pointsBack: "one html file", "the last
- * step" and "the same way" point at nothing that a job makes, and a wait
- * costs the person time.
+ * then waited for. It is narrow, because a wait costs the person time: the
+ * word must stand in the first clause, before any "and", "then", "that",
+ * "when" or comma. In "find the big files and list them" and "write a script
+ * and run it" the word names a thing of this sentence, and "it is" names
+ * nothing. "One html file" and "the same way" count no thing of a job.
  */
-const followsUp = (spoken: string) =>
-  /\b(?:it|them|those|these|that one|this one)\b/i.test(spoken);
+const followsUp = (spoken: string) => {
+  const words = spoken
+    .trim()
+    .replace(
+      /^(?:(?:ok|okay|so|and|then|also|now|next|please|great|nice|perfect|thanks|cool)[,.!\s]+)+/i,
+      "",
+    );
+  const first =
+    words.split(
+      /[,;:.!?\n]|\b(?:and|then|that(?!\s+one\b)|which|when|if|so|because|while|until|what|how|where|who|whether|but|or)\b/i,
+    )[0] ?? "";
+  return (
+    /\b(?:it|them|those|these|that one|this one)\b/i.test(first) &&
+    !/\bit\s+(?:is|was|will|would|has|had|can|could|should)\b|\bit['\u2019]s\b|\b(?:is|was|does|did|will|can)\s+it\b/i.test(
+      first,
+    )
+  );
+};
+/**
+ * "Start it now", "don't wait": the person ends the wait of a job that waits
+ * for the job before it. Whole messages only, so that no other sentence with
+ * these words starts a job early.
+ */
+const startsNow = (text: string) =>
+  /^(?:(?:ok|okay|so|then|please|just|no|well)[,\s]+)*(?:(?:start|begin)\s+(?:it|that|that one|that job|the job|this one)\s+(?:now|right now|at once|anyway|without waiting)|start now|begin now|(?:do\s+not|don['\u2019]?t)\s+wait(?:\s+for\s+(?:it|that|the\s+(?:first|other)\s+(?:one|job)))?(?:[,\s]+start (?:it )?now)?)(?:[,\s]+please)?[\s.!]*$/i.test(
+    text.trim(),
+  );
 const pointsBack = (spoken: string) =>
   /\b(?:it|that|this|those|these|them|one|ones|same|again|previous|last|earlier|before|above|there)\b/i.test(
     spoken,
@@ -2461,6 +2488,24 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    // "Start it now": a job that the person asked for waits for the job
+    // before it, and the person ends that wait. Only where nothing else can
+    // own the sentence: no request and no task waits for an answer, and the
+    // turn is open.
+    if (
+      startsNow(words) &&
+      !turn.closed &&
+      !taskWaits &&
+      this.world.desk.pending().length === 0 &&
+      this.world.jobs?.release &&
+      this.jobsNow(20).some((job) => job.waiting)
+    ) {
+      try {
+        return this.world.jobs.release().said;
+      } catch {
+        return "I could not start that job from here. Press Return in its terminal window.";
+      }
+    }
     // "Then ask it", after the person's question about one session. Nothing
     // is typed: the code says the sentence that sends that question, with the
     // session's name and the person's own earlier words. The person then says
