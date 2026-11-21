@@ -547,6 +547,19 @@ So these open nothing:
   "open payments, actually never mind". "Open payments, no, docs" is a
   correction, and "open payments but don't type anything" is still a request.
 - Words for a session: "tell docs: open the file".
+- A request for later, with something to wait for or a time: "show me
+  payments, when it is done", "open docs, once the build passes", "open it in
+  ten minutes". ClawdTime has nothing that opens a session later, so it opens
+  nothing now. "Show me payments, if you can" and "open docs, before I
+  forget" wait for nothing, and open at once.
+
+When the part of your sentence that asks names exactly one session by its own
+name, it opens at once: ClawdTime does not wait for the model to choose it,
+and "show me the deploy fix one and make it bigger" does both. Another part of
+the sentence does not choose the session: "show me the other one, payments is
+done" does not open payments. One message opens a session once. The common typos count:
+"shwo me the payments one", "opne docs", and a long name with one wrong letter
+("the paymnts one").
 
 Right after you asked to see a session, your next message can be only the
 session, within ten minutes: "no wait, the other one", "and the docs one",
@@ -599,7 +612,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   "use Codex to fix the tests", "fix the tests with Codex". "Not with Codex"
   gives the job to the other one, and so do "no Codex" and "avoid Codex". The
   name also counts in fast or sloppy words ("opn codex nd write the tests"),
-  as long as it stands in your message. With no agent in the sentence, the agent of
+  as long as it stands in your message: that sentence starts at once, too. A
+  session whose name stands in the work ("... write tests for the login page",
+  with a session named "login page") does not hold the job back: you asked
+  for a new agent. Work that speaks to a session ("open Codex and tell login
+  page to ...") is routed as before, and so is work that names a session of
+  the same agent ("use Claude to fix the bug in payments", with a Claude
+  session named payments): you can mean that session. With no agent in the sentence, the agent of
   `CLAWDTIME_JOB_AGENT` takes it. "Open Claude and build ..." starts at once,
   also while sessions of that agent run. "Tell Claude to ..." and "open my
   Claude session and ..." can mean a session that runs, so ClawdTime works out

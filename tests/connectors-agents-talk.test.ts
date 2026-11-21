@@ -455,9 +455,12 @@ describe("the ClawdTime agent", () => {
       (message) => message.role === "tool",
     ).map((message) => message.content);
     expect(results).toEqual([
+      // The person's words name docs: the code opened it before the model.
       "Opened docs.",
+      // The model asks for it too. One message opens a session once.
+      "docs is open already.",
       // "d" names no single session. The person's own words name docs.
-      "Opened docs.",
+      "docs is open already.",
       "Kept in the trove as a critical decision.",
       // The person said nothing about being away: the model alone changes nothing.
       "The person did not ask for away mode. Ask them.",
