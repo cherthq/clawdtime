@@ -391,7 +391,8 @@ request that still waits, and does nothing more with those words.
 A job is only work that ClawdTime started. When you ask about jobs and it
 started none, it says so, and then says what your own sessions do.
 
-ClawdTime checks its own answer when you asked for work. When the answer says
+ClawdTime checks its own answer when you asked for work, for a window to
+change, or to see a session. When the answer says
 that it did something ("I added that to the job") and no tool that acts ran in
 that turn, the model answers once more and can then do it, through the same
 checks as always. When the second answer claims it again, you get plain words:
@@ -461,6 +462,13 @@ When you ask for a session, your own words decide:
 
 ClawdTime also says how exactly it landed. "Opened" means the tab or the pane.
 When only the terminal application came forward, it says so.
+
+A session comes to the front only when your own words ask to see it: "show me
+the payments one", "open deploy fix", "switch to docs", "take me to it". A
+question about a session ("what's the payments one doing", "is docs done?")
+gets words, and opens nothing: a window that comes forward takes your screen.
+"Don't open it" opens nothing. After you asked to see a session, a correction
+with no such word still counts: "no wait, the other one".
 
 ### The window of a session
 

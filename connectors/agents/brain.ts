@@ -790,6 +790,28 @@ const asksAbout = (spoken: string) =>
   );
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
+/** A word that asks to see a session: to open it, show it or go to it. */
+const seeCue =
+  /\b(?:open|show|bring\s+(?:up|back|it|that|the|me)|switch\s+(?:to|over|back)|go\s+(?:back\s+)?to|pull\s+up|take\s+me\s+to|jump\s+to|focus(?:\s+on)?|look\s+at|let\s+me\s+see|let['\u2019]?s\s+see|see\s+(?:the|that|it|what)|view|display|in\s+front|to\s+the\s+front)\b/i;
+/** "Don't open it", "no need to show me that": the person rules it out. */
+const rulesOutSeeing = (spoken: string) =>
+  /\b(?:do\s+not|don['\u2019\u2018\u00b4\u02bc\u2032`]?t|no\s+need\s+to|never|stop)\b[^.?!;]*\b(?:open|show|bring|switch|pull|display|view|see)\b/i.test(
+    spoken,
+  );
+/**
+ * The person's own words ask to see a session: one sentence of the message
+ * has a word for it, and that sentence is no question about something ("why
+ * did you open it?"). A question about a session ("what's the payments one
+ * doing") asks for words, not for a window: opening takes the screen.
+ */
+const asksToSee = (spoken: string) =>
+  !rulesOutSeeing(spoken) &&
+  spoken
+    .split(/[.?!;]+\s*/)
+    .some((part) => seeCue.test(part) && !asksAbout(part));
+/** A word that can point at a session after a request to see one: "the other one", "that", "it". */
+const pointsAtSession =
+  /\b(?:one|ones|other|session|it|that|this|same|first|second|third|last|next|previous)\b/i;
 /** What comes before an instruction in speech: a filler, a greeting, a polite opening. */
 const opening =
   /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime)[,.!]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to)\s+)+/i;
@@ -1409,7 +1431,7 @@ const readingTools = new Set([
  * claims: "as I told you", "I ran into a problem".
  */
 const claimVerbs =
-  "added|started|opened|typed|sent|created|built|fixed|deployed|approved|denied|allowed|answered|closed|resized|moved|brought|launched|kicked off|queued|scheduled|updated|changed|deleted|removed|installed|restarted|stopped|cancell?ed|accepted|passed|forwarded|handed|put|set up";
+  "added|started|opened|typed|sent|created|built|fixed|deployed|approved|denied|allowed|answered|closed|resized|moved|brought|launched|kicked off|queued|scheduled|updated|changed|deleted|removed|installed|restarted|stopped|cancell?ed|accepted|passed|forwarded|handed|put|set up|made|enlarged|shrunk|maximi[sz]ed|minimi[sz]ed|zoomed|increased|decreased|expanded|reduced|restored|switched|showed|displayed|focused|pulled up|selected|raised";
 const claim = new RegExp(
   `(?:^|[,;:\u2013\u2014]\\s*|\\s-+\\s+|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes|yep|yeah|yup|alright|right|great|perfect|well|got it)[,!.\\s]+)I(?:['\u2019]ve| have)?(?:\\s+(?:just|now|also))*\\s+(?:(?:gone|went)\\s+ahead\\s+and\\s+)?(?:${claimVerbs})\\b(?!\\s+(?:no|nothing|none|neither)\\b)([^,;.!?]*?)(?=$|[,;.!?]|\\s+(?:and|but)\\b)`,
   "gi",
@@ -1990,6 +2012,27 @@ export class Supervisor {
         : bySpoken;
     return bySpoken.kind === "many" ? bySpoken : byModel;
   }
+  /**
+   * The message asks to see a session. Or it has no such word, is no
+   * question, has no verb for work, points at a session, and one of the
+   * person's last two messages asked to see one: then it corrects that
+   * request.
+   */
+  private asksToSeeNow(turn: Turn, spoken: string) {
+    if (asksToSee(spoken)) return true;
+    if (
+      rulesOutSeeing(spoken) ||
+      isQuestion(spoken) ||
+      // A verb for work: "now fix the header in that one" asks for work.
+      new RegExp(`\\b${workVerb}\\b`, "i").test(spoken) ||
+      !pointsAtSession.test(spoken)
+    )
+      return false;
+    return turn.history
+      .filter((message) => message.role === "user")
+      .slice(-2)
+      .some((message) => asksToSee(message.text));
+  }
   /** What to say when the words name no single session. */
   private unclear(pick: SessionPick) {
     return pick.kind === "many"
@@ -2183,6 +2226,12 @@ export class Supervisor {
           turn,
         );
       case "open_session": {
+        // The person's own words must ask to see a session, now or as a
+        // correction of such a request ("show me the payments one", then "no
+        // wait, the other one"). The model alone opens nothing: a session
+        // that comes to the front takes the screen.
+        if (!this.asksToSeeNow(turn, spoken))
+          return "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
         const pick = this.pick(String(args.session ?? ""), spoken);
         if (pick.kind !== "one") return this.unclear(pick);
         const { session } = pick;
@@ -3066,12 +3115,18 @@ export class Supervisor {
             if (!hasDecisionTarget())
               return "There is no pending request to approve or deny.";
           }
-          // The person asked for work, the answer says that ClawdTime did
-          // something, and no tool that acts ran in this turn: the answer is
-          // not true. The model answers once more, and can call the tool
+          // The person asked for an action, the answer says that ClawdTime
+          // did something, and no tool that acts ran in this turn: the answer
+          // is not true. The model answers once more, and can call the tool
           // then: its gates decide as always. A second such answer is
           // replaced by plain words.
-          if (asksForWork(words) && claimsAction(reply.text) && !acted()) {
+          if (
+            // The person asked for an action: work, a window to change, or a
+            // session to see.
+            (asksForWork(words) || asksForSize(words) || asksToSee(words)) &&
+            claimsAction(reply.text) &&
+            !acted()
+          ) {
             if (rechecked) return notDone;
             rechecked = true;
             recheck =
