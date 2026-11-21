@@ -201,7 +201,10 @@ How the call sounds:
   seconds before the ready mark. `CLAWDTIME_LINE_GREET_ON=mark` waits for the
   mark alone.
 - The picture is sent from the moment the agent waits for a call, so its first
-  frame is there when the line shows video.
+  frame is there when the line shows video. While it waits, it sends one frame
+  a second, which costs almost nothing.
+- The wide picture turns on only when your own words ask for it ("my phone is
+  sideways", "make it wide"). The voice model alone cannot turn it on.
 - ClawdTime does not listen while it speaks, nor for half a second after. On a
   phone line its own voice comes back, and it would stop itself or answer
   itself. Its answers are short: wait for the end of the sentence, then speak.
