@@ -299,6 +299,9 @@ What it can do when you ask:
 - Open an application, or a web address in it: "open Chrome", "go to
   example.com in Chrome". It opens at once. Your own words must name the
   application and give the site of the address.
+- On a call, choose what the video shows: "zoom in on the session that checks
+  the lines" shows only that window, "show the whole screen" goes back. The
+  session's tab comes to the front first. `clawdtime view` prints the view.
 - Act in the browser that runs: "refresh the browser", "go back", "which tabs
   are open", "bring tab three forward", "read this page". It uses the
   browser's own scripting: no key and no click, and it starts no browser.

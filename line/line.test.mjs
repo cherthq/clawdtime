@@ -440,7 +440,7 @@ test("the life of the stone: it blinks every few seconds, and each state moves i
 // The picture and the small stone on the screen
 
 test("the picture is a full dark frame with the stone large in the middle", () => {
-  const picture = makePicture({ style: "jet" });
+  const picture = makePicture({ style: "jet", layout: "wide" });
   const frame = picture.frame(5, "idle");
   assert.equal(frame.length, WIDTH * HEIGHT * 4);
   for (let i = 3; i < frame.length; i += 4)
@@ -481,7 +481,7 @@ test("the picture is a full dark frame with the stone large in the middle", () =
 });
 
 test("the picture is alive: frames differ over time, a blink shuts the eyes, and speech differs from rest", () => {
-  const picture = makePicture({ style: "jet" });
+  const picture = makePicture({ style: "jet", layout: "wide" });
   const at = (tick, state) => Uint8Array.from(picture.frame(tick, state));
   const frames = Array.from({ length: 6 }, (_, tick) => at(tick, "idle"));
   for (let tick = 1; tick < frames.length; tick++)
@@ -522,7 +522,9 @@ test("the picture is alive: frames differ over time, a blink shuts the eyes, and
   // A frame depends only on its tick and state: what was drawn before leaves no mark.
   assert.deepEqual(at(3, "idle"), rest);
   assert.deepEqual(
-    Uint8Array.from(makePicture({ style: "jet" }).frame(3, "idle")),
+    Uint8Array.from(
+      makePicture({ style: "jet", layout: "wide" }).frame(3, "idle"),
+    ),
     rest,
   );
   // A sign of life outside the stone: the bar under it moves in every frame.
@@ -545,7 +547,7 @@ test("the picture is alive: frames differ over time, a blink shuts the eyes, and
 });
 
 test("one frame costs little at 1280 by 720", () => {
-  const picture = makePicture({ style: "jet" }),
+  const picture = makePicture({ style: "jet", layout: "wide" }),
     shot = fakeScreen();
   for (let tick = 0; tick < 10; tick++) {
     picture.frame(tick, "speaking");
@@ -673,7 +675,7 @@ test("on the screen the stone is small, in the bottom right corner, on a dark pl
 });
 
 test("with a screen frame, the picture is that screen with the small stone, and the screen frame is not changed", () => {
-  const picture = makePicture({ style: "jet" });
+  const picture = makePicture({ style: "jet", layout: "wide" });
   const alone = Uint8Array.from(picture.frame(4, "idle"));
   const shot = fakeScreen(),
     kept = Uint8Array.from(shot);
@@ -681,18 +683,24 @@ test("with a screen frame, the picture is that screen with the small stone, and 
   assert.deepEqual(shot, kept, "the screen frame is only read");
   const want = Uint8Array.from(shot);
   drawOverlay(want, WIDTH, HEIGHT, { tick: 4, state: "idle", style: "jet" });
-  assert.deepEqual(shown, want);
+  assert.equal(changed(shown, want), 0);
   assert.ok(changed(shown, shot) > 15_000 && changed(shown, shot) <= 150 * 150);
   // The same screen frame a second time: the stone is drawn on a new copy, not on top of the last one.
-  assert.deepEqual(Uint8Array.from(picture.frame(4, "idle", shot)), want);
-  assert.deepEqual(
-    Uint8Array.from(picture.frame(4, "idle")),
-    alone,
+  assert.equal(
+    changed(Uint8Array.from(picture.frame(4, "idle", shot)), want),
+    0,
+  );
+  assert.equal(
+    changed(Uint8Array.from(picture.frame(4, "idle")), alone),
+    0,
     "without the screen, the picture is whole again",
   );
-  assert.deepEqual(
-    Uint8Array.from(picture.frame(4, "idle", new Uint8Array(12))),
-    alone,
+  assert.equal(
+    changed(
+      Uint8Array.from(picture.frame(4, "idle", new Uint8Array(12))),
+      alone,
+    ),
+    0,
     "a frame of the wrong size is not shown",
   );
 });
@@ -1200,6 +1208,7 @@ test("the capture runs ffmpeg with an argument list, keeps the newest frame, and
   const screen = startScreen({
     frameBytes: 4,
     device: "3",
+    layout: "wide",
     onExit: (code) => exits.push(code),
     start: (command, args, options) => {
       runs.push({ command, args, options });
@@ -1285,4 +1294,263 @@ test("a capture that does not start says so", async () => {
   const silent = startScreen({ frameBytes: 4, start: () => fakeFfmpeg() });
   assert.equal(await silent.started(15), false, "no frame in time");
   silent.stop();
+});
+
+// The layout for a phone held upright with its video set to fill: the caller sees only the middle strip.
+const { seenBox, screenLayout } = await import("./layout.mjs");
+
+test("by default the stone stays inside what a phone held upright shows, whatever the style", () => {
+  const seen = seenBox(WIDTH, HEIGHT, "upright");
+  for (const style of STYLES) {
+    const picture = makePicture({ style });
+    assert.equal(picture.layout, "upright");
+    for (const state of STATES) {
+      const frame = picture.frame(7, state);
+      // Nothing but the dark ground is outside the strip: no part of the stone, its rim or the bar is cut.
+      for (let y = 0; y < HEIGHT; y += 3)
+        for (const x of [
+          seen.x - 1,
+          seen.x - 40,
+          seen.x + seen.w,
+          seen.x + seen.w + 40,
+        ])
+          assert.ok(
+            is(frame, WIDTH, x, y, BACKGROUND),
+            `${style} ${state} at ${x},${y}`,
+          );
+    }
+    // And the stone is there, in the middle, in its body color.
+    const frame = picture.frame(7, "idle");
+    assert.ok(
+      count(frame, WIDTH, STONES[style].body, [
+        seen.x,
+        0,
+        seen.x + seen.w,
+        HEIGHT,
+      ]).total > 8000,
+    );
+  }
+});
+
+test("by default a shared screen leaves the outside of the strip alone, and the small stone sits under it", () => {
+  const picture = makePicture({ style: "jet" });
+  const { stone, box } = screenLayout(WIDTH, HEIGHT, "upright");
+  // A screen frame as the capture gives it in this layout: the screen inside its box, dark ground around.
+  const shot = new Uint8Array(WIDTH * HEIGHT * 4);
+  for (let i = 0; i < shot.length; i += 4) {
+    shot[i] = 0x11;
+    shot[i + 1] = 0x13;
+    shot[i + 2] = 0x17;
+    shot[i + 3] = 255;
+  }
+  const shown = picture.frame(2, "speaking", shot);
+  let outside = 0;
+  for (let y = 0; y < HEIGHT; y++)
+    for (let x = 0; x < WIDTH; x++) {
+      const i = (y * WIDTH + x) * 4;
+      if (
+        shown[i] === shot[i] &&
+        shown[i + 1] === shot[i + 1] &&
+        shown[i + 2] === shot[i + 2]
+      )
+        continue;
+      // Every changed pixel is in the plate of the small stone.
+      if (
+        x < stone.x ||
+        x >= stone.x + stone.size ||
+        y < stone.y ||
+        y >= stone.y + stone.size
+      )
+        outside++;
+    }
+  assert.equal(outside, 0);
+  assert.ok(
+    stone.y >= box.y + box.h,
+    "the stone is under the screen, not on it",
+  );
+});
+
+const { readView, recall } = await import("./desk.mjs");
+
+test("the view of the call comes from clawdtime view --json, and anything else is no answer", async () => {
+  const calls = [];
+  const exec =
+    (stdout, ok = true) =>
+    async (file, args, options) => {
+      calls.push({ file, args, cwd: options.cwd });
+      return { ok, stdout };
+    };
+  const set = await readView(
+    exec(
+      JSON.stringify({
+        version: 1,
+        view: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 },
+        at: 1234,
+      }),
+    ),
+  );
+  assert.deepEqual(set, { view: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 }, at: 1234 });
+  assert.deepEqual(calls[0].args, ["view", "--json"]);
+  assert.equal(calls[0].file, "/fake/bin/clawdtime");
+  assert.deepEqual(
+    await readView(exec(JSON.stringify({ view: null, at: 9 }))),
+    { view: null, at: 9 },
+  );
+  // Numbers that are no numbers are no view. A command that fails, or prints other text, gives no answer.
+  assert.deepEqual(
+    await readView(
+      exec(JSON.stringify({ view: { x: "0", y: 0, w: 1, h: 1 }, at: 9 })),
+    ),
+    { view: null, at: 9 },
+  );
+  assert.equal(await readView(exec("usage: clawdtime", false)), null);
+  assert.equal(await readView(exec("not json")), null);
+});
+
+test("a call that starts reads what was said before, newest last, and nothing from an earlier day", async () => {
+  const now = Date.UTC(2026, 10, 21, 6, 0, 0);
+  const minute = 60_000;
+  const calls = [];
+  const exec =
+    (messages, ok = true) =>
+    async (file, args) => {
+      calls.push(args);
+      return {
+        ok,
+        stdout:
+          typeof messages === "string" ? messages : JSON.stringify(messages),
+      };
+    };
+  const text = await recall(
+    exec([
+      { role: "user", text: "an old thing", at: now - 30 * 60 * minute },
+      {
+        role: "user",
+        text: "Build a landing   page for the demo",
+        at: now - 12 * minute,
+      },
+      {
+        role: "assistant",
+        text: "\u001b[32mOn it.\u001b[0m A session is working on that.",
+        at: now - 12 * minute,
+      },
+      { role: "tool", text: "not a message of the talk", at: now - 5 * minute },
+      { role: "user", text: "x".repeat(900), at: now - 2 * minute },
+    ]),
+    () => now,
+  );
+  assert.deepEqual(calls[0], ["chat", "--recent", "12"]);
+  const lines = text.split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(
+    lines[0],
+    "- 12 min ago, the person said: Build a landing page for the demo",
+  );
+  assert.equal(
+    lines[1],
+    "- 12 min ago, ClawdTime answered: On it. A session is working on that.",
+  );
+  assert.ok(
+    lines[2].startsWith("- 2 min ago, the person said: xxx") &&
+      lines[2].length < 300,
+  );
+  // Nothing to recall: an empty talk, a command that fails, or text that is no list.
+  assert.equal(await recall(exec([]), () => now), "");
+  assert.equal(await recall(exec("[]", false), () => now), "");
+  assert.equal(await recall(exec("{}"), () => now), "");
+  assert.equal(await recall(exec("usage"), () => now), "");
+});
+
+const { LINE_AUDIO, lineAudioIn } = await import("./greet.mjs");
+
+test("the agent greets on the line's audio track in the room, before the ready mark reaches the room", () => {
+  const room = fakeRoom("");
+  const greetings = [],
+    signals = [];
+  greetOnBridgeReady(room, (signal) => greetings.push(signal), {
+    trackEvents: ["trackPublished", "trackSubscribed"],
+    onSignal: (kind) => signals.push(kind),
+  });
+  // The caller's video, or an audio track with another name, is not the signal.
+  room.emit(
+    "trackPublished",
+    { name: "camera", kind: 2 },
+    { identity: "chert-bridge-1" },
+  );
+  room.emit(
+    "trackSubscribed",
+    {},
+    { name: "some-audio" },
+    { identity: "chert-bridge-1" },
+  );
+  assert.deepEqual(greetings, []);
+  // The line's audio track: published, then subscribed. One greeting.
+  room.emit(
+    "trackPublished",
+    { name: LINE_AUDIO },
+    { identity: "chert-bridge-1" },
+  );
+  room.emit(
+    "trackSubscribed",
+    {},
+    { name: LINE_AUDIO },
+    { identity: "chert-bridge-1" },
+  );
+  assert.deepEqual(greetings, ["track"]);
+  // The mark comes two seconds later: it is recorded, and nobody greets again.
+  room.change('{"chert_bridge_ready":true}');
+  assert.deepEqual(greetings, ["track"]);
+  assert.deepEqual(signals, ["track", "mark"]);
+  assert.equal(
+    room.listenerCount("roomMetadataChanged"),
+    0,
+    "both signals came: it listens no more",
+  );
+  assert.equal(room.listenerCount("trackPublished"), 0);
+});
+
+test("the mark alone still greets, and without track events a track is no signal", () => {
+  const room = fakeRoom("");
+  const greetings = [];
+  greetOnBridgeReady(room, (signal) => greetings.push(signal));
+  room.emit("trackPublished", { name: LINE_AUDIO });
+  assert.deepEqual(greetings, []);
+  room.change('{"chert_bridge_ready":true}');
+  assert.deepEqual(greetings, ["mark"]);
+  // The mark first, the track after: one greeting, on the mark.
+  const second = fakeRoom("");
+  const order = [];
+  greetOnBridgeReady(second, (signal) => order.push(signal), {
+    trackEvents: ["trackPublished"],
+  });
+  second.change('{"chert_bridge_ready":true}');
+  second.emit("trackPublished", { name: LINE_AUDIO });
+  assert.deepEqual(order, ["mark"]);
+});
+
+test("the agent greets at once when the line's audio track is already in the room, and never after the stop", () => {
+  const room = fakeRoom("");
+  room.remoteParticipants = new Map([
+    [
+      "chert-bridge-1",
+      { trackPublications: new Map([["TR_1", { name: LINE_AUDIO }]]) },
+    ],
+  ]);
+  assert.equal(lineAudioIn(room), true);
+  assert.equal(lineAudioIn(fakeRoom("")), false);
+  const greetings = [];
+  greetOnBridgeReady(room, (signal) => greetings.push(signal), {
+    trackEvents: ["trackPublished"],
+  });
+  assert.deepEqual(greetings, ["track"]);
+  const later = fakeRoom("");
+  const none = [];
+  const stop = greetOnBridgeReady(later, (signal) => none.push(signal), {
+    trackEvents: ["trackPublished"],
+  });
+  stop();
+  later.emit("trackPublished", { name: LINE_AUDIO });
+  later.change('{"chert_bridge_ready":true}');
+  assert.deepEqual(none, []);
+  assert.equal(later.listenerCount("trackPublished"), 0);
 });
