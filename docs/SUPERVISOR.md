@@ -371,7 +371,13 @@ back to the plain answer. A request with no answer after 15 seconds is stuck:
 ClawdTime ends it and asks once more, for 30 seconds at most. With a reasoning
 effort set, the one request keeps 45 seconds. When the model does not answer
 at all and your message was not about the state, ClawdTime says so, says that
-nothing was done, and gives the state.
+nothing was done, and gives the state. When the model stops after your words
+already decided a request in that message, ClawdTime says that decision
+("Allowed. The agent continues.") and does nothing more with those words.
+
+A job is only work that ClawdTime started. When you ask about jobs and it
+started none in the last day, it says so, and then says what your own
+sessions do.
 
 ### Give it a task
 

@@ -388,7 +388,9 @@ describe("the brain hands work to a job", () => {
       "what did it find",
       "call",
     );
-    expect(run.results[0]).toBe("ClawdTime started no job yet.");
+    expect(run.results[0]).toBe(
+      "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.",
+    );
   });
 
   it("sends a task to a job where no task service runs, instead of a refusal", async () => {

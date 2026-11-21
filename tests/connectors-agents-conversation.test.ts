@@ -1715,6 +1715,91 @@ describe("the conversation goes with the work", () => {
   });
 });
 
+describe("the state says when no job was started", () => {
+  const stateOf = async (made: ReturnType<typeof mac>) => {
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(made.world, model).reply(
+      [],
+      "what are my jobs doing?",
+      "chat",
+    );
+    return seen[0]!.messages.find((message) => message.role === "tool")!
+      .content!;
+  };
+  const none =
+    "ClawdTime started no job in the last day. The sessions above are not jobs: a job is work that ClawdTime started in a new terminal window.";
+
+  it("says that ClawdTime started no job, so that sessions are not called jobs", async () => {
+    const made = mac([session({ name: "deploy fix" })]);
+    const state = await stateOf(made);
+    expect(state).toContain(none);
+    expect(state).toContain("deploy fix");
+  });
+
+  it("reads the job tool too when the person asks about jobs and none was started", async () => {
+    const seeded = async (made: ReturnType<typeof mac>, words: string) => {
+      const { model, seen } = scripted(["Okay."]);
+      await new Supervisor(made.world, model).reply([], words, "chat");
+      return seen[0]!.messages.filter((message) => message.role === "tool");
+    };
+    const noJob =
+      "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.";
+    // The newest thing that the model sees is the answer of the job tool.
+    for (const words of ["what are my jobs doing?", "is any job running?"]) {
+      const results = await seeded(
+        mac([session({ name: "deploy fix" })]),
+        words,
+      );
+      expect(results.at(-1)).toMatchObject({
+        toolCallId: "job_first",
+        content: noJob,
+      });
+    }
+    // A question about the sessions gets no job answer.
+    const plain = await seeded(
+      mac([session({ name: "deploy fix" })]),
+      "what is everyone doing?",
+    );
+    expect(plain.some((message) => message.toolCallId === "job_first")).toBe(
+      false,
+    );
+    // A job started in the last day: its line is in the state, and no "no job" answer is read.
+    const busy = mac([session({ name: "deploy fix" })]);
+    expect((await busy.jobs.start("build a small landing page")).ok).toBe(true);
+    const withJob = await seeded(busy, "what are my jobs doing?");
+    expect(withJob.some((message) => message.content === noJob)).toBe(false);
+    expect(withJob[0]!.content).toContain('Job "build a small landing page"');
+    // The instructions say that a session is never a job.
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(mac().world, model).reply([], "hello there", "chat");
+    expect(seen[0]!.system).toContain(
+      "A session that the person runs is a session, never a job",
+    );
+  });
+
+  it("does not say it when a job started in the last day, and says it again after a day", async () => {
+    const made = mac([session({ name: "deploy fix" })]);
+    expect((await made.jobs.start("build a small landing page")).ok).toBe(true);
+    expect(await stateOf(made)).not.toContain("started no job");
+    made.clock.now += 25 * 60 * 60 * 1000;
+    expect(await stateOf(made)).toContain(none);
+  });
+
+  it("says nothing of jobs where no terminal window can open", async () => {
+    const made = mac([session({ name: "deploy fix" })]);
+    const { jobs: _jobs, ...world } = made.world;
+    const { model, seen } = scripted(["Okay."]);
+    await new Supervisor(world, model).reply(
+      [],
+      "what is everyone doing?",
+      "chat",
+    );
+    expect(
+      seen[0]!.messages.find((message) => message.role === "tool")!.content,
+    ).not.toContain("job");
+  });
+});
+
 describe("more work on a job that still runs", () => {
   const work = "build a small landing page for my bakery in one html file";
   const started =
@@ -2167,6 +2252,84 @@ describe("then ask it", () => {
     ).toBe("A request waits for your answer.");
     expect(seen).toHaveLength(1);
     expect(sent).toEqual([]);
+  });
+
+  it("says the decision when the model fails after it decided a request, and acts on those words no more", async () => {
+    // The model decides the request with the person's words, then fails.
+    const fails = (request: string): ModelClient => {
+      let calls = 0;
+      return {
+        complete: async () => {
+          calls++;
+          if (calls === 1)
+            return {
+              text: "",
+              toolCalls: [call("decide", { request, decision: "allow" })],
+            };
+          throw new Error("The operation timed out.");
+        },
+      };
+    };
+    for (const words of ["yes", "approve", "yes accept it"]) {
+      const made = typing();
+      const accepted: string[] = [];
+      const world: SupervisorWorld = {
+        ...made.world,
+        tasks: {
+          current: () => ({
+            id: "t1",
+            goal: "ship the site",
+            state: "review",
+            summary: "",
+            question: null,
+            choices: [],
+            canAnswer: false,
+            canAccept: true,
+            canCancel: true,
+          }),
+          canStart: () => false,
+          start: async () => ({ ok: true, message: "started" }),
+          answer: async () => ({ ok: true, message: "answered" }),
+          accept: async () => {
+            accepted.push("accept");
+            return { ok: true, message: "accepted" };
+          },
+          cancel: async () => ({ ok: true, message: "cancelled" }),
+        } as unknown as NonNullable<SupervisorWorld["tasks"]>,
+      };
+      const request = waits(world);
+      expect(
+        await new Supervisor(world, fails(request.id)).reply([], words, "chat"),
+        words,
+      ).toBe("Allowed. The agent continues.");
+      expect(world.desk.take(request.id)?.decision, words).toBe("allow");
+      // The same words accept no task after that.
+      expect(accepted, words).toEqual([]);
+    }
+    // Two requests wait: the second stays undecided.
+    const two = typing();
+    const first = waits(two.world);
+    const second = two.world.desk.open({
+      agent: "codex",
+      sessionId: "s2",
+      cwd: "/work/site",
+      pids: [],
+      described: {
+        kind: "permission",
+        tool: "Bash",
+        summary: "npm publish",
+        options: [],
+      },
+      holdSeconds: 45,
+    });
+    expect(
+      await new Supervisor(two.world, fails(first.id)).reply(
+        [],
+        "approve the git push one",
+        "chat",
+      ),
+    ).toBe("Allowed. The agent continues.");
+    expect(two.world.desk.take(second.id)).toBeNull();
   });
 
   it("says what is true when the model does not answer", async () => {
