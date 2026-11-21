@@ -176,8 +176,10 @@ export const waitBlock = (
     // this job gives up too, unless the person started it. A link in the
     // place of a file is not written through.
     `if [[ ! -e ${now} && -z $released ]] && [[ ! -e ${answer} || -e ${quoted(paths.beforeGaveUp)} ]]; then`,
-    `  [[ -L ${result} ]] || print -r -- ${quoted(neverFinished)} > ${result}`,
+    // The mark first: a job that waits for this one never sees the answer
+    // without it.
     `  [[ -L ${gaveUp} ]] || : > ${gaveUp}`,
+    `  [[ -L ${result} ]] || print -r -- ${quoted(neverFinished)} > ${result}`,
     "  exit 0",
     "fi",
     // The wait is over: the state of the job says "works" from here.

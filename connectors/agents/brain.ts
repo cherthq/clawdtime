@@ -2508,33 +2508,42 @@ export class Supervisor {
         (choice) =>
           spokenWords(choice).join(" ") === spokenWords(words).join(" "),
       );
-    if (
-      startsNow(words) &&
-      !turn.closed &&
-      !isChoice &&
-      this.world.jobs?.release
-    ) {
+    if (startsNow(words) && !isChoice && this.world.jobs?.release) {
+      const now = this.world.now();
       const lately = this.jobsNow(20).filter(
-        (job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000,
+        (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
       );
-      if (lately.some((job) => job.waiting)) {
-        // A request of an agent or a question of a task waits too: the words
-        // could be taken as its answer. Nothing is passed on, and both are named.
+      // The code owns the sentence whenever a job started lately, also when
+      // its wait is over by now and also in a closed turn: it is the sentence
+      // that ClawdTime teaches for a job, so it is never an answer to a
+      // request ("yes, start it now") or to a question of a task.
+      if (lately.length) {
+        const waits = lately.some((job) => job.waiting);
+        const job = waits
+          ? "A job also waits for the job before it."
+          : "No job waits now.";
+        // Something else waits for an answer: nothing is passed on, and both are named.
         if (this.world.desk.pending().length > 0)
-          return `${this.waitingRequest()} A job also waits for the job before it. I did nothing with that sentence: answer the request first, then say it again.`;
+          return `${this.waitingRequest()} ${job} I did nothing with that sentence${waits ? ": answer the request first, then say it again" : ""}.`;
         if (taskWaits)
-          return `Your task asks: ${clean(current!.question!, 200)} A job also waits for the job before it. I did nothing with that sentence: answer the task first, then say it again.`;
-        try {
-          return this.world.jobs.release().said;
-        } catch {
-          return "I could not start that job from here. Press Return in its terminal window.";
+          return `Your task asks: ${clean(current!.question!, 200)} ${job} I did nothing with that sentence: answer the task in its own words${waits ? ", then say it again" : ""}.`;
+        if (waits) {
+          try {
+            return this.world.jobs.release().said;
+          } catch {
+            return "I could not start that job from here. Press Return in its terminal window.";
+          }
         }
+        // No job waits and nothing else waits. After a question of ClawdTime
+        // the sentence can be its answer: the model reads it then, and the
+        // job tool refuses those words as work.
+        const before = history.at(-1);
+        const asked =
+          before?.role === "assistant" && /\?\s*$/.test(before.text);
+        const newest = lately[0]!;
+        if (!asked)
+          return `No job waits now. The job "${clean(newest.job, 80)}" ${newest.done ? "is done: ask me for its answer" : now - newest.startedAt < 2 * 60 * 60 * 1000 ? "works already" : "wrote no answer"}.`;
       }
-      // No job waits, jobs ran lately, and nothing else waits for an answer:
-      // the sentence is about the jobs, and it starts no new job.
-      const newest = lately[0];
-      if (newest && !taskWaits && this.world.desk.pending().length === 0)
-        return `No job waits now. The job "${clean(newest.job, 80)}" ${newest.done ? "is done: ask me for its answer" : "works already"}.`;
     }
     // "Then ask it", after the person's question about one session. Nothing
     // is typed: the code says the sentence that sends that question, with the
