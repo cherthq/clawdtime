@@ -276,6 +276,38 @@ test("repeated source events do not restart animations; reduce motion removes an
   assert.equal(still.camera.crop().w, 1 / 1.8);
 });
 
+test("latched transition heartbeats finish widening and fresh arrival context cannot restore retired framing", () => {
+  const r = rig();
+  r.send(1, { kind: "typing" });
+  r.at(1400);
+  assert.ok(r.camera.crop().w < 1);
+  const transition = {
+    kind: "transition",
+    surface: undefined,
+    target: undefined,
+  };
+  r.send(2, transition);
+  r.at(1750);
+  r.send(3, transition);
+  r.at(1800);
+  // A refreshed transition must not restart the 400 ms widening animation.
+  assert.deepEqual(r.camera.crop(), OVERVIEW);
+  for (let seq = 4; seq <= 12; seq++) {
+    r.at(1750 + (seq - 3) * 350);
+    r.send(seq, transition);
+    assert.deepEqual(r.camera.crop(), OVERVIEW);
+  }
+  r.at(5300);
+  r.send(13, { kind: "context", target: undefined });
+  assert.equal(r.camera.event(event(1000, 1, { kind: "typing" })), false);
+  r.at(5700);
+  assert.deepEqual(r.camera.crop(), OVERVIEW);
+  // Ready releases the producer, but only a new action may establish a crop.
+  r.send(14, { target: { x: 1100, y: 650, w: 30, h: 30 } });
+  r.at(6100);
+  assert.ok(r.camera.crop().w < 1);
+});
+
 test("Fit/Fill letterboxing maps cursor and label through the same Retina crop", () => {
   const crop = { x: 0.2, y: 0.2, w: 0.5, h: 0.5 };
   for (const layout of ["wide", "upright"]) {

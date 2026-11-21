@@ -12,6 +12,7 @@ import TaskPanelCore
   private var commandSeq = 0
   private var surfaceGate = CallPresentationSurfaceGate()
   private var intent = CallPresentationIntent()
+  private var transitionLatch = CallPresentationTransitionLatch()
   private var heartbeat: Task<Void, Never>?
   private var settlement: Task<Void, Never>?
   private var sender: Task<Void, Never>?
@@ -44,13 +45,27 @@ import TaskPanelCore
   /// is never reused. This seam does not implement or assume Space switching.
   func transition() {
     cancelSettlement()
+    transitionLatch.invalidateContent()
     intent.retire(); surfaceGate.reset()
     enqueue(.transition)
   }
 
+  /// Optional lifecycle counterpart to the one-shot transition above. A caller
+  /// supplies epochs from one monotonic source; no desktop implementation or
+  /// additional wire contract is required by this presentation consumer.
+  func transition(phase: CallPresentationTransitionPhase, epoch: Int) {
+    guard active, allowed?() == true, transitionLatch.receive(phase, epoch: epoch) else { return }
+    cancelSettlement()
+    intent.retire(); surfaceGate.reset()
+    // Even ready stays wide until the next independent native context read.
+    enqueue(.transition)
+  }
+
   func point(_ rect: CGRect) { publish(.target, target: rect) }
-  var currentSurface: CallPresentationEvent.Surface? { Self.surface() }
-  func type(in field: CGRect?, overlay: CGRect, observedSurface: CallPresentationEvent.Surface?) {
+  var currentGeneration: UInt64 { transitionLatch.generation }
+  var currentSurface: CallPresentationEvent.Surface? { transitionLatch.mode == .content ? Self.surface() : nil }
+  func type(in field: CGRect?, overlay: CGRect, observedSurface: CallPresentationEvent.Surface?, observedGeneration: UInt64) {
+    guard transitionLatch.permitsContent(generation: observedGeneration) else { publish(.context); return }
     intent.beginTyping()
     guard let observedSurface, observedSurface == Self.surface() else { invalidateGeometry(); return }
     guard let field else { enqueue(.reset); return }
@@ -60,6 +75,7 @@ import TaskPanelCore
 
   func reset() {
     cancelSettlement()
+    transitionLatch.reset()
     active = false; intent.retire(); surfaceGate.reset()
     heartbeat?.cancel(); heartbeat = nil
     // Supersede queued targets, including after Stop. An in-flight event has a
@@ -69,15 +85,18 @@ import TaskPanelCore
 
   private func refresh() async {
     guard active, allowed?() == true else { reset(); return }
+    guard transitionLatch.mode == .content else { publish(.context); return }
     if intent.typing {
       let readingCommand = commandSeq
+      let readingGeneration = transitionLatch.generation
       let before = Self.surface()
       // Accessibility work never blocks the panel's UI/Stop button. No field
       // content is requested, and secure fields do not produce a target.
       let field = await Task.detached(priority: .utility) {
         HandsTree.focusIsSecure() == false ? HandsTree.focusFrame() : nil
       }.value
-      guard active, !Task.isCancelled, allowed?() == true, intent.typing, commandSeq == readingCommand else { return }
+      guard active, !Task.isCancelled, allowed?() == true, intent.typing, commandSeq == readingCommand,
+        transitionLatch.permitsContent(generation: readingGeneration) else { return }
       guard before == Self.surface() else { invalidateGeometry(); return }
       guard let field else { enqueue(.reset); return }
       publish(.typing, target: field.union(overlayBounds?() ?? .null))
@@ -90,6 +109,7 @@ import TaskPanelCore
   /// Its next heartbeat must independently reacquire a nonsecure focus field.
   private func invalidateGeometry() {
     cancelSettlement()
+    transitionLatch.invalidateContent()
     intent.geometryChanged(); surfaceGate.reset(); enqueue(.transition)
   }
 
@@ -101,9 +121,11 @@ import TaskPanelCore
   private func settleTarget() {
     cancelSettlement()
     let observedCommand = commandSeq
+    let observedGeneration = transitionLatch.generation
     settlement = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 80_000_000)
-      guard let self, !Task.isCancelled, self.commandSeq == observedCommand, self.active else { return }
+      guard let self, !Task.isCancelled, self.commandSeq == observedCommand, self.active,
+        self.transitionLatch.permitsContent(generation: observedGeneration) else { return }
       self.settlement = nil
       self.publish(.context)
     }
@@ -111,6 +133,22 @@ import TaskPanelCore
 
   private func publish(_ kind: CallPresentationEvent.Kind, target: CGRect? = nil) {
     guard active, allowed?() == true else { reset(); return }
+    switch transitionLatch.mode {
+    case .transition:
+      enqueue(.transition)
+      return
+    case .freshContext:
+      let generation = transitionLatch.generation
+      guard let surface = Self.surface(), surface.valid, transitionLatch.establishFreshContext(generation: generation) else {
+        enqueue(.transition)
+        return
+      }
+      _ = surfaceGate.observe(surface)
+      enqueue(.context, surface: surface)
+      return
+    case .content:
+      break
+    }
     guard let surface = Self.surface() else { cancelSettlement(); surfaceGate.reset(); intent.geometryChanged(); enqueue(.reset); return }
     let clipped = target.map { $0.intersection(surface.bounds) }
     if let clipped, clipped.isNull || clipped.isEmpty { enqueue(.reset); return }

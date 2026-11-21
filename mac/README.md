@@ -55,11 +55,19 @@ discards it. An ongoing
 typing command survives a geometry change as intent only: the next heartbeat
 must reacquire fresh nonsecure field bounds before it can frame typing again.
 
-`HandsController.presentationTransition()` is the presentation-only seam for
-desktop-switching integration. Existing app/URL activation and known app/window
-or possible Mission Control shortcuts call it before switching. It assumes no
-Space identifier, does not configure shortcuts, and never sends additional input.
+`HandsController.presentationTransition()` remains a one-shot widening hint for
+existing app/URL activation and known app/window or possible Mission Control
+shortcuts. Desktop lifecycle integration instead calls
+`presentationTransition(phase: CallPresentationTransitionPhase, epoch: Int)`:
+switching, waiting and blocked hold repeated transition hints and suppress target
+and context events. Ready permits only a fresh context read first; it never
+restores old coordinates. Blocked requires a newer switching phase to reopen.
+The bridge must use one monotonic epoch producer for the panel lifetime. Stop
+and reset fence previously observed epochs; inactive callbacks are ignored.
+Neither seam assumes a Space identifier, configures shortcuts or sends input.
 Observed surface changes also widen independently of a desktop-switching branch.
+See [automatic call zoom integration](../docs/AUTOMATIC_CALL_ZOOM.md) for the
+phase bridge, freshness rules and remaining combined acceptance requirements.
 
 The guided cursor window already opts into screen sharing; the video compositor
 transforms it with the captured pixels rather than creating a second cursor or

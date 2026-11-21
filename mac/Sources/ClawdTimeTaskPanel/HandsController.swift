@@ -290,6 +290,7 @@ import TaskPanelCore
   /// with the label of the command. With no field known it stays where it last pointed.
   private func pointAtKeyboard(_ label: String, presentTyping: Bool = true) async {
     guard let map = HandsDisplay.main?.map else { return }
+    let presentationGeneration = presentation.currentGeneration
     let surface = presentTyping ? presentation.currentSurface : nil
     // The Accessibility tree is read off the main thread, as everywhere here. It counts from the top.
     let field = await Task.detached(priority: .userInitiated) {
@@ -300,7 +301,8 @@ import TaskPanelCore
     let target = GuidedFocus.place(focus: focus.map(map.flip), shown: guide.place, pointer: map.flip(input.pointer), screen: screen)
     if presentTyping {
       presentation.type(in: field.safeForPresentation ? focus : nil,
-        overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface)
+        overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface,
+        observedGeneration: presentationGeneration)
     }
     await guide.travel(to: target, label: label)
   }
@@ -399,6 +401,12 @@ import TaskPanelCore
   /// Presentation-only transition seam for app/desktop activation. Call before
   /// switching; fresh surface observations establish the next video context.
   func presentationTransition() { presentation.transition() }
+  /// Optional persistent lifecycle seam. Bridge a monotonic desktop producer's
+  /// phase raw value to CallPresentationTransitionPhase; no desktop dependency
+  /// is needed for this branch to build. Stop/reset fence observed old epochs.
+  func presentationTransition(phase: CallPresentationTransitionPhase, epoch: Int) {
+    presentation.transition(phase: phase, epoch: epoch)
+  }
   /// The typing pose stays a moment after the last key, so one key press shows too.
   private func endTyping() {
     presentation.endTyping()

@@ -137,18 +137,39 @@ the private desktop descriptor, owner lock, panel configuration and service
 instance through the established loopback discovery path. Pre-call/share hints
 cannot be inherited. Service loss clears the target, not replay fences.
 
-For Track A, call `HandsController.presentationTransition()` before activation.
-Fresh observed surface geometry supplies the next context; no completion
-notification is treated as verification. This PR already widens before native
-app opening and known surface-changing shortcuts, and on observed changes,
-so it works without Track A.
+The no-argument `HandsController.presentationTransition()` remains a one-shot
+widening hint for native app opening and known surface-changing shortcuts.
+Observed identity/geometry changes also widen without Track A.
 
 Desktop switching draft [PR #51](https://github.com/cherthq/clawdtime/pull/51)
-exposes `onDesktopTransition(phase, epoch)`. At integration, wire its
-switching/waiting/blocked phases to the widening seam and let independently
-observed context/targets establish framing after ready. Do not restore old
-coordinates merely because a callback says ready. The hook is not imported
-or required by this PR.
+exposes `onDesktopTransition(phase, epoch)`. Its lifecycle must use the separate
+latched overload, not the one-shot seam:
+
+```swift
+// In the combined HandsController, after presentation.begin(commandSeq).
+if let presentationPhase = CallPresentationTransitionPhase(rawValue: phase.rawValue) {
+  presentationTransition(phase: presentationPhase, epoch: epoch)
+}
+```
+
+Switching/waiting/blocked retire deferred clicks and typing, cancel settlement,
+and suppress targets and context. Every 350 ms heartbeat repeats a transition
+hint, so latest-only delivery cannot overwrite it with ordinary context during
+settling. Ready requires an active lifecycle and a nonstale epoch; blocked
+requires a newer switching lifecycle before release. Ready does not supply
+coordinates: a fresh native context must be observed before new action targets
+can frame. An action arriving before that context read is conservatively used
+only to refresh context; its target is discarded, so that first action may not
+zoom. Later fresh targets can frame normally. In-flight AX reads and deferred
+settlement are fenced across lifecycle changes. Stop/reset retire the latch
+and reject callbacks through its observed
+epoch watermark. Epochs must remain monotonic for this producer's lifetime.
+
+The phase enum and latch belong to presentation; no Track A types or wire-schema
+changes are required. The coordinator wires the callback when combining PRs.
+This latch controls framing only: it does not verify Space arrival or prove the
+capture pixels show the new desktop. Continuous display capture and its 500 ms
+freshness limit remain unchanged; physical transition-following needs acceptance.
 
 ## Validation and measured performance
 
@@ -171,16 +192,20 @@ Automated coverage includes interpolation/bounds, edge targets, Retina mapping,
 Fit/Fill and pixel alignment, long labels, identity changes, typing continuity,
 expiry/replay, persistent overview and independent switches, authentication,
 Stop with an action receipt still pending, capture failure, backpressure,
-reconfiguration, and delayed events after hide/hangup. Tests use disposable
+reconfiguration, repeated transition heartbeats, blocked/stale lifecycle events,
+in-flight typing generation fences, and delayed events after hide/hangup. Tests use disposable
 files, local HTTP fixtures and synthetic pixels, not the installed state.
 
 Final automated results on the rebased branch: `npm run check` passed
-3,753 tests in 121 files, typecheck and build; standalone line tests passed
-78 tests; Swift passed 244 tests and the panel product build; the relevant
+3,754 tests in 121 files, typecheck and build; standalone line tests passed
+79 tests; Swift passed 254 tests and the panel product build; the relevant
 Python presentation suite passed 36 tests. Importing the actual line agent with
 its installed dependencies also passed without starting a runtime. The first
 full attempt needed the fresh worktree's Python environment and a dual-runner
-test import fix; those were resolved before the passing checks.
+test import fix; those were resolved before the passing checks. During the
+lifecycle-latch follow-up, one intermediate Swift run returned `unavailable`
+from the unchanged AgentBoard loopback fixture; its isolated recheck and the
+final full 254-test suite passed.
 
 Benchmark on Apple M4 Pro, Node 24.22.1, ffmpeg 9.0.1: six three-second sweeps.
 Synthetic 2560×1440 `testsrc2` → the actual decoder/camera/renderer/mascot →
@@ -215,7 +240,10 @@ acceptance, or evidence that real-time voice stayed responsive.
 
 Likely Track A overlap: `HandsController.swift`; runtime overlap:
 `connectors/computer/panel-hands.ts`, `service.ts`, `src/control/task-app.ts`,
-and `TaskPanelCore/PanelClient.swift`. Cursor-bound changes additionally touch
+and `TaskPanelCore/PanelClient.swift`. Track A's later caller-transcript binding
+also overlaps `line/agent.mjs`; preserve that binding when reconciling the video
+refactor. Its `line/desktop-intent.mjs` and legacy `line/screen.mjs` freshness fix
+are independent of this PR's `continuous-screen.mjs`. Cursor-bound changes additionally touch
 `GuidedCursor.swift` and `GuidedCursorLook.swift`. No worker/planner/input
 contract or root manifest changes. The line package adds tests/benchmark only;
 there are no new dependencies. Reconcile Track A first, then Track B, as planned.
