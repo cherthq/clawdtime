@@ -1763,26 +1763,38 @@ const unsureWords = (
     .split(/[,;:.!?\u2014\n]/);
   // A clause made only of words that hedge, say no or put off hedges the
   // request that follows it: "maybe, tell deploy fix to push", "not yet.
-  // tell ...", "I don't think you should, tell ...". A clause with another
-  // word in it is the person's own business ("do not wait, tell ..."), and
-  // "no" alone corrects ClawdTime: the request stands.
+  // tell ...", "I don't think you should, tell ...", "better not, tell ...".
+  // A clause with another word in it is the person's own business ("do not
+  // wait, tell ...", "better yet, tell ..."), and "no" alone corrects
+  // ClawdTime: the request stands.
   const earlier = (clauses.at(-2) ?? "")
     .replace(/[^\p{L}'\u2019\s]/gu, " ")
     .split(/\s+/)
     .filter(Boolean);
   const hedges =
-    /^(?:maybe|perhaps|possibly|probably|not|never|don['\u2019]?t|yet|later|idk|dunno|wonder|should|shall)$/;
+    /^(?:maybe|perhaps|possibly|probably|not|never|don['\u2019]?t|wouldn['\u2019]?t|shouldn['\u2019]?t|later|tomorrow|tonight|soon|idk|dunno|wonder|should|shall)$/;
   if (
     earlier.length > 0 &&
     earlier.every(
       (word) =>
         hedges.test(word) ||
-        /^(?:um+|uh+|hmm+|well|so|ok|okay|and|but|oh|no|nope|nah|yeah|i|i['\u2019]?m|am|you|we|do|what|think|sure|now)$/.test(
+        /^(?:um+|uh+|hmm+|well|so|ok|okay|and|but|oh|no|nope|nah|yeah|i|i['\u2019]?m|am|you|we|do|what|think|sure|now|yet|just|right|for|today|let['\u2019]?s|would|better|rather)$/.test(
           word,
         ),
     ) &&
     (earlier.some((word) => hedges.test(word)) ||
       /\bdo you think\b/.test(earlier.join(" ")))
+  )
+    return "The person's message hedges that request, asks about it or says not to. Type nothing. Ask one short question.";
+  // A clause that opens with a word of doubt hedges the request too, whatever
+  // follows ("maybe hold off on that", "perhaps in a bit", "maybe we should
+  // wait"). It does not when it goes on about something of its own: a thing
+  // ("maybe it's done", "maybe the build is green now") or another request
+  // to ClawdTime ("maybe show me docs. tell deploy fix to push").
+  if (
+    /^(?:(?:um+|uh+|hmm+|well|so|ok|okay|and|but|oh)\s+)*(?:maybe|perhaps|possibly|probably)\s+(?!(?:it|it['\u2019]?s|its|that|that['\u2019]?s|this|these|those|the|a|an|my|our|your|their|his|her|they|they['\u2019]?re|he|he['\u2019]?s|she|she['\u2019]?s|there|there['\u2019]?s|someone|somebody|something|i['\u2019]?m|i['\u2019]?ve|we['\u2019]?re|we['\u2019]?ve|you['\u2019]?re|you['\u2019]?ve|tell|ask|type|send|say|show|open)\b)\S/.test(
+      earlier.join(" "),
+    )
   )
     return "The person's message hedges that request, asks about it or says not to. Type nothing. Ask one short question.";
   const before = clauses

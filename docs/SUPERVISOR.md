@@ -430,9 +430,13 @@ These rules are in the code, not in the model's instructions:
   or at their end ("... push the branch, would that help"). The tool that
   types refuses then, whatever the language model chose, and ClawdTime asks
   you. A time after the words ("... later") puts them off, and nothing is
-  typed. A clause before the request with your own business in it does not
-  hedge it ("do not wait, tell deploy fix to push now"), and "no, tell
-  deploy fix to push" corrects ClawdTime: both are typed. A polite word
+  typed. A clause before the request that only hedges, or that opens with
+  a word of doubt, hedges it too ("better not, tell deploy fix to push",
+  "maybe hold off on that, tell deploy fix to push"). A clause before the
+  request with your own business in it does not hedge it ("do not wait,
+  tell deploy fix to push now", "maybe it's done, tell deploy fix to check
+  the build"), and "no, tell deploy fix to push" corrects ClawdTime: these
+  are typed. A polite word
   after the words ("please", "thanks") is nothing. A
   question for the session is typed ("tell deploy fix: why is it failing?",
   "tell payments tests: did the tests pass?"): only a question about you
