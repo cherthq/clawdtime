@@ -676,3 +676,30 @@ separation of transition restrictions from generic input. These compile and
 test code only; they do not activate apps, switch desktops, or establish physical
 acceptance. Zoom owns its presentation API; the optional transition callback
 carries only phase/epoch and introduces no dependency on the zoom branch.
+
+### Read-only task panel access check
+
+Run the exact deployed app executable with its normal shortcut environment and
+only `--check-access`:
+
+```sh
+"/absolute/ClawdTime Supervisor.app/Contents/MacOS/ClawdTimeTaskPanel" --check-access
+```
+
+This exits before AppKit application/controller startup and reads no panel
+configuration or receipts. It emits one JSON object with `version: 1`,
+`accessibility`, `screenRecording`, `desktopSwitchingEnabled`, and
+`desktopShortcutsAvailable`. The permission APIs are silent preflight checks;
+the shortcut check reuses the controller's current-layout/public enabled-key
+inventory validation without constructing an input source. It never captures,
+posts input, requests permission, opens a window, or starts controller polling.
+
+`desktopShortcutsAvailable: false` includes absent/invalid left-right mappings,
+disabled combinations and unavailable inventory. The two combinations still
+need the operator's existing attestation that they mean left/right Space;
+enabled-key inventory does not identify their actions. The switching flag and
+permission fields are independent facts, not physical acceptance. Exit 0 means
+the probe completed, even when permissions are false; exit 1 is a probe error.
+Combining `--check-access` with other arguments emits a bounded error and exits
+2 rather than launching the panel. A bare build's permissions do not qualify a
+different signed/installed app: probe the exact deployed executable.

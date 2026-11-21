@@ -220,9 +220,9 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// Carbon requires. It identifies combinations, never Mission Control actions.
   func keyIsPermitted(_ combo: KeyCombo) -> Bool {
     let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
-    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: enabledHotKeys())
+    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: Self.enabledHotKeys())
   }
-  private func enabledHotKeys() -> [DesktopHotKey]? {
+  private static func enabledHotKeys() -> [DesktopHotKey]? {
     var array: Unmanaged<CFArray>?
     guard CopySymbolicHotKeys(&array) == noErr, let raw = array?.takeRetainedValue() as? [[String: Any]] else { return nil }
     var parsed: [DesktopHotKey] = []
@@ -238,7 +238,10 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// No defaults: the operator must attest both configured actions. Layout
   /// resolution and public enabled-shortcut inventory are checked independently.
   func desktopShortcuts() -> DesktopShortcutPair? {
-    let environment = ProcessInfo.processInfo.environment
+    Self.configuredDesktopShortcuts(environment: ProcessInfo.processInfo.environment)
+  }
+  /// Shared with the read-only access check without constructing an input source.
+  static func configuredDesktopShortcuts(environment: [String: String]) -> DesktopShortcutPair? {
     let left = environment["CLAWDTIME_SPACE_LEFT_SHORTCUT"].flatMap(KeyCombo.parse)
     let right = environment["CLAWDTIME_SPACE_RIGHT_SHORTCUT"].flatMap(KeyCombo.parse)
     func code(_ combo: KeyCombo?) -> UInt16? {
@@ -262,7 +265,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     guard CGPreflightScreenCaptureAccess() else { return .failure(.noScreenRecording) }
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
       session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
-    guard DesktopShortcutConfiguration.isEnabled(shortcut, in: enabledHotKeys()) else { return .failure(.desktopShortcutUnavailable) }
+    guard DesktopShortcutConfiguration.isEnabled(shortcut, in: Self.enabledHotKeys()) else { return .failure(.desktopShortcutUnavailable) }
     post(down, flags: CGEventFlags(rawValue: shortcut.flags))
     await pause(0.02)
     post(up, flags: CGEventFlags(rawValue: shortcut.flags))
