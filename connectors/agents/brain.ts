@@ -1725,25 +1725,78 @@ const claim = new RegExp(
   `(?:^|[,;:\u2013\u2014]\\s*|\\s-+\\s+|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes|yep|yeah|yup|alright|right|great|perfect|well|got it)[,!.\\s]+)I(?:['\u2019]ve| have)?(?:\\s+(?:just|now|also))*\\s+(?:(?:gone|went)\\s+ahead\\s+and\\s+)?(?:${claimVerbs})\\b(?!\\s+(?:no|nothing|none|neither)\\b)([^,;.!?]*?)(?=$|[,;.!?]|\\s+(?:and|but)\\b)`,
   "gi",
 );
+/**
+ * The answer says that ClawdTime does something now: "Starting a job to add
+ * a dark mode", "I'm opening docs", "On it, adding the form". The word in
+ * "-ing" opens a clause, with "I'm" or "I am" before it or with nothing. It
+ * is no claim when the clause goes on to say what the action is, takes or
+ * would need ("Starting a job would need the page", "Adding a form is not
+ * possible"), and none in a question.
+ */
+const claimNowVerbs =
+  "starting|opening|typing|sending|creating|building|fixing|deploying|launching|kicking off|queue?ing|adding|updating|changing|bringing|switching|pulling up|telling|restarting|installing|deleting|removing|moving|resizing";
+const claimNow = new RegExp(
+  `(?:^|[,;:\u2013\u2014]\\s*|\\s-+\\s+|\\b(?:and|so|then|but|now|ok|okay|done|sure|yes|yep|yeah|yup|alright|right|great|perfect|well|got it|on it)[,!.\\s]+)(?:I(?:['\u2019]m| am)\\s+(?:(?:just|now|also)\\s+)*)?(?:${claimNowVerbs})\\b([^,;.!?]*)`,
+  "gi",
+);
+const claimsNow = (sentence: string) =>
+  !/\?\s*$/.test(sentence) &&
+  [...sentence.matchAll(claimNow)].some(
+    (found) =>
+      // What the action is, takes or would need; a condition ("starting once
+      // you say go"); a state ("deploying still"); an idiom ("building on
+      // that", "moving on").
+      !/\b(?:would|could|should|might|may|needs?|takes?|requires?|means|is|are|was|were|will|won['\u2019]?t|can(?:not|['\u2019]?t)?|does|doesn['\u2019]?t|did|up|once|after|when|if|until|still|on)\b/i.test(
+        found[1] ?? "",
+      ),
+  );
+/**
+ * More ways to say that it is done or under way, with no "I": "Started a job
+ * for that", "Job started", "On it", "Working on it", "Kicking that off
+ * now". And a promise with no condition: "I'll start a job for that", "Let
+ * me add the form": the person then waits for something that never starts.
+ */
+const claimsShortly = (sentence: string) =>
+  !/\?\s*$/.test(sentence) &&
+  !/\b(?:earlier|before|ago|previously|last time|yesterday|already|if|once|when|after|until|unless)\b/i.test(
+    sentence,
+  ) &&
+  (/^(?:(?:ok|okay|done|sure|yes|yep|yeah|alright|right|great|perfect|got it)[,!.\s]+)*(?:started|opened|typed|sent|created|built|fixed|added|launched|queued|kicked\s+off)\s+(?:an?|the|it|that|this|them|my|your|some|one)\b/i.test(
+    sentence,
+  ) ||
+    /^(?:(?:the|a|that|your)\s+)?(?:new\s+)?(?:job|task)\s+(?:is\s+|has\s+)?(?:started|queued|kicked\s+off|created)\b[^,;]{0,40}$/i.test(
+      sentence.replace(/[.!]+$/, ""),
+    ) ||
+    /^(?:(?:ok|okay|sure|yes|yep|yeah|alright|right|great|perfect|got it)[,!.\s]+)*(?:on\s+it|working\s+on\s+(?:it|that|this)|kicking\s+(?:it|that|this)\s+off)\b/i.test(
+      sentence,
+    ) ||
+    /^(?:(?:ok|okay|sure|yes|yep|yeah|alright|right|great|perfect|got it)[,!.\s]+)*(?:I['\u2019]ll|I\s+will|let\s+me)\s+(?:now\s+|just\s+|go\s+ahead\s+and\s+)?(?:start|open|type|send|create|build|fix|add|launch|queue|kick\s+off|update)\b(?!\s+(?:that|my\s+wording|you)\b)/i.test(
+      sentence,
+    ));
 const claimsAction = (text: string) =>
-  text.split(/(?<=[.!?])\s+|\n+/).some((sentence) =>
-    // Every claim in the sentence is read: one that is about this turn is enough.
-    [...sentence.trim().matchAll(claim)].some((found) => {
-      const tail = found[1] ?? "";
-      // "Made" is a claim only for a size or a window: "I made the text
-      // bigger". "I made a mistake" and "I made a list" claim no action.
-      if (
-        /\bmade\b/i.test(found[0]) &&
-        (/^\s*an?\s+(?:[\p{L}]+\s+)?(?:mistake|error|typo)\b/iu.test(tail) ||
-          !/\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|window|size)\b/i.test(
-            tail,
-          ))
-      )
-        return false;
-      return !/\b(?:earlier|before|ago|previously|last time|yesterday)\b/i.test(
-        tail,
-      );
-    }),
+  text.split(/(?<=[.!?])\s+|\n+/).some(
+    (sentence, at, all) =>
+      // A sentence that a question follows asks: "Adding the form. Which
+      // page?" claims nothing yet. That holds for the claims with no "I".
+      ((claimsNow(sentence.trim()) || claimsShortly(sentence.trim())) &&
+        !/\?\s*$/.test((all[at + 1] ?? "").trim())) ||
+      // Every claim in the sentence is read: one that is about this turn is enough.
+      [...sentence.trim().matchAll(claim)].some((found) => {
+        const tail = found[1] ?? "";
+        // "Made" is a claim only for a size or a window: "I made the text
+        // bigger". "I made a mistake" and "I made a list" claim no action.
+        if (
+          /\bmade\b/i.test(found[0]) &&
+          (/^\s*an?\s+(?:[\p{L}]+\s+)?(?:mistake|error|typo)\b/iu.test(tail) ||
+            !/\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|window|size)\b/i.test(
+              tail,
+            ))
+        )
+          return false;
+        return !/\b(?:earlier|before|ago|previously|last time|yesterday)\b/i.test(
+          tail,
+        );
+      }),
   );
 /**
  * The answer claims, in the first person, that a size or a window changed:
@@ -4710,12 +4763,23 @@ export class Supervisor {
                   ? "open_session"
                   : this.spokenTo(words, turn)
                     ? "type_into_session"
-                    : this.speaksToASession(words, turn)
+                    : this.speaksToASession(words, turn) ||
+                        // "Deploy fix needs a dark mode": the person speaks
+                        // of a session that runs. That is no work for a new
+                        // agent, whatever the draft claimed.
+                        // Only where the name opens the message: "build a
+                        // status page for deploy fix" is work.
+                        (this.world.board()?.sessions ?? []).some((session) =>
+                          new RegExp(
+                            `^(?:the\\s+)?${title(session).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`,
+                            "iu",
+                          ).test(words.trim().replace(toldLead, "").trim()),
+                        )
                       ? null
                       : "start_job";
             recheck = tool
               ? `\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message asks for it, so call ${tool} now, with what their message says. If you cannot, answer again with what is true, and do not say that it is done.`
-              : "\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message speaks to a session. Answer again with what is true, and do not say that it is done: ask one short question if their words are not plain.";
+              : "\nA check of your last draft: it said that you did something, but no tool did that in this turn. The person's last message speaks to a session or of one. Answer again with what is true, and do not say that it is done: ask one short question if their words are not plain.";
             continue;
           }
           // "What's waiting on me? Open it": the person asks to see what the

@@ -5421,6 +5421,35 @@ describe("an answer that claims an action that no tool did", () => {
     // A word about an earlier time in the claim's own clause.
     "I started that job two minutes ago, and it still works.",
     "I already started that job.",
+    // A word in "-ing" that claims nothing: it names the action, asks about
+    // it, or says what it would take.
+    "Starting a job for that would need the name of the page.",
+    "Adding a form is not possible from here: no job runs.",
+    "Building that needs a page first. Which page do you mean?",
+    "Are you asking me to add it to the bakery page?",
+    "Opening the page will not help. Which page do you mean?",
+    "The job is still starting up, so the form is not in it yet.",
+    // A question follows, or the clause holds a condition or a state.
+    "Adding the form. Which page?",
+    "Deploying still, three minutes in.",
+    "Starting once you say go.",
+    "Adding it after the first job finishes.",
+    "Options: adding a form, fixing the header. Which one?",
+    "Building on that, a dark mode would fit.",
+    "Moving on, payments is idle.",
+    // A promise with a condition, the opposite of a claim, an earlier time.
+    "I'll start it once you say go.",
+    "I'll add it if you tell me which page.",
+    "Started no job for that. Which page do you mean?",
+    "The job started two minutes ago and still works.",
+    "Let me check which page you mean.",
+    // A past form that describes a thing, and a "let me add that ...".
+    "Fixed bugs are listed in the changelog.",
+    "Added value is hard to measure.",
+    "Sent messages are kept in the log.",
+    "Built pages live in the dist folder.",
+    "Let me add that the page is slow.",
+    "I'll fix my wording: the job did not start.",
   ])("says a true answer as it is: %j", async (answer) => {
     const made = mac();
     const { model, seen } = scripted([answer, "A second answer."]);
@@ -5447,6 +5476,26 @@ describe("an answer that claims an action that no tool did", () => {
     "Got it - I added the form to the job.",
     "Yep I added the form.",
     "I've gone ahead and added the form to the job.",
+    // A claim that it happens now, with "I am" or with no "I" at all.
+    "Starting a job to add a contact form to that bakery page in the same file.",
+    "Starting a job to add the form. I'll update it so you can see it.",
+    "I'm starting a job for that now.",
+    "I am adding the form to the job now.",
+    "On it, adding the contact form.",
+    "Okay, kicking off the work for the form.",
+    "Sure. Creating the form for you now.",
+    "Got it \u2014 building that now.",
+    // Done or under way, with no "I", and a promise with no condition.
+    "Started a job for that.",
+    "Job started.",
+    "The job is queued.",
+    "Kicking that off now.",
+    "Working on it.",
+    "On it.",
+    "Okay, on it.",
+    "Let me start a job for that.",
+    "I'll start a job for that.",
+    "Sure, I will add the form now.",
   ])("catches the claim %j", async (answer) => {
     const made = mac();
     const { model, seen } = scripted([answer, answer]);
@@ -5459,6 +5508,67 @@ describe("an answer that claims an action that no tool did", () => {
     ).toBe(notDone);
     expect(seen).toHaveLength(2);
     expect(made.windows).toHaveLength(0);
+  });
+
+  it("names no tool when the message speaks of a session that runs", async () => {
+    // "Deploy fix needs a dark mode": the person speaks of a session. A draft
+    // that claims the work must not lead to a new agent.
+    for (const [words, draft] of [
+      ["deploy fix needs a dark mode", "Adding a dark mode to deploy fix."],
+      ["docs should get a changelog", "Adding a changelog to docs."],
+      ["deploy fix needs a dark mode", "I added a dark mode to deploy fix."],
+    ]) {
+      const made = mac([
+        session({ name: "deploy fix" }),
+        session({ id: "2", name: "docs" }),
+      ]);
+      // A model that would obey a note for a job.
+      const { model, seen } = scripted([draft!, [call("start_job")], "Okay."]);
+      await new Supervisor(made.world, model).reply([], words!, "chat");
+      expect(seen[1]!.system, words).toContain("A check of your last draft");
+      expect(seen[1]!.system, words).not.toMatch(/so call \w+ now/);
+      expect(seen[1]!.system, words).toContain("or of one");
+    }
+    // A session's name later in a sentence that asks for work: the note
+    // names the tool for a job, as before.
+    for (const [words, draft] of [
+      ["build a status page for deploy fix", "I built the status page."],
+      [
+        "build a status page that shows deploy fix and docs",
+        "Building the status page now.",
+      ],
+    ]) {
+      const made = mac([
+        session({ name: "deploy fix" }),
+        session({ id: "2", name: "docs" }),
+      ]);
+      const { model, seen } = scripted([draft!, "That is not done yet."]);
+      await new Supervisor(made.world, model).reply([], words!, "chat");
+      expect(seen[1]!.system, words).toContain("so call start_job now");
+    }
+  });
+
+  it("starts more work on a job when the draft only says that it starts", async () => {
+    // "Nice, now add a dark mode to it": the draft says "Starting a job ..."
+    // and calls nothing. After the note the model calls the tool.
+    const made = mac();
+    const history: ChatMessage[] = [];
+    await talk(made.world, wantsJob().model, history, work);
+    expect(made.windows).toHaveLength(1);
+    const { model, seen } = scripted([
+      "Starting a job to add a dark mode toggle to that bakery landing page in the same HTML file. I'll update it so you can switch modes.",
+      [call("start_job")],
+      "unused",
+    ]);
+    const answer = await talk(
+      made.world,
+      model,
+      history,
+      "nice, now add a dark mode to it",
+    );
+    expect(made.windows).toHaveLength(2);
+    expect(answer).toContain("On it.");
+    expect(seen[1]!.system).toContain("so call start_job now");
   });
 
   it("catches a claim after a job that did not start, and after a tool that does not exist", async () => {
