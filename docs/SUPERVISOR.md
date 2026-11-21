@@ -842,6 +842,20 @@ a tunnel and get its link, find something out: all of these are jobs.
   next message after you started a job, is about that job. The answer is data:
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
+- While a job still works, ClawdTime knows its request and how long it has
+  run, and nothing else: a job reports nothing until it writes its answer.
+  A complaint about the time ("why is this taking so long?", "this is
+  taking forever") is read as a question about the state: the code reads
+  the state and the job before the language model answers, so the answer
+  starts from the time the job has run. An answer about a job that was read
+  in that turn is checked in code. When it says what the job does now ("it
+  is going through the logs"), how far it is ("almost done"), another time
+  than the job has run, or no time when you asked how long, or when it
+  offers to look into the job, to speed it up or to stop it, the language
+  model answers once more. A second such answer is replaced by a sentence
+  with only what is known: that it still works, how long it has run, that
+  it runs in its own terminal window where you can watch it, and that you
+  can ask again for its answer.
 - When the coding agent is not installed, the job ends at once and says so.
 
 Jobs and applications work in `clawdtime chat` and in the chat of the desktop

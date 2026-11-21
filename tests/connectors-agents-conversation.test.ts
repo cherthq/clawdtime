@@ -5014,6 +5014,352 @@ describe("the gate of typing refuses words that the message asks about, hedges o
   });
 });
 
+describe("a job that still works: only what is known of it is said", () => {
+  const work = "find out why the nightly backup of the database is failing";
+  const started = async (minutes = 3, request = work) => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+    ]);
+    expect((await made.jobs.start(request)).ok).toBe(true);
+    made.clock.now += minutes * 60_000;
+    return made;
+  };
+  const stateOf = async (made: Awaited<ReturnType<typeof started>>) => {
+    const { model, seen } = scripted(["It still works."]);
+    await new Supervisor(made.world, model).reply(
+      [],
+      "what are my jobs doing?",
+      "chat",
+    );
+    return seen[0]!.messages.find((message) => message.role === "tool")!
+      .content!;
+  };
+  /**
+   * One turn while the job still works, as the next message after the
+   * request that started it: the model's drafts in order, what was said, and
+   * what the model saw.
+   */
+  const turn = async (
+    question: string,
+    drafts: (ToolCall[] | string)[],
+    options: { request?: string; minutes?: number } = {},
+  ) => {
+    const request = options.request ?? work;
+    const made = await started(options.minutes ?? 3, request);
+    const { model, seen } = scripted(drafts);
+    const answer = await new Supervisor(made.world, model).reply(
+      [said("user", request), said("assistant", "On it.")],
+      question,
+      "chat",
+    );
+    return { answer, seen };
+  };
+  const known = (time = "3 minutes") =>
+    `It still works: ${time} so far. It runs in its own terminal window, where you can watch it. Ask me again for its answer.`;
+
+  it("says in the state how long the job has run, and that nothing reports what it does now", async () => {
+    expect(await stateOf(await started())).toContain(
+      `Job "${work}", started 3m ago, still works. It has run 3 minutes. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.`,
+    );
+  });
+
+  it("says the same when the model reads the job", async () => {
+    const made = await started();
+    const { model, seen } = scripted([
+      [call("job_result")],
+      "It still works, 3 minutes so far.",
+    ]);
+    await new Supervisor(made.world, model).reply(
+      [],
+      "bro why is this taking so long",
+      "chat",
+    );
+    const read = seen
+      .flatMap((asked) => asked.messages)
+      .filter(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "c-job_result",
+      )
+      .at(-1);
+    expect(read?.content).toBe(
+      `Job "${work}", started 3m ago, still works. It has run 3 minutes. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.`,
+    );
+  });
+
+  it("says nothing of that for a job that is done", async () => {
+    const made = await started();
+    writeFileSync(
+      join(made.folder, made.ids().at(-1)!, "result.md"),
+      "The disk was full.\n",
+    );
+    const state = await stateOf(made);
+    expect(state).toContain("is done. Its answer: The disk was full.");
+    expect(state).not.toContain("Nothing reports");
+  });
+
+  it.each([
+    "bro why is this taking so long",
+    "this is taking forever",
+    "why is it so slow",
+    "is that stuck?",
+  ])(
+    "reads the state and the job before the model answers %j",
+    async (question) => {
+      // With no state before it, the model makes one up: a time, and what the job does.
+      const got = await turn(question, ["It still works, 3 minutes so far."]);
+      expect(
+        got.seen[0]!.messages.filter((message) => message.role === "tool").map(
+          (message) => message.toolCallId,
+        ),
+        question,
+      ).toEqual(["state_first", "job_first"]);
+      expect(got.seen[0]!.messages.at(-1)!.content, question).toBe(
+        `Job "${work}", started 3m ago, still works. It has run 3 minutes. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.`,
+      );
+    },
+  );
+
+  it("asks the model once more when its answer says what the job does now", async () => {
+    const clean = "It still works, three minutes so far.";
+    const got = await turn("bro why is this taking so long", [
+      "It's still digging through the logs and errors.",
+      clean,
+    ]);
+    expect(got.answer).toBe(clean);
+    expect(got.seen).toHaveLength(2);
+    expect(got.seen[0]!.system).not.toContain("A check of your last draft");
+    expect(got.seen[1]!.system).toContain(
+      "A check of your last draft: the job still works, and a job reports nothing until its answer is written. You know its request and that it has run 3 minutes, nothing else.",
+    );
+  });
+
+  it.each([
+    // What the job does now, in words that no tool and no person gave.
+    "It's still digging through the logs and errors, 3 minutes so far.",
+    "It's still running, 3 minutes in, checking the backup logs now.",
+    "Still on it after 3 minutes, it runs commands to find the cause.",
+    "It is still going through the config files, 3 minutes so far.",
+    "It is scanning the database, 3 minutes so far.",
+    "3 minutes so far. It is reading the backup history.",
+    "It is compiling right now, 3 minutes in.",
+    // How far it is, or when it ends.
+    "3 minutes so far. It is halfway done.",
+    "3 minutes so far. It is almost finished.",
+    "3 minutes so far. It should be done soon.",
+    "3 minutes so far. A few more minutes.",
+    "3 minutes so far. It is stuck on a prompt.",
+    "3 minutes so far. It is waiting for your input.",
+    // An offer or a promise to look into it, to hurry it or to stop it.
+    "It still works, 3 minutes. Want me to check any logs manually?",
+    "The job is still running, 3 minutes. Want me to speed things up?",
+    "Still running, 3 minutes. Want me to keep waiting or try a quicker check?",
+    "It still works, 3 minutes. I can look into it myself if you like.",
+    "It still works, 3 minutes. Should I check its current output?",
+    "Still working, 3 minutes. Let me check what it has so far.",
+    "3 minutes so far. I'll check on it in a bit.",
+    "3 minutes so far. I can ping it.",
+    "3 minutes so far. Want me to cancel it?",
+    "3 minutes so far. Want me to stop it?",
+    "It has run 3 minutes and has no report yet. Want me to keep it running or restart it?",
+    "3 minutes so far. Would you like me to cancel it and try a quicker check?",
+    // A time that is not the time the job has run.
+    "It's still running, about a minute now.",
+    "The job has been running for 23 minutes now.",
+    "It still works, it started just a few moments ago.",
+    "It just started, give it time.",
+    "It still works, 3 minutes so far. Give it five more minutes.",
+    "Not yet. A minute ago it was still building.",
+    // No time at all, and the person asked why it takes so long.
+    "It's still running in its terminal window, been a bit.",
+    "The job is still running, started a short while ago.",
+  ])("says only what is known after two answers like %j", async (draft) => {
+    const got = await turn("bro why is this taking so long", [draft, draft]);
+    expect(got.answer, draft).toBe(known());
+    expect(got.seen, draft).toHaveLength(2);
+  });
+
+  it.each([
+    "It still works, three minutes so far. You can watch it in its terminal window.",
+    "The agent is still on why the nightly backup of the database fails, 3 minutes in. I will tell you its answer when it is done.",
+    "It still works after 3 minutes. I cannot speed it up or look inside it.",
+    "It has run 3m. I can't speed it up, sorry.",
+    "Still running, about 3 min. Want me to bring its window up?",
+    "It still works, almost 4 minutes now. Should I keep you posted?",
+    "Not done yet: 3 minutes so far. I will tell you when it is.",
+    // Plain words for working on the request, and the request's own words.
+    "It is still working on why the backup fails: 3 minutes so far.",
+    "It is still finding out why the backup is failing, 3 minutes in.",
+    "It is still looking into the backup, 3 minutes so far. Nothing is reporting what it does.",
+    // "As", "am" and "ah" are words, not a figure and a unit; "as soon as" is no "soon".
+    "It still works and has run 3 minutes; I will tell you what it finds as soon as it is done.",
+    "It has been 3 minutes and the job is still running; as far as I am told it is not done.",
+    "Ah, it still works: 3 minutes so far.",
+    "The job still works, it started 3 minutes ago; I'll tell you what it found as soon as it's done. You can watch its progress in the terminal window if you want.",
+    "One second: it still works, 3 minutes so far.",
+  ])("says an answer with only what is known as it is: %j", async (draft) => {
+    const got = await turn("bro why is this taking so long", [draft]);
+    expect(got.answer, draft).toBe(draft);
+    expect(got.seen, draft).toHaveLength(1);
+  });
+
+  it.each([
+    [2, "A couple of minutes so far."],
+    [3, "A few minutes so far."],
+    [30, "About half an hour so far."],
+    [119, "About 2 hours so far."],
+    [0.5, "Less than a minute so far."],
+  ])(
+    "reads the time after %s minutes in %j as right",
+    async (minutes, draft) => {
+      const got = await turn("how long has it been?", [draft], { minutes });
+      expect(got.answer, draft).toBe(draft);
+      expect(got.seen, draft).toHaveLength(1);
+    },
+  );
+
+  it("reads no time in the name of a branch", async () => {
+    const draft = "It still works on fix-3m-bug: 5 minutes so far.";
+    const got = await turn("how long has it been?", [draft], {
+      request: "rebase the branch fix-3m-bug on main",
+      minutes: 5,
+    });
+    expect(got.answer).toBe(draft);
+  });
+
+  it("asks for no time when the person did not ask how long it takes", async () => {
+    for (const draft of [
+      "Not yet. I will tell you when it is done.",
+      "Not yet: it still works.",
+    ]) {
+      const got = await turn("is it done?", [draft]);
+      expect(got.answer, draft).toBe(draft);
+      expect(got.seen, draft).toHaveLength(1);
+    }
+  });
+
+  it("lets the answer use the words of the job's request and of the person", async () => {
+    const tests = "Not yet: it still runs the tests.";
+    expect(
+      (
+        await turn("is it done yet?", [tests], {
+          request: "run the tests and fix the failing ones",
+        })
+      ).answer,
+    ).toBe(tests);
+    const logs = "It still works. Nothing reports whether it reads the logs.";
+    expect(
+      (await turn("is it done yet, or is it still reading the logs?", [logs]))
+        .answer,
+    ).toBe(logs);
+  });
+
+  it("lets the answer use a word that a tool gave in this turn", async () => {
+    // An older job is done, and its answer names logs: the state holds it.
+    const made = mac([session({ name: "deploy fix" })]);
+    expect((await made.jobs.start("count the logs")).ok).toBe(true);
+    writeFileSync(
+      join(made.folder, made.ids().at(-1)!, "result.md"),
+      "Three error logs were found.\n",
+    );
+    made.clock.now += 60_000;
+    expect((await made.jobs.start(work)).ok).toBe(true);
+    made.clock.now += 3 * 60_000;
+    const draft =
+      "It still works, 3 minutes so far. The job before it found three error logs.";
+    const { model, seen } = scripted([draft]);
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [said("user", work), said("assistant", "On it.")],
+        "why is this taking so long",
+        "chat",
+      ),
+    ).toBe(draft);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("leaves an answer about a session alone: a session reports what it does", async () => {
+    const draft = "deploy fix is still running the tests.";
+    const got = await turn("why is it taking so long?", [draft]);
+    expect(got.answer).toBe(draft);
+    expect(got.seen).toHaveLength(1);
+  });
+
+  it.each([
+    // The turn did not read the job: the answer is about something else.
+    ["how long is the readme?", "The readme has 40 lines."],
+    [
+      "are you done with the summary yet?",
+      "Yes: the build passed and two tests failed.",
+    ],
+    [
+      "is the docs session ready?",
+      "It finished the tests 5 minutes ago and waits for you.",
+    ],
+    ["any update on the payments tests?", "The test suite is at step 4."],
+    ["how long does the build take?", "The build takes 10 minutes."],
+    [
+      "is the readme done yet?",
+      "The readme is done; I will check the rest again in 5 minutes.",
+    ],
+    ["how long will the deploy take?", "The deploy usually runs quickly."],
+    [
+      "what is a good name for the cleanup script?",
+      "Call the script cleanup.sh.",
+    ],
+  ])(
+    "leaves the answer to %j alone: the turn did not read the job",
+    async (question, draft) => {
+      const got = await turn(question, [draft, draft]);
+      expect(got.answer, question).toBe(draft);
+      expect(got.seen, question).toHaveLength(1);
+    },
+  );
+
+  it("leaves an answer about an older job alone", async () => {
+    const draft = "The first job found three error logs.";
+    const got = await turn("what did the first job find?", [
+      [call("job_result")],
+      draft,
+      draft,
+    ]);
+    expect(got.answer).toBe(draft);
+    expect(got.seen).toHaveLength(2);
+  });
+
+  it("leaves a question about a session alone when the job is older than the talk", async () => {
+    const made = await started();
+    const draft = "Not yet: it is still running the tests.";
+    const { model, seen } = scripted([draft, draft]);
+    made.clock.now += 60_000;
+    expect(
+      await new Supervisor(made.world, model).reply(
+        [
+          { ...said("user", "what is docs doing?"), at: made.clock.now },
+          said("assistant", "docs is running the tests."),
+        ],
+        "is it done?",
+        "chat",
+      ),
+    ).toBe(draft);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("leaves the answer of a job that is done alone", async () => {
+    const made = await started();
+    writeFileSync(
+      join(made.folder, made.ids().at(-1)!, "result.md"),
+      "The disk was full.\n",
+    );
+    const draft = "It is done: the logs show that the disk was full.";
+    const { model, seen } = scripted([[call("job_result")], draft]);
+    expect(
+      await new Supervisor(made.world, model).reply([], "is it done?", "chat"),
+    ).toBe(draft);
+    expect(seen).toHaveLength(2);
+  });
+});
+
 describe("an answer that offers words to type that the person did not say", () => {
   const board2 = () => [
     session({ name: "deploy fix" }),

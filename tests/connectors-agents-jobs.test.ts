@@ -360,7 +360,7 @@ describe("the brain hands work to a job", () => {
       "call",
     );
     expect(run.results[0]).toBe(
-      'Job "Open a tunnel for port 3000 and give me the link", started 5m ago, still works.',
+      'Job "Open a tunnel for port 3000 and give me the link", started 5m ago, still works. It has run 5 minutes. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.',
     );
     ({ value } = world([
       {
