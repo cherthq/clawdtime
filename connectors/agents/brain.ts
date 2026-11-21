@@ -819,12 +819,14 @@ const seePointer =
 /**
  * A session that is described, as people say it on a call: "the Terminal
  * session with the Claude Code checking the lines", "the one that fixes the
- * login bug". It opens with "the", "that", "this" or "my", its head is a word
- * for a session, and a description can follow that word. "A new terminal",
- * "the sessions" and "the one thing I asked for" are none.
+ * login bug", "the one you started". It opens with "the", "that", "this" or
+ * "my", its head is a word for a session, and a description follows that
+ * word or nothing does. The first group is the head, the second what follows
+ * it. "A new terminal", "the sessions" and "the one thing I asked for" are
+ * none.
  */
-const describesASession =
-  /^(?:the|that|this|my)\s+(?:[\p{L}\p{N}'-]+\s+){0,3}(?:session|one|window|tab|agent)(?=$|\s+(?:that|which|who|where|with|on|about|for|in|of|from|at|called|named|(?!(?:some|any|no|every)?thing\b)[\p{L}]{2,}ing)\b)/iu;
+const describedSession =
+  /^(?:the|that|this|my)\s+(?:[\p{L}\p{N}'-]+\s+){0,3}(session|one|window|tab|agent)(?:$|\s+(that|which|who|where|with|on|about|for|in|of|from|at|called|named|i|you|u|we|they|(?!(?:some|any|no|every)?thing\b)[\p{L}]{2,}ing)\b)/iu;
 /** Words that add nothing to the name of a session: "the payments one", "the session on payments". */
 const seeFiller =
   /^(?:the|a|an|my|our|your|me|us|session|sessions|one|ones|window|terminal|tab|pane|agent|on|about|for|with|of|in|at|from)$/i;
@@ -1482,9 +1484,10 @@ const claimsAction = (text: string) =>
       // bigger". "I made a mistake" and "I made a list" claim no action.
       if (
         /\bmade\b/i.test(found[0]) &&
-        !/\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|window|size)\b/i.test(
-          tail,
-        )
+        (/^\s*an?\s+(?:[\p{L}]+\s+)?(?:mistake|error|typo)\b/iu.test(tail) ||
+          !/\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|window|size)\b/i.test(
+            tail,
+          ))
       )
         return false;
       return !/\b(?:earlier|before|ago|previously|last time|yesterday)\b/i.test(
@@ -2102,6 +2105,51 @@ export class Supervisor {
     );
   }
   /**
+   * The words describe a session. "Session" and "agent" are words for one by
+   * themselves. "One", "window" and "tab" can be many things ("the settings
+   * window", "the tab with the invoice"), so the description must fit a
+   * session, or speak of what a person did ("the one you started"): only the
+   * conversation knows that one.
+   */
+  private describesASession(thing: string) {
+    const core = thing.replace(seeTail, "").trim();
+    const found = describedSession.exec(core);
+    if (!found) return false;
+    if (/^(?:session|agent)$/i.test(found[1] ?? "")) return true;
+    if (/^(?:i|you|u|we|they)$/i.test(found[2] ?? "")) return true;
+    try {
+      return this.pick("", core).kind !== "none";
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * The words of the message that say which session to see. After a
+   * take-back that a named session follows ("open payments, no, the other
+   * one"), only the words after the take-back say it, and a session that was
+   * named before it is ruled out.
+   */
+  private seeWords(spoken: string) {
+    const clauses = clausesOf(spoken);
+    const at = clauses.findIndex(seeTakenBack);
+    const none = { words: spoken, ruledOut: [] as AgentSession[] };
+    if (at <= 0) return none;
+    const after = clauses.slice(at);
+    if (
+      !after.some((clause) =>
+        this.namesOnlyASession(clause.replace(seeLead, "")),
+      )
+    )
+      return none;
+    const before = clauses.slice(0, at).join(", ");
+    return {
+      words: after.join(", "),
+      ruledOut: (this.world.board()?.sessions ?? []).filter((session) =>
+        saidAsWords(title(session), before),
+      ),
+    };
+  }
+  /**
    * The person's own words ask to see a session. One clause opens with words
    * for it ("show me", "open", "switch to", "can I see"), and what it asks to
    * see is a session: its name and nothing else, a word that points at one,
@@ -2135,10 +2183,7 @@ export class Supervisor {
         .find((found) => found);
       if (!thing || seeAsks.test(thing)) continue;
       // A name, a word that points at a session, or a session that is described.
-      if (
-        this.namesOnlyASession(thing) ||
-        describesASession.test(thing.replace(seeTail, "").trim())
-      )
+      if (this.namesOnlyASession(thing) || this.describesASession(thing))
         asked = at;
     }
     if (asked < 0) return false;
@@ -2378,9 +2423,12 @@ export class Supervisor {
         // that comes to the front takes the screen.
         if (!this.asksToSeeNow(turn, spoken))
           return "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
-        const pick = this.pick(String(args.session ?? ""), spoken);
+        const see = this.seeWords(spoken);
+        const pick = this.pick(String(args.session ?? ""), see.words);
         if (pick.kind !== "one") return this.unclear(pick);
         const { session } = pick;
+        if (see.ruledOut.includes(session))
+          return `The person took ${title(session)} back in the same message. Ask them which session they mean.`;
         const result = await this.world.focus(session);
         if (!result.ok)
           return `${title(session)} has no terminal on this Mac to open.`;

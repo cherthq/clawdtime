@@ -1770,6 +1770,10 @@ describe("a session opens only when the person asks to see it", () => {
     "show the payments session with the claude code that checks the webhooks",
     "open the one that runs payments",
     "show me the session on payments",
+    // Only the conversation knows this one: the model's choice stands.
+    "show me the one you started",
+    "open the one I started this morning",
+    "show me the one we were working on",
     // A "don't" about something else, and words that add nothing.
     "open payments but don't type anything",
     "show me payments and don't close it",
@@ -1830,6 +1834,12 @@ describe("a session opens only when the person asks to see it", () => {
     "view the sessions",
     "show me one way to fix the payments bug",
     "show me the one thing I asked for about payments",
+    // A window, a tab or "the one" that fits no session.
+    "open the settings window",
+    "open my browser window",
+    "show me the tab with the invoice",
+    "show me the one that failed",
+    "show me the one with the most errors",
     // Words for a session.
     "tell payments: open the file",
     // Work, a remark, a bare name: nothing asks to see it.
@@ -1857,6 +1867,39 @@ describe("a session opens only when the person asks to see it", () => {
       expect(results(), words).not.toContain(refusal);
       expect(opened.includes("payments"), words).toBe(false);
     }
+  });
+
+  it("does not open the session that the person took back in the same message", async () => {
+    for (const words of [
+      "open payments, no, the other one",
+      "open payments, actually no, not that one",
+      "open payments, no wait, not payments",
+    ]) {
+      // The model asks for the session that was taken back.
+      const stubborn = opening("payments");
+      await new Supervisor(stubborn.world, stubborn.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(stubborn.opened, words).toEqual([]);
+    }
+    // The model follows the correction: the other session opens.
+    const follows = opening("docs");
+    await new Supervisor(follows.world, follows.model).reply(
+      [],
+      "open payments, no, the other one",
+      "chat",
+    );
+    expect(follows.opened).toEqual(["docs"]);
+    // The named session after the take-back opens, also when the model asks for the first.
+    const named = opening("payments");
+    await new Supervisor(named.world, named.model).reply(
+      [],
+      "open payments, no, docs",
+      "chat",
+    );
+    expect(named.opened).toEqual(["docs"]);
   });
 
   it("opens the session that the person names when ClawdTime asked which one", async () => {
@@ -2266,6 +2309,7 @@ describe("an answer that claims an action that no tool did", () => {
     "Sorry, I made a small mistake: that page is not there.",
     "Sorry, I made a typo: it is the docs session.",
     "Okay, I made the list below: one works, two wait.",
+    "Sorry, I made a mistake with the window size: nothing changed.",
   ])('takes %j as it is: this "made" claims no action', async (answer) => {
     const made = mac();
     const { model, seen } = scripted([answer, "A second answer."]);
