@@ -1563,17 +1563,29 @@ const claimsAction = (text: string) =>
       );
     }),
   );
-/** The answer claims, in the first person, that a size or a window changed: "I made its text bigger". */
+/**
+ * The answer claims, in the first person, that a size or a window changed:
+ * "I made its text bigger", "I opened it and made the text bigger". The word
+ * for the size stands in the claim's own clause, or in a clause that goes on
+ * with "and" and a verb for a size. "I opened it, but I can't change its
+ * size from here" claims no such thing.
+ */
+const sizeWord =
+  /\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|size|resized|zoomed|enlarged|shrunk)\b/i;
 const claimsSize = (text: string) =>
-  text
-    .split(/(?<=[.!?])\s+|\n+/)
-    .some(
-      (sentence) =>
-        claimsAction(sentence) &&
-        /\b(?:bigger|larger|smaller|maximi[sz]ed|minimi[sz]ed|full\s*screen|text|font|size|resized|zoomed|enlarged|shrunk)\b/i.test(
-          sentence,
-        ),
+  text.split(/(?<=[.!?])\s+|\n+/).some((sentence) => {
+    const claims = [...sentence.trim().matchAll(claim)];
+    if (!claims.length) return false;
+    return (
+      claims.some((found) => sizeWord.test(`${found[0]} ${found[1] ?? ""}`)) ||
+      /\band\s+(?:also\s+)?(?:made|enlarged|resized|maximi[sz]ed|minimi[sz]ed|zoomed|increased|shrunk|set|changed)\b[^,.;!?]*/i
+        .exec(sentence)
+        ?.some((part) => sizeWord.test(part)) === true
     );
+  });
+/** Said in place of a second answer that claims a size change that the window tool did not make. Another tool can have acted in that turn. */
+const sizeNotDone =
+  "I did not change the size of a window. Say that part once more.";
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
@@ -1743,8 +1755,14 @@ export class Supervisor {
    */
   private speaksToSession(work: string, agent: JobAgent) {
     const kind = agent === "codex" ? "codex" : "claude-code";
+    // A name agrees with its form without a plain ending: "the payment
+    // service" names a session called "payments".
     const named = (this.world.board()?.sessions ?? []).filter(
-      (session) => session.name !== null && saidAsWords(session.name, work),
+      (session) =>
+        session.name !== null &&
+        (saidAsWords(session.name, work) ||
+          (/[^s]s$/i.test(session.name) &&
+            saidAsWords(session.name.slice(0, -1), work))),
     );
     return (
       /\b(?:agents?|sessions?)\b/i.test(work) ||
@@ -2309,12 +2327,15 @@ export class Supervisor {
    * after the take-back say it, and a session that was named before it is
    * ruled out. "It" can be a session that the message named before the
    * request ("is payments done? open it"), and never one that it names after.
-   * With no clause that asks (a correction of the message before), the whole
-   * message says it.
+   * It can also be another thing ("docs wrote a summary file, open it"), so
+   * `pronoun` marks it: the code opens nothing by itself for it. With no
+   * clause that asks (a correction of the message before), the whole message
+   * says it.
    */
   private seeWords(spoken: string) {
     const asked = this.seeAsked(spoken);
-    const none = { words: spoken, ruledOut: [] as AgentSession[] };
+    const none: { words: string; ruledOut: AgentSession[]; pronoun?: boolean } =
+      { words: spoken, ruledOut: [] };
     if (!asked) return none;
     const after = asked.clauses.slice(asked.at + 1);
     const takenBack = after.findIndex(seeTakenBack);
@@ -2340,7 +2361,25 @@ export class Supervisor {
       asked.thing.replace(seeTail, "").trim(),
     );
     const before = asked.clauses.slice(0, asked.at).join(", ");
-    return { words: pronoun && before ? before : asked.thing, ruledOut: [] };
+    if (pronoun)
+      return {
+        words: before || asked.thing,
+        ruledOut: [] as AgentSession[],
+        pronoun: true,
+      };
+    // More sessions that the request names right after it: "show me payments
+    // and docs". A clause that says something else ends the list: "show me
+    // the other one, payments is done" does not ask for payments.
+    const more: string[] = [];
+    for (const clause of after) {
+      const named = clause.replace(seeLead, "").trim();
+      if (!named || !this.namesOnlyASession(named)) break;
+      more.push(named);
+    }
+    return {
+      words: [asked.thing, ...more].join(", "),
+      ruledOut: [] as AgentSession[],
+    };
   }
   /**
    * The message asks to see a session. Or it corrects such a request: the
@@ -3461,6 +3500,9 @@ export class Supervisor {
         if (
           named.kind === "one" &&
           named.session.name !== null &&
+          // "It" after another clause can be a file or a page, not the
+          // session: only the model's own call opens for it.
+          !see.pronoun &&
           !see.ruledOut.includes(named.session)
         ) {
           const call: ToolCall = {
@@ -3549,6 +3591,7 @@ export class Supervisor {
           // claim.
           const sizeClaim =
             asksForSize(words) &&
+            names.has("session_window") &&
             !ran.has("session_window") &&
             claimsSize(reply.text);
           if (
@@ -3561,7 +3604,9 @@ export class Supervisor {
               claimsAction(reply.text) &&
               !acted())
           ) {
-            if (rechecked) return notDone;
+            // "Nothing was started or changed" is true only when no tool
+            // acted in this turn.
+            if (rechecked) return acted() ? sizeNotDone : notDone;
             rechecked = true;
             // The tool for what the person asked: a window, a session to
             // see, or work.

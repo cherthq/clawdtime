@@ -1771,6 +1771,22 @@ describe("an agent and its work, with typos", () => {
     );
     expect(same.windows).toHaveLength(0);
     expect(routed.seen.length).toBeGreaterThan(0);
+    // The name agrees without its plain ending: "the payment service".
+    const singular = mac([
+      session({
+        name: "payments",
+        agent: "claude-code",
+        agentLabel: "Claude Code",
+      }),
+    ]);
+    const asked = scripted(["Which one do you mean?"]);
+    await new Supervisor(singular.world, asked.model).reply(
+      [],
+      "use claude to fix the bug in the payment service",
+      "chat",
+    );
+    expect(singular.windows).toHaveLength(0);
+    expect(asked.seen.length).toBeGreaterThan(0);
     // Work that speaks to a session goes to the model, as before.
     for (const speaks of [
       "open codex and tell login page to run the tests",
@@ -2043,8 +2059,11 @@ describe("a session opens only when the person asks to see it", () => {
     expect(
       await run("open the one you started, and ask payments to wait"),
     ).toEqual([]);
-    // "It" is the session that the message named before the request.
-    expect(await run("is payments done? open it")).toEqual(["payments"]);
+    // "It" can be the session that the message named before, or another
+    // thing: the code opens nothing by itself for it.
+    expect(await run("is payments done? open it")).toEqual([]);
+    expect(await run("docs wrote a summary file, open it")).toEqual([]);
+    expect(await run("payments made a report, open it")).toEqual([]);
     // A session that is known only by its folder: "the app" can be the app.
     expect(
       await run("open the app", [
@@ -2063,6 +2082,49 @@ describe("a session opens only when the person asks to see it", () => {
       "chat",
     );
     expect(opened).toEqual(["docs"]);
+  });
+
+  it('lets the model open "it" for a session that the message named before', async () => {
+    const { world, model, opened } = opening("payments");
+    await new Supervisor(world, model).reply(
+      [],
+      "is payments done? open it",
+      "chat",
+    );
+    expect(opened).toEqual(["payments"]);
+  });
+
+  it("opens two sessions that one request names, through the model", async () => {
+    for (const words of [
+      "show me payments and docs",
+      "open the payments one and the docs one",
+    ]) {
+      const opened: string[] = [];
+      const made = mac([
+        session({ name: "payments" }),
+        session({ id: "2", name: "docs" }),
+      ]);
+      const world: SupervisorWorld = {
+        ...made.world,
+        focus: async (item) => {
+          opened.push(String(item.name));
+          return { ok: true };
+        },
+      };
+      const { model } = scripted([
+        [
+          call("open_session", { session: "payments" }),
+          {
+            id: "c-2",
+            name: "open_session",
+            arguments: JSON.stringify({ session: "docs" }),
+          },
+        ],
+        "Both are open.",
+      ]);
+      await new Supervisor(world, model).reply([], words, "chat");
+      expect(opened, words).toEqual(["payments", "docs"]);
+    }
   });
 
   it("says which session opened when the model does not answer after it", async () => {
@@ -2125,6 +2187,44 @@ describe("a session opens only when the person asks to see it", () => {
     ).toBe("Deploy fix is in front, with bigger text.");
     expect(acts).toEqual(["focus deploy fix", "window deploy fix bigger_text"]);
     expect(seen[1]!.system).toContain("so call session_window now");
+    // The model claims the size twice: the plain sentence is about the
+    // size, because the session did open.
+    acts.length = 0;
+    const twice = scripted([
+      "I opened deploy fix and made its text bigger.",
+      "Done, I made the text bigger.",
+    ]);
+    expect(
+      await new Supervisor(world, twice.model).reply(
+        [],
+        "show me the deploy fix one and make it bigger",
+        "chat",
+      ),
+    ).toBe("I did not change the size of a window. Say that part once more.");
+    expect(acts).toEqual(["focus deploy fix"]);
+    // A true answer that names the size in another clause is said as it is.
+    acts.length = 0;
+    const cannot = scripted([
+      "I opened deploy fix, but I can't change its size from here.",
+    ]);
+    expect(
+      await new Supervisor(world, cannot.model).reply(
+        [],
+        "show me the deploy fix one and make it bigger",
+        "chat",
+      ),
+    ).toBe("I opened deploy fix, but I can't change its size from here.");
+    expect(cannot.seen).toHaveLength(1);
+    // With no tool for windows on this Mac, a size is not checked that way.
+    acts.length = 0;
+    const { window: _window, ...noWindow } = world;
+    const plainly = scripted(["I opened deploy fix and made its text bigger."]);
+    await new Supervisor(noWindow, plainly.model).reply(
+      [],
+      "show me the deploy fix one and make it bigger",
+      "chat",
+    );
+    expect(plainly.seen).toHaveLength(1);
     // A true answer about the opening alone is said as it is.
     acts.length = 0;
     const honest = scripted(["I opened deploy fix. Which size do you want?"]);
