@@ -329,6 +329,28 @@ These rules are in the code, not in the model's instructions:
   a question about a denial ("Should I deny it?", "Do you want to approve or
   deny it?"), a "yes" approves nothing and a "no" denies nothing: only your
   own word ("approve it", "deny it") decides there.
+- A bare word answers what ClawdTime said last. When ClawdTime said
+  something before your message (its message is the last one, or it is
+  younger than five minutes) and one request waits, a bare "yes", "ok",
+  "sure", "go ahead" or "no" decides that request only when ClawdTime's
+  message is the last one and put the request before you. Two forms count.
+  The first is ClawdTime's own sentence about the request ("One request
+  waits for your answer: ... Say approve or deny to answer it.") at the end
+  of the message, with no question before it. The second is its offer to
+  approve the request as the last sentence ("Should I approve it?", "Want me
+  to approve it?", "Approve it?", "Should I let it run?"), where the
+  sentence before says what runs, by a word of the head of the request's
+  text (the program, or what it works on), or the offer names the request
+  by such a word; the text is then one short simple command. "The branch is
+  main. Should I approve it?" does not say what runs, so a yes to it
+  approves nothing. The message must
+  be on the same channel and younger than five minutes, and no task may be
+  live. After any other message ("Should I keep an eye on the tests?", "docs
+  is idle."), a bare word decides nothing, and ClawdTime says so. Your own
+  word decides at any time ("approve it", "deny it"), and so does a word of
+  the request ("ok, push it"; a verb for any work, such as "make" or "test",
+  names it only as "the make one"). A bare word that follows no message of
+  ClawdTime belongs to the one request that waits, as before.
 - A "yes" is your denial in one case: ClawdTime offered to deny the one
   request that waits. Its message is the last one, on the same channel and
   younger than five minutes, and it ends with the offer itself: "Should I",
