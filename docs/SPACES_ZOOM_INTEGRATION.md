@@ -338,3 +338,24 @@ Current checks: 3,946 backend/combined tests across 127 files, typecheck/build,
 and 113 standalone line tests passed. Eight new startup cases use the actual
 SDK waiter and real RTC video classes. Native/Python code remains unchanged.
 See the [latest handoff](PHONE_ZOOM_TEST_HANDOFF.md) for scope and remaining gaps.
+
+## Instrumented phone startup passed; action matrix remains incomplete
+
+Two incoming calls on November 21 at 13:46 and 13:49 ET used `ecf9032`. Both
+reached actual bridge join, camera/voice startup, greeting and provider media
+`ok`; the person confirmed avatar/audio and a visible shared screen. The previous
+12:41 missing-avatar cause did not reproduce and remains historically unproved.
+
+First-call Mac requests arrived while control was deliberately off for startup
+isolation. The second call began with test control enabled, but its forwarded
+request was answered as a Messages status question, with no native action created.
+Whether that was the intended utterance or a recognition error is awaiting user
+clarification. Unsent typing, phone navigation, zoom/overview/resume, physical
+Stop/takeover and boundary/performance tests remain pending. Prior local navigation
+results are unchanged; these calls do not qualify the remaining matrix.
+
+Both calls closed, capture ceased, and no native request or unknown result was
+added. The test line released with zero retained calls. Normal sole ownership
+and prior control setting were restored; test control is off and its phone agent
+has exited. The normal native installation/service remain untouched. See the
+[full evidence and next step](PHONE_ZOOM_TEST_HANDOFF.md).

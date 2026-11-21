@@ -5,14 +5,17 @@ requested by the user after the latest phone test showed no avatar.
 
 ## Start here
 
-**The integration code is implemented, but phone acceptance has failed twice.**
-Do not call the feature complete or ask the person to retry until the current
-startup failure is diagnosed and the matching test runtime is ready.
+**Latest result: two instrumented incoming calls passed startup; action acceptance is incomplete.**
+The person confirmed avatar, audio and a visible shared screen. No native action
+was executed. The earlier missing-avatar cause remains historically unresolved;
+it did not reproduce. Read the latest physical continuation at the end of this
+file before another handoff. Normal ownership/control is restored and test control
+is off. Do not call the full feature accepted.
 
 - Worktree: `/Users/garygao/clawdtime-spaces-zoom-integration`.
 - Branch: `spaces-zoom-integration` (do not use a `codex/` branch).
 - Draft integration PR: <https://github.com/cherthq/clawdtime/pull/56>.
-- Current implementation commit: `481706be116b1eb7e1adc47067dd3f70986fa67e`.
+- Current implementation commit: `ecf9032bee5d1f31ec2668a614ad7b60a6b70b2c`.
 - This handoff may be committed after that implementation commit; use the actual
   current Git head when recording subsequent work.
 - Main incorporated through `fc2bfe4c2815b5acc1429b7f32059543da085658` (PRs #54/#55,
@@ -463,3 +466,64 @@ claim the full matrix passed. Begin with avatar/audio and no computer input;
 only after observed startup proceed to the hands-off screen/control matrix.
 If it fails, retain the stage and provider verdict, stop the run, and restore the
 normal owner. Do not replay the call or computer requests automatically.
+
+## Instrumented incoming calls and restored ownership — November 21, afternoon ET
+
+The user granted an exclusive Mac interval. The normal owner released with a
+fresh zero-retained receipt, the normal agent stopped, and normal computer control
+was disabled. The isolated line at `ecf9032` became the sole owner. No outgoing
+call was initiated. Native binary remains the previously qualified `c9e4145`.
+
+| Incoming call (ET) | Observed result                                                                                                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 13:46:13–13:48:20  | Bridge joined at 13:46:14.886; first frame and camera publication followed. Greeting began at 13:46:20.101; provider bridge-ready at 13:46:21.601 and media `ok` at 13:46:23.437. Person confirmed avatar/audio and visible sharing. |
+| 13:49:31–13:51:01  | Bridge, camera, voice and greeting started again; provider bridge-ready at 13:49:39.586 and media `ok` at 13:49:42.363. Test controller was enabled before this call. No native request was created.                                 |
+
+For the first call, both controllers were initially off to isolate startup.
+Test control was enabled at 13:48:16.615, after all forwarded Mac requests and
+less than a second before the caller departed. The person reported actions did
+not work. This run cannot qualify typing; nothing was replayed after enable.
+The coordinator should enable the test controller at the agreed idle handoff
+before a future action test, and make the test phase unambiguous.
+
+On the second call, a successful final provider transcript and bound SDK response
+forwarded a question about missed messages to the desktop supervisor. The
+supervisor answered it as a status question rather than delegating computer work.
+No typing request reached the native worker. The person was asked whether they
+intended a Messages question or whether speech recognition misunderstood a typing
+request; that clarification is still pending. Do not claim a typing defect is
+fixed, or treat a general mailbox inquiry as a disposable typing acceptance test.
+Do not test against real customer/message content to fill this evidence gap.
+
+Both calls emitted agent cleanup on departure. A process-tree check after the
+second hangup found zero owned capture processes; the remaining waiting room had
+one agent and no caller/audio/video tracks. The computer journal is readable,
+contains zero new native requests from these calls, and has no unresolved result.
+No controller receipt was cleared or retried.
+
+The test owner subsequently released with a fresh **zero-retained** receipt. Test
+agent/process session exited and test computer control was disabled. Normal phone
+ownership and its prior enabled computer switch were restored. A fresh provider
+check confirms one connected normal owner, the correct scope, and an idle line.
+The normal native installation/service were not replaced or restarted.
+
+| Acceptance area        | Current evidence                                                                                                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Avatar/audio/startup   | Physical user confirmation; complete stage chain and provider media `ok`; recovery on second call. Historical 12:41 failure cause still unproved.                |
+| Screen sharing         | Person reported visible sharing; capture process absent after hangup. Readability and destination-follow behavior not qualified.                                 |
+| Natural speech         | Provider-final/SDK-response path delivered a status question. No exact/fuzzy text authorization added. Physical no-submit constraint preservation still pending. |
+| Unsent typing/clicking | No native action executed; pending.                                                                                                                              |
+| App/desktop switching  | Earlier local four-move acceptance retained; current phone pass, previous-desktop history and destination editing pending.                                       |
+| Automatic zoom         | Physical click/typing zoom, edges, long labels, Fit/Fill and Retina alignment pending.                                                                           |
+| Overview/resume        | Natural controls, persistence and fresh-target retirement pending.                                                                                               |
+| Interruption/Stop      | Synthetic protections passed; physical Stop/takeover and unknown-input reconciliation pending.                                                                   |
+| Disconnect/recovery    | Two call teardown events, no owned capture process afterward, and second-call media startup observed. Disconnect during active native input untested.            |
+| Boundaries/performance | Shortcut/ambiguity/lock/sleep/capture-loss cases and longer-call measurements pending; Split View/multi-display navigation unsupported.                          |
+| Cleanup                | Normal sole owner/control restored; test off; zero retained calls and no new unresolved input.                                                                   |
+
+Private sanitized evidence is `phone/acceptance-ecf9032.json` under the existing
+fixture root. `phone/room-status.mjs` is a read-only diagnostic scoped to dispatches
+for the uniquely named integration agent; it emits counts and a room digest, no
+identities or media. Recheck fresh ownership before another test. Await the
+intended-request clarification, then arrange one fresh disposable typing request;
+proceed through the remaining matrix only after its observed outcome.
