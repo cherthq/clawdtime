@@ -37,6 +37,23 @@ export const lineCommandSchema = z.discriminatedUnion("action", [
     })
     .strict(),
 ]);
+export const sharedLineTokenText =
+  "The phone runtime needs a credential of its own. The token in line-runtime.json is the same as the operator, panel or session token: write a new one.";
+/**
+ * The token of the phone runtime is never one of the other credentials of the
+ * service: a phone process must not hold the operator, panel or session
+ * capability. Every credential is compared, each in constant time, so the
+ * check does not tell which one was the same.
+ */
+export function assertSeparateLineToken(
+  lineToken: string,
+  others: readonly (string | undefined)[],
+) {
+  let shared = false;
+  for (const other of others)
+    if (other !== undefined && equal(lineToken, other)) shared = true;
+  if (shared) throw Error(sharedLineTokenText);
+}
 interface Call {
   id: string;
   state: "open" | "closed";
@@ -122,9 +139,17 @@ export class LineRuntime {
     for (const call of this.calls.all())
       if (call.state === "open") this.end(call);
   }
-  private authorizeView(token: string, callId: string) {
+  /**
+   * The capability check alone. A route makes it before it reads a body, so a
+   * request with no token or a wrong one gets this one refusal, whatever it
+   * carries.
+   */
+  authorize(token: string) {
     if (!equal(this.token, token))
       throw new DomainError(401, "Line runtime authorization required.");
+  }
+  private authorizeView(token: string, callId: string) {
+    this.authorize(token);
     identity.parse(callId);
     this.expire();
     const call = this.calls.get(callId);
@@ -143,8 +168,7 @@ export class LineRuntime {
     token: string,
     input: unknown,
   ): Promise<DesktopExecutionSnapshot> {
-    if (!equal(this.token, token))
-      throw new DomainError(401, "Line runtime authorization required.");
+    this.authorize(token);
     const value = lineCommandSchema.parse(input);
     this.expire();
     let call = this.calls.get(value.callId);

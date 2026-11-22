@@ -137,6 +137,12 @@ records of `chert dev` go to `~/.local/share/clawdtime/line/dev.jsonl`: they
 show the number of your line and say `agent_warm` when the agent is in a
 waiting room. `./host.sh stop` frees the line and stops the agent.
 
+Both programs start again by themselves when they end. After a network drop
+`chert dev` gives up and the agent's worker closes; ten seconds later each
+starts again, and goes on until the network is back. Each such start is a line
+in `~/.local/share/clawdtime/line/host.log`, and `./host.sh status` shows the
+newest one.
+
 When you belong to several projects, put the id of the one to use in
 `.env.local` as `CLAWDTIME_LINE_CHERT_PROJECT`.
 
@@ -175,7 +181,50 @@ greets you when FaceTime is ready. Things to say:
 | "Open a tunnel for port 3000 and give me the link." | A new coding session does it. ClawdTime says the answer    |
 | "What did it find?"                                 | The answer of the newest job                               |
 | "Approve it." "Deny it."                            | The request that an agent waits on is answered             |
+| "Zoom in on the terminal that runs the tests."      | The video shows only that window                           |
+| "Show the whole screen."                            | The video shows the whole screen again                     |
+| "The sides of the picture are cut."                 | Everything is drawn in the middle of the picture           |
 | "Hide the screen."                                  | The video is the mascot again                              |
+
+How the call looks:
+
+- What the caller sees is the Video framing of your line, on the line's page
+  in the Chert dashboard. It is fixed for a call. Fit, the default, shows the
+  whole picture. Fill turns the video upright and shows only the middle of the
+  picture, so that it fills a phone held upright.
+- With Fill, put `CLAWDTIME_LINE_FRAMING=fill` in `.env.local`. The mascot,
+  and a shared screen, are then drawn in that middle strip: nothing is cut. A
+  shared screen shows whole, and small.
+- "Zoom in on the session that builds the page" shows only that one window on
+  the video. "Show the whole screen" goes back.
+- Automatic zoom follows native agent clicks and focused typing without changing
+  input coordinates. Say "disable automatic zoom" to turn it off. "Show the
+  whole screen" persists until "resume automatic zoom", including later calls.
+  See [automatic call-video zoom](docs/AUTOMATIC_CALL_ZOOM.md) for local controls,
+  capture-device configuration, manual-view precedence and acceptance limits.
+- With Fit, the picture uses its whole width. If your phone cuts its sides,
+  say so: everything is then drawn in the middle. "Make it wide again" goes
+  back.
+- Hang up and call back: ClawdTime knows what you said in the last day, and
+  goes on from there.
+
+How the call sounds:
+
+- FaceTime needs some seconds to connect after you call. ClawdTime greets you
+  as soon as the line says that FaceTime is ready, not before. It takes that
+  from the line's own audio track in the room, which is there about two
+  seconds before the ready mark. `CLAWDTIME_LINE_GREET_ON=mark` waits for the
+  mark alone.
+- While the agent waits for a call it sends nothing: its picture is ready, and
+  goes out as the first thing of a call.
+- After you asked for the middle picture, the wide one comes back only as an
+  answer to something that you said ("make it wide"). The voice model cannot
+  turn it on by itself, as in a greeting or the news of a job.
+- ClawdTime does not listen while it speaks, nor for half a second after. On a
+  phone line its own voice comes back, and it would stop itself or answer
+  itself. Its answers are short: wait for the end of the sentence, then speak.
+  For a line that brings no voice back, `CLAWDTIME_LINE_BARGE_IN=on` in
+  `.env.local` lets you cut in.
 
 ## 6. Text it (optional)
 
@@ -243,17 +292,19 @@ Say it plainly to yourself before you start:
 
 ## When something fails
 
-| What you see                           | What to do                                                                 |
-| -------------------------------------- | -------------------------------------------------------------------------- |
-| The call is declined                   | Join your phone to the line first (step 1). Call with FaceTime             |
-| The call ends after ten seconds        | The agent said nothing: look in terminal 1 for a model key or credit error |
-| No video                               | Call with FaceTime Video, not Audio                                        |
-| "ClawdTime did not answer on this Mac" | `clawdtime agents` must work in a terminal. Run `npm link` again           |
-| The screen video is black              | Grant Screen Recording to your terminal app, then restart the agent        |
-| The wrong screen is shown              | Set `CLAWDTIME_LINE_SCREEN_DEVICE` (see `.env.example`)                    |
-| `line_in_use` from `chert dev`         | Another session holds the line. Stop it there, or wait                     |
-| A job starts but no answer comes       | Look at its terminal window. `clawdtime jobs` lists every job              |
-| `clawdtime texts check` is refused     | Make a new key with read and write access. Check the project id            |
+| What you see                                                   | What to do                                                                          |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| The call is declined                                           | Join your phone to the line first (step 1). Call with FaceTime                      |
+| The call ends after ten seconds                                | The agent said nothing: look in terminal 1 for a model key or credit error          |
+| ClawdTime stops in the middle of a sentence, or answers itself | Take the newest `main` (`./host.sh update`), and keep `CLAWDTIME_LINE_BARGE_IN` off |
+| The greeting never comes                                       | The same update: sound at pickup no longer cancels the greeting                     |
+| No video                                                       | Call with FaceTime Video, not Audio                                                 |
+| "ClawdTime did not answer on this Mac"                         | `clawdtime agents` must work in a terminal. Run `npm link` again                    |
+| The screen video is black                                      | Grant Screen Recording to your terminal app, then restart the agent                 |
+| The wrong screen is shown                                      | Set `CLAWDTIME_LINE_SCREEN_DEVICE` (see `.env.example`)                             |
+| `line_in_use` from `chert dev`                                 | Another session holds the line. Stop it there, or wait                              |
+| A job starts but no answer comes                               | Look at its terminal window. `clawdtime jobs` lists every job                       |
+| `clawdtime texts check` is refused                             | Make a new key with read and write access. Check the project id                     |
 
 More: [the supervisor guide](docs/SUPERVISOR.md), [the agent board](docs/AGENT_BOARD.md),
 and `chert guide` for the line itself.

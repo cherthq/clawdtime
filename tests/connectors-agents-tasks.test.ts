@@ -227,6 +227,76 @@ describe("direct software requests start without a confirmation loop", () => {
     expect(tasks.calls[0]!.text).toBe(spoken);
   });
 
+  it("preserves a large software goal and trailing navigation prohibition with native execution connected", async () => {
+    const spoken = `Build a landing page. ${"Use supplied brand text. ".repeat(90)}Do not switch desktops or open Messages.`;
+    const tasks = fakeTasks();
+    const run = scripted(["Must not ask model"]);
+    let interpretations = 0;
+    const submitted: string[] = [];
+    run.model.navigation = async () => {
+      interpretations++;
+      return { kind: "app", name: "Messages" };
+    };
+    const value = world(tasks.port).value;
+    value.execution = {
+      snapshot: () => ({
+        configured: true,
+        mode: "native",
+        state: "idle",
+        canStop: false,
+        message: "idle",
+      }),
+      submit: async (_id, text) => {
+        submitted.push(text);
+        return { message: "unexpected" };
+      },
+      stop: () => ({
+        configured: true,
+        mode: "native",
+        state: "idle",
+        canStop: false,
+        message: "stopped",
+      }),
+      answer: async () => ({ message: "unexpected" }),
+    };
+    await new Supervisor(value, run.model).reply([], spoken, "chat");
+    expect(tasks.calls).toHaveLength(1);
+    expect(tasks.calls[0]!.text).toBe(spoken);
+    expect(interpretations).toBe(0);
+    expect(submitted).toEqual([]);
+    expect(run.seen).toEqual([]);
+  });
+  it("rejects oversized non-software requests even when a task service exists", async () => {
+    const tasks = fakeTasks();
+    const run = scripted(["Must not ask model"]);
+    const spoken =
+      "Bring Messages forward. ".padEnd(2000, " ") + "Do not do that yet.";
+    expect(
+      await new Supervisor(world(tasks.port).value, run.model).reply(
+        [],
+        spoken,
+        "chat",
+      ),
+    ).toContain("longer than 2000");
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen).toEqual([]);
+  });
+  it("does not truncate a direct software goal beyond its 8000-character bound", async () => {
+    const tasks = fakeTasks();
+    const run = scripted(["Must not ask model"]);
+    const spoken =
+      "Build a landing page. ".padEnd(8000, "x") + "Do not deploy.";
+    expect(
+      await new Supervisor(world(tasks.port).value, run.model).reply(
+        [],
+        spoken,
+        "chat",
+      ),
+    ).toContain("Nothing was started");
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen).toEqual([]);
+  });
+
   it("acknowledges only a successful real start and keeps an active task unchanged", async () => {
     const tasks = fakeTasks();
     const originalStart = tasks.port.start;
@@ -364,7 +434,9 @@ describe("a task by talking, with a language model", () => {
       "what is the login test doing?",
       "chat",
     );
+    // The question is about what runs, so the code reads the state first.
     expect(run.results()).toEqual([
+      expect.stringMatching(/^Sessions: /),
       "The person did not ask for a task in their last message. Ask them.",
     ]);
     expect(tasks.calls).toEqual([]);
@@ -810,8 +882,9 @@ describe("a task by talking, with no language model", () => {
         eventId: expect.stringMatching(/^talk_[0-9a-f]{16}_start$/),
       },
     ]);
+    // With no model, the gate's sentence, which is written for a model, is not the answer.
     expect(await agent.reply([], "start a task", "chat")).toBe(
-      "The person gave no goal. Ask them what the task is.",
+      "Nothing started. Tell me in one sentence what to do.",
     );
     expect(await agent.reply([], "Start a task: write the notes", "chat")).toBe(
       "Finish or reconcile the current task before starting another.",

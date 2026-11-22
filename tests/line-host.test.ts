@@ -126,7 +126,9 @@ esac`,
   };
 }
 
-describe("the host script of the line agent", () => {
+// These tests run real git and shell commands on a small repository. On a busy
+// machine one of them can take longer than the usual five seconds.
+describe("the host script of the line agent", { timeout: 60_000 }, () => {
   it("knows a call from its records: the newest call record decides", () => {
     const f = fixture();
     expect(f.run("in-call").out.trim()).toBe("no");
@@ -234,6 +236,134 @@ describe("the host script of the line agent", () => {
     expect(readFileSync(join(f.base, "crontab"), "utf8")).toBe(
       "0 9 * * * /usr/bin/true\n",
     );
+  });
+
+  it("starts chert dev again each time it ends, as after a lost connection, until the stop mark", () => {
+    const f = fixture();
+    const bin = join(f.base, "bin"),
+      state = join(f.base, "state"),
+      calls = join(f.base, "calls.log");
+    writeFileSync(
+      join(f.clone, "line", ".env.local"),
+      "AGENT_NAME=clawdtime\nCLAWDTIME_LINE_CHERT_PROJECT=proj_1\n",
+    );
+    // chert dev ends at once with an error. During its third run the host is stopped.
+    writeFileSync(
+      join(bin, "chert"),
+      `#!/bin/sh\necho "chert $*" >> '${calls}'\n[ "$(grep -c '^chert' '${calls}')" -lt 3 ] || : > '${state}/stopping'\necho '{"code":"transport_unavailable"}'\nexit 1\n`,
+    );
+    chmodSync(join(bin, "chert"), 0o755);
+    const result = f.run("keep", "dev");
+    expect(result.status).toBe(0);
+    const run =
+      "chert dev --agent clawdtime --env-file .env.local --project proj_1 --json";
+    expect(f.called()).toEqual([run, run, run]);
+    const log = readFileSync(join(state, "host.log"), "utf8")
+      .trim()
+      .split("\n");
+    expect(log).toHaveLength(2);
+    for (const line of log)
+      expect(line).toMatch(/Z dev ended; it starts again in 10 s$/);
+    // The records of each run reach the same file.
+    expect(
+      readFileSync(join(state, "dev.jsonl"), "utf8").trim().split("\n"),
+    ).toHaveLength(3);
+  });
+
+  it("starts the agent again when its worker closes, and knows only its two programs", () => {
+    const f = fixture();
+    const bin = join(f.base, "bin"),
+      state = join(f.base, "state"),
+      calls = join(f.base, "calls.log");
+    writeFileSync(
+      join(bin, "node"),
+      `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n[ "$(grep -c '^node' '${calls}')" -lt 2 ] || : > '${state}/stopping'\nexit 1\n`,
+    );
+    chmodSync(join(bin, "node"), 0o755);
+    expect(f.run("keep", "agent").status).toBe(0);
+    const run = "node --env-file=.env.local agent.mjs start in line";
+    expect(f.called()).toEqual([run, run]);
+    expect(
+      readFileSync(join(state, "host.log"), "utf8").trim().split("\n"),
+    ).toHaveLength(1);
+    const unknown = f.run("keep", "other");
+    expect(unknown.status).toBe(2);
+    expect(f.called()).toHaveLength(2);
+  });
+
+  it("runs the agent of a pinned release, from this folder, and starts nothing for a release that is not whole", () => {
+    const f = fixture();
+    const bin = join(f.base, "bin"),
+      state = join(f.base, "state"),
+      calls = join(f.base, "calls.log"),
+      release = join(f.base, "release"),
+      settings = join(f.clone, "line", ".env.local");
+    writeFileSync(
+      join(bin, "node"),
+      `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n: > '${state}/stopping'\nexit 1\n`,
+    );
+    chmodSync(join(bin, "node"), 0o755);
+    // A release with no dependencies is not whole: no session starts, and no agent runs.
+    mkdirSync(release);
+    writeFileSync(join(release, "agent.mjs"), "// fixture release\n");
+    writeFileSync(
+      settings,
+      `AGENT_NAME=clawdtime\nCLAWDTIME_LINE_RELEASE=${release}\n`,
+    );
+    const partial = f.run("start");
+    expect(partial.status).toBe(1);
+    expect(partial.out).toContain("The selected agent release is incomplete.");
+    expect(f.run("keep", "agent").status).toBe(0);
+    expect(f.called().filter((line) => line.startsWith("node"))).toEqual([]);
+    expect(f.called()).not.toContain("tmux new-session");
+    // The keeper says why it ended, in one line of its record.
+    const record = readFileSync(join(state, "host.log"), "utf8")
+      .trim()
+      .split("\n");
+    expect(record).toHaveLength(1);
+    expect(record[0]).toMatch(
+      /Z the agent release is not whole: the agent is not started$/,
+    );
+    // A release must be an absolute folder.
+    writeFileSync(
+      settings,
+      "AGENT_NAME=clawdtime\nCLAWDTIME_LINE_RELEASE=release\n",
+    );
+    const relative = f.run("start");
+    expect(relative.status).toBe(1);
+    expect(relative.out).toContain(
+      "Agent release must be an absolute directory.",
+    );
+    // A whole release: its agent runs, with the settings of this folder.
+    mkdirSync(join(release, "node_modules"));
+    writeFileSync(
+      settings,
+      `AGENT_NAME=clawdtime\nCLAWDTIME_LINE_RELEASE=${release}\n`,
+    );
+    expect(f.run("keep", "agent").status).toBe(0);
+    expect(f.called().filter((line) => line.startsWith("node"))).toEqual([
+      `node --env-file=.env.local ${release}/agent.mjs start in line`,
+    ]);
+    expect(f.run("start").out).toContain("Started in the tmux session");
+  });
+
+  it("marks the stop before it stops, and a start takes the mark away and starts both keepers", () => {
+    const f = fixture();
+    const state = join(f.base, "state");
+    writeFileSync(join(f.base, "session"), "");
+    f.records("agent_warm", "dev_stopped");
+    expect(f.run("stop").out).toContain("Stopped.");
+    expect(existsSync(join(state, "stopping"))).toBe(true);
+    expect(f.run("start").out).toContain("Started in the tmux session");
+    expect(existsSync(join(state, "stopping"))).toBe(false);
+    expect(f.called()).toEqual([
+      "tmux has-session",
+      "tmux send-keys",
+      "tmux kill-session",
+      "tmux has-session",
+      "tmux new-session",
+      "tmux new-window",
+    ]);
   });
 
   it("starts only with settings and dependencies in place, and prints its use for an unknown word", () => {

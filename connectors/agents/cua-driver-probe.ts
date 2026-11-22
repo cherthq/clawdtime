@@ -226,11 +226,25 @@ export async function verifyProbeApplication(
   );
 }
 
+export const driverRefusedInTest =
+  "The installed driver is not used from a test.";
+/**
+ * A process that a test started never reaches the installed driver: no status
+ * command, no SDK and no connection. So no input for the driver can come out
+ * of a test, whatever configuration the test wrote.
+ */
+export function refuseDriverInTest(
+  env: Record<string, string | undefined> = process.env,
+) {
+  if (env.VITEST) throw Error(driverRefusedInTest);
+}
+
 /** Lead-only local diagnostic: fixed official package and fixed read-only calls. */
 export async function probePinnedCuaDaemon(
   rawConfig: unknown,
   signal: AbortSignal,
 ) {
+  refuseDriverInTest();
   const config = cuaDriverProbeConfigSchema.parse(rawConfig);
   signal.throwIfAborted();
   const socket = await lstat(config.socketPath);

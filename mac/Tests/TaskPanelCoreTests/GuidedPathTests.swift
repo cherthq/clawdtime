@@ -1,0 +1,187 @@
+import CoreGraphics
+import Foundation
+import XCTest
+@testable import TaskPanelCore
+
+/// The way of the guided cursor, and what the mascot does while the hands act.
+final class GuidedPathTests: XCTestCase {
+  let ways: [(CGPoint, CGPoint)] = [
+    (CGPoint(x: 1300, y: 120), CGPoint(x: 200, y: 700)), (CGPoint(x: 100, y: 100), CGPoint(x: 900, y: 100)),
+    (CGPoint(x: 400, y: 800), CGPoint(x: 400, y: 50)), (CGPoint(x: 10, y: 10), CGPoint(x: 14, y: 12)),
+    (CGPoint(x: 0, y: 0), CGPoint(x: 3000, y: 1900)),
+  ]
+  /// How far `point` is along the line from the start to the target, and how far off it.
+  func split(_ point: CGPoint, _ path: GuidedPath) -> (along: Double, across: Double) {
+    let dx = Double(path.target.x - path.start.x), dy = Double(path.target.y - path.start.y), length = hypot(dx, dy)
+    let px = Double(point.x - path.start.x), py = Double(point.y - path.start.y)
+    return ((px * dx + py * dy) / length, abs(px * dy - py * dx) / length)
+  }
+
+  func testItStartsAtTheStartAndEndsAtTheTarget() {
+    for (start, target) in ways {
+      let path = GuidedPath(from: start, to: target)
+      XCTAssertEqual(path.duration, 0.30)
+      XCTAssertEqual(path.point(at: 0), start)
+      XCTAssertEqual(path.point(at: -1), start)
+      XCTAssertEqual(path.point(at: path.duration), target)
+      XCTAssertEqual(path.point(at: 5), target)
+      XCTAssertFalse(path.done(at: 0.29)); XCTAssertTrue(path.done(at: 0.30))
+      XCTAssertEqual(path.progress(at: 0), 0); XCTAssertEqual(path.progress(at: path.duration), 1)
+    }
+  }
+
+  func testItNeverGoesBackwardAndNeverPastTheTarget() {
+    for (start, target) in ways {
+      let path = GuidedPath(from: start, to: target)
+      var before = -1.0
+      for frame in 0...300 {
+        let now = split(path.point(at: path.duration * Double(frame) / 300), path)
+        // Along the line: always forward, and never one point beyond the target.
+        XCTAssertGreaterThanOrEqual(now.along, before - 0.000_001)
+        XCTAssertGreaterThanOrEqual(now.along, -0.000_001)
+        XCTAssertLessThanOrEqual(now.along, path.length + 0.000_001)
+        // Across the line: a small swing, bounded in points and as a share of the way.
+        XCTAssertLessThanOrEqual(now.across, GuidedPath.maxBend + 0.000_001)
+        XCTAssertLessThanOrEqual(now.across, path.length * GuidedPath.arc + 0.000_001)
+        before = now.along
+      }
+      XCTAssertLessThanOrEqual(path.bend, GuidedPath.maxBend)
+    }
+    // The swing is there, so the cursor reads as a hand and not as a ruler.
+    let bent = GuidedPath(from: .zero, to: CGPoint(x: 400, y: 0))
+    XCTAssertEqual(split(bent.point(at: 0.15), bent).across, 36, accuracy: 0.000_001)
+    XCTAssertEqual(split(bent.point(at: 0.15), bent).along, 200, accuracy: 0.000_001)
+  }
+
+  func testTheEaseIsSlowAtBothEnds() {
+    XCTAssertEqual(GuidedPath.ease(0), 0); XCTAssertEqual(GuidedPath.ease(1), 1); XCTAssertEqual(GuidedPath.ease(0.5), 0.5)
+    XCTAssertEqual(GuidedPath.ease(-3), 0); XCTAssertEqual(GuidedPath.ease(7), 1)
+    XCTAssertLessThan(GuidedPath.ease(0.1), 0.1); XCTAssertGreaterThan(GuidedPath.ease(0.9), 0.9)
+    var before = 0.0
+    for step in 0...1000 {
+      let value = GuidedPath.ease(Double(step) / 1000)
+      XCTAssertGreaterThanOrEqual(value, before); XCTAssertLessThanOrEqual(value, 1)
+      before = value
+    }
+  }
+
+  func testWithReduceMotionTheCursorIsAtTheTargetAtOnce() {
+    let path = GuidedPath(from: CGPoint(x: 1300, y: 120), to: CGPoint(x: 200, y: 700), still: true)
+    XCTAssertEqual(path.duration, 0); XCTAssertEqual(path.bend, 0)
+    XCTAssertEqual(path.point(at: 0), CGPoint(x: 200, y: 700))
+    XCTAssertEqual(path.point(at: 0.1), CGPoint(x: 200, y: 700))
+    XCTAssertTrue(path.done(at: 0))
+    XCTAssertEqual(path.points(every: 1.0 / 120), [CGPoint(x: 200, y: 700)])
+    // A way with no length, and numbers with no meaning, give the target too.
+    XCTAssertEqual(GuidedPath(from: CGPoint(x: 5, y: 5), to: CGPoint(x: 5, y: 5)).point(at: 0.1), CGPoint(x: 5, y: 5))
+    XCTAssertEqual(GuidedPath(from: .zero, to: CGPoint(x: 9, y: 9), duration: .nan).point(at: 0), CGPoint(x: 9, y: 9))
+    XCTAssertEqual(GuidedPath(from: .zero, to: CGPoint(x: 9, y: 9)).point(at: .nan), CGPoint(x: 9, y: 9))
+  }
+
+  func testTheRealPointerFollowsAShortStraightWay() {
+    let start = CGPoint(x: 100, y: 100), target = CGPoint(x: 900, y: 500)
+    let length = hypot(800.0, 400.0)
+    let path = GuidedPath(from: start, to: target, duration: GuidedPath.moveDuration(length: length), arc: 0)
+    let points = path.points(every: 1.0 / 120)
+    XCTAssertEqual(points.last, target)
+    XCTAssertGreaterThan(points.count, 5); XCTAssertLessThan(points.count, 30)
+    var before = 0.0
+    for point in points {
+      let now = split(point, path)
+      XCTAssertEqual(now.across, 0, accuracy: 0.000_001)
+      XCTAssertGreaterThanOrEqual(now.along, before); XCTAssertLessThanOrEqual(now.along, length + 0.000_001)
+      before = now.along
+    }
+    // Short, and a little longer for a long way. A drag is slow enough for an app to follow.
+    XCTAssertEqual(GuidedPath.moveDuration(length: 0), 0.06)
+    XCTAssertEqual(GuidedPath.moveDuration(length: 100_000), 0.18)
+    XCTAssertLessThan(GuidedPath.moveDuration(length: 200), GuidedPath.moveDuration(length: 600))
+    XCTAssertEqual(GuidedPath.dragDuration(length: 0), 0.25); XCTAssertEqual(GuidedPath.dragDuration(length: 100_000), 0.60)
+    XCTAssertEqual(GuidedPath(from: start, to: target, duration: 0).points(every: 0.01), [target])
+    XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: 0.001).count, 600)
+    XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: .leastNonzeroMagnitude).count, 600)
+  }
+
+  func testTheGlideIsSlowEnoughToFollowAndALongWayTakesLonger() {
+    // The picture of a call has 10 frames a second: the shortest glide is in four of them or more.
+    XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.45)
+    XCTAssertGreaterThanOrEqual((GuidedPath.shortestGlide * 10).rounded(.down), 4)
+    XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.45)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 300), 0.575, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.70)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.45)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.45)
+    var before = 0.0
+    for length in stride(from: 0.0, through: 4000, by: 50) {
+      let now = GuidedPath.glideDuration(length: length)
+      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.45); XCTAssertLessThanOrEqual(now, 0.70)
+      before = now
+    }
+    // The screen can change between the worker's last look and the event: the glide and the wait stay at one second or under.
+    XCTAssertLessThanOrEqual(GuidedPath.longestGlide + GuidedPath.dwell(still: false), 1.0)
+    XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 1.0)
+    // The way to one target takes the time of its length, and ends on the target.
+    for (start, target) in ways {
+      let path = GuidedPath.glide(from: start, to: target, still: false)
+      XCTAssertEqual(path.duration, GuidedPath.glideDuration(length: path.length))
+      XCTAssertEqual(path.point(at: 0), start); XCTAssertEqual(path.point(at: path.duration), target)
+      XCTAssertFalse(path.done(at: path.duration - 0.01)); XCTAssertTrue(path.done(at: path.duration))
+    }
+  }
+
+  func testWithReduceMotionTheGlideIsAJump() {
+    for (start, target) in ways {
+      let path = GuidedPath.glide(from: start, to: target, still: true)
+      XCTAssertEqual(path.duration, 0); XCTAssertEqual(path.bend, 0)
+      // No place between the start and the target is ever shown.
+      for time in [0, 0.001, 0.2, 0.7, 5] { XCTAssertEqual(path.point(at: time), target) }
+      XCTAssertTrue(path.done(at: 0))
+    }
+    // With no glide to lead the eye, the cursor waits longer at the target before the hands act.
+    XCTAssertGreaterThan(GuidedPath.dwell(still: true), GuidedPath.dwell(still: false))
+    // Three frames of a call's picture at the target before the hands act, and never a long wait.
+    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false), 0.3)
+    XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 0.5)
+  }
+
+  func testTheCursorGoesOnFromWhereItIsAndFirstComesOutOfTheMascot() {
+    let shown = CGPoint(x: 400, y: 300), mascot = CGPoint(x: 1300, y: 120), pointer = CGPoint(x: 20, y: 880)
+    XCTAssertEqual(GuidedPath.origin(shown: shown, mascot: mascot, pointer: pointer), shown)
+    XCTAssertEqual(GuidedPath.origin(shown: nil, mascot: mascot, pointer: pointer), mascot)
+    XCTAssertEqual(GuidedPath.origin(shown: nil, mascot: nil, pointer: pointer), pointer)
+    // A place with no meaning is skipped.
+    XCTAssertEqual(GuidedPath.origin(shown: CGPoint(x: CGFloat.nan, y: 0), mascot: mascot, pointer: pointer), mascot)
+    XCTAssertEqual(GuidedPath.origin(shown: nil, mascot: CGPoint(x: 0, y: CGFloat.infinity), pointer: pointer), pointer)
+    // The cursor stays long enough after a command for the next one to take it on.
+    XCTAssertGreaterThanOrEqual(GuidedPath.rest, 1.0)
+  }
+
+  func testTheMascotLeansTowardTheTarget() {
+    let mascot = CGPoint(x: 800, y: 300)
+    // A positive lean is toward the left, as the lean of a tucked mascot is.
+    XCTAssertGreaterThan(GuidedPath.lean(from: mascot, to: CGPoint(x: 300, y: 600)), 0)
+    XCTAssertLessThan(GuidedPath.lean(from: mascot, to: CGPoint(x: 1300, y: 20)), 0)
+    XCTAssertEqual(GuidedPath.lean(from: mascot, to: CGPoint(x: 800, y: 900)), 0)
+    XCTAssertEqual(GuidedPath.lean(from: mascot, to: CGPoint(x: -9000, y: 0)), 0.26)
+    XCTAssertEqual(GuidedPath.lean(from: mascot, to: CGPoint(x: 9000, y: 0)), -0.26)
+    XCTAssertEqual(GuidedPath.lean(from: mascot, to: CGPoint(x: CGFloat.nan, y: 0)), 0)
+  }
+
+  func testWhileItTypesTheMascotLooksDownAndTaps() {
+    var moving = MascotPose()
+    TypingBeat.apply(to: &moving, at: 0.5 / TypingBeat.tapsPerSecond, still: false)
+    XCTAssertEqual(moving.pupilY, -0.55); XCTAssertEqual(moving.pitch, 0.08)
+    XCTAssertEqual(moving.bob, -0.020, accuracy: 0.000_001); XCTAssertEqual(moving.squash, 0.975, accuracy: 0.000_001)
+    // The taps stay small, at every moment.
+    for frame in 0...600 {
+      var pose = MascotPose()
+      TypingBeat.apply(to: &pose, at: Double(frame) / 120, still: false)
+      XCTAssertTrue((-0.0201...0).contains(pose.bob)); XCTAssertTrue((0.9749...1).contains(pose.squash)); XCTAssertLessThanOrEqual(abs(pose.roll), 0.0301)
+    }
+    // With Reduce Motion only the eyes go down.
+    var still = MascotPose()
+    TypingBeat.apply(to: &still, at: 0.37, still: true)
+    var expected = MascotPose(); expected.pupilY = -0.55
+    XCTAssertEqual(still, expected)
+  }
+}

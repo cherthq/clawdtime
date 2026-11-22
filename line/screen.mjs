@@ -1,6 +1,7 @@
 // The Mac's main screen as RGBA frames, for the call's video. ffmpeg reads the screen only while a caller asked
 // to see it. It needs ffmpeg on the PATH and the Screen Recording permission for the program that starts it.
 import { spawn } from "node:child_process";
+import { screenFilter } from "./layout.mjs";
 
 export const WIDTH = 1280;
 export const HEIGHT = 720;
@@ -25,7 +26,8 @@ export function splitFrames(pending, chunk, size = FRAME_BYTES) {
 }
 
 /**
- * Starts the capture. The picture is scaled to fit WIDTH by HEIGHT with bars, so text keeps its shape.
+ * Starts the capture. The screen, or the one part of it in `view`, is fitted into the box of the `layout` with
+ * its shape kept, so text keeps its shape. A new view or layout needs a new capture: stop this one, start one.
  *  - `latest()` gives the newest full frame, or null before the first one and after the stop.
  *  - `started(ms)` resolves true at the first frame, or false when none came in that time or ffmpeg stopped.
  *  - `stop()` ends ffmpeg.
@@ -33,19 +35,18 @@ export function splitFrames(pending, chunk, size = FRAME_BYTES) {
  * @param {(code: number | null) => void} [options.onExit] called when ffmpeg stops by itself
  * @param {string} [options.command] the ffmpeg program
  * @param {string} [options.device] the avfoundation screen device
+ * @param {string} [options.layout] "upright" or "wide": see layout.mjs
+ * @param {{ x: number, y: number, w: number, h: number } | null} [options.view] one part of the screen, in shares
  * @param {number} [options.frameBytes] the size of one frame, for a test
+ * @param {() => number} [options.now] monotonic clock for freshness tests
  * @param {typeof spawn} [options.start] starts the program, for a test
  */
 export function startScreen(options = {}) {
   const size = options.frameBytes ?? FRAME_BYTES;
-  const now = options.now ?? Date.now;
-  const maxFrameAgeMs = options.maxFrameAgeMs ?? 1500;
-  if (
-    !Number.isFinite(maxFrameAgeMs) ||
-    maxFrameAgeMs <= 0 ||
-    maxFrameAgeMs > 5000
-  )
-    throw Error("Invalid frame freshness bound.");
+  const now = options.now ?? (() => performance.now());
+  let frameAt = -Infinity;
+  const fresh = () =>
+    frame && now() >= frameAt && now() - frameAt <= 500 ? frame : null;
   const child = (options.start ?? spawn)(
     options.command || "ffmpeg",
     [
@@ -63,7 +64,13 @@ export function startScreen(options = {}) {
       "-i",
       `${options.device ?? screenDevice}:none`,
       "-vf",
-      `fps=${FPS},scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2`,
+      screenFilter({
+        width: WIDTH,
+        height: HEIGHT,
+        fps: FPS,
+        layout: options.layout,
+        view: options.view,
+      }),
       "-pix_fmt",
       "rgba",
       "-f",
@@ -73,7 +80,6 @@ export function startScreen(options = {}) {
     { stdio: ["ignore", "pipe", "ignore"] },
   );
   let frame = null,
-    capturedAt = null,
     pending = Buffer.alloc(0),
     stopped = false,
     ended = false;
@@ -88,7 +94,7 @@ export function startScreen(options = {}) {
     // The frame is a copy: the next chunk must not change a picture that is on its way to the call.
     if (cut.newest) {
       frame = new Uint8Array(cut.newest);
-      capturedAt = now();
+      frameAt = now();
       settle(true);
     }
     pending = cut.rest;
@@ -103,21 +109,10 @@ export function startScreen(options = {}) {
   child.on("exit", (code) => end(code));
   child.on("error", () => end(null));
   return {
-    latest: () => {
-      const at = now();
-      if (
-        capturedAt === null ||
-        !Number.isFinite(at) ||
-        at < capturedAt ||
-        at - capturedAt > maxFrameAgeMs
-      ) {
-        frame = null;
-        return null;
-      }
-      return frame;
-    },
+    // A stalled process must not replay the old desktop as a live view.
+    latest: fresh,
     started(ms = 4000) {
-      if (frame) return Promise.resolve(true);
+      if (fresh()) return Promise.resolve(true);
       if (stopped || ended) return Promise.resolve(false);
       return new Promise((resolve) => {
         const done = (value) => {

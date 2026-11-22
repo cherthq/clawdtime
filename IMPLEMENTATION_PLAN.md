@@ -1,5 +1,30 @@
 # ClawdTime: approved implementation and migration plan
 
+## Phone testing handoff — November 21, 2026
+
+The app/desktop/zoom integration and speech-turn correction are on draft PR #56.
+Two instrumented incoming calls passed avatar/audio startup and showed sharing;
+the historical missing-avatar cause remains unproved. The user then explicitly
+requested production deployment. The normal local Supervisor and phone host now
+run `ae56d947`, with normal computer control enabled, one connected line owner,
+and test control off. Installed permission/shortcut checks passed. Physical
+phone typing/navigation/zoom/Stop acceptance remains incomplete. Read
+[the current testing handoff](docs/PHONE_ZOOM_TEST_HANDOFF.md) before continuing,
+and verify fresh ownership before any further live work. This deployment did not
+merge the PR or authorize outgoing calls.
+
+## App and desktop navigation — November 21, 2026
+
+Retain named app/window activation and adjacent desktop switching; add explicit
+previous-app switching and full-screen destination verification. Interpret
+navigation dynamically from the original human request through structured model
+output, replacing the fixed directional phrase grammar. Keep one-shot execution,
+Stop, fresh observations, unknown-outcome protection and shared-video zoom
+transitions. Add per-Mac navigation readiness to setup. The complete approved
+implementation and test plan is [App and desktop navigation](docs/APP_DESKTOP_NAVIGATION_PLAN.md).
+Work on the integration branch, run the checks and open a PR before physical
+acceptance; this does not authorize a merge or live installation replacement.
+
 ## Direct local task execution — November 20, 2026
 
 The operator requested removal of redundant task-start and local computer-action

@@ -11,6 +11,7 @@ import {
   existsSync,
 } from "node:fs";
 import { resolve, join, relative, isAbsolute, sep } from "node:path";
+import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { Store } from "../src/storage/store.js";
 import { Vault, token } from "../src/storage/security.js";
@@ -32,6 +33,8 @@ import {
 } from "../src/task-presentation-contracts.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
+import { stateRoot } from "../connectors/agents/hooks.js";
+import { chooseExecution } from "../connectors/computer/service.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
@@ -40,6 +43,7 @@ import { QualifiedBackgroundWorker } from "../src/control/background-worker.js";
 import { backgroundConfigSchema } from "../src/control/background-config.js";
 import {
   LineRuntime,
+  assertSeparateLineToken,
   lineRuntimeConfigSchema,
 } from "../src/control/line-runtime.js";
 import { BundledCuaNative } from "../src/control/bundled-cua-native.js";
@@ -377,6 +381,12 @@ if (
   throw Error(
     "Background execution requires exclusive local runtime selection.",
   );
+// A service that a test started never has the background runtime, as it never
+// has the computer worker: no input for the driver can come out of a test.
+if (backgroundConfig && process.env.VITEST)
+  throw Error(
+    "Background execution does not run in a service that a test started.",
+  );
 const background = backgroundConfig
   ? new BackgroundRuntime(
       store,
@@ -433,12 +443,23 @@ const executor =
         (text) => agentBoard?.appendExecutionResult(text),
       )
     : undefined);
+// The file of the phone runtime is a private desktop file as the three before
+// it: it is read only in a desktop service, and only as a regular file of
+// this user for its owner alone, never through a link.
 const lineRuntimePath = join(directory, "line-runtime.json");
-const lineRuntimeConfig = existsSync(lineRuntimePath)
-  ? lineRuntimeConfigSchema.parse(
-      JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
-    )
-  : undefined;
+const lineRuntimeConfig =
+  desktop && existsSync(lineRuntimePath)
+    ? lineRuntimeConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
+      )
+    : undefined;
+// A phone process never holds the operator, panel or session credential.
+if (lineRuntimeConfig)
+  assertSeparateLineToken(lineRuntimeConfig.token, [
+    config.operatorToken,
+    desktopSetup?.config.token,
+    desktopSetup?.config.sessionToken,
+  ]);
 if (
   lineRuntimeConfig &&
   !background &&
@@ -457,6 +478,29 @@ const lineRuntime =
 const lineRuntimeWatch = lineRuntime
   ? setInterval(() => lineRuntime.expire(), 1000)
   : undefined;
+// One engine does the computer work of this service. A file in the state
+// folder keeps priority: the connection to an existing chat, then the
+// background runtime, then the bundled runtime. With none of them, the
+// app-owned computer worker runs, when the person turned it on with
+// `clawdtime computer on` and a key for the language model is in this
+// environment. A service that a test started never has that worker, so no
+// command for the hands can come out of a test.
+const chosen = desktop
+  ? chooseExecution({
+      root: stateRoot({ env: process.env, home: homedir() }),
+      env: process.env,
+      chat: executorConfig ? executor : undefined,
+      background,
+      bundled,
+      actors: !!(calls || presentation),
+      board: flags.get("--agents") !== "false",
+      notify: (text) => agentBoard?.appendExecutionResult(text),
+      // The browser goes in here, as one more line:
+      //   browser: new AppleEventsBrowser(),
+      // Without it the worker refuses the browser actions and uses the screen.
+    })
+  : undefined;
+const execution = chosen?.execution;
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -472,7 +516,7 @@ agentBoard =
             }
           : {}),
         tasks: deskTasks(desktop, desktopSetup.config.token),
-        ...(executor ? { execution: executor } : {}),
+        ...(execution ? { execution } : {}),
       })
     : undefined;
 agentBoard?.start();
@@ -488,6 +532,7 @@ const app = createTaskApp(
   calls,
   agentBoard,
   executor,
+  chosen?.computer.port,
   lineRuntime,
 );
 const presentationWatch = presentation

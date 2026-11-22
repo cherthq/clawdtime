@@ -598,18 +598,20 @@ describe("the brain opens the session that the person means", () => {
       item.id === "p2"
         ? ["platform-2", "Arthur Pendelton dedicated line"]
         : titles(item);
-    const { model, seen } = scripted([
+    const { model } = scripted([
       [call("open_session", { session: "the line session" })],
       "Which one?",
     ]);
-    await new Supervisor(value, model).reply(
+    // The code asks which one by itself, with both names.
+    const answer = await new Supervisor(value, model).reply(
       [],
       "show the line session",
       "chat",
     );
     expect(log).toEqual([]);
-    expect(seen[0]).toContain("work-13");
-    expect(seen[0]).toContain("platform-2");
+    expect(answer).toMatch(/^Which one: /);
+    expect(answer).toContain("work-13");
+    expect(answer).toContain("platform-2");
   });
 
   it("says the truth when only the application came forward", async () => {
@@ -848,18 +850,20 @@ describe("the person's words and the model's choice, after an independent review
     const { value, log } = world([app, web], (item) =>
       item.id === "w" ? ["web", "Fix login bug in the app"] : ["app"],
     );
-    const { model, seen } = scripted([
+    const { model } = scripted([
       [call("open_session", { session: "app" })],
       "Which one?",
     ]);
-    await new Supervisor(value, model).reply(
+    // Both are named, by the code's own question, and none opens.
+    const answer = await new Supervisor(value, model).reply(
       [],
       "Open the one that fixes the login bug in the app",
       "call",
     );
     expect(log).toEqual([]);
-    expect(seen[0]).toContain("app");
-    expect(seen[0]).toContain("web");
+    expect(answer).toMatch(/^Which one: /);
+    expect(answer).toContain("app");
+    expect(answer).toContain("web");
   });
 
   it("still takes the model's choice when the person's words name no session", async () => {

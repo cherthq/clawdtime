@@ -8,8 +8,8 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentsCli } from "../cli/agents.js";
@@ -24,6 +24,7 @@ import { DecisionDesk } from "../connectors/agents/decisions.js";
 import type { Runner } from "../connectors/agents/focus.js";
 import {
   Jobs,
+  waitBlock,
   type JobFacts,
   type JobPort,
 } from "../connectors/agents/jobs.js";
@@ -55,7 +56,7 @@ describe("a job for a coding session", () => {
       "Open a tunnel for port 3000 and give me the link; $(rm -rf ~) `whoami` 'x'";
     expect(await jobs.start(job)).toEqual({
       ok: true,
-      said: "I requested a terminal session for that job. Its progress is unverified until the session reports a result.",
+      said: "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.",
     });
     const folder = join(directory, "agents", "jobs");
     const [id] = readdirSync(folder);
@@ -72,6 +73,23 @@ describe("a job for a coding session", () => {
     expect(script).toContain("trap job_exit_receipt EXIT");
     expect(script).toContain(
       `claude "$(cat '${join(folder, id!, "prompt.txt")}')"`,
+    );
+    // The whole script, in its order: the receipts, then the lines that
+    // start the agent.
+    const at = (name: string) => `'${join(folder, id!, name)}'`;
+    expect(script).toBe(
+      [
+        "#!/bin/zsh",
+        `[[ ! -e ${at("retired.json")} ]] || { print -r -- 'This job was retired; it will not be replayed.'; exit 1; }`,
+        `( umask 077; setopt NO_CLOBBER; [[ ! -L ${at("launched.json")} ]] && printf '{"version":1,"pid":%s}\\n' "$$" > ${at("launched.json")} ) || { print -r -- 'This job was already launched; it will not be replayed.'; exit 1; }`,
+        `job_exit_receipt() { local job_exit=$?; ( umask 077; setopt NO_CLOBBER; [[ ! -L ${at("exited.json")} ]] && printf '{"version":1,"exitCode":%s}\\n' "$job_exit" > ${at("exited.json")} ); }`,
+        "trap job_exit_receipt EXIT",
+        "cd '/work/app' || exit 1",
+        `command -v claude >/dev/null 2>&1 || { print -r -- 'The coding agent claude is not installed on this Mac, so the job did not start.' > ${at("result.md")}; exit 1; }`,
+        `( exec claude "$(cat ${at("prompt.txt")})" )`,
+        "exit $?",
+        "",
+      ].join("\n"),
     );
     // No word of the job is in the script: nothing spoken can become a command.
     for (const word of ["tunnel", "rm -rf", "whoami"])
@@ -102,7 +120,7 @@ describe("a job for a coding session", () => {
       "utf8",
     );
     expect(script).toContain(`cd '/work/it'\\''s here' || exit 1`);
-    expect(script).toContain("codex ");
+    expect(script).toContain("exec codex ");
   });
 
   it("starts nothing for an unclear job, for a credential, when the window does not open, and past the limit", async () => {
@@ -133,9 +151,7 @@ describe("a job for a coding session", () => {
           run: failing.run,
         }).start("Build the landing page of the app")
       ).said,
-    ).toBe(
-      "The terminal launch failed. Whether the agent started is unverified; inspect this job before retrying.",
-    );
+    ).toBe("The terminal window for the job did not open on this Mac.");
     let clock = now;
     const limited = new Jobs(directory, {
       project: "/work/app",
@@ -154,17 +170,22 @@ describe("a job for a coding session", () => {
     const third = await limited.start("Open a tunnel for port 3000");
     expect(third).toEqual({
       ok: false,
-      said: "2 jobs have unresolved outcomes. Inspect them before starting another job; missing answers do not prove they are running.",
+      said: "2 jobs still run. Ask for a result, or wait for one to finish.",
     });
-    // Time alone cannot reconcile an unknown external effect.
-    clock += 3 * 60 * 60 * 1000;
-    expect((await limited.start("Open a tunnel for port 3000")).ok).toBe(false);
+    // A retired job holds no place: the next job starts with no wait.
     expect(
       limited.retire(
         limited.recent()[0]!.id,
         "Operator reviewed the stopped session; completion remains unknown.",
       ),
     ).toContain("did not stop");
+    expect((await limited.start("Open a tunnel for port 3000")).ok).toBe(true);
+    clock += 1000;
+    expect((await limited.start("Check which lines are healthy")).ok).toBe(
+      false,
+    );
+    // A job with no answer after two hours no longer counts as running.
+    clock += 3 * 60 * 60 * 1000;
     expect((await limited.start("Open a tunnel for port 3000")).ok).toBe(true);
   });
 
@@ -246,6 +267,7 @@ describe("a job for a coding session", () => {
     });
     lines.length = 0;
     await cli([]);
+    expect(lines[0]).toContain("WORKING");
     expect(lines[0]).toContain("LAUNCH_REQUESTED");
     expect(lines[0]).toContain("has not acknowledged starting");
     expect(lines[0]).toContain("Build the landing page of the app");
@@ -357,7 +379,7 @@ describe("the brain hands work to a job", () => {
     expect(started).toEqual(["Build the landing page and run its tests"]);
   });
 
-  it("says the answer of the newest job, or preserves unverified progress without model reassurance", async () => {
+  it("says the answer of the newest job, or that it still works", async () => {
     const working: JobFacts = {
       id: "20261121T005500-ab12",
       job: "Open a tunnel for port 3000 and give me the link",
@@ -367,16 +389,14 @@ describe("the brain hands work to a job", () => {
     };
     let { value } = world([working]);
     let run = scripted([[call("job_result")], "Still working."]);
-    const unresolved = await new Supervisor(value, run.model).reply(
+    await new Supervisor(value, run.model).reply(
       [],
       "is the tunnel up?",
       "call",
     );
-    expect(unresolved).toBe(
-      'Job "Open a tunnel for port 3000 and give me the link", started 5m ago. No result has arrived. Whether the session is working, waiting, or stuck is unverified.',
+    expect(run.results[0]).toBe(
+      'Job "Open a tunnel for port 3000 and give me the link", started 5m ago, still works. It has run 5 minutes. Nothing reports what it does now, and no tool looks into a job, speeds it up or stops it: offer none of that.',
     );
-    expect(run.systems).toHaveLength(1);
-    expect(run.results).toEqual([]);
     ({ value } = world([
       {
         ...working,
@@ -403,7 +423,9 @@ describe("the brain hands work to a job", () => {
       "what did it find",
       "call",
     );
-    expect(run.results[0]).toBe("ClawdTime started no job yet.");
+    expect(run.results[0]).toBe(
+      "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.",
+    );
   });
 
   it("sends a task to a job where no task service runs, instead of a refusal", async () => {
@@ -642,7 +664,7 @@ describe("job launch receipts and explicit retirement", () => {
       await jobs.start("Another isolated fixture operation"),
     ).toMatchObject({
       ok: false,
-      said: expect.stringContaining("1 jobs have unresolved outcomes"),
+      said: expect.stringContaining("1 jobs still run"),
     });
     expect(launcher.calls).toEqual([]);
     expect(
@@ -794,6 +816,137 @@ describe("job launch receipts and explicit retirement", () => {
     expect(jobs.recent()[0]!.status).toBe("unknown");
   });
 
+  it("still makes more work wait for a retired job that has no answer, and lists it by its status", async () => {
+    const directory = root();
+    let clock = now;
+    const system = fakeSystem({
+      now,
+      home: directory,
+      env: { CLAWDTIME_CONFIG_HOME: directory },
+    });
+    const jobs = new Jobs(directory, {
+      project: "/work/app",
+      now: () => clock,
+      run: recorder().run,
+    });
+    await jobs.start("build a small landing page for my bakery");
+    const [first] = jobs.recent();
+    jobs.retire(first!.id, "The window was closed; its outcome is unknown.");
+    clock += 30_000;
+    // Retirement does not stop a process: the retired job can still change
+    // files. More work on its thing waits for it, as for any job with no
+    // answer.
+    expect(
+      (
+        await jobs.start("also add a contact form to it", {
+          refersBack: true,
+          followsUp: true,
+        })
+      ).said,
+    ).toBe(
+      "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.",
+    );
+    expect(jobs.recent(1)[0]!.waiting).toBe(true);
+    // The list names a retired job by its status, not as working.
+    const lines: string[] = [];
+    await agentsCli(["--supervisor", "jobs"], {
+      system,
+      runner: recorder().run,
+      print: (line) => lines.push(line),
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.startsWith("WORKING  ")).toBe(true);
+    expect(lines[0]).toContain("LAUNCH_REQUESTED: ");
+    expect(lines[1]!.startsWith(`RETIRED_UNKNOWN  ${first!.id}  `)).toBe(true);
+    expect(lines[1]).toContain("Retirement does not stop its process.");
+  });
+
+  it.skipIf(!existsSync("/bin/zsh"))(
+    "does not start the agent of a job that was retired while it waited",
+    async () => {
+      const directory = root();
+      let clock = now;
+      const jobs = new Jobs(directory, {
+        project: directory,
+        now: () => clock,
+        run: recorder().run,
+      });
+      const bin = join(directory, "bin");
+      mkdirSync(bin);
+      const counter = join(directory, "invocations");
+      writeFileSync(
+        join(bin, "claude"),
+        '#!/bin/sh\nprintf invoked >> "$FIXTURE_COUNT"\nexit 0\n',
+        { mode: 0o700 },
+      );
+      await jobs.start("build a small landing page for my bakery");
+      clock += 30_000;
+      await jobs.start("also add a contact form to it", {
+        refersBack: true,
+        followsUp: true,
+      });
+      const [second, first] = jobs.recent(2);
+      expect(second!.waiting).toBe(true);
+      const folder = join(directory, "agents", "jobs");
+      const script = readFileSync(
+        join(folder, second!.id, "start.command"),
+        "utf8",
+      );
+      // The script looks for the retirement twice: at its start, and after
+      // the wait, just before the agent.
+      const check = `[[ ! -e '${join(folder, second!.id, "retired.json")}' ]] || {`;
+      expect(script.split(check)).toHaveLength(3);
+      expect(script.lastIndexOf(check)).toBeGreaterThan(
+        script.indexOf("wait-over"),
+      );
+      expect(script.lastIndexOf(check)).toBeLessThan(
+        script.indexOf("( exec claude "),
+      );
+      // The script of the second job runs with no terminal, and waits.
+      const child = spawn(
+        "/bin/zsh",
+        [join(folder, second!.id, "start.command")],
+        {
+          env: { PATH: `${bin}:/usr/bin:/bin`, FIXTURE_COUNT: counter },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let output = "";
+      child.stdout.on("data", (chunk) => (output += chunk));
+      child.stderr.on("data", (chunk) => (output += chunk));
+      const ended = new Promise<number | null>((resolve) =>
+        child.on("exit", (code) => resolve(code)),
+      );
+      const launched = join(folder, second!.id, "launched.json");
+      for (let tries = 0; tries < 200 && !existsSync(launched); tries++)
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(existsSync(launched)).toBe(true);
+      // It is retired while it waits, and then the job before it answers.
+      jobs.retire(second!.id, "The person changed the plan for this work.");
+      writeFileSync(
+        join(folder, first!.id, "result.md"),
+        "The page is done.\n",
+      );
+      expect(await ended).toBe(1);
+      expect(output).toContain("This job waits for the job before it.");
+      expect(output).toContain(
+        "This job was retired; it will not be replayed.",
+      );
+      expect(existsSync(counter)).toBe(false);
+      expect(jobs.recent(1)[0]).toMatchObject({
+        status: "retired_unknown",
+        done: false,
+        result: null,
+      });
+      expect(
+        JSON.parse(
+          readFileSync(join(folder, second!.id, "exited.json"), "utf8"),
+        ),
+      ).toEqual({ version: 1, exitCode: 1 });
+    },
+    30_000,
+  );
+
   it("exposes retirement as an explicit CLI command without invoking a process", async () => {
     const directory = root();
     const system = fakeSystem({
@@ -826,4 +979,229 @@ describe("job launch receipts and explicit retirement", () => {
     expect(runner.calls).toEqual([]);
     expect(jobs.recent()[0]!.status).toBe("retired_unknown");
   });
+});
+
+describe("a job that follows up on a job that still runs", () => {
+  const first = "build a small landing page for my bakery in one html file";
+  const second = "also add a contact form to it";
+  const waiting =
+    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.";
+  const atOnce =
+    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  const follows = { refersBack: true, followsUp: true };
+  const made = () => {
+    const directory = root();
+    const clock = { now };
+    const { calls, run } = recorder();
+    const jobs = new Jobs(directory, {
+      project: "/work/app",
+      now: () => clock.now,
+      run,
+    });
+    const folder = join(directory, "agents", "jobs");
+    const ids = () => readdirSync(folder).sort();
+    const file = (id: string, name: string) =>
+      readFileSync(join(folder, id, name), "utf8");
+    /** The paths that the wait of the job `id` uses, when it waits for `before`. */
+    const paths = (id: string, before: string) => ({
+      answer: join(folder, before, "result.md"),
+      beforeGaveUp: join(folder, before, "gave-up"),
+      over: join(folder, id, "wait-over"),
+      result: join(folder, id, "result.md"),
+      gaveUp: join(folder, id, "gave-up"),
+    });
+    return { jobs, clock, calls, folder, ids, file, paths };
+  };
+
+  it("waits in its own start script until that job wrote its answer, and says so", async () => {
+    const { jobs, clock, calls, folder, ids, file, paths } = made();
+    expect((await jobs.start(first)).said).toBe(atOnce);
+    clock.now += 30_000;
+    expect(await jobs.start(second, follows)).toEqual({
+      ok: true,
+      said: waiting,
+    });
+    const [one, two] = ids();
+    const answer = join(folder, one!, "result.md");
+    const script = file(two!, "start.command");
+    // The wait stands before the agent starts, and names only paths of the two jobs.
+    const block = waitBlock(paths(two!, one!));
+    expect(script).toContain(block);
+    expect(script.indexOf(block)).toBeLessThan(script.indexOf("exec claude "));
+    expect(script).toContain(`[[ ! -e '${answer}' && `);
+    // No word of the person stands in the script.
+    expect(script).not.toContain("contact form");
+    expect(script).not.toContain("bakery");
+    // The window of the second job opens at once: the wait shows there.
+    expect(calls).toHaveLength(2);
+    // The job is told that another job worked there. The answer of that job
+    // is not handed on: nothing could check it for a credential.
+    const prompt = file(two!, "prompt.txt");
+    expect(prompt).toContain(
+      "Another job worked in this folder just before you",
+    );
+    expect(prompt).not.toContain(answer);
+    // The first script has no wait.
+    expect(file(one!, "start.command")).not.toContain("waits for the job");
+    // Its state says that it waits, until its script ended the wait.
+    expect(jobs.recent(2).map((job) => job.waiting ?? false)).toEqual([
+      true,
+      false,
+    ]);
+    writeFileSync(join(folder, two!, "wait-over"), "");
+    expect(jobs.recent(1)[0]!.waiting ?? false).toBe(false);
+  });
+
+  it("says that a job runs when anything stands in the place of its wait-over file", async () => {
+    const { jobs, clock, folder, ids } = made();
+    await jobs.start(first);
+    clock.now += 30_000;
+    await jobs.start(second, follows);
+    mkdirSync(join(folder, ids()[1]!, "wait-over"));
+    expect(jobs.recent(1)[0]!.waiting ?? false).toBe(false);
+  });
+
+  it("does not wait when the request is not more work on that thing, or when no job runs", async () => {
+    // The request points back with a word that names no thing of a job
+    // ("one html file"): it gets no wait.
+    const loose = made();
+    await loose.jobs.start(first);
+    loose.clock.now += 30_000;
+    expect(
+      (
+        await loose.jobs.start(
+          "make one landing page for the cafe in one html file",
+          { refersBack: true },
+        )
+      ).said,
+    ).toBe(atOnce);
+    expect(loose.file(loose.ids()[1]!, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    // The request does not point back: both run side by side, as before.
+    const side = made();
+    await side.jobs.start(first);
+    side.clock.now += 30_000;
+    expect((await side.jobs.start("check which lines are healthy")).said).toBe(
+      atOnce,
+    );
+    expect(side.file(side.ids()[1]!, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    // The job before it is done: no wait, and its answer is handed on as before.
+    const done = made();
+    await done.jobs.start(first);
+    writeFileSync(
+      join(done.folder, done.ids()[0]!, "result.md"),
+      "The page is at /work/app/bakery.html.\n",
+    );
+    done.clock.now += 60_000;
+    expect((await done.jobs.start(second, follows)).said).toBe(atOnce);
+    const later = done.ids()[1]!;
+    expect(done.file(later, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    expect(done.file(later, "prompt.txt")).toContain(
+      `The answer of the job before this one is in the file ${join(done.folder, done.ids()[0]!, "result.md")}.`,
+    );
+    // The job before it never wrote an answer and is older than two hours: it
+    // does not count as running, so nothing waits for it.
+    const old = made();
+    await old.jobs.start(first);
+    old.clock.now += 2 * 60 * 60 * 1000 + 1000;
+    expect((await old.jobs.start(second, follows)).said).toBe(atOnce);
+    expect(old.file(old.ids()[1]!, "start.command")).not.toContain(
+      "waits for the job",
+    );
+    // No job before it at all.
+    const none = made();
+    expect((await none.jobs.start(second, follows)).said).toBe(atOnce);
+  });
+
+  it("waits in a chain: the third job waits for the second", async () => {
+    const { jobs, clock, ids, file, paths } = made();
+    await jobs.start(first);
+    clock.now += 30_000;
+    await jobs.start(second, follows);
+    clock.now += 30_000;
+    expect(
+      (await jobs.start("then make the header of it blue", follows)).said,
+    ).toBe(waiting);
+    const [, two, three] = ids();
+    expect(file(three!, "start.command")).toContain(
+      waitBlock(paths(three!, two!)),
+    );
+  });
+
+  it.skipIf(!existsSync("/bin/zsh"))(
+    "the wait lines run in zsh, with no terminal and no window",
+    () => {
+      const zsh = (script: string) =>
+        execFileSync("/bin/zsh", ["-c", script], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 30_000,
+        });
+      const q = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+      const fresh = () => {
+        // A quote and a space in the path: it stays one word of the shell.
+        const directory = mkdtempSync(join(tmpdir(), "clawdtime wait's-"));
+        return {
+          answer: join(directory, "answer.md"),
+          beforeGaveUp: join(directory, "before-gave-up"),
+          over: join(directory, "wait-over"),
+          result: join(directory, "result.md"),
+          gaveUp: join(directory, "gave-up"),
+        };
+      };
+      const line =
+        "This job waits for the job before it. Press Return to begin without the wait.\n";
+      // 1. The answer comes half a second later: the wait shows its line,
+      //    ends, writes that it is over, and the script goes on.
+      const a = fresh();
+      expect(
+        zsh(
+          `( sleep 0.5; : > ${q(a.answer)} ) &\n${waitBlock(a)}print -r -- started`,
+        ),
+      ).toBe(`${line}started\n`);
+      expect(existsSync(a.over)).toBe(true);
+      expect(existsSync(a.result)).toBe(false);
+      // 2. The answer is there already: no wait and no line.
+      expect(zsh(`${waitBlock(a)}print -r -- started`)).toBe("started\n");
+      // 3. The job before never wrote an answer until the wait was over: this
+      //    job writes that as its own answer and starts nothing.
+      const c = fresh();
+      expect(zsh(`${waitBlock(c, 1)}print -r -- started`)).toBe(line);
+      expect(readFileSync(c.result, "utf8")).toBe(
+        "The job before this one did not finish in two hours, so this job did not start. Ask for it again.\n",
+      );
+      expect(existsSync(c.over)).toBe(false);
+      expect(existsSync(c.gaveUp)).toBe(true);
+      // 4b. The job before gave up its own wait, and wrote that as its
+      //     answer: this job gives up too, and does not start hours late.
+      const e = fresh();
+      writeFileSync(e.answer, "The job before this one did not finish.");
+      writeFileSync(e.beforeGaveUp, "");
+      expect(zsh(`${waitBlock(e, 1)}print -r -- started`)).toBe("");
+      expect(readFileSync(e.result, "utf8")).toContain("did not start");
+      expect(existsSync(e.gaveUp)).toBe(true);
+      // 4c. At the end of the wait, a link in the place of this job's answer
+      //     is not written through.
+      const g = fresh();
+      const kept = `${g.answer}.kept`;
+      writeFileSync(kept, "keep");
+      symlinkSync(kept, g.result);
+      expect(zsh(`${waitBlock(g, 1)}print -r -- started`)).toBe(line);
+      expect(readFileSync(kept, "utf8")).toBe("keep");
+      // 5. A link in the place of the wait-over file is not written through.
+      const d = fresh();
+      const outside = `${d.answer}.outside`;
+      writeFileSync(outside, "keep");
+      symlinkSync(outside, d.over);
+      writeFileSync(d.answer, "done");
+      expect(zsh(`${waitBlock(d)}print -r -- started`)).toBe("started\n");
+      expect(readFileSync(outside, "utf8")).toBe("keep");
+    },
+    40_000,
+  );
 });
