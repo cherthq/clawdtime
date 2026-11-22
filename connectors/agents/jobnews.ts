@@ -56,6 +56,19 @@ const waitsForAWord = (text: string) =>
   /\?\s*$/.test(text) ||
   /\bsay\s+(?:yes|no|approve|deny|allow|a word|")/i.test(text);
 
+/**
+ * A line of news waits for the next quiet moment: a question of ClawdTime
+ * waits for its answer ("Which one: docs or payments?"), or a message of the
+ * person waits for ClawdTime's. A line between the two would part them, and
+ * "the second one" would then follow the news. The code does not read a line
+ * of news as an answer (`news` marks it), so this is for the person's eyes:
+ * the question and its answer stay together on the screen.
+ */
+export const holdsNews = (last: ChatMessage | undefined, now: number) =>
+  !!last &&
+  now - last.at < questionHoldMs &&
+  (last.role === "user" || (!last.news && waitsForAWord(last.text)));
+
 export class JobNews {
   private readonly file: string;
   constructor(
@@ -115,20 +128,7 @@ export class JobNews {
       )
       .sort((a, b) => a.startedAt - b.startedAt);
     if (!due.length) return [];
-    // A question of ClawdTime waits for its answer ("Which one: docs or
-    // payments?"), or a message of the person waits for ClawdTime's: a line
-    // between the two would part them, and "the second one" would then
-    // follow the news of a job. The news waits for the next quiet moment.
-    // The code does not read a line of news as an answer (`news` marks it),
-    // so this is for the person's eyes: the question and its answer stay
-    // together on the screen.
-    const last = this.options.log.recent(1)[0];
-    if (
-      last &&
-      now - last.at < questionHoldMs &&
-      (last.role === "user" || (!last.news && waitsForAWord(last.text)))
-    )
-      return [];
+    if (holdsNews(this.options.log.recent(1)[0], now)) return [];
     const added: ChatMessage[] = [];
     for (const job of due) {
       // Written before it is said: a fault after this says nothing twice.

@@ -1166,6 +1166,62 @@ only: the request, the start script, the answer, and what you said before the
 request (`context.txt`). Work that waits for your yes is in `offer.json` there,
 for five minutes at most.
 
+### Hear when a session is done
+
+ClawdTime answers when you ask. Two things it says later by itself, in the chat
+of the desktop panel: the answer of a job that it started, and that a session
+is done, when you asked to hear that.
+
+- "Tell me when deploy fix is done", "keep an eye on deploy fix", "watch docs
+  for me" and "let me know if deploy fix fails" ask for one session. When the
+  request is said to ClawdTime and names one session in full right at the
+  request, with nothing more named after it, the code takes the request by
+  itself. "I'll watch docs", "watch the docs build logs" and "did you watch
+  docs?" are none. For any other form the language model calls the tool
+  `watch_session`. The tool takes a request only when your own last message
+  asks to hear something later (a list of forms in code), is no question
+  about it, is no words for a session and takes nothing back, and a session
+  that your words name wins over one that the model names.
+- "Let me know if anything breaks", "tell me when they're all done" and "keep
+  an eye on everything" name no session. The code then takes each session
+  that works now, and the answer says their names. A session that starts
+  later is not in it. "Let me know if something breaks in production" speaks
+  of something else, and the code takes nothing for it.
+- A yes to ClawdTime's own offer takes the request: after "Want me to keep
+  an eye on deploy fix?" or "Should I tell you when docs is done?", "yes"
+  takes that session, under the same conditions as a yes to an offer to
+  open a session. "It" in such an offer is the one session that the
+  sentence before names, or the one session of your plain question before
+  ("is deploy fix done?", "Not yet. Want me to tell you when it's done?",
+  "yes"). After a question with a word of contrast ("apart from docs, is
+  the other one done?") nothing is taken. "Them" is the sessions that
+  ClawdTime's own answer names, two or more of them; with fewer names,
+  nothing is taken. After "Docs wrote a summary file. Should I monitor it?"
+  nothing is taken: "it" is the file.
+- When the session stops working, the chat says one line, once: "As you
+  asked: deploy fix is done and idle now." The line says how the work ended
+  when the board knows it: done, stopped on an error, or interrupted. A
+  session that waits for you is not done, so nothing is said then. A session
+  that leaves the board is said after 30 seconds away. After 12 hours of
+  work the chat says so once, and the request ends.
+- A session that is idle already has nothing to wait for: ClawdTime says so
+  and takes no request. The chat waits for 8 sessions at most.
+- "Stop watching deploy fix" and "no need to tell me when docs is done" end
+  the request. Only your own words end it. "Don't stop watching docs" and
+  "you can stop watching docs once it's done" end nothing.
+- "What are you watching?" is answered from the state, which lists the
+  sessions that the chat waits for.
+- This only reads the board. It types nothing into a session, opens nothing
+  and starts no work. The line holds the name of the session, as one plain
+  line, and how its work ended, and no text from the session.
+- The line waits while a question of ClawdTime, or a message of yours, waits
+  for its answer, as the line of a job does, and it is marked as news in the
+  same way.
+- ClawdTime keeps no timer and no reminder, and it watches nothing else. It
+  says so when you ask for one.
+- The desktop service says the line on its own rhythm. In `clawdtime chat`
+  with no desktop service nothing runs between your messages.
+
 ### The bar under the mascot
 
 At rest the bar has two buttons: chat and talk. In a conversation it opens into
@@ -1263,6 +1319,9 @@ moves it):
 - `agents/chat.jsonl`: the conversation with ClawdTime, 2,000 characters for
   each message at most. A message that holds a credential is kept as a marker
   only.
+- `agents/chat-watches.json`: the sessions that you asked to hear about, 8 at
+  most: for each one its id, its name and when you asked. A request goes
+  when its line is said or when you end it.
 - `memory/settings.json` and `memory/facts.json`: whether memory is on, and the
   facts, 400 characters for each at most and 2,000 facts at most. Nothing is
   written there while memory is off.

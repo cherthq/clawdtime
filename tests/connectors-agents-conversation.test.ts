@@ -33,9 +33,13 @@ import {
   modelSecondWaitMs,
   modelWaitMs,
   newsFrame,
+  asksToBeTold,
+  sessionNewsFrame,
+  stopsWatching,
 } from "../connectors/agents/brain.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { Jobs, type JobAgent } from "../connectors/agents/jobs.js";
+import { SessionNews, settleMs } from "../connectors/agents/sessionnews.js";
 import type {
   AgentSession,
   BoardSnapshot,
@@ -13429,5 +13433,1524 @@ describe("the language model of this Mac's settings", () => {
     ).complete(ask);
     expect(bodies[0]!.model).toBe("another-model");
     expect(bodies[0]!.reasoning_effort).toBe("none");
+  });
+});
+
+describe("the person asks to hear when a session is done", () => {
+  /** A Mac with three sessions, and the real record of what the chat waits for. */
+  const room = () => {
+    const sessions = [
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+    ];
+    const made = mac(sessions);
+    const directory = dirname(dirname(made.folder));
+    const log = new ChatLog(directory);
+    const later = new SessionNews(directory, {
+      board: () => board(sessions),
+      log,
+      now: () => made.clock.now,
+    });
+    const world: SupervisorWorld = { ...made.world, laterNews: later };
+    const history: ChatMessage[] = [];
+    /** A message of ClawdTime before the person's next one. */
+    const told = (text: string) => {
+      made.clock.now += 1_000;
+      history.push({ ...said("assistant", text), at: made.clock.now });
+      made.clock.now += 5_000;
+    };
+    const say = async (words: string, steps: (ToolCall[] | string)[]) => {
+      const run = scripted(steps);
+      const at = made.clock.now;
+      const reply = await new Supervisor(world, run.model).reply(
+        [...history],
+        words,
+        "chat",
+      );
+      history.push(
+        { ...said("user", words), at },
+        { ...said("assistant", reply), at },
+      );
+      made.clock.now += 5_000;
+      return { reply, run };
+    };
+    /** What the tool answered to the model. */
+    const toolSaid = (run: ReturnType<typeof scripted>) =>
+      run.seen
+        .at(-1)!
+        .messages.filter((message) => message.role === "tool")
+        .map((message) => message.content)
+        .join("\n");
+    /** A message of the person before ClawdTime's next one. */
+    const asked = (text: string) => {
+      made.clock.now += 1_000;
+      history.push({ ...said("user", text), at: made.clock.now });
+    };
+    return { made, sessions, later, log, world, say, told, asked, toolSaid };
+  };
+
+  it("takes the request for the session that the person names", async () => {
+    const { later, say, toolSaid } = room();
+    const got = await say("tell me when deploy fix is done", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Will do: the chat says it when deploy fix is done.",
+    ]);
+    expect(later.watching()).toEqual(["deploy fix"]);
+    expect(toolSaid(got.run)).toContain(
+      "The chat says it by itself, once, when deploy fix is done or stops on an error.",
+    );
+    expect(got.reply).toBe(
+      "Will do: the chat says it when deploy fix is done.",
+    );
+  });
+
+  it("says the line in the chat when that session is done", async () => {
+    const { later, say, sessions, made, log } = room();
+    await say("keep an eye on deploy fix and tell me when it's done", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    made.clock.now += 60_000;
+    expect(later.tell()).toEqual([]);
+    sessions[0] = { ...sessions[0]!, state: "idle", detail: "turn_complete" };
+    later.tell();
+    made.clock.now += settleMs;
+    expect(later.tell().map((message) => message.text)).toEqual([
+      "As you asked: deploy fix is done and idle now.",
+    ]);
+    expect(log.recent().at(-1)).toMatchObject({ news: true, via: "chat" });
+  });
+
+  it.each([
+    "how is deploy fix doing?",
+    "open deploy fix",
+    "is deploy fix done?",
+    "what does deploy fix do?",
+    "thanks",
+  ])(
+    "takes nothing when the person did not ask to hear later: %j",
+    async (words) => {
+      const { later, say, toolSaid } = room();
+      const got = await say(words, [
+        [call("watch_session", { session: "deploy fix" })],
+        "Okay.",
+      ]);
+      expect(later.watching(), words).toEqual([]);
+      expect(toolSaid(got.run), words).toContain(
+        "The person's message is no request to hear later about a session in a form that is taken, so nothing changed and nothing will be said later.",
+      );
+    },
+  );
+
+  it("takes the session of the person's words, not another one that the model names", async () => {
+    const { later, say } = room();
+    await say("let me know when payments tests finishes", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual(["payments tests"]);
+  });
+
+  it("takes the model's session where the person's words name none", async () => {
+    const { later, say } = room();
+    await say("ping me when it's done", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual(["deploy fix"]);
+  });
+
+  it("takes no session that the board does not have", async () => {
+    const { later, say, toolSaid } = room();
+    const got = await say("tell me when it's done", [
+      [call("watch_session", { session: "billing" })],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual([]);
+    expect(toolSaid(got.run)).toContain("No single session has that name.");
+  });
+
+  it("tells the model that an idle session has nothing to wait for", async () => {
+    const { later, say, toolSaid } = room();
+    const got = await say("keep an eye on docs for me", [
+      [call("watch_session", { session: "docs" })],
+      "Docs is idle already.",
+    ]);
+    expect(later.watching()).toEqual([]);
+    expect(toolSaid(got.run)).toContain(
+      "docs is idle now: its work is done already, and nothing is left to wait for. Nothing will be said later about it.",
+    );
+  });
+
+  it("takes each session that works, when the person names none and the model asks for each", async () => {
+    const { later, say } = room();
+    await say("let me know if anything breaks", [
+      [
+        { ...call("watch_session", { session: "deploy fix" }), id: "c-1" },
+        { ...call("watch_session", { session: "payments tests" }), id: "c-2" },
+        // Docs is idle: nothing is left to wait for.
+        { ...call("watch_session", { session: "docs" }), id: "c-3" },
+      ],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual(["deploy fix", "payments tests"]);
+  });
+
+  it("takes two sessions that the person names, each with its own call", async () => {
+    const { later, say } = room();
+    await say("tell me when deploy fix and payments tests are done", [
+      [
+        { ...call("watch_session", { session: "deploy fix" }), id: "c-1" },
+        { ...call("watch_session", { session: "payments tests" }), id: "c-2" },
+      ],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual(["deploy fix", "payments tests"]);
+  });
+
+  it("starts no job, opens nothing and types nothing for it", async () => {
+    const { made, say, later } = room();
+    const sent: string[] = [];
+    made.world.send = async (_session, text) => {
+      sent.push(text);
+      return { ok: true, route: "tmux" };
+    };
+    await say("watch deploy fix and tell me when it's done", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual(["deploy fix"]);
+    expect(made.windows).toEqual([]);
+    expect(made.opened).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("offers the tool only where the chat can say something later, and adds nothing to the instructions", async () => {
+    const { say, made } = room();
+    const tools: string[][] = [];
+    const systems: string[] = [];
+    const model: ModelClient = {
+      async complete(input) {
+        tools.push(input.tools.map((tool) => tool.name));
+        systems.push(input.system);
+        return { text: "Okay.", toolCalls: [] };
+      },
+    };
+    const { world } = room();
+    await new Supervisor(world, model).reply([], "hello there", "chat");
+    await new Supervisor(made.world, model).reply([], "hello there", "chat");
+    expect(tools[0]).toContain("watch_session");
+    // What the tool is for stands in its description. A paragraph about it
+    // in the instructions made the model ask before it started work.
+    expect(systems[0]).toBe(systems[1]);
+    expect(systems[0]).not.toContain("watch_session");
+    expect(tools[1]).not.toContain("watch_session");
+    expect(systems[1]).not.toContain("watch_session");
+    // With no such port, a call of the model does nothing.
+    const got = await say("tell me when deploy fix is done", ["Okay."]);
+    expect(got.reply).toBe("Okay.");
+    const none = scripted([
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    await new Supervisor(made.world, none.model).reply(
+      [],
+      "tell me when deploy fix is done",
+      "chat",
+    );
+    expect(
+      none.seen
+        .at(-1)!
+        .messages.filter((message) => message.role === "tool")
+        .map((message) => message.content)
+        .join("\n"),
+    ).toContain("Nothing here can say something later.");
+  });
+
+  it("says in the state which sessions the chat waits for", async () => {
+    const { world, say } = room();
+    expect(new Supervisor(world, null).status()).toContain(
+      "The chat waits for no session now: nothing will be said by itself about a session.",
+    );
+    // Where nothing can say something later, the state has no word of it.
+    expect(new Supervisor(room().made.world, null).status()).not.toContain(
+      "The chat",
+    );
+    await say("tell me when deploy fix is done", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    expect(new Supervisor(world, null).status()).toContain(
+      "The chat says by itself when these sessions are done, as the person asked: deploy fix. It waits for no other session.",
+    );
+  });
+
+  describe("the code takes the request by itself, when the message names one session right at the request", () => {
+    it.each([
+      "keep an eye on deploy fix and tell me when it's done",
+      "watch deploy fix for me",
+      "can you watch deploy fix for me while I'm in a meeting?",
+      "ok and could you keep an eye on deploy fix?",
+      "monitor the deploy fix",
+      "keep track of deploy fix",
+      "tell me when deploy fix is done",
+      "let me know once deploy fix finishes",
+      "ping me as soon as the deploy fix is done please",
+      "let me know if deploy fix fails",
+      // Leads that ask ClawdTime, and words that open a spoken message.
+      "make sure to tell me when deploy fix is done",
+      "make sure you tell me when deploy fix is done",
+      "remember to tell me when deploy fix is done",
+      "be sure to let me know when deploy fix finishes",
+      "don't forget to tell me when deploy fix is done",
+      "do not forget to let me know when deploy fix is done",
+      "ClawdTime keep an eye on deploy fix",
+      "hey clawdtime keep an eye on deploy fix",
+      "um keep an eye on deploy fix",
+      "uh can you keep an eye on deploy fix",
+      "hmm watch deploy fix",
+      "for now just keep an eye on deploy fix",
+      "also maybe keep an eye on deploy fix",
+      "I want you to watch deploy fix",
+    ])("takes %j with no call of the model", async (words) => {
+      const { later, say } = room();
+      const got = await say(words, ["Will do."]);
+      expect(later.watching(), words).toEqual(["deploy fix"]);
+      // The model reads what the tool said, and words the answer.
+      expect(got.run.seen, words).toHaveLength(1);
+      expect(
+        got.run.seen[0]!.messages.some(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId === "watch_first" &&
+            message.content ===
+              "The chat says it by itself, once, when deploy fix is done or stops on an error.",
+        ),
+        words,
+      ).toBe(true);
+      expect(got.reply).toBe("Will do.");
+    });
+
+    it.each([
+      "let me know if anything breaks",
+      "tell me when they're all done",
+      "tell me when everything is done",
+      "ping me if any of them fails",
+      "keep an eye on everything for me",
+      "can you watch my sessions while I'm in a meeting?",
+      "keep an eye on all of them",
+      "let me know as soon as one of them finishes",
+      "let me know when things are ready",
+      "keep an eye on things",
+    ])(
+      "takes each session that works for %j, which names none",
+      async (words) => {
+        const { later, say } = room();
+        const got = await say(words, ["Will do."]);
+        // Docs is idle: nothing is left to wait for there.
+        expect(later.watching(), words).toEqual([
+          "deploy fix",
+          "payments tests",
+        ]);
+        expect(got.run.seen, words).toHaveLength(1);
+        expect(
+          got.run.seen[0]!.messages.filter(
+            (message) => message.role === "tool",
+          ).map((message) => message.toolCallId),
+          words,
+        ).toEqual(expect.arrayContaining(["watch_first", "watch_first_2"]));
+      },
+    );
+
+    it("takes nothing for every session when none works", async () => {
+      const sessions = [
+        session({ state: "idle", detail: "turn_complete" }),
+        session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      ];
+      const made = mac(sessions);
+      const directory = dirname(dirname(made.folder));
+      const later = new SessionNews(directory, {
+        board: () => board(sessions),
+        log: new ChatLog(directory),
+        now: () => made.clock.now,
+      });
+      const run = scripted(["Nothing works now."]);
+      await new Supervisor(
+        { ...made.world, laterNews: later },
+        run.model,
+      ).reply([], "let me know if anything breaks", "chat");
+      expect(later.watching()).toEqual([]);
+      expect(
+        run.seen[0]!.messages.some(
+          (message) =>
+            message.role === "tool" &&
+            String(message.toolCallId).startsWith("watch_first"),
+        ),
+      ).toBe(false);
+    });
+
+    it("gives the model the reason when the session is idle already", async () => {
+      const { later, say } = room();
+      const got = await say(
+        "can you watch docs for me while I'm in a meeting?",
+        ["Docs is idle already."],
+      );
+      expect(later.watching()).toEqual([]);
+      expect(
+        got.run.seen[0]!.messages.some(
+          (message) =>
+            message.role === "tool" &&
+            message.content ===
+              "docs is idle now: its work is done already, and nothing is left to wait for. Nothing will be said later about it.",
+        ),
+      ).toBe(true);
+    });
+
+    it.each([
+      // A question about the past or the present.
+      "did you watch deploy fix?",
+      "do you watch deploy fix?",
+      "are you watching deploy fix?",
+      "why would I watch deploy fix?",
+      // The name does not stand at the request.
+      "open docs so I can watch it, deploy fix can wait",
+      "tell me when deploy fix started",
+      "tell me what deploy fix does when it runs",
+      "let me know when you are done with deploy fix",
+      // Two sessions: the model takes each one.
+      "watch deploy fix and payments tests",
+      // Words for a session.
+      "tell deploy fix to keep an eye on the logs",
+      "ask deploy fix to watch deploy fix",
+      // Taken back.
+      "stop watching deploy fix",
+      "no need to watch deploy fix",
+      "don't keep an eye on deploy fix",
+      // Every session, but as a question about now or the past, or taken back.
+      "is anything broken?",
+      "did anything break?",
+      "don't tell me when everything is done",
+      "stop watching everything",
+      // "Anything" that is no session.
+      "let me know if you need anything",
+      "tell me if there is anything to do",
+      "tell me when you know something",
+      // The person says what they do themselves, or says no.
+      "I'll watch deploy fix",
+      "I will keep an eye on deploy fix",
+      "let me watch deploy fix",
+      "no, I'll watch deploy fix myself",
+      "I can monitor deploy fix myself",
+      "we'll keep an eye on the deploy fix",
+      "remind me to watch deploy fix later",
+      "I'll watch them all",
+      "I will keep an eye on everything",
+      "I can monitor my sessions myself",
+      // Taken back at the end.
+      "tell me when deploy fix is done, never mind",
+      "tell me when deploy fix is done, actually no",
+      "tell me when deploy fix is done, or not",
+      // A thing of a session, not the session.
+      "keep an eye on the deploy fix folder",
+      "monitor the deploy fix build logs",
+      "keep an eye on deploy fix's output",
+      "watch deploy fix logs",
+      // Every session, with something else named after it.
+      "ping me when everything is ready for the demo",
+      "let me know if something breaks in production",
+      "keep an eye on everything in production",
+      // No request at all.
+      "how is deploy fix doing?",
+      "deploy fix",
+      "watch out, deploy fix is broken",
+    ])("leaves %j to the model", async (words) => {
+      const { later, say } = room();
+      const got = await say(words, ["Okay."]);
+      expect(later.watching(), words).toEqual([]);
+      expect(
+        got.run.seen[0]!.messages.some(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "watch_first",
+        ),
+        words,
+      ).toBe(false);
+    });
+
+    it("takes no session that is known only by its folder", async () => {
+      const sessions = [session({ name: null, project: "website" })];
+      const made = mac(sessions);
+      const directory = dirname(dirname(made.folder));
+      const later = new SessionNews(directory, {
+        board: () => board(sessions),
+        log: new ChatLog(directory),
+        now: () => made.clock.now,
+      });
+      const run = scripted(["Okay."]);
+      await new Supervisor(
+        { ...made.world, laterNews: later },
+        run.model,
+      ).reply([], "watch website for me", "chat");
+      expect(later.watching()).toEqual([]);
+    });
+
+    it("takes nothing where the chat can say nothing later", async () => {
+      const { made } = room();
+      const run = scripted(["Okay."]);
+      await new Supervisor(made.world, run.model).reply(
+        [],
+        "watch deploy fix for me",
+        "chat",
+      );
+      expect(
+        run.seen[0]!.messages.some((message) => message.role === "tool"),
+      ).toBe(false);
+    });
+  });
+
+  describe("a yes to ClawdTime's own offer to watch takes the request", () => {
+    it.each([
+      "Deploy fix still works. Want me to keep an eye on deploy fix?",
+      "Not yet. Should I tell you when deploy fix is done?",
+      "Want me to let you know when deploy fix finishes?",
+      "Deploy fix is still working. Want me to watch it?",
+      "Deploy fix is still working. Want me to tell you when it's done?",
+      "Deploy fix is still working. Should I let you know once it is done?",
+      "Want me to tell you when deploy fix's done?",
+      "Should I ping you once the deploy fix session is done?",
+    ])("takes deploy fix after %j and a yes", async (offer) => {
+      for (const words of ["yes", "yes please", "ok", "sure", "go ahead"]) {
+        const { later, say, told } = room();
+        told(offer);
+        const got = await say(words, ["Will do."]);
+        expect(later.watching(), `${offer} / ${words}`).toEqual(["deploy fix"]);
+        expect(
+          got.run.seen[0]!.messages.some(
+            (message) =>
+              message.role === "tool" && message.toolCallId === "watch_first",
+          ),
+          `${offer} / ${words}`,
+        ).toBe(true);
+      }
+    });
+
+    it.each([
+      "Not yet, it's still running the tests. Want me to let you know when it finishes?",
+      "Not yet. Want me to tell you when it's done?",
+      "It's still working. Should I keep an eye on it?",
+    ])(
+      "takes the session that the exchange speaks of, after the question about it and the offer %j",
+      async (offer) => {
+        const { later, say, told, asked } = room();
+        asked("is deploy fix done?");
+        told(offer);
+        await say("yes", ["Will do."]);
+        expect(later.watching(), offer).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      "Deploy fix is still running the tests. Want me to let you know when it finishes?",
+      "Not yet, deploy fix is still running. Want me to tell you when it is done?",
+      "Deploy fix is working on the footer. Should I keep an eye on it?",
+      "Want me to let you know when deploy fix is done or fails?",
+    ])("takes the session that the offer speaks of: %j", async (offer) => {
+      const { later, say, told } = room();
+      told(offer);
+      await say("yes", ["Will do."]);
+      expect(later.watching(), offer).toEqual(["deploy fix"]);
+    });
+
+    it.each([
+      [
+        "is deploy fix done with the tests?",
+        "Not yet. Want me to tell you when it's done?",
+      ],
+      [
+        "has deploy fix pushed the branch yet?",
+        "Not yet, it's still running the tests. Want me to let you know when it finishes?",
+      ],
+      [
+        "did deploy fix fix the bug?",
+        "It's still on it. Want me to tell you when it's done?",
+      ],
+      [
+        "how's deploy fix doing on the build?",
+        "Still going. Want me to tell you when it finishes?",
+      ],
+    ])(
+      "takes the session after a question about its work, %j, and the offer %j",
+      async (question, offer) => {
+        const { later, say, told, asked } = room();
+        asked(question);
+        told(offer);
+        await say("yes", ["Will do."]);
+        expect(later.watching(), question).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      // The person's question names the sessions, and the answer names none.
+      [
+        "are docs and deploy fix done?",
+        "Not yet. Want me to tell you when they're done?",
+      ],
+      [
+        "are docs and deploy fix done?",
+        "Not yet, both are still running. Want me to keep an eye on them?",
+      ],
+      [
+        "is deploy fix done?",
+        "Not yet. Want me to tell you when they're done?",
+      ],
+      // The question names the one session that the person does not mean.
+      [
+        "apart from payments tests, are the others done?",
+        "Not yet. Want me to tell you when they're done?",
+      ],
+      [
+        "docs failed again, is anything else running?",
+        "Yes, two of them. Want me to tell you when they're done?",
+      ],
+      [
+        "forget docs. are deploy fix and payments tests done?",
+        "Not yet. Want me to tell you when they're done?",
+      ],
+      [
+        "stop watching payments tests, are docs and deploy fix done?",
+        "Not yet. Want me to tell you when they're done?",
+      ],
+    ])(
+      "takes nothing when its own message names no session, whatever the question %j named, for the offer %j",
+      async (question, offer) => {
+        const sessions = [
+          session({ name: "deploy fix" }),
+          session({ id: "101-def", pid: 101, name: "docs" }),
+          session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+        ];
+        const made = mac(sessions);
+        const directory = dirname(dirname(made.folder));
+        const later = new SessionNews(directory, {
+          board: () => board(sessions),
+          log: new ChatLog(directory),
+          now: () => made.clock.now,
+        });
+        const run = scripted(["Okay."]);
+        await new Supervisor(
+          { ...made.world, laterNews: later },
+          run.model,
+        ).reply(
+          [
+            { ...said("user", question), at: made.clock.now - 9_000 },
+            { ...said("assistant", offer), at: made.clock.now - 5_000 },
+          ],
+          "yes",
+          "chat",
+        );
+        expect(later.watching(), `${question} / ${offer}`).toEqual([]);
+      },
+    );
+
+    it.each([
+      "The payments tests look flaky. Should I keep an eye on them?",
+      "Payments tests are still running. Want me to tell you when they're done?",
+    ])(
+      "takes the one session with a plural name that the sentence before names, for them: %j",
+      async (offer) => {
+        const { later, say, told } = room();
+        told(offer);
+        await say("ok", ["Will do."]);
+        expect(later.watching(), offer).toEqual(["payments tests"]);
+      },
+    );
+
+    it.each([
+      "Docs is waiting for your answer, and the other two are still running. Want me to tell you when they're done?",
+      "Docs is waiting for you; the others are still going. Want me to tell you when they're done?",
+      "Docs found two regressions. Want me to keep an eye on them?",
+      "Docs hit three failures. Should I watch them?",
+    ])(
+      "takes nothing for them when the plural name is there to set that session apart, or beside a thing: %j",
+      async (offer) => {
+        // Docs waits for the person here, so a request for it would be taken.
+        const sessions = [
+          session({ name: "deploy fix" }),
+          session({
+            id: "101-def",
+            pid: 101,
+            name: "docs",
+            state: "needs_you",
+            detail: "question",
+          }),
+          session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+        ];
+        const made = mac(sessions);
+        const directory = dirname(dirname(made.folder));
+        const later = new SessionNews(directory, {
+          board: () => board(sessions),
+          log: new ChatLog(directory),
+          now: () => made.clock.now,
+        });
+        const run = scripted(["Okay."]);
+        await new Supervisor(
+          { ...made.world, laterNews: later },
+          run.model,
+        ).reply(
+          [{ ...said("assistant", offer), at: made.clock.now - 5_000 }],
+          "yes",
+          "chat",
+        );
+        expect(later.watching(), offer).toEqual([]);
+      },
+    );
+
+    it.each([
+      "Okay. I started a job to fix the payments tests.",
+      "Got it. I started a task to stabilize the payments tests.",
+      "On it. I started a job to watch the payments tests.",
+      // A false claim in the same sentence as a clause about watching.
+      "On it, I kicked off a fix and I'm watching the payments tests.",
+      "I'm watching them, and I started fixing the flaky one.",
+      "I started fixing the flaky one while I watch them.",
+    ])(
+      "still replaces a false claim of started work in a turn that took the request: %j",
+      async (claim) => {
+        const { later, say, told } = room();
+        told("The payments tests look flaky. Should I keep an eye on them?");
+        const got = await say("ok", [claim, claim]);
+        expect(later.watching(), claim).toEqual(["payments tests"]);
+        expect(got.reply, claim).not.toBe(claim);
+      },
+    );
+
+    it.each([
+      "Got it, I started watching deploy fix.",
+      "On it: I'm watching deploy fix now and I'll tell you when it's done.",
+      "I started keeping an eye on deploy fix.",
+      "Sure thing, I've added deploy fix to the list.",
+      "Okay, deploy fix is on my list now.",
+      "On it! I'm watching deploy fix now.",
+      "On it, watching deploy fix, back soon.",
+      "I've added it.",
+      "I started to watch deploy fix.",
+      "Done. I'll keep an eye on deploy fix to tell you when it's done.",
+    ])(
+      "lets the answer to a plain request say that it watches: %j",
+      async (answer) => {
+        const { later, say } = room();
+        // The same words twice: a check that takes them for an action that
+        // did not happen would replace the second answer.
+        const got = await say("keep an eye on deploy fix", [answer, answer]);
+        expect(later.watching(), answer).toEqual(["deploy fix"]);
+        expect(got.reply, answer).toBe(answer);
+      },
+    );
+
+    it.each([
+      "I typed go on into deploy fix and I'm watching it.",
+      "I opened docs so you can watch it.",
+      "On it, I kicked off a fix and I'm watching deploy fix.",
+      "I restarted deploy fix and I'm keeping an eye on it.",
+      // The typed words hold a word of watching.
+      "I typed watch the logs into deploy fix.",
+      "I typed watch the logs into deploy fix and I'm keeping an eye on it.",
+      // The claim and the watching in one clause, joined by "to" or "while".
+      "I typed go on into deploy fix to watch it run.",
+      "I opened docs to keep an eye on it.",
+      "I restarted deploy fix to monitor it.",
+      "I kicked off a fix while keeping an eye on deploy fix.",
+    ])(
+      "still replaces a false claim that stands beside a clause about watching, after a plain request: %j",
+      async (claim) => {
+        const { later, say } = room();
+        const got = await say("keep an eye on deploy fix", [claim, claim]);
+        expect(later.watching(), claim).toEqual(["deploy fix"]);
+        expect(got.reply, claim).not.toBe(claim);
+      },
+    );
+
+    it('takes the session after "Not yet," and its plural name', async () => {
+      const { later, say, told } = room();
+      told(
+        "Not yet, payments tests are still going. Want me to tell you when they're done?",
+      );
+      await say("yes", ["Will do."]);
+      expect(later.watching()).toEqual(["payments tests"]);
+    });
+
+    it("lets a short answer that opens with its own sentence stand, in a turn that took the request", async () => {
+      const { later, say, told } = room();
+      told("The payments tests look flaky. Should I keep an eye on them?");
+      const answer = "On it! I'm watching them now.";
+      const got = await say("ok", [answer, answer]);
+      expect(later.watching()).toEqual(["payments tests"]);
+      expect(got.reply).toBe(answer);
+    });
+
+    it("lets the answer say that it started to watch, in a turn that took the request", async () => {
+      const { later, say, told } = room();
+      told("The payments tests look flaky. Should I keep an eye on them?");
+      // The same words twice: a check that takes them for a claim of work
+      // that did not start would replace the second answer.
+      const got = await say("ok", [
+        "I started watching the payments tests for you.",
+        "I started watching the payments tests for you.",
+      ]);
+      expect(later.watching()).toEqual(["payments tests"]);
+      expect(got.reply).toBe("I started watching the payments tests for you.");
+    });
+
+    it.each([
+      // A name that is no plural: "them" is something else.
+      "Deploy fix looks stuck. Should I keep an eye on them?",
+      // The sentence names a thing beside the session.
+      "Payments tests is running the builds. Want me to keep an eye on them?",
+      // No session in the sentence.
+      "The tests look flaky. Should I keep an eye on them?",
+    ])("takes nothing for them after %j", async (offer) => {
+      const { later, say, told } = room();
+      told(offer);
+      await say("ok", ["Okay."]);
+      expect(later.watching(), offer).toEqual([]);
+    });
+
+    it.each([
+      "Not yet: docs is still writing. Deploy fix is still running. Want me to tell you when they're done?",
+      "Neither docs nor deploy fix is done. Want me to tell you when they're done?",
+      "Docs and deploy fix are still at it. Should I keep an eye on them?",
+    ])(
+      "takes the two sessions that its own message names, and no third one: %j",
+      async (offer) => {
+        const sessions = [
+          session({ name: "deploy fix" }),
+          session({ id: "101-def", pid: 101, name: "docs" }),
+          session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+        ];
+        const made = mac(sessions);
+        const directory = dirname(dirname(made.folder));
+        const later = new SessionNews(directory, {
+          board: () => board(sessions),
+          log: new ChatLog(directory),
+          now: () => made.clock.now,
+        });
+        const run = scripted(["Will do."]);
+        await new Supervisor(
+          { ...made.world, laterNews: later },
+          run.model,
+        ).reply(
+          [
+            {
+              ...said("user", "are the two done?"),
+              at: made.clock.now - 9_000,
+            },
+            { ...said("assistant", offer), at: made.clock.now - 5_000 },
+          ],
+          "yes",
+          "chat",
+        );
+        expect(later.watching().sort(), offer).toEqual(["deploy fix", "docs"]);
+      },
+    );
+
+    it("takes only the sessions that wait for the person, when its own message says that sessions are waiting", async () => {
+      const sessions = [
+        session({ name: "deploy fix" }),
+        session({
+          id: "101-def",
+          pid: 101,
+          name: "docs",
+          state: "needs_you",
+          detail: "question",
+        }),
+        session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+      ];
+      const made = mac(sessions);
+      const directory = dirname(dirname(made.folder));
+      const later = new SessionNews(directory, {
+        board: () => board(sessions),
+        log: new ChatLog(directory),
+        now: () => made.clock.now,
+      });
+      const run = scripted(["Will do."]);
+      await new Supervisor(
+        { ...made.world, laterNews: later },
+        run.model,
+      ).reply(
+        [
+          {
+            ...said(
+              "assistant",
+              "One of your sessions is waiting for you, and your other sessions are waiting on nothing. Want me to keep an eye on them?",
+            ),
+            at: made.clock.now - 5_000,
+          },
+        ],
+        "yes",
+        "chat",
+      );
+      expect(later.watching()).toEqual(["docs"]);
+    });
+
+    it("takes only the sessions that work, when its own message says that sessions are working", async () => {
+      const sessions = [
+        session({ name: "deploy fix" }),
+        session({
+          id: "101-def",
+          pid: 101,
+          name: "docs",
+          state: "needs_you",
+          detail: "question",
+        }),
+        session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+      ];
+      const made = mac(sessions);
+      const directory = dirname(dirname(made.folder));
+      const later = new SessionNews(directory, {
+        board: () => board(sessions),
+        log: new ChatLog(directory),
+        now: () => made.clock.now,
+      });
+      const run = scripted(["Will do."]);
+      await new Supervisor(
+        { ...made.world, laterNews: later },
+        run.model,
+      ).reply(
+        [
+          {
+            ...said(
+              "assistant",
+              "Two sessions are still working. Want me to tell you when they're done?",
+            ),
+            at: made.clock.now - 5_000,
+          },
+        ],
+        "yes",
+        "chat",
+      );
+      expect(later.watching().sort()).toEqual(["deploy fix", "payments tests"]);
+    });
+
+    it('takes nothing for "them" after a question about a thing', async () => {
+      const { later, say, told, asked } = room();
+      asked("did deploy fix and payments tests open their pull requests?");
+      told("Not yet. Want me to keep an eye on them?");
+      await say("yes", ["Okay."]);
+      expect(later.watching()).toEqual([]);
+    });
+
+    it.each([
+      [
+        "stop watching docs. is the other one done?",
+        "Not yet. Want me to tell you when it's done?",
+      ],
+      [
+        "stop watching docs, is the other one done?",
+        "Not yet. Want me to tell you when it's done?",
+      ],
+      [
+        "apart from docs, is the other one done?",
+        "Not yet. Want me to tell you when it's done?",
+      ],
+      [
+        "other than docs, is anything still working?",
+        "Yes, one session. Want me to tell you when it's done?",
+      ],
+      [
+        "docs failed again, is anything else running?",
+        "Yes, one more. Want me to tell you when it's done?",
+      ],
+      [
+        "I don't care about docs. is anything else done?",
+        "Not yet. Want me to tell you when it's done?",
+      ],
+      [
+        "is docs done? what about the other one?",
+        "Not yet. Want me to tell you when it's done?",
+      ],
+      ["docs is slow today", "It is. Want me to tell you when it's done?"],
+    ])(
+      "takes nothing through the exchange after %j: the one session that it names is not the one that is meant for sure",
+      async (question, offer) => {
+        // Every session works, so a wrong one would be taken.
+        const sessions = [
+          session({ name: "deploy fix" }),
+          session({ id: "101-def", pid: 101, name: "docs" }),
+          session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+        ];
+        const made = mac(sessions);
+        const directory = dirname(dirname(made.folder));
+        const later = new SessionNews(directory, {
+          board: () => board(sessions),
+          log: new ChatLog(directory),
+          now: () => made.clock.now,
+        });
+        const run = scripted(["Okay."]);
+        await new Supervisor(
+          { ...made.world, laterNews: later },
+          run.model,
+        ).reply(
+          [
+            { ...said("user", question), at: made.clock.now - 9_000 },
+            { ...said("assistant", offer), at: made.clock.now - 5_000 },
+          ],
+          "yes",
+          "chat",
+        );
+        expect(later.watching(), `${question} / ${offer}`).toEqual([]);
+      },
+    );
+
+    it.each([
+      "is docs done?",
+      "so is docs done yet?",
+      "how's docs doing?",
+      "what is docs doing?",
+      "has docs pushed the branch yet?",
+      "any news on docs?",
+    ])(
+      "takes the session through the exchange after the plain question %j",
+      async (question) => {
+        const sessions = [
+          session({ name: "deploy fix" }),
+          session({ id: "101-def", pid: 101, name: "docs" }),
+          session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+        ];
+        const made = mac(sessions);
+        const directory = dirname(dirname(made.folder));
+        const later = new SessionNews(directory, {
+          board: () => board(sessions),
+          log: new ChatLog(directory),
+          now: () => made.clock.now,
+        });
+        const run = scripted(["Will do."]);
+        await new Supervisor(
+          { ...made.world, laterNews: later },
+          run.model,
+        ).reply(
+          [
+            { ...said("user", question), at: made.clock.now - 9_000 },
+            {
+              ...said(
+                "assistant",
+                "Not yet. Want me to tell you when it's done?",
+              ),
+              at: made.clock.now - 5_000,
+            },
+          ],
+          "yes",
+          "chat",
+        );
+        expect(later.watching(), question).toEqual(["docs"]);
+      },
+    );
+
+    it("takes nothing through the exchange when the person's question was about a thing", async () => {
+      const { later, say, told, asked } = room();
+      asked("where's the file deploy fix wrote?");
+      told("It's in tmp. Want me to keep an eye on it?");
+      await say("yes", ["Okay."]);
+      expect(later.watching()).toEqual([]);
+    });
+
+    it.each([
+      "Deploy fix and payments tests are running the build. Want me to keep an eye on them?",
+      "Deploy fix and payments tests are still running. Want me to keep an eye on them?",
+      "Deploy fix and payments tests are still running. Should I tell you when they're done?",
+      "Deploy fix and payments tests still work. Want me to tell you when they are done?",
+      "Want me to watch deploy fix and payments tests?",
+    ])("takes the sessions that the offer names: %j", async (offer) => {
+      const { later, say, told } = room();
+      told(offer);
+      await say("yes", ["Will do."]);
+      expect(later.watching(), offer).toEqual(["deploy fix", "payments tests"]);
+    });
+
+    it("takes only the two sessions that the sentence before names, not every session", async () => {
+      const sessions = [
+        session({ name: "deploy fix" }),
+        session({ id: "101-def", pid: 101, name: "docs" }),
+        session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+      ];
+      const made = mac(sessions);
+      const directory = dirname(dirname(made.folder));
+      const later = new SessionNews(directory, {
+        board: () => board(sessions),
+        log: new ChatLog(directory),
+        now: () => made.clock.now,
+      });
+      const run = scripted(["Will do."]);
+      await new Supervisor(
+        { ...made.world, laterNews: later },
+        run.model,
+      ).reply(
+        [
+          {
+            ...said(
+              "assistant",
+              "Docs and deploy fix are still running. Want me to keep an eye on them?",
+            ),
+            at: made.clock.now - 5_000,
+          },
+        ],
+        "yes",
+        "chat",
+      );
+      expect(later.watching().sort()).toEqual(["deploy fix", "docs"]);
+    });
+
+    it.each([
+      "Deploy fix is running the tests. Should I keep an eye on it?",
+      "Deploy fix is waiting on your answer about the tests. Should I keep an eye on it?",
+      "Not yet, deploy fix is still building the site. Want me to watch it?",
+    ])(
+      "takes the session after a sentence that says what it does: %j",
+      async (offer) => {
+        const { later, say, told } = room();
+        told(offer);
+        await say("yes", ["Will do."]);
+        expect(later.watching(), offer).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      "Docs wrote a summary file. Should I monitor it?",
+      "I found the log of the build. Want me to keep an eye on it?",
+      "Deploy fix and payments tests both run. Want me to tell you when it finishes?",
+      // "Them" is what the sessions made, and "it" is what the person asked about.
+      "Deploy fix and payments tests opened two pull requests. Want me to keep an eye on them?",
+      // "They" are jobs or tests, not the sessions.
+      "Two jobs are still running. Want me to tell you when they're done?",
+      "Deploy fix is running the tests. Want me to keep an eye on them?",
+      "These tests are flaky. Want me to watch them?",
+    ])("takes nothing after %j: it is not one session", async (offer) => {
+      const { later, say, told } = room();
+      told(offer);
+      await say("yes", ["Okay."]);
+      expect(later.watching(), offer).toEqual([]);
+    });
+
+    it.each([
+      "Two sessions work now. Want me to tell you if anything breaks?",
+      "Two sessions are still working. Want me to tell you when they're done?",
+      "Both agents are busy. Should I keep an eye on them?",
+    ])(
+      "takes each session that works after an offer for every session: %j",
+      async (offer) => {
+        const { later, say, told } = room();
+        told(offer);
+        await say("yes", ["Will do."]);
+        expect(later.watching(), offer).toEqual([
+          "deploy fix",
+          "payments tests",
+        ]);
+      },
+    );
+
+    it("takes the offered session, whatever session the model names", async () => {
+      const { later, say, told } = room();
+      told("Want me to keep an eye on deploy fix?");
+      await say("yes", [
+        [call("watch_session", { session: "payments tests" })],
+        "Will do.",
+      ]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+    });
+
+    it.each([
+      // No offer before the yes.
+      [null, "yes"],
+      // A statement, or a question that is no offer to watch.
+      ["Deploy fix still works.", "yes"],
+      ["Is deploy fix the one you mean?", "yes"],
+      ["Want me to open deploy fix?", "no"],
+      // The offer is not the end of the message.
+      ["Want me to keep an eye on deploy fix? It may take a while.", "yes"],
+      // A thing of the session, or two sessions.
+      ["Want me to keep an eye on the deploy fix logs?", "yes"],
+      ["Want me to watch deploy fix or payments tests?", "yes"],
+      // More than a yes.
+      ["Want me to keep an eye on deploy fix?", "no"],
+      ["Want me to keep an eye on deploy fix?", "yes, and open docs"],
+      ["Want me to keep an eye on deploy fix?", "what would that do?"],
+    ] as const)("takes nothing after %j and %j", async (offer, words) => {
+      const { later, say, told } = room();
+      if (offer) told(offer);
+      const got = await say(words, [
+        [call("watch_session", { session: "deploy fix" })],
+        "Okay.",
+      ]);
+      expect(later.watching(), `${offer} / ${words}`).toEqual([]);
+      // With no question before it, a bare yes never reaches the model.
+      expect(got.reply.length).toBeGreaterThan(0);
+    });
+
+    it("takes nothing after an old offer, or an offer on another channel", async () => {
+      const old = room();
+      old.told("Want me to keep an eye on deploy fix?");
+      old.made.clock.now += 6 * 60_000;
+      await old.say("yes", ["Okay."]);
+      expect(old.later.watching()).toEqual([]);
+    });
+
+    it("opens nothing, types nothing and starts nothing for that yes", async () => {
+      const { made, later, say, told } = room();
+      const sent: string[] = [];
+      const focused: string[] = [];
+      made.world.send = async (_session, text) => {
+        sent.push(text);
+        return { ok: true, route: "tmux" };
+      };
+      made.world.focus = async (item) => {
+        focused.push(item.name ?? "");
+        return { ok: true, precision: "tab" };
+      };
+      told("Want me to keep an eye on deploy fix?");
+      await say("yes", ["Will do."]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+      expect(sent).toEqual([]);
+      expect(focused).toEqual([]);
+      expect(made.windows).toEqual([]);
+    });
+  });
+
+  describe("the gate refuses a call of the model for a message that is no request", () => {
+    it.each([
+      ["did you watch deploy fix?", "is no request to hear later"],
+      ["should I watch deploy fix?", "is no request to hear later"],
+      ["keep an eye on deploy fix, right?", "a question, not a request"],
+      ["tell me when deploy fix started", "is no request to hear later"],
+      [
+        "I don't want to know when deploy fix is done",
+        "is no request to hear later",
+      ],
+      [
+        "can you tell deploy fix to keep an eye on the logs?",
+        "is no request to hear later",
+      ],
+      [
+        "could you ask deploy fix to watch the build?",
+        "is no request to hear later",
+      ],
+      // Another subject does the watching, or it is no request at all.
+      ["I'll keep an eye on deploy fix myself", "is no request to hear later"],
+      ["let me watch deploy fix", "is no request to hear later"],
+      ["remind me to watch deploy fix later", "is no request to hear later"],
+      [
+        "fix the footer and I'll watch deploy fix",
+        "is no request to hear later",
+      ],
+      ["I keep an eye on deploy fix myself", "is no request to hear later"],
+      ["they keep an eye on deploy fix", "is no request to hear later"],
+      ["the tests keep an eye on deploy fix", "is no request to hear later"],
+      ["you were watching deploy fix, right", "is no request to hear later"],
+      ["watching deploy fix is pointless", "is no request to hear later"],
+      // Taken back at the end.
+      ["watch deploy fix. Actually, don't.", "is no request to hear later"],
+      ["watch deploy fix, wait no", "is no request to hear later"],
+      ["watch deploy fix, nah actually don't", "is no request to hear later"],
+      // The person names something that is no session, and the model names one.
+      ["watch your tone", "names no session"],
+      ["watch the clock", "names no session"],
+      // Work beside the request, and no session named.
+      [
+        "deploy the site and keep an eye on it",
+        "asks for work and names no session",
+      ],
+      // A common word that is a part of the session's name is no name.
+      [
+        "fix the footer and tell me when the fix is done",
+        "asks for work and names no session",
+      ],
+      [
+        "deploy the site and keep an eye on the deploy",
+        "asks for work and names no session",
+      ],
+      [
+        "fix the footer and keep an eye on the deploy one",
+        "asks for work and names no session",
+      ],
+      ["keep an eye on the fix", "names no session"],
+      ["keep an eye on the deploy for me", "names no session"],
+      [
+        "fix the footer and tell me when it's done",
+        "asks for work and names no session",
+      ],
+      ["tell me when deploy fix is done, never mind", "is no request"],
+    ])("refuses for %j", async (words, reason) => {
+      const { later, say, toolSaid } = room();
+      const got = await say(words, [
+        [call("watch_session", { session: "deploy fix" })],
+        "Okay.",
+      ]);
+      expect(later.watching(), words).toEqual([]);
+      expect(toolSaid(got.run), words).toContain(reason);
+    });
+
+    it.each([
+      "can you tell me when deploy fix is done?",
+      "could you keep an eye on deploy fix?",
+      "would you mind keeping an eye on it?",
+      "I need you to watch deploy fix",
+      "stop watching the logs and tell me when deploy fix is done",
+      "don't worry about docs, just watch deploy fix",
+      "open docs and tell me when deploy fix is done",
+      "I'd like you to keep an eye on deploy fix",
+      "I want you to watch deploy fix",
+      // Words that can take something back, in another clause or after the request.
+      "keep an eye on deploy fix until I say stop",
+      "deploy fix is not yet finished, tell me when it is done",
+      "not now, but tell me when deploy fix is done",
+      "hold off on the deploy and keep an eye on deploy fix",
+      "tell me when deploy fix is done, no rush",
+      // The person names no session, and the conversation says which.
+      "it's slow, keep an eye on it",
+      "keep an eye on that one",
+      "ping me when it's done",
+      // A statement beside the request is no work.
+      "the build is slow, keep an eye on it",
+      "looks like it's stuck, keep an eye on it",
+      // Leads that the gate knows too.
+      "make sure to tell me when it's done",
+      "don't forget to let me know when it finishes",
+    ])("takes the model's call for %j", async (words) => {
+      const { later, say } = room();
+      await say(words, [
+        [call("watch_session", { session: "deploy fix" })],
+        "Okay.",
+      ]);
+      expect(later.watching(), words).toEqual(["deploy fix"]);
+    });
+  });
+
+  describe("the person takes the request back", () => {
+    it("ends it on their word, and says nothing later", async () => {
+      const { later, say, sessions, made, toolSaid } = room();
+      await say("watch deploy fix for me", ["Okay."]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+      const got = await say("stop watching deploy fix", [
+        [call("watch_session", { session: "deploy fix", stop: true })],
+        "Okay, I stopped.",
+      ]);
+      expect(toolSaid(got.run)).toContain(
+        "The chat no longer waits for deploy fix: nothing will be said about it by itself.",
+      );
+      expect(later.watching()).toEqual([]);
+      sessions[0] = { ...sessions[0]!, state: "idle", detail: "turn_complete" };
+      later.tell();
+      made.clock.now += settleMs * 3;
+      expect(later.tell()).toEqual([]);
+    });
+
+    it.each([
+      "how is deploy fix doing?",
+      "tell me when deploy fix is done",
+      "stop the deploy",
+      "thanks",
+    ])("does not end it for %j, whatever the model asks", async (words) => {
+      const { later, say } = room();
+      await say("watch payments tests for me", ["Okay."]);
+      const got = await say(words, [
+        [call("watch_session", { session: "payments tests", stop: true })],
+        "Okay.",
+      ]);
+      expect(later.watching(), words).toContain("payments tests");
+      expect(
+        got.run.seen
+          .at(-1)!
+          .messages.filter((message) => message.role === "tool")
+          .map((message) => message.content)
+          .join("\n"),
+        words,
+      ).toContain("The person did not say to stop watching a session.");
+    });
+
+    it("takes no new request from a message that takes one back", async () => {
+      const { later, say, toolSaid } = room();
+      const got = await say("no need to tell me when deploy fix is done", [
+        [call("watch_session", { session: "deploy fix" })],
+        "Okay.",
+      ]);
+      expect(later.watching()).toEqual([]);
+      expect(toolSaid(got.run)).toContain(
+        "The person's message is no request to hear later about a session",
+      );
+    });
+
+    it("says that it did not wait for a session that it did not wait for", async () => {
+      const { say, toolSaid } = room();
+      const got = await say("stop watching docs", [
+        [call("watch_session", { session: "docs", stop: true })],
+        "Okay.",
+      ]);
+      expect(toolSaid(got.run)).toContain("The chat did not wait for docs.");
+    });
+
+    it.each([
+      "stop watching deploy fix",
+      "you can stop keeping an eye on docs",
+      "no need to watch it anymore",
+      "don't tell me when it's done",
+      "never mind watching deploy fix",
+      "cancel the watch on docs",
+      "forget watching it",
+      "you don't have to keep an eye on it",
+      "forget about watching docs",
+      "I don't need you to watch docs anymore",
+      "unwatch docs",
+      "I don't want to hear about docs anymore",
+      "can you stop watching docs?",
+    ])("reads %j as taking the request back", (words) => {
+      expect(stopsWatching(words), words).toBe(true);
+      expect(asksToBeTold(words), words).toBe(false);
+    });
+
+    it.each([
+      "stop the deploy and tell me when it's done",
+      "don't worry about docs, just watch deploy fix",
+      "watch deploy fix for me",
+      "I can't stop thinking about it",
+      // "Stop" that is turned around, said of the person, or tied to a condition.
+      "don't stop watching docs",
+      "never stop watching docs",
+      "no need to stop watching docs",
+      "you can stop watching docs once it's done",
+      "I'll stop watching docs, you keep an eye on it",
+      "keep watching docs, don't stop",
+      // A question about it.
+      "why did you stop watching docs?",
+      "did you stop watching docs?",
+    ])("reads %j as taking nothing back", (words) => {
+      expect(stopsWatching(words), words).toBe(false);
+    });
+
+    it("reads a new request beside a stop of something else", () => {
+      const words = "stop watching the logs and tell me when docs is done";
+      expect(asksToBeTold(words)).toBe(true);
+      expect(
+        asksToBeTold("I'll stop watching docs, you keep an eye on it"),
+      ).toBe(true);
+    });
+  });
+
+  it.each([
+    ["keep an eye on the payments one", "payments tests"],
+    ["please keep an eye on the payments one", "payments tests"],
+    ["watch the deploy one", "deploy fix"],
+  ])(
+    "takes the session that the person's own words find by a part of its name: %j",
+    async (words, name) => {
+      const { later, say } = room();
+      await say(words, [[call("watch_session", { session: name })], "Okay."]);
+      expect(later.watching(), words).toEqual([name]);
+    },
+  );
+
+  it("tells the model which words work, when it refuses", async () => {
+    const { say, toolSaid } = room();
+    const got = await say("I'd love to hear how deploy fix ends", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    expect(toolSaid(got.run)).toContain(
+      'say that these words work: "tell me when NAME is done".',
+    );
+  });
+
+  it("takes no request from words that are for a session", async () => {
+    const { later, say, toolSaid } = room();
+    const got = await say("tell deploy fix to keep an eye on the logs", [
+      [call("watch_session", { session: "deploy fix" })],
+      "Okay.",
+    ]);
+    expect(later.watching()).toEqual([]);
+    expect(toolSaid(got.run)).toContain(
+      "The person's message is no request to hear later about a session",
+    );
+  });
+
+  it("reads the state first for a question about what it watches", async () => {
+    const { say } = room();
+    await say("watch deploy fix for me", ["Okay."]);
+    const got = await say("what are you watching for me right now?", [
+      "Only deploy fix.",
+    ]);
+    expect(
+      got.run.seen[0]!.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "state_first" &&
+          message.content.includes(
+            "as the person asked: deploy fix. It waits for no other session.",
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("gives the model a line of this news with its own frame, and the news of a job with the frame of a job", async () => {
+    const { world } = room();
+    const run = scripted(["Okay."]);
+    const at = now - 60_000;
+    await new Supervisor(world, run.model).reply(
+      [
+        {
+          ...said(
+            "assistant",
+            "As you asked: deploy fix is done and idle now.",
+          ),
+          at,
+          news: true,
+        },
+        {
+          ...said(
+            "assistant",
+            "Done: count the files\n\nIts answer: 12 files.",
+          ),
+          at,
+          news: true,
+        },
+      ],
+      "thanks",
+      "chat",
+    );
+    const read = run.seen[0]!.messages.map((message) => message.content);
+    expect(read).toContain(
+      `${sessionNewsFrame}\nAs you asked: deploy fix is done and idle now.`,
+    );
+    expect(read).toContain(
+      `${newsFrame}\nDone: count the files\n\nIts answer: 12 files.`,
+    );
+  });
+
+  it.each([
+    "tell me when deploy fix is done",
+    "let me know when it's done",
+    "let me know once it finishes",
+    "ping me as soon as docs is idle",
+    "notify me when the payments tests finish",
+    "keep an eye on deploy fix",
+    "keep a close eye on it",
+    "keep track of deploy fix for me",
+    "can you watch docs for me while I'm in a meeting?",
+    "monitor deploy fix",
+    "give me a heads-up when it's done",
+    "I want to know when deploy fix is done",
+    "let me know if deploy fix fails",
+  ])("reads %j as a request to hear later", (words) => {
+    expect(asksToBeTold(words), words).toBe(true);
+  });
+
+  it.each([
+    "how is deploy fix doing?",
+    "is it done?",
+    "tell me what deploy fix does",
+    "tell me about docs",
+    "when will it be done?",
+    "open docs",
+    "watch out, the deploy is broken",
+    "what did you tell me before?",
+    "yes",
+    "do you know when it started?",
+  ])("reads %j as no request to hear later", (words) => {
+    expect(asksToBeTold(words), words).toBe(false);
   });
 });
