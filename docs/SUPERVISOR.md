@@ -580,8 +580,24 @@ These rules are in the code, not in the model's instructions:
 - Words for a session that runs never start a job or a task: "show me docs
   and tell deploy fix to run the tests again" opens docs and types into
   deploy fix, and "ask deploy fix if the tests pass" starts nothing. Work of
-  its own in another clause still starts: "build the page and tell docs to
-  wait", "tell docs to wait and build a landing page".
+  its own BEFORE those words still starts: "build the page and tell docs to
+  wait". What follows them after "and" or "then" can be more words for the
+  session or work of its own, and the sentence does not say which ("tell
+  deploy fix to pull main and run the tests", "tell docs to wait and build
+  a landing page"): it is read as words for the session, and no job starts
+  for it, whatever the language model asks for. New work still starts when
+  it stands in a sentence or on a line of its own ("tell docs to wait.
+  Build a landing page."), or when it says itself that it is new work:
+  "..., and start a new job to build the landing page", "... and you build
+  the landing page", "... and get codex on it", "..., meanwhile build it",
+  "... and build it in a separate window". "Also", "for me" and a form of
+  politeness ("when you can", "..., will you") are no such sign.
+- A message that only asks to hear later about a session, or to stop that
+  ("tell me when deploy fix is done", "deploy fix is running, tell me when
+  it's done", "stop watching docs"), starts no job and no task. Work with
+  such a request after it starts as always: "run the tests and tell me when
+  they're done". So does a request that holds work for ClawdTime: "let me
+  know when you finish the migration".
 - Your words are typed as you said them. "Tell deploy fix to pull main and
   run the tests" types "pull main and run the tests": ClawdTime never turns
   your words into a shell command. An answer that offers a sentence to type
