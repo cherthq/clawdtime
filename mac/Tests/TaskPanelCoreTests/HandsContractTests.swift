@@ -45,10 +45,11 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"switch_desktop","direction":"right"}"#, .switchDesktop(direction: .right)),
       (#"{"kind":"switch_desktop","direction":"previous"}"#, .switchDesktop(direction: .previous)),
       (#"{"kind":"open_url","url":"https://example.com/a?b=1"}"#, .openURL(url: "https://example.com/a?b=1")),
+      (#"{"kind":"quit_app","name":"TextEdit"}"#, .quitApp(name: "TextEdit")),
       (#"{"kind":"wait","ms":250}"#, .wait(ms: 250)),
     ]
     XCTAssertEqual(Set(cases.map { $0.1.kind }),
-      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "wait"])
+      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "quit_app", "wait"])
     for (json, expected) in cases {
       let decoded = try command(json)
       XCTAssertEqual(decoded, expected, json)

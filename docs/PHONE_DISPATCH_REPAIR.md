@@ -101,3 +101,29 @@ No upstream merge or package publication has been performed.
 The handset must still verify transcription-to-action, compound presentation and
 work, Stop, and hangup. Reading message contents and broader app workflows remain
 unverified. Local bridge checks do not imply phone acceptance.
+
+## Newer upstream installation — November 22, 2026
+
+Integrated upstream `2babb53` (15 commits after the previous `abbbff2` baseline)
+with the local phone repair. The two source conflicts were resolved by keeping
+the upstream reader-model fallback and native approval/timing changes together
+with local exact session routing and call-authority checks. The installed panel
+was rebuilt, its existing bundle identity retained, and the desktop restarted
+against the same protected state. Previous app code is retained for rollback;
+receipts and runtime databases were not reset.
+
+Verification: `npm run check` passed with 6,427 tests across 158 files plus
+TypeScript/build; all 173 voice tests and 354 Swift tests passed. The installed
+panel reports Accessibility and Screen Recording access. Desktop service, chat,
+task admission, and native worker readiness checks pass. Desktop Space shortcut
+mappings remain unconfigured; those moves are not qualified on this installation.
+
+The real compound TextEdit request reached the worker. Mouse/keyboard activity
+paused the attempt before the typing result could be verified; closing its call
+admission canceled that attempt. Do not count this as successful typing.
+
+An existing upstream routing limitation remains: the phrase "test document"
+triggers the conservative coding-work keyword filter, despite a correct model
+classification for screen work. "New document" routes to the native worker.
+Record this separately from installation readiness and retain it in upstream
+follow-up. Physical phone acceptance still requires a handset test.

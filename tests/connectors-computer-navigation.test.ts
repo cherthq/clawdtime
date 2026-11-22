@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { OpenAIModel } from "../connectors/agents/brain.js";
+import {
+  OpenAIModel,
+  defaultReaderModel,
+  supervisorModel,
+} from "../connectors/agents/brain.js";
 import { OpenAIPlanner } from "../connectors/computer/planner.js";
-import { navigationRules } from "../connectors/computer/navigation.js";
+import {
+  navigationRules,
+  navigationTools,
+} from "../connectors/computer/navigation.js";
 import { check } from "../connectors/computer/guards.js";
 import { observation } from "./connectors-computer-fixture.js";
 
@@ -60,6 +67,107 @@ describe("goal-only semantic navigation interpretation", () => {
       expect(JSON.stringify(net.sent[0])).not.toContain("image_url");
     },
   );
+  it("reads with the reader's model, and all other calls keep the chat's model", async () => {
+    const models: { model: string; effort?: string; tools: number }[] = [];
+    const request: typeof fetch = async (_url, options) => {
+      const body = JSON.parse(String(options?.body)) as {
+        model: string;
+        reasoning_effort?: string;
+        tools?: unknown[];
+      };
+      models.push({
+        model: body.model,
+        ...(body.reasoning_effort ? { effort: body.reasoning_effort } : {}),
+        tools: body.tools?.length ?? 0,
+      });
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "ok",
+                tool_calls: [
+                  { id: "c", function: { name: "none", arguments: "{}" } },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    };
+    const model = new OpenAIModel("fixture-key", "chat-model", request, {
+      reasoningEffort: "low",
+      readerModel: "reader-model",
+    });
+    await model.reading("open example.com");
+    await model.complete({ system: "s", messages: [], tools: [] });
+    expect(models).toEqual([
+      // The reader's call carries no reasoning effort of the chat's model.
+      { model: "reader-model", tools: navigationTools.length },
+      { model: "chat-model", effort: "low", tools: 0 },
+    ]);
+    // The environment names both. With no name the reader is the default one.
+    models.length = 0;
+    await supervisorModel({}, "k", request).reading("go to Notes");
+    await supervisorModel(
+      { CLAWDTIME_READER_MODEL: "another-reader" },
+      "k",
+      request,
+    ).reading("go to Notes");
+    expect(models.map((item) => item.model)).toEqual([
+      defaultReaderModel,
+      "another-reader",
+    ]);
+  });
+  it("reads with the chat's own model when the service refuses the reader's model for this key", async () => {
+    const models: string[] = [];
+    const request: typeof fetch = async (_url, options) => {
+      const model = (JSON.parse(String(options?.body)) as { model: string })
+        .model;
+      models.push(model);
+      return model === "reader-model"
+        ? new Response("{}", { status: 403 })
+        : new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    tool_calls: [
+                      {
+                        id: "c",
+                        function: {
+                          name: "desktop",
+                          arguments: '{"direction":"right","only":true}',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          );
+    };
+    const model = new OpenAIModel("fixture-key", "chat-model", request, {
+      readerModel: "reader-model",
+    });
+    expect((await model.reading("one desktop right")).intent).toEqual({
+      kind: "desktop",
+      direction: "right",
+    });
+    await model.reading("one desktop right");
+    // One refused try, then the chat's model, and no further try of the refused one.
+    expect(models).toEqual(["reader-model", "chat-model", "chat-model"]);
+    // Another failure is no refusal of the model: it is an error, as before.
+    const broken = new OpenAIModel(
+      "fixture-key",
+      "chat-model",
+      async () => new Response("{}", { status: 400 }),
+      { readerModel: "reader-model" },
+    );
+    await expect(broken.reading("go to Notes")).rejects.toThrow(
+      "The language model answered 400.",
+    );
+  });
   it.each([
     {
       name: "app",
@@ -172,4 +280,53 @@ it("rejects session interpretations that rewrite or omit constraints", async () 
   await expect(
     new OpenAIModel("fixture-key", "fixture-model", net.request).reading(text),
   ).rejects.toThrow("complete request");
+});
+
+it("preserves coding-session routing when the configured reader is refused and falls back to the chat model", async () => {
+  const text =
+    "Start a new Claude Code session in a separate terminal window. Only reply READY; do not edit files or run commands.";
+  const requests: {
+    model: string;
+    messages: { role: string; content: string }[];
+  }[] = [];
+  const request: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    requests.push(body);
+    if (body.model === "fixture-reader")
+      return new Response(null, { status: 403 });
+    return Response.json({
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              {
+                id: "session",
+                function: {
+                  name: "coding_session",
+                  arguments: JSON.stringify({ source: text, agent: "claude" }),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  };
+  const model = new OpenAIModel("fixture-key", "fixture-chat", request, {
+    readerModel: "fixture-reader",
+  });
+  expect(await model.reading(text)).toEqual({
+    intent: { kind: "none" },
+    work: false,
+    codingSession: { source: text, agent: "claude" },
+  });
+  await model.reading(text);
+  expect(requests.map((item) => item.model)).toEqual([
+    "fixture-reader",
+    "fixture-chat",
+    "fixture-chat",
+  ]);
+  expect(requests.every((item) => item.messages.at(-1)?.content === text)).toBe(
+    true,
+  );
 });

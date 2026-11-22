@@ -671,6 +671,31 @@ describe("the time of each step", () => {
     ]);
     expect(JSON.stringify(heard)).not.toMatch(/Save|secret/);
   });
+  it("says why a step was held back", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-timing-"));
+    roots.push(home);
+    const hands = new FakeHands([save]);
+    // The look just before the click cannot read the screen.
+    hands.answer = (command) =>
+      command.kind === "observe" && !command.image
+        ? { ok: false, error: "failed" }
+        : undefined;
+    const heard: { kind: string; held?: string }[] = [];
+    const worker = new ComputerWorker({
+      hands,
+      planner: new ScriptedPlanner([click, done]),
+      journal: new ComputerJournal(home),
+      timing: (entry) => heard.push(entry),
+    });
+    await worker.submit("r1", "Click it");
+    await worker.idle();
+    expect(heard[0]).toMatchObject({
+      kind: "click_element",
+      held: "The screen could not be read just before the action.",
+    });
+    // The next step was sent: it has no such word.
+    expect(heard[1]!.held).toBeUndefined();
+  });
   it("changes nothing in the request when the listener fails", async () => {
     const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-timing-"));
     roots.push(home);
@@ -685,6 +710,173 @@ describe("the time of each step", () => {
     await worker.submit("r1", "Click it");
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");
+  });
+});
+
+describe("a yes after which the action was not sent", () => {
+  // The question itself changes what is in front: the look just before the
+  // click has another generation than the planner's look.
+  const dialog = (surfaceEpoch: number) =>
+    observation(
+      [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+      { surfaceEpoch },
+    );
+  const press: Action = { kind: "click_element", element: 2 };
+  const questions = (said: string[]) =>
+    said.filter((text) => text.startsWith('Click "Delete"?')).length;
+
+  it("holds for the same action: the person is not asked a second time", async () => {
+    const { worker, hands, planner, said, waiting } = setup(
+      [press, press, done],
+      { screens: [dialog(1), dialog(2), dialog(2), dialog(2), dialog(2)] },
+    );
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    expect((await worker.answer("yes")).message).toBe("Continuing.");
+    await worker.idle();
+    // The first try was held back, the planner looked again and chose the same click, and it went out.
+    expect(planner.inputs[1]!.history[0]!.outcome).toMatch(
+      /^not sent: The desktop or display changed/,
+    );
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(questions(said)).toBe(1);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("is used once: the same action a second time asks again", async () => {
+    const { worker, hands, said, waiting } = setup(
+      [press, press, press, done],
+      {
+        screens: [dialog(1), dialog(2), dialog(2)],
+      },
+    );
+    await worker.submit("r1", "Delete it twice");
+    await waiting();
+    await worker.answer("yes");
+    await waiting();
+    // One click went out with the first yes. The third plan of the click asks.
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(questions(said)).toBe(2);
+    worker.stop();
+  });
+
+  it("comes back to the person when the action is held back again and again", async () => {
+    // Every look has a new generation: nothing can be sent.
+    let epoch = 0;
+    const { worker, hands, said, waiting } = setup(
+      [press, press, press, press, done],
+      { screens: [dialog(0)] },
+    );
+    hands.answer = (command) =>
+      command.kind === "observe" ? { observation: dialog(++epoch) } : undefined;
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    await worker.answer("yes");
+    await waiting();
+    // The yes covered the first try and two more. The fourth plan asks again.
+    expect(questions(said)).toBe(2);
+    expect(hands.sent).toEqual([]);
+    worker.stop();
+  });
+
+  it("does not hold for a button of the same name in another app or window", async () => {
+    const elsewhere = observation(
+      [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+      {
+        surfaceEpoch: 2,
+        app: {
+          name: "Photos",
+          bundleId: "com.apple.Photos",
+          window: "Library",
+        },
+      },
+    );
+    const { worker, hands, said, waiting } = setup([press, press, done], {
+      screens: [dialog(1), dialog(2), elsewhere],
+    });
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    await worker.answer("yes");
+    await waiting();
+    // Another app is in front now. Its "Delete" is another deletion: the person is asked.
+    expect(questions(said)).toBe(2);
+    expect(hands.sent).toEqual([]);
+    worker.stop();
+  });
+
+  it("does not hold for another action, nor after a minute", async () => {
+    const other = observation(
+      [element(1, { title: "Cancel" }), element(2, { title: "Remove" })],
+      { surfaceEpoch: 2 },
+    );
+    const changed = setup([press, press, done], {
+      screens: [dialog(1), dialog(2), other],
+    });
+    await changed.worker.submit("r1", "Delete it");
+    await changed.waiting();
+    await changed.worker.answer("yes");
+    await changed.waiting();
+    // The screen now has another button under that number: a new question, for its name.
+    expect(changed.worker.snapshot().message).toMatch(/^Click "Remove"\?/);
+    expect(changed.hands.sent).toEqual([]);
+    changed.worker.stop();
+
+    const late = setup(
+      [
+        press,
+        () => {
+          late.clock.now += 61_000;
+          return press;
+        },
+        done,
+      ],
+      { screens: [dialog(1), dialog(2), dialog(2)] },
+    );
+    await late.worker.submit("r1", "Delete it");
+    await late.waiting();
+    await late.worker.answer("yes");
+    await late.waiting();
+    expect(questions(late.said)).toBe(2);
+    expect(late.hands.sent).toEqual([]);
+    late.worker.stop();
+  });
+});
+
+describe("a quit by name", () => {
+  const quit: Action = { kind: "quit_app", name: "TextEdit" };
+  it("asks, sends the quit after a yes, and needs no look at a window", async () => {
+    const { worker, hands, waiting } = setup([quit, done]);
+    await worker.submit("r1", "Quit TextEdit");
+    await waiting();
+    expect(worker.snapshot().message).toBe(
+      "Quit TextEdit? This quits the app, with what is open in it. Work that is not saved can be lost. Say yes to allow it, or no to stop.",
+    );
+    expect(hands.sent).toEqual([]);
+    await worker.answer("yes");
+    await worker.idle();
+    expect(hands.sent).toEqual([{ kind: "quit_app", name: "TextEdit" }]);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+  it("tells the planner when the app stayed open", async () => {
+    const { worker, hands, planner, waiting } = setup([quit, done]);
+    hands.answer = (command) =>
+      command.kind === "quit_app" ? { ok: false, error: "failed" } : undefined;
+    await worker.submit("r1", "Quit TextEdit");
+    await waiting();
+    await worker.answer("yes");
+    await worker.idle();
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(
+      "the quit was sent, but the app still runs: it may ask something first. Look at the screen.",
+    );
+  });
+  it("sends nothing after a no", async () => {
+    const { worker, hands, waiting } = setup([quit, done]);
+    await worker.submit("r1", "Quit TextEdit");
+    await waiting();
+    await worker.answer("no");
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().state).toBe("canceled");
   });
 });
 

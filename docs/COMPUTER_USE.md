@@ -298,6 +298,12 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
 - **Your yes in a terminal.** Typing and every key need your yes while a
   terminal app is in front, or while a terminal inside another app has the
   focus.
+- **Your yes for a quit.** The planner quits an app by its name (`quit_app`),
+  and the worker always asks first. The hands then ask the app to quit the
+  polite way, as its own Quit does: no key goes out and nothing is forced. An
+  app that asks about work that is not saved stays open, and the planner reads
+  that and looks. It works for an app with no window too, where no key can be
+  sent: after its last document closed, an app could not be quit before.
 - **Your yes for keys.** A key combination that quits, logs out or locks
   (Command with Q in any form, and the force-quit keys). Command with Delete.
   Command or Control with Return. Return in a messages or mail app. The send
@@ -326,7 +332,24 @@ yes or no change nothing, and the question is said again. A no ends the request.
 
 A yes is for what you were asked. The worker looks again after your answer. If
 the screen is another one by then, it sends nothing and the planner starts
-again from a new look.
+again from a new look. When the planner then chooses the same action, with the
+same question, in the same app and window, your yes still holds: you are not
+asked the same thing again. That is so for one minute and for two tries at
+most. Any other action, and the same button in another app or window, asks
+anew. On a real Mac the question itself changes what is in front, so before
+this rule an approved click was never sent and the question came again without
+end.
+
+A sheet, the dialog that hangs from a window ("Do you want to save?"), is a
+window that the hands can act on. It has no title of its own, so it is known by
+its app and its frame as the top window.
+
+Text for a field that has the focus goes in with no click before it. A click
+moves the caret and drops a selection, so "select all, then type" added the
+text in place of replacing what was selected.
+
+`clawdtime computer timing` also says why a step was held back, in the
+worker's own fixed words: "Not sent: Another app or window came to the front."
 
 A question of the planner starts with "The task asks:". Its answer goes back to
 the planner as text and allows nothing in code. An answer that holds a password

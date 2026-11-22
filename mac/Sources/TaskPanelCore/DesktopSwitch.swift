@@ -67,13 +67,19 @@ public enum DesktopWindowVisibility {
   /// Match exactly one focused AX window to visible Quartz metadata. At most one
   /// same-app full-width auxiliary top strip may precede it, and only when AX
   /// confirms full screen and does not expose the strip as a real window/dialog.
+  ///
+  /// A sheet (the dialog that hangs from a window: "Do you want to save?") has no Accessibility title, and the
+  /// window server lists it under a name of the app's own ("Save"). It is matched by the app and the frame
+  /// alone, and only as the top ordinary window: a sheet is always in front of the window that it hangs from.
   public static func focusedWindowID(pid: Int, title: String, frame: CGRect, fullScreenConfirmed: Bool,
-                                     display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?) -> Int? {
+                                     display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?,
+                                     sheet: Bool = false) -> Int? {
     let matches = visible.indices.filter {
-      visible[$0].pid == pid && sameTitle(listed: visible[$0].title, accessible: title) && sameFrame(visible[$0].frame, frame)
+      visible[$0].pid == pid && (sheet || sameTitle(listed: visible[$0].title, accessible: title)) && sameFrame(visible[$0].frame, frame)
     }
     guard matches.count == 1, let index = matches.first else { return nil }
     if index == 0 { return visible[index].id }
+    guard !sheet else { return nil }
     guard index == 1, fullScreenConfirmed, DesktopSurfaceScope.fullScreenGeometry(window: frame, display: display),
       let accessibleFrames else { return nil }
     let strip = visible[0]
@@ -170,6 +176,17 @@ public enum DesktopShortcutConfiguration {
 /// before. That is the last desktop on that side, or a shortcut that did nothing.
 /// It is known, so it is not an unknown result. One look that shows nothing or
 /// another surface, or one Space change, and the result stays unknown.
+/// How long a desktop with no window must show before it counts as the arrival of a switch.
+public enum DesktopEmptyArrival {
+  public static let looks = 4
+  public static let seconds = 1.0
+  /// The same rule for a caller that keeps its own count: the desktop of arrival, or the one that is left.
+  public static func settled(looks: Int, since: TimeInterval?, at: TimeInterval) -> Bool {
+    guard let since, at.isFinite, since.isFinite else { return false }
+    return looks >= Self.looks && at - since >= seconds
+  }
+}
+
 public struct DesktopSwitchSettlement<Surface: Equatable> {
   private let origin: Surface
   private let expected: Surface?
@@ -177,14 +194,32 @@ public struct DesktopSwitchSettlement<Surface: Equatable> {
   private var lastEpoch: Int?
   private var looks = 0
   private var stayed = true
+  private var emptyLooks = 0
+  private var emptySince: TimeInterval?
+  private var emptyUntil: TimeInterval = 0
   public init(origin: Surface, expected: Surface? = nil, at: TimeInterval) {
     self.origin = origin; self.expected = expected; settlement = .init(at: at)
   }
   /// Ask this only when the wait is over. Three looks at least, as an arrival needs.
   public var notMoved: Bool { stayed && looks >= 3 }
-  public mutating func sample(_ surface: Surface?, spaceChanges: Int, epoch: Int, at: TimeInterval) -> DesktopSettlement<Surface>.Decision {
+  /// The arrival is a desktop with no window. "No window was read" is not enough for that: the caller says
+  /// `empty` only when the window server itself lists no ordinary window on the display. It counts after
+  /// exactly one Space change, when four looks in a row, over one second, all showed it. A window, a look
+  /// that was not empty, another Space change or a new epoch starts the count again. A move back to a named
+  /// desktop (`expected`) never arrives this way: it names a window.
+  public var arrivedEmpty: Bool {
+    guard expected == nil, emptyLooks >= DesktopEmptyArrival.looks, let emptySince else { return false }
+    return emptyUntil - emptySince >= DesktopEmptyArrival.seconds
+  }
+  public mutating func sample(_ surface: Surface?, empty: Bool = false, spaceChanges: Int, epoch: Int, at: TimeInterval) -> DesktopSettlement<Surface>.Decision {
     looks += 1
     if spaceChanges != 0 || surface != origin { stayed = false }
+    if lastEpoch != epoch { emptyLooks = 0; emptySince = nil }
+    if spaceChanges == 1, surface == nil, empty, at.isFinite {
+      emptyLooks += 1
+      if emptySince == nil { emptySince = at }
+      emptyUntil = at
+    } else { emptyLooks = 0; emptySince = nil }
     if lastEpoch != epoch { _ = settlement.sample(nil, at: at); lastEpoch = epoch }
     guard spaceChanges == 1, let surface, surface != origin, expected.map({ $0 == surface }) ?? true else {
       return settlement.sample(nil, at: at)

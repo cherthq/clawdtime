@@ -269,8 +269,18 @@ export class OpenAIModel implements ModelClient {
       timeoutMs?: number;
       retryTimeoutMs?: number;
       retryWaitMs?: number;
+      /**
+       * The model that reads what a message asks of the screen (a move, work
+       * for the computer worker, or neither). It is one short call with no
+       * picture, and a small model reads it wrong too often: it took "open
+       * example.com" for a move to an app that it made up. Without it the
+       * chat's own model reads.
+       */
+      readerModel?: string;
     } = {},
   ) {}
+  /** The service refused the reader's model for this key: the chat's own model reads from then on. */
+  private readerRefused = false;
   async navigation(goal: string): Promise<NavigationIntent> {
     return (await this.reading(goal)).intent;
   }
@@ -279,12 +289,33 @@ export class OpenAIModel implements ModelClient {
     work: boolean;
     codingSession?: CodingSessionIntent;
   }> {
-    const result = await this.complete({
-      system: navigationRules,
-      messages: [{ role: "user", content: goal }],
-      tools: navigationTools,
-      requireTool: true,
-    });
+    const ask = (model?: string) =>
+      this.complete({
+        system: navigationRules,
+        messages: [{ role: "user", content: goal }],
+        tools: navigationTools,
+        requireTool: true,
+        ...(model ? { model } : {}),
+      });
+    const reader =
+      this.readerRefused || this.options.readerModel === this.model
+        ? undefined
+        : this.options.readerModel;
+    let result: Awaited<ReturnType<typeof ask>>;
+    try {
+      result = await ask(reader);
+    } catch (error) {
+      // 403 and 404: this key may not use the reader's model, or the service
+      // does not know it. The chat's own model reads, now and from now on.
+      if (
+        !reader ||
+        !(error instanceof Error) ||
+        !/answered (?:403|404)\.$/.test(error.message)
+      )
+        throw error;
+      this.readerRefused = true;
+      result = await ask();
+    }
     const codingSession = readCodingSession(result.toolCalls, goal);
     if (codingSession)
       return { intent: { kind: "none" }, work: false, codingSession };
@@ -298,6 +329,8 @@ export class OpenAIModel implements ModelClient {
     messages: ModelMessage[];
     tools: ToolSpec[];
     requireTool?: boolean;
+    /** Another model for this one call. It gets no reasoning effort of the chat's model. */
+    model?: string;
   }) {
     const messages = [
       { role: "system", content: input.system },
@@ -333,9 +366,9 @@ export class OpenAIModel implements ModelClient {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: this.model,
+          model: input.model ?? this.model,
           messages,
-          ...(this.options.reasoningEffort
+          ...(this.options.reasoningEffort && !input.model
             ? { reasoning_effort: this.options.reasoningEffort }
             : {}),
           // A request with no tools carries no tool list: an empty one is refused.
@@ -418,6 +451,13 @@ export class OpenAIModel implements ModelClient {
 /** The model that every chat, voice and call turn uses when the person set no other. */
 export const defaultSupervisorModel = "gpt-4.1-mini";
 /**
+ * The model that reads what a message asks of the screen. Measured on real
+ * calls: 20 of 20 sentences right, three times, and 16 of 16 requests with a
+ * web address, where the small chat model had about 19 and 10. CLAWDTIME_READER_MODEL
+ * changes it. A key that may not use it gets the chat's own model.
+ */
+export const defaultReaderModel = "gpt-5.4";
+/**
  * The language model from this Mac's settings: CLAWDTIME_SUPERVISOR_MODEL names
  * it, and CLAWDTIME_SUPERVISOR_REASONING sets its reasoning effort.
  */
@@ -431,7 +471,10 @@ export function supervisorModel(
     key,
     env.CLAWDTIME_SUPERVISOR_MODEL?.trim() || defaultSupervisorModel,
     request,
-    effort ? { reasoningEffort: effort } : {},
+    {
+      ...(effort ? { reasoningEffort: effort } : {}),
+      readerModel: env.CLAWDTIME_READER_MODEL?.trim() || defaultReaderModel,
+    },
   );
 }
 
@@ -968,6 +1011,64 @@ const asksWhatIsWatched = (text: string) =>
     text,
   );
 
+/** What opens a part that says who does new work, or how: "you build ...", "separately build ...", "also, meanwhile build ...". */
+const newWorkLead =
+  /^\s*(?:(?:then|and|also|now|so|ok|okay|please|meanwhile|separately|in\s+parallel|at\s+the\s+same\s+time|in\s+the\s+meantime|you)[,\s]+)+/i;
+/**
+ * "You" in a form of politeness: "when you can", "if you could", "..., will
+ * you", "thank you", "so you know", "if you don't mind". It does not name
+ * ClawdTime as the one who works.
+ */
+const politeYou =
+  /\b(?:when|if|whenever|once)\s+you\s+(?:can|could|would|will|want|like|get\s+(?:a\s+)?(?:chance|minute|sec|second|moment)|have\s+(?:a\s+)?(?:time|minute|moment|second|sec))\b|\b(?:when|if|whenever|once)\s+you(?:['\u2019]re|\s+are)\s+(?:free|ready|done|back)\b|\bas\s+soon\s+as\s+you\s+(?:can|could)\b|\b(?:will|would|could|can|won['\u2019]?t)\s+you(?:\s+mind)?\s*[?.!]*\s*$|\bthank\s+you\b|\bso\s+you\s+know\b|(?:^|[,\s])you\s+know\s*[?.!]*\s*$|\bif\s+you\s+(?:don['\u2019]?t\s+)?mind\b/gi;
+/** A clause that is only such a form, or thanks: it says nothing. */
+const politeOnly =
+  /^\s*(?:(?:when|if|whenever)\s+you\s+(?:can|could|would|will|want|like|get\s+(?:a\s+)?(?:chance|minute|sec|second|moment))|(?:when|if|whenever)\s+you(?:['\u2019]re|\s+are)\s+(?:free|ready)|as\s+soon\s+as\s+you\s+(?:can|could)|(?:will|would|could|can)\s+you(?:\s+mind)?|thank\s+you(?:\s+(?:so|very)\s+much)?|thanks(?:\s+a\s+lot)?|so\s+you\s+know|you\s+know|if\s+you\s+(?:don['\u2019]?t\s+)?mind|please)[\s.!?]*$/i;
+/**
+ * What follows words for a session in the same sentence says itself that
+ * it is new work for ClawdTime, and no more words for that session. A list
+ * of what is taken:
+ * - it speaks of a job or a task (`startCue`);
+ * - it names a coding agent ("open claude to build it", "get codex on it");
+ * - "you" or "yourself" stands in it, or "on your own", "for your part": in
+ *   "tell docs to wait and you build the page" the listener is ClawdTime. A
+ *   form of politeness is none (`politeYou`);
+ * - the work runs beside the session: "meanwhile", "separately", "in
+ *   parallel", or another, a new, a fresh, a separate or a second agent,
+ *   session, window, terminal or tab;
+ * - "we" or "let's" as the subject that opens a part ("... and we'll
+ *   build the page"), or someone other than the session ("somebody
+ *   else"): a session is told "to ...", and the person does not count
+ *   themselves in it. "The tests we wrote", "like we discussed" and "let
+ *   us know" are words for the session.
+ * "Also", "for me" and a bare "your" say nothing of the kind: people add
+ * them to more words for the same session ("... and run your tests").
+ */
+const saysItIsNewWork = (text: string) =>
+  startCue.test(text) ||
+  /\b(?:claude|codex)\b/i.test(text) ||
+  /\b(?:you|yourself|on\s+your\s+own|for\s+your\s+part|by\s+yourself)\b/i.test(
+    text.replace(politeYou, " "),
+  ) ||
+  /\b(?:meanwhile|separately|in\s+parallel|at\s+the\s+same\s+time|in\s+the\s+meantime)\b/i.test(
+    text,
+  ) ||
+  /\b(?:another|a\s+new|a\s+fresh|a\s+separate|a\s+second|a\s+different|its\s+own)\s+(?:\w+\s+)?(?:agent|session|window|terminal|tab|instance|job|task|folder)\b/i.test(
+    text,
+  ) ||
+  /\b(?:(?:some(?:one|body)|any(?:one|body))\s+else|someone\s+new)\b/i.test(
+    text,
+  ) ||
+  // "We" and "let's" only as the subject that opens a part: "the tests
+  // we wrote", "like we discussed" and "let us know" are words for the
+  // session.
+  text
+    .split(/\s*,\s*/)
+    .some((part) =>
+      /^\s*(?:(?:then|and|also|now|so|ok|okay|please|meanwhile)[,\s]+)*(?:let['\u2019]?s\b|let\s+us\s+(?!know\b)|we(?:['\u2019](?:ll|re|d|ve))?\b)/i.test(
+        part,
+      ),
+    );
 /**
  * The message opens with the request itself: a form that asks to hear
  * later about a session, or to stop that, stands first, after fillers and a
@@ -3572,6 +3673,8 @@ interface Turn {
 /** What the model reads when it asks for new work with words that are for a session that runs. */
 const forThatSession = (session: AgentSession) =>
   `The person's message speaks to the session ${title(session)}: those words are for that session, not work for a new agent, so no job and no task starts for them.`;
+const onlyToHear =
+  "The person's message only asks to hear later about a session, or to stop that. That is no work for a new agent: no job and no task starts for it.";
 /** Marks a gate's refusal, and gives its sentence back for the model. */
 const refuse = (turn: Turn, sentence: string) => {
   turn.refused = sentence;
@@ -3949,10 +4052,18 @@ export class Supervisor {
    * opening only), and what follows at once names one session and nothing
    * else ("show me docs and tell deploy fix to run the tests again", "ask the
    * payments one if the tests pass"), or the message has the form with a
-   * colon. Work of its own in another clause keeps the message what it was:
-   * "build the page and tell docs to wait", "tell docs to wait and build a
-   * landing page". After the clause, only more words for the session can
-   * follow ("..., and to report back").
+   * colon. Work of its own BEFORE that clause keeps the message what it
+   * was: "build the page and tell docs to wait". What follows the clause
+   * after "and" or "then" can be more words for the session or work of its
+   * own, and nothing in the sentence says which ("tell deploy fix to pull
+   * main and run the tests", "tell docs to wait and build a landing page"):
+   * it is read as words for the session, so no job starts with it, whatever
+   * the model calls. A part keeps the message work when it stands in a
+   * sentence or on a line of its own ("tell docs to wait. Build a landing
+   * page."), or when it says itself that it is new work (`saysItIsNewWork`):
+   * "..., and start a new job to build the page", "... and you build the
+   * page", "... and open claude to build it", "..., meanwhile build the
+   * page in a new window".
    */
   private toldSession(spoken: string, turn?: Turn): AgentSession | null {
     const sessions = this.world.board()?.sessions ?? [];
@@ -3962,10 +4073,23 @@ export class Supervisor {
       );
       if (named.length === 1) return named[0]!;
     }
-    const clauses = clausesOf(spoken);
-    const work = (clause: string) =>
+    // Each clause with its sentence: the words for a session end where
+    // their sentence ends, at a mark with a space after it or at a new line.
+    const parts = spoken
+      .split(/(?<=[.?!;])\s+|\n+/)
+      .flatMap((sentence, index) =>
+        clausesOf(sentence).map((clause) => ({ clause, sentence: index })),
+      );
+    const asked = (clause: string) =>
       asksForWork(clause, { dont: true }) && this.seeAsked(clause) === null;
-    for (const [at, clause] of clauses.entries()) {
+    // "... and you build the page", "... and separately build the page":
+    // the word that says who does it, or how, is no part of the work.
+    const work = (clause: string) =>
+      asked(clause) ||
+      asked(clause.replace(newWorkLead, "")) ||
+      // "I need you to build the page", "while you build the page".
+      asked(clause.replace(/^.*?\byou\s+(?:to\s+)?/i, ""));
+    for (const [at, { clause, sentence }] of parts.entries()) {
       const told = /^(?:tell|ask)\s+(.+)$/i.exec(
         clause.replace(toldLead, "").trim(),
       );
@@ -3978,14 +4102,80 @@ export class Supervisor {
         turn,
       );
       if (!session) continue;
-      return clauses.slice(0, at).some(work) ||
-        clauses
+      // What follows the clause in its own sentence, as one text: a sign
+      // of new work can stand in another part of it ("..., and, for your
+      // part, build the page").
+      const newWork = saysItIsNewWork(
+        parts
           .slice(at + 1)
-          .some((after) => !/^to\b/i.test(after) && work(after))
+          .filter((after) => after.sentence === sentence)
+          .map((after) => after.clause)
+          .join(", "),
+      );
+      return parts.slice(0, at).some((before) => work(before.clause)) ||
+        parts.slice(at + 1).some(
+          (after) =>
+            !/^to\b/i.test(after.clause) &&
+            work(after.clause) &&
+            // In the same sentence, joined by "and" or "then": only when
+            // the rest says itself that it is new work.
+            (after.sentence !== sentence || newWork),
+        )
         ? null
         : session;
     }
     return null;
+  }
+  /**
+   * The message asks for nothing but to hear later about a session, or to
+   * stop that: "tell me when deploy fix is done", "deploy fix is running,
+   * tell me when it's done", "keep an eye on docs, thanks", "stop watching
+   * deploy fix". A list of what is taken: at least one clause opens as such
+   * a request (`opensAsARequestToHear`), and each other clause opens so,
+   * holds only words that say nothing, or says the state of a session of
+   * the board by its name ("deploy fix is running"). That is for the watch
+   * tool, or for nothing where no record of watched sessions exists: never
+   * work for a new agent. A clause of any other kind keeps the message
+   * what it was ("run the tests and tell me when they're done", "keep an
+   * eye on the tests and rerun them when they fail"), and so does a request
+   * with "you" after its form ("let me know when you finish the migration").
+   */
+  private onlyAsksToHear(spoken: string) {
+    const clauses = clausesOf(spoken);
+    // "Tell me when deploy fix is done so you can deploy it", "let me know
+    // when you finish the migration": with "you" after the form, the clause
+    // can hold work for ClawdTime, and is not only a request to hear.
+    const onlyARequest = (clause: string) => {
+      if (!opensAsARequestToHear(clause)) return false;
+      const found =
+        requestsToHear(clause)[0] ?? [...clause.matchAll(stopForm)][0];
+      return !/\byou\b/i.test(
+        clause.slice(found?.index ?? 0).replace(politeYou, " "),
+      );
+    };
+    if (!clauses.some(onlyARequest)) return false;
+    let names: string[] = [];
+    try {
+      names = (this.world.board()?.sessions ?? []).map((session) =>
+        title(session).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      );
+    } catch {
+      names = [];
+    }
+    const saysNothing = new RegExp(`^\\s*${fillersBefore}$`, "i");
+    const stateOfASession = names.length
+      ? new RegExp(
+          `^(?:the\\s+|my\\s+)?(?:${names.join("|")})(?:\\s+(?:session|one|agent))?\\s+(?:is|was|has|looks|seems|still|keeps)\\b`,
+          "iu",
+        )
+      : null;
+    return clauses.every(
+      (clause) =>
+        onlyARequest(clause) ||
+        saysNothing.test(`${clause} `) ||
+        politeOnly.test(clause) ||
+        (stateOfASession?.test(clause) ?? false),
+    );
   }
   /**
    * "Tell deploy fix to run the tests again", as people say it: the last
@@ -4244,6 +4434,8 @@ export class Supervisor {
     // Words for a session that runs are no task either.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
+    // A request to hear later about a session is no task either.
+    if (this.onlyAsksToHear(spoken)) return refuse(turn, onlyToHear);
     if (turn.typedByCode)
       return refuse(
         turn,
@@ -4626,6 +4818,9 @@ export class Supervisor {
     // runs are not work for a new one.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
+    // "Tell me when deploy fix is done", "stop watching docs": a request to
+    // hear later about a session is no work for a new agent.
+    if (this.onlyAsksToHear(spoken)) return refuse(turn, onlyToHear);
     // The code typed words of this message into a session already: those
     // words were what the person asked for.
     if (turn.typedByCode)

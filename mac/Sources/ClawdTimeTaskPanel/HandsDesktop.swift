@@ -384,7 +384,14 @@ import TaskPanelCore
     guard singleDisplay else { return .failure(.unsupportedDesktop) }
     if let error = await allowed() { return .failure(error) }
     let beforeEpoch = epoch
-    guard let origin = await surface(transition: true), beforeEpoch == epoch else { return .failure(.unsupportedDesktop) }
+    guard let origin = await surface(transition: true), beforeEpoch == epoch else {
+      // No window is in front. A desktop with no window at all can still be left; the arrival is then a window.
+      // The desktop of before has no name here, so "previous" stays unavailable.
+      guard beforeEpoch == epoch, requested != .previous, let display = HandsDisplay.main,
+        await surface(transition: true) == nil, DesktopAX.noOrdinaryWindow(display: display.id) else { return .failure(.unsupportedDesktop) }
+      return await leaveEmptyDesktop(direction: requested, display: display, configuration: configuration, send: send,
+        allowed: allowed, observer: observer, pointer: pointer)
+    }
     let direction: DesktopDirection
     let expected: Surface?
     if requested == .previous {
@@ -430,7 +437,24 @@ import TaskPanelCore
         guard sampleEpoch == epoch, value.displayID == origin.displayID, value.map == origin.map else { return nil }
         return value
       }
-      switch settlement.sample(stableCandidate, spaceChanges: spaceChanges - initialSpaceChanges, epoch: epoch, at: now) {
+      // No window was read, and the window server lists none: that is the look of a desktop with no window.
+      let empty = candidate == nil && sampleEpoch == epoch && DesktopAX.noOrdinaryWindow(display: origin.displayID)
+      let decision = settlement.sample(stableCandidate, empty: empty, spaceChanges: spaceChanges - initialSpaceChanges, epoch: epoch, at: now)
+      if settlement.arrivedEmpty {
+        // One Space change, and for a second no window anywhere on the display: the desktop of arrival is empty.
+        // It is observed as it is. An observation with no window gives no lease for input.
+        if let error = await allowed() { return failure(error) }
+        guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1 else { return failure(.staleObservation) }
+        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        if let error = await allowed() { return failure(error) }
+        // The observation of a desktop with no window retires the lease once itself: one more environment change.
+        guard now - began < 6, environmentChanges == initialEnvironmentChanges + 1, spaceChanges - initialSpaceChanges == 1,
+          case .success(let seen) = captured, await surface(transition: true) == nil, DesktopAX.noOrdinaryWindow(display: origin.displayID),
+          seen.surfaceEpoch == epoch else { return failure(.staleObservation) }
+        ready = true; phase(.ready)
+        return .success(seen)
+      }
+      switch decision {
       case .expired:
         // The whole wait showed the surface of before and no Space change: the desktop
         // did not move. That is known, so it is said as it is and not as unknown.
@@ -447,6 +471,76 @@ import TaskPanelCore
           case .success(let seen) = captured, let target = await surface(transition: true), target == stableCandidate,
           seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         history.verified(direction, from: origin, to: target)
+        ready = true; phase(.ready)
+        return .success(seen)
+      }
+      try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+  }
+
+  /// One desktop left or right from a desktop with no window. Nothing names the desktop of before, so the
+  /// evidence is on the side of the arrival: exactly one Space change, and then a window that holds, by the
+  /// same rule as for every arrival. Two empty desktops look the same: such a move stays unknown.
+  private func leaveEmptyDesktop(direction: DesktopDirection, display: HandsDisplay, configuration: () -> DesktopShortcutPair?,
+                                 send: (DesktopResolvedShortcut, () async -> HandError?) async -> Result<Void, HandError>,
+                                 allowed: @escaping () async -> HandError?, observer: HandsObserver,
+                                 pointer: () -> CGPoint) async -> Result<Observation?, HandError> {
+    guard let pair = configuration(), let shortcut = pair.shortcut(for: direction) else { return .failure(.desktopShortcutUnavailable) }
+    if let error = await allowed() { return .failure(error) }
+    guard configuration() == pair else { return .failure(.desktopShortcutUnavailable) }
+    let initialSpaceChanges = spaceChanges, initialEnvironmentChanges = environmentChanges
+    let began = now
+    var dispatched = false, ready = false
+    history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
+    defer {
+      switching = false
+      if !ready { invalidate(); phase(.blocked) }
+    }
+    func failure(_ error: HandError) -> Result<Observation?, HandError> {
+      .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
+    }
+    let dispatchEpoch = epoch
+    switch await send(shortcut, { [self] in
+      if let error = await allowed() { return error }
+      guard dispatchEpoch == epoch, spaceChanges == initialSpaceChanges, environmentChanges == initialEnvironmentChanges,
+        await surface(transition: true) == nil, DesktopAX.noOrdinaryWindow(display: display.id), dispatchEpoch == epoch else { return .staleObservation }
+      return nil
+    }) {
+    case .failure(let error): return failure(error)
+    case .success: dispatched = true
+    }
+    phase(.waiting)
+    var settlement = DesktopSettlement<Surface>(at: began)
+    var stayedEmpty = true, looks = 0
+    while true {
+      if let error = await allowed() { return failure(error) }
+      guard environmentChanges == initialEnvironmentChanges, singleDisplay else { return failure(.unsupportedDesktop) }
+      let changes = spaceChanges - initialSpaceChanges
+      guard changes <= 1 else { return failure(.targetNotVisible) }
+      let sampleEpoch = epoch
+      let candidate = await surface(transition: true)
+      let stableCandidate = candidate.flatMap { value -> Surface? in
+        guard sampleEpoch == epoch, value.displayID == display.id, value.map == display.map else { return nil }
+        return value
+      }
+      looks += 1
+      if changes != 0 || candidate != nil || !DesktopAX.noOrdinaryWindow(display: display.id) { stayedEmpty = false }
+      // A window counts as the arrival only after the one Space change.
+      switch settlement.sample(changes == 1 ? stableCandidate : nil, at: now) {
+      case .expired:
+        // The whole wait showed the empty desktop and no Space change: it did not move. That is known.
+        if stayedEmpty, looks >= 3, spaceChanges == initialSpaceChanges, environmentChanges == initialEnvironmentChanges {
+          return .failure(.desktopUnchanged)
+        }
+        return failure(.targetNotVisible)
+      case .waiting: break
+      case .ready:
+        if let error = await allowed() { return failure(error) }
+        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        if let error = await allowed() { return failure(error) }
+        guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1,
+          case .success(let seen) = captured, let target = await surface(transition: true), target == stableCandidate,
+          seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)
       }
@@ -514,11 +608,29 @@ import TaskPanelCore
         let title = value(window, kAXTitleAttribute) as? String else { return .failure(.targetNotVisible) }
       return .selected(Target(pid: pid, window: window, title: title, minimized: minimized))
     }
+    /// True when the window server lists no ordinary window on this display: a desktop with no window.
+    /// The panel's own windows, the Dock, the menu bar and what lies on the desktop itself do not count.
+    /// False when the list cannot be read: nothing is said of a desktop that was not seen.
+    static func noOrdinaryWindow(display: CGDirectDisplayID) -> Bool {
+      guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+      let bounds = CGDisplayBounds(display)
+      return !windows.contains { row in
+        guard (row[kCGWindowLayer as String] as? Int) == 0, (row[kCGWindowOwnerPID as String] as? Int) != Int(getpid()) else { return false }
+        // A row with no frame cannot be placed: it counts as a window, so the desktop is not called empty.
+        guard let raw = row[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: raw) else { return true }
+        return !bounds.intersection(frame).isEmpty
+      }
+    }
     static func visibleSurface(pid: pid_t, display: HandsDisplay) -> Surface? {
       let app = app(pid)
-      guard let focused = element(value(app, kAXFocusedWindowAttribute)),
-        (value(focused, kAXMinimizedAttribute) as? Bool) == false,
-        let title = value(focused, kAXTitleAttribute) as? String, let bounds = frame(focused),
+      guard let focused = element(value(app, kAXFocusedWindowAttribute)) else { return nil }
+      // A sheet hangs from a window and takes the focus: "Do you want to save?". It has no title and no
+      // minimized state of its own. Without it as a surface, no button of a sheet could ever be pressed.
+      let sheet = (value(focused, kAXRoleAttribute) as? String) == "AXSheet"
+      let minimized = value(focused, kAXMinimizedAttribute) as? Bool
+      guard sheet ? minimized != true : minimized == false,
+        let title = sheet ? ((value(focused, kAXTitleAttribute) as? String) ?? "") : (value(focused, kAXTitleAttribute) as? String),
+        let bounds = frame(focused),
         !CGDisplayBounds(display.id).intersection(bounds).isEmpty,
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
       let ordinary = windows.filter { row in
@@ -546,7 +658,8 @@ import TaskPanelCore
         }
       }
       guard let windowID = DesktopWindowVisibility.focusedWindowID(pid: Int(pid), title: title, frame: bounds,
-        fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames) else { return nil }
+        fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames,
+        sheet: sheet) else { return nil }
       return Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
         fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed)

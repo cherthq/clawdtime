@@ -340,6 +340,26 @@ import TaskPanelCore
       if let refusal = await lastCheck() { return .failure(refusal) }
       desktop.invalidate()
       return NSWorkspace.shared.open(url) ? .success(nil) : .failure(.failed)
+    case .quitApp(let name):
+      guard let safe = HandsTarget.appName(name) else { return .failure(.refused) }
+      guard case .success(let url) = Self.application(named: safe) else { return .failure(.notFound) }
+      let path = url.resolvingSymlinksInPath().path
+      // Only an app that runs and shows in the Dock, and never this panel.
+      guard let app = NSWorkspace.shared.runningApplications.first(where: {
+        $0.activationPolicy == .regular && $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath().path == path
+      }) else { return .failure(.notFound) }
+      defer { guide.rest() }
+      await say(label)
+      if let refusal = await lastCheck() { return .failure(refusal) }
+      desktop.invalidate()
+      // The polite quit, as the app's own Quit: no key goes out, and nothing is forced. An app that asks
+      // about work that is not saved stays, and the worker then looks at what it asks.
+      guard app.terminate() else { return .failure(.failed) }
+      for _ in 0..<20 {
+        if app.isTerminated { return .success(nil) }
+        try? await Task.sleep(nanoseconds: 150_000_000)
+      }
+      return app.isTerminated ? .success(nil) : .failure(.failed)
     case .wait:
       return .success(nil)
     }

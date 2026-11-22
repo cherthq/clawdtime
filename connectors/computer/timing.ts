@@ -28,6 +28,8 @@ const timedStepSchema = z
     lookMs: duration,
     planMs: duration,
     actMs: duration,
+    /** Why the worker held the step back: one of its own fixed sentences. */
+    held: z.string().max(200).optional(),
   })
   .strict();
 export type TimedStep = z.infer<typeof timedStepSchema>;
@@ -67,6 +69,7 @@ export function recordTiming(
       lookMs: whole(entry.lookMs),
       planMs: whole(entry.planMs),
       actMs: whole(entry.actMs),
+      ...(entry.held ? { held: entry.held.slice(0, 200) } : {}),
     });
     secureWrite(timingFile(root), {
       steps: [...readTimings(root).slice(-(keptTimings - 1)), step],
@@ -78,4 +81,4 @@ export function recordTiming(
 
 /** One step as a line for a person. */
 export const timingLine = (step: TimedStep) =>
-  `${new Date(step.at).toISOString()} step ${step.step} ${step.kind}: look ${step.lookMs} ms, plan ${step.planMs} ms, act ${step.actMs} ms`;
+  `${new Date(step.at).toISOString()} step ${step.step} ${step.kind}: look ${step.lookMs} ms, plan ${step.planMs} ms, act ${step.actMs} ms${step.held ? `. Not sent: ${step.held}` : ""}`;

@@ -272,9 +272,10 @@ describe("words for a session that runs are never a job", () => {
   it.each([
     // Work of its own before the words for the session.
     "build a pricing page and tell deploy fix to run the tests again",
-    // Work of its own after them.
-    "tell docs to wait and build a new landing page",
+    // Work of its own after them, which says itself that it is a new job.
     "ask docs to wait and start a new job to build the landing page",
+    "tell docs to wait, and start a job to build the landing page",
+    "tell deploy fix to pull main and then start a new job to write the changelog",
     // The person speaks to the session themselves.
     "let me tell docs to wait myself, you build the landing page",
     "let me ask docs first, then start a job for the landing page",
@@ -292,6 +293,173 @@ describe("words for a session that runs are never a job", () => {
     expect(said.windows, words).toHaveLength(1);
     expect(said.answer, words).toContain("Requested a new ");
     expect(said.typed, words).toEqual([]);
+  });
+
+  describe('words for a session with more after "and": no job, whatever the model calls', () => {
+    const messages = [
+      "tell deploy fix to pull main and run the tests",
+      "tell deploy fix to pull main and run the tests please",
+      "ask docs to check the links and build the index",
+      "tell docs to wait and build a new landing page",
+      "tell deploy fix to pull main, then deploy to staging",
+      "ok can you tell deploy fix to stash the change and run the linter",
+    ];
+    it.each(messages)("starts no job for %j", async (words) => {
+      const said = await run(words, [[call("start_job")], "Okay."]);
+      expect(said.windows, words).toHaveLength(0);
+      // What the model reads names the session, and says that no job
+      // starts. For a rest that opens with a verb of software work, the
+      // code types the first part by itself and the model is not asked.
+      if (said.results[0] !== undefined) {
+        expect(said.results[0], words).toMatch(/deploy fix|docs/);
+        expect(said.results[0], words).toContain("no job");
+      }
+    });
+
+    it.each(messages)("starts no task for %j either", async (words) => {
+      const said = await run(words, [
+        [call("start_task", { goal: words })],
+        "Okay.",
+      ]);
+      expect(said.windows, words).toHaveLength(0);
+    });
+
+    it.each([
+      // The part after the words for the session says itself that it is
+      // new work for ClawdTime.
+      "tell docs to wait and you build the landing page",
+      "tell docs to wait, and also build a landing page yourself",
+      "tell docs to wait and open claude to build a landing page",
+      "tell docs to wait and ask codex to build a landing page",
+      "tell docs to wait; meanwhile build a landing page in a new window",
+      "tell docs to wait, and separately build a landing page for me",
+      "tell docs to wait and build a landing page in a new window",
+      "tell docs to wait and in the meantime build a landing page",
+      // "You" anywhere in the part is ClawdTime.
+      "tell docs to wait, and I need you to build a landing page",
+      "tell docs to wait, while you build a landing page",
+      "tell docs to wait and build a landing page on your own",
+      "tell docs to wait and, for your part, build a landing page",
+      "tell docs to wait and can you build a landing page",
+      // Another agent, session or window.
+      "tell docs to wait and build a landing page in a separate window",
+      "tell docs to wait and spin up another session to build the landing page",
+      "tell docs to wait and get a fresh agent on the landing page",
+      // A coding agent by its name, in any form.
+      "tell docs to wait and get codex on the landing page",
+      // "We", or someone other than the session: never the session itself.
+      "tell docs to wait and let's build a landing page",
+      "tell docs to wait and let's get a landing page going",
+      "tell docs to wait and we'll build a landing page",
+      "tell docs to wait and get somebody else on the landing page",
+      "tell docs to wait and we can build a landing page",
+      "tell docs to wait, then let us build a landing page",
+      // A new sentence, or a new line: the words for the session end there.
+      "tell docs to wait. Build a landing page.",
+      "tell docs to wait.\nBuild a landing page for the demo.",
+      "Tell deploy fix to pull main! Then build me a landing page.",
+    ])(
+      "still starts the job for %j: the new work says so itself",
+      async (words) => {
+        const said = await run(words, [[call("start_job")], "Okay."]);
+        expect(said.windows, words).toHaveLength(1);
+        expect(said.answer, words).toContain("Requested a new ");
+      },
+    );
+
+    it("asks before it starts, as before, when the new work in its own sentence holds a don't", async () => {
+      const said = await run(
+        "tell docs to wait. Build a landing page, don't use React.",
+        [[call("start_job")], "Okay."],
+      );
+      expect(said.windows).toHaveLength(0);
+      expect(said.answer).toContain("Say yes or no");
+    });
+
+    it.each([
+      // Words that many people add to more words for the same session.
+      "tell deploy fix to pull main and also run the tests",
+      "tell deploy fix to pull main and run the tests for me",
+      "tell deploy fix to pull main and then run the tests when you can",
+      // "You" in a form of politeness is not ClawdTime as the one who works.
+      "tell deploy fix to pull main and run the tests, will you",
+      "tell deploy fix to pull main and run the tests if you could",
+      "tell deploy fix to pull main and run the tests, thank you",
+      "tell deploy fix to pull main and run the tests as soon as you can",
+      "tell deploy fix to pull main and run the tests when you get a sec",
+      "tell deploy fix to pull main and run the tests when you're free",
+      "tell deploy fix to pull main and run the tests, would you mind",
+      "tell deploy fix to pull main and run the tests, you know",
+      // "We" and "us" inside more words for the session: team speech.
+      "tell deploy fix to pull main and run the tests we wrote",
+      "tell deploy fix to pull main and run the tests like we discussed",
+      "tell deploy fix to pull main and run the tests as we agreed",
+      "tell deploy fix to pull main and run the tests and let us know",
+      "tell deploy fix to pull main and run the tests, then let us know how it went",
+    ])("starts no job for %j: nothing in it says new work", async (words) => {
+      const said = await run(words, [[call("start_job")], "Okay."]);
+      expect(said.windows, words).toHaveLength(0);
+    });
+
+    it("types the person's words into the session when the model asks for that after the refused job", async () => {
+      const said = await run(
+        "tell deploy fix to pull main and run the tests",
+        wantsJobThenTypes("pull main and run the tests"),
+      );
+      expect(said.windows).toHaveLength(0);
+      expect(said.typed).toEqual([
+        ["deploy fix", "pull main and run the tests"],
+      ]);
+      expect(said.answer).toBe("Done.");
+    });
+  });
+
+  describe("a message that only asks to hear later about a session: no job, whatever the model calls", () => {
+    it.each([
+      "deploy fix is running, tell me when it's done",
+      "tell me when deploy fix is done",
+      "keep an eye on docs and let me know when it finishes",
+      "ok can you keep an eye on deploy fix and tell me when it's done",
+      "watch docs for me please",
+      "let me know once deploy fix finishes, thanks",
+      "stop watching deploy fix",
+      // A form of politeness with "you" adds no work.
+      "let me know when deploy fix is done if you would",
+      "ping me when deploy fix is done so you know",
+      "tell me when deploy fix is done, if you can",
+      "tell me when deploy fix is done, thank you",
+      "let me know when deploy fix is done, will you",
+      "tell me when deploy fix is done as soon as you can",
+    ])("starts no job and no task for %j", async (words) => {
+      for (const tool of ["start_job", "start_task"]) {
+        const said = await run(words, [
+          [tool === "start_job" ? call(tool) : call(tool, { goal: words })],
+          "Okay.",
+        ]);
+        expect(said.windows, `${words} / ${tool}`).toHaveLength(0);
+        expect(said.typed, `${words} / ${tool}`).toEqual([]);
+      }
+    });
+
+    it.each([
+      "run the tests and tell me when they're done",
+      "check which packages are outdated in this repo and tell me when it's done",
+      "start a job to watch the logs and tell me when it breaks",
+      "watch the build and fix what breaks",
+      "write a changelog for this week, and let me know once it's ready",
+      "keep an eye on the tests and rerun them when they fail",
+      // Work for ClawdTime inside the request: "you" does something.
+      "tell me when deploy fix is done so you can deploy it",
+      "let me know when you finish the migration",
+      "tell me when you have fixed the footer",
+    ])(
+      "still starts the job for %j: it holds work of its own",
+      async (words) => {
+        const said = await run(words, [[call("start_job")], "Okay."]);
+        expect(said.windows, words).toHaveLength(1);
+        expect(said.answer, words).toContain("Requested a new ");
+      },
+    );
   });
 
   it.each([
