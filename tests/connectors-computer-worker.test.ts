@@ -757,6 +757,25 @@ describe("a yes after which the action was not sent", () => {
     worker.stop();
   });
 
+  it("comes back to the person when the action is held back again and again", async () => {
+    // Every look has a new generation: nothing can be sent.
+    let epoch = 0;
+    const { worker, hands, said, waiting } = setup(
+      [press, press, press, press, done],
+      { screens: [dialog(0)] },
+    );
+    hands.answer = (command) =>
+      command.kind === "observe" ? { observation: dialog(++epoch) } : undefined;
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    await worker.answer("yes");
+    await waiting();
+    // The yes covered the first try and two more. The fourth plan asks again.
+    expect(questions(said)).toBe(2);
+    expect(hands.sent).toEqual([]);
+    worker.stop();
+  });
+
   it("does not hold for another action, nor after a minute", async () => {
     const other = observation(
       [element(1, { title: "Cancel" }), element(2, { title: "Remove" })],

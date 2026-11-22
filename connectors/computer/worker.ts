@@ -193,7 +193,13 @@ interface Run {
    * was then not sent: the screen had to be read again. The yes holds once,
    * for a short time, for the same action with the same questions.
    */
-  approval?: { signature: string; questions: string[]; at: number };
+  approval?: {
+    signature: string;
+    questions: string[];
+    at: number;
+    /** How often the yes was used with no new question. Two times at most. */
+    tries: number;
+  };
   /** Why the browser cannot be driven in this request, once it said so. The screen is used from then on. */
   browserClosed?: string;
   navigation?: NavigationIntent;
@@ -1194,13 +1200,17 @@ export class ComputerWorker implements DesktopExecutorPort {
     // was then not sent. It is used once.
     const held = run.approval;
     delete run.approval;
-    const granted =
+    const kept =
       held &&
       checked.signature !== null &&
       held.signature === checked.signature &&
       this.now() - held.at <= approvalHoldsMs
-        ? held.questions
-        : [];
+        ? held
+        : null;
+    const granted = kept?.questions ?? [];
+    // A yes is used with no new question two times at most: an action that
+    // is held back again and again must come back to the person.
+    const tries = kept ? kept.tries + 1 : 0;
     const answered: string[] = [];
     // The same action with the same arguments does not go out a third time in a row.
     if (
@@ -1245,12 +1255,14 @@ export class ComputerWorker implements DesktopExecutorPort {
       answered.length &&
       run.held &&
       checked.signature !== null &&
-      this.current === run
+      this.current === run &&
+      tries < 2
     )
       run.approval = {
         signature: checked.signature,
         questions: answered,
-        at: this.now(),
+        at: kept ? kept.at : this.now(),
+        tries,
       };
   }
 

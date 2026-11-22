@@ -41,6 +41,27 @@ final class AppNavigationTests: XCTestCase {
     XCTAssertNil(match([row(1, frame: CGRect(x: 0, y: 37, width: 1500, height: 100)), row(2, frame: full)], frames: [full]))
   }
 
+  func testASheetIsMatchedByItsAppAndFrameAsTheTopWindowOnly() {
+    let sheet = CGRect(x: 250, y: 158, width: 390, height: 318)
+    let window = CGRect(x: 152, y: 73, width: 586, height: 488)
+    let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    func id(_ visible: [DesktopWindowEvidence], sheet isSheet: Bool = true, frame: CGRect? = nil) -> Int? {
+      DesktopWindowVisibility.focusedWindowID(pid: 10, title: "", frame: frame ?? sheet, fullScreenConfirmed: false,
+        display: display, visible: visible, accessibleFrames: nil, sheet: isSheet)
+    }
+    let own: [DesktopWindowEvidence] = [.init(id: 7, pid: 10, title: "Save", frame: sheet), .init(id: 3, pid: 10, title: "Untitled", frame: window)]
+    // The sheet has no Accessibility title. The window server calls it "Save". Same app, same frame, on top: it is the one.
+    XCTAssertEqual(id(own), 7)
+    // The same rows read as an ordinary window need the same name, so a window with no title matches nothing.
+    XCTAssertNil(id(own, sheet: false))
+    // Another app's window on top, a sheet that is not on top, another frame, two rows with the frame: no match.
+    XCTAssertNil(id([.init(id: 9, pid: 11, title: "Other", frame: window)] + own))
+    XCTAssertNil(id([.init(id: 3, pid: 10, title: "Untitled", frame: window), .init(id: 7, pid: 10, title: "Save", frame: sheet)]))
+    XCTAssertNil(id(own, frame: sheet.offsetBy(dx: 40, dy: 0)))
+    XCTAssertNil(id([.init(id: 7, pid: 10, title: "Save", frame: sheet), .init(id: 8, pid: 10, title: "Save", frame: sheet)]))
+    XCTAssertNil(id([.init(id: 7, pid: 12, title: "Save", frame: sheet), .init(id: 3, pid: 10, title: "Untitled", frame: window)]))
+  }
+
   func testAListNameWithTheAppsOwnWordsAfterItIsTheSameWindow() {
     func found(_ rows: [DesktopWindowEvidence], accessible: String) -> Int? {
       DesktopWindowVisibility.focusedWindowID(pid: 10, title: accessible, frame: full,
