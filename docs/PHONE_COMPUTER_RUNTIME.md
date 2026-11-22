@@ -21,6 +21,13 @@ with `{ "version": 1, "origin": "http://127.0.0.1:13346", "token": "the-same-cap
 line environment. Never use the desktop panel or operator credential here.
 Restart the desktop service and the line agent when idle.
 
+With that variable the line agent gives each call to the entry in
+`line/runtime-agent.mjs`, and not to the usual call entry in `line/agent.mjs`.
+The file is loaded only then. A line without the variable is the usual call
+agent and never touches the runtime. In this mode a call cannot reach agent
+sessions, approvals or jobs, and it never captures the screen: the video is the
+mascot or the one window of the task that runs.
+
 Keep the Chert project's joined-phone list limited to the intended user.
 Configured mode binds authority to the ready Chert room metadata and the exact
 matching bridge participant. A new authenticated local call lease is opened;
