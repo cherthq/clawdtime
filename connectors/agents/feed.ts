@@ -13,6 +13,7 @@ import {
   supervisorModel,
 } from "./brain.js";
 import type { CliFact } from "./inventory.js";
+import { SessionNews } from "./sessionnews.js";
 import {
   speak,
   speechSettings,
@@ -246,10 +247,16 @@ export class BoardFeed implements AgentBoardPort {
           now: options.now ?? Date.now,
         })
       : undefined;
+    this.sessionNews = new SessionNews(this.root, {
+      board: () => this.snapshot(),
+      log: this.log,
+      now: options.now ?? Date.now,
+    });
     this.supervisor = new Supervisor(
       {
         now: options.now ?? Date.now,
         board: () => this.snapshot(),
+        laterNews: this.sessionNews,
         desk: this.desk,
         focus: (session) => this.focusOne(session),
         send: (session, text) => this.sendOne(session, text, true),
@@ -306,6 +313,8 @@ export class BoardFeed implements AgentBoardPort {
   private readonly root: string;
   /** Says a finished job in the chat. Absent where the service has no jobs. */
   private readonly news: JobNews | undefined;
+  /** Says in the chat that a session is done, when the person asked for that. */
+  private readonly sessionNews: SessionNews;
   private readonly watchStore: WatchStore;
   private readonly watcher: Watcher;
 
@@ -417,6 +426,13 @@ export class BoardFeed implements AgentBoardPort {
   tellJobs(): ChatMessage[] {
     return this.news?.tell() ?? [];
   }
+  /**
+   * Says in the chat that a session is done, once, when the person asked to
+   * hear that. The service calls this on its own rhythm. Public for tests.
+   */
+  tellSessions(): ChatMessage[] {
+    return this.sessionNews.tell();
+  }
   setMemory(enabled: boolean) {
     this.desk.memory.setEnabled(enabled);
   }
@@ -512,6 +528,8 @@ export class BoardFeed implements AgentBoardPort {
         }
         // A job that finished is said in the chat, with no question first.
         this.tellJobs();
+        // And a session that is done, when the person asked to hear that.
+        this.tellSessions();
       }, 2000);
       this.awayTimer.unref();
     }
