@@ -217,9 +217,9 @@ How the call sounds:
   mark alone.
 - While the agent waits for a call it sends nothing: its picture is ready, and
   goes out as the first thing of a call.
-- After you asked for the middle picture, the wide one comes back only when
-  your own words ask for it ("make it wide"). The voice model alone cannot
-  turn it on.
+- After you asked for the middle picture, the wide one comes back only as an
+  answer to something that you said ("make it wide"). The voice model cannot
+  turn it on by itself, as in a greeting or the news of a job.
 - ClawdTime does not listen while it speaks, nor for half a second after. On a
   phone line its own voice comes back, and it would stop itself or answer
   itself. Its answers are short: wait for the end of the sentence, then speak.
