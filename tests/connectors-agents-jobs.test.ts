@@ -923,6 +923,15 @@ describe("job launch receipts and explicit retirement", () => {
       for (let tries = 0; tries < 200 && !existsSync(launched); tries++)
         await new Promise((resolve) => setTimeout(resolve, 25));
       expect(existsSync(launched)).toBe(true);
+      // The script writes that it started before it looks for a retirement
+      // and before it says that it waits. A retirement right after the start
+      // is seen by that first look, and the script then never waits: on a
+      // busy computer that happened, and this test is about a retirement
+      // during the wait. So the wait must have begun.
+      const waits = "This job waits for the job before it.";
+      for (let tries = 0; tries < 400 && !output.includes(waits); tries++)
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(output).toContain(waits);
       // It is retired while it waits, and then the job before it answers.
       jobs.retire(second!.id, "The person changed the plan for this work.");
       writeFileSync(
@@ -930,7 +939,6 @@ describe("job launch receipts and explicit retirement", () => {
         "The page is done.\n",
       );
       expect(await ended).toBe(1);
-      expect(output).toContain("This job waits for the job before it.");
       expect(output).toContain(
         "This job was retired; it will not be replayed.",
       );
