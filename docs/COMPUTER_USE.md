@@ -119,7 +119,38 @@ So after `clawdtime computer on`, start the desktop service again.
 `clawdtime computer off` needs no restart: the worker reads the switch before
 every action.
 
-The model is `gpt-4.1`. `CLAWDTIME_COMPUTER_MODEL` changes it.
+The model is `gpt-5.4`. `CLAWDTIME_COMPUTER_MODEL` changes it. When the service
+says that a key may not use `gpt-5.4`, the planner goes to `gpt-4.1`, the model
+before it, and stays there. A model that you chose is never replaced.
+
+### The planner test
+
+`npm run eval:computer:planner -- gpt-4.1 gpt-5.4` measures a model before it
+becomes the planner. Each task is one decision: a goal and a rendered screen
+that looks like a Mac app window (a notes app, a settings pane, a save dialog,
+a table of invoices, a sign-in form), as a picture and as named elements in the
+form that the hands give. The real planner code builds the request, the model
+answers, and a check says whether the chosen action is right: the right row,
+the right one of ten links with the same name, an icon with no name that only
+the picture shows, the state of a switch from the picture, no click when the
+goal is met already or cannot be met, the careful button of a dialog, and a
+password left to the person. Add `:low` to a model for a small picture. It
+needs a key and the Chromium of Playwright, and it costs real model calls. It
+opens no window and sends no input.
+
+Results of November 22, 2026, 17 tasks, three runs with 2, 5 and 3 repeats:
+
+| Model             | Right      | Median answer  | What went wrong                                                |
+| ----------------- | ---------- | -------------- | -------------------------------------------------------------- |
+| `gpt-5.4`         | 170 of 170 | 1.19 to 1.23 s | Nothing                                                        |
+| `gpt-4.1`         | 162 of 170 | 1.29 to 1.35 s | The wrong one of four icons with no name, 8 times in 10        |
+| `gpt-4.1`, `:low` | 80 of 85   | 1.06 to 1.09 s | Icons with no name                                             |
+| `gpt-4.1-mini`    | 74 of 85   | 1.09 to 1.12 s | "Don't Save" where the goal said to keep the changes, and more |
+
+On a real desktop service, for a request that only looks, the answer of the
+planner took 1.25 to 1.27 seconds with `gpt-5.4` and 1.40 to 1.82 seconds with
+`gpt-4.1`. The test is not physical acceptance: its screens are rendered pages,
+not the apps of a Mac, and each task is one decision, not a whole request.
 
 To find the slow part of a request, start the desktop service with
 `CLAWDTIME_COMPUTER_TIMING=on`. The worker then keeps the time of each step in

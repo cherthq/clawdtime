@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { actionSchema } from "../connectors/computer/guards.js";
 import {
+  defaultComputerModel,
+  fallbackComputerModel,
   OpenAIPlanner,
   plannerFromEnvironment,
 } from "../connectors/computer/planner.js";
@@ -108,7 +110,7 @@ describe("the planner on the chat completions API", () => {
     expect(only.url).toBe("https://api.openai.com/v1/chat/completions");
     expect(only.headers.authorization).toBe("Bearer test-key");
     expect(only.headers["content-type"]).toBe("application/json");
-    expect(only.body.model).toBe("gpt-4.1");
+    expect(only.body.model).toBe(defaultComputerModel);
     expect(only.body.tool_choice).toBe("required");
     expect(only.body.parallel_tool_calls).toBe(false);
     expect(only.body.messages.map((message) => message.role)).toEqual([
@@ -486,7 +488,105 @@ describe("the planner on the chat completions API", () => {
       expect(calls[0]!.headers.authorization).toBe("Bearer own");
       expect(calls[0]!.body.model).toBe("gpt-4.1-mini");
       expect(calls[1]!.headers.authorization).toBe("Bearer general");
-      expect(calls[1]!.body.model).toBe("gpt-4.1");
+      expect(calls[1]!.body.model).toBe(defaultComputerModel);
+    });
+  });
+
+  describe("a key that may not use the default model", () => {
+    /** Answers with `refusal` for the default model, and with a tool call for any other. */
+    const service = (refusal: number) => {
+      const models: string[] = [];
+      const request = (async (
+        _url: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        const model = (JSON.parse(String(init?.body)) as { model: string })
+          .model;
+        models.push(model);
+        return model === defaultComputerModel
+          ? new Response("{}", { status: refusal })
+          : new Response(JSON.stringify(toolCall("wait", '{"ms":1}')));
+      }) as typeof fetch;
+      return { models, request };
+    };
+    it.each([403, 404])(
+      "goes to the model before it after a %i, once, and stays there",
+      async (refusal) => {
+        const { models, request } = service(refusal);
+        const planner = new OpenAIPlanner({ key: "k", request });
+        expect((await planner.next(input())).action).toEqual({
+          kind: "wait",
+          ms: 1,
+        });
+        expect(models).toEqual([defaultComputerModel, fallbackComputerModel]);
+        // The next request does not try the refused model again.
+        await planner.next(input());
+        expect(models).toEqual([
+          defaultComputerModel,
+          fallbackComputerModel,
+          fallbackComputerModel,
+        ]);
+      },
+    );
+    it("does the same for the reading of a request", async () => {
+      const models: string[] = [];
+      const request = (async (
+        _url: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        const model = (JSON.parse(String(init?.body)) as { model: string })
+          .model;
+        models.push(model);
+        return model === defaultComputerModel
+          ? new Response("{}", { status: 403 })
+          : new Response(JSON.stringify(toolCall("none", "{}")));
+      }) as typeof fetch;
+      const planner = new OpenAIPlanner({ key: "k", request });
+      expect(await planner.navigation("click the Save button")).toEqual({
+        kind: "none",
+      });
+      expect(models).toEqual([defaultComputerModel, fallbackComputerModel]);
+    });
+    it("never replaces a model that the person chose", async () => {
+      const models: string[] = [];
+      const request = (async (
+        _url: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        models.push(
+          (JSON.parse(String(init?.body)) as { model: string }).model,
+        );
+        return new Response("{}", { status: 403 });
+      }) as typeof fetch;
+      const chosen = plannerFromEnvironment(
+        { OPENAI_API_KEY: "k", CLAWDTIME_COMPUTER_MODEL: defaultComputerModel },
+        { request },
+      )!;
+      await expect(chosen.next(input())).rejects.toThrow(
+        "The language model answered 403.",
+      );
+      expect(models).toEqual([defaultComputerModel]);
+    });
+    it("keeps the default after another failure, and reports a key that no model accepts", async () => {
+      // A fault of the service is no refusal of the model.
+      const busy = fakeFetch({}, 500);
+      const planner = new OpenAIPlanner({ key: "k", request: busy.request });
+      await expect(planner.next(input())).rejects.toThrow(
+        "The language model answered 500.",
+      );
+      expect(busy.sent.map((item) => item.body.model)).toEqual([
+        defaultComputerModel,
+      ]);
+      // A key that is refused for both models: two requests, then the status.
+      const refused = fakeFetch({}, 403);
+      const none = new OpenAIPlanner({ key: "k", request: refused.request });
+      await expect(none.next(input())).rejects.toThrow(
+        "The language model answered 403.",
+      );
+      expect(refused.sent.map((item) => item.body.model)).toEqual([
+        defaultComputerModel,
+        fallbackComputerModel,
+      ]);
     });
   });
 });
