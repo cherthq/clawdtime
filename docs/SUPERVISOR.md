@@ -952,6 +952,20 @@ a tunnel and get its link, find something out: all of these are jobs.
 
 - The job is your own sentence. The language model chooses the tool. It does
   not choose the words.
+- Work that you asked for starts with no round of confirmation. When the
+  language model only offers the work ("I see no session about that. Should
+  I start a job to look into it?"), the code asks it once more to start the
+  work. The tool that starts a job still decides from your own words. This
+  check runs only in a turn in which nothing happened yet and nothing waits
+  for your answer, and only for a message that is new work for sure: it
+  opens with a verb of work, names no session and speaks of no state. A
+  question to ClawdTime, a request to watch, words for a session, "check
+  what's running" and "open the settings page" are none. An offer is a
+  question with a word of starting or with your own verb ("Should I start a
+  job for it?", "Should I fix it now?"). A question that you must answer
+  ("staging or production?", "Should I update the docs too?") stands. When
+  the second answer starts nothing either, you get the first one: the offer
+  was true.
 - "Build me a status page", "make us a pricing page" and "and build me a
   small dashboard" start at once, as "build a landing page" does. In this
   form only a short list of things starts by itself: a site, an app, a
