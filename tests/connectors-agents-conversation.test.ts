@@ -14952,6 +14952,335 @@ describe("the person asks to hear when a session is done", () => {
     });
   });
 
+  describe("a plain request to stop: the code takes it by itself, whatever the model calls", () => {
+    /** A room in which the chat waits for deploy fix and for payments tests. */
+    const watched = async () => {
+      const made = room();
+      await made.say("watch deploy fix for me", ["Okay."]);
+      await made.say("watch payments tests for me", ["Okay."]);
+      expect([...made.later.watching()].sort()).toEqual([
+        "deploy fix",
+        "payments tests",
+      ]);
+      return made;
+    };
+
+    it.each([
+      "actually stop watching payments tests",
+      "stop watching payments tests",
+      "ok stop watching payments tests please",
+      "can you stop watching payments tests?",
+      "never mind watching payments tests",
+      "forget about watching payments tests",
+      "no need to tell me when payments tests is done",
+      "I don't want to hear about payments tests anymore",
+    ])("stops for %j with a model that calls nothing", async (words) => {
+      const { later, say, toolSaid } = await watched();
+      const got = await say(words, ["Okay."]);
+      expect(later.watching(), words).toEqual(["deploy fix"]);
+      expect(toolSaid(got.run), words).toContain(
+        "The chat no longer waits for payments tests",
+      );
+      expect(got.reply, words).toBe("Okay.");
+    });
+
+    it("stops also when the model calls the tool that decides a request, with an id that it made up", async () => {
+      const { later, say, world } = await watched();
+      const got = await say("actually stop watching payments tests", [
+        [call("decide", { request: "watch_payments_tests", decision: "deny" })],
+        "Stopped: the chat no longer waits for payments tests.",
+      ]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+      expect(world.desk.pending()).toHaveLength(0);
+      expect(got.reply).toBe(
+        "Stopped: the chat no longer waits for payments tests.",
+      );
+    });
+
+    it("stops once when the model asks for the same stop too", async () => {
+      const { later, say } = await watched();
+      await say("stop watching payments tests", [
+        [call("watch_session", { session: "payments tests", stop: true })],
+        "Okay.",
+      ]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+    });
+
+    it("stops both sessions that the message names", async () => {
+      const { later, say } = await watched();
+      await say("stop watching deploy fix and payments tests", ["Okay."]);
+      expect(later.watching()).toEqual([]);
+    });
+
+    it.each([
+      "stop watching everything",
+      "stop watching all of them",
+      "stop watching both",
+      "no need to watch them all anymore",
+      "you can stop watching every session",
+    ])("stops every session for %j", async (words) => {
+      const { later, say } = await watched();
+      await say(words, ["Okay."]);
+      expect(later.watching(), words).toEqual([]);
+    });
+
+    it.each([
+      "no need to watch it anymore",
+      "forget watching it",
+      "don't tell me when it's done",
+      "stop watching it",
+      "stop watching that one",
+      "stop watching",
+      "you can stop watching now",
+    ])("stops the one session that it waits for, for %j", async (words) => {
+      const { later, say } = room();
+      await say("watch deploy fix for me", ["Okay."]);
+      await say(words, ["Okay."]);
+      expect(later.watching(), words).toEqual([]);
+    });
+
+    it.each(["no need to watch it anymore", "forget watching it"])(
+      "stops nothing by itself for %j while it waits for two sessions: which one is not said",
+      async (words) => {
+        const { later, say } = await watched();
+        const got = await say(words, ["Which one?"]);
+        expect(later.watching(), words).toHaveLength(2);
+        expect(got.reply, words).toBe("Which one?");
+      },
+    );
+
+    it.each([
+      // What is stopped is something else: no session, and no word that
+      // points at one.
+      "stop watching the logs",
+      "forget watching the game",
+      "no need to watch your tone",
+      "stop tracking time",
+      "cancel the watch on the build",
+      "stop telling me jokes",
+      "don't tell me the answer yet",
+      "don't wait for me",
+      "I don't need to know about the weather",
+    ])(
+      "stops nothing by itself for %j while it waits for one session",
+      async (words) => {
+        const { later, say } = room();
+        await say("watch deploy fix for me", ["Okay."]);
+        await say(words, ["Okay."]);
+        expect(later.watching(), words).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      // A word for everything in another meaning.
+      "don't tell me anything yet",
+      "don't tell me everything, just the summary",
+      "stop telling me things I already know",
+      // The name stands in another sentence than the stop.
+      "stop telling me jokes. payments tests matters more",
+      // A hedge before the stop, or a second thought after it.
+      "maybe stop watching payments tests",
+      "I think you can stop watching payments tests",
+      "stop watching payments tests? or not",
+      "stop watching payments tests, never mind",
+      "stop watching payments tests... actually don't",
+      "stop watching payments tests, wait no",
+    ])(
+      "stops nothing by itself for %j while it waits for two sessions",
+      async (words) => {
+        const { later, say } = await watched();
+        await say(words, ["Okay."]);
+        expect(later.watching(), words).toHaveLength(2);
+      },
+    );
+
+    it.each([
+      "no need to tell me when it's done",
+      "don't tell me when it's done",
+      "stop watching it",
+    ])(
+      'stops nothing by itself for %j while a job of ClawdTime runs: "it" can be the job',
+      async (words) => {
+        const { later, say } = room();
+        await say("watch deploy fix for me", ["Okay."]);
+        await say("find out why the backup fails", [
+          [call("start_job")],
+          "On it.",
+        ]);
+        await say(words, ["Okay."]);
+        expect(later.watching(), words).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      "ok stop watching it",
+      "stop watching that",
+      "forget watching it",
+    ])(
+      "stops nothing by itself for %j right after an exchange about another session",
+      async (words) => {
+        const { later, say, asked, told } = room();
+        await say("watch deploy fix for me", ["Okay."]);
+        asked("how is docs doing?");
+        told("Docs is idle now: it finished the rewrite.");
+        await say(words, ["Okay."]);
+        expect(later.watching(), words).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      [
+        "the news of a job",
+        "Done: find out why the backup fails\n\nIts answer: The disk is full.",
+      ],
+      ["the news of a session", "As you asked: docs is done and idle now."],
+    ])(
+      'stops nothing by itself right after %s: "it" can be that',
+      async (_what, news) => {
+        for (const words of [
+          "ok thanks, you can stop watching it",
+          "no need to tell me when it's done",
+          "stop watching it",
+        ]) {
+          const { later, world, made, sessions } = room();
+          expect(later.watch(sessions[0]!).ok).toBe(true);
+          const at = made.clock.now;
+          const history: ChatMessage[] = [
+            { ...said("user", "find out why the backup fails"), at },
+            { ...said("assistant", "On it."), at: at + 1 },
+            { ...said("assistant", news), at: at + 2, news: true },
+          ];
+          made.clock.now += 5_000;
+          await new Supervisor(world, scripted(["Okay."]).model).reply(
+            history,
+            words,
+            "chat",
+          );
+          expect(later.watching(), words).toEqual(["deploy fix"]);
+        }
+      },
+    );
+
+    it.each([
+      [
+        "is the backup job done?",
+        "Yes, the backup job is done: the disk is full.",
+        "great, you can stop watching it",
+      ],
+      [
+        "did it finish?",
+        "Yes, it finished: the backup fails because the disk is full.",
+        "ok stop watching it",
+      ],
+      [
+        "is the pipeline green?",
+        "The pipeline finished and it is green.",
+        "ok stop watching it",
+      ],
+      [
+        "open the dashboard",
+        "The dashboard is open in the browser.",
+        "ok, stop watching that",
+      ],
+    ])(
+      'stops nothing by itself after %j and %j: "it" is that thing',
+      async (question, answer, words) => {
+        const { later, say, asked, told } = room();
+        await say("watch deploy fix for me", ["Okay."]);
+        asked(question);
+        told(answer);
+        await say(words, ["Okay."]);
+        expect(later.watching(), words).toEqual(["deploy fix"]);
+      },
+    );
+
+    it("stops the one session for a first message with nothing before it", async () => {
+      const { later, sessions, say } = room();
+      expect(later.watch(sessions[0]!).ok).toBe(true);
+      await say("stop watching it", ["Okay."]);
+      expect(later.watching()).toEqual([]);
+    });
+
+    it("stops the one session after an exchange about that session", async () => {
+      const { later, say, asked, told } = room();
+      await say("watch deploy fix for me", ["Okay."]);
+      asked("how is deploy fix doing?");
+      told("Deploy fix still works on the staging script.");
+      await say("ok stop watching it", ["Okay."]);
+      expect(later.watching()).toEqual([]);
+    });
+
+    it.each([
+      "stop watching both, the logs and the metrics",
+      "stop watching all of them on the dashboard",
+    ])(
+      "stops nothing by itself for %j: more follows the word for every session",
+      async (words) => {
+        const { later, say } = await watched();
+        await say(words, ["Okay."]);
+        expect(later.watching(), words).toHaveLength(2);
+      },
+    );
+
+    it("says what ended, and that nothing else happened, in place of a false claim of other work", async () => {
+      const { later, say } = await watched();
+      const claim = "Stopped, and I started a job to fix the footer.";
+      const got = await say("stop watching payments tests", [claim, claim]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+      expect(got.reply).toBe(
+        "I stopped watching payments tests. Nothing else was started, typed or decided for that message.",
+      );
+    });
+
+    it("stops only the session with the longer name, when one name stands inside the other", async () => {
+      const { later, say, sessions } = room();
+      sessions[1] = {
+        ...sessions[1]!,
+        state: "working",
+        detail: "turn_running",
+      };
+      sessions.push(session({ id: "104-jkl", pid: 104, name: "docs site" }));
+      expect(later.watch(sessions[1]!).ok).toBe(true);
+      expect(later.watch(sessions[3]!).ok).toBe(true);
+      await say("stop watching docs site", ["Okay."]);
+      expect(later.watching()).toEqual(["docs"]);
+    });
+
+    it("lets a true answer about the stop stand", async () => {
+      const { later, say } = await watched();
+      const got = await say("stop watching payments tests", [
+        "Done, I stopped watching payments tests.",
+      ]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+      expect(got.reply).toBe("Done, I stopped watching payments tests.");
+    });
+
+    it("still replaces a claim of other work in the same answer", async () => {
+      const { say } = await watched();
+      const claim =
+        "Stopped watching payments tests. I also started a job to fix the footer.";
+      const got = await say("stop watching payments tests", [claim, claim]);
+      expect(got.reply).not.toBe(claim);
+    });
+
+    it.each([
+      "did you stop watching payments tests?",
+      "don't stop watching payments tests",
+      "I'll stop watching payments tests myself",
+      "you can stop watching payments tests once it's done",
+      "how is payments tests doing?",
+      "tell deploy fix to stop watching the logs",
+      // A session that it does not wait for.
+      "stop watching docs",
+      // A stop and a new request in one message: the model's tools do it.
+      "stop watching payments tests and tell me when deploy fix is done",
+    ])("stops nothing by itself for %j", async (words) => {
+      const { later, say } = await watched();
+      await say(words, ["Okay."]);
+      expect(later.watching(), words).toHaveLength(2);
+    });
+  });
+
   describe("the person takes the request back", () => {
     it("ends it on their word, and says nothing later", async () => {
       const { later, say, sessions, made, toolSaid } = room();

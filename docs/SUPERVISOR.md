@@ -1251,6 +1251,21 @@ is done, when you asked to hear that.
 - "Stop watching deploy fix" and "no need to tell me when docs is done" end
   the request. Only your own words end it. "Don't stop watching docs" and
   "you can stop watching docs once it's done" end nothing.
+  The code ends it by itself, before the language model answers, for a
+  plain request, so that a stop does not hang on which tool the model
+  calls. What is stopped is read from the words right after the stop: the
+  sessions that you name there, when ClawdTime waits for each of them
+  ("stop watching payments tests"); every session ("stop watching all of
+  them", "stop watching everything"); or, when ClawdTime waits for exactly
+  one and the two messages just before spoke of that session and of no
+  other thing that "it" can be, a word that points at it or nothing ("stop
+  watching it", "no need to watch it anymore", "you can stop watching
+  now"). Nothing ends by
+  itself when something else is stopped ("stop watching the logs", "stop
+  telling me jokes", "don't wait for me"), with a hedge or a second
+  thought ("maybe stop watching docs", "stop watching docs, never mind"),
+  for a session that ClawdTime does not wait for, or with a new request
+  beside the stop: the model reads those as before.
 - "What are you watching?" is answered from the state, which lists the
   sessions that the chat waits for. For this question the code also gives
   the language model the fact in plain words before it answers: the sessions
