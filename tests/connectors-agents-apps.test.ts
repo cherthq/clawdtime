@@ -12,6 +12,9 @@ import {
   asksPlainly,
   clearsComputer,
   modelWaitMs,
+  nothingRanOnScreen,
+  speaksAsTheEngine,
+  speaksOfManagedWork,
   Supervisor,
   type ModelClient,
   type SupervisorWorld,
@@ -299,6 +302,131 @@ describe("the brain opens an application", () => {
     expect(f.submitted).toEqual([]);
     expect(f.opened).toEqual([]);
     expect(f.started).toEqual([]);
+  });
+
+  it("hands work on the screen that is no move to the worker, whole and once, before the model that talks", async () => {
+    const words =
+      "close the Untitled document in TextEdit without saving it, then quit TextEdit";
+    const f = withExecution();
+    const run = scripted(["Done. Closed the document and quit TextEdit."]);
+    run.model.reading = async () => ({ intent: { kind: "none" }, work: true });
+    const said = await new Supervisor(f.value, run.model).reply(
+      [],
+      words,
+      "call",
+    );
+    expect(f.submitted).toEqual([
+      { id: expect.any(String) as unknown as string, text: words },
+    ]);
+    expect(said).toBe(f.message);
+    // The model that talks was not asked.
+    expect(run.offered).toEqual([]);
+    // Another engine than ClawdTime's own worker keeps its own road: nothing is handed over here.
+    const other = withExecution("idle", { nativeWorker: false });
+    const talks = scripted(["I looked at it."]);
+    talks.model.reading = async () => ({
+      intent: { kind: "none" },
+      work: true,
+    });
+    await new Supervisor(other.value, talks.model).reply([], words, "call");
+    expect(other.submitted).toEqual([]);
+    // What the supervisor manages itself is never handed over, whatever the reader made of it.
+    for (const managed of [
+      "close the deploy fix session",
+      "stop the job",
+      "run the tests again",
+      "quit the build and close that branch",
+    ]) {
+      expect(speaksOfManagedWork(managed)).toBe(true);
+      const kept = withExecution();
+      const model = scripted(["That is not work on the screen."]);
+      model.model.reading = async () => ({
+        intent: { kind: "none" },
+        work: true,
+      });
+      await new Supervisor(kept.value, model.model).reply([], managed, "call");
+      expect([managed, kept.submitted]).toEqual([managed, []]);
+    }
+    expect(speaksOfManagedWork(words)).toBe(false);
+    // A bare answer never reaches the reader.
+    const bare = withExecution();
+    const answers = scripted(["There is no request to approve."]);
+    let read = 0;
+    answers.model.reading = async () => {
+      read++;
+      return { intent: { kind: "previous_app" }, work: false };
+    };
+    await new Supervisor(bare.value, answers.model).reply(
+      [],
+      "approve it",
+      "call",
+    );
+    expect(read).toBe(0);
+    expect(bare.submitted).toEqual([]);
+    // No such work in the reading: the message goes on as before.
+    const none = withExecution();
+    const plain = scripted(["Two sessions work."]);
+    plain.model.reading = async () => ({
+      intent: { kind: "none" },
+      work: false,
+    });
+    expect(
+      await new Supervisor(none.value, plain.model).reply(
+        [],
+        "tell me what every agent is doing",
+        "call",
+      ),
+    ).toBe("Two sessions work.");
+    expect(none.submitted).toEqual([]);
+  });
+
+  it("does not let a draft in the engine's voice stand when nothing went to the engine", async () => {
+    for (const draft of [
+      "Done. Closed the Untitled document without saving and quit TextEdit.",
+      "Started. I look at the screen and take one checked action at a time. Say stop to stop me. Done. Closed the document.",
+    ])
+      expect(speaksAsTheEngine(draft)).toBe(true);
+    for (const draft of [
+      "Two sessions work and one waits for you.",
+      "It is done when the tests pass.",
+      "I started a job for that.",
+    ])
+      expect(speaksAsTheEngine(draft)).toBe(false);
+    // The model copies the engine's answers twice: the person hears what is true.
+    const f = withExecution();
+    const copies = scripted([
+      "Done. Closed the Untitled document without saving and quit TextEdit.",
+      "Started. I look at the screen and take one checked action at a time. Say stop to stop me. Done. Closed it.",
+    ]);
+    expect(
+      await new Supervisor(f.value, copies.model).reply(
+        [],
+        "tidy that editor window away for me",
+        "chat",
+      ),
+    ).toBe(nothingRanOnScreen);
+    expect(f.submitted).toEqual([]);
+    // After the check the model hands the message over: the engine's own answer is the answer.
+    const g = withExecution();
+    const words = "quit TextEdit";
+    const hands = scripted([
+      "Done. Quit TextEdit.",
+      [call("delegate_computer_task", {})],
+      "Started.",
+    ]);
+    expect(
+      await new Supervisor(g.value, hands.model).reply([], words, "chat"),
+    ).toBe(g.message);
+    expect(g.submitted.map((item) => item.text)).toEqual([words]);
+    // Words for a session are never handed to the engine, whatever the model asks.
+    const h = withExecution();
+    const wrong = scripted([[call("delegate_computer_task", {})], "No."]);
+    await new Supervisor(h.value, wrong.model).reply(
+      [],
+      "quit the deploy session",
+      "chat",
+    );
+    expect(h.submitted).toEqual([]);
   });
 
   it("does not make a plain question wait for the reader of navigation", async () => {

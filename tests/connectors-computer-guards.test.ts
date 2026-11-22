@@ -344,6 +344,15 @@ describe("an action that needs the person's yes", () => {
     for (const combo of ["cmd+s", "cmd+c", "tab", "escape", "shift+tab", "q"])
       expect(run({ kind: "key", combo }).risk).toBeNull();
   });
+  it("asks before a key combination that closes a window or a tab", () => {
+    for (const combo of ["cmd+w", "cmd+shift+w", "cmd+opt+w", "command+W"])
+      expect(run({ kind: "key", combo }).risk).toMatch(/closes a window/);
+    // The letter alone, and other keys with Command, close nothing.
+    for (const combo of ["w", "shift+w", "cmd+e", "cmd+r"])
+      expect(run({ kind: "key", combo }).risk).toBeNull();
+    expect(dangerWords).toContain("close");
+    expect(dangerWords).toContain("terminate");
+  });
   it("asks before a key that sends or removes", () => {
     for (const combo of ["cmd+return", "ctrl+enter", "cmd+delete"])
       expect(run({ kind: "key", combo }).risk).not.toBeNull();

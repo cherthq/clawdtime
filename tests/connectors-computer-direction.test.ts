@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   navigationIntentSchema,
+  asksForScreenWork,
   navigationTools,
   parseNavigationCalls,
   type NavigationIntent,
@@ -118,6 +119,40 @@ describe("explicit directional navigation", () => {
         { name: "none", arguments: '{"kind":"desktop","direction":"right"}' },
       ]),
     ).toThrow();
+  });
+  it("reads work on the screen that is no move: the planner's work, and the supervisor hands it over", () => {
+    const calls = (name: string, args: object = {}) => [
+      { name, arguments: JSON.stringify(args) },
+    ];
+    // "Close the document and quit the editor": no move at all.
+    expect(parseNavigationCalls(calls("computer"))).toEqual({ kind: "none" });
+    expect(asksForScreenWork(calls("computer"))).toBe(true);
+    // "Open the editor and type a line": a move that is only a part.
+    expect(
+      asksForScreenWork(calls("app", { name: "TextEdit", only: false })),
+    ).toBe(true);
+    expect(
+      asksForScreenWork(calls("desktop", { direction: "left", only: false })),
+    ).toBe(true);
+    // A move that is the whole request, no reading, a question for more, and broken answers: no such work.
+    expect(
+      asksForScreenWork(calls("app", { name: "TextEdit", only: true })),
+    ).toBe(false);
+    expect(asksForScreenWork(calls("app", { name: "TextEdit" }))).toBe(false);
+    expect(asksForScreenWork(calls("none"))).toBe(false);
+    expect(
+      asksForScreenWork(calls("clarify", { question: "Which app?" })),
+    ).toBe(false);
+    expect(asksForScreenWork([])).toBe(false);
+    expect(
+      asksForScreenWork([...calls("computer"), ...calls("computer")]),
+    ).toBe(false);
+    expect(asksForScreenWork([{ name: "app", arguments: "{" }])).toBe(false);
+    // The tool takes no arguments: an answer with some is no answer.
+    expect(() =>
+      parseNavigationCalls(calls("computer", { name: "Notes" })),
+    ).toThrow();
+    expect(navigationTools.map((tool) => tool.name)).toContain("computer");
   });
   it("takes a move that is only a part of the request as other work, for the planner", () => {
     const one = (name: string, args: object) =>
