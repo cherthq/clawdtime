@@ -171,6 +171,7 @@ async function fixture() {
     );
   };
   let running = true,
+    time = now,
     pid = 10101,
     stops = 0,
     starts = 0;
@@ -182,6 +183,7 @@ async function fixture() {
     afterStop: undefined,
     beforeStart: undefined,
     afterStart: undefined,
+    afterSleep: undefined,
   };
   const host = {
     inspect: async () => ({ running, ...(running ? { pid } : {}) }),
@@ -254,7 +256,11 @@ async function fixture() {
   const make = () =>
     new RetainedProactiveLineOwner(config, {
       request,
-      clock: () => now,
+      clock: () => time,
+      sleep: async (ms) => {
+        time += ms;
+        flags.afterSleep?.();
+      },
       host,
       retention: async (retentionPid) => ({
         capability: "clawdtime-retention-v1",
@@ -458,6 +464,81 @@ test("provider call arrival after outbound cleanup prevents incoming reacquisiti
     f.line.current_call_id = "incoming-during-gap";
     assert.equal(await owner.verify("attempt-one"), false);
     await assert.rejects(owner.restore("attempt-one"));
+    assert.equal(f.starts(), 0);
+    assert.equal(owner.diagnostics().phase, "unknown");
+    const receipt = JSON.parse(readFileSync(f.config.stateFile, "utf8"));
+    assert.equal(
+      receipt.history.some((r) => r.reason === "incoming_claim_reserved"),
+      false,
+    );
+    assert.equal(
+      readFileSync(
+        join(f.config.hostStateDirectory, "outbound-hold"),
+        "utf8",
+      ).includes("attempt-one"),
+      true,
+    );
+    assert.equal(statSync(`${f.config.stateFile}.lock`).isFile(), true);
+    await assert.rejects(owner.restore("attempt-one"));
+    assert.equal(f.starts(), 0);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const transient of ["busy", "media"])
+  test(`restoration waits for ${transient} convergence before one incoming claim`, async () => {
+    const f = await fixture();
+    try {
+      const owner = f.make();
+      await owner.acquire("attempt-one");
+      if (transient === "busy") f.line.worker_occupied = true;
+      else f.worker.readiness.audio_ready = false;
+      let waits = 0;
+      f.flags.afterSleep = () => {
+        waits++;
+        assert.equal(f.starts(), 0);
+        const receipt = JSON.parse(readFileSync(f.config.stateFile, "utf8"));
+        assert.equal(receipt.phase, "outbound");
+        assert.equal(
+          receipt.history.some((r) => r.reason === "incoming_claim_reserved"),
+          false,
+        );
+        if (waits === 2) {
+          f.line.worker_occupied = false;
+          f.worker.readiness.audio_ready = true;
+        }
+      };
+      assert.deepEqual(await owner.restore("attempt-one"), { confirmed: true });
+      assert.equal(waits, 2);
+      assert.equal(f.starts(), 1);
+      assert.equal(
+        f.requests.every((r) => r.method === "GET"),
+        true,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+
+test("competing owner during idle convergence cannot reserve an incoming claim", async () => {
+  const f = await fixture();
+  try {
+    const owner = f.make();
+    await owner.acquire("attempt-one");
+    f.line.worker_occupied = true;
+    let waits = 0;
+    f.flags.afterSleep = () => {
+      waits++;
+      f.line.worker_occupied = false;
+      f.bindings.push({
+        state: "active",
+        connected: true,
+        scope: { ...f.bindings[0].scope, binding_id: restoredBindingId },
+      });
+    };
+    await assert.rejects(owner.restore("attempt-one"), /release_unverified/);
+    assert.equal(waits, 1);
     assert.equal(f.starts(), 0);
     assert.equal(owner.diagnostics().phase, "unknown");
   } finally {

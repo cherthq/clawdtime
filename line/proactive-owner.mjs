@@ -689,9 +689,17 @@ export class RetainedProactiveLineOwner {
     }
   }
   async verify(attemptId) {
-    if (this.state.phase !== "outbound" || this.state.attemptId !== attemptId)
-      return false;
     try {
+      await this.verifyReleased(attemptId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async verifyReleased(attemptId) {
+    if (this.state.phase !== "outbound" || this.state.attemptId !== attemptId)
+      throw Error("owner_restore_requires_original_attempt");
+    const local = async () => {
       this.checkHistory();
       const hold = JSON.parse(readPrivate(this.hold, 4096).toString("utf8"));
       if (
@@ -700,16 +708,16 @@ export class RetainedProactiveLineOwner {
         (await this.host.inspect()).running
       )
         throw Error("owner_local_ownership_changed");
-      await this.provider(
-        this.state.incomingBindingId,
-        "released",
-        this.state.incomingScope,
-      );
-      this.checkHistory();
-      return true;
-    } catch {
-      return false;
-    }
+    };
+    await local();
+    await this.provider(
+      this.state.incomingBindingId,
+      "released",
+      this.state.incomingScope,
+    );
+    // Do not authorize a claim from an earlier local snapshot if another host
+    // or a changed hold/journal appeared during the provider reads.
+    await local();
   }
   async restore(attemptId) {
     id(attemptId);
@@ -717,10 +725,34 @@ export class RetainedProactiveLineOwner {
       throw Error("owner_restore_requires_original_attempt");
     this.lockMutation();
     try {
-      // Provider busy includes an inbound arrival during the released-binding gap.
-      // Never reacquire over it or interpret disconnected historical draining rows as current owners.
-      if (!(await this.verify(attemptId)))
-        throw Error("owner_restore_not_idle");
+      // Terminal call cleanup can precede idle/media-readiness propagation.
+      // Observe only: no claim/start is reserved or submitted during this wait.
+      // Competing ownership, changed journals/hold or unavailable evidence are
+      // hard failures, not readiness convergence. Never restart after a claim.
+      const idleDeadline = this.clock() + 60000;
+      let idle = false;
+      for (
+        let checks = 0;
+        checks < 241 && this.clock() < idleDeadline;
+        checks++
+      ) {
+        try {
+          await this.verifyReleased(attemptId);
+          if (this.clock() >= idleDeadline) break;
+          idle = true;
+          break;
+        } catch (error) {
+          if (
+            !["owner_line_busy", "owner_native_media_not_ready"].includes(
+              error?.message,
+            )
+          )
+            throw error;
+        }
+        if (this.clock() >= idleDeadline) break;
+        await this.sleep(Math.min(250, idleDeadline - this.clock()));
+      }
+      if (!idle) throw Error("owner_restore_not_idle");
       const boundary = hostLogBoundary(this.log);
       this.save("restoring", "incoming_claim_reserved", {
         restoreBoundary: boundary,
