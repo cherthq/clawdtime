@@ -67,10 +67,16 @@ when it starts, in this order (`chooseExecution` in
 
 1. The connection to an existing chat, when `desktop-executor.json` is in the
    state folder of the service. See [the execution page](DESKTOP_EXECUTOR.md).
-2. The bundled runtime, when `bundled-cua.json` is there. See
-   [the bundled runtime](BUNDLED_CUA.md). A service with both files does not
-   start.
-3. This worker, and only when all of this holds:
+2. The background runtime, when `background-cua.json` is there. It takes
+   requests only from an admitted phone call, and it comes before the bundled
+   runtime when both files are there. See
+   [the background qualification](BACKGROUND_QUALIFICATION.md) and
+   [the phone runtime](PHONE_COMPUTER_RUNTIME.md). A service with this file
+   and `desktop-executor.json` does not start.
+3. The bundled runtime, when `bundled-cua.json` is there. See
+   [the bundled runtime](BUNDLED_CUA.md). A service with this file and
+   `desktop-executor.json` does not start.
+4. This worker, and only when all of this holds:
    - The switch is on. The switch is the file `computer/config.json` in the
      state folder (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`). A
      switch file that is not a regular file of this user for its owner only

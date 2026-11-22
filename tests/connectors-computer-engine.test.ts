@@ -13,6 +13,7 @@ import {
 } from "../connectors/computer/ports.js";
 import {
   actorsText,
+  backgroundEngineText,
   bundledEngineText,
   chatEngineText,
   chooseExecution,
@@ -237,6 +238,70 @@ describe("which engine does the computer work in a desktop service", () => {
     expect(bundled.decision).toHaveBeenCalledExactlyOnceWith("action-1", true);
     // The command route belongs to the chat connection only.
     expect((await f.post("/executor/command", {})).status).toBe(404);
+  });
+
+  it("takes the background runtime before the bundled runtime and the worker, and gives the hands nothing", async () => {
+    // A made-up background runtime: it has no decision route and no command route.
+    const snapshot: DesktopExecutionSnapshot = {
+      ...still("The background runtime is ready."),
+      mode: "background",
+    };
+    const background = {
+      snapshot: vi.fn((): DesktopExecutionSnapshot => snapshot),
+      submit: vi.fn(async () => ({
+        message: "The background runtime took it.",
+      })),
+      stop: vi.fn((): DesktopExecutionSnapshot => ({
+        ...snapshot,
+        state: "canceled",
+        message: "The background runtime stopped.",
+      })),
+    };
+    const bundled = bundledEngine();
+    const chosen = chooseExecution({
+      root: turnedOn(),
+      env: withKey,
+      background,
+      bundled,
+      actors: false,
+      board: true,
+    });
+    expect(chosen.engine).toBe("background");
+    expect(chosen.execution).toBe(background);
+    expect(chosen.configured).toBe(background);
+    // The switch is on and a key is there: the worker is still not built.
+    expect(chosen.computer.worker).toBeNull();
+    const f = routes(chosen);
+    expect(await f.status()).toMatchObject({
+      enabled: false,
+      state: "idle",
+      message: backgroundEngineText,
+    });
+    expect(await f.next(0)).toEqual(nothingForTheHands);
+    expect(
+      await (
+        await f.post("/desktop/hands/result", { seq: 1, ok: true })
+      ).json(),
+    ).toEqual({ ok: false });
+    expect(
+      await (await f.post("/desktop/execution/stop", {})).json(),
+    ).toMatchObject({
+      execution: { message: "The background runtime stopped." },
+    });
+    expect(background.stop).toHaveBeenCalledTimes(1);
+    expect(bundled.stop).not.toHaveBeenCalled();
+    // The chat connection still comes first.
+    const chat = chatEngine();
+    expect(
+      chooseExecution({
+        root: turnedOn(),
+        env: withKey,
+        chat,
+        background,
+        actors: false,
+        board: true,
+      }).engine,
+    ).toBe("chat");
   });
 
   it("puts the chat connection before the bundled runtime when a caller gives both", () => {
