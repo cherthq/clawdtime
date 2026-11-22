@@ -380,6 +380,66 @@ describe("the brain opens an application", () => {
     expect(none.submitted).toEqual([]);
   });
 
+  it("gives the worker its reading with the request, so that the worker does not read the request again", async () => {
+    const readings: unknown[] = [];
+    const withWorker = () => {
+      const f = withExecution();
+      f.value.execution!.submitRead = async (_id, text, reading) => {
+        readings.push([text, reading]);
+        return { message: f.message };
+      };
+      return f;
+    };
+    // A move: the worker gets the move.
+    const move = withWorker();
+    const first = scripted(["No."]);
+    first.model.reading = async () => ({
+      intent: { kind: "desktop", direction: "right" },
+      work: false,
+    });
+    await new Supervisor(move.value, first.model).reply(
+      [],
+      "move one desktop to the right",
+      "call",
+    );
+    // Work that is no move: the worker gets "none", and plans.
+    const work = withWorker();
+    const second = scripted(["No."]);
+    second.model.reading = async () => ({
+      intent: { kind: "none" },
+      work: true,
+    });
+    await new Supervisor(work.value, second.model).reply(
+      [],
+      "save the document in Pages",
+      "call",
+    );
+    expect(readings).toEqual([
+      [
+        "move one desktop to the right",
+        { kind: "desktop", direction: "right" },
+      ],
+      ["save the document in Pages", { kind: "none" }],
+    ]);
+    expect(move.submitted).toEqual([]);
+    expect(work.submitted).toEqual([]);
+    // An engine that takes no reading gets the request as before.
+    const plain = withExecution();
+    const third = scripted(["No."]);
+    third.model.reading = async () => ({
+      intent: { kind: "previous_app" },
+      work: false,
+    });
+    await new Supervisor(plain.value, third.model).reply(
+      [],
+      "take me back to the app before",
+      "call",
+    );
+    expect(plain.submitted.map((item) => item.text)).toEqual([
+      "take me back to the app before",
+    ]);
+  });
+
   it("does not let a draft in the engine's voice stand when nothing went to the engine", async () => {
     for (const draft of [
       "Done. Closed the Untitled document without saving and quit TextEdit.",

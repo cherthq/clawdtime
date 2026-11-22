@@ -263,7 +263,7 @@ final class HandsContractTests: XCTestCase {
 
   func testTheHandsAskOftenDuringARunAndSeldomOtherwise() {
     XCTAssertEqual(HandsPace.delay(active: true, failures: 0), 0.12)
-    XCTAssertEqual(HandsPace.delay(active: false, failures: 0), 1)
+    XCTAssertEqual(HandsPace.delay(active: false, failures: 0), 0.25)
     // A service that does not answer is asked less and less often, whatever the run was.
     XCTAssertEqual([1, 2, 3, 4, 9].map { HandsPace.delay(active: true, failures: $0) }, [1, 2, 4, 5, 5])
     XCTAssertEqual(HandsPace.delay(active: false, failures: 2), 2)
