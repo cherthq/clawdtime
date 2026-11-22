@@ -13628,7 +13628,7 @@ describe("the person asks to hear when a session is done", () => {
     expect(sent).toEqual([]);
   });
 
-  it("offers the tool only where the chat can say something later, and adds nothing about it to the instructions there", async () => {
+  it("offers the tool only where the chat can say something later, and adds nothing to the instructions", async () => {
     const { say, made } = room();
     const tools: string[][] = [];
     const systems: string[] = [];
@@ -13645,16 +13645,7 @@ describe("the person asks to hear when a session is done", () => {
     expect(tools[0]).toContain("watch_session");
     // What the tool is for stands in its description. A paragraph about it
     // in the instructions made the model ask before it started work.
-    // Where nothing can be said later, one paragraph says so, and nothing
-    // else differs.
-    const paragraph = systems[1]!
-      .split("\n")
-      .find((line) =>
-        line.startsWith("From here nothing is said by itself about a session:"),
-      );
-    expect(paragraph).toBeDefined();
-    expect(systems[1]!.replace(`\n${paragraph}`, "")).toBe(systems[0]);
-    expect(systems[0]).not.toContain("From here nothing is said by itself");
+    expect(systems[0]).toBe(systems[1]);
     expect(systems[0]).not.toContain("watch_session");
     expect(tools[1]).not.toContain("watch_session");
     expect(systems[1]).not.toContain("watch_session");
@@ -16513,67 +16504,5 @@ describe("a brain with no record of watched sessions: nothing is said later, and
     expect(later.watching()).toEqual(["deploy fix"]);
     const read = readFirst(got.run);
     if (read !== undefined) expect(read).not.toContain(about);
-  });
-});
-
-describe("the instructions of a brain with no record of watched sessions say that nothing is said later about a session", () => {
-  const brief =
-    "From here nothing is said by itself about a session: you cannot watch a session, and nothing comes from here about one until the person asks.";
-  /** The instructions that the model gets for one message. */
-  const instructions = async (withRecord: boolean, words: string) => {
-    const sessions = [
-      session({ name: "deploy fix" }),
-      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
-    ];
-    const made = mac(sessions);
-    const directory = dirname(dirname(made.folder));
-    const later = new SessionNews(directory, {
-      board: () => board(sessions),
-      log: new ChatLog(directory),
-      now: () => made.clock.now,
-    });
-    const world: SupervisorWorld = withRecord
-      ? { ...made.world, laterNews: later }
-      : made.world;
-    const run = scripted(["Okay."]);
-    await new Supervisor(world, run.model).reply([], words, "chat");
-    return run.seen[0]!.system;
-  };
-
-  it.each([
-    "deploy fix is running, tell me when it's done",
-    "when deploy fix is done, let me know",
-    "give me a heads up if docs changes",
-    "how are the sessions doing?",
-    "fix the footer",
-  ])("holds the fact for every message, here %j", async (words) => {
-    const system = await instructions(false, words);
-    expect(system, words).toContain(brief);
-    // What to do with such a request, and what not to start for it.
-    expect(system, words).toContain(
-      "say plainly that you cannot do that from here and that they can ask at any time how it stands",
-    );
-    expect(system, words).toContain(
-      "Do not offer it, do not promise it, and do not start a job or a task only to watch.",
-    );
-    // Work is kept apart, in the paragraph's last sentence.
-    expect(system, words).toContain(
-      'Work that the person asks for starts as always, also when "tell me when it\'s done" follows it.',
-    );
-  });
-
-  it("is not in the instructions where the record exists: there the watch tool does it", async () => {
-    const system = await instructions(true, "tell me when deploy fix is done");
-    expect(system).not.toContain(brief);
-    expect(system).not.toContain("you cannot watch a session");
-  });
-
-  it("names no service and speaks of sessions only", async () => {
-    const system = await instructions(false, "what are you watching?");
-    const at = system.indexOf(brief);
-    const part = system.slice(at, at + 700);
-    expect(part).not.toMatch(
-      /desktop service|away mode|only when the person writes/i,
-    );
   });
 });

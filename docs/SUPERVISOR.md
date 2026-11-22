@@ -1242,10 +1242,7 @@ is done, when you asked to hear that.
   session. The state says so there, and for a question or a request about
   watching the code gives the language model that fact before it answers.
   What the desktop service waits for is not visible from there. Ask again
-  to hear how a session stands. The instructions of the language model say
-  the same there for every message, so a request in any wording ("give me
-  a heads up if docs changes") gets that answer: no offer, no promise, and
-  no job or task that you did not ask for.
+  to hear how a session stands.
 - "What did I miss?", "anything new?", "any news?" and "catch me up" are
   answered from the state and from the lines that the chat said by itself
   since your last message: that a session is done, or the answer of a job.
