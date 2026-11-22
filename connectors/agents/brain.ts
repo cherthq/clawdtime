@@ -253,20 +253,51 @@ export class OpenAIModel implements ModelClient {
       timeoutMs?: number;
       retryTimeoutMs?: number;
       retryWaitMs?: number;
+      /**
+       * The model that reads what a message asks of the screen (a move, work
+       * for the computer worker, or neither). It is one short call with no
+       * picture, and a small model reads it wrong too often: it took "open
+       * example.com" for a move to an app that it made up. Without it the
+       * chat's own model reads.
+       */
+      readerModel?: string;
     } = {},
   ) {}
+  /** The service refused the reader's model for this key: the chat's own model reads from then on. */
+  private readerRefused = false;
   async navigation(goal: string): Promise<NavigationIntent> {
     return (await this.reading(goal)).intent;
   }
   async reading(
     goal: string,
   ): Promise<{ intent: NavigationIntent; work: boolean }> {
-    const result = await this.complete({
-      system: navigationRules,
-      messages: [{ role: "user", content: goal }],
-      tools: navigationTools,
-      requireTool: true,
-    });
+    const ask = (model?: string) =>
+      this.complete({
+        system: navigationRules,
+        messages: [{ role: "user", content: goal }],
+        tools: navigationTools,
+        requireTool: true,
+        ...(model ? { model } : {}),
+      });
+    const reader =
+      this.readerRefused || this.options.readerModel === this.model
+        ? undefined
+        : this.options.readerModel;
+    let result: Awaited<ReturnType<typeof ask>>;
+    try {
+      result = await ask(reader);
+    } catch (error) {
+      // 403 and 404: this key may not use the reader's model, or the service
+      // does not know it. The chat's own model reads, now and from now on.
+      if (
+        !reader ||
+        !(error instanceof Error) ||
+        !/answered (?:403|404)\.$/.test(error.message)
+      )
+        throw error;
+      this.readerRefused = true;
+      result = await ask();
+    }
     return {
       intent: parseNavigationCalls(result.toolCalls),
       work: asksForScreenWork(result.toolCalls),
@@ -277,6 +308,8 @@ export class OpenAIModel implements ModelClient {
     messages: ModelMessage[];
     tools: ToolSpec[];
     requireTool?: boolean;
+    /** Another model for this one call. It gets no reasoning effort of the chat's model. */
+    model?: string;
   }) {
     const messages = [
       { role: "system", content: input.system },
@@ -312,9 +345,9 @@ export class OpenAIModel implements ModelClient {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: this.model,
+          model: input.model ?? this.model,
           messages,
-          ...(this.options.reasoningEffort
+          ...(this.options.reasoningEffort && !input.model
             ? { reasoning_effort: this.options.reasoningEffort }
             : {}),
           // A request with no tools carries no tool list: an empty one is refused.
@@ -397,6 +430,13 @@ export class OpenAIModel implements ModelClient {
 /** The model that every chat, voice and call turn uses when the person set no other. */
 export const defaultSupervisorModel = "gpt-4.1-mini";
 /**
+ * The model that reads what a message asks of the screen. Measured on real
+ * calls: 20 of 20 sentences right, three times, and 16 of 16 requests with a
+ * web address, where the small chat model had about 19 and 10. CLAWDTIME_READER_MODEL
+ * changes it. A key that may not use it gets the chat's own model.
+ */
+export const defaultReaderModel = "gpt-5.4";
+/**
  * The language model from this Mac's settings: CLAWDTIME_SUPERVISOR_MODEL names
  * it, and CLAWDTIME_SUPERVISOR_REASONING sets its reasoning effort.
  */
@@ -410,7 +450,10 @@ export function supervisorModel(
     key,
     env.CLAWDTIME_SUPERVISOR_MODEL?.trim() || defaultSupervisorModel,
     request,
-    effort ? { reasoningEffort: effort } : {},
+    {
+      ...(effort ? { reasoningEffort: effort } : {}),
+      readerModel: env.CLAWDTIME_READER_MODEL?.trim() || defaultReaderModel,
+    },
   );
 }
 
