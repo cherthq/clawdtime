@@ -1230,6 +1230,13 @@ is done, when you asked to hear that.
   "you can stop watching docs once it's done" end nothing.
 - "What are you watching?" is answered from the state, which lists the
   sessions that the chat waits for.
+- "What did I miss?", "anything new?", "any news?" and "catch me up" are
+  answered from the state and from the lines that the chat said by itself
+  since your last message: that a session is done, or the answer of a job.
+  The code gives both to the language model before it answers, so the
+  answer is that news and not the list of jobs. With no such line it says
+  that nothing was said. A message that opens with a verb of work ("find out
+  what happened to the deploy") is work, and is not read this way.
 - This only reads the board. It types nothing into a session, opens nothing
   and starts no work. The line holds the name of the session, as one plain
   line, and how its work ended, and no text from the session.
