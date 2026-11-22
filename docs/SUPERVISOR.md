@@ -1229,7 +1229,11 @@ is done, when you asked to hear that.
   the request. Only your own words end it. "Don't stop watching docs" and
   "you can stop watching docs once it's done" end nothing.
 - "What are you watching?" is answered from the state, which lists the
-  sessions that the chat waits for.
+  sessions that the chat waits for. For this question the code also gives
+  the language model the fact in plain words before it answers: the sessions
+  that it watches because you asked, and the sessions that work and that it
+  does not watch. A session that works is not watched for that reason alone:
+  nothing is said by itself about it until you ask for that.
 - "What did I miss?", "anything new?", "any news?" and "catch me up" are
   answered from the state and from the lines that the chat said by itself
   since your last message: that a session is done, or the answer of a job.
