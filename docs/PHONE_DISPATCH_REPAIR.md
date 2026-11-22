@@ -2,6 +2,34 @@
 
 November 22, 2026. Local-first repair based on `abbbff2`.
 
+## Installation outcome — November 22, 2026
+
+The operator confirmed that the FaceTime retry worked after installing the warm
+media repair. The matching call lifecycle records show acceptance, actual bridge
+readiness, a healthy audio/video publication assessment, and call end. This
+qualifies the repaired incoming connection with the operator's confirmation;
+it does not separately qualify every computer action or Stop scenario below.
+
+Installation changes made during this work:
+
+- Integrated the upstream computer-use updates into the local repair branch and
+  rebuilt/restarted the desktop service, panel and phone host as needed.
+- Connected the phone host to the intended authenticated desktop service. Added
+  enforced caller-request dispatch and separated new coding-session requests from
+  app navigation, including the explicit app-work routing repair.
+- Configured the Mac's adjacent-desktop shortcuts and repaired destination
+  verification for overlapping full-screen windows. A rightward move and leftward
+  return were physically verified without relaxing click/type target matching.
+- Prepared audio and synthetic mascot video before incoming calls, reused the
+  published tracks during the voice session, and verified greeting and cleanup.
+- Preserved installed permissions, protected credentials, task history and
+  unknown-outcome receipts. Automatic updates remain held while this repair
+  branch is reviewed; pushing it does not merge or deploy new upstream changes.
+
+The qualified desktop binary is `3ba05cc`; the phone startup repair is `3915f40`.
+Mac-specific protected configuration and runtime evidence stay outside Git.
+The upstream provider-admission/native-recovery follow-up remains described below.
+
 ## Problem and evidence
 
 An incoming call delivered voice and video, and a status question reached the
