@@ -158,6 +158,7 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
       endSubmitted = false,
       providerClean = false;
     let outcome: "ended" | "refused" | "unknown" = "refused";
+    let refusalReason: string | undefined;
     const binding: NativeProactiveCallBinding = {
       attemptId: grant.attemptId,
       lineId: this.ports.destination.lineId,
@@ -314,7 +315,26 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
         await pause(250);
       }
       if (!providerClean) outcome = "unknown";
-    } catch {
+    } catch (error) {
+      // Only fixed diagnostic codes may escape the transport. Provider errors
+      // can contain credentials or task prose and must never be persisted.
+      const safeReasons = new Set([
+        "fresh_exact_delivery_required",
+        "line_or_authority_changed",
+        "authority_changed",
+        "authority_changed_during_media_allocation",
+        "authority_or_media_changed_during_prepare",
+        "dispatch_revalidation_failed",
+        "production_worker_retired_during_prepare",
+        "production_worker_prepare_timeout",
+        "proactive_publications_not_ready",
+        "proactive_publisher_identity_mismatch",
+        "proactive_duplicate_publication",
+      ]);
+      refusalReason =
+        error instanceof Error && safeReasons.has(error.message)
+          ? error.message
+          : "delivery_preparation_failed";
       outcome =
         submissionStarted ||
         handoff === "unknown" ||
@@ -396,7 +416,9 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
       cleanupConfirmed,
       ...(outcome === "unknown"
         ? { reason: "provider_or_cleanup_outcome_unknown" }
-        : {}),
+        : outcome === "refused" && refusalReason
+          ? { reason: refusalReason }
+          : {}),
     };
   }
   /** Retire only an already reconciled in-process fence. This performs no provider

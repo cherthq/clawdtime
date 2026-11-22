@@ -534,7 +534,25 @@ export function createProductionDelivery(
                   throw error;
                 }
                 await authorize();
-                return room.prepare();
+                const prepared = await room.prepare();
+                // LiveKit can expose publications before the worker's warm-media
+                // preparation and authenticated acknowledgement finish. Wait for
+                // both observations without allocating or dispatching again.
+                const until = Math.min(attempt.expiresAt, now() + 10_000);
+                for (;;) {
+                  await authorize();
+                  const status = context.sessions.status(attempt.attemptId);
+                  if (!worker.alive() || !status || status.closed)
+                    throw Error("production_worker_retired_during_prepare");
+                  if (status.prepared) return prepared;
+                  if (now() >= until)
+                    throw Error("production_worker_prepare_timeout");
+                  await (
+                    dependencies.pause ??
+                    ((ms: number) =>
+                      new Promise<void>((resolve) => setTimeout(resolve, ms)))
+                  )(50);
+                }
               })());
             },
             async inspect() {

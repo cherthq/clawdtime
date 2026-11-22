@@ -414,6 +414,74 @@ it("retains an unacknowledged worker launch and never retries or restores over i
   ).toBe("unknown");
 });
 
+it("waits for the exact worker acknowledgement when publications appear first", async () => {
+  const f = fixture();
+  const acknowledge = f.roomService.createRoom.getMockImplementation()!;
+  f.roomService.createRoom.mockResolvedValue({});
+  let waited = false;
+  const delivery = f.create({
+    pause: async () => {
+      expect(f.request).not.toHaveBeenCalled();
+      expect(f.sessions.status(f.grant.attemptId)?.prepared).toBe(false);
+      waited = true;
+      await acknowledge();
+    },
+  });
+  expect(await delivery.deliver(f.intent, f.grant)).toMatchObject({
+    state: "ended",
+    cleanupConfirmed: true,
+  });
+  expect(waited).toBe(true);
+  expect(f.roomService.createRoom).toHaveBeenCalledTimes(1);
+  expect(f.launch).toHaveBeenCalledTimes(1);
+  expect(f.events.filter((event) => event === "dial")).toHaveLength(1);
+});
+
+it("cleans up without dialing when the worker never acknowledges published media", async () => {
+  const f = fixture();
+  f.roomService.createRoom.mockResolvedValue({});
+  expect(await f.create().deliver(f.intent, f.grant)).toMatchObject({
+    state: "refused",
+    cleanupConfirmed: true,
+    reason: "production_worker_prepare_timeout",
+  });
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.worker.stop).toHaveBeenCalledTimes(1);
+  expect(f.owner.restore).toHaveBeenCalledTimes(1);
+});
+
+it("does not wait or dial after an unacknowledged worker exits", async () => {
+  const f = fixture();
+  f.roomService.createRoom.mockImplementation(async () => {
+    f.setAlive(false);
+    return {};
+  });
+  expect(await f.create().deliver(f.intent, f.grant)).toMatchObject({
+    state: "refused",
+    cleanupConfirmed: true,
+    reason: "production_worker_retired_during_prepare",
+  });
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.owner.restore).toHaveBeenCalledTimes(1);
+});
+
+it("stops waiting without dialing when authority is revoked before the worker acknowledgement", async () => {
+  const f = fixture();
+  f.roomService.createRoom.mockResolvedValue({});
+  const delivery = f.create({
+    pause: async () => {
+      f.authority.revoke("policy");
+    },
+  });
+  expect(await delivery.deliver(f.intent, f.grant)).toMatchObject({
+    state: "refused",
+    cleanupConfirmed: true,
+  });
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.worker.stop).toHaveBeenCalledTimes(1);
+  expect(f.owner.restore).toHaveBeenCalledTimes(1);
+});
+
 it("retains failed worker join even after provider call and room cleanup", async () => {
   const f = fixture(),
     delivery = f.create();

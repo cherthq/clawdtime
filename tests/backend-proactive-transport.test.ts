@@ -314,10 +314,11 @@ describe("durable generic proactive transport", () => {
   });
   it("can reconcile failed preparation with positive owned media cleanup before restoring", async () => {
     const f = fixture();
-    f.handle.prepare.mockRejectedValue(Error("publication unknown"));
+    f.handle.prepare.mockRejectedValue(Error("private provider credential"));
     expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
       state: "refused",
       cleanupConfirmed: true,
+      reason: "delivery_preparation_failed",
     });
     expect(f.handle.close).toHaveBeenCalledTimes(1);
     expect(f.line.restore).toHaveBeenCalledTimes(1);
@@ -379,6 +380,7 @@ describe("durable generic proactive transport", () => {
     expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
       state: "refused",
       cleanupConfirmed: true,
+      reason: expect.any(String),
     });
     expect(f.line.acquire).not.toHaveBeenCalled();
     expect(f.calls.createProactive).not.toHaveBeenCalled();
@@ -399,6 +401,7 @@ describe("durable generic proactive transport", () => {
       expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
         state: "refused",
         cleanupConfirmed: true,
+        reason: expect.any(String),
       });
       expect(f.calls.createProactive).not.toHaveBeenCalled();
       expect(f.handle.prepare).not.toHaveBeenCalled();
@@ -413,6 +416,7 @@ describe("durable generic proactive transport", () => {
     expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
       state: "refused",
       cleanupConfirmed: true,
+      reason: expect.any(String),
     });
     expect(f.calls.createProactive).not.toHaveBeenCalled();
   });
@@ -477,6 +481,7 @@ describe("durable generic proactive transport", () => {
       expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
         state: "refused",
         cleanupConfirmed: true,
+        reason: expect.any(String),
       });
       expect(f.media).not.toHaveBeenCalled();
       expect(f.calls.createProactive).not.toHaveBeenCalled();
@@ -505,6 +510,7 @@ describe("durable generic proactive transport", () => {
     expect(await g.transport.deliver(g.intent, g.grant)).toEqual({
       state: "refused",
       cleanupConfirmed: true,
+      reason: expect.any(String),
     });
     expect(g.calls.createProactive).not.toHaveBeenCalled();
   });
@@ -528,6 +534,7 @@ describe("durable generic proactive transport", () => {
     expect(await g.transport.deliver(g.intent, g.grant)).toEqual({
       state: "refused",
       cleanupConfirmed: true,
+      reason: expect.any(String),
     });
     expect(g.calls.createProactive).not.toHaveBeenCalled();
     expect(g.line.restore).toHaveBeenCalledTimes(1);
