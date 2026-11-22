@@ -2,7 +2,9 @@
  * The planner of computer use, measured without the real screen.
  *
  * Each task is one decision: a goal, a rendered screen (a picture and named
- * elements, in the form that the hands give) and sometimes earlier steps. The
+ * elements, in the form that the hands give) and sometimes earlier steps. On
+ * the board screen the targets are drawn and have no element: only a click at
+ * a point in the picture reaches them. The
  * real planner code builds the request, a real language model answers, and a
  * check says whether the chosen action is right. The time of each answer is
  * kept. It is the check to run before the model of the planner changes.
@@ -66,6 +68,15 @@ async function render(): Promise<Record<string, Seen>> {
     });
     for (const [name, screen] of Object.entries(screens)) {
       await page.setContent(screen.html);
+      // What the picture shows and the Accessibility tree does not name: a box for the checks, and no element.
+      const drawn = (await page.evaluate(`(() => {
+        const out = [];
+        for (const el of document.querySelectorAll("[data-key]:not([data-role])")) {
+          const r = el.getBoundingClientRect();
+          out.push({ key: el.dataset.key, x: r.left, y: r.top, w: r.width, h: r.height });
+        }
+        return out;
+      })()`)) as { key: string; x: number; y: number; w: number; h: number }[];
       const found = (await page.evaluate(`(() => {
         const out = [];
         for (const el of document.querySelectorAll("[data-role]")) {
@@ -85,6 +96,9 @@ async function render(): Promise<Record<string, Seen>> {
         await page.screenshot({ type: "jpeg", quality: 80 })
       ).toString("base64");
       const at: Seen["at"] = {};
+      // No element has the number 0, so only a point inside the box hits it.
+      for (const item of drawn)
+        at[item.key] = { id: 0, x: item.x, y: item.y, w: item.w, h: item.h };
       const elements = found.map((item, index): ScreenElement => {
         if (item.key)
           at[item.key] = {
@@ -144,7 +158,8 @@ const hits = (action: Action, seen: Seen, ...keys: string[]) =>
   keys.some((name) => {
     const box = seen.at[name];
     if (!box) return false;
-    if (action.kind === "click_element") return action.element === box.id;
+    if (action.kind === "click_element")
+      return box.id > 0 && action.element === box.id;
     if (action.kind !== "click_at") return false;
     return (
       action.x >= box.x - 2 &&
@@ -279,6 +294,36 @@ const tasks: Task[] = [
       (a.kind === "type" &&
         a.text === "ada@example.com" &&
         a.element === number(s, "email")),
+  },
+  {
+    id: "point: a large drawn thing",
+    screen: "board",
+    goal: "Click the sticky note that says Pricing.",
+    right: (a, s) => hits(a, s, "sticky-pricing"),
+  },
+  {
+    id: "point: a drawn tool of 30 pixels",
+    screen: "board",
+    goal: "Choose the text tool, the letter T, in the tool bar on the board.",
+    right: (a, s) => hits(a, s, "tool-text"),
+  },
+  {
+    id: "point: another drawn tool of 30 pixels",
+    screen: "board",
+    goal: "Choose the magnifier tool in the tool bar on the board.",
+    right: (a, s) => hits(a, s, "tool-zoom"),
+  },
+  {
+    id: "point: a drawn x of 18 pixels",
+    screen: "board",
+    goal: "Close the yellow banner at the top of the board with its x.",
+    right: (a, s) => hits(a, s, "banner-x"),
+  },
+  {
+    id: "point: one of five drawn stars",
+    screen: "board",
+    goal: "Rate this board with three stars.",
+    right: (a, s) => hits(a, s, "star-3"),
   },
   {
     id: "password: hand over to the person",
