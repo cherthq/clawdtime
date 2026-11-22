@@ -318,6 +318,12 @@ import TaskPanelCore
                          allowed: @escaping () async -> HandError?, observer: HandsObserver,
                          pointer: () -> CGPoint) async -> Result<Observation?, HandError> {
     guard enabled else { return .failure(.desktopDisabled) }
+    // No other app to go back to: the keys would change nothing. Refuse before
+    // anything is sent, so that this never ends as an unknown result.
+    let regular = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !$0.isTerminated }
+      .map { Int($0.processIdentifier) }
+    guard DesktopAppSwitch.hasPrevious(regular: regular, front: NSWorkspace.shared.frontmostApplication.map { Int($0.processIdentifier) },
+      own: Int(getpid())) else { return .failure(.notFound) }
     guard singleDisplay else { return .failure(.unsupportedDesktop) }
     if let error = await allowed() { return .failure(error) }
     let beforeEpoch = epoch
@@ -425,7 +431,13 @@ import TaskPanelCore
         return value
       }
       switch settlement.sample(stableCandidate, spaceChanges: spaceChanges - initialSpaceChanges, epoch: epoch, at: now) {
-      case .expired: return failure(.targetNotVisible)
+      case .expired:
+        // The whole wait showed the surface of before and no Space change: the desktop
+        // did not move. That is known, so it is said as it is and not as unknown.
+        if settlement.notMoved, spaceChanges == initialSpaceChanges, environmentChanges == initialEnvironmentChanges {
+          return .failure(.desktopUnchanged)
+        }
+        return failure(.targetNotVisible)
       case .waiting: break
       case .ready:
         if let error = await allowed() { return failure(error) }

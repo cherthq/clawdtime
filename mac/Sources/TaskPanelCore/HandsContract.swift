@@ -348,6 +348,8 @@ public enum HandError: String, Codable, CaseIterable, Error, Sendable {
   case ambiguousTarget = "ambiguous_target"
   case unsupportedDesktop = "unsupported_desktop"
   case targetNotVisible = "target_not_visible"
+  /// The shortcut for a desktop switch went out and the desktop is known not to have moved.
+  case desktopUnchanged = "desktop_unchanged"
   case transitionUnknown = "transition_unknown"
   case inputUnknown = "input_unknown"
   case staleObservation = "stale_observation"

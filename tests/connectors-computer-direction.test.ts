@@ -364,6 +364,83 @@ describe("explicit directional navigation", () => {
       expect(f.journal.get("one")?.reason).toBe("transition_unknown");
     },
   );
+  it("says that the desktop did not change at the last desktop, and does not lock", async () => {
+    const f = setup({ kind: "desktop", direction: "right" });
+    f.hands.answer = (c) =>
+      c.kind === "switch_desktop"
+        ? { ok: false, error: "desktop_unchanged" }
+        : undefined;
+    await f.worker.submit("one", "Move one desktop right");
+    await f.worker.idle();
+    expect(f.worker.status()).toMatchObject({
+      state: "blocked",
+      message:
+        "The desktop did not change. There may be no desktop on that side.",
+    });
+    expect(f.journal.get("one")?.reason).toBe("desktop_unchanged");
+    // Known, not unknown: nothing to clear, and the next request runs at once.
+    expect(f.journal.unresolved()).toBeNull();
+    expect(f.worker.clear()).toEqual({ message: "Nothing to clear." });
+    expect(f.hands.sent).toHaveLength(1);
+    expect(f.planner.inputs).toHaveLength(0);
+    f.hands.answer = (c) =>
+      c.kind === "switch_desktop" ? { observation: after } : undefined;
+    await f.worker.submit("two", "Move one desktop right");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("completed");
+    // One switch for each request: the first was never sent a second time.
+    expect(f.hands.sent).toEqual([
+      { kind: "switch_desktop", direction: "right" },
+      { kind: "switch_desktop", direction: "right" },
+    ]);
+  });
+  it("says that there is no other app when Command+Tab has nowhere to go, and does not lock", async () => {
+    const f = setup({ kind: "previous_app" });
+    f.hands.answer = (c) =>
+      c.kind === "switch_previous_app"
+        ? { ok: false, error: "not_found" }
+        : undefined;
+    await f.worker.submit("one", "Go back to the app I was just using");
+    await f.worker.idle();
+    expect(f.worker.status()).toMatchObject({
+      state: "blocked",
+      message: "There is no other app to go back to. Nothing was sent.",
+    });
+    expect(f.journal.get("one")?.reason).toBe("no_other_app");
+    expect(f.journal.unresolved()).toBeNull();
+    expect(f.hands.sent).toEqual([{ kind: "switch_previous_app" }]);
+    expect(f.planner.inputs).toHaveLength(0);
+    expect((await f.worker.submit("two", "Open Notes")).message).toMatch(
+      /^Started/,
+    );
+    await f.worker.idle();
+  });
+  it.each([
+    ["switch_desktop", { kind: "desktop", direction: "right" }],
+    ["switch_previous_app", { kind: "previous_app" }],
+  ] as const)(
+    "keeps a real unknown of %s unknown: an interruption in the middle and a lost result",
+    async (kind, intent) => {
+      for (const answer of [
+        { ok: false, error: "transition_unknown", interrupted: true },
+        { ok: false, error: "input_unknown" },
+        "lost",
+      ] as const) {
+        const f = setup(intent);
+        f.hands.answer = (c) => (c.kind === kind ? answer : undefined);
+        await f.worker.submit("one", "Move");
+        await f.worker.idle();
+        expect(f.worker.status().state).toBe("uncertain");
+        expect(f.worker.status().message).toMatch(
+          /say "clear the computer task", or run: clawdtime computer clear$/,
+        );
+        expect((await f.worker.submit("two", "Move")).message).toMatch(
+          /unknown result/,
+        );
+        expect(f.hands.sent).toHaveLength(1);
+      }
+    },
+  );
   it.each([
     "desktop_shortcut_unavailable",
     "desktop_history_unavailable",

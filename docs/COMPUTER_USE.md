@@ -295,7 +295,10 @@ Two things make a request `uncertain`:
 
 An uncertain request is never run again, and no new request starts. Look at the
 screen to see what happened. Then run `clawdtime computer clear`. Its record
-stays in the journal.
+stays in the journal. The worker has the same step as a method, `clear()`, for
+a person who has no terminal: its messages about an unknown result say "After
+you looked at the screen, say "clear the computer task", or run: clawdtime
+computer clear". `clear()` starts nothing and sends nothing again.
 
 A look or a wait whose result never came back is not uncertain, because it
 changed nothing. The same holds for a command that the panel never fetched.

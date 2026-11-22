@@ -49,7 +49,9 @@ import type {
 import { HandsTimeout } from "./panel-hands.js";
 import {
   activationRefusal,
+  clearHint,
   desktopBlockedText,
+  noOtherAppText,
   verifiedDesktopSwitch,
   inputUnknownText,
   sameSurface,
@@ -92,8 +94,7 @@ const plannerText =
   "The planner did not answer, so I stopped. Nothing more was sent.";
 const refusalsText =
   "The planner chose 3 actions in a row that the checks refused, so I stopped.";
-const faultText =
-  "Something failed inside the worker, so I stopped. An action may have been sent. Look at the screen, then run: clawdtime computer clear";
+const faultText = `Something failed inside the worker, so I stopped. An action may have been sent. ${clearHint}`;
 const secretText =
   "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.";
 const unwrittenText =
@@ -105,11 +106,13 @@ const grantText = {
     "ClawdTime may not see the screen yet. Open System Settings, Privacy & Security, Screen & System Audio Recording, and turn on the ClawdTime panel. Then ask again.",
 } as const;
 const lostText = (label: string) =>
-  `I sent this and its result never came back: ${label}. It may have happened or not. I do not send it again. Look at the screen, then run: clawdtime computer clear`;
+  `I sent this and its result never came back: ${label}. It may have happened or not. I do not send it again. ${clearHint}`;
 const uncertainText = (request: JournalRequest) =>
   request.reason === "unreadable_journal"
-    ? "The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until you run: clawdtime computer clear"
-    : `An earlier computer task has an unknown result: "${request.goal}". It is not run again. Look at the screen to see what happened, then run: clawdtime computer clear`;
+    ? `The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until it is cleared. ${clearHint}`
+    : `An earlier computer task has an unknown result: "${request.goal}". It is not run again. ${clearHint}`;
+const unclearedText =
+  "The record of computer tasks could not be cleared now. Say it again in a moment.";
 
 /** What `GET /desktop/computer` answers. */
 export const computerStatusSchema = z
@@ -510,6 +513,33 @@ export class ComputerWorker implements DesktopExecutorPort {
     return this.snapshot();
   }
 
+  /**
+   * The person looked at the screen and says so: "clear the computer task".
+   * This does what `clawdtime computer clear` does, for a person who has no
+   * terminal at hand: on a call, or away from the Mac. The request with the
+   * unknown result is marked as seen, so that new work can start. Its record
+   * stays. Nothing is started and nothing is sent again. The answer is one
+   * line that can be said aloud.
+   */
+  clear(): { message: string } {
+    let done: ReturnType<ComputerJournal["clear"]>;
+    try {
+      done = this.journal.clear();
+    } catch {
+      return { message: unclearedText };
+    }
+    if (done.setAside)
+      return {
+        message: `The record of computer requests could not be read. It was set aside as ${done.setAside} and is not removed. New work can start.`,
+      };
+    if (!done.cleared.length) return { message: "Nothing to clear." };
+    return {
+      message: done.cleared
+        .map((request) => `Cleared: "${request.goal}". New work can start.`)
+        .join(" "),
+    };
+  }
+
   /** The person's reply to what the worker asks. Words that are not clear change nothing. */
   async answer(text: string): Promise<{ message: string }> {
     this.expire();
@@ -656,6 +686,13 @@ export class ComputerWorker implements DesktopExecutorPort {
     } else if (activationRefusal(command, result)) {
       // Nothing was sent, so the request goes on: the caller hands the
       // reason to the planner, as it does for an action that a check refused.
+    } else if (
+      !result.ok &&
+      command.kind === "switch_previous_app" &&
+      result.error === "not_found"
+    ) {
+      // The hands sent no key: there was no other app. That is known.
+      this.finish(run, "blocked", "no_other_app", noOtherAppText);
     } else if (
       !result.ok &&
       result.error &&

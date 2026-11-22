@@ -39,6 +39,11 @@ or promise that a named app is the most recently used one. Generic keyboard
 commands cannot bypass this verified path. A missing or ambiguous destination
 after dispatch remains unknown and is not retried.
 
+The app switcher shows regular apps only. With no regular app besides the one
+in front, the keys would change nothing, so the panel refuses before anything
+is sent (`DesktopAppSwitch`). The worker says "There is no other app to go back
+to." and nothing locks.
+
 See [the navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md) for semantic routing,
 caller transcript binding and the combined acceptance matrix.
 
@@ -70,12 +75,23 @@ Each request authorizes **one key-down/key-up pair**, not a desktop search.
 Verification requires a post-dispatch `activeSpaceDidChange` notification and
 a distinct, independently observed on-screen surface, stable for at least
 600 ms/three samples within five seconds, followed by fresh bracketed capture
-and AX evidence. Notification or dispatch alone is insufficient. A boundary,
-a shortcut disabled during dispatch, identical visible surfaces, missing window
-evidence, conflicting shortcut, animation timeout, or interruption can leave
-`transition_unknown`. No blind retry occurs, including after Stop/restart.
-Inspect the desktop and reconcile the journal before another request. A
-predispatch refusal and a possibly completed transition are different outcomes.
+and AX evidence. Notification or dispatch alone is insufficient. A shortcut
+disabled during dispatch, identical visible surfaces after a Space change,
+missing window evidence, conflicting shortcut, animation timeout, or
+interruption can leave `transition_unknown`. No blind retry occurs, including
+after Stop/restart. Inspect the desktop and reconcile the journal before another
+request. A predispatch refusal and a possibly completed transition are different
+outcomes.
+
+There is a third outcome: **not moved** (`desktop_unchanged`). The key went out,
+no Space change was reported, and every look of the whole five-second wait
+showed the same surface as before. That is the last desktop on that side, or a
+shortcut that did nothing. It is known, so it is not `transition_unknown` and
+nothing locks. The worker says "The desktop did not change. There may be no
+desktop on that side." One look that shows nothing or another surface, one
+Space change, Stop or a takeover in the wait, and the result stays unknown. A
+move to an empty desktop reports a Space change and shows no window, so it
+still ends as unknown.
 
 ## Target-window activation
 
@@ -149,7 +165,11 @@ effect was submitted and verification, permissions, Stop, takeover, or connectio
 checks fail, the result is `transition_unknown`. The worker preserves that
 uncertainty across restart and blocks new work until the person inspects the
 screen and explicitly clears the journal through `clawdtime computer clear`.
-Clearing is reconciliation, not permission to replay the original request.
+The worker has the same step as a method, `clear()`, so that the supervisor can
+take the words "clear the computer task" from a person who has no terminal: on
+a call, or away from the Mac. Every message of the worker about an unknown
+result names both ways. Clearing is reconciliation, not permission to replay
+the original request.
 
 ## Freshness and interruption
 
@@ -371,8 +391,10 @@ The tester verifies arrival and a harmless unsent edit, then exercises:
    ask right once; independently verify desktop B in person and on the shared
    video. Ask left once and verify A. Repeat as separate requests; test previous.
    Confirm a harmless unsent TextEdit edit lands after a new observation.
-6. At the left/right boundary, send one request and record lack of arrival proof
-   as unknown, never a second automatic dispatch. Reconcile before continuing.
+6. At the left/right boundary, send one request and record the outcome not
+   moved: the worker says that the desktop did not change, nothing locks, and
+   there is never a second automatic dispatch. Send one request toward an empty
+   desktop and record it as unknown. Reconcile that one before continuing.
 7. With a shortcut disabled before dispatch, verify definite refusal. With custom
    enabled shortcuts and matching environment, verify both directions. Change a
    shortcut after preflight if practicable and ensure uncertainty/no retry.

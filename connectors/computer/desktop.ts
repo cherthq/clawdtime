@@ -14,9 +14,28 @@ export const desktopBlockedText = {
     "Navigation requires one active main display and a distinguishable ordinary or explicitly verified full-screen window. Split View, multiple displays, or unavailable evidence are unsupported; no transition was attempted.",
   target_not_visible:
     "The intended window could not be identified before activation. Open the target window yourself and ask again; nothing was activated.",
+  // Known, not unknown: no Space change was reported and the same surface
+  // stayed in view for the whole wait. Nothing locks after it.
+  desktop_unchanged:
+    "The desktop did not change. There may be no desktop on that side.",
 } as const;
 
-/** What the hands answer for open_app when the request did not end there. */
+/** Command+Tab was refused before anything was sent: no other app runs. */
+export const noOtherAppText =
+  "There is no other app to go back to. Nothing was sent.";
+
+/**
+ * How a person clears an unknown result. The spoken way comes first: a person
+ * on a call or away from the Mac has no terminal. The command stays for the
+ * one who has. Both mark the request as seen and repeat nothing.
+ */
+export const clearHint =
+  'After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear';
+
+/**
+ * Answers to open_app that end the request: an unknown result, a missing
+ * right, Stop. They never go to the planner as a refusal.
+ */
 const activationOver = new Set([
   "transition_unknown",
   "input_unknown",
@@ -61,11 +80,9 @@ export function activationRefusal(
   );
 }
 
-export const transitionUnknownText =
-  "An app or desktop transition was attempted, but arrival was not independently verified. It may have switched; a boundary, disabled shortcut, or delayed animation can also prevent verification. I stopped without retrying or sending further input. Check the screen and Mission Control settings, then run: clawdtime computer clear";
+export const transitionUnknownText = `An app or desktop transition was attempted, but arrival was not independently verified. It may have switched; a disabled shortcut or a delayed animation can also prevent verification. I stopped without retrying or sending further input. Check the Mission Control settings too. ${clearHint}`;
 
-export const inputUnknownText =
-  "Input began, then the target changed or control was interrupted. Some input may have reached the app. I stopped without retrying. Check the screen, then run: clawdtime computer clear";
+export const inputUnknownText = `Input began, then the target changed or control was interrupted. Some input may have reached the app. I stopped without retrying. ${clearHint}`;
 
 /** Same surface, including a round trip to another Space with unchanged titles. */
 export function sameSurface(before: Observation, after: Observation): boolean {

@@ -159,7 +159,20 @@ public enum DesktopInputOutcome {
     }
   }
   public static func failure(_ error: HandError, submitted: Bool, interrupted: Bool) -> HandError {
-    if submitted && error != .transitionUnknown { return .inputUnknown }
+    // A desktop switch gives its own verdict after its key went out: unknown, or known
+    // not to have moved. Every other failure after input began may have typed or
+    // clicked something, so it stays unknown and is never sent again.
+    if submitted && error != .transitionUnknown && error != .desktopUnchanged { return .inputUnknown }
     return error
+  }
+}
+
+/// Command+Tab goes to another app of the app switcher, which shows regular apps
+/// only. With no regular app besides the one in front, the keys change nothing and
+/// the wait for another app could only end as unknown. So the hands refuse before
+/// anything is sent. ClawdTime itself is never a place to go back to.
+public enum DesktopAppSwitch {
+  public static func hasPrevious(regular: [Int], front: Int?, own: Int) -> Bool {
+    regular.contains { $0 != front && $0 != own }
   }
 }
