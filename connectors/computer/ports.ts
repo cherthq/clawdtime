@@ -120,6 +120,8 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("switch_previous_app") }).strict(),
   z.object({ kind: z.literal("open_url"), url: text(2000) }).strict(),
+  /** Quits a running app by its name, the polite way. No key goes out. */
+  z.object({ kind: z.literal("quit_app"), name: text(120) }).strict(),
   z
     .object({
       kind: z.literal("wait"),
@@ -274,6 +276,8 @@ export type Action =
   /** Optional exact title disambiguates ordinary windows of the requested app. */
   | { kind: "open_app"; name: string; window?: string }
   | { kind: "open_url"; url: string }
+  /** Quits a running app by its name. The person is asked first. */
+  | { kind: "quit_app"; name: string }
   | { kind: "browser_read" }
   | { kind: "browser_open"; url: string }
   | { kind: "browser_click"; index: number }

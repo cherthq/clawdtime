@@ -298,6 +298,12 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
 - **Your yes in a terminal.** Typing and every key need your yes while a
   terminal app is in front, or while a terminal inside another app has the
   focus.
+- **Your yes for a quit.** The planner quits an app by its name (`quit_app`),
+  and the worker always asks first. The hands then ask the app to quit the
+  polite way, as its own Quit does: no key goes out and nothing is forced. An
+  app that asks about work that is not saved stays open, and the planner reads
+  that and looks. It works for an app with no window too, where no key can be
+  sent: after its last document closed, an app could not be quit before.
 - **Your yes for keys.** A key combination that quits, logs out or locks
   (Command with Q in any form, and the force-quit keys). Command with Delete.
   Command or Control with Return. Return in a messages or mail app. The send

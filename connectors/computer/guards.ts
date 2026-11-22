@@ -65,6 +65,7 @@ export const actionSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("open_url"), url: words(2000) }).strict(),
+  z.object({ kind: z.literal("quit_app"), name: words(120) }).strict(),
   z.object({ kind: z.literal("browser_read") }).strict(),
   z.object({ kind: z.literal("browser_open"), url: words(2000) }).strict(),
   z.object({ kind: z.literal("browser_click"), index: number }).strict(),
@@ -198,6 +199,8 @@ const dangerRisk = (name: string, goal?: string, words = false) => {
 };
 const terminalRisk =
   "This goes into a terminal, where text can run as a command.";
+const appQuitRisk =
+  "This quits the app, with what is open in it. Work that is not saved can be lost.";
 const quitRisk =
   "This key combination can quit an app, log out or lock the Mac.";
 const removeRisk = "This key combination can remove something.";
@@ -583,6 +586,24 @@ export function check(raw: unknown, view: View, why: string): Checked {
             name,
             ...(action.window === undefined ? {} : { window: action.window }),
           },
+        },
+      };
+    }
+    case "quit_app": {
+      const name = action.name.trim();
+      if (!name || name.startsWith(".") || /[\p{C}/\\:]/u.test(name))
+        return refuse("That is not the plain name of an app.");
+      return {
+        verdict: "run",
+        label: `Quit ${clean(name, 80)}`,
+        target: clean(name, 80),
+        // A quit always asks: work that is not saved, and what still runs in the app, can be lost.
+        risk: appQuitRisk,
+        signature: JSON.stringify(["quit_app", name]),
+        send: {
+          via: "hands",
+          look: false,
+          command: { kind: "quit_app", name },
         },
       };
     }

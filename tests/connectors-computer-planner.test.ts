@@ -147,6 +147,7 @@ describe("the planner on the chat completions API", () => {
       "key",
       "scroll",
       "open_app",
+      "quit_app",
       "open_url",
       "wait",
       "ask",
@@ -166,7 +167,7 @@ describe("the planner on the chat completions API", () => {
       browser: true,
     }).next(input());
     expect(
-      wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(11),
+      wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(12),
     ).toEqual([
       "browser_read",
       "browser_open",

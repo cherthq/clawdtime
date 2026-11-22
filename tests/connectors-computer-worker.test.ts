@@ -839,6 +839,44 @@ describe("a yes after which the action was not sent", () => {
   });
 });
 
+describe("a quit by name", () => {
+  const quit: Action = { kind: "quit_app", name: "TextEdit" };
+  it("asks, sends the quit after a yes, and needs no look at a window", async () => {
+    const { worker, hands, waiting } = setup([quit, done]);
+    await worker.submit("r1", "Quit TextEdit");
+    await waiting();
+    expect(worker.snapshot().message).toBe(
+      "Quit TextEdit? This quits the app, with what is open in it. Work that is not saved can be lost. Say yes to allow it, or no to stop.",
+    );
+    expect(hands.sent).toEqual([]);
+    await worker.answer("yes");
+    await worker.idle();
+    expect(hands.sent).toEqual([{ kind: "quit_app", name: "TextEdit" }]);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+  it("tells the planner when the app stayed open", async () => {
+    const { worker, hands, planner, waiting } = setup([quit, done]);
+    hands.answer = (command) =>
+      command.kind === "quit_app" ? { ok: false, error: "failed" } : undefined;
+    await worker.submit("r1", "Quit TextEdit");
+    await waiting();
+    await worker.answer("yes");
+    await worker.idle();
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(
+      "the quit was sent, but the app still runs: it may ask something first. Look at the screen.",
+    );
+  });
+  it("sends nothing after a no", async () => {
+    const { worker, hands, waiting } = setup([quit, done]);
+    await worker.submit("r1", "Quit TextEdit");
+    await waiting();
+    await worker.answer("no");
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().state).toBe("canceled");
+  });
+});
+
 describe("typed text and the focus", () => {
   it("tells the planner when no text field had the focus, and says ok when one had", async () => {
     // No element of this screen has the focus.

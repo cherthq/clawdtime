@@ -110,6 +110,8 @@ public enum HandCommand: Equatable, Sendable {
   case switchDesktop(direction: DesktopDirection)
   case switchPreviousApp
   case openURL(url: String)
+  /// Quits a running app by its name, the polite way: the app may ask about work that is not saved, and stay.
+  case quitApp(name: String)
   case wait(ms: Int)
 
   /// The name of the command in the contract.
@@ -126,6 +128,7 @@ public enum HandCommand: Equatable, Sendable {
     case .switchDesktop: return "switch_desktop"
     case .switchPreviousApp: return "switch_previous_app"
     case .openURL: return "open_url"
+    case .quitApp: return "quit_app"
     case .wait: return "wait"
     }
   }
@@ -154,7 +157,7 @@ public enum HandCommand: Equatable, Sendable {
     switch self {
     case .observe(_, let elements): return elements
     case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop, .switchPreviousApp: return true
-    case .openURL, .wait: return false
+    case .openURL, .quitApp, .wait: return false
     }
   }
   /// The command takes a picture of the screen.
@@ -229,6 +232,9 @@ extension HandCommand: Codable {
     case "open_url":
       try only(.url)
       self = .openURL(url: try string(.url, 2000))
+    case "quit_app":
+      try only(.name)
+      self = .quitApp(name: try string(.name, 120))
     case "wait":
       try only(.ms)
       let ms = try box.decode(Int.self, forKey: .ms)
@@ -263,6 +269,7 @@ extension HandCommand: Codable {
     case .switchDesktop(let direction): try box.encode(direction, forKey: .direction)
     case .switchPreviousApp: break
     case .openURL(let url): try box.encode(url, forKey: .url)
+    case .quitApp(let name): try box.encode(name, forKey: .name)
     case .wait(let ms): try box.encode(ms, forKey: .ms)
     }
   }
