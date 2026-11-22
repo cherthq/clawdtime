@@ -34,7 +34,6 @@ import TaskPanelCore
   }
   private enum WindowSelection {
     case selected(Target)
-    case emptyInventory
     case failure(HandError)
   }
   private var lease = DesktopObservationLease<Surface>()
@@ -83,10 +82,12 @@ import TaskPanelCore
   func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil }
   private func phase(_ value: DesktopTransitionPhase) { onTransition?(value, epoch) }
   private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
-  private var singleDisplay: Bool {
+  /// Zero when the list of displays cannot be read: then nothing that needs one display runs.
+  private var activeDisplays: Int {
     var count: UInt32 = 0
-    return CGGetActiveDisplayList(0, nil, &count) == .success && count == 1
+    return CGGetActiveDisplayList(0, nil, &count) == .success ? Int(count) : 0
   }
+  private var singleDisplay: Bool { activeDisplays == 1 }
 
   /// A focused AX window must agree with the top ordinary Quartz window on the
   /// current display. A front-app name alone, or an off-Space AX tree, is insufficient.
@@ -145,12 +146,21 @@ import TaskPanelCore
   /// One activation attempt. Every effect is preceded by the controller's Stop,
   /// takeover, permission and session checks. Once anything is dispatched, failure
   /// is unknown even if the OS returned false or Stop interrupted the wait.
+  ///
+  /// A request has one of two meanings, and "arrived" follows it:
+  /// - Only an app is named ("open Chrome"): the app comes forward with the window
+  ///   that it chooses. Arrived: that app is in front. See `bringForward`.
+  /// - A window title is named: that one window is raised and independently verified.
+  ///   Only here can a request be ambiguous, and only here does one display count.
   func activate(url: URL, windowTitle: String?, allowed: () async -> HandError?, observer: HandsObserver,
                 pointer: () -> CGPoint) async -> Result<Arrival, HandError> {
     guard enabled else { return .failure(.desktopDisabled) }
-    guard singleDisplay else { return .failure(.unsupportedDesktop) }
     guard windowTitle.map({ HandsTarget.windowTitle($0) != nil }) ?? true,
       let bundleID = Bundle(url: url)?.bundleIdentifier else { return .failure(.refused) }
+    if let refusal = DesktopActivationRule.refusal(windowNamed: windowTitle != nil, displays: activeDisplays) { return .failure(refusal) }
+    guard let windowTitle else {
+      return await bringForward(url: url, bundleID: bundleID, allowed: allowed, observer: observer, pointer: pointer)
+    }
     let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
     guard running.count <= 1 else { return .failure(.ambiguousTarget) }
     // If the source is full screen, require the same affirmative AX/geometry
@@ -176,78 +186,54 @@ import TaskPanelCore
     guard app.bundleIdentifier == bundleID, !app.isTerminated else { return failure(.notFound) }
     let pid = app.processIdentifier
     var selected = await Task.detached { DesktopAX.select(pid: pid, title: windowTitle) }.value
-    var reveal = DesktopAppReveal()
-    if case .emptyInventory = selected, !dispatched {
-      // Some running background apps publish no AX windows until activation.
-      // This is app-level authority only: exact window requests never widen.
-      let sourceEpoch = epoch
-      guard let source = await surface(transition: true), sourceEpoch == epoch else { return failure(.unsupportedDesktop) }
-      let refusal = await allowed()
-      if refusal == nil {
-        guard sourceEpoch == epoch, await surface(transition: true) == source, sourceEpoch == epoch else { return failure(.staleObservation) }
-        // Stop/takeover may arrive while that AX read is suspended.
-        if let interruption = await allowed() { return failure(interruption) }
-        guard sourceEpoch == epoch else { return failure(.staleObservation) }
-      }
-      switch reveal.claim(running: !running.isEmpty, exactWindowRequested: windowTitle != nil,
-                          inventory: .empty, refusal: refusal) {
-      case .failure(let error): return failure(error)
-      case .success: break
-      }
-      guard singleDisplay, app.bundleIdentifier == bundleID, !app.isTerminated else { return failure(.notFound) }
-      invalidate(); phase(.switching); dispatched = true
-      _ = app.activate(options: [])
-      phase(.waiting)
-    }
-    // Launch/reveal may publish the first window later. Bounded reads only:
-    // never launch/activate a second time or choose an arbitrary sibling.
+    // A launch may publish its windows later: a cold start takes seconds. Bounded
+    // reads only: never launch a second time or choose an arbitrary sibling.
     if dispatched {
-      let discoveryDeadline = now + 2
-      for _ in 0..<10 {
+      let discoveryDeadline = now + DesktopAppWait.limit
+      while true {
         if case .selected = selected { break }
-        guard now < discoveryDeadline else { return failure(.targetNotVisible) }
         if case .failure(let error) = selected, error != .targetNotVisible { break }
+        guard now < discoveryDeadline else { return failure(.targetNotVisible) }
         if let error = await allowed() { return failure(error) }
         try? await Task.sleep(nanoseconds: 100_000_000)
         selected = await Task.detached { DesktopAX.select(pid: pid, title: windowTitle) }.value
-        guard now < discoveryDeadline else { return failure(.targetNotVisible) }
       }
     }
+    // A running app that shows no window with this title, or no window at all: a
+    // title names one window, so nothing is activated to go and look for it.
     guard case .selected(let target) = selected else {
       if case .failure(let error) = selected { return failure(error) }
       return failure(.targetNotVisible)
     }
     if let error = await allowed() { return failure(error) }
     guard singleDisplay else { return failure(.unsupportedDesktop) }
-    if !reveal.claimed {
-      invalidate(); phase(.switching)
-      // A minimized target is explicitly restored once, never replaced by a sibling.
-      if target.minimized {
-        dispatched = true
-        let restored = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success }.value
-        guard restored else { return failure(.failed) }
-        if let error = await allowed() { return failure(error) }
-      }
-      // Prefer the exact main window before activating the application. Otherwise
-      // macOS may choose an unrelated sibling window on a different Space.
-      let settable = await Task.detached { () -> Bool in
-        var result = DarwinBoolean(false)
-        return AXUIElementIsAttributeSettable(target.window, kAXMainAttribute as CFString, &result) == .success && result.boolValue
-      }.value
-      if settable {
-        if let error = await allowed() { return failure(error) }
-        dispatched = true
-        let selectedMain = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMainAttribute as CFString, kCFBooleanTrue) == .success }.value
-        guard selectedMain else { return failure(.failed) }
-      }
+    invalidate(); phase(.switching)
+    // A minimized target is explicitly restored once, never replaced by a sibling.
+    if target.minimized {
+      dispatched = true
+      let restored = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success }.value
+      guard restored else { return failure(.failed) }
+      if let error = await allowed() { return failure(error) }
+    }
+    // Prefer the exact main window before activating the application. Otherwise
+    // macOS may choose an unrelated sibling window on a different Space.
+    let settable = await Task.detached { () -> Bool in
+      var result = DarwinBoolean(false)
+      return AXUIElementIsAttributeSettable(target.window, kAXMainAttribute as CFString, &result) == .success && result.boolValue
+    }.value
+    if settable {
       if let error = await allowed() { return failure(error) }
       dispatched = true
-      // Raise exactly the selected AX object, never all of the application's windows.
-      let raised = await Task.detached { AXUIElementPerformAction(target.window, kAXRaiseAction as CFString) == .success }.value
-      guard raised else { return failure(.failed) }
-      if let error = await allowed() { return failure(error) }
-      _ = app.activate(options: [])
+      let selectedMain = await Task.detached { AXUIElementSetAttributeValue(target.window, kAXMainAttribute as CFString, kCFBooleanTrue) == .success }.value
+      guard selectedMain else { return failure(.failed) }
     }
+    if let error = await allowed() { return failure(error) }
+    dispatched = true
+    // Raise exactly the selected AX object, never all of the application's windows.
+    let raised = await Task.detached { AXUIElementPerformAction(target.window, kAXRaiseAction as CFString) == .success }.value
+    guard raised else { return failure(.failed) }
+    if let error = await allowed() { return failure(error) }
+    _ = app.activate(options: [])
     phase(.waiting)
     var settlement = DesktopSettlement<Surface>(at: now)
     var settlementEpoch = epoch
@@ -270,9 +256,57 @@ import TaskPanelCore
         // The same rule as the worker's: the app in front is the app that the name stood for.
         guard case .success(let seen) = captured, let current = await surface(transition: true), current == matches,
           seen.surfaceEpoch == epoch, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
-          windowTitle.map({ DesktopArrival.sameTitle(seen.app.window, $0) }) ?? true else { return failure(.staleObservation) }
+          DesktopArrival.sameTitle(seen.app.window, windowTitle) else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(Arrival(observation: seen, bundleID: DesktopArrival.identity(bundleID)))
+      }
+      try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+  }
+
+  /// A request that names only an app. One open request goes to macOS, as a click on
+  /// the app's icon in the Dock does: a running app comes forward with the window that
+  /// it chooses, and an app that does not run starts. Arrived means: that app is in
+  /// front. How many displays there are, how many windows the app has and where a
+  /// window lies do not matter. A person who says "open Chrome" means the app.
+  private func bringForward(url: URL, bundleID: String, allowed: () async -> HandError?, observer: HandsObserver,
+                            pointer: () -> CGPoint) async -> Result<Arrival, HandError> {
+    // Nothing went out yet: this is a refusal with its own reason.
+    if let error = await allowed() { return .failure(error) }
+    var ready = false
+    // Old coordinates are retired before the app comes forward.
+    invalidate(); phase(.switching)
+    defer { if !ready { invalidate(); phase(.blocked) } }
+    // The request is out from here. What fails after it is unknown, never a refusal:
+    // Stop, a takeover or a lost right in the middle, and an app that never came forward.
+    let unknown: Result<Arrival, HandError> = .failure(DesktopEffectOutcome.failure(.targetNotVisible, dispatched: true))
+    let wait = DesktopAppWait(at: now)
+    let options = NSWorkspace.OpenConfiguration()
+    options.activates = true
+    // What macOS answers is not the evidence. The app in front is.
+    NSWorkspace.shared.openApplication(at: url, configuration: options) { _, _ in }
+    phase(.waiting)
+    while true {
+      if await allowed() != nil { return unknown }
+      let inFront = DesktopArrival.sameApp(resolved: bundleID, front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+      switch wait.sample(inFront: inFront, at: now) {
+      case .expired: return unknown
+      case .waiting: break
+      case .inFront:
+        // The picture and the tree are the evidence for the worker. The same app is in
+        // front before and after they are taken.
+        let read = await observer.observe(image: true, elements: true, accessibility: true, pointer: pointer())
+        if await allowed() != nil { return unknown }
+        if case .success(let seen) = read, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
+          DesktopArrival.sameApp(resolved: bundleID, front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
+          // This result permits no input. The worker looks again before it acts.
+          invalidate()
+          ready = true; phase(.ready)
+          let arrived = Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: seen.elements,
+            image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: epoch)
+          return .success(Arrival(observation: arrived, bundleID: DesktopArrival.identity(bundleID)))
+        }
+        if wait.over(at: now) { return unknown }
       }
       try? await Task.sleep(nanoseconds: 150_000_000)
     }
@@ -441,24 +475,24 @@ import TaskPanelCore
       guard let window = element(value(app(pid), kAXFocusedWindowAttribute)) else { return false }
       return fullScreen(window)
     }
-    static func select(pid: pid_t, title: String?) -> WindowSelection {
+    /// The one standard window of the app that has this title. Only a request that
+    /// names a window comes here, so only such a request can be ambiguous.
+    static func select(pid: pid_t, title: String) -> WindowSelection {
       guard let windows = value(app(pid), kAXWindowsAttribute) as? [AXUIElement] else { return .failure(.targetNotVisible) }
       guard windows.count <= 32 else { return .failure(.ambiguousTarget) }
-      if windows.isEmpty { return .emptyInventory }
       let deadline = ProcessInfo.processInfo.systemUptime + 2
-      var ordinary: [AXUIElement] = []
+      var ordinary: [AXUIElement] = [], titles: [String?] = []
       for window in windows {
         guard ProcessInfo.processInfo.systemUptime < deadline else { return .failure(.targetNotVisible) }
         AXUIElementSetMessagingTimeout(window, 0.15)
-        // A title is compared as an observation carries it, so the worker and the hands agree on it.
-        if (value(window, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
-          title.map({ wanted in (value(window, kAXTitleAttribute) as? String).map { DesktopArrival.sameTitle($0, wanted) } == true }) ?? true {
-          ordinary.append(window)
-        }
+        guard (value(window, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole else { continue }
+        ordinary.append(window); titles.append(value(window, kAXTitleAttribute) as? String)
       }
-      let candidates = ordinary
-      guard candidates.count <= 1 else { return .failure(.ambiguousTarget) }
-      guard let window = candidates.first else { return .failure(.targetNotVisible) }
+      let window: AXUIElement
+      switch DesktopWindowChoice.index(titled: title, among: titles) {
+      case .failure(let error): return .failure(error)
+      case .success(let index): window = ordinary[index]
+      }
       AXUIElementSetMessagingTimeout(window, 0.15)
       guard let bounds = frame(window), DesktopSurfaceScope.permits(window: bounds,
         display: CGDisplayBounds(CGMainDisplayID()), ordinary: true, fullScreen: fullScreen(window),

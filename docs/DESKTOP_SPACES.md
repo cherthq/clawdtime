@@ -92,32 +92,49 @@ used: "iTerm" opens an app that calls itself "iTerm2". A window title is
 compared after the cleaning that every observation gets, on both sides: a
 no-break space or a format character counts as a space, and a title over 200
 characters is cut the same way. Two windows with the same cleaned title are
-ambiguous. App-only
-selection requires one matching standard AX window, including a positively
-verified single-display full-screen window. Multiple matching apps or
-windows block without choosing the first. A validated plain app-opening request
+ambiguous. A validated plain app-opening request
 handled by the supervisor also goes through this worker when it is the selected
 native engine. URL opening, terminal-session selection, and other execution
 engines retain their existing routes.
 
-The panel selects the AX window, restores it if minimized, and requests supported
-activation/raise operations. It never selects a sibling merely because that
-window is already visible. For an absent running app it may launch the installed
-application once; a launch that does not yield a verifiable window is
-an unknown outcome, not success. An app or exact target that cannot be resolved
-before any external effect gets a definite refusal.
+A request has one of two meanings, and "arrived" follows it.
 
-Some running background apps return a successful empty AX window inventory. For
-a named-app request without an exact window title, the panel may activate that
-app once to reveal its window metadata. It then only reads and verifies; it does
-not raise, restore, or activate a second time. Exact-window requests and failed
-inventory reads never use this path. If the revealed window is missing, ambiguous
-or unverifiable, the activation remains unknown and no further input follows.
+**Only an app is named** ("open Chrome", "go to Slack"). The panel sends one
+open request to macOS, as a click on the app's icon in the Dock does. A running
+app comes forward with the window that it chooses, and an app that does not run
+starts. Arrived means: that app is in front. The panel reads which app is in
+front for up to 6 seconds, then takes the picture and the tree with the same
+app in front before and after. The number of displays, the number of windows of
+the app and a window that lies partly off the screen do not matter. An app that
+restored two windows is in front all the same. Only an app that is not in front
+when the wait is over leaves the result unknown.
 
-Readiness requires the same AX window to be focused, its app to be frontmost,
-and a unique matching on-screen Quartz window to agree on owner, title and
-geometry. The selected window must be the front verified window and wholly on
-the main display. Full-screen matching permits at most one same-app auxiliary
+**A window title is named.** The panel selects the one standard AX window with
+that title, restores it if minimized, and requests supported activation/raise
+operations. It never selects a sibling merely because that window is already
+visible, and a title that fits more than one window blocks without choosing the
+first. This path needs one display. For an absent running app it may launch the
+installed application once and reads its windows for up to 6 seconds; a launch
+that does not yield the verifiable window is an unknown outcome, not success.
+A running app that shows no window with that title gets a definite refusal, and
+nothing is activated to look for one.
+
+An app or a window that cannot be resolved before any external effect gets a
+definite refusal. A refusal of `open_app` does not end the request and does not
+lock. The worker gives the planner the reason as a refused action, so that it
+can use the name that this Mac knows ("Chrome" is "Google Chrome" here), leave
+the title out, or tell the person why it cannot be done. That holds for a name
+that matches no app, an ambiguous name or title, a title that no window has, a
+named window with more than one display, and activation that is turned off.
+Three refusals in a row end the request as blocked, with the last reason. A
+missing Accessibility or Screen Recording right still ends the request at once,
+with the sentence that names the right. A refused desktop switch or previous-app
+switch still ends its request: the planner cannot send those.
+
+For a named window, readiness requires the same AX window to be focused, its app
+to be frontmost, and a unique matching on-screen Quartz window to agree on owner,
+title and geometry. The selected window must be the front verified window and
+wholly on the main display. Full-screen matching permits at most one same-app auxiliary
 top strip under narrow geometry checks and only when AX does not expose that
 strip as a window/dialog. Other overlays remain blocking. Repeated observations must agree for at least 600 ms, with
 at least three samples within five seconds. Space-generation changes reset
@@ -208,8 +225,10 @@ be read, modified/function shortcuts are refused; plain editing remains
 available. This is a guard against a generic key action bypassing verification,
 not the dedicated `switch_desktop` command. Only that command can dispatch the explicitly configured directional combination. No shortcut settings are changed.
 
-Switching supports distinguishable ordinary windows and positively verified
-full-screen app windows on **one active main display**. Full-screen acceptance
+A desktop switch, a previous-app switch and a named window support
+distinguishable ordinary windows and positively verified full-screen app windows
+on **one active main display**. A request that names only an app has none of
+these limits. Full-screen acceptance
 requires `AXFullScreen` plus full-width, near-full-height geometry. Split View,
 multiple displays, off-main/partly off-screen windows, missing AX/CG evidence,
 ambiguous duplicate windows and identical destination surfaces remain unsupported.
@@ -230,7 +249,8 @@ inside the already opted-in native computer engine. This variable does not
 enable computer use, start a service, or change the installed environment. Input
 freshness/Stop checks remain active when desktop activation is disabled. The
 single-display and independently verified window checks apply
-to transitions, not unrelated input. Existing input can still use a fresh
+to a desktop switch, a previous-app switch and a named window, not to unrelated
+input and not to a request that names only an app. Existing input can still use a fresh
 visible main-display window on multi-display or full-screen configurations;
 that does not qualify Space switching in those configurations.
 
@@ -368,7 +388,9 @@ The tester verifies arrival and a harmless unsent edit, then exercises:
     500 ms; resume and verify a fresh destination view. No outgoing call is a test.
 11. Verify ordinary-to-full-screen and full-screen-to-ordinary transitions, named
     full-screen app activation, and previous-app switching. Confirm Split View and
-    multi-display refusal separately. Reconcile any unknown result before new work.
+    multi-display refusal of a named window and of a desktop switch separately,
+    and that a request that names only an app still works there. Reconcile any
+    unknown result before new work.
 
 Record app/OS/build identities, independently observed target/geometry, result
 classification, and whether the harmless edit landed correctly; retain no screen

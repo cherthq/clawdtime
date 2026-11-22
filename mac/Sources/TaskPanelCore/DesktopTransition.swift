@@ -76,6 +76,48 @@ public enum DesktopArrival {
   }
 }
 
+/// What must hold before the hands try to bring an app forward. A request that
+/// names only an app ("open Chrome") is verified by the app in front, so it runs
+/// with any number of displays. A request that names a window is verified by that
+/// window on the main display, so it needs exactly one display.
+public enum DesktopActivationRule {
+  public static func refusal(windowNamed: Bool, displays: Int) -> HandError? {
+    windowNamed && displays != 1 ? .unsupportedDesktop : nil
+  }
+}
+
+/// Which standard window of an app a title names. A title is compared as an
+/// observation carries it. Two windows with that title are ambiguous: the first
+/// is never taken. A request with no title never comes here, because then the
+/// app chooses its own window and nothing can be ambiguous.
+public enum DesktopWindowChoice {
+  public static func index(titled title: String, among titles: [String?]) -> Result<Int, HandError> {
+    let matches = titles.indices.filter { index in titles[index].map { DesktopArrival.sameTitle($0, title) } == true }
+    guard matches.count <= 1 else { return .failure(.ambiguousTarget) }
+    guard let index = matches.first else { return .failure(.targetNotVisible) }
+    return .success(index)
+  }
+}
+
+/// The wait for an app to come to the front after one open request. A cold start
+/// takes seconds, so the wait is longer than the settling of a window, and it is
+/// read again and again instead of slept through. The app in front counts at any
+/// moment of the wait, also at its end. Only an app that is still not in front
+/// when the wait is over leaves the result unknown.
+public struct DesktopAppWait {
+  public enum Decision: Equatable { case waiting, inFront, expired }
+  public static let limit: TimeInterval = 6
+  private let began: TimeInterval
+  public init(at: TimeInterval) { began = at }
+  /// The wait is over. An app in front that gave no evidence until now gets no more time.
+  public func over(at: TimeInterval) -> Bool { !(at.isFinite && at >= began && at - began < Self.limit) }
+  public func sample(inFront: Bool, at: TimeInterval) -> Decision {
+    guard at.isFinite, at >= began else { return .expired }
+    if inFront { return .inFront }
+    return over(at: at) ? .expired : .waiting
+  }
+}
+
 /// One discovered application; aliases can include its localized and file names.
 public struct DesktopAppCandidate: Sendable {
   public let path: String
@@ -94,6 +136,8 @@ public enum DesktopAppSelection {
 /// Successful empty AX inventory is distinct from an unreadable inventory or a
 /// nonempty inventory whose windows do not match. Only the first can justify a
 /// single app-level reveal for a named-app request without an exact window.
+/// The panel does not use this any more: a request that names only an app is
+/// now verified by the app in front (`DesktopAppWait`), with no window to reveal.
 public enum DesktopAppInventory: Equatable { case empty, nonempty, unavailable }
 public struct DesktopAppReveal {
   public private(set) var claimed = false

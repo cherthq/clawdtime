@@ -16,6 +16,51 @@ export const desktopBlockedText = {
     "The intended window could not be identified before activation. Open the target window yourself and ask again; nothing was activated.",
 } as const;
 
+/** What the hands answer for open_app when the request did not end there. */
+const activationOver = new Set([
+  "transition_unknown",
+  "input_unknown",
+  "no_accessibility",
+  "no_screen_recording",
+  "stopped_by_person",
+]);
+/** Why the hands opened nothing, when the reason is about the app or the window. */
+const activationRefusedText: Record<string, string> = {
+  not_found:
+    "No app with that name was found on this Mac. Nothing was opened. Use the name that the app has in Finder or its bundle identifier, or tell the person that it is not there.",
+  ambiguous_target:
+    "More than one app has that name, or more than one window has that title. Nothing was activated. Use the bundle identifier, or leave the window title out to let the app choose its window.",
+  unsupported_desktop:
+    "A window can be chosen by its title only on one display, as an ordinary or a verified full-screen window. Nothing was activated. Leave the window title out to bring the app forward.",
+  target_not_visible:
+    "No window of that app has that title now. Nothing was activated. Leave the window title out to bring the app forward, or tell the person.",
+  desktop_disabled:
+    "Bringing an app forward is turned off in the panel (CLAWDTIME_DESKTOP_SWITCHING=off). Nothing was activated. Tell the person.",
+  stale_observation: "The screen changed on the way. Nothing was activated.",
+};
+/**
+ * The hands refused open_app before anything was sent: the reason, in words
+ * for the planner. Null for every other result.
+ *
+ * The hands say `transition_unknown` for everything that fails after the
+ * request went out, so any other error means that nothing was sent. Such a
+ * refusal is not the end of the request. A person who says "open Chrome"
+ * names an app as people do, and the planner can try the name that this Mac
+ * knows or say why it cannot be done.
+ */
+export function activationRefusal(
+  command: HandCommand,
+  result: HandResult | null,
+): string | null {
+  if (command.kind !== "open_app" || !result || result.ok) return null;
+  const error = result.error ?? "failed";
+  if (activationOver.has(error)) return null;
+  return (
+    activationRefusedText[error] ??
+    `The panel did not open it (${error}). Nothing was sent.`
+  );
+}
+
 export const transitionUnknownText =
   "An app or desktop transition was attempted, but arrival was not independently verified. It may have switched; a boundary, disabled shortcut, or delayed animation can also prevent verification. I stopped without retrying or sending further input. Check the screen and Mission Control settings, then run: clawdtime computer clear";
 

@@ -48,6 +48,7 @@ import type {
 } from "./journal.js";
 import { HandsTimeout } from "./panel-hands.js";
 import {
+  activationRefusal,
   desktopBlockedText,
   verifiedDesktopSwitch,
   inputUnknownText,
@@ -652,27 +653,21 @@ export class ComputerWorker implements DesktopExecutorPort {
         "transition_unknown",
         transitionUnknownText,
       );
+    } else if (activationRefusal(command, result)) {
+      // Nothing was sent, so the request goes on: the caller hands the
+      // reason to the planner, as it does for an action that a check refused.
     } else if (
       !result.ok &&
       result.error &&
       result.error in desktopBlockedText
     ) {
+      // A desktop switch is the person's own one-step request. The planner
+      // cannot send it, so a refusal ends the request with its reason.
       this.finish(
         run,
         "blocked",
         result.error,
         desktopBlockedText[result.error as keyof typeof desktopBlockedText],
-      );
-    } else if (
-      !result.ok &&
-      result.error === "not_found" &&
-      command.kind === "open_app"
-    ) {
-      this.finish(
-        run,
-        "blocked",
-        "not_found",
-        "The requested app or exact window was not found. Nothing was activated.",
       );
     } else if (
       !result.ok &&
@@ -737,8 +732,13 @@ export class ComputerWorker implements DesktopExecutorPort {
             "navigation_ambiguous",
             run.navigation.question,
           );
-        if (run.navigation.kind !== "none")
-          return await this.navigate(run, run.navigation);
+        // Only an app that the hands refused to open comes back from here
+        // to the planner. Every other end of a navigation request is final.
+        if (
+          run.navigation.kind !== "none" &&
+          (await this.navigate(run, run.navigation)) !== "plan"
+        )
+          return;
       }
       for (;;) {
         if (this.halted(run)) return;
@@ -821,11 +821,13 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
 
   /** A user-authored direction is a one-shot operation outside the planner loop.
-   * Neither a model, a continuation, nor a failed verification can repeat it. */
+   * Neither a model, a continuation, nor a failed verification can repeat it.
+   * "plan": the hands refused to open the named app before anything was
+   * sent, and the planner goes on with that reason. */
   private async navigate(
     run: Run,
     intent: Exclude<NavigationIntent, { kind: "none" | "clarify" }>,
-  ) {
+  ): Promise<"plan" | void> {
     const looked = await this.hand(
       run,
       { kind: "observe", image: true, elements: true },
@@ -882,6 +884,22 @@ export class ComputerWorker implements DesktopExecutorPort {
           : `Bring ${intent.name} forward`,
     );
     if (handed.over) return;
+    const refusal = activationRefusal(command, handed.result);
+    if (refusal && command.kind === "open_app") {
+      // "Open Chrome" names an app as people do, and the hands know it by
+      // another name. The planner sees the reason and the screen: it can use
+      // the name that this Mac knows, or tell the person why it cannot.
+      this.note(
+        run,
+        command,
+        "The person asked for this app.",
+        clean(command.name, 80),
+        `refused: ${refusal}`,
+        handed.result?.error ?? "failed",
+      );
+      run.refusals = 1;
+      return "plan";
+    }
     if (!handed.result?.ok)
       return this.finish(
         run,
@@ -947,6 +965,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         this.finish(run, "blocked", "too_many_refusals", refusalsText);
       return;
     }
+    // The hands can still refuse to open an app. That refusal joins the row.
+    const refused = run.refusals;
     run.refusals = 0;
     switch (checked.verdict) {
       case "done":
@@ -1013,7 +1033,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     if (checked.send.via === "browser")
       return this.viaBrowser(run, action, why, checked);
-    return this.viaHands(run, action, why, checked, before);
+    return this.viaHands(run, action, why, checked, before, refused);
   }
 
   /** Text for a secure field: the person types it, and the worker goes on after their yes. */
@@ -1065,6 +1085,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     why: string,
     first: Ready,
     before: Observation | null,
+    /** The refusals in a row before this action. */
+    refused: number,
   ) {
     let ready = first;
     if (first.send.via !== "hands") return;
@@ -1150,9 +1172,35 @@ export class ComputerWorker implements DesktopExecutorPort {
         );
       if (focusedSecure(seen)) return this.personTypes(run, action, why, ready);
     }
+    const streak = run.streak;
     this.count(run, ready.signature);
     const handed = await this.hand(run, send.command, ready.label);
     if (!handed.sent) return;
+    const refusal = handed.over
+      ? null
+      : activationRefusal(send.command, handed.result);
+    if (refusal) {
+      // The hands opened nothing. The planner reads why and chooses again,
+      // as after a refusal of the checks: it counts in the same row of three,
+      // and it is not a repeat of an action that went out.
+      run.streak = streak;
+      this.note(
+        run,
+        action,
+        why,
+        ready.target,
+        `refused: ${refusal}`,
+        handed.result?.error ?? "failed",
+      );
+      if ((run.refusals = refused + 1) >= 3)
+        this.finish(
+          run,
+          "blocked",
+          "too_many_refusals",
+          `${refusalsText} The last reason: ${refusal}`,
+        );
+      return;
+    }
     this.note(run, action, why, ready.target, ...outcome(handed));
   }
 

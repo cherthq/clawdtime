@@ -598,7 +598,7 @@ import TaskPanelCore
     let alert = NSAlert()
     alert.messageText = "App and desktop switching"
     alert.informativeText = "Accessibility and Screen Recording are granted.\n\n" + shortcuts + "\n\n" + appSpaces +
-      " Check Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application.\n\nPrevious app uses Command–Tab once. Named apps use their exact application/window identity. One display is supported; full-screen windows need verifiable window evidence. Split View and multiple displays remain unsupported."
+      " Check Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application.\n\nPrevious app uses Command–Tab once. A named app comes forward with the window that it chooses, on any number of displays. A named window and a desktop switch need one display; full-screen windows need verifiable window evidence, and Split View remains unsupported for them."
     alert.addButton(withTitle: "Done")
     alert.addButton(withTitle: "Open System Settings")
     if alert.runModal() == .alertSecondButtonReturn,

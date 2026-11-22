@@ -347,7 +347,8 @@ engine, with the switch off, with no key, and for one that a test started.
 ## Limits
 
 The native worker supports [desktop navigation and verified activation](DESKTOP_SPACES.md).
-`open_app` selects an exact window; separate complete requests such as “Move one
+`open_app` brings a named app forward, or one window by its title; separate
+complete requests such as “Move one
 desktop right” dispatch one `switch_desktop` action outside the planner loop.
 Directional navigation requires explicit enabled Mission Control shortcut mappings.
 Both paths settle and retire old coordinates; unverified transitions never retry.

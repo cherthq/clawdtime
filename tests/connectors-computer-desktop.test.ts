@@ -148,24 +148,163 @@ describe("verified desktop activation", () => {
     "unsupported_desktop",
     "target_not_visible",
     "not_found",
+    "stale_observation",
+    "refused",
   ] as const)(
-    "stops on %s before another plan or input can run",
+    "hands %s back to the planner as a refused action, and nothing locks",
     async (error) => {
-      const f = setup([
-        activate,
-        activate,
-        { kind: "type", text: "should never type" },
-      ]);
+      const f = setup([activate, done]);
       f.hands.answer = (c) =>
         c.kind === "open_app" ? { ok: false, error } : undefined;
-      await f.worker.submit("blocked", "Show the disposable target");
+      await f.worker.submit("refused", "Show the disposable target");
       await f.worker.idle();
-      expect(f.worker.status().state).toBe("blocked");
-      expect(f.journal.get("blocked")?.reason).toBe(error);
+      // Nothing was sent, so the request went on: the planner read why and chose again.
       expect(f.hands.sent).toEqual([activate]);
-      expect(f.planner.inputs).toHaveLength(1);
+      expect(f.planner.inputs).toHaveLength(2);
+      expect(f.planner.inputs[1]?.history[0]?.outcome).toMatch(
+        /^refused: .*Nothing was (?:opened|activated|sent)\./,
+      );
+      expect(f.planner.inputs[1]?.observation).toEqual(target);
+      expect(f.journal.get("refused")?.steps[0]?.outcome).toBe(error);
+      expect(f.worker.status().state).toBe("completed");
+      expect(f.journal.unresolved()).toBeNull();
+      expect((await f.worker.submit("next", "Another task")).message).toMatch(
+        /^Started/,
+      );
     },
   );
+
+  it("tells the planner that no app has the name, so that it can use the name this Mac knows", async () => {
+    const chrome = observation([], {
+      surfaceEpoch: 5,
+      app: {
+        name: "Google Chrome",
+        bundleId: "com.google.Chrome",
+        window: "New Tab",
+      },
+    });
+    const f = setup(
+      [
+        { kind: "open_app", name: "Chrome" },
+        { kind: "open_app", name: "Google Chrome" },
+        done,
+      ],
+      [target, target, chrome],
+    );
+    f.hands.answer = (c) =>
+      c.kind !== "open_app"
+        ? undefined
+        : c.name === "Chrome"
+          ? { ok: false, error: "not_found" }
+          : { observation: chrome, resolvedBundleId: "com.google.Chrome" };
+    await f.worker.submit("chrome", "Open Chrome and show me the new tab");
+    await f.worker.idle();
+    expect(f.hands.sent).toEqual([
+      { kind: "open_app", name: "Chrome" },
+      { kind: "open_app", name: "Google Chrome" },
+    ]);
+    expect(f.planner.inputs[1]?.history[0]?.outcome).toMatch(
+      /^refused: No app with that name was found on this Mac\./,
+    );
+    expect(f.planner.inputs[2]?.history[1]?.outcome).toBe("ok");
+    expect(f.worker.status().state).toBe("completed");
+    expect(f.journal.unresolved()).toBeNull();
+  });
+
+  it("ends after three refusals in a row with the reason, asks nothing, and does not lock", async () => {
+    const f = setup([activate, activate, activate, done]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app" ? { ok: false, error: "not_found" } : undefined;
+    await f.worker.submit("absent", "Show the disposable target");
+    await f.worker.idle();
+    // The same refused action is no repeat of an action that went out: no
+    // "I already did this twice" question stands in the way of the end.
+    expect(f.hands.sent).toEqual([activate, activate, activate]);
+    expect(f.worker.status()).toMatchObject({
+      state: "blocked",
+      question: null,
+    });
+    expect(f.worker.status().message).toMatch(
+      /3 actions in a row .* The last reason: No app with that name was found on this Mac\./,
+    );
+    expect(f.journal.get("absent")?.reason).toBe("too_many_refusals");
+    expect(f.journal.unresolved()).toBeNull();
+    expect((await f.worker.submit("next", "Another task")).message).toMatch(
+      /^Started/,
+    );
+  });
+
+  it("counts a refusal of the hands and a refusal of the checks in one row", async () => {
+    const f = setup([
+      activate,
+      { kind: "open_app", name: "../Fixture" },
+      activate,
+      done,
+    ]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? { ok: false, error: "ambiguous_target" }
+        : undefined;
+    await f.worker.submit("row", "Show the disposable target");
+    await f.worker.idle();
+    expect(f.hands.sent).toEqual([activate, activate]);
+    expect(f.worker.status().state).toBe("blocked");
+    expect(f.journal.get("row")?.reason).toBe("too_many_refusals");
+    expect(f.planner.inputs).toHaveLength(3);
+  });
+
+  it("starts the row again after an action that ran", async () => {
+    const f = setup([
+      activate,
+      activate,
+      { kind: "wait", ms: 0 },
+      activate,
+      activate,
+      done,
+    ]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app" ? { ok: false, error: "not_found" } : undefined;
+    await f.worker.submit("reset", "Show the disposable target");
+    await f.worker.idle();
+    expect(f.hands.sent).toHaveLength(4);
+    expect(f.worker.status().state).toBe("completed");
+  });
+
+  it.each([
+    ["no_accessibility", /Accessibility, and turn on the ClawdTime panel/],
+    [
+      "no_screen_recording",
+      /Screen & System Audio Recording, and turn on the ClawdTime panel/,
+    ],
+  ] as const)(
+    "still ends on %s with the sentence that names the missing right",
+    async (error, sentence) => {
+      const f = setup([activate, activate, done]);
+      f.hands.answer = (c) =>
+        c.kind === "open_app" ? { ok: false, error } : undefined;
+      await f.worker.submit("right", "Show the disposable target");
+      await f.worker.idle();
+      expect(f.worker.status().state).toBe("blocked");
+      expect(f.worker.status().message).toMatch(sentence);
+      expect(f.journal.get("right")?.reason).toBe(error);
+      expect(f.hands.sent).toEqual([activate]);
+      expect(f.planner.inputs).toHaveLength(1);
+      expect(f.journal.unresolved()).toBeNull();
+    },
+  );
+
+  it("still ends when the person stops it at the hands, and sends nothing more", async () => {
+    const f = setup([activate, activate, done]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? { ok: false, error: "stopped_by_person" }
+        : undefined;
+    await f.worker.submit("stopped", "Show the disposable target");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("canceled");
+    expect(f.hands.sent).toEqual([activate]);
+    expect(f.planner.inputs).toHaveLength(1);
+  });
 
   it.each([
     { ok: false, error: "transition_unknown" },

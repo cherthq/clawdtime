@@ -163,6 +163,138 @@ describe("explicit directional navigation", () => {
       expect(f.journal.unresolved()).toBeNull();
     },
   );
+  it("goes on with the planner when the hands know no app by the name that was said", async () => {
+    // "Open Chrome": the app's file, its name in Finder and its running name
+    // are all "Google Chrome". The hands open nothing and say so.
+    const chrome = {
+      ...after,
+      app: {
+        name: "Google Chrome",
+        bundleId: "com.google.Chrome",
+        window: "New Tab",
+      },
+    };
+    const f = setup({ kind: "app", name: "Chrome" });
+    f.planner = Object.assign(
+      new ScriptedPlanner([
+        { kind: "open_app", name: "Google Chrome" },
+        { kind: "done", summary: "Chrome is in front." },
+      ]),
+      { navigation: f.planner.navigation },
+    );
+    const worker = new ComputerWorker({
+      hands: f.hands,
+      planner: f.planner,
+      journal: f.journal,
+    });
+    f.hands.answer = (c) =>
+      c.kind !== "open_app"
+        ? undefined
+        : c.name === "Chrome"
+          ? { ok: false, error: "not_found" }
+          : { observation: chrome, resolvedBundleId: "com.google.Chrome" };
+    await worker.submit("one", "Open Chrome");
+    await worker.idle();
+    expect(f.hands.sent).toEqual([
+      { kind: "open_app", name: "Chrome" },
+      { kind: "open_app", name: "Google Chrome" },
+    ]);
+    expect(f.planner.inputs[0]?.history).toEqual([
+      {
+        step: 1,
+        action: { kind: "open_app", name: "Chrome" },
+        why: "The person asked for this app.",
+        outcome: expect.stringMatching(
+          /^refused: No app with that name was found on this Mac\. Nothing was opened\./,
+        ),
+      },
+    ]);
+    expect(worker.status()).toMatchObject({
+      state: "completed",
+      message: "Done. Chrome is in front.",
+    });
+    expect(f.journal.unresolved()).toBeNull();
+  });
+  it("lets the planner tell the person why the app cannot be opened, and does not lock", async () => {
+    const f = setup({ kind: "app", name: "Notesy", window: "Shopping" });
+    f.planner = Object.assign(
+      new ScriptedPlanner([
+        { kind: "give_up", reason: "No app with the name Notesy is here." },
+      ]),
+      { navigation: f.planner.navigation },
+    );
+    const worker = new ComputerWorker({
+      hands: f.hands,
+      planner: f.planner,
+      journal: f.journal,
+    });
+    f.hands.answer = (c) =>
+      c.kind === "open_app" ? { ok: false, error: "not_found" } : undefined;
+    await worker.submit("one", "Go to the Shopping window of Notesy");
+    await worker.idle();
+    expect(f.hands.sent).toEqual([
+      { kind: "open_app", name: "Notesy", window: "Shopping" },
+    ]);
+    expect(worker.status()).toMatchObject({
+      state: "blocked",
+      message: "I could not finish. No app with the name Notesy is here.",
+    });
+    expect(f.journal.unresolved()).toBeNull();
+    expect((await worker.submit("two", "Open Notes")).message).toMatch(
+      /^Started/,
+    );
+  });
+  it("counts the refused app of the person's request in the row of three", async () => {
+    const f = setup({ kind: "app", name: "Notesy" });
+    const again = { kind: "open_app", name: "Notesy" } as const;
+    f.planner = Object.assign(new ScriptedPlanner([again, again, again]), {
+      navigation: f.planner.navigation,
+    });
+    const worker = new ComputerWorker({
+      hands: f.hands,
+      planner: f.planner,
+      journal: f.journal,
+    });
+    f.hands.answer = (c) =>
+      c.kind === "open_app" ? { ok: false, error: "not_found" } : undefined;
+    await worker.submit("one", "Open Notesy");
+    await worker.idle();
+    expect(f.hands.sent).toEqual([again, again, again]);
+    expect(worker.status().state).toBe("blocked");
+    expect(f.journal.get("one")?.reason).toBe("too_many_refusals");
+    expect(f.journal.unresolved()).toBeNull();
+  });
+  it.each(["no_accessibility", "no_screen_recording"] as const)(
+    "ends an app request on %s with the sentence that names the right, and never asks the planner",
+    async (error) => {
+      const f = setup({ kind: "app", name: "Notes" });
+      f.hands.answer = (c) =>
+        c.kind === "open_app" ? { ok: false, error } : undefined;
+      await f.worker.submit("one", "Open Notes");
+      await f.worker.idle();
+      expect(f.worker.status().state).toBe("blocked");
+      expect(f.worker.status().message).toMatch(
+        error === "no_accessibility"
+          ? /Privacy & Security, Accessibility/
+          : /Screen & System Audio Recording/,
+      );
+      expect(f.journal.get("one")?.reason).toBe(error);
+      expect(f.planner.inputs).toHaveLength(0);
+      expect(f.hands.sent).toHaveLength(1);
+    },
+  );
+  it("keeps an app request with an unknown result away from the planner", async () => {
+    const f = setup({ kind: "app", name: "Notes" });
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? { ok: false, error: "transition_unknown" }
+        : undefined;
+    await f.worker.submit("one", "Open Notes");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("uncertain");
+    expect(f.planner.inputs).toHaveLength(0);
+    expect(f.hands.sent).toHaveLength(1);
+  });
   it("rejects a previous-app receipt that still shows the same app", async () => {
     const f = setup({ kind: "previous_app" });
     f.hands.answer = (c) =>
