@@ -1098,6 +1098,23 @@ const changesWhatIsWatched = (text: string) =>
   (asksToBeTold(text) && (!isQuestion(text) || asksYouTo(text))) ||
   stopsWatching(text);
 
+/**
+ * Added to the instructions only where no record of watched sessions
+ * exists (a brain that the desktop service did not build): the watch tool
+ * is not offered there, and nothing told the model that it cannot say
+ * something later about a session. It then offered it ("Want me to tell
+ * you when it's done?"), promised it, or called the tools that start work
+ * to get it done. The text speaks of this brain only and of sessions only,
+ * as the fact of `watchedNow` does. `noLaterWork` keeps work apart, where
+ * a job can start: "run the tests and tell me when they're done" is work,
+ * and it starts as work. The examples in the text do not begin with
+ * "tell": words for a session begin so ("tell deploy fix to ..."), and
+ * with "tell me when it's done" as the example the model asked for a job
+ * for such words more often.
+ */
+const noLaterBrief = `From here nothing is said by itself about a session: you cannot watch a session, and nothing comes from here about one until the person asks. When the person asks to hear later about a session ("let me know when it's done", "keep an eye on it", "give me a heads up"), say plainly that you cannot do that from here and that they can ask at any time how it stands. Do not offer it, do not promise it, and do not start a job or a task only to watch.`;
+const noLaterWork = `Work that the person asks for starts as always, also when "let me know when it's done" follows it.`;
+
 /** Added to the instructions only where an application can open. */
 const appBrief = `To open an application or a web address on this Mac, call open_app. It opens at once. Do not answer that you cannot open an application.`;
 
@@ -8869,6 +8886,9 @@ export class Supervisor {
       ...(this.world.openApp ? [appBrief] : []),
       ...(this.world.browse || this.world.look ? [screenBrief] : []),
       ...(this.world.callView ? [viewBrief] : []),
+      ...(this.world.laterNews
+        ? []
+        : [this.world.jobs ? `${noLaterBrief} ${noLaterWork}` : noLaterBrief]),
     ].join("\n");
     const brief = known
       ? `${base}\nWhat you know about this person, from memory (a line marked inferred is a guess):\n${known}`
