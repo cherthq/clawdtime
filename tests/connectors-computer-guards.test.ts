@@ -577,6 +577,21 @@ describe("the browser", () => {
       check({ kind: "browser_type", index: 2, text: "hunter2" }, at, ""),
     ).toMatchObject({ verdict: "person_types", target: "Password" });
   });
+  it("refuses a disabled password field, and does not ask the person to type in it", () => {
+    const locked = view(observation(), {
+      page: page([
+        pageElement(0, {
+          label: "Password",
+          tag: "input",
+          password: true,
+          disabled: true,
+        }),
+      ]),
+    });
+    expect(
+      refused({ kind: "browser_type", index: 0, text: "hunter2" }, locked),
+    ).toMatch(/disabled/);
+  });
   it("asks before it submits a form, but not a search", () => {
     expect(
       run({ kind: "browser_type", index: 4, text: "hi", submit: true }, at)
