@@ -1,7 +1,23 @@
-import { describe, it, expect, vi } from "vitest";
-import { LineRuntime } from "../src/control/line-runtime.js";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { TaskLedger } from "../src/attention/task-ledger.js";
+import {
+  LineRuntime,
+  assertSeparateLineToken,
+  sharedLineTokenText,
+} from "../src/control/line-runtime.js";
 import { createTaskApp } from "../src/control/task-app.js";
-import type { TaskService } from "../src/control/task-service.js";
+import { desktopConfigurationFingerprint } from "../src/control/task-desktop-config.js";
+import { TaskService } from "../src/control/task-service.js";
 import { Store } from "../src/storage/store.js";
 import { Vault } from "../src/storage/security.js";
 import type { DesktopExecutionSnapshot } from "../src/control/desktop-executor.js";
@@ -322,4 +338,183 @@ describe("phone computer runtime", () => {
     expect(broken.status).toBe(400);
     f.store.close();
   });
+});
+
+describe("the token of the phone runtime", () => {
+  const line = "l".repeat(40);
+  it("is refused when it is the same as another credential of the service", () => {
+    for (const others of [
+      [line],
+      ["o".repeat(40), line],
+      ["o".repeat(40), "p".repeat(40), line],
+      [undefined, line, undefined],
+    ])
+      expect(() => assertSeparateLineToken(line, others)).toThrow(
+        sharedLineTokenText,
+      );
+  });
+  it("is accepted when it differs from each of them, also by one character or by its length", () => {
+    for (const others of [
+      [],
+      [undefined, undefined],
+      ["o".repeat(40), "p".repeat(40), "s".repeat(40)],
+      [`${line}l`, line.slice(1), `${line.slice(0, 39)}L`],
+    ])
+      expect(() => assertSeparateLineToken(line, others)).not.toThrow();
+  });
+});
+
+/**
+ * The start of the real service script, with files that a test wrote in a new
+ * private state folder. Every start here ends in a refusal before the service
+ * listens, before the agent board starts and before any runtime takes a
+ * request: nothing here reaches a screen, a helper or a driver.
+ */
+describe("the service and the files of the phone runtime", () => {
+  const made: string[] = [];
+  afterEach(() =>
+    made
+      .splice(0)
+      .forEach((path) => rmSync(path, { recursive: true, force: true })),
+  );
+  const port = 39217;
+  const key = "5".repeat(64);
+  const operator = "operator-credential-".repeat(3);
+  const panel = "panel-credential-".repeat(3);
+  const lineToken = "line-credential-".repeat(3);
+  /** A state folder and a project, with the operator credential that the test chose. */
+  function folders(operatorToken = operator) {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), "clawdtime-line-service-")),
+    );
+    made.push(root);
+    const project = join(root, "project"),
+      state = join(root, "state");
+    mkdirSync(project, { mode: 0o700 });
+    mkdirSync(state, { mode: 0o700 });
+    const secret = (name: string, value: unknown) =>
+      writeFileSync(join(state, name), JSON.stringify(value), { mode: 0o600 });
+    secret("local-config.json", { key, operatorToken, projectRoot: project });
+    const registrationId = "desktop_fixture_registration";
+    /** The panel credential that the service will use, fixed before it starts. */
+    const bindPanel = () =>
+      secret("desktop-binding.json", {
+        version: 1,
+        desktopId: "desktop_fixture",
+        configurationFingerprint: desktopConfigurationFingerprint({
+          projectRoot: project,
+          worker: "simulation",
+          checksFingerprint: null,
+          port,
+        }),
+        uiToken: panel,
+        registrationId,
+      });
+    /**
+     * The session credential that the service will use. The registration is
+     * made here with the service's own classes and its receipt is kept in the
+     * state folder, so the service finds the same one when it starts.
+     */
+    const registerSession = () => {
+      bindPanel();
+      const store = new Store(join(state, "tasks.sqlite"));
+      try {
+        store.put("pairing", {
+          id: "local-demo-pairing",
+          memberId: "local-demo-member",
+          deviceId: "local-demo-device",
+          recipient: "fixture",
+          conversationId: "fixture",
+          lineId: "fixture",
+          displayId: "none",
+          allowView: false,
+          allowControl: false,
+          createdAt: Date.now(),
+        });
+        const vault = new Vault(key);
+        const service = new TaskService(
+          store,
+          vault,
+          new TaskLedger(store, vault),
+          { projectRoots: [project], simulation: true },
+        );
+        return service.register({
+          eventId: registrationId,
+          pairingId: "local-demo-pairing",
+          hostId: "local-desktop",
+          projectRoot: project,
+          voice: false,
+        }).token;
+      } finally {
+        store.close();
+      }
+    };
+    const start = (
+      extra: string[] = [],
+      env: Record<string, string | undefined> = process.env,
+    ) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          resolve("scripts/task-server.ts"),
+          "--state",
+          state,
+          "--project",
+          project,
+          "--port",
+          String(port),
+          ...extra,
+        ],
+        { encoding: "utf8", timeout: 30_000, env },
+      );
+    return { state, project, secret, bindPanel, registerSession, start };
+  }
+  const desktop = ["--desktop", "true", "--agents", "false"];
+  const needsRuntime =
+    "Phone computer control requires the app-owned native runtime.";
+
+  it(
+    "does not start when the token of the phone runtime is the operator, panel or session token",
+    { timeout: 120_000 },
+    () => {
+      // The operator token.
+      const first = folders();
+      first.secret("line-runtime.json", { version: 1, token: operator });
+      const sameAsOperator = first.start(desktop);
+      expect(sameAsOperator.status).toBe(1);
+      expect(sameAsOperator.stderr).toContain(sharedLineTokenText);
+      // The panel token.
+      const second = folders();
+      second.bindPanel();
+      second.secret("line-runtime.json", { version: 1, token: panel });
+      const sameAsPanel = second.start(desktop);
+      expect(sameAsPanel.status).toBe(1);
+      expect(sameAsPanel.stderr).toContain(sharedLineTokenText);
+      // The session token.
+      const third = folders();
+      const session = third.registerSession();
+      expect(session.length).toBeGreaterThanOrEqual(32);
+      third.secret("line-runtime.json", { version: 1, token: session });
+      const sameAsSession = third.start(desktop);
+      expect(sameAsSession.status).toBe(1);
+      expect(sameAsSession.stderr).toContain(sharedLineTokenText);
+      // No refusal prints a credential.
+      for (const result of [sameAsOperator, sameAsPanel, sameAsSession])
+        for (const credential of [operator, panel, session]) {
+          expect(result.stderr).not.toContain(credential);
+          expect(result.stdout).not.toContain(credential);
+        }
+      // A token of its own passes this check. The start then ends at the
+      // next one: this fixture has no runtime for the phone.
+      const fourth = folders();
+      fourth.registerSession();
+      fourth.secret("line-runtime.json", { version: 1, token: lineToken });
+      const separate = fourth.start(desktop);
+      expect(separate.status).toBe(1);
+      expect(separate.stderr).toContain(needsRuntime);
+      expect(separate.stderr).not.toContain(sharedLineTokenText);
+    },
+  );
 });

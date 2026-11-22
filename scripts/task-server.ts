@@ -43,6 +43,7 @@ import { QualifiedBackgroundWorker } from "../src/control/background-worker.js";
 import { backgroundConfigSchema } from "../src/control/background-config.js";
 import {
   LineRuntime,
+  assertSeparateLineToken,
   lineRuntimeConfigSchema,
 } from "../src/control/line-runtime.js";
 import { BundledCuaNative } from "../src/control/bundled-cua-native.js";
@@ -448,6 +449,13 @@ const lineRuntimeConfig = existsSync(lineRuntimePath)
       JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
     )
   : undefined;
+// A phone process never holds the operator, panel or session credential.
+if (lineRuntimeConfig)
+  assertSeparateLineToken(lineRuntimeConfig.token, [
+    config.operatorToken,
+    desktopSetup?.config.token,
+    desktopSetup?.config.sessionToken,
+  ]);
 if (
   lineRuntimeConfig &&
   !background &&

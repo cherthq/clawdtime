@@ -37,6 +37,23 @@ export const lineCommandSchema = z.discriminatedUnion("action", [
     })
     .strict(),
 ]);
+export const sharedLineTokenText =
+  "The phone runtime needs a credential of its own. The token in line-runtime.json is the same as the operator, panel or session token: write a new one.";
+/**
+ * The token of the phone runtime is never one of the other credentials of the
+ * service: a phone process must not hold the operator, panel or session
+ * capability. Every credential is compared, each in constant time, so the
+ * check does not tell which one was the same.
+ */
+export function assertSeparateLineToken(
+  lineToken: string,
+  others: readonly (string | undefined)[],
+) {
+  let shared = false;
+  for (const other of others)
+    if (other !== undefined && equal(lineToken, other)) shared = true;
+  if (shared) throw Error(sharedLineTokenText);
+}
 interface Call {
   id: string;
   state: "open" | "closed";
