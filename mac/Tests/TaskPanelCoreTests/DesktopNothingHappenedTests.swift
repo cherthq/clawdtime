@@ -72,6 +72,67 @@ final class DesktopNothingHappenedTests: XCTestCase {
     XCTAssertFalse(empty.notMoved)
   }
 
+  // MARK: a desktop switch that arrives where no window is
+
+  /// Looks every 0.15 seconds, as the hands do. The Space changes at 0.3 seconds.
+  private func looks(_ settling: inout DesktopSwitchSettlement<String>, until: Double, surface: (Double) -> String? = { at in at < 0.3 ? "A" : nil },
+                     empty: (Double) -> Bool = { $0 >= 0.3 }, spaceChanges: (Double) -> Int = { $0 >= 0.3 ? 1 : 0 }, epoch: (Double) -> Int = { $0 >= 0.3 ? 2 : 1 }) {
+    var at = 0.0
+    while at <= until + 0.001 {
+      XCTAssertEqual(settling.sample(surface(at), empty: empty(at), spaceChanges: spaceChanges(at), epoch: epoch(at), at: at), .waiting)
+      at += 0.15
+    }
+  }
+
+  func testOneSpaceChangeAndNoWindowForOneSecondIsAnArrivalOnAnEmptyDesktop() {
+    var settling = DesktopSwitchSettlement(origin: "A", at: 0)
+    // Empty since 0.3. Four looks are there at 0.75, and one second is over at 1.3.
+    looks(&settling, until: 1.2)
+    XCTAssertFalse(settling.arrivedEmpty)
+    var arrived = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&arrived, until: 1.35)
+    XCTAssertTrue(arrived.arrivedEmpty)
+    // It is an arrival, and never "not moved".
+    XCTAssertFalse(arrived.notMoved)
+  }
+
+  func testAnEmptyArrivalNeedsTheWindowServerOneSpaceChangeAndNoWindowInBetween() {
+    // Nothing was read, but the window server lists a window: a slow desktop, not an empty one.
+    var slow = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&slow, until: 3, empty: { _ in false })
+    XCTAssertFalse(slow.arrivedEmpty)
+    // No Space change: the window of before went away, the desktop did not move.
+    var same = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&same, until: 3, spaceChanges: { _ in 0 })
+    XCTAssertFalse(same.arrivedEmpty)
+    // Two Space changes: where it ended is not known.
+    var twice = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&twice, until: 3, spaceChanges: { $0 >= 0.3 ? 2 : 0 })
+    XCTAssertFalse(twice.arrivedEmpty)
+    // A window shows for one look: the count starts again, and one second after it the arrival holds.
+    var blink = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&blink, until: 1.5, surface: { at in at < 0.3 ? "A" : abs(at - 0.9) < 0.01 ? "B" : nil }, empty: { at in at >= 0.3 && abs(at - 0.9) >= 0.01 })
+    XCTAssertFalse(blink.arrivedEmpty)
+    var after = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&after, until: 2.1, surface: { at in at < 0.3 ? "A" : abs(at - 0.9) < 0.01 ? "B" : nil }, empty: { at in at >= 0.3 && abs(at - 0.9) >= 0.01 })
+    XCTAssertTrue(after.arrivedEmpty)
+    // A new epoch starts the count again.
+    var epoch = DesktopSwitchSettlement(origin: "A", at: 0)
+    looks(&epoch, until: 1.5, epoch: { at in at >= 1.05 ? 3 : at >= 0.3 ? 2 : 1 })
+    XCTAssertFalse(epoch.arrivedEmpty)
+    // A move back to a named desktop names a window: an empty desktop is never its arrival.
+    var named = DesktopSwitchSettlement(origin: "A", expected: "B", at: 0)
+    looks(&named, until: 3)
+    XCTAssertFalse(named.arrivedEmpty)
+  }
+
+  func testTheRuleForADesktopWithNoWindow() {
+    XCTAssertFalse(DesktopEmptyArrival.settled(looks: 3, since: 0, at: 2))
+    XCTAssertFalse(DesktopEmptyArrival.settled(looks: 9, since: 0.2, at: 1.1))
+    XCTAssertFalse(DesktopEmptyArrival.settled(looks: 9, since: nil, at: 5))
+    XCTAssertTrue(DesktopEmptyArrival.settled(looks: 4, since: 0.2, at: 1.2))
+  }
+
   func testNotMovedNeedsThreeLooksAndIsNeverSaidOfAnArrival() {
     var few = DesktopSwitchSettlement(origin: "A", at: 0)
     XCTAssertEqual(few.sample("A", spaceChanges: 0, epoch: 1, at: 0), .waiting)
