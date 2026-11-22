@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -474,6 +476,7 @@ describe("the service and the files of the phone runtime", () => {
   const desktop = ["--desktop", "true", "--agents", "false"];
   const needsRuntime =
     "Phone computer control requires the app-owned native runtime.";
+  const ownerOnly = "Owner-only desktop configuration required.";
 
   it(
     "does not start when the token of the phone runtime is the operator, panel or session token",
@@ -515,6 +518,61 @@ describe("the service and the files of the phone runtime", () => {
       expect(separate.status).toBe(1);
       expect(separate.stderr).toContain(needsRuntime);
       expect(separate.stderr).not.toContain(sharedLineTokenText);
+    },
+  );
+
+  it(
+    "reads the file of the phone runtime only as a private regular file, never through a link",
+    { timeout: 120_000 },
+    () => {
+      // Readable by others: refused.
+      const open = folders();
+      open.secret("line-runtime.json", { version: 1, token: lineToken });
+      chmodSync(join(open.state, "line-runtime.json"), 0o644);
+      const readable = open.start(desktop);
+      expect(readable.status).toBe(1);
+      expect(readable.stderr).toContain(ownerOnly);
+      // A link to a good private file: not followed, and refused.
+      const linked = folders();
+      linked.secret("elsewhere.json", { version: 1, token: lineToken });
+      symlinkSync(
+        join(linked.state, "elsewhere.json"),
+        join(linked.state, "line-runtime.json"),
+      );
+      const link = linked.start(desktop);
+      expect(link.status).toBe(1);
+      expect(link.stderr).toContain("ELOOP");
+      expect(link.stderr).not.toContain(needsRuntime);
+      // A folder in its place: refused.
+      const folder = folders();
+      mkdirSync(join(folder.state, "line-runtime.json"), { mode: 0o700 });
+      const directory = folder.start(desktop);
+      expect(directory.status).toBe(1);
+      expect(directory.stderr).toContain(ownerOnly);
+      // The good file is read: the start gets as far as the check after it.
+      const good = folders();
+      good.secret("line-runtime.json", { version: 1, token: lineToken });
+      const read = good.start(desktop);
+      expect(read.status).toBe(1);
+      expect(read.stderr).toContain(needsRuntime);
+    },
+  );
+
+  it(
+    "does not read the file of the phone runtime in a service that is no desktop service",
+    { timeout: 60_000 },
+    () => {
+      // The operator token is too short for the task app. So this start can
+      // never listen: when nothing else refuses it, the task app does.
+      const f = folders("short");
+      f.secret("line-runtime.json", { version: 1, token: lineToken });
+      // Readable by others: a read of it would be refused.
+      chmodSync(join(f.state, "line-runtime.json"), 0o644);
+      const result = f.start();
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toContain(ownerOnly);
+      expect(result.stderr).not.toContain(needsRuntime);
+      expect(result.stderr).toContain("Protected operator token required.");
     },
   );
 });

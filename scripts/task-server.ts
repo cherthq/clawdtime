@@ -443,12 +443,16 @@ const executor =
         (text) => agentBoard?.appendExecutionResult(text),
       )
     : undefined);
+// The file of the phone runtime is a private desktop file as the three before
+// it: it is read only in a desktop service, and only as a regular file of
+// this user for its owner alone, never through a link.
 const lineRuntimePath = join(directory, "line-runtime.json");
-const lineRuntimeConfig = existsSync(lineRuntimePath)
-  ? lineRuntimeConfigSchema.parse(
-      JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
-    )
-  : undefined;
+const lineRuntimeConfig =
+  desktop && existsSync(lineRuntimePath)
+    ? lineRuntimeConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
+      )
+    : undefined;
 // A phone process never holds the operator, panel or session credential.
 if (lineRuntimeConfig)
   assertSeparateLineToken(lineRuntimeConfig.token, [
