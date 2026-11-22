@@ -164,6 +164,15 @@ export interface ModelClient {
 /** OpenAI chat completions with function tools. */
 /** How long the first request to the model may take, and the one after it. */
 export const modelWaitMs = 15_000;
+/**
+ * The person says that the unknown result of a computer task can be cleared:
+ * "clear the computer task", "I looked, clear it". The whole message is that
+ * one order, so a sentence that only speaks of clearing does not count.
+ */
+export const clearsComputer = (words: string) =>
+  /^(?:please\s+)?(?:i(?:'ve|\s+have)?\s+(?:looked|checked)(?:\s+(?:at\s+)?(?:the\s+|my\s+)?(?:screen|mac))?[,.;]?\s+(?:and\s+)?(?:please\s+)?)?(?:clear|reset)\s+(?:it|that|(?:the\s+)?computer(?:\s+(?:task|state|use))?)[.!]*$/i.test(
+    words.trim(),
+  );
 export const modelSecondWaitMs = 30_000;
 /** How long the one request of a model with a reasoning effort may take. */
 export const modelLongWaitMs = 45_000;
@@ -408,6 +417,11 @@ export interface SupervisorWorld {
    */
   execution?: DesktopExecutorPort & {
     answer?(text: string): Promise<{ message: string }>;
+    /**
+     * Clears a request whose result nobody knows, as `clawdtime computer
+     * clear` does. It starts and repeats nothing.
+     */
+    clear?(): { message: string };
   };
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
@@ -6820,7 +6834,10 @@ export class Supervisor {
       !this.world.execution.snapshot().pendingAction
     ) {
       const generation = this.navigationGeneration;
-      let navigation: NavigationIntent;
+      // With no reading, the message goes on as it did before this reader
+      // existed. A reader that is slow or fails must not answer every message,
+      // a question about the state among them, with a refusal.
+      let navigation: NavigationIntent | undefined;
       let timer: NodeJS.Timeout | undefined;
       let stop!: () => void;
       try {
@@ -6836,11 +6853,9 @@ export class Supervisor {
         ]);
         if (generation !== this.navigationGeneration)
           return "Stopped. The pending navigation interpretation was discarded.";
-        if (result === null)
-          return "Navigation interpretation timed out. Nothing was started.";
-        navigation = navigationIntentSchema.parse(result);
+        if (result !== null) navigation = navigationIntentSchema.parse(result);
       } catch {
-        return "I could not interpret that request reliably. Nothing was started; please ask again.";
+        navigation = undefined;
       } finally {
         clearTimeout(timer);
         this.navigationStops.delete(stop);
@@ -6858,8 +6873,8 @@ export class Supervisor {
         this.world.execution.snapshot().state === "waiting_for_person"
       )
         return "Another request now waits for your answer. Nothing was switched.";
-      if (navigation.kind === "clarify") return navigation.question;
-      if (navigation.kind !== "none") {
+      if (navigation?.kind === "clarify") return navigation.question;
+      if (navigation && navigation.kind !== "none") {
         const execution = this.world.execution;
         const selected = execution.snapshot();
         if (
@@ -6998,6 +7013,17 @@ export class Supervisor {
         )
       )
         return execution.stop().message;
+      // An earlier request has a result that nobody knows, and nothing new
+      // starts until a person looked at the screen. On a call the person is
+      // away from the Mac and sees its screen in the video: these plain words
+      // are that person saying that they looked. Only in that state, and it
+      // starts nothing.
+      if (
+        execution.clear &&
+        execution.snapshot().state === "uncertain" &&
+        clearsComputer(words)
+      )
+        return execution.clear().message;
       if (
         /^(?:(?:what(?:'s| is)|check)\s+)?(?:computer(?: task)?|execution|browser(?: task)?)\s+status[.!?]*$/i.test(
           words,
