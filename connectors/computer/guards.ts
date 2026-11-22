@@ -132,6 +132,10 @@ export const dangerWords = [
   "overwrite",
   "revert",
   "don't save",
+  // What was open is gone, with work that was not saved, or with a program
+  // that still ran in it.
+  "close",
+  "terminate",
   // A name that gives a yes in the person's place: a permission of macOS, a
   // request of an agent, the terms of a site.
   "approve",
@@ -163,6 +167,8 @@ const terminalRisk =
 const quitRisk =
   "This key combination can quit an app, log out or lock the Mac.";
 const removeRisk = "This key combination can remove something.";
+const closeRisk =
+  "This key combination closes a window or a tab, with what is open in it.";
 const sendRisk = "This key usually sends or submits what is typed.";
 const submitRisk = "This submits a form.";
 
@@ -291,6 +297,8 @@ function keyRisk(
     return quitRisk;
   if (modifiers.has("cmd") && (key === "delete" || key === "forwarddelete"))
     return removeRisk;
+  // Close a window or a tab, in any form (with shift: all of them).
+  if (modifiers.has("cmd") && key === "w") return closeRisk;
   if (key === "return" && (modifiers.has("cmd") || modifiers.has("ctrl")))
     return sendRisk;
   if (key === "return" && !modifiers.size && sendsOnReturn(observation.app))

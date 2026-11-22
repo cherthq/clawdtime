@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
 import {
+  asksForScreenWork,
   navigationRules,
   navigationTools,
   parseNavigationCalls,
@@ -163,6 +164,12 @@ export interface ModelClient {
   classifyIntent?(input: IntentInput): Promise<unknown>;
   /** Interpret only the complete current user message, without screen/history data. */
   navigation?(goal: string): Promise<NavigationIntent>;
+  /**
+   * The same reading, with one more fact: `work` is true when the message is
+   * work for the computer engine and no single move ("close the document and
+   * quit the editor"). A client without it gives moves only.
+   */
+  reading?(goal: string): Promise<{ intent: NavigationIntent; work: boolean }>;
   complete(input: {
     system: string;
     messages: ModelMessage[];
@@ -174,6 +181,30 @@ export interface ModelClient {
 /** OpenAI chat completions with function tools. */
 /** How long the first request to the model may take, and the one after it. */
 export const modelWaitMs = 15_000;
+/**
+ * A draft that speaks in the computer engine's voice: the engine's answers
+ * open with "Started." and "Done.", and its first one says "one checked action
+ * at a time". A conversation holds many of them, and a model copies them.
+ */
+export const speaksAsTheEngine = (text: string) =>
+  /^(?:Started\.|Done\.)(?:\s|$)/.test(text.trim()) ||
+  /\bone checked action at a time\b/i.test(text);
+/**
+ * The message speaks of what the supervisor itself manages: agent sessions,
+ * jobs, tasks, requests, and the coding work in them (tests, builds,
+ * branches, pull requests, deploys). Such a message is never handed to the
+ * computer engine as work on the screen, whatever a reader made of it: a
+ * small model took "close the deploy session", "stop the job" and "run the
+ * tests again" for such work. A word here grants nothing. It only keeps the
+ * message on the supervisor's own road.
+ */
+export const speaksOfManagedWork = (words: string) =>
+  /\b(?:agents?|sessions?|jobs?|tasks?|requests?|tests?|builds?|branch(?:es)?|pull\s+requests?|prs?|commits?|deploys?|deployments?|repos?|repositor(?:y|ies)|codebase|worktrees?)\b/i.test(
+    words,
+  );
+/** What is true when such a draft came twice and nothing ran. */
+export const nothingRanOnScreen =
+  "Nothing ran on the screen for that message. Tell me in one plain sentence what to do in which app, and I do it.";
 /**
  * A question that asks for a fact and asks nothing of ClawdTime: it starts
  * with a question word, and "you" is not in it. "How many sessions run?",
@@ -225,13 +256,21 @@ export class OpenAIModel implements ModelClient {
     } = {},
   ) {}
   async navigation(goal: string): Promise<NavigationIntent> {
+    return (await this.reading(goal)).intent;
+  }
+  async reading(
+    goal: string,
+  ): Promise<{ intent: NavigationIntent; work: boolean }> {
     const result = await this.complete({
       system: navigationRules,
       messages: [{ role: "user", content: goal }],
       tools: navigationTools,
       requireTool: true,
     });
-    return parseNavigationCalls(result.toolCalls);
+    return {
+      intent: parseNavigationCalls(result.toolCalls),
+      work: asksForScreenWork(result.toolCalls),
+    };
   }
   async complete(input: {
     system: string;
@@ -6849,7 +6888,15 @@ export class Supervisor {
       contextualUiRequest(spoken) ||
       /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show|refresh|reload|press)\b/i.test(
         spoken,
-      );
+      ) ||
+      // ClawdTime's own worker reads the request itself and checks every
+      // action in code. The list of verbs above is for an engine that takes
+      // any text as it is, and it does not stand in the worker's way: "close
+      // the document", "quit the editor" and "save it" are work on the
+      // screen too. Words for a session are never such work.
+      (!!execution.answer &&
+        execution.snapshot().mode === "native" &&
+        !this.forSession(spoken));
     if (
       !navigation &&
       (!action ||
@@ -7855,7 +7902,10 @@ export class Supervisor {
     if (
       spoken.length <= userMessageLimit &&
       !asksPlainly(words) &&
-      this.model?.navigation &&
+      // A bare yes, no, approve or deny is an answer, never a move: the
+      // reader took "approve it" for "back to the previous app" once.
+      !bareDecision.test(words) &&
+      (this.model?.reading || this.model?.navigation) &&
       this.world.execution?.snapshot().configured &&
       this.world.execution.snapshot().mode === "native" &&
       !stopsSomething &&
@@ -7870,6 +7920,8 @@ export class Supervisor {
       // existed. A reader that is slow or fails must not answer every message,
       // a question about the state among them, with a refusal.
       let navigation: NavigationIntent | undefined;
+      // The message is work for the engine and no single move.
+      let work = false;
       let timer: NodeJS.Timeout | undefined;
       let stop!: () => void;
       try {
@@ -7880,14 +7932,23 @@ export class Supervisor {
           timer.unref();
         });
         const result = await Promise.race([
-          this.model.navigation(spoken),
+          this.model.reading
+            ? this.model.reading(spoken)
+            : this.model.navigation!(spoken).then((intent) => ({
+                intent,
+                work: false,
+              })),
           halted,
         ]);
         if (generation !== this.navigationGeneration)
           return "Stopped. The pending navigation interpretation was discarded.";
-        if (result !== null) navigation = navigationIntentSchema.parse(result);
+        if (result !== null) {
+          navigation = navigationIntentSchema.parse(result.intent);
+          work = result.work === true;
+        }
       } catch {
         navigation = undefined;
+        work = false;
       } finally {
         clearTimeout(timer);
         this.navigationStops.delete(stop);
@@ -7917,6 +7978,21 @@ export class Supervisor {
           return "App and desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
         return this.delegate(turn, spoken, true);
       }
+      // No move, but work on the screen: "close the document and quit the
+      // editor". The worker does it. Nothing else here can: the model that
+      // talks has no tool for it, and it answered such a request with "Done"
+      // in the worker's own voice while nothing ran. Another engine keeps
+      // its own road, below.
+      if (
+        work &&
+        this.world.execution.answer &&
+        this.world.execution.snapshot().mode === "native" &&
+        // Never what the supervisor manages itself, and never words for a
+        // session that runs: those keep their own road, below.
+        !speaksOfManagedWork(words) &&
+        !this.forSession(words)
+      )
+        return this.delegate(turn, spoken, true);
     }
     // "Stop all my sessions": no tool stops or closes a session, so the code
     // says that, where nothing else can own the words: no request and no
@@ -8676,6 +8752,25 @@ export class Supervisor {
             rechecked = true;
             recheck =
               "\nA check of your last draft: it said that you typed or told something, or opened a session, but that did not happen in this turn. The person's last message asked for none of that. Answer it again with what is true. You type only words that the person says themselves: say that they can tell the session in their own words.";
+            continue;
+          }
+          // The draft speaks in the computer engine's own voice ("Started.",
+          // "Done. Closed the document"), and nothing went to the engine in
+          // this turn and no tool acted: the model copied the engine's
+          // answers from the conversation. Nothing ran on the screen. It
+          // answers once more and can hand the message to the engine then;
+          // a second such draft is replaced by what is true.
+          if (
+            this.world.execution?.answer &&
+            this.world.execution.snapshot().configured &&
+            !turn.done.has("execution") &&
+            !acted() &&
+            speaksAsTheEngine(reply.text)
+          ) {
+            if (rechecked) return nothingRanOnScreen;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that work on the screen started or was done, but nothing was handed to the computer engine in this turn and no tool acted. When the person's last message asks for work in an app or a window of this Mac, call delegate_computer_task now. Else say what is true, and claim no work.";
             continue;
           }
           // The person asked for no action, and the answer says that work
