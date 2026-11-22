@@ -28,7 +28,9 @@ export function splitFrames(pending, chunk, size = FRAME_BYTES) {
 /**
  * Starts the capture. The screen, or the one part of it in `view`, is fitted into the box of the `layout` with
  * its shape kept, so text keeps its shape. A new view or layout needs a new capture: stop this one, start one.
- *  - `latest()` gives the newest full frame, or null before the first one and after the stop.
+ *  - `latest()` gives the newest full frame, or null before the first one and after the stop. With
+ *    `maxFrameAgeMs`, a frame older than that is dropped too: a capture that stalls shows no old picture.
+ *    Without it a frame has no age limit, so a still screen stays on the call.
  *  - `started(ms)` resolves true at the first frame, or false when none came in that time or ffmpeg stopped.
  *  - `stop()` ends ffmpeg.
  * @param {object} [options]
@@ -37,17 +39,20 @@ export function splitFrames(pending, chunk, size = FRAME_BYTES) {
  * @param {string} [options.device] the avfoundation screen device
  * @param {string} [options.layout] "upright" or "wide": see layout.mjs
  * @param {{ x: number, y: number, w: number, h: number } | null} [options.view] one part of the screen, in shares
+ * @param {number} [options.maxFrameAgeMs] the oldest frame that `latest()` gives, at most 5000
+ * @param {() => number} [options.now] the clock, for a test
  * @param {number} [options.frameBytes] the size of one frame, for a test
  * @param {typeof spawn} [options.start] starts the program, for a test
  */
 export function startScreen(options = {}) {
   const size = options.frameBytes ?? FRAME_BYTES;
   const now = options.now ?? Date.now;
-  const maxFrameAgeMs = options.maxFrameAgeMs ?? 1500;
+  const maxFrameAgeMs = options.maxFrameAgeMs;
   if (
-    !Number.isFinite(maxFrameAgeMs) ||
-    maxFrameAgeMs <= 0 ||
-    maxFrameAgeMs > 5000
+    maxFrameAgeMs !== undefined &&
+    (!Number.isFinite(maxFrameAgeMs) ||
+      maxFrameAgeMs <= 0 ||
+      maxFrameAgeMs > 5000)
   )
     throw Error("Invalid frame freshness bound.");
   const child = (options.start ?? spawn)(
@@ -114,6 +119,7 @@ export function startScreen(options = {}) {
   child.on("error", () => end(null));
   return {
     latest: () => {
+      if (maxFrameAgeMs === undefined) return frame;
       const at = now();
       if (
         capturedAt === null ||
