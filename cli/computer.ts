@@ -162,7 +162,7 @@ export async function computerCli(
       "in the ClawdTime panel. A task that starts says so when the panel lacks Accessibility or Screen & System Audio Recording in System Settings, Privacy & Security.",
     );
     let browser =
-      "not connected in this build. The worker uses the screen for web pages.";
+      "off. The worker uses the screen for web pages. To read and operate the page itself, start the desktop service with CLAWDTIME_COMPUTER_BROWSER=on.";
     if (dependencies.browser)
       try {
         const answer = await dependencies.browser.doctor();

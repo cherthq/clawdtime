@@ -38,7 +38,12 @@ import {
   pageScript,
   type PageCall,
 } from "./browser-script.js";
-import type { BrowserElement, BrowserPage, BrowserPort } from "./ports.js";
+import {
+  BrowserClosed,
+  type BrowserElement,
+  type BrowserPage,
+  type BrowserPort,
+} from "./ports.js";
 
 export interface CommandOutput {
   /** null when the command could not start or was stopped by the timeout. */
@@ -364,8 +369,26 @@ const answerSchema = z.union([
     .strict(),
 ]);
 
+const refusal = (result: { reason: string; closed?: true }) =>
+  result.closed ? new BrowserClosed(result.reason) : new Error(result.reason);
+
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+/** The name of the switch for this driver, and the one value that turns it on. */
+export const browserSwitch = "CLAWDTIME_COMPUTER_BROWSER";
+
+/**
+ * The driver, when the person turned it on. It runs a script in the pages of
+ * the person's own browser, with their sign-ins, so it is off until the
+ * environment of the desktop service says "on". Any other value is off.
+ */
+export function browserFromEnvironment(
+  env: Record<string, string | undefined>,
+  make: () => BrowserPort = () => new AppleEventsBrowser(),
+): BrowserPort | undefined {
+  return env[browserSwitch] === "on" ? make() : undefined;
+}
 
 export class AppleEventsBrowser implements BrowserPort {
   /** Names this driver to the page, which keeps its numbers apart from those of another driver. */
@@ -409,7 +432,7 @@ export class AppleEventsBrowser implements BrowserPort {
       browser,
       await this.command(["-e", openScript(browser), address]),
     );
-    if ("reason" in result) throw new Error(result.reason);
+    if ("reason" in result) throw refusal(result);
     if (result.text !== "clawdtime:opened")
       throw new Error(unreadable(browser));
     // A new tab holds an empty first document until the address answers.
@@ -503,7 +526,7 @@ export class AppleEventsBrowser implements BrowserPort {
   private outcome(
     browser: SupportedBrowser,
     output: CommandOutput,
-  ): { text: string } | { reason: string } {
+  ): { text: string } | { reason: string; closed?: true } {
     if (output.status === null)
       return { reason: reasonFor("timed_out", browser) };
     // osascript ends what it prints with one line break.
@@ -515,7 +538,14 @@ export class AppleEventsBrowser implements BrowserPort {
         ? Number(marked[1])
         : Number(/\((-?\d+)\)\s*$/.exec(text)?.[1] ?? Number.NaN);
       const trouble = troubleOf(Number.isFinite(number) ? number : null, text);
-      if (trouble) return { reason: reasonFor(trouble, browser) };
+      if (trouble)
+        return {
+          reason: reasonFor(trouble, browser),
+          // Only the person opens these two doors, in settings.
+          ...(trouble === "javascript_off" || trouble === "automation_denied"
+            ? { closed: true as const }
+            : {}),
+        };
       const detail =
         oneLine(marked ? `${text} (${number})` : text, 200) ||
         `osascript ended with status ${output.status}.`;
@@ -540,7 +570,7 @@ export class AppleEventsBrowser implements BrowserPort {
       browser,
       await this.command(["-e", runScript(browser), script]),
     );
-    if ("reason" in result) throw new Error(result.reason);
+    if ("reason" in result) throw refusal(result);
     let answer: z.infer<typeof answerSchema>;
     try {
       answer = answerSchema.parse(JSON.parse(result.text));

@@ -175,6 +175,26 @@ describe("the planner on the chat completions API", () => {
     ]);
   });
 
+  it("offers no browser function for a request in which the browser cannot be used", async () => {
+    const { sent, request } = fakeFetch();
+    const planner = new OpenAIPlanner({ key: "k", request, browser: true });
+    await planner.next(input({ browser: false }));
+    expect(
+      sent[0]!.body.tools.some((tool) =>
+        tool.function.name.startsWith("browser_"),
+      ),
+    ).toBe(false);
+    expect(text(sent[0]!)).not.toContain("browser_read");
+    expect(sent[0]!.body.messages[0]!.content as string).not.toContain(
+      "browser_read",
+    );
+    // The next request is offered the browser again.
+    await planner.next(input());
+    expect(
+      sent[1]!.body.tools.some((tool) => tool.function.name === "browser_read"),
+    ).toBe(true);
+  });
+
   it("tells the model to prefer an element number over a point, and the browser over pixels", async () => {
     const { sent, request } = fakeFetch();
     await new OpenAIPlanner({ key: "k", request, browser: true }).next(input());

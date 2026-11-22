@@ -959,7 +959,7 @@ describe("the page script: read", () => {
     expect(page.log).toContain("click@inner");
   });
 
-  it("leaves out what is hidden, without size, inert or disabled", () => {
+  it("leaves out what is hidden, without size or inert, and marks what is disabled", () => {
     const page = new FakePage(
       h("button", {}, "Shown"),
       h("button", {}, "No display").set((element) => {
@@ -993,6 +993,9 @@ describe("the page script: read", () => {
       page.read().elements.map((element) => [element.label, element.disabled]),
     ).toEqual([
       ["Shown", false],
+      ["Disabled", true],
+      ["In a disabled group", true],
+      ["Disabled field", true],
       ["Said to be disabled", true],
       ["Read only", true],
       ["Styled box", false],

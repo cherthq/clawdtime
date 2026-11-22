@@ -135,6 +135,8 @@ function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CLAWDTIME_SEMANTIC_TASKS",
           // The language model that plans each action of computer use.
           "CLAWDTIME_COMPUTER_MODEL",
+          // The browser driver of computer use, when it is "on".
+          "CLAWDTIME_COMPUTER_BROWSER",
           "CLAWDTIME_TRANSCRIBE_MODEL",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",

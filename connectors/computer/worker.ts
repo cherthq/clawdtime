@@ -58,7 +58,7 @@ import {
   transitionUnknownText,
   verifiedActivation,
 } from "./desktop.js";
-import { handErrors } from "./ports.js";
+import { BrowserClosed, handErrors } from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import type {
   Action,
@@ -164,6 +164,8 @@ interface Question {
   settle: (reply: Reply) => void;
 }
 interface Run {
+  /** Why the browser cannot be driven in this request, once it said so. The screen is used from then on. */
+  browserClosed?: string;
   navigation?: NavigationIntent;
   id: string;
   /** The person's words, for the planner. */
@@ -852,6 +854,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               history: run.history.slice(-12),
               observation: run.observation,
               page: run.page,
+              ...(run.browserClosed ? { browser: false } : {}),
             }),
             run.halted,
             new Promise<null>((resolve) => {
@@ -1012,7 +1015,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       observation: before,
       page: run.page,
       fresh: run.fresh,
-      browser: this.browser !== undefined,
+      browser: this.drives(run),
     };
     const parsed = actionSchema.safeParse(raw);
     // The history needs an action even for output that was none.
@@ -1190,7 +1193,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           observation: moved.observation,
           page: null,
           fresh: true,
-          browser: this.browser !== undefined,
+          browser: this.drives(run),
         },
         why,
       );
@@ -1273,6 +1276,27 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.note(run, action, why, ready.target, ...outcome(handed));
   }
 
+  /** True while a browser is connected and has not said that it is closed to this program. */
+  private drives(run: Run) {
+    return this.browser !== undefined && run.browserClosed === undefined;
+  }
+  /**
+   * What the planner reads about a browser step that failed: the reason of
+   * the driver, on one line. Its texts are fixed, or name an element of the
+   * page that the planner already read. A browser that only the person can
+   * open is not offered again in this request.
+   */
+  private browserFailure(run: Run, error: unknown, lead: string) {
+    const reason =
+      error instanceof Error && !(error instanceof BrowserSilent)
+        ? error.message.replace(/\s+/g, " ").trim().slice(0, 300)
+        : "";
+    if (!(error instanceof BrowserClosed))
+      return reason ? `${lead}: ${reason}` : `${lead}: the browser failed`;
+    run.browserClosed = reason;
+    run.page = null;
+    return `${lead}: ${reason} The browser functions are off for this request. Use the screen.`;
+  }
   private call(browser: BrowserPort, call: BrowserCall): Promise<BrowserPage> {
     switch (call.name) {
       case "read":
@@ -1305,14 +1329,18 @@ export class ComputerWorker implements DesktopExecutorPort {
       let now: BrowserPage;
       try {
         now = tidy(await within(browser.read(), this.browserMs));
-      } catch {
+      } catch (error) {
         run.page = null;
         this.note(
           run,
           action,
           why,
           first.target,
-          "not sent: the page could not be read just before the action",
+          this.browserFailure(
+            run,
+            error,
+            "not sent: the page could not be read just before the action",
+          ),
           "changed",
         );
         this.halted(run);
@@ -1380,7 +1408,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         action,
         why,
         first.target,
-        "did not run: the browser failed",
+        this.browserFailure(run, error, "did not run"),
         "failed",
       );
       this.halted(run);

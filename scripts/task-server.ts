@@ -35,6 +35,7 @@ import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { chooseExecution } from "../connectors/computer/service.js";
+import { browserFromEnvironment } from "../connectors/computer/browser.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
@@ -515,6 +516,9 @@ const lineRuntimeWatch = lineRuntime
 // `clawdtime computer on` and a key for the language model is in this
 // environment. A service that a test started never has that worker, so no
 // command for the hands can come out of a test.
+const connectedBrowser = desktop
+  ? browserFromEnvironment(process.env)
+  : undefined;
 const chosen = desktop
   ? chooseExecution({
       root: stateRoot({ env: process.env, home: homedir() }),
@@ -525,9 +529,12 @@ const chosen = desktop
       actors: !!(calls || presentation),
       board: flags.get("--agents") !== "false",
       notify: (text) => agentBoard?.appendExecutionResult(text),
-      // The browser goes in here, as one more line:
-      //   browser: new AppleEventsBrowser(),
+      // The browser driver reads and operates the page of the browser in
+      // front through the browser's own scripting, in place of pixels. It is
+      // a switch, off unless CLAWDTIME_COMPUTER_BROWSER=on: it runs a script
+      // in the person's own signed-in pages, so the person turns it on.
       // Without it the worker refuses the browser actions and uses the screen.
+      ...(connectedBrowser ? { browser: connectedBrowser } : {}),
     })
   : undefined;
 const execution = chosen?.execution;

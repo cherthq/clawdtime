@@ -3,6 +3,8 @@ import type { Runner } from "../connectors/agents/focus.js";
 import {
   AppleEventsBrowser,
   browserErrors,
+  browserFromEnvironment,
+  browserSwitch,
   browserTiming,
   openScript,
   osascript,
@@ -18,7 +20,10 @@ import {
   pageScript,
   type PageCall,
 } from "../connectors/computer/browser-script.js";
-import type { BrowserPort } from "../connectors/computer/ports.js";
+import {
+  BrowserClosed,
+  type BrowserPort,
+} from "../connectors/computer/ports.js";
 
 /**
  * No test here runs osascript or touches a browser. The command runner is
@@ -603,6 +608,45 @@ describe("the browser driver: doctor", () => {
     }
   });
 
+  it("marks the two errors that only the person can clear, and no other", async () => {
+    const failing = (printed: string | null): CommandRunner => {
+      return async (_command, args) =>
+        args[1] === probeScript
+          ? { status: 0, stdout: `front ${chrome.id}\n`, stderr: "" }
+          : printed === null
+            ? { status: null, stdout: "", stderr: "" }
+            : { status: 0, stdout: printed, stderr: "" };
+    };
+    const thrown = async (printed: string | null) => {
+      const browser = new AppleEventsBrowser(
+        failing(printed),
+        fakeClock().clock,
+      );
+      return browser.read().then(
+        () => null,
+        (error: unknown) => error,
+      );
+    };
+    // Scripts from Apple events are off in the browser, and macOS refuses this program.
+    for (const printed of [
+      "clawdtime:error:12:Google Chrome got an error: Executing JavaScript through AppleScript is turned off.",
+      "clawdtime:error:-1743:Not authorized to send Apple events to Google Chrome.",
+    ])
+      expect(await thrown(printed)).toBeInstanceOf(BrowserClosed);
+    // What can change in a moment is an error, and not that one.
+    for (const printed of [
+      "clawdtime:error:-600:Application isn't running.",
+      "clawdtime:no-window",
+      "clawdtime:no-answer",
+      "clawdtime:error:-1:Something new.",
+      null,
+    ]) {
+      const error = await thrown(printed);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(BrowserClosed);
+    }
+  });
+
   it("keeps the real error texts in one table", () => {
     expect(browserErrors).toEqual([
       {
@@ -852,6 +896,28 @@ describe("the browser driver: the wait after a step", () => {
       "https://trychert.com/",
     );
     expect(slept).toEqual([150, 250, 250, 250]);
+  });
+});
+
+describe("the browser driver: its switch", () => {
+  it("is off until the environment says on, and makes no driver before that", () => {
+    let made = 0;
+    const driver = {} as BrowserPort;
+    const make = () => {
+      made += 1;
+      return driver;
+    };
+    expect(browserSwitch).toBe("CLAWDTIME_COMPUTER_BROWSER");
+    for (const value of [undefined, "", "off", "true", "1", "ON", " on", "yes"])
+      expect(
+        browserFromEnvironment({ [browserSwitch]: value }, make),
+      ).toBeUndefined();
+    expect(browserFromEnvironment({}, make)).toBeUndefined();
+    expect(made).toBe(0);
+    expect(browserFromEnvironment({ [browserSwitch]: "on" }, make)).toBe(
+      driver,
+    );
+    expect(made).toBe(1);
   });
 });
 

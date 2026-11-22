@@ -9,10 +9,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerJournal } from "../connectors/computer/journal.js";
-import type {
-  Action,
-  HandCommand,
-  Observation,
+import {
+  BrowserClosed,
+  type Action,
+  type HandCommand,
+  type Observation,
 } from "../connectors/computer/ports.js";
 import { ComputerWorker, stoppedText } from "../connectors/computer/worker.js";
 import {
@@ -1362,11 +1363,54 @@ describe("the browser", () => {
     );
     await worker.submit("r1", "Next");
     await worker.idle();
+    // The planner reads why, on one line. The browser stays on offer.
     expect(planner.inputs[2]!.history[1]!.outcome).toBe(
-      "did not run: the browser failed",
+      "did not run: The script did not run.",
     );
     expect(planner.inputs[2]!.page).toBeNull();
+    expect(planner.inputs[2]!.browser).toBeUndefined();
     expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("uses the screen for the rest of the request when only the person can open the browser", async () => {
+    const browser = new FakeBrowser(shop);
+    const closed =
+      "Google Chrome does not take page scripts yet: in Google Chrome, choose View > Developer > Allow JavaScript from Apple Events.";
+    browser.read = async () => {
+      browser.calls.push("read refused");
+      throw new BrowserClosed(closed);
+    };
+    const { worker, planner, journal } = setup(
+      [{ kind: "browser_read" }, { kind: "browser_read" }, done],
+      { browser },
+    );
+    await worker.submit("r1", "Read the page");
+    await worker.idle();
+    // The reason reaches the planner once, with what to do in its place.
+    expect(planner.inputs[0]!.browser).toBeUndefined();
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(
+      `did not run: ${closed} The browser functions are off for this request. Use the screen.`,
+    );
+    // From then on the planner is told that there is no browser, and a browser action is refused unsent.
+    expect(planner.inputs[1]!.browser).toBe(false);
+    expect(planner.inputs[2]!.browser).toBe(false);
+    expect(planner.inputs[2]!.history[1]!.outcome).toMatch(
+      /^refused: No browser is connected/,
+    );
+    expect(browser.calls).toEqual(["read refused"]);
+    // The journal keeps no text of the browser: only that the step failed.
+    expect(JSON.stringify(journal.get("r1"))).not.toContain("Allow JavaScript");
+    expect(worker.snapshot().state).toBe("completed");
+    // The next request tries the browser again: the person may have opened it.
+    browser.read = async () => {
+      browser.calls.push("read");
+      return shop;
+    };
+    const next = setup([{ kind: "browser_read" }, done], { browser });
+    await next.worker.submit("r2", "Read the page");
+    await next.worker.idle();
+    expect(next.planner.inputs[0]!.browser).toBeUndefined();
+    expect(next.planner.inputs[1]!.page).not.toBeNull();
   });
 });
 

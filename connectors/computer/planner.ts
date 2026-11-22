@@ -418,7 +418,8 @@ export class OpenAIPlanner implements Planner {
   async next(
     input: Parameters<Planner["next"]>[0],
   ): Promise<{ action: Action; why: string }> {
-    const text = brief(input, this.browser);
+    const browser = this.browser && input.browser !== false;
+    const text = brief(input, browser);
     const image = input.observation?.image;
     const response = await this.request(
       "https://api.openai.com/v1/chat/completions",
@@ -431,7 +432,7 @@ export class OpenAIPlanner implements Planner {
         body: JSON.stringify({
           model: this.model,
           messages: [
-            { role: "system", content: rules(this.browser) },
+            { role: "system", content: rules(browser) },
             {
               role: "user",
               content: [
@@ -450,7 +451,7 @@ export class OpenAIPlanner implements Planner {
               ],
             },
           ],
-          tools: this.browser ? [...screenTools, ...browserTools] : screenTools,
+          tools: browser ? [...screenTools, ...browserTools] : screenTools,
           // One action for each turn: a function call, and only one.
           tool_choice: "required",
           parallel_tool_calls: false,

@@ -822,14 +822,15 @@ function checkBrowser(
       const found = pick(action.index);
       if ("verdict" in found) return found;
       const label = `Type in ${pageName(found)} on the page`;
+      // A disabled field first: nobody can type in it, also not the person.
+      if (found.disabled)
+        return refuse(`Element ${action.index} of the page is disabled.`);
       if (found.password)
         return {
           verdict: "person_types",
           label,
           target: clean(found.label, 80),
         };
-      if (found.disabled)
-        return refuse(`Element ${action.index} of the page is disabled.`);
       const submit = action.submit === true;
       if (!action.text && !submit) return refuse("There is no text to type.");
       if (oneLine.test(action.text)) return refuse(lineRefusal);

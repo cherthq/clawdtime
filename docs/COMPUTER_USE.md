@@ -26,9 +26,31 @@ parts. The hands and the cursor are in `mac/Sources/ClawdTimeTaskPanel/`
 `HandsBar.swift`, `GuidedCursor.swift`), over the pure rules in
 `mac/Sources/TaskPanelCore/`.
 
-The browser driver is built and tested, and the desktop service does not
-connect it yet: one line in `scripts/task-server.ts` does that. Until then the
-worker uses the screen for web pages.
+The browser driver is a switch, off by default. Start the desktop service with
+`CLAWDTIME_COMPUTER_BROWSER=on`, and the worker reads and operates the page of
+the browser in front through the browser's own scripting: it reads the text and
+the controls of the page, and clicks and types by element, with no guess at
+pixels. It runs in your own browser, with your sign-ins, so you turn it on.
+Two things must be there, and `clawdtime computer doctor` (run with the same
+variable) says which one is missing:
+
+- In Chrome, Brave, Edge or Chromium: View > Developer > Allow JavaScript from
+  Apple Events. In Safari: Settings > Advanced, "Show features for web
+  developers", then Settings > Developer, "Allow JavaScript from Apple Events".
+- The Automation right of macOS for the program that starts the desktop
+  service, for that browser.
+
+When one of the two is missing, the worker says so to its planner once and
+uses the screen for the rest of that request. A natively disabled control stays
+in a reading of the page, marked as disabled.
+
+`npm run test:computer:browser` runs the driver with its real page script in a
+real page of Chromium and of WebKit, with no window: reading, numbers, clicks,
+typing into a field that a framework controls, a search that leads to the next
+page, and pages that change built-in functions to forge the answer.
+
+Without the switch, or when the browser does not answer, the worker uses the
+screen for web pages.
 
 ## One request, one action at a time
 
