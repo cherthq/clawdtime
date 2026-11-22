@@ -781,17 +781,75 @@ test("ask runs clawdtime chat with the request as one argument, and says the ans
     "no key, no key for the command",
   );
   if (before !== undefined) process.env.OPENAI_API_KEY = before;
-  // A request can never read as an option of the command.
-  await ask("  --json --help me", async (file, args) => {
+  // A request can never read as an option or be silently rewritten into one.
+  const refused = await ask("  --json --help me", async (file, args) => {
     calls.push({ file, args });
     return { ok: true, stdout: "ok" };
   });
-  assert.deepEqual(calls[2].args, ["chat", "json --help me"]);
+  assert.equal(calls.length, 2);
+  assert.match(refused, /leading dash/);
   const long = await ask("status", async () => ({
     ok: true,
     stdout: "word ".repeat(2000),
   }));
   assert.ok(long.length <= 1200);
+});
+
+test("ask rejects over-limit whole requests before dropping trailing qualifiers or executing", async () => {
+  const request =
+    "Consider the following context: " +
+    "word ".repeat(400) +
+    " Do not switch apps or desktops.";
+  assert.ok(request.indexOf("Do not switch") > 2000);
+  const calls = [];
+  const execute = async (...args) => {
+    calls.push(args);
+    return { ok: true, stdout: "unexpected" };
+  };
+  assert.match(await ask(request, execute), /longer than 2000/);
+  // Length applies before whitespace normalization, even if it would shrink.
+  assert.match(
+    await ask(" ".repeat(2001) + "do not switch", execute),
+    /longer than 2000/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("ask forwards a maximum-length request completely with only whitespace normalized", async () => {
+  const prefix = "  Bring Messages forward.\n";
+  const suffix = "\tDo not switch desktops.  ";
+  const request =
+    prefix + "x".repeat(2000 - prefix.length - suffix.length) + suffix;
+  const calls = [];
+  assert.equal(request.length, 2000);
+  await ask(request, async (file, args) => {
+    calls.push({ file, args });
+    return { ok: true, stdout: "ok" };
+  });
+  assert.deepEqual(calls, [
+    {
+      file: "/fake/bin/clawdtime",
+      args: ["chat", request.trim().replace(/\s+/g, " ")],
+    },
+  ]);
+  assert.ok(calls[0].args[1].endsWith("Do not switch desktops."));
+});
+
+test("ask refuses malformed, option-like or control-bearing input without rewriting or executing", async () => {
+  const calls = [];
+  for (const request of [
+    null,
+    {},
+    "--help",
+    " \t- open Messages",
+    "Open\u0000Messages",
+    "\u001b[0mOpen Messages",
+  ])
+    await ask(request, async (...args) => {
+      calls.push(args);
+      return { ok: true, stdout: "unexpected" };
+    });
+  assert.deepEqual(calls, []);
 });
 
 test("ask says plainly when ClawdTime does not answer", async () => {
@@ -820,7 +878,7 @@ test("ask says plainly when ClawdTime does not answer", async () => {
     await ask("--", async () => {
       throw new Error("must not run");
     }),
-    "There was no request.",
+    "Please rephrase the request without a leading dash. Nothing was sent.",
   );
 });
 
@@ -1554,4 +1612,46 @@ test("the agent greets at once when the line's audio track is already in the roo
   later.change('{"chert_bridge_ready":true}');
   assert.deepEqual(none, []);
   assert.equal(later.listenerCount("trackPublished"), 0);
+});
+
+test("display capture expires stalled frames and resumes from fresh frames without restarting", async () => {
+  const child = fakeFfmpeg();
+  let now = 1000,
+    starts = 0;
+  const screen = startScreen({
+    frameBytes: 4,
+    now: () => now,
+    start: () => {
+      starts++;
+      return child;
+    },
+  });
+  child.stdout.emit("data", Buffer.from([1, 1, 1, 1]));
+  assert.deepEqual([...screen.latest()], [1, 1, 1, 1]);
+  now += 501;
+  assert.equal(
+    screen.latest(),
+    null,
+    "old desktop must not remain live while capture stalls",
+  );
+  assert.equal(
+    await screen.started(1),
+    false,
+    "stale cached pixels are not readiness",
+  );
+  child.stdout.emit("data", Buffer.from([2, 2, 2, 2]));
+  assert.deepEqual(
+    [...screen.latest()],
+    [2, 2, 2, 2],
+    "fresh arrival replaces prior desktop",
+  );
+  assert.equal(starts, 1, "same-display transition does not restart capture");
+  child.emit("exit", 1);
+  child.stdout.emit("data", Buffer.from([3, 3, 3, 3]));
+  assert.equal(
+    screen.latest(),
+    null,
+    "late bytes cannot resurrect an ended capture",
+  );
+  screen.stop();
 });

@@ -663,6 +663,11 @@ import TaskPanelCore
 }
 
 MainActor.assumeIsolated {
+  switch PanelAccessCheck.parse(arguments: CommandLine.arguments) {
+  case .requested: Darwin.exit(PanelAccessDiagnostics.run())
+  case .invalid: Darwin.exit(PanelAccessDiagnostics.invalidArguments())
+  case .notRequested: break
+  }
   let app = NSApplication.shared
   let delegate = TaskPanelApp()
   app.delegate = delegate

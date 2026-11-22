@@ -26,7 +26,7 @@ public final class PanelClient {
       path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
-      path == "/desktop/computer" || path == "/desktop/hands/result" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}$", options: .regularExpression) != nil ||
+      path == "/desktop/computer" || path == "/desktop/hands/result" || path == "/desktop/hands/presentation" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}$", options: .regularExpression) != nil ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -150,6 +150,12 @@ public final class PanelClient {
     try result.validate()
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     _ = try await request(path: "/desktop/hands/result", body: try encoder.encode(result))
+  }
+  /// A transient outgoing-video hint; never a command, receipt or UI outcome.
+  public func handsPresentation(_ event: CallPresentationEvent) async throws {
+    try event.validate()
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    _ = try await request(path: "/desktop/hands/presentation", body: try encoder.encode(event))
   }
   /// One typed message. The answer can take as long as the language model takes.
   public func say(_ text: String) async throws -> ChatTranscript.Message {

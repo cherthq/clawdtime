@@ -14,6 +14,11 @@ import type {
 } from "../../src/control/desktop-executor.js";
 import { ComputerJournal, readComputerSwitch } from "./journal.js";
 import { PanelHands } from "./panel-hands.js";
+import {
+  PresentationEvents,
+  presentationEventSchema,
+  type PresentationEvent,
+} from "./presentation.js";
 import { plannerFromEnvironment } from "./planner.js";
 import {
   handResultSchema,
@@ -37,6 +42,8 @@ export interface ComputerPort {
   result(raw: unknown): boolean;
   /** `GET /desktop/computer`. */
   status(): ComputerStatus;
+  present(raw: unknown): boolean;
+  presentation(): { version: 1; event: PresentationEvent | null };
   /** Stop, for the existing stop route. Absent when no worker runs here. */
   stop?(): DesktopExecutionSnapshot;
 }
@@ -53,6 +60,15 @@ export function computerPort(
   worker: ComputerWorker,
   hands: PanelHands,
 ): ComputerPort {
+  const events = new PresentationEvents();
+  const active = () => {
+    const status = worker.status();
+    return (
+      status.enabled &&
+      status.state === "running" &&
+      hands.presentationCommand() > 0
+    );
+  };
   return {
     next: (after) =>
       handsNextSchema.parse({
@@ -62,7 +78,12 @@ export function computerPort(
       }),
     result: (raw) => hands.result(raw),
     status: () => computerStatusSchema.parse(worker.status()),
-    stop: () => worker.stop(),
+    present: (raw) => events.accept(raw, hands.presentationCommand(), active()),
+    presentation: () => ({ version: 1, event: events.latest(active()) }),
+    stop: () => {
+      events.clear();
+      return worker.stop();
+    },
   };
 }
 
@@ -74,6 +95,11 @@ export function offComputerPort(message: string): ComputerPort {
       handResultSchema.parse(raw);
       return false;
     },
+    present: (raw) => {
+      presentationEventSchema.parse(raw);
+      return false;
+    },
+    presentation: () => ({ version: 1, event: null }),
     status: () => ({
       version: 1,
       enabled: false,

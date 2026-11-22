@@ -1,3 +1,4 @@
+import { userMessageTooLong } from "../connectors/agents/request-text.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import {
@@ -357,23 +358,63 @@ describe("clawdtime chat TEXT with a desktop service", () => {
     expect(model!.complete).not.toHaveBeenCalled();
   });
 
-  it("cuts the text at 2000 characters, as the route takes it", async () => {
+  it("rejects an over-limit instruction with a trailing negation without dispatch or fallback", async () => {
+    const service = await madeUpService((_seen, response) =>
+      json(response, 200, { reply: { role: "assistant", text: "Unexpected" } }),
+    );
+    const env = { CLAWDTIME_DESKTOP_STATE: described(service.origin) };
+    const text =
+      "Move one desktop right. ".padEnd(2000, " ") +
+      "Do not actually switch anything.";
+    expect(await sayToDesktop({ env, home: "/Users/tester" }, text)).toEqual({
+      kind: "rejected",
+      text: userMessageTooLong,
+    });
+    const { lines, model } = await chat(env, [text]);
+    expect(lines).toEqual([userMessageTooLong]);
+    expect(model!.complete).not.toHaveBeenCalled();
+    expect(service.requests).toEqual([]);
+  });
+  it("rejects over-limit text even when no desktop service exists", async () => {
+    const text =
+      "Bring Messages forward".padEnd(2000, " ") + " but don't do that";
+    expect(
+      await sayToDesktop(
+        { env: { VITEST: "true" }, home: "/Users/tester" },
+        text,
+      ),
+    ).toEqual({ kind: "rejected", text: userMessageTooLong });
+    const { lines, model } = await chat(
+      { CLAWDTIME_CONFIG_HOME: temporary() },
+      [text],
+    );
+    expect(lines).toEqual([userMessageTooLong]);
+    expect(model!.complete).not.toHaveBeenCalled();
+  });
+  it("sends the complete at-limit request including its last constraint", async () => {
     const service = await madeUpService((seen, response) => {
       if (ready(seen, response)) return;
       json(response, 200, { reply: { role: "assistant", text: "Taken." } });
     });
-    const system = {
-      env: { CLAWDTIME_DESKTOP_STATE: described(service.origin) },
-      home: "/Users/tester",
-    };
-    expect(await sayToDesktop(system, "x".repeat(2500))).toEqual({
-      kind: "answered",
-      text: "Taken.",
-    });
-    expect(JSON.parse(service.requests[2]!.body).text).toHaveLength(2000);
-    // Words that are empty go nowhere.
-    expect(await sayToDesktop(system, "   ")).toEqual({ kind: "absent" });
-    expect(service.requests).toHaveLength(3);
+    const text =
+      "Bring Messages forward. ".padEnd(1977, "x") + " Do not send a message.";
+    expect(text.length).toBe(2000);
+    expect(
+      await sayToDesktop(
+        {
+          env: { CLAWDTIME_DESKTOP_STATE: described(service.origin) },
+          home: "/Users/tester",
+        },
+        text,
+      ),
+    ).toEqual({ kind: "answered", text: "Taken." });
+    expect(JSON.parse(service.requests[2]!.body).text).toBe(text);
+    expect(
+      await sayToDesktop(
+        { env: { VITEST: "true" }, home: "/Users/tester" },
+        "   ",
+      ),
+    ).toEqual({ kind: "absent" });
   });
 
   it("never takes an option of the command for a message", async () => {

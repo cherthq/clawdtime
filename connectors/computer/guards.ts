@@ -57,7 +57,13 @@ export const actionSchema = z.discriminatedUnion("kind", [
       element: number.optional(),
     })
     .strict(),
-  z.object({ kind: z.literal("open_app"), name: words(120) }).strict(),
+  z
+    .object({
+      kind: z.literal("open_app"),
+      name: words(120),
+      window: words(200).min(1).optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("open_url"), url: words(2000) }).strict(),
   z.object({ kind: z.literal("browser_read") }).strict(),
   z.object({ kind: z.literal("browser_open"), url: words(2000) }).strict(),
@@ -507,16 +513,27 @@ export function check(raw: unknown, view: View, why: string): Checked {
       const name = action.name.trim();
       if (!name || name.startsWith(".") || /[\p{C}/\\:]/u.test(name))
         return refuse("That is not the plain name of an app.");
+      if (
+        action.window !== undefined &&
+        (!action.window.trim() || /\p{C}/u.test(action.window))
+      )
+        return refuse(
+          "Use the exact nonempty window title, without control characters.",
+        );
       return {
         verdict: "run",
         label: `Open ${clean(name, 80)}`,
         target: clean(name, 80),
         risk: null,
-        signature: `open_app|${name}`,
+        signature: JSON.stringify(["open_app", name, action.window ?? null]),
         send: {
           via: "hands",
           look: false,
-          command: { kind: "open_app", name },
+          command: {
+            kind: "open_app",
+            name,
+            ...(action.window === undefined ? {} : { window: action.window }),
+          },
         },
       };
     }
@@ -673,6 +690,19 @@ function checkScreen(
     case "key": {
       const parsed = parseCombo(action.combo);
       if (!parsed) return refuse("That is not one key with known modifiers.");
+      if (parsed.modifiers.has("cmd") && parsed.key === "tab")
+        return refuse(
+          "Application switching needs a goal-only navigation interpretation. Ask to return to the previous app, or name the app to bring forward.",
+        );
+      if (
+        parsed.modifiers.has("ctrl") &&
+        (parsed.key === "left" ||
+          parsed.key === "right" ||
+          /^[0-9]$/.test(parsed.key))
+      )
+        return refuse(
+          "Unverified desktop-navigation shortcuts are not supported. For a specific window use open_app; for one desktop transition ask separately to switch the desktop left or right.",
+        );
       return {
         verdict: "run",
         label: `Press ${parsed.combo}`,
@@ -838,6 +868,17 @@ export function retarget(
 ):
   | { ok: true; action: Action; observation: Observation }
   | { ok: false; reason: string } {
+  if (
+    before.surfaceEpoch !== after.surfaceEpoch ||
+    before.screen.width !== after.screen.width ||
+    before.screen.height !== after.screen.height ||
+    before.screen.scale !== after.screen.scale
+  )
+    return {
+      ok: false,
+      reason:
+        "The desktop or display changed. Old coordinates were retired; nothing was sent.",
+    };
   if (
     before.app.bundleId !== after.app.bundleId ||
     before.app.window !== after.app.window

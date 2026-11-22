@@ -598,6 +598,48 @@ describe("independent desktop service launcher", () => {
       );
     expect(f.spawnMock).not.toHaveBeenCalled();
   });
+  it("passes explicit Space settings only to the panel on launch and reattach", async () => {
+    const f = fixture();
+    const settings = {
+      CLAWDTIME_SPACE_LEFT_SHORTCUT: "ctrl+shift+left",
+      CLAWDTIME_SPACE_RIGHT_SHORTCUT: "ctrl+shift+right",
+      CLAWDTIME_DESKTOP_SWITCHING: "off",
+    };
+    for (const [key, value] of Object.entries(settings)) vi.stubEnv(key, value);
+    try {
+      await f.run();
+      await f.run();
+      const calls = f.spawnMock.mock.calls;
+      expect(calls.map(([command]) => command)).toEqual([
+        process.execPath,
+        f.binary,
+        f.binary,
+      ]);
+      for (const key of Object.keys(settings))
+        expect(calls[0]![2]).not.toHaveProperty(`env.${key}`);
+      for (const call of calls.slice(1))
+        expect(call[2]).toMatchObject({ env: settings });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("does not manufacture Space shortcut mappings when none were supplied", async () => {
+    const f = fixture();
+    const keys = [
+      "CLAWDTIME_SPACE_LEFT_SHORTCUT",
+      "CLAWDTIME_SPACE_RIGHT_SHORTCUT",
+      "CLAWDTIME_DESKTOP_SWITCHING",
+    ];
+    for (const key of keys) vi.stubEnv(key, undefined);
+    try {
+      await f.run();
+      for (const call of f.spawnMock.mock.calls)
+        for (const key of keys)
+          expect(call[2]).not.toHaveProperty(`env.${key}`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it("does not pass arbitrary inherited credentials to either child", async () => {
     const f = fixture();
     vi.stubEnv("DESKTOP_SYNTHETIC_SECRET", "fixture-only");

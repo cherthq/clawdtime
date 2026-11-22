@@ -69,6 +69,8 @@ public struct Observation: Codable, Equatable, Sendable {
   }
   /// Milliseconds since 1970.
   public let at: Double
+  /// Native desktop generation. A changed epoch retires every old coordinate.
+  public let surfaceEpoch: Int?
   public let screen: Screen
   public let cursor: Cursor
   public let app: App
@@ -78,13 +80,13 @@ public struct Observation: Codable, Equatable, Sendable {
   public let imageWidth: Int?
   public let imageHeight: Int?
   public init(at: Double, screen: Screen, cursor: Cursor, app: App, elements: [ScreenElement],
-              image: String? = nil, imageWidth: Int? = nil, imageHeight: Int? = nil) {
+              image: String? = nil, imageWidth: Int? = nil, imageHeight: Int? = nil, surfaceEpoch: Int? = nil) {
     self.at = at; self.screen = screen; self.cursor = cursor; self.app = app; self.elements = elements
-    self.image = image; self.imageWidth = imageWidth; self.imageHeight = imageHeight
+    self.image = image; self.imageWidth = imageWidth; self.imageHeight = imageHeight; self.surfaceEpoch = surfaceEpoch
   }
   public static let maxElements = 400, maxImageCharacters = 4_000_000
   public func validate() throws {
-    guard at.isFinite, screen.width.isFinite, screen.height.isFinite, screen.scale.isFinite, cursor.x.isFinite, cursor.y.isFinite,
+    guard surfaceEpoch.map({ $0 >= 0 }) ?? true, at.isFinite, screen.width.isFinite, screen.height.isFinite, screen.scale.isFinite, cursor.x.isFinite, cursor.y.isFinite,
       HandsShape.fits(app.name, 120), HandsShape.fits(app.bundleId, 200), HandsShape.fits(app.window, 200),
       elements.count <= Self.maxElements, (image?.utf8.count ?? 0) <= Self.maxImageCharacters,
       imageWidth.map({ $0 > 0 }) ?? true, imageHeight.map({ $0 > 0 }) ?? true else { throw PanelFailure.configuration }
@@ -104,7 +106,9 @@ public enum HandCommand: Equatable, Sendable {
   case type(text: String)
   /// Keys joined by "+", modifiers first: "cmd+s", "cmd+shift+4", "return", "escape", "tab".
   case key(combo: String)
-  case openApp(name: String)
+  case openApp(name: String, window: String? = nil)
+  case switchDesktop(direction: DesktopDirection)
+  case switchPreviousApp
   case openURL(url: String)
   case wait(ms: Int)
 
@@ -119,6 +123,8 @@ public enum HandCommand: Equatable, Sendable {
     case .type: return "type"
     case .key: return "key"
     case .openApp: return "open_app"
+    case .switchDesktop: return "switch_desktop"
+    case .switchPreviousApp: return "switch_previous_app"
     case .openURL: return "open_url"
     case .wait: return "wait"
     }
@@ -147,13 +153,16 @@ public enum HandCommand: Equatable, Sendable {
   public var needsAccessibility: Bool {
     switch self {
     case .observe(_, let elements): return elements
-    case .move, .click, .drag, .scroll, .type, .key: return true
-    case .openApp, .openURL, .wait: return false
+    case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop, .switchPreviousApp: return true
+    case .openURL, .wait: return false
     }
   }
   /// The command takes a picture of the screen.
   public var needsScreenRecording: Bool {
     if case .observe(let image, _) = self { return image }
+    if case .openApp = self { return true }
+    if case .switchDesktop = self { return true }
+    if case .switchPreviousApp = self { return true }
     return false
   }
   /// The right that the command needs and macOS has not given. With one missing, nothing runs.
@@ -166,7 +175,7 @@ public enum HandCommand: Equatable, Sendable {
 
 extension HandCommand: Codable {
   private enum Key: String, CodingKey {
-    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, url, ms
+    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, ms
   }
   public init(from decoder: Decoder) throws {
     let box = try decoder.container(keyedBy: Key.self)
@@ -207,8 +216,16 @@ extension HandCommand: Codable {
       try only(.combo)
       self = .key(combo: try string(.combo, 40))
     case "open_app":
-      try only(.name)
-      self = .openApp(name: try string(.name, 120))
+      try only(.name, .window)
+      let window = try box.decodeIfPresent(String.self, forKey: .window)
+      guard window.map({ HandsTarget.windowTitle($0) != nil }) ?? true else { throw PanelFailure.response }
+      self = .openApp(name: try string(.name, 120), window: window)
+    case "switch_previous_app":
+      try only()
+      self = .switchPreviousApp
+    case "switch_desktop":
+      try only(.direction)
+      self = .switchDesktop(direction: try box.decode(DesktopDirection.self, forKey: .direction))
     case "open_url":
       try only(.url)
       self = .openURL(url: try string(.url, 2000))
@@ -241,7 +258,10 @@ extension HandCommand: Codable {
       try box.encode(dx, forKey: .dx); try box.encode(dy, forKey: .dy)
     case .type(let text): try box.encode(text, forKey: .text)
     case .key(let combo): try box.encode(combo, forKey: .combo)
-    case .openApp(let name): try box.encode(name, forKey: .name)
+    case .openApp(let name, let window):
+      try box.encode(name, forKey: .name); try box.encodeIfPresent(window, forKey: .window)
+    case .switchDesktop(let direction): try box.encode(direction, forKey: .direction)
+    case .switchPreviousApp: break
     case .openURL(let url): try box.encode(url, forKey: .url)
     case .wait(let ms): try box.encode(ms, forKey: .ms)
     }
@@ -322,6 +342,17 @@ public enum HandError: String, Codable, CaseIterable, Error, Sendable {
   case notFound = "not_found"
   case refused
   case failed
+  case desktopDisabled = "desktop_disabled"
+  case desktopShortcutUnavailable = "desktop_shortcut_unavailable"
+  case desktopHistoryUnavailable = "desktop_history_unavailable"
+  case ambiguousTarget = "ambiguous_target"
+  case unsupportedDesktop = "unsupported_desktop"
+  case targetNotVisible = "target_not_visible"
+  /// The shortcut for a desktop switch went out and the desktop is known not to have moved.
+  case desktopUnchanged = "desktop_unchanged"
+  case transitionUnknown = "transition_unknown"
+  case inputUnknown = "input_unknown"
+  case staleObservation = "stale_observation"
 }
 
 /// What the panel posts to `POST /desktop/hands/result`.
@@ -330,21 +361,27 @@ public struct HandResult: Codable, Equatable, Sendable {
   public let ok: Bool
   public let error: HandError?
   public let observation: Observation?
+  /// After open_app: the bundle identifier of the app that the hands found for the name.
+  /// The worker compares it with the app in front, so the form of the name does not matter.
+  public let resolvedBundleId: String?
   /// The person moved the mouse or pressed a key while the hands acted.
   public let interrupted: Bool?
-  public init(seq: Int, ok: Bool, error: HandError? = nil, observation: Observation? = nil, interrupted: Bool? = nil) {
+  public init(seq: Int, ok: Bool, error: HandError? = nil, observation: Observation? = nil, interrupted: Bool? = nil,
+              resolvedBundleId: String? = nil) {
     self.seq = seq; self.ok = ok; self.error = error; self.observation = observation; self.interrupted = interrupted
+    self.resolvedBundleId = resolvedBundleId
   }
   /// The command ran. Input that was sent is not proof of what the app did with it.
-  public static func done(_ seq: Int, observation: Observation? = nil, interrupted: Bool = false) -> HandResult {
-    HandResult(seq: seq, ok: true, observation: observation, interrupted: interrupted ? true : nil)
+  public static func done(_ seq: Int, observation: Observation? = nil, interrupted: Bool = false,
+                          resolvedBundleId: String? = nil) -> HandResult {
+    HandResult(seq: seq, ok: true, observation: observation, interrupted: interrupted ? true : nil, resolvedBundleId: resolvedBundleId)
   }
   /// The command did not run, and why.
   public static func failure(_ seq: Int, _ error: HandError, interrupted: Bool = false) -> HandResult {
     HandResult(seq: seq, ok: false, error: error, interrupted: interrupted ? true : nil)
   }
   public func validate() throws {
-    guard seq > 0, !ok || error == nil else { throw PanelFailure.configuration }
+    guard seq > 0, !ok || error == nil, resolvedBundleId.map({ HandsShape.fits($0, 200) }) ?? true else { throw PanelFailure.configuration }
     try observation?.validate()
   }
 }

@@ -24,8 +24,12 @@ import TaskPanelCore
   private let pet: PetController
   private let input = HandsInput()
   private let observer = HandsObserver()
+  private let desktop = HandsDesktop()
+  /// Narrow transition seam for a presentation consumer; no presentation contract here.
+  var onDesktopTransition: ((DesktopTransitionPhase, Int) -> Void)?
   private let bar = HandsBar()
   private let guide: GuidedCursor
+  private let presentation = HandsPresentation()
   private var client: PanelClient?
   private var loop: Task<Void, Never>?
   private var ledger = HandsLedger()
@@ -37,6 +41,9 @@ import TaskPanelCore
   /// When the bar came into view.
   private var barUp: Date?
   private var typingMark = 0
+  private var inputRefusal: HandError?
+  /// The app that the name of the last open_app stood for. It goes out with the result.
+  private var resolvedApp: String?
   private let menuItems = NSHashTable<NSMenuItem>.weakObjects()
   private var rights: (accessibility: Bool, screenRecording: Bool, at: Date)?
   /// A run begins: the app's own sheets get out of the way.
@@ -52,6 +59,33 @@ import TaskPanelCore
     super.init()
     bar.onStop = { [weak self] in self?.stopByPerson() }
     input.onEscapeHold = { [weak self] in self?.stopByPerson() }
+    input.mayContinue = { [weak self] in
+      guard let self else { return false }
+      return !self.stop.stopped && self.sessionOpen && self.input.watching && !self.input.personActed
+        && AXIsProcessTrusted() && CGPreflightScreenCaptureAccess() && self.desktop.inputGenerationCurrent
+    }
+    input.beforeInput = { [weak self] in
+      guard let self else { return false }
+      if let error = await self.lastCheck() { self.inputRefusal = error; return false }
+      guard await self.desktop.inputStillCurrent() else { self.inputRefusal = .staleObservation; return false }
+      return true
+    }
+    desktop.onTransition = { [weak self] phase, epoch in
+      guard let self else { return }
+      switch phase {
+      case .switching: self.label = "Switching the work surface"; self.guide.hide()
+      case .waiting: self.label = "Waiting for the work surface to settle"
+      case .ready: self.label = "Work surface verified"
+      case .blocked: self.label = "Desktop switch blocked; no further input"
+      }
+      self.showBar()
+      // Desktop verification owns readiness; presentation stays wide until that
+      // lifecycle releases it and a separate fresh context has been observed.
+      if let presentationPhase = CallPresentationTransitionPhase(rawValue: phase.rawValue) {
+        self.presentationTransition(phase: presentationPhase, epoch: epoch)
+      }
+      self.onDesktopTransition?(phase, epoch)
+    }
   }
 
   // MARK: the loop
@@ -60,6 +94,13 @@ import TaskPanelCore
   func start(client: PanelClient) {
     guard loop == nil else { return }
     self.client = client
+    presentation.connect(client, overlayBounds: { [weak self] in
+      guard let self, let map = HandsDisplay.main?.map, let bounds = self.guide.visiblePresentationBounds else { return nil }
+      return map.flip(bounds)
+    }) { [weak self] in
+      guard let self else { return false }
+      return self.live && !self.stop.stopped && !(self.input.watching && self.input.personActed) && self.sessionOpen
+    }
     loop = Task { [weak self] in
       var failures = 0
       while !Task.isCancelled {
@@ -81,13 +122,15 @@ import TaskPanelCore
             let result = await self.perform(pending)
             // Exactly one POST for this number. A failure is not sent again: the
             // worker reads a missing answer as an unknown outcome.
-            try? await client.handsResult(result)
+            do { try await client.handsResult(result) }
+            catch { self.presentation.reset(); self.desktop.invalidate() } // No replay; disconnected history is no longer usable.
             self.showBar()
           }
         } catch {
           failures += 1
+          self.presentation.reset()
           // A service that is gone commands nothing: the bar goes too.
-          if failures >= HandsPace.failuresBeforeQuiet { self.quiet() }
+          if failures >= HandsPace.failuresBeforeQuiet { self.desktop.invalidate(); self.quiet() }
         }
         try? await Task.sleep(nanoseconds: UInt64(HandsPace.delay(active: active, failures: failures) * 1_000_000_000))
       }
@@ -96,13 +139,14 @@ import TaskPanelCore
   func shutdown() {
     loop?.cancel(); loop = nil
     input.halted = true
+    desktop.invalidate()
     input.letGo()
     quiet()
   }
   /// The task service that answers now. Another instance counts its commands from the start again.
   func service(instance: String) {
     // Another service can have another engine: read it again at once.
-    if instance != serviceInstance { serviceInstance = instance; engineRead = nil }
+    if instance != serviceInstance { presentation.reset(); serviceInstance = instance; engineRead = nil; desktop.invalidate() }
     ledger.service(instance)
   }
   private var serviceInstance: String?
@@ -119,6 +163,7 @@ import TaskPanelCore
       onRunStarted?()
     }
     if let pending = next.command { label = ElementCleaner.line(pending.label, limit: 120) }
+    if stop.stopped || next.run.state == "waiting_for_person" || next.run.state == "stopping" { presentation.reset() }
     shield(true)
     // The tap needs the Accessibility right. It starts as soon as the right is there.
     input.watch()
@@ -126,8 +171,10 @@ import TaskPanelCore
   }
   /// Nothing runs: the bar, the guided cursor and the tap go, and the windows show in captures again.
   private func quiet() {
+    presentation.reset()
     guard live || bar.isShown else { return }
     live = false; label = ""
+    desktop.retireObservation()
     bar.hide(); guide.hide(); guide.typing(false)
     input.unwatch()
     shield(false)
@@ -150,6 +197,8 @@ import TaskPanelCore
   private func stopByPerson() {
     guard live, !stop.stopped else { return }
     stop.press()
+    presentation.reset()
+    desktop.invalidate()
     input.halted = true
     guide.hide(); guide.typing(false)
     showBar()
@@ -173,16 +222,29 @@ import TaskPanelCore
     let screenRecording = !command.needsScreenRecording || CGPreflightScreenCaptureAccess()
     if let missing = command.missingRight(accessibility: accessibility, screenRecording: screenRecording) { return .failure(seq, missing) }
     input.beginCommand()
+    inputRefusal = nil
+    resolvedApp = nil
+    presentation.begin(seq)
     let outcome = await act(command, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
     let interrupted = input.watching && input.personActed
+    if interrupted { presentation.reset() }
     switch outcome {
     case .success(let seen):
-      let result = HandResult.done(seq, observation: seen, interrupted: interrupted)
-      // What the service would refuse is not sent: the worker hears that the command failed.
-      return (try? result.validate()) != nil ? result : .failure(seq, .failed, interrupted: interrupted)
+      let result = HandResult.done(seq, observation: seen, interrupted: interrupted, resolvedBundleId: resolvedApp)
+      // Contract failure cannot erase an already-submitted external effect.
+      guard (try? result.validate()) != nil else {
+        presentation.reset()
+        desktop.invalidate()
+        return .failure(seq, DesktopInputOutcome.invalidResult(command: command, submitted: input.submittedInput), interrupted: interrupted)
+      }
+      return result
     case .failure(let error):
-      return .failure(seq, error, interrupted: interrupted)
+      presentation.reset()
+      // A partially submitted click/type/scroll is never described as a refusal
+      // that can be retried. A takeover before input still pauses the worker.
+      let reported = DesktopInputOutcome.failure(error, submitted: input.submittedInput, interrupted: interrupted)
+      return .failure(seq, reported, interrupted: interrupted)
     }
   }
 
@@ -201,7 +263,7 @@ import TaskPanelCore
     switch command {
     case .observe(let image, let elements):
       shield(true)
-      return await observer.observe(image: image, elements: elements, accessibility: accessibility, pointer: input.pointer).map { Optional($0) }
+      return await desktop.observe(observer: observer, image: image, elements: elements, accessibility: accessibility, pointer: input.pointer).map { Optional($0) }
     case .move, .click, .drag, .scroll:
       return await point(command, label: label)
     case .type(let text):
@@ -212,69 +274,126 @@ import TaskPanelCore
       defer { guide.rest() }
       await pointAtKeyboard(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
+      guard await desktop.beginInput() else { return .failure(.staleObservation) }
+      defer { desktop.endInput() }
       guard await mayType() else { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       // A Tab or a Return in the text can move the keyboard, so the same two checks run again on the way.
       switch await input.type(text, allowed: { [self] in await mayType() }) {
       case .done: return .success(nil)
-      case .stopped: return .failure(.stoppedByPerson)
+      case .stopped: return .failure(inputFailure())
       case .refused: return .failure(.refused)
       }
     case .key(let combo):
-      guard let keys = KeyCombo.parse(combo), await keyboardFree() else { return .failure(.refused) }
+      guard let keys = KeyCombo.parse(combo), input.keyIsPermitted(keys), await keyboardFree() else { return .failure(.refused) }
       // A key that prints a character is text: it stays out of a password field too. Return, Tab and shortcuts may go.
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
       if stop.stopped { return .failure(.stoppedByPerson) }
       defer { guide.rest() }
-      await pointAtKeyboard(label)
+      let changesSurface = CallPresentationKeyPolicy.mayChangeSurface(keys)
+      if changesSurface { presentationTransition() }
+      await pointAtKeyboard(label, presentTyping: !changesSurface)
       // Stop may have come during the waits above, and the keyboard may be in another place now.
       if let refusal = await lastCheck() { return .failure(refusal) }
+      guard await desktop.beginInput() else { return .failure(.staleObservation) }
+      defer { desktop.endInput() }
       guard NSApp.keyWindow == nil else { return .failure(.refused) }
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
       showTyping(); defer { endTyping() }
-      return await input.key(keys) ? .success(nil) : .failure(.stoppedByPerson)
-    case .openApp(let name):
+      return await input.key(keys) ? .success(nil) : .failure(inputFailure())
+    case .openApp(let name, let window):
       guard let safe = HandsTarget.appName(name) else { return .failure(.refused) }
-      guard let app = Self.application(named: safe) else { return .failure(.notFound) }
+      let resolved = Self.application(named: safe)
+      guard case .success(let app) = resolved else {
+        if case .failure(let error) = resolved { return .failure(error) }
+        return .failure(.notFound)
+      }
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
-      let settings = NSWorkspace.OpenConfiguration()
-      settings.activates = true
-      do { _ = try await NSWorkspace.shared.openApplication(at: app, configuration: settings); return .success(nil) }
-      catch { return .failure(.failed) }
+      switch await desktop.activate(url: app, windowTitle: window, allowed: { [self] in await lastCheck() },
+        observer: observer, pointer: { [self] in input.pointer }) {
+      case .success(let arrival):
+        resolvedApp = arrival.bundleID
+        return .success(arrival.observation)
+      case .failure(let error): return .failure(error)
+      }
+    case .switchPreviousApp:
+      defer { guide.rest() }
+      await say(label)
+      if let refusal = await lastCheck() { return .failure(refusal) }
+      return await desktop.switchPreviousApp(send: { [self] gate in await input.dispatchPreviousApp(allowed: gate) },
+        allowed: { [self] in await lastCheck() }, observer: observer, pointer: { [self] in input.pointer })
+    case .switchDesktop(let direction):
+      defer { guide.rest() }
+      await say(label)
+      if let refusal = await lastCheck() { return .failure(refusal) }
+      return await desktop.switchDesktop(direction: direction, configuration: { [self] in input.desktopShortcuts() },
+        send: { [self] shortcut, gate in await input.dispatchDesktopShortcut(shortcut, allowed: gate) },
+        allowed: { [self] in await lastCheck() }, observer: observer, pointer: { [self] in input.pointer })
     case .openURL(let text):
       // Only a web address. Another scheme can start a program or a call.
       guard let url = HandsTarget.webURL(text) else { return .failure(.refused) }
+      presentationTransition()
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
+      desktop.invalidate()
       return NSWorkspace.shared.open(url) ? .success(nil) : .failure(.failed)
     case .wait:
       return .success(nil)
     }
   }
 
+  /// A canceled event is not necessarily a user Stop. Keep takeover, permission
+  /// loss and stale desktop identity distinct; perform() upgrades partial effects.
+  private func inputFailure() -> HandError {
+    if stop.stopped || Task.isCancelled || input.halted { return .stoppedByPerson }
+    if input.personActed { return .refused }
+    if let inputRefusal { return inputRefusal }
+    if !AXIsProcessTrusted() { return .noAccessibility }
+    if !CGPreflightScreenCaptureAccess() { return .noScreenRecording }
+    if !sessionOpen || !input.watching { return .refused }
+    return desktop.inputGenerationCurrent ? .refused : .staleObservation
+  }
+
   /// The last check before an event goes out, after the glide of the cursor: Stop at this Mac,
   /// the person's own mouse and keys since the command began, and Stop at the service, which is
   /// read once now. Nil: the event may go. `HandsGate` holds the rule.
   private func lastCheck() async -> HandError? {
+    if Task.isCancelled || stop.stopped { return .stoppedByPerson }
+    guard sessionOpen, input.watching else { return .refused }
+    guard AXIsProcessTrusted() else { return .noAccessibility }
+    guard CGPreflightScreenCaptureAccess() else { return .noScreenRecording }
     // Stop at this Mac and the person's own input need no read of the service.
     if let refusal = HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed,
                                        run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
     // The number of this command is taken already, so this read gives no command: only what the worker does now.
     let now = try? await client?.handsNext(after: ledger.last)
-    return HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed, run: now?.run)
+    guard sessionOpen, input.watching else { return .refused }
+    guard AXIsProcessTrusted() else { return .noAccessibility }
+    guard CGPreflightScreenCaptureAccess() else { return .noScreenRecording }
+    return HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed, run: now?.run)
   }
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
   /// with the label of the command. With no field known it stays where it last pointed.
-  private func pointAtKeyboard(_ label: String) async {
+  private func pointAtKeyboard(_ label: String, presentTyping: Bool = true) async {
     guard let map = HandsDisplay.main?.map else { return }
+    let presentationGeneration = presentation.currentGeneration
+    let surface = presentTyping ? presentation.currentSurface : nil
     // The Accessibility tree is read off the main thread, as everywhere here. It counts from the top.
-    let focus = await Task.detached(priority: .userInitiated) { HandsTree.focusFrame() }.value
+    let field = await Task.detached(priority: .userInitiated) {
+      (frame: HandsTree.focusFrame(), safeForPresentation: !presentTyping || HandsTree.focusIsSecure() == false)
+    }.value
+    let focus = field.frame
     let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
     let target = GuidedFocus.place(focus: focus.map(map.flip), shown: guide.place, pointer: map.flip(input.pointer), screen: screen)
+    if presentTyping {
+      presentation.type(in: field.safeForPresentation ? focus : nil,
+        overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface,
+        observedGeneration: presentationGeneration)
+    }
     await guide.travel(to: target, label: label)
   }
   /// A command with no place of its own, such as opening an app: the cursor says it where it is.
@@ -290,13 +409,22 @@ import TaskPanelCore
     let places = command.places.map(map.clamp)
     var restore: [() -> Void] = []
     defer { restore.forEach { $0() }; guide.rest() }
+    // All geometry stays in the original top-left screen-point space. The
+    // renderer alone maps it into the outgoing call video.
+    let xs = places.map(\.x), ys = places.map(\.y)
+    let action = CGRect(x: xs.min()! - 1, y: ys.min()! - 1,
+      width: max(2, xs.max()! - xs.min()! + 2), height: max(2, ys.max()! - ys.min()! + 2))
+    let overlay = map.flip(guide.presentationBounds(at: map.flip(places[0]), label: label))
+    presentation.point(action.union(overlay))
     await guide.travel(to: map.flip(places[0]), label: label)
     if let refusal = await lastCheck() { return .failure(refusal) }
     // ClawdTime's windows are not in the picture that the worker saw. A click on
     // one of them goes through to what is behind it, which is what the worker meant.
     // They let clicks through only from here: during the glide the bar keeps its Stop.
+    guard await desktop.beginInput() else { return .failure(.staleObservation) }
+    defer { desktop.endInput() }
     restore = passThrough(places.map(map.flip))
-    guard await input.move(to: places[0]) else { return .failure(.stoppedByPerson) }
+    guard await input.move(to: places[0]) else { return .failure(inputFailure()) }
     // A window of ClawdTime that came up on the way, for example a request with Approve on it, gets no click either.
     restore += passThrough(places.map(map.flip))
     let done: Bool
@@ -311,7 +439,7 @@ import TaskPanelCore
     default:
       done = true
     }
-    return done ? .success(nil) : .failure(.stoppedByPerson)
+    return done ? .success(nil) : .failure(inputFailure())
   }
 
   // MARK: ClawdTime keeps out of its own way
@@ -337,7 +465,7 @@ import TaskPanelCore
   }
   /// In the middle of typed text: the keyboard is still outside ClawdTime and outside a password field.
   private func mayType() async -> Bool {
-    guard NSApp.keyWindow == nil else { return false }
+    guard NSApp.keyWindow == nil, await lastCheck() == nil, await desktop.inputStillCurrent() else { return false }
     return !(await focusIsSecure())
   }
   /// The field that has the keyboard is a password field: the Accessibility
@@ -362,8 +490,18 @@ import TaskPanelCore
     return session[kCGSessionOnConsoleKey as String] as? Bool == true && session["CGSSessionScreenIsLocked"] as? Bool != true
   }
   private func showTyping() { typingMark += 1; guide.typing(true) }
+  /// Presentation-only transition seam for app/desktop activation. Call before
+  /// switching; fresh surface observations establish the next video context.
+  func presentationTransition() { presentation.transition() }
+  /// Optional persistent lifecycle seam. Bridge a monotonic desktop producer's
+  /// phase raw value to CallPresentationTransitionPhase; no desktop dependency
+  /// is needed for this branch to build. Stop/reset fence observed old epochs.
+  func presentationTransition(phase: CallPresentationTransitionPhase, epoch: Int) {
+    presentation.transition(phase: phase, epoch: epoch)
+  }
   /// The typing pose stays a moment after the last key, so one key press shows too.
   private func endTyping() {
+    presentation.endTyping()
     let mark = typingMark
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 240_000_000)
@@ -376,32 +514,32 @@ import TaskPanelCore
   }
 
   /// An app by the name that a person says, or by its bundle identifier.
-  private static func application(named name: String) -> URL? {
+  private static func application(named name: String) -> Result<URL, HandError> {
     let workspace = NSWorkspace.shared
-    if name.contains("."), !name.contains(" "), let found = workspace.urlForApplication(withBundleIdentifier: name) { return found }
-    func same(_ other: String?) -> Bool { other?.caseInsensitiveCompare(name) == .orderedSame }
-    if let running = workspace.runningApplications.first(where: { $0.activationPolicy == .regular && same($0.localizedName) }),
-      let found = running.bundleURL { return found }
+    if name.contains("."), !name.contains(" "), let found = workspace.urlForApplication(withBundleIdentifier: name) { return .success(found) }
     let files = FileManager.default
+    var candidates: [DesktopAppCandidate] = workspace.runningApplications.compactMap { app in
+      guard app.activationPolicy == .regular, let url = app.bundleURL, let name = app.localizedName else { return nil }
+      return DesktopAppCandidate(path: url.resolvingSymlinksInPath().path, names: [name])
+    }
     let folders = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/Applications/Utilities",
                    NSHomeDirectory() + "/Applications", "/System/Library/CoreServices", "/System/Library/CoreServices/Applications"]
-    let apps = folders.flatMap { folder in
-      ((try? files.contentsOfDirectory(atPath: folder)) ?? []).filter { $0.hasSuffix(".app") }.map { (folder: folder, file: $0) }
+    for folder in folders {
+      for file in ((try? files.contentsOfDirectory(atPath: folder)) ?? []) where file.hasSuffix(".app") {
+        let url = URL(fileURLWithPath: folder + "/" + file).resolvingSymlinksInPath()
+        let shown = files.displayName(atPath: url.path)
+        candidates.append(DesktopAppCandidate(path: url.path,
+          names: [String(file.dropLast(4)), shown.hasSuffix(".app") ? String(shown.dropLast(4)) : shown]))
+      }
     }
-    // First by the name of the file, then by the name that the Finder shows in the person's language.
-    if let match = apps.first(where: { same(String($0.file.dropLast(4))) }) { return URL(fileURLWithPath: match.folder + "/" + match.file) }
-    if let match = apps.first(where: {
-      let shown = files.displayName(atPath: $0.folder + "/" + $0.file)
-      return same(shown) || same(shown.hasSuffix(".app") ? String(shown.dropLast(4)) : shown)
-    }) { return URL(fileURLWithPath: match.folder + "/" + match.file) }
-    return nil
+    return DesktopAppSelection.path(named: name, candidates: candidates).map { URL(fileURLWithPath: $0) }
   }
 
   // MARK: rights
 
   /// The one menu item for the two rights. A click asks macOS for both; its second line shows each.
   func menuItem() -> NSMenuItem {
-    let item = NSMenuItem(title: "Computer use: grant access", action: #selector(grantAccess), keyEquivalent: "")
+    let item = NSMenuItem(title: "Computer use: access and navigation setup", action: #selector(grantAccess), keyEquivalent: "")
     item.target = self
     item.toolTip = "ClawdTime needs both to act on this Mac when you ask it to. After you allow screen recording, macOS may ask you to start ClawdTime again."
     menuItems.add(item)
@@ -417,7 +555,7 @@ import TaskPanelCore
     }
     let accessibility = rights?.accessibility == true, screenRecording = rights?.screenRecording == true
     let state = "Accessibility: \(accessibility ? "granted" : "not granted") · Screen recording: \(screenRecording ? "granted" : "not granted")"
-    if #available(macOS 14.4, *) { item.subtitle = state } else { item.title = "Computer use: grant access (" + state + ")" }
+    if #available(macOS 14.4, *) { item.subtitle = state } else { item.title = "Computer use: access and navigation setup (" + state + ")" }
     item.state = accessibility && screenRecording ? .on : .off
   }
   /// The person clicked the menu item. Only here may macOS show its prompts.
@@ -438,5 +576,32 @@ import TaskPanelCore
     }
     rights = nil
     refreshMenu()
+    if AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() { navigationSetup() }
+  }
+  /// A person opens this setup summary. Reading settings never changes them and
+  /// missing preference data is displayed as unknown, not a guessed default.
+  private func navigationSetup() {
+    let environment = ProcessInfo.processInfo.environment
+    let left = environment["CLAWDTIME_SPACE_LEFT_SHORTCUT"].flatMap { KeyCombo.parse($0) == nil ? nil : $0 }
+    let right = environment["CLAWDTIME_SPACE_RIGHT_SHORTCUT"].flatMap { KeyCombo.parse($0) == nil ? nil : $0 }
+    let shortcuts: String
+    if let left, let right, input.desktopShortcuts() != nil {
+      shortcuts = "Left: \(left) · Right: \(right). Both combinations are enabled. Confirm they are assigned to Move left/right a space in Keyboard → Keyboard Shortcuts → Mission Control."
+    } else {
+      shortcuts = "Desktop shortcuts are not ready. Enable Move left/right a space in Keyboard → Keyboard Shortcuts → Mission Control, then configure ClawdTime with those exact combinations and relaunch it."
+    }
+    let setting = CFPreferencesCopyAppValue("workspaces-auto-swoosh" as CFString, "com.apple.dock" as CFString)
+    let appSpaces: String
+    if let setting, CFGetTypeID(setting) == CFBooleanGetTypeID() {
+      appSpaces = (setting as! Bool) ? "The saved app-to-Space setting is enabled." : "The saved app-to-Space setting is disabled; activating an app may leave its window on another Space."
+    } else { appSpaces = "The app-to-Space setting could not be confirmed." }
+    let alert = NSAlert()
+    alert.messageText = "App and desktop switching"
+    alert.informativeText = "Accessibility and Screen Recording are granted.\n\n" + shortcuts + "\n\n" + appSpaces +
+      " Check Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application.\n\nPrevious app uses Command–Tab once. A named app comes forward with the window that it chooses, on any number of displays. A named window and a desktop switch need one display; full-screen windows need verifiable window evidence, and Split View remains unsupported for them."
+    alert.addButton(withTitle: "Done")
+    alert.addButton(withTitle: "Open System Settings")
+    if alert.runModal() == .alertSecondButtonReturn,
+      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") { NSWorkspace.shared.open(url) }
   }
 }

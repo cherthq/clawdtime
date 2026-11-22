@@ -80,6 +80,14 @@ public enum ScrollPlan {
 
 /// What the hands may open. The worker's command is a plan that nobody checked.
 public enum HandsTarget {
+  /// The title as it was asked for. It is never rewritten here; a window's title is
+  /// compared with it by `DesktopArrival.sameTitle`.
+  public static func windowTitle(_ text: String) -> String? {
+    guard (1...200).contains(text.utf16.count), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      !text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else { return nil }
+    return text
+  }
+
   /// A web address: http or https with a host and no credentials. Any other
   /// scheme can start a program, a file or a call, so it is refused.
   public static func webURL(_ text: String) -> URL? {

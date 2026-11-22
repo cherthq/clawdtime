@@ -172,4 +172,55 @@ final class GuidedCursorLookTests: XCTestCase {
     XCTAssertEqual(GuidedFocus.place(focus: nil, shown: CGPoint(x: 5000, y: 5), pointer: pointer, screen: screen), pointer)
     XCTAssertEqual(GuidedFocus.place(focus: nil, shown: CGPoint(x: CGFloat.nan, y: 5), pointer: pointer, screen: screen), pointer)
   }
+
+  func testPresentationRegionIncludesTheLongestCentralLabelBeyondAnActionCentredCrop() throws {
+    let display = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let tip = CGPoint(x: 720, y: 450)
+    let layout = GuidedLayout(tip: tip, pillWidth: GuidedLook.pillMax, screen: display)
+    let pill = onScreen(layout).pill
+    let painted = layout.paintedBounds.intersection(display)
+    XCTAssertTrue(painted.contains(pill.insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade)))
+    XCTAssertTrue(painted.contains(tip))
+    // This is the regression: a 1.8x action-centred crop loses the far end.
+    let oldCrop = CGRect(x: tip.x - 1440 / 1.8 / 2, y: 0, width: 1440 / 1.8, height: 900)
+    XCTAssertFalse(oldCrop.contains(pill))
+    XCTAssertGreaterThan(painted.maxX, oldCrop.maxX)
+    // Use only painted geometry, not the slightly larger transparent window.
+    XCTAssertLessThan(painted.width, layout.window.width)
+    let map = try XCTUnwrap(ScreenMap(width: 1440, height: 900, scale: 2))
+    let region = map.flip(painted)
+    XCTAssertEqual(region.width, painted.width)
+    XCTAssertTrue(region.contains(map.flip(pill)))
+    XCTAssertTrue(region.contains(map.flip(tip)))
+  }
+
+  func testPresentationRegionKeepsTheLongestLabelAndPulseInsideEveryScreenEdge() {
+    let display = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    for point in [CGPoint(x: 0, y: 0), CGPoint(x: 1439, y: 0), CGPoint(x: 0, y: 899),
+                  CGPoint(x: 1439, y: 899), CGPoint(x: 1400, y: 450)] {
+      let layout = GuidedLayout(tip: point, pillWidth: GuidedLook.pillMax, screen: display)
+      let painted = layout.paintedBounds.intersection(display)
+      XCTAssertTrue(display.contains(painted))
+      XCTAssertTrue(painted.contains(onScreen(layout).pill))
+      let radius = (GuidedLook.ring + GuidedLook.ringLine) * GuidedLook.pulse / 2
+      let pulse = CGRect(x: point.x - radius, y: point.y - radius, width: 2 * radius, height: 2 * radius).intersection(display)
+      XCTAssertTrue(painted.contains(pulse))
+    }
+  }
+
+  func testTypingPresentationIncludesFreshFieldAndPlannedLabelInOriginalPoints() throws {
+    let display = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let map = try XCTUnwrap(ScreenMap(width: 1440, height: 900, scale: 2))
+    for field in [CGRect(x: 400, y: 100, width: 280, height: 24), CGRect(x: 1050, y: 850, width: 360, height: 30)] {
+      let tip = GuidedFocus.place(focus: map.flip(field), shown: nil, pointer: .zero, screen: display)
+      let layout = GuidedLayout(tip: tip, pillWidth: GuidedLook.pillMax, screen: display)
+      let region = field.union(map.flip(layout.paintedBounds.intersection(display)))
+      XCTAssertTrue(region.contains(field))
+      XCTAssertTrue(region.contains(map.flip(onScreen(layout).pill)))
+      XCTAssertTrue(region.contains(map.flip(tip)))
+      XCTAssertTrue(display.contains(region))
+      // Retina scaling is metadata only, never applied to input or these hints.
+      XCTAssertEqual(map.flip(map.flip(field)), field)
+    }
+  }
 }

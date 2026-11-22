@@ -2372,12 +2372,14 @@ describe("work with a don't in it waits for the person's yes", () => {
       expect(world.desk.pending().map((item) => item.id)).toEqual([request.id]);
       expect(windows).toHaveLength(0);
     }
-    // The same for a sentence that the chat log cut: the yes cannot be bound, and still decides nothing.
+    // An oversized instruction is rejected. A later yes is still unbound and
+    // cannot approve an unrelated request that arrived after the rejection.
     const { world, windows } = mac();
     const history: ChatMessage[] = [];
     const long = `build a landing page, don't use React, ${"and   keep   it   simple   ".repeat(120)}`;
     expect(long.length).toBeGreaterThan(2000);
     const question = await new Supervisor(world, null).reply([], long, "chat");
+    expect(question).toContain("longer than 2000");
     history.push(
       said("user", long.slice(0, 2000)),
       said("assistant", question),
