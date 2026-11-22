@@ -16,6 +16,7 @@ import {
   computerDirectory,
   readComputerSwitch,
 } from "../connectors/computer/journal.js";
+import { recordTiming } from "../connectors/computer/timing.js";
 import { FakeBrowser } from "./connectors-computer-fixture.js";
 
 const roots: string[] = [];
@@ -215,13 +216,36 @@ describe("clawdtime computer", () => {
     expect(browser.calls).toEqual([]);
   });
 
+  it("prints the time of the newest steps, and says how to turn the record on when there is none", async () => {
+    const { root, run } = setup();
+    expect(await run("timing")).toBe(
+      "No step was timed yet. Start the desktop service with CLAWDTIME_COMPUTER_TIMING=on, then ask for something.",
+    );
+    // Reading writes nothing.
+    expect(readdirSync(root)).toEqual([]);
+    const at = Date.UTC(2026, 10, 22, 9);
+    for (let step = 1; step <= 23; step++)
+      recordTiming(
+        root,
+        { step, kind: "click_element", lookMs: 310, planMs: 1840, actMs: 420 },
+        () => at + step * 1000,
+      );
+    const printed = (await run("timing")).split("\n");
+    // The newest 20, oldest first.
+    expect(printed).toHaveLength(20);
+    expect(printed[0]).toBe(
+      "2026-11-22T09:00:04.000Z step 4 click_element: look 310 ms, plan 1840 ms, act 420 ms",
+    );
+    expect(printed[19]).toMatch(/^2026-11-22T09:00:23\.000Z step 23 /);
+  });
+
   it("has help, and refuses a word that it does not know", async () => {
     const { root, run } = setup();
     const help = await run("help");
-    for (const word of ["status", "on", "off", "doctor", "clear"])
+    for (const word of ["status", "on", "off", "doctor", "clear", "timing"])
       expect(help).toMatch(new RegExp(`computer ${word}\\b`));
     await expect(run("launch")).rejects.toThrow(
-      "Use: clawdtime computer status|on|off|doctor|clear",
+      "Use: clawdtime computer status|on|off|doctor|clear|timing",
     );
     await expect(run("on", "now")).rejects.toThrow("Use: clawdtime computer");
     expect(readdirSync(root)).toEqual([]);

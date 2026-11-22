@@ -29,7 +29,6 @@ import {
   computerPort,
   offComputerPort,
   testServiceText,
-  timingLine,
 } from "../connectors/computer/service.js";
 import {
   ComputerWorker,
@@ -529,19 +528,6 @@ describe("how the service builds computer use", () => {
       message: offText,
     });
     expect(built.worker!.snapshot().configured).toBe(false);
-  });
-  it("writes one line for a step, with numbers and the kind of action only", () => {
-    expect(
-      timingLine({
-        step: 3,
-        kind: "click_element",
-        lookMs: 310,
-        planMs: 1840,
-        actMs: 420,
-      }),
-    ).toBe(
-      "computer step 3 click_element: look 310 ms, plan 1840 ms, act 420 ms",
-    );
   });
   it("is not built where the service says that it may not run", () => {
     const root = home();
