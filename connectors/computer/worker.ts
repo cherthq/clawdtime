@@ -1470,6 +1470,22 @@ export class ComputerWorker implements DesktopExecutorPort {
         "sent, but no text field had the focus. Look for the text on the next screen: it may not be there.",
         "ok",
       );
+    // A polite quit can be refused by the app itself: it asks about work that
+    // is not saved, and stays. The planner reads that, and looks.
+    if (
+      send.command.kind === "quit_app" &&
+      handed.result &&
+      !handed.result.ok &&
+      handed.result.error === "failed"
+    )
+      return this.note(
+        run,
+        action,
+        why,
+        ready.target,
+        "the quit was sent, but the app still runs: it may ask something first. Look at the screen.",
+        "failed",
+      );
     this.note(run, action, why, ready.target, ...outcome(handed));
   }
 

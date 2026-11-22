@@ -200,6 +200,24 @@ describe("a secure field", () => {
       command: { kind: "type", text: "finished" },
     });
   });
+  it("quits an app by its name, and always asks first", () => {
+    const quit = run({ kind: "quit_app", name: " TextEdit " }, view(seen));
+    expect(quit.label).toBe("Quit TextEdit");
+    expect(quit.risk).toMatch(/quits the app.*not saved can be lost/);
+    expect(quit.send).toEqual({
+      via: "hands",
+      look: false,
+      command: { kind: "quit_app", name: "TextEdit" },
+    });
+    // It needs no window and no look at the screen: it also runs when the screen could not be read.
+    expect(
+      check({ kind: "quit_app", name: "TextEdit" }, view(null), "").verdict,
+    ).toBe("run");
+    for (const name of ["", "  ", ".hidden", "a/b", "a:b", "a\\b"])
+      expect(refused({ kind: "quit_app", name }, view(seen))).toMatch(
+        /plain name of an app/,
+      );
+  });
   it("refuses text with a line break or another control character", () => {
     expect(refused({ kind: "type", text: "ls\n" }, view(seen))).toMatch(
       /one line/,

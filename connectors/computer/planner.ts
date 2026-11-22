@@ -143,6 +143,12 @@ const screenTools = [
     ["name"],
   ),
   tool(
+    "quit_app",
+    "Quit an app by its name. The person is asked first. Use this to quit an app, not a key combination: it also works when the app has no window.",
+    { name: { type: "string" } },
+    ["name"],
+  ),
+  tool(
     "open_url",
     "Open an http or https link in the default browser.",
     { url: { type: "string" } },
@@ -290,7 +296,7 @@ function stepLine(record: StepRecord) {
       ? ` "${line(action.text, 60)}"`
       : action.kind === "key"
         ? ` ${line(action.combo, 40)}`
-        : action.kind === "open_app"
+        : action.kind === "open_app" || action.kind === "quit_app"
           ? ` ${line(action.name, 60)}`
           : action.kind === "open_url" || action.kind === "browser_open"
             ? ` ${line(action.url, 120)}`
