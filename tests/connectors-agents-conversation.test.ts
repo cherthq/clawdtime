@@ -7592,9 +7592,13 @@ describe("a decision that the person said: the model is asked once more, and a y
       "(For you, the model: their word is the answer to your own last message, which was not about this request. Reply to that answer first, in words: say what your last message offered, and do not say that you did it. You may add one short sentence that the request still waits. Call no tool for this word.)";
     const noYes = `${yesForThePerson} ${forTheModel}`;
     const noNo = `A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny". ${forTheModel}`;
+    // What the decide tool answered. The state that the code reads first
+    // for a word about a session stands before it and is no such answer.
     const toolSaid = (run: ReturnType<typeof scripted>) =>
-      run.seen[1]!.messages.filter((message) => message.role === "tool")[0]!
-        .content;
+      run.seen[1]!.messages.filter(
+        (message) =>
+          message.role === "tool" && message.toolCallId !== "state_first",
+      )[0]!.content;
     const others = [
       "The payments tests look flaky. Should I keep an eye on them?",
       "Deploy fix has been quiet for a while. Want me to tell you what it last did?",
@@ -15829,5 +15833,126 @@ describe("an answer that promises to tell, watch or remind later, with nothing b
     expect(reply).toBe(
       "Not yet. I do not say that later by myself. Ask me again when you want to know.",
     );
+  });
+});
+
+describe("a bare word that answers ClawdTime's own question about a session: the state is read first", () => {
+  /** A Mac with three sessions, and a conversation with the clock's time. */
+  const room = () => {
+    const made = mac([
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+    ]);
+    const opened: string[] = [];
+    const world: SupervisorWorld = {
+      ...made.world,
+      focus: async (item) => {
+        opened.push(item.name ?? "");
+        return { ok: true, precision: "tab" };
+      },
+    };
+    const history: ChatMessage[] = [];
+    const told = (text: string) => {
+      made.clock.now += 1_000;
+      history.push({ ...said("assistant", text), at: made.clock.now });
+      made.clock.now += 5_000;
+    };
+    const say = async (words: string, steps: (ToolCall[] | string)[]) => {
+      const run = scripted(steps);
+      const at = made.clock.now;
+      const reply = await new Supervisor(world, run.model).reply(
+        [...history],
+        words,
+        "chat",
+      );
+      history.push(
+        { ...said("user", words), at },
+        { ...said("assistant", reply), at },
+      );
+      made.clock.now += 5_000;
+      return { reply, run };
+    };
+    /** The state that the code read before the model, or undefined. */
+    const stateFirst = (run: ReturnType<typeof scripted>) =>
+      run.seen[0]?.messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "state_first",
+      )?.content;
+    return { made, world, opened, told, say, stateFirst };
+  };
+
+  it.each([
+    "Deploy fix has been quiet for a while. Want me to tell you what it last did?",
+    "Should I tell you what deploy fix is doing?",
+    "Want me to check on deploy fix?",
+    "Deploy fix looks stuck. Want a summary?",
+  ])("reads the state first for a yes after %j", async (question) => {
+    for (const words of ["yes", "ok", "sure", "yes please", "go ahead"]) {
+      const { told, say, stateFirst, opened } = room();
+      told(question);
+      const got = await say(words, ["Deploy fix is still working."]);
+      const state = stateFirst(got.run);
+      expect(state, `${question} / ${words}`).toBeDefined();
+      expect(state, `${question} / ${words}`).toContain("deploy fix");
+      // One request to the model, and nothing opened.
+      expect(got.run.seen, `${question} / ${words}`).toHaveLength(1);
+      expect(opened).toEqual([]);
+      expect(got.reply).toBe("Deploy fix is still working.");
+    }
+  });
+
+  it("reads the state first also while a request waits, and decides nothing", async () => {
+    const { made, world, told, say, stateFirst } = room();
+    waits(world);
+    told(
+      "Deploy fix has been quiet for a while. Want me to tell you what it last did?",
+    );
+    const got = await say("yes", ["Deploy fix is still working."]);
+    expect(stateFirst(got.run)).toContain("deploy fix");
+    expect(world.desk.pending()).toHaveLength(1);
+    void made;
+  });
+
+  it.each([
+    // No session in ClawdTime's question.
+    ["Want me to check anything else?", "yes"],
+    ["The footer looks off. Want me to start a job to fix the footer?", "yes"],
+    // No question of ClawdTime before the word.
+    [null, "yes"],
+    ["Deploy fix is still working.", "yes"],
+    // More than a bare word.
+    ["Want me to check on deploy fix?", "yes, and tell it to hurry"],
+    ["Want me to check on deploy fix?", "what would that show?"],
+  ] as const)(
+    "does not read the state by this rule after %j and %j",
+    async (question, words) => {
+      const { told, say, stateFirst } = room();
+      if (question) told(question);
+      const got = await say(words, ["Okay."]);
+      // A message that asks about the state by itself is read by its own rule.
+      if (got.run.seen.length)
+        expect(stateFirst(got.run), words).toBeUndefined();
+    },
+  );
+
+  it("leaves a yes to an offer to open to the open, and reads no state for it", async () => {
+    const { told, say, stateFirst, opened } = room();
+    told("Want me to open the docs session?");
+    const got = await say("yes", ["Docs is open."]);
+    expect(opened).toEqual(["docs"]);
+    expect(stateFirst(got.run)).toBeUndefined();
+  });
+
+  it("reads the state only once when the message is also a question about the state", async () => {
+    const { told, say } = room();
+    told("Want me to check on deploy fix?");
+    const got = await say("yes", ["Deploy fix is still working."]);
+    expect(
+      got.run.seen[0]!.messages.filter(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "state_first",
+      ),
+    ).toHaveLength(1);
   });
 });
