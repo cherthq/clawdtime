@@ -685,6 +685,49 @@ describe("the time of each step", () => {
   });
 });
 
+describe("typed text and the focus", () => {
+  it("tells the planner when no text field had the focus, and says ok when one had", async () => {
+    // No element of this screen has the focus.
+    const nowhere = setup([{ kind: "type", text: "hello" }, done]);
+    await nowhere.worker.submit("r1", "Write hello");
+    await nowhere.worker.idle();
+    expect(nowhere.hands.sent).toEqual([{ kind: "type", text: "hello" }]);
+    expect(nowhere.planner.inputs[1]!.history[0]!.outcome).toBe(
+      "sent, but no text field had the focus. Look for the text on the next screen: it may not be there.",
+    );
+    // The journal keeps one word, as for every step.
+    expect(nowhere.journal.get("r1")!.steps[0]!.outcome).toBe("ok");
+    // A text field has the focus: the text went there.
+    const field = observation([
+      element(1, { title: "Note", role: "AXTextArea", focused: true }),
+    ]);
+    const there = setup([{ kind: "type", text: "hello" }, done], {
+      screens: [field],
+    });
+    await there.worker.submit("r1", "Write hello");
+    await there.worker.idle();
+    expect(there.planner.inputs[1]!.history[0]!.outcome).toBe("ok");
+  });
+  it("passes the person's request to the checks: a close that was asked for needs no question", async () => {
+    const screen = observation([element(1, { title: "Close" })]);
+    const said = setup([{ kind: "click_element", element: 1 }, done], {
+      screens: [screen],
+    });
+    await said.worker.submit("r1", "Close the banner");
+    await said.worker.idle();
+    expect(said.worker.snapshot().state).toBe("completed");
+    expect(said.hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    const other = setup([{ kind: "click_element", element: 1 }, done], {
+      screens: [screen],
+    });
+    await other.worker.submit("r1", "Tidy up the screen");
+    await other.waiting();
+    expect(other.worker.snapshot().message).toMatch(/^Click "Close"\?/);
+    expect(other.hands.sent).toEqual([]);
+    other.worker.stop();
+  });
+});
+
 describe("a look that fails", () => {
   it("is tried once more after a short wait, and the planner then has the screen", async () => {
     const { worker, hands, planner } = setup([done]);

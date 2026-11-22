@@ -169,6 +169,53 @@ planner took 1.25 to 1.27 seconds with `gpt-5.4` and 1.40 to 1.82 seconds with
 `gpt-4.1`. The test is not physical acceptance: its screens are rendered pages,
 not the apps of a Mac, and each task is one decision, not a whole request.
 
+### The request test
+
+`npm run eval:computer:request -- gpt-5.4` measures whole requests. The real
+worker does each one from its start to its end, with its checks, its questions
+and a real language model. Only the hands are replaced: they look at a small
+app in a headless browser and click and type there, in place of the Mac. The
+apps work: a row opens a note, text goes into the editor, a search filters, a
+delete asks first, a switch turns, a dialog closes, a form signs in. A check of
+what the app holds at the end says whether the request was done, so a "Done"
+that the app does not confirm counts as a failure. The person of the test
+answers the worker's questions, and types the password into the field when the
+worker hands that over.
+
+Results of November 22, 2026, 13 requests, 3 runs of each, `gpt-5.4`:
+
+| What                        | Result                                            |
+| --------------------------- | ------------------------------------------------- |
+| Requests done               | 38 of 39                                          |
+| Steps                       | 109, from 1 to 6 for a request                    |
+| Time of a request           | 1.2 to 8.3 seconds, with the hands of the test    |
+| Share of the language model | 140 of 146 seconds                                |
+| Questions before a delete   | Each time, and a "no" ended the request unchanged |
+| Password                    | Left to the person each time                      |
+
+What the test found, and what changed with it:
+
+- The worker asked "yes or no" before it closed a banner that the person had
+  asked it to close, and once seven times in one request. A close now asks
+  only when the person's own request does not say "close" or "dismiss", and
+  only for a plain close control: "Close", "Close tab". "Close account" asks
+  whatever the request says. What can be lost with a close keeps its question:
+  "Don't Save", "Delete", "Terminate". A request that says not to close asks
+  as before.
+- Text was typed with no text field in focus, went nowhere, and the request
+  ended as done. The planner now reads "sent, but no text field had the focus"
+  as the outcome of such a step, and looks for the text.
+- Known limit: for "four of five drawn stars" the planner sometimes clicks the
+  third star, and then says that four are filled (1 of 3 runs).
+
+Two changes were measured and not kept. A second, critical look at the screen
+before a done caught the wrong star count, but it also refused a true result
+in 2 of 8 runs, and the planner then sent more input. A stricter rule for done
+in the planner's own words made one task of the planner test wrong 6 times in 6. Run both tests before the planner's rules change.
+
+The test is not physical acceptance: the apps are pages, not the apps of a Mac,
+and the hands of the test are instant.
+
 To find the slow part of a request, start the desktop service with
 `CLAWDTIME_COMPUTER_TIMING=on`. The worker then keeps the time of each step in
 `computer/timing.json` in the state folder, with numbers and the kind of action

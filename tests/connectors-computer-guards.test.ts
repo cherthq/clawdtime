@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  askedToClose,
   check,
   dangerWords,
   parseCombo,
@@ -350,8 +351,85 @@ describe("an action that needs the person's yes", () => {
     // The letter alone, and other keys with Command, close nothing.
     for (const combo of ["w", "shift+w", "cmd+e", "cmd+r"])
       expect(run({ kind: "key", combo }).risk).toBeNull();
-    expect(dangerWords).toContain("close");
     expect(dangerWords).toContain("terminate");
+  });
+  it("asks before a close, except when the person's own request says to close", () => {
+    const screen = observation([
+      element(1, { title: "Close" }),
+      element(2, { title: "Don't Save" }),
+      element(3, { title: "Closet" }),
+    ]);
+    const asked = (goal?: string) => view(screen, goal ? { goal } : {});
+    // No request, or a request that does not say it: the close asks.
+    for (const goal of [undefined, "Tidy up the screen.", "Save the report."]) {
+      expect(
+        run({ kind: "click_element", element: 1 }, asked(goal)).risk,
+      ).toMatch(/"Close" may be something that cannot be undone/);
+      expect(run({ kind: "key", combo: "cmd+w" }, asked(goal)).risk).toMatch(
+        /closes a window/,
+      );
+    }
+    // The person said it: a click on Close, a point that the planner calls a close, and the key need no question.
+    for (const goal of [
+      "Close the yellow banner at the top.",
+      "please dismiss that popup",
+      "Close this tab and open the report.",
+    ]) {
+      expect(
+        run({ kind: "click_element", element: 1 }, asked(goal)).risk,
+      ).toBeNull();
+      expect(
+        run(
+          { kind: "click_at", x: 600, y: 700 },
+          asked(goal),
+          "Close the banner",
+        ).risk,
+      ).toBeNull();
+      expect(run({ kind: "key", combo: "cmd+w" }, asked(goal)).risk).toBeNull();
+    }
+    // A request that says not to close asks as before.
+    for (const goal of [
+      "Do not close the window, only save.",
+      "don't close anything",
+      "Save it without ever having to close the tab",
+      "never dismiss the alert",
+    ])
+      expect(
+        run({ kind: "click_element", element: 1 }, asked(goal)).risk,
+      ).not.toBeNull();
+    // What can be lost with a close keeps its question, whatever the request says.
+    expect(
+      run(
+        { kind: "click_element", element: 2 },
+        asked("Close the document without saving it."),
+      ).risk,
+    ).toMatch(/Don't Save/);
+    // Only a plain close control goes without the question. What ends more than a view asks, whatever the request says.
+    const named = (title: string, goal: string) =>
+      run(
+        { kind: "click_element", element: 1 },
+        view(observation([element(1, { title })]), { goal }),
+      ).risk;
+    for (const title of [
+      "Close",
+      "close button",
+      "Close tab",
+      "Close this window",
+      "Close the sidebar",
+    ])
+      expect(named(title, "Close it, please.")).toBeNull();
+    for (const title of [
+      "Close account",
+      "Close issue",
+      "Close project and archive",
+      "Close all",
+    ])
+      expect(named(title, "Close my account.")).toMatch(/"Close" may be/);
+    // A whole word only.
+    expect(run({ kind: "click_element", element: 3 }, asked()).risk).toBeNull();
+    expect(askedToClose("Close it")).toBe(true);
+    expect(askedToClose("Open the note")).toBe(false);
+    expect(askedToClose(undefined)).toBe(false);
   });
   it("asks before a key that sends or removes", () => {
     for (const combo of ["cmd+return", "ctrl+enter", "cmd+delete"])
