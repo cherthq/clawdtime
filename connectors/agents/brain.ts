@@ -651,10 +651,76 @@ const keepAnEyeOn =
 /** How the work of a session ends, in the person's words. */
 const endWords =
   "(?:done|finish(?:es|ed)?|complet(?:e|es|ed)|ends?|stops?|ready|idle|through|over|wraps?\\s+up|fails?|breaks?|crash(?:es)?|errors?)";
+/**
+ * A verb that opens a question when it stands before the subject: "when IS
+ * it done", "when WILL it finish", "when exactly DOES it end".
+ */
+const questionVerb =
+  "(?:is|are|am|was|were|be|been|being|will|would|shall|should|can|cannot|could|may|might|must|ought|do|does|did|has|have|had|isnt|arent|wasnt|werent|wont|wouldnt|cant|couldnt|shouldnt|dont|doesnt|didnt|hasnt|havent|hadnt)";
+/** One word of the subject: no mark, no apostrophe, and no verb that opens a question. */
+const subjectWord = `(?!${questionVerb}(?![^\\s.?!;,]))[^\\s.?!;,'\\u2019]+`;
+/** What may stand between the subject and the word of the end: "is", "'s", "gets", "has been". */
+const joinsTheEnd =
+  "(?:\\s+(?:is|are|gets?|goes|go|has(?:\\s+been)?|have(?:\\s+been)?)|['\\u2019](?:s|re|ve))";
+/** The verb of the end with its ending, after one subject: "it finishes", "deploy fix fails". */
+const endsAsAVerb =
+  "(?:finishes|completes|ends|stops|wraps\\s+up|fails|breaks|crashes|errors)";
+/** The plain verb of the end, after more than one: "they finish", "the tests fail". */
+const endsPlain =
+  "(?:finish|complete|end|stop|wrap\\s+up|fail|break|crash|error)";
+/** The last word of a subject that is more than one. */
+const moreThanOne =
+  "(?:they|these|those|both|them|all|you|we|sessions|agents|tests|jobs|builds|tasks|runs|checks|ones)";
+/** "All done", "finally done", "fully finished". */
+const fullyBefore = "(?:(?:all|finally|fully|completely)\\s+)?";
+/** "When exactly ...", "when roughly ...": a question about the time, in any order. */
+const timeAdverb =
+  "(?:exactly|roughly|approximately|precisely|about|around|abouts)";
+/**
+ * The same request with the when first: "when payments tests is done, let
+ * me know", "once it finishes, tell me", "if deploy fix breaks, ping me".
+ * The end of the work stands in the when, a comma can follow it, and the
+ * request ends the clause: "when it's done, tell me what it found" and "if
+ * it fails, tell me why" ask for something else. "..., don't tell me" and
+ * "..., I'll let you know" have other words between, and are none.
+ *
+ * A list of what is taken, by its grammar: the word of when, a space, the
+ * subject (one to eight words), and then one of three ends. A joining verb
+ * and the word of the end ("is done", "'s done", "gets done", "has been
+ * completed"). The verb of the end with its ending ("finishes", "fails").
+ * Or, after a subject that is more than one, the plain verb ("they
+ * finish", "the tests fail").
+ *
+ * A question about the time is none of these. Its verb stands before the
+ * subject ("when is deploy fix done, tell me", "when will it finish, let
+ * me know", "when's it done, tell me"), so no word of the subject is such
+ * a verb and none holds an apostrophe. Or its helping verb is left out
+ * ("when it gonna finish, tell me", "when deploy fix probably done, tell
+ * me"), or it asks in the order of a statement ("when deploy fix is going
+ * to finish, tell me", "when exactly it finishes, tell me"): then
+ * something stands between the subject and its end, or a word like
+ * "exactly" follows the when.
+ */
+const whenFirstForm = `(?:when|once|as\\s+soon\\s+as|the\\s+moment|if|after)(?!\\s+${timeAdverb}(?![^\\s.?!;,]))(?:(?:\\s+${subjectWord}){1,8}?(?:${joinsTheEnd}\\s+${fullyBefore}${endWords}|\\s+${fullyBefore}${endsAsAVerb})|(?:\\s+${subjectWord}){0,7}?\\s+${moreThanOne}\\s+${fullyBefore}${endsPlain})\\b\\s*,?\\s*(?:then\\s+)?(?:please\\s+)?${hearCue}(?:\\s+know)?(?=\\s*(?:$|[.!;,]|(?:please|thanks|then|right\\s+away|at\\s+once|here)\\b))`;
 /** A form that says when: "tell me when ... is done", "give me a heads-up when it finishes", "I want to know when it's done". The end of the work stands in it. */
-const whenForm = `(?:${hearCue}[^.?!;,]{0,40}?\\b(?:when|once|as\\s+soon\\s+as|the\\s+moment|if|after)\\b[^.?!;,]{0,60}?\\b${endWords}\\b|(?:give\\s+(?:me\\s+)?a\\s+)?(?:heads[- ]up|shout)\\b[^.?!;,]{0,40}?\\b(?:when|once|as\\s+soon\\s+as|if)\\b[^.?!;,]{0,60}?\\b${endWords}\\b|report\\s+back\\b[^.?!;,]{0,40}?\\b(?:when|once|as\\s+soon\\s+as|if)\\b[^.?!;,]{0,60}?\\b${endWords}\\b|(?:i\\s+|i(?:['\\u2019]d|\\s+would)\\s+)?(?:want|need|like)\\s+to\\s+(?:know|hear)\\s+(?:when|once|as\\s+soon\\s+as)\\b)`;
+const whenForm = `(?:${whenFirstForm}|${hearCue}[^.?!;,]{0,40}?\\b(?:when|once|as\\s+soon\\s+as|the\\s+moment|if|after)\\b[^.?!;,]{0,60}?\\b${endWords}\\b|(?:give\\s+(?:me\\s+)?a\\s+)?(?:heads[- ]up|shout)\\b[^.?!;,]{0,40}?\\b(?:when|once|as\\s+soon\\s+as|if)\\b[^.?!;,]{0,60}?\\b${endWords}\\b|report\\s+back\\b[^.?!;,]{0,40}?\\b(?:when|once|as\\s+soon\\s+as|if)\\b[^.?!;,]{0,60}?\\b${endWords}\\b|(?:i\\s+|i(?:['\\u2019]d|\\s+would)\\s+)?(?:want|need|like)\\s+to\\s+(?:know|hear)\\s+(?:when|once|as\\s+soon\\s+as)\\b)`;
 /** A form that says to watch: "watch docs", "keep an eye on it", "monitor the payments one". */
 const watchForm = `(?:${keepAnEyeOn}\\b|(?:watch|monitor)(?:ing)?\\s+(?!out\\b)\\S)`;
+/**
+ * "When payments tests is done, let me know" opens with a word that also
+ * opens a question, and is none: the form with the when first, said to
+ * ClawdTime at the start of the message, with no question mark.
+ */
+const whenFirstRequest = (text: string) =>
+  !/\?/.test(text) &&
+  new RegExp(`^\\s*${fillersBefore}${whenFirstForm}`, "i").test(text);
+/**
+ * A question about hearing later, and no request for it: "did you watch
+ * docs?", "should I watch docs?". A question that asks ClawdTime to do it
+ * ("can you watch docs?") and the form with the when first are requests.
+ */
+const asksAboutHearing = (text: string) =>
+  isQuestion(text) && !asksYouTo(text) && !whenFirstRequest(text);
 /**
  * The forms that ask to hear later about a session: "tell me when deploy fix
  * is done", "let me know once it finishes", "keep an eye on docs", "watch
@@ -849,6 +915,11 @@ const asksToHearTheEndOf = (text: string, name: string) => {
     ).test(text) ||
     new RegExp(
       `${saidToClawdTime}${hearCue}[^.?!;,]{0,20}?\\b(?:when|once|as\\s+soon\\s+as|the\\s+moment|if|after)\\s+${named}\\s+(?:(?:is|gets|has|goes)\\s+)?(?:all\\s+)?${endWords}\\b`,
+      "iu",
+    ).test(text) ||
+    // The when first: "when NAME is done, let me know".
+    new RegExp(
+      `${saidToClawdTime}(?:when|once|as\\s+soon\\s+as|the\\s+moment|if|after)\\s+${named}\\s+(?:(?:is|gets|has|goes)\\s+)?(?:all\\s+)?${endWords}\\b\\s*,?\\s*(?:then\\s+)?(?:please\\s+)?${hearCue}(?:\\s+know)?(?=\\s*(?:$|[.!;,]|(?:please|thanks|then|right\\s+away|at\\s+once|here)\\b))`,
       "iu",
     ).test(text)
   );
@@ -1174,6 +1245,16 @@ const opensAsARequestToHear = (text: string) =>
  * "ping me when it's done, then open a pull request").
  */
 const onlyRequestsToHear = (text: string) => {
+  // The when first runs over a comma: "when deploy fix is done, let me
+  // know". The whole message is that form, with words that say nothing.
+  if (
+    whenFirstRequest(text) &&
+    new RegExp(
+      `^\\s*${fillersBefore}${whenFirstForm}[\\s.!,]*(?:(?:please|thanks|then|right\\s+away|at\\s+once|here|ok|okay)[\\s.!,]*)*$`,
+      "i",
+    ).test(text)
+  )
+    return true;
   const clauses = text
     .split(/[.;,!?\n]+|\b(?:and|but|then)\b/i)
     .map((clause) => clause.trim())
@@ -1194,8 +1275,7 @@ const onlyRequestsToHear = (text: string) => {
  * gate: a question is a request only when it asks ClawdTime to do it.
  */
 const changesWhatIsWatched = (text: string) =>
-  (asksToBeTold(text) && (!isQuestion(text) || asksYouTo(text))) ||
-  stopsWatching(text);
+  (asksToBeTold(text) && !asksAboutHearing(text)) || stopsWatching(text);
 
 /**
  * Added to the instructions only where no record of watched sessions
@@ -5251,7 +5331,7 @@ export class Supervisor {
       !this.world.laterNews ||
       !asksToBeTold(spoken) ||
       beginsAsWordsForASession(spoken) ||
-      (isQuestion(spoken) && !asksYouTo(spoken))
+      asksAboutHearing(spoken)
     )
       return [];
     let sessions: AgentSession[];
@@ -8296,7 +8376,7 @@ export class Supervisor {
             return 'The person\'s message is no request to hear later about a session in a form that is taken, so nothing changed and nothing will be said later. Which sessions the chat waits for is in status. Promise nothing for later. When they do want to hear when a session is done, say that these words work: "tell me when NAME is done".';
           // "Did you watch docs?", "should I watch docs?": a question about
           // it, not a request. "Can you watch docs?" asks for it.
-          if (isQuestion(spoken) && !asksYouTo(spoken))
+          if (asksAboutHearing(spoken))
             return "The person's message is a question, not a request to hear later about a session. Nothing changed. Answer the question.";
           // "Tell deploy fix to keep an eye on the logs": words for that
           // session.
