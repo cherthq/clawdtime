@@ -948,6 +948,46 @@ const asksWhatIsWatched = (text: string) =>
   );
 
 /**
+ * The message opens with the request itself: a form that asks to hear
+ * later about a session, or to stop that, stands first, after fillers and a
+ * lead to ClawdTime ("ok can you keep an eye on deploy fix and tell me when
+ * it's done", "stop watching docs"). A message that opens with anything
+ * else can be work with such a form in it ("start the migration and tell
+ * me when it's done", "start a job to watch the logs").
+ */
+const opensAsARequestToHear = (text: string) =>
+  requestsToHear(text).some((found) =>
+    (/^(?:watching|monitoring|keeping)\b/i.test(found[0])
+      ? leadToClawdTimeIng
+      : leadToClawdTime
+    ).test(text.slice(0, found.index)),
+  ) ||
+  [...text.matchAll(stopForm)].some((found) =>
+    leadToClawdTime.test(text.slice(0, found.index)),
+  );
+/**
+ * The message is a request to hear later about a session, or to stop that,
+ * and nothing else: each of its clauses opens with such a form
+ * (`opensAsARequestToHear`) or holds only words that say nothing ("ok",
+ * "please", "thanks"). A list of what is taken: a clause of any other kind
+ * can be work ("keep an eye on the tests and rerun them when they fail",
+ * "ping me when it's done, then open a pull request").
+ */
+const onlyRequestsToHear = (text: string) => {
+  const clauses = text
+    .split(/[.;,!?\n]+|\b(?:and|but|then)\b/i)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause !== "");
+  const saysNothing = new RegExp(`^\\s*${fillersBefore}$`, "i");
+  return (
+    clauses.some(opensAsARequestToHear) &&
+    clauses.every(
+      (clause) =>
+        opensAsARequestToHear(clause) || saysNothing.test(`${clause} `),
+    )
+  );
+};
+/**
  * A message that the gate of the watch tool can take: a request to hear
  * later about a session, said to ClawdTime ("can you watch deploy fix and
  * tell me when it's done?"), or a request to stop. The same readers as that
@@ -3588,6 +3628,14 @@ export class Supervisor {
           ? `The chat says by itself when these sessions are done, as the person asked: ${waitsFor.join(", ")}. It waits for no other session.`
           : "The chat waits for no session now: nothing will be said by itself about a session.",
       );
+    // A brain that the desktop service did not build (the command, also
+    // for a call) takes no request to hear later, and the state says so.
+    // It speaks of this brain only: a desktop service that runs beside it
+    // keeps its own record, which is not visible from here.
+    else
+      lines.push(
+        "From here nothing is said by itself when a session is done: no request for that can be taken here.",
+      );
     lines.push(
       this.world.desk.away() ? "Away mode is on." : "Away mode is off.",
     );
@@ -5550,6 +5598,26 @@ export class Supervisor {
     );
   }
   /**
+   * A request to hear later about a session, or to stop that, where no
+   * record of watched sessions exists: nothing here can take it. The same
+   * readers as the gate of the watch tool, and the message is that request
+   * and nothing else (`onlyRequestsToHear`). Not words for a session ("tell
+   * deploy fix to watch the logs"). Not work: a message with a clause of
+   * any other kind ("run the tests and tell me when they're done", "start
+   * the migration and tell me when it's done", "watch docs and then fix
+   * the footer"). The model must not be told "you cannot" before work that
+   * the person asked for.
+   */
+  private asksToWatchWhereNothingCan(spoken: string) {
+    return (
+      this.world.laterNews === undefined &&
+      changesWhatIsWatched(spoken) &&
+      onlyRequestsToHear(spoken) &&
+      !beginsAsWordsForASession(spoken) &&
+      !opensWithAVerbOfWork(spoken)
+    );
+  }
+  /**
    * What the chat watches, for a question about it: the sessions that it
    * waits for because the person asked to hear when they are done, and the
    * sessions that work and that it does not watch.
@@ -5561,6 +5629,22 @@ export class Supervisor {
    * fact stands last, in the words of the question.
    */
   private watchedNow() {
+    // A brain that the desktop service did not build (the command, also
+    // for a call): it takes no request to hear later. With nothing in
+    // front of it the model answered "I'm watching deploy fix", offered
+    // "Want me to tell you when it's done?", or its draft was cut to a
+    // sentence that said nothing about watching.
+    //
+    // The text speaks of this brain only ("from here", "you"), and its
+    // order is about the end of a session only. So it is true whether or
+    // not a desktop service runs beside this brain: that service keeps its
+    // own record of watched sessions, and with away mode on it places the
+    // calls. The text does not name that service: the model read "the chat
+    // of the desktop service says it by itself" as itself, and promised.
+    // It is about sessions only: the text channel says the answer of a
+    // finished job by itself.
+    if (!this.world.laterNews)
+      return "About what you watch: From here nothing is said by itself when a session is done: about a session, nothing comes from here until the person asks. So you watch no session from here, and you cannot start to watch one. Do not say that you watch, track or keep an eye on a session, and do not offer or promise to say later when a session is done. Say that plainly. The person can ask at any time how a session stands.";
     let waitsFor: string[] = [];
     let sessions: AgentSession[] = [];
     try {
@@ -8632,7 +8716,10 @@ export class Supervisor {
       (asksHowLong(words) && this.complainsAboutAJob(words)) ||
       // "What are you watching for me?": which sessions the chat waits for
       // is in the state, and nowhere else.
-      (this.world.laterNews !== undefined && asksWhatIsWatched(words)) ||
+      asksWhatIsWatched(words) ||
+      // "Tell me when deploy fix is done", where nothing can say something
+      // later: the model must know that before it answers.
+      this.asksToWatchWhereNothingCan(words) ||
       // "Yes", after ClawdTime's own question about a session ("Deploy
       // fix has been quiet. Want me to tell you what it last did?"): the
       // answer is about that session, so it starts from the state too.
@@ -8660,9 +8747,14 @@ export class Supervisor {
           // and tell me when it's done?", "can you stop watching it?"):
           // that turn changes what is watched, and a fact from before it
           // would be false after it.
-          ...(this.world.laterNews !== undefined &&
-          asksWhatIsWatched(words) &&
-          !changesWhatIsWatched(words)
+          // Where nothing can say something later, no turn changes what is
+          // watched: the fact stands for a question and for a request.
+          ...((
+            this.world.laterNews !== undefined
+              ? asksWhatIsWatched(words) && !changesWhatIsWatched(words)
+              : asksWhatIsWatched(words) ||
+                this.asksToWatchWhereNothingCan(words)
+          )
             ? [this.watchedNow()]
             : []),
         ].join("\n");

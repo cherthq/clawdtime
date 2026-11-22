@@ -13904,9 +13904,17 @@ describe("the person asks to hear when a session is done", () => {
         "watch deploy fix for me",
         "chat",
       );
-      expect(
-        run.seen[0]!.messages.some((message) => message.role === "tool"),
-      ).toBe(false);
+      // The code takes no request there. It reads the state first, with the
+      // fact that nothing here can say something later.
+      const tools = run.seen[0]!.messages.filter(
+        (message) => message.role === "tool",
+      );
+      expect(tools.map((message) => message.toolCallId)).toEqual([
+        "state_first",
+      ]);
+      expect(tools[0]!.content).toContain(
+        "So you watch no session from here, and you cannot start to watch one.",
+      );
     });
   });
 
@@ -16328,5 +16336,173 @@ describe("a question about what the chat watches: what it waits for is read firs
     const got = await say(words, ["Okay."]);
     const read = got.run.seen.length ? readFirst(got.run) : undefined;
     if (read !== undefined) expect(read, words).not.toContain(rule);
+  });
+});
+
+describe("a brain with no record of watched sessions: nothing is said later, and it says so", () => {
+  /** A Mac with three sessions. `withRecord` adds the record that the desktop service keeps. */
+  const room = (withRecord = false) => {
+    const sessions = [
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+    ];
+    const made = mac(sessions);
+    const directory = dirname(dirname(made.folder));
+    const later = new SessionNews(directory, {
+      board: () => board(sessions),
+      log: new ChatLog(directory),
+      now: () => made.clock.now,
+    });
+    const world: SupervisorWorld = withRecord
+      ? { ...made.world, laterNews: later }
+      : made.world;
+    const say = async (words: string, steps: (ToolCall[] | string)[]) => {
+      made.clock.now += 5_000;
+      const run = scripted(steps);
+      const reply = await new Supervisor(world, run.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      return { reply, run };
+    };
+    /** What the code read before the model, or undefined. */
+    const readFirst = (run: ReturnType<typeof scripted>) =>
+      run.seen[0]?.messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "state_first",
+      )?.content;
+    return { made, world, later, say, readFirst };
+  };
+  const line =
+    "From here nothing is said by itself when a session is done: no request for that can be taken here.";
+  const fact =
+    "From here nothing is said by itself when a session is done: about a session, nothing comes from here until the person asks. So you watch no session from here, and you cannot start to watch one.";
+  // The order is about the end of a session only: away mode is not in it.
+  const order = "do not offer or promise to say later when a session is done";
+  /** The first words of the fact, in every form of it. */
+  const about = "About what you watch:";
+
+  it("says in the state that no request for that can be taken from here", () => {
+    const { world } = room();
+    expect(new Supervisor(world, scripted([]).model).status()).toContain(line);
+  });
+
+  it("does not say so in the state where the record exists", () => {
+    const { world } = room(true);
+    const state = new Supervisor(world, scripted([]).model).status();
+    expect(state).not.toContain(line);
+    expect(state).toContain("The chat waits for no session now");
+  });
+
+  it.each([
+    "what are you watching for me right now?",
+    "what are you watching?",
+    "are you watching anything?",
+    "so are you watching it or not?",
+    "are you still keeping an eye on docs?",
+  ])(
+    "gives the fact before the model answers the question %j",
+    async (words) => {
+      const { say, readFirst } = room();
+      const got = await say(words, ["I watch nothing from here."]);
+      const read = readFirst(got.run);
+      expect(read, words).toBeDefined();
+      expect(read, words).toContain("Sessions:");
+      expect(read, words).toContain(fact);
+      expect(read, words).toContain(order);
+      // The record of the desktop service is not visible from here: the
+      // read does not say that no session is watched.
+      // The text speaks of this brain only. A desktop service beside it
+      // keeps its own record, so nothing says that no session is watched
+      // at all, and nothing names that service as the one that speaks.
+      expect(read, words).not.toContain("no session is watched");
+      expect(read, words).not.toContain("desktop service");
+      // The text channel says the answer of a finished job by itself: the
+      // fact is about sessions, and not about every answer.
+      expect(read, words).not.toContain("only when the person writes");
+      expect(read, words).not.toContain("You watch now");
+      expect(got.run.seen, words).toHaveLength(1);
+      expect(got.reply, words).toBe("I watch nothing from here.");
+    },
+  );
+
+  it.each([
+    "keep an eye on deploy fix and tell me when it's done",
+    "tell me when deploy fix is done",
+    "can you watch deploy fix for me?",
+    "let me know when payments tests finishes",
+    "watch docs",
+    "stop watching deploy fix",
+    "ok can you keep an eye on deploy fix and tell me when it's done",
+    "please let me know once deploy fix finishes",
+    "tell me when deploy fix is done, thanks",
+    "watch docs for me please",
+  ])(
+    "gives the fact before the model answers the request %j",
+    async (words) => {
+      const { say, readFirst } = room();
+      const got = await say(words, ["I cannot say that later from here."]);
+      const read = readFirst(got.run);
+      expect(read, words).toBeDefined();
+      expect(read, words).toContain(fact);
+      expect(got.reply, words).toBe("I cannot say that later from here.");
+    },
+  );
+
+  it("says nothing about away mode: the order is about the end of a session only", async () => {
+    const { made, say, readFirst } = room();
+    made.world.desk.setAway(true);
+    made.world.desk.attend();
+    const read = readFirst(
+      (await say("what are you watching?", ["Nothing from here."])).run,
+    )!;
+    expect(read).toContain(fact);
+    expect(read).toContain(order);
+    // Who attends the desk is not known here, so no line promises a call.
+    expect(read.slice(read.indexOf(about))).not.toMatch(/away mode|call/i);
+    expect(read).not.toContain("promise to tell the person later");
+  });
+
+  it.each([
+    "start a job to watch the logs and tell me when it breaks",
+    // A question that the gate of the watch tool does not take: the model
+    // reads it, as it does where the record exists.
+    "keep an eye on deploy fix and let me know when it finishes, ok?",
+    // The request first, and work after it.
+    "keep an eye on the tests and rerun them when they fail",
+    "monitor the logs, summarize the errors",
+    "keep an eye on deploy fix and restart it if it crashes",
+    "ping me when deploy fix is done, then open a pull request",
+    "tell me when the build finishes and send the report to the team",
+    "watch docs and let me know, then merge the branch",
+    "watch the build and fix what breaks",
+    "tell me when deploy fix is done and then deploy it",
+    "watch docs and then fix the footer",
+    "keep an eye on deploy fix, and run the tests in a new job",
+    "deploy to staging, then ping me when it's done",
+    "start the migration and tell me when it's done",
+    "kick off the build and let me know when it finishes",
+    "spin up a job to rerun the tests and ping me when it's done",
+    "get a job going on the backup and tell me when it's done",
+    "run the tests and tell me when they're done",
+    "fix the footer and let me know when it's done",
+    "tell deploy fix to keep an eye on the logs",
+    "did you watch docs?",
+    "thanks",
+  ])("gives no such fact for %j", async (words) => {
+    const { say, readFirst } = room();
+    const got = await say(words, ["Okay."]);
+    const read = got.run.seen.length ? readFirst(got.run) : undefined;
+    if (read !== undefined) expect(read, words).not.toContain(about);
+  });
+
+  it("gives no such fact where the record exists: the code takes the request there", async () => {
+    const { later, say, readFirst } = room(true);
+    const got = await say("tell me when deploy fix is done", ["Will do."]);
+    expect(later.watching()).toEqual(["deploy fix"]);
+    const read = readFirst(got.run);
+    if (read !== undefined) expect(read).not.toContain(about);
   });
 });

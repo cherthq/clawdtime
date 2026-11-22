@@ -1234,6 +1234,15 @@ is done, when you asked to hear that.
   that it watches because you asked, and the sessions that work and that it
   does not watch. A session that works is not watched for that reason alone:
   nothing is said by itself about it until you ask for that.
+- Only the chat of the desktop service says by itself when a session is
+  done, and only it takes a request for that. Where another brain answers
+  your message (`clawdtime chat` alone in a plain terminal, and a call while
+  no desktop service runs), ClawdTime says that it cannot take such a
+  request there, and it offers and promises nothing about the end of a
+  session. The state says so there, and for a question or a request about
+  watching the code gives the language model that fact before it answers.
+  What the desktop service waits for is not visible from there. Ask again
+  to hear how a session stands.
 - "What did I miss?", "anything new?", "any news?" and "catch me up" are
   answered from the state and from the lines that the chat said by itself
   since your last message: that a session is done, or the answer of a job.
