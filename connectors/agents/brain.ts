@@ -488,6 +488,15 @@ export interface SupervisorWorld {
      * clear` does. It starts and repeats nothing.
      */
     clear?(): { message: string };
+    /**
+     * The app-owned worker also takes what the supervisor's reader made of
+     * the message, so that it does not read the message a second time.
+     */
+    submitRead?(
+      eventId: string,
+      text: string,
+      reading: NavigationIntent,
+    ): Promise<{ message: string }>;
   };
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
@@ -6878,6 +6887,8 @@ export class Supervisor {
     turn: Turn,
     spoken: string,
     navigation = false,
+    /** What the reader made of this message, for the worker: one move, or "none". */
+    reading?: NavigationIntent,
   ): Promise<string> {
     const execution = this.world.execution;
     if (!execution?.snapshot().configured)
@@ -6910,7 +6921,13 @@ export class Supervisor {
     if (previous !== undefined) return previous;
     let result: string;
     try {
-      result = (await execution.submit(`${turn.id}_execution`, spoken)).message;
+      // Only ClawdTime's own worker takes a reading. Another engine gets the
+      // request as before.
+      result = (
+        reading && execution.submitRead
+          ? await execution.submitRead(`${turn.id}_execution`, spoken, reading)
+          : await execution.submit(`${turn.id}_execution`, spoken)
+      ).message;
     } catch {
       result =
         "Computer task delivery is uncertain. It was not retried; check execution status.";
@@ -7976,7 +7993,7 @@ export class Supervisor {
           selected.mode !== "native"
         )
           return "App and desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
-        return this.delegate(turn, spoken, true);
+        return this.delegate(turn, spoken, true, navigation);
       }
       // No move, but work on the screen: "close the document and quit the
       // editor". The worker does it. Nothing else here can: the model that
@@ -7992,7 +8009,8 @@ export class Supervisor {
         !speaksOfManagedWork(words) &&
         !this.forSession(words)
       )
-        return this.delegate(turn, spoken, true);
+        // The reader already said that this is no move: the worker plans.
+        return this.delegate(turn, spoken, true, { kind: "none" });
     }
     // "Stop all my sessions": no tool stops or closes a session, so the code
     // says that, where nothing else can own the words: no request and no

@@ -56,8 +56,10 @@ public enum HandsGate {
 
 /// How often the hands ask for the next command.
 public enum HandsPace {
-  /// Seconds between two reads while the worker runs, and while it does not.
-  public static let active = 0.12, idle = 1.0
+  /// Seconds between two reads while the worker runs, and while it does not. The idle time is what a new
+  /// request waits before the hands see it: a second there was half a second lost, on average, at the start
+  /// of every request. A read is one small request on this Mac, so four a second cost nothing that counts.
+  public static let active = 0.12, idle = 0.25
   /// The wait before the next read. A service that does not answer is asked less often.
   public static func delay(active: Bool, failures: Int) -> Double {
     if failures > 0 { return min(5, pow(2, Double(min(failures, 4) - 1))) }

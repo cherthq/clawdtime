@@ -56,6 +56,54 @@ function setup(
   return { hands, planner, journal, worker, navigationInputs };
 }
 
+describe("a request that comes with the supervisor's reading", () => {
+  it("is not read a second time: a move runs at once, and other work goes to the planner", async () => {
+    // The worker's own reader would say "none" here. It is not asked.
+    const move = setup({ kind: "none" });
+    move.hands.answer = (c) =>
+      c.kind === "switch_desktop" ? { observation: after } : undefined;
+    await move.worker.submitRead("one", "Move one desktop right.", {
+      kind: "desktop",
+      direction: "right",
+    });
+    await move.worker.idle();
+    expect(move.navigationInputs).toEqual([]);
+    expect(move.hands.sent).toEqual([
+      { kind: "switch_desktop", direction: "right" },
+    ]);
+    // "none" from the supervisor: no move, the planner works, and the worker's reader is not asked.
+    const work = setup({ kind: "desktop", direction: "left" });
+    await work.worker.submitRead("two", "type hello in the note", {
+      kind: "none",
+    });
+    await work.worker.idle();
+    expect(work.navigationInputs).toEqual([]);
+    expect(work.hands.sent.some((c) => c.kind === "switch_desktop")).toBe(
+      false,
+    );
+  });
+  it("is read by the worker itself when no reading comes with it, and a question is no reading", async () => {
+    const own = setup({ kind: "desktop", direction: "left" });
+    own.hands.answer = (c) =>
+      c.kind === "switch_desktop" ? { observation: after } : undefined;
+    await own.worker.submit("one", "Move one desktop left.");
+    await own.worker.idle();
+    expect(own.navigationInputs).toEqual(["Move one desktop left."]);
+    expect(own.hands.sent).toEqual([
+      { kind: "switch_desktop", direction: "left" },
+    ]);
+    const asked = setup();
+    await expect(
+      asked.worker.submitRead("two", "go there", {
+        kind: "clarify",
+        question: "Where?",
+      }),
+    ).rejects.toThrow();
+    expect(asked.hands.sent).toEqual([]);
+    expect(asked.journal.get("two")).toBeNull();
+  });
+});
+
 describe("explicit directional navigation", () => {
   it.each([
     ["Switch to the desktop on the left.", "left"],

@@ -450,9 +450,36 @@ export class ComputerWorker implements DesktopExecutorPort {
    * answer. The same id never starts a second time, and nothing starts while
    * another request runs or while one has an unknown result.
    */
-  async submit(eventId: string, text: string): Promise<{ message: string }> {
+  /**
+   * `reading` is what the supervisor's reader made of this same message,
+   * when it read it: one move, or "none" for work that the planner does. The
+   * worker then does not read the message a second time, which was one more
+   * model call at the start of every such request. Without a reading the
+   * worker reads the message itself, as before. A question back to the person
+   * is no reading that can be handed over.
+   */
+  submitRead(
+    eventId: string,
+    text: string,
+    reading: NavigationIntent,
+  ): Promise<{ message: string }> {
+    return this.begin(eventId, text, reading);
+  }
+  /** A request with no reading: the worker reads it itself. */
+  submit(eventId: string, text: string): Promise<{ message: string }> {
+    return this.begin(eventId, text);
+  }
+  private async begin(
+    eventId: string,
+    text: string,
+    reading?: NavigationIntent,
+  ): Promise<{ message: string }> {
     const id = identity.parse(eventId);
     const goal = z.string().trim().min(1).max(2000).parse(text);
+    const read =
+      reading === undefined ? undefined : navigationIntentSchema.parse(reading);
+    if (read?.kind === "clarify")
+      throw new Error("A question to the person is no reading of a request.");
     if (this.journal.get(id)) return { message: this.snapshot().message };
     if (!this.enabled()) return { message: offText };
     if (this.current) return { message: busyText };
@@ -486,6 +513,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       takeover: false,
       halt,
       halted,
+      ...(read ? { navigation: read } : {}),
     };
     this.current = run;
     this.last = null;
@@ -743,7 +771,9 @@ export class ComputerWorker implements DesktopExecutorPort {
 
   private async loop(run: Run) {
     try {
-      if (this.planner.navigation) {
+      // A reading that came with the request stands. Else the worker reads
+      // the request itself, when its planner can.
+      if (run.navigation === undefined && this.planner.navigation) {
         try {
           const intent = await Promise.race([
             within(
@@ -769,14 +799,16 @@ export class ComputerWorker implements DesktopExecutorPort {
             "navigation_ambiguous",
             run.navigation.question,
           );
-        // Only an app that the hands refused to open comes back from here
-        // to the planner. Every other end of a navigation request is final.
-        if (
-          run.navigation.kind !== "none" &&
-          (await this.navigate(run, run.navigation)) !== "plan"
-        )
-          return;
       }
+      // Only an app that the hands refused to open comes back from here to
+      // the planner. Every other end of a navigation request is final.
+      if (
+        run.navigation &&
+        run.navigation.kind !== "none" &&
+        run.navigation.kind !== "clarify" &&
+        (await this.navigate(run, run.navigation)) !== "plan"
+      )
+        return;
       for (;;) {
         if (this.halted(run)) return;
         if (run.step >= this.maxSteps)
