@@ -49,7 +49,7 @@ protected state. It neither resets old tasks nor copies their data into Git.
 
 ## Upstream plan
 
-Prepare two reviewable changes from the locally verified patch:
+Prepare three reviewable changes, including their local verification evidence:
 
 1. **Dispatch and call ownership.** Include voice binding, scoped desktop
    transport, native ownership, session routing, liveness guards, and regressions as
@@ -58,6 +58,13 @@ Prepare two reviewable changes from the locally verified patch:
 2. **Setup and truthful readiness.** Include the desktop doctor, installed CLI
    entrypoint repair, accurate launch acknowledgements, and the setup-guide
    acceptance checklist. Explain which actions need the panel and which do not.
+
+3. **Directional desktop verification.** Keep strict input-window matching, but
+   qualify an explicitly requested adjacent desktop separately when a full-screen
+   parent has bounded same-app overlay windows. Require one Space notification,
+   changed parent identity, stable complete compositor evidence and fresh capture.
+   Never grant an input lease or previous-desktop history from that evidence.
+   Include the runtime diagnostic and physical switching evidence with the review.
 
 Review duplicates, concurrent requests, service replacement, lost replies,
 transcription failure, interruptions, compound presentation requests, and shutdown.

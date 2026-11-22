@@ -737,3 +737,25 @@ log show --last 10m --style json --predicate 'subsystem == "com.clawdtime.task-p
 Diagnostics neither change settlement/Stop checks nor clear or retry an unknown
 effect. A refusal before the desktop coordinator is called has no transition
 summary; the worker's fixed refusal code remains the evidence in that case.
+
+### Directional desktop evidence with app overlays
+
+Explicit left/right moves can separately recognize a stable full-screen
+composition when the focused AX parent uniquely matches its Quartz owner,
+title and frame, and up to eight smaller ordinary windows of that same app
+precede it. Every leading row must have complete, finite metadata and a unique
+window ID. Overlay frames must intersect the sole display and be no wider or
+taller than the contained full-screen parent. Their full, unclipped geometry
+and ordering are retained, including partly offscreen edges; overlays are not
+declared harmless or ignored. Foreign leading windows, duplicate IDs, missing
+frames and oversized compositions remain unsupported.
+
+A composite source must remain unchanged for three samples over 600 ms before
+one shortcut can be sent. Arrival still requires exactly one Space event, a
+different parent window, stable complete composition, and fresh capture
+bracketed by matching evidence. If either endpoint uses this path, no input
+lease or previous-desktop history is granted. App/window activation and
+click/type targeting keep their original strict matcher. This fallback is not
+used for “previous” or for departures from an empty desktop. The read-only
+`--check-desktop` report adds `directionalCompositionEligible` when the strict
+source matcher fails; it is a source preflight, not physical acceptance.
