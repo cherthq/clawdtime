@@ -769,6 +769,26 @@ describe("the person takes over", () => {
     expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
     worker.stop();
   });
+  it("keeps the person's input during a wait for the next input", async () => {
+    const { worker, hands, waiting } = setup([
+      { kind: "wait", ms: 200 },
+      click,
+      done,
+    ]);
+    hands.answer = (command) =>
+      command.kind === "wait" ? { interrupted: true } : undefined;
+    await worker.submit("r1", "Wait, then click");
+    await waiting();
+    // The wait did not pause the request. The click after it did.
+    expect(hands.commands.map((command) => command.kind)).toEqual([
+      "observe",
+      "wait",
+      "observe",
+    ]);
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    worker.stop();
+  });
   it("pauses before a click on a page too", async () => {
     const browser = new FakeBrowser(shop);
     const { worker, hands, waiting } = setup(

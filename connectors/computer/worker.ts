@@ -674,7 +674,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     run: Run,
     command: HandCommand,
     label: string,
-    /** The look before a plan: the person's input during it is kept for the next input, and pauses nothing now. */
+    /** A look before a plan, or a wait: the person's input during it is kept for the next input, and pauses nothing now. */
     planning = false,
   ): Promise<Handed> {
     if (this.halted(run)) return { sent: false, over: true, result: null };
@@ -872,6 +872,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               run,
               { kind: "wait", ms: lookAgainMs },
               "Wait for the screen",
+              true,
             );
             if (waited.over) return;
             if (run.takeover) continue;
@@ -1300,7 +1301,14 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     const streak = run.streak;
     this.count(run, ready.signature);
-    const handed = await this.hand(run, send.command, ready.label);
+    // A wait changes nothing on the Mac: the person's input during it is
+    // kept for the next input, as for the look before a plan.
+    const handed = await this.hand(
+      run,
+      send.command,
+      ready.label,
+      sendsNoInput(send),
+    );
     if (!handed.sent) return;
     const refusal = handed.over
       ? null
