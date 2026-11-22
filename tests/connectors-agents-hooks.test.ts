@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -466,6 +467,8 @@ describe("Codex hooks file", () => {
       JSON.stringify({ hooks: { Stop: [other] } }),
       { mode: 0o640 },
     );
+    // Establish the mode being preserved even when the service uses umask 077.
+    chmodSync(join(codexHome, "hooks.json"), 0o640);
     const lines: string[] = [];
     const run = (...args: string[]) =>
       agentsCli(args, {
