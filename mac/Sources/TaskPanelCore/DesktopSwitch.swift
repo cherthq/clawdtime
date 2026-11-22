@@ -54,12 +54,24 @@ public enum DesktopWindowVisibility {
   private static func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
     abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1 && abs(a.width - b.width) <= 1 && abs(a.height - b.height) <= 1
   }
+  /// One window can have two names. The window list of some apps gives the title of the page or the document
+  /// alone, and Accessibility gives that title with the app's own words after a dash: a browser adds its name
+  /// and the profile ("Inbox" and "Inbox - Browser \u{2013} Work"). Both name the same window. Without this
+  /// no transition could start from a browser window. A list name that is missing or empty names no window.
+  static func sameTitle(listed: String?, accessible: String) -> Bool {
+    guard let listed else { return false }
+    if listed == accessible { return true }
+    guard !listed.isEmpty else { return false }
+    return [" - ", " \u{2013} ", " \u{2014} "].contains { accessible.hasPrefix(listed + $0) }
+  }
   /// Match exactly one focused AX window to visible Quartz metadata. At most one
   /// same-app full-width auxiliary top strip may precede it, and only when AX
   /// confirms full screen and does not expose the strip as a real window/dialog.
   public static func focusedWindowID(pid: Int, title: String, frame: CGRect, fullScreenConfirmed: Bool,
                                      display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?) -> Int? {
-    let matches = visible.indices.filter { visible[$0].pid == pid && visible[$0].title == title && sameFrame(visible[$0].frame, frame) }
+    let matches = visible.indices.filter {
+      visible[$0].pid == pid && sameTitle(listed: visible[$0].title, accessible: title) && sameFrame(visible[$0].frame, frame)
+    }
     guard matches.count == 1, let index = matches.first else { return nil }
     if index == 0 { return visible[index].id }
     guard index == 1, fullScreenConfirmed, DesktopSurfaceScope.fullScreenGeometry(window: frame, display: display),
