@@ -1087,6 +1087,67 @@ const saysItIsNewWork = (text: string) =>
       ),
     );
 /**
+ * A hedge before a stop, a second thought after it, or a question inside
+ * the message: "maybe stop watching docs", "stop watching docs, never
+ * mind", "stop watching docs? or not". The code ends no watch by itself
+ * for such a message. "Can you stop watching docs?" asks for it.
+ */
+const hedgesAStop = (text: string) =>
+  takesItsRequestBack(text) ||
+  /\b(?:maybe|perhaps|probably|possibly|i\s+(?:think|guess|wonder|suppose)|not\s+sure|should\s+(?:i|we|you)|or\s+not|scratch\s+that|on\s+second\s+thought)\b/i.test(
+    text,
+  ) ||
+  /(?:[,.;!?\u2026]|\s-+)\s*(?:(?:oh|ah|um|uh|hmm|wait|sorry|ok|okay|actually|well)[,\s]+)*(?:don['\u2019]?t|do\s+not|wait,?\s+no|no,?\s+wait)\b[\s.!]*$/i.test(
+    text,
+  ) ||
+  (/\?/.test(text) && !(asksYouTo(text) && /^[^?]*\?\s*$/.test(text)));
+/**
+ * Each form in the message that takes a request back, with what follows it
+ * in its own clause (to the next full stop, question mark, semicolon or
+ * line break): "stop watching", " payments tests". `every`: what follows
+ * speaks of every session. `pointsAtIt`: what follows is nothing, a word
+ * that points at the session, or "when it's done".
+ */
+const stopFormsWithRest = (text: string) =>
+  [
+    ...text.matchAll(stopForm),
+    ...text.matchAll(new RegExp(noNeedForm.source, "gi")),
+  ].map((found) => {
+    const rest = text
+      .slice(found.index + found[0].length)
+      .split(/[.;!?\n]/)[0]!;
+    // The whole rest of the clause: "both, the logs and the metrics" speaks
+    // of other things.
+    const first = rest.trim();
+    // Words that add nothing, with or without a word before them: "now",
+    // "it anymore".
+    const fillers =
+      "(?:[,\\s]*\\b(?:now|anymore|any\\s+more|any\\s+longer|please|thanks|then|for\\s+now|ok|okay|too|already)\\b)*";
+    const watches =
+      /(?:watch(?:ing)?|monitor(?:ing)?|track(?:ing)?|eyes?|tabs)$/i.test(
+        found[0],
+      );
+    return {
+      rest,
+      every:
+        new RegExp(
+          `^(?:(?:on|about|for)\\s+)?(?:all\\s+of\\s+(?:them|those|these)|both(?:\\s+of\\s+them)?|them\\s+all|all\\s+(?:the\\s+|my\\s+)?sessions|every\\s+session|each\\s+(?:of\\s+them|session)|everything\\s+you(?:['\u2019]re|\\s+are)\\s+watching)${fillers}$`,
+          "i",
+        ).test(first) ||
+        (watches &&
+          new RegExp(`^(?:on\\s+)?everything${fillers}$`, "i").test(first)),
+      pointsAtIt:
+        new RegExp(
+          `^(?:(?:on|about|for)\\s+)?(?:it|that|this|that\\s+one|this\\s+one|the\\s+session|that\\s+session|this\\s+session|the\\s+agent)?${fillers}$`,
+          "i",
+        ).test(first) ||
+        new RegExp(
+          `^(?:when|once|if|as\\s+soon\\s+as)\\s+(?:it|that\\s+one|this\\s+one|the\\s+session)(?:['\u2019]s|\\s+is)?\\s+(?:done|finished|ready|complete|over|finishes|ends|stops|completes)${fillers}$`,
+          "i",
+        ).test(first),
+    };
+  });
+/**
  * The message opens with the request itself: a form that asks to hear
  * later about a session, or to stop that, stands first, after fillers and a
  * lead to ClawdTime ("ok can you keep an eye on deploy fix and tell me when
@@ -5216,6 +5277,139 @@ export class Supervisor {
           session.state === "working" || session.state === "needs_you",
       )
       .slice(0, 8);
+  }
+  /**
+   * In a turn that ended a watch, "nothing was started or changed" is
+   * false. The sentence that stands in place of a false claim says what
+   * ended, and that nothing else happened. Null in any other turn.
+   */
+  private endedInTurn(turn: Turn) {
+    // A turn that also typed, opened or decided did more than end a watch:
+    // the sentence below would be false for it.
+    if (
+      [...turn.done.keys()].some(
+        (key) =>
+          key === "decide" ||
+          key.startsWith("typed ") ||
+          key.startsWith("opened "),
+      )
+    )
+      return null;
+    const ended = [...turn.done]
+      .filter(([key]) => key.startsWith("unwatched "))
+      .map(([, name]) => name);
+    return ended.length
+      ? `I stopped watching ${ended.join(" and ")}. Nothing else was started, typed or decided for that message.`
+      : null;
+  }
+  /**
+   * The sessions whose watch the person ends in plain words, for the code
+   * to take by itself. The gate of the tool reads only that the message
+   * takes a request back (`stopsWatching`), and the model then chooses the
+   * session. Here the code chooses, so the list of what is taken is short:
+   * - the message takes a request back, asks for no new one beside it
+   *   (`asksToBeTold`), is no words for a session, and holds no hedge
+   *   before the stop and no second thought after it (`hedgesAStop`);
+   * - each stop form is read with what follows it in its own clause
+   *   (`stopFormsWithRest`). What is stopped stands there;
+   * - (a) sessions are named there, the longest name where one stands
+   *   inside another, no other session is named in the message, and the
+   *   chat waits for each of them: those;
+   * - (b) no session is named, and what follows speaks of every session
+   *   ("all of them", "both", "every session", "everything" after a verb of
+   *   watching): each session that the chat waits for;
+   * - (c) no session is named, the chat waits for exactly one, what
+   *   follows is nothing, a word that points at it ("it", "that one", "the
+   *   session") or "when it's done", and "it" is that session for sure:
+   *   no job of ClawdTime is due, no task is live, and the two messages
+   *   just before are no line of news, name that session and name no other
+   *   (or nothing was said before): that one.
+   * None for any other message: "stop watching the logs", "stop telling me
+   * jokes", "don't wait for me", "don't tell me anything yet" stop no
+   * session. Those go to the model and its call of the tool, as before.
+   */
+  private namedToStop(spoken: string, turn: Turn): AgentSession[] {
+    const later = this.world.laterNews;
+    if (
+      !later ||
+      !stopsWatching(spoken) ||
+      asksToBeTold(spoken) ||
+      beginsAsWordsForASession(spoken) ||
+      hedgesAStop(spoken)
+    )
+      return [];
+    const forms = stopFormsWithRest(spoken);
+    if (!forms.length) return [];
+    let sessions: AgentSession[];
+    let waited: Set<string>;
+    try {
+      sessions = this.world.board()?.sessions ?? [];
+      waited = new Set(later.watching().map((name) => name.toLowerCase()));
+    } catch {
+      return [];
+    }
+    // The record keeps a name as one plain line of 80 characters at most.
+    const watched = sessions.filter((session) =>
+      waited.has(clean(title(session), 80).toLowerCase()),
+    );
+    if (!watched.length) return [];
+    // The longest name wins: "docs site" is not "docs".
+    const longest = (found: AgentSession[]) =>
+      found.filter(
+        (session) =>
+          !found.some(
+            (other) =>
+              other !== session &&
+              title(other).length > title(session).length &&
+              saidAsWords(title(session), title(other)),
+          ),
+      );
+    const stopped = longest(
+      sessions.filter((session) =>
+        forms.some((form) => saidAsWords(title(session), form.rest)),
+      ),
+    );
+    const anywhere = longest(
+      sessions.filter((session) => saidAsWords(title(session), spoken)),
+    );
+    if (anywhere.length)
+      return stopped.length === anywhere.length &&
+        stopped.every((session) => watched.includes(session))
+        ? stopped
+        : [];
+    if (forms.some((form) => form.every)) return watched;
+    if (watched.length !== 1 || !forms.some((form) => form.pointsAtIt))
+      return [];
+    // "It" must have nothing else to mean. A job of ClawdTime that still
+    // runs can be "it" ("no need to tell me when it's done", after the job
+    // started), and so can another session that the exchange just before
+    // spoke of ("how is docs doing?", "Docs is idle now.", "ok stop
+    // watching it").
+    if (this.aJobIsDue(turn)) return [];
+    // A task that is not over says its own news: "it" can be the task.
+    try {
+      const task = this.world.tasks?.current();
+      if (task && !taskIsOver(task)) return [];
+    } catch {
+      return [];
+    }
+    // The two messages just before, lines of news among them. A line that
+    // the chat said by itself (the answer of a job, the end of a session)
+    // is another thing that "it" can mean.
+    const lastTwo = (turn.whole ?? turn.history).slice(-2);
+    if (lastTwo.some((message) => message.news === true)) return [];
+    // With nothing said before, "it" is the one session that is watched.
+    if (!lastTwo.length) return watched;
+    // Else the exchange just before must speak of that session, and of no
+    // other: after "is the pipeline green?", "it" is the pipeline.
+    const before = lastTwo.map((message) => message.text).join("\n");
+    return saidAsWords(title(watched[0]!), before) &&
+      !sessions.some(
+        (session) =>
+          session !== watched[0] && saidAsWords(title(session), before),
+      )
+      ? watched
+      : [];
   }
   /**
    * A job of ClawdTime whose answer is still due: one that this turn
@@ -9551,6 +9745,28 @@ export class Supervisor {
           },
         );
       }
+      // "Actually stop watching payments tests": the code takes the request
+      // to stop by itself too, for the sessions that `namedToStop` gives.
+      // The gate of the tool decides as for a call of the model. A stop
+      // that hangs on the model's choice of a tool can stay undone while
+      // the answer says "stopped", and with a phone channel the person
+      // then gets a call after their stop.
+      const toStop = turn.typedByCode ? [] : this.namedToStop(words, turn);
+      for (const [index, session] of toStop.entries()) {
+        const call: ToolCall = {
+          id: index ? `unwatch_first_${index + 1}` : "unwatch_first",
+          name: "watch_session",
+          arguments: JSON.stringify({ session: title(session), stop: true }),
+        };
+        messages.push(
+          { role: "assistant", content: "", toolCalls: [call] },
+          {
+            role: "tool",
+            toolCallId: call.id,
+            content: (await this.run(call, words, via, turn)).slice(0, 6000),
+          },
+        );
+      }
       // "Show me the payments one": the person asks to see a session, and
       // their own words fit exactly one. The code calls the tool that opens
       // it, where nothing else can own the sentence. The gate of that tool
@@ -9798,8 +10014,11 @@ export class Supervisor {
           // then. The two checks below read the answer without its
           // sentences about watching. "I started a job to fix it" stays in
           // and is caught as before.
-          const claimed = [...turn.done.keys()].some((key) =>
-            key.startsWith("watching "),
+          // The same holds for a turn that ended a watch: "Done, I stopped
+          // watching payments tests" is true then.
+          const claimed = [...turn.done.keys()].some(
+            (key) =>
+              key.startsWith("watching ") || key.startsWith("unwatched "),
           )
             ? besideWatching(reply.text)
             : reply.text;
@@ -9815,7 +10034,7 @@ export class Supervisor {
             !acted("open_session") &&
             this.startsNothing(claimed)
           ) {
-            if (rechecked) return nothingStarted;
+            if (rechecked) return this.endedInTurn(turn) ?? nothingStarted;
             rechecked = true;
             recheck =
               "\nA check of your last draft: it said that you started work, but nothing was started in this turn, and no job or task that you started is that work. The person's last message asked you to start nothing. Answer it again with what is true, and do not say that something was started or is under way.";
@@ -9836,7 +10055,10 @@ export class Supervisor {
           ) {
             // "Nothing was started or changed" is true only when no tool
             // acted in this turn.
-            if (rechecked) return acted() ? sizeNotDone : notDone;
+            if (rechecked)
+              return acted()
+                ? sizeNotDone
+                : (this.endedInTurn(turn) ?? notDone);
             rechecked = true;
             // The tool for what the person asked: a window, a session to
             // see, or work.
