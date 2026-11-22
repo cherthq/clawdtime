@@ -63,7 +63,7 @@ esac`,
     "crontab",
     `if [ "$1" = "-l" ]; then [ -f '${base}/crontab' ] && cat '${base}/crontab' || exit 1; else cat > '${base}/crontab'; fi`,
   );
-  const env = {
+  const env: Record<string, string> = {
     PATH: `${bin}:/usr/bin:/bin`,
     HOME: base,
     CLAWDTIME_LINE_STATE: state,
@@ -130,6 +130,7 @@ esac`,
   const called = () =>
     existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : [];
   return {
+    env,
     base,
     clone,
     run,
@@ -270,8 +271,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     chmodSync(join(bin, "chert"), 0o755);
     const result = f.run("keep", "dev");
     expect(result.status).toBe(0);
-    const run =
-      "chert dev --agent clawdtime --env-file .env.local --project proj_1 --json";
+    const run = `chert dev --agent clawdtime --env-file ${f.clone}/line/.env.local --project proj_1 --json`;
     expect(f.called()).toEqual([run, run, run]);
     const log = readFileSync(join(state, "host.log"), "utf8")
       .trim()
@@ -283,6 +283,31 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     expect(
       readFileSync(join(state, "dev.jsonl"), "utf8").trim().split("\n"),
     ).toHaveLength(3);
+  });
+
+  it("uses the original external env file and never automatically reclaims after guarded dev exits", () => {
+    const f = fixture();
+    const external = join(f.base, "original env.local");
+    writeFileSync(
+      external,
+      "AGENT_NAME=synthetic-agent\nCLAWDTIME_LINE_CHERT_PROJECT=synthetic-project\n",
+    );
+    f.env.CLAWDTIME_LINE_ENV_FILE = external;
+    f.env.CLAWDTIME_LINE_RETENTION_CONFIG = join(f.base, "retention.json");
+    const node = join(f.base, "bin", "node");
+    unlinkSync(node);
+    writeFileSync(
+      node,
+      `#!/bin/sh\nif [ "$1" = --input-type=module ]; then echo /synthetic/provider; exit 0; fi\nprintf '%s\\n' "node $*" >> '${f.base}/calls.log'\nexit 1\n`,
+    );
+    chmodSync(node, 0o755);
+    expect(f.run("keep", "dev").status).toBe(0);
+    expect(f.called()).toEqual([
+      `node --import ${f.clone}/line/provider-retention-preload.mjs /synthetic/provider/dist/src/cli/main.js dev --agent synthetic-agent --env-file ${external} --project synthetic-project --json`,
+    ]);
+    expect(readFileSync(join(f.base, "state", "host.log"), "utf8")).toContain(
+      "guarded dev exited; ownership must be reconciled before another claim",
+    );
   });
 
   it("starts the agent again when its worker closes, and knows only its two programs", () => {
@@ -297,7 +322,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     );
     chmodSync(join(bin, "node"), 0o755);
     expect(f.run("keep", "agent").status).toBe(0);
-    const run = "node --env-file=.env.local agent.mjs start in line";
+    const run = `node --env-file=${f.clone}/line/.env.local agent.mjs start in line`;
     expect(f.called()).toEqual([run, run]);
     expect(
       readFileSync(join(state, "host.log"), "utf8").trim().split("\n"),
@@ -359,9 +384,54 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     );
     expect(f.run("keep", "agent").status).toBe(0);
     expect(f.called().filter((line) => line.startsWith("node"))).toEqual([
-      `node --env-file=.env.local ${release}/agent.mjs start in line`,
+      `node --env-file=${f.clone}/line/.env.local ${release}/agent.mjs start in line`,
     ]);
     expect(f.run("start").out).toContain("Started in the tmux session");
+  });
+
+  it("rolls back agent code with an environment override while keeping the guarded host wrapper", () => {
+    const f = fixture();
+    const baseline = join(f.base, "baseline agent");
+    mkdirSync(baseline);
+    mkdirSync(join(baseline, "node_modules"));
+    writeFileSync(join(baseline, "agent.mjs"), "// synthetic baseline\n");
+    writeFileSync(
+      join(f.clone, "line", ".env.local"),
+      "CLAWDTIME_LINE_RELEASE=/missing/env-file-release\n",
+    );
+    f.env.CLAWDTIME_LINE_RELEASE = baseline;
+    f.env.CLAWDTIME_LINE_RETENTION_CONFIG = join(f.base, "retention.json");
+    const node = join(f.base, "bin", "node");
+    unlinkSync(node);
+    writeFileSync(
+      node,
+      `#!/bin/sh\nprintf '%s\\n' "node $*" >> '${f.base}/calls.log'\n: > '${f.base}/state/stopping'\n`,
+    );
+    chmodSync(node, 0o755);
+    expect(f.run("keep", "agent").status).toBe(0);
+    expect(f.called()).toEqual([
+      `node --env-file=${f.clone}/line/.env.local ${baseline}/agent.mjs start`,
+    ]);
+    const tmux = join(f.base, "bin", "tmux");
+    writeFileSync(
+      tmux,
+      `#!/bin/sh\n[ "$1" != has-session ] || exit 1\nprintf '%s\\n' "$*" >> '${f.base}/tmux-commands'\n`,
+    );
+    chmodSync(tmux, 0o755);
+    expect(f.run("start").status).toBe(0);
+    const commands = readFileSync(join(f.base, "tmux-commands"), "utf8");
+    expect(commands).toContain(`CLAWDTIME_LINE_RELEASE='${baseline}'`);
+    expect(commands).toContain(
+      `CLAWDTIME_LINE_RETENTION_CONFIG='${f.base}/retention.json'`,
+    );
+    expect(commands).toContain(`'${f.clone}/line/host.sh' keep agent`);
+    expect(commands).toContain(`'${f.clone}/line/host.sh' keep dev`);
+    f.env.CLAWDTIME_LINE_RELEASE = "relative";
+    expect(f.run("start").out).toContain(
+      "Agent release must be an absolute directory.",
+    );
+    f.env.CLAWDTIME_LINE_RELEASE = "/" + "x".repeat(4096);
+    expect(f.run("start").out).toContain("Agent release path is too long.");
   });
 
   it("marks the stop before it stops, and a start takes the mark away and starts both keepers", () => {

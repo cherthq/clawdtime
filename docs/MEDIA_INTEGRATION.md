@@ -1471,3 +1471,86 @@ records, rotation, lost release and retained cleanup cannot authorize killing th
 session. An `outbound-hold` prevents incoming restart until the coordinating
 service reconciles cleanup. These checks do not override the unsupported journal
 retention prerequisite or turn an idle line into an unowned line.
+
+### Pinned journal retention adapter (2026-11-22)
+
+`line/provider-retention.mjs` is ClawdTime's explicit local adapter for installed
+`@trychert/facetime@0.1.0-beta.19`, not an upstream provider retention feature.
+The published beta.22 also deletes clean dev state and provides no retention
+option. This adapter pins the installed Node v24.22.1 executable SHA-256 and four
+provider source hashes (CLI entry, dev command, claim/release, journal) in
+`RETENTION_PIN`. A version or byte mismatch refuses activation. No package,
+global module, sibling repository, or provider API is patched.
+
+The adapter changes only `fs.rmSync` calls from the pinned dev command for an
+exact direct `dev/<binding>` directory or its corresponding credentials file.
+It checks the original journal's project, line, binding and BYOR scope before
+preserving those paths in place. Other deletion calls retain native behavior.
+Normal provider drain, revoke, media cleanup and `dev_stopped` emission execute
+unchanged. Node's documented
+[`syncBuiltinESMExports`](https://nodejs.org/api/module.html#modulesyncbuiltinesmexports)
+updates existing named imports; the test exercises the already-loaded actual
+provider `runDev` with synthetic control dependencies and forbidden network.
+No journal or credentials are copied, moved, rewritten or restored.
+
+Private config (0600, owner-only canonical directories) has
+`{version:1, providerRoot, chertHome, projectId, lineId, receiptDirectory}`.
+The process proof contains PID, process start time, executable/hash, process
+command hash, provider source hash, config hash and guard hash; no credential or
+call content. The owner verifies that proof and the exact live provider binding.
+For a zero-call process whose journal does not yet exist, the owner additionally
+calls `authorizeRetentionBinding(configFile, pid, scope)` after verifying the
+provider binding. This creates only a new scoped binding authorization record;
+it never synthesizes an original journal or cursor. Missing or contradictory
+scope evidence refuses cleanup rather than deleting anything.
+
+The coordinating lead alone may migrate a running unguarded owner. From the
+final immutable source release, first write the bounded process identity to a
+new private file, then install against that exact identity:
+
+```sh
+umask 077
+node line/provider-retention-migrate.mjs describe "$RETENTION_CONFIG" "$INCOMING_PID" > "$EXPECTED_IDENTITY"
+node line/provider-retention-migrate.mjs install "$RETENTION_CONFIG" "$EXPECTED_IDENTITY"
+```
+
+`describe` is read-only. `install` verifies the pinned executable, exact CLI
+entry/`dev` arguments, PID/start time, source and config again before signaling.
+It rejects pre-existing inspector flags, any `NODE_OPTIONS`, and an occupied
+loopback port 9229. The documented Node SIGUSR1 inspector activation keeps the
+owner running. The utility verifies the inspector's PID/executable/CLI identity,
+installs the same tracked guard using documented `process.getBuiltinModule` and
+`createRequire`, requires its acknowledgment, and closes and checks the inspector.
+An installation failure after verified attachment also closes it; uncertain
+attachment or closure is an operational refusal, never permission to stop or
+claim a replacement. No unrelated debugger is closed. Only after this completes
+may the owner perform its ordinary graceful stop and require a fresh retained=0
+release receipt plus original-journal witness.
+
+Future incoming processes use `CLAWDTIME_LINE_RETENTION_CONFIG` with the scoped
+`provider-retention-preload.mjs` loader; the agent process is unaffected.
+`CLAWDTIME_LINE_ENV_FILE` points at the original private env file without copying
+or linking it into the immutable release. Before a fresh claim, preload reads
+original journals in place and applies the pinned provider's schema and
+`complete()` predicate, refusing unfinished/unknown originals. A guarded dev
+exit never triggers host.sh's automatic restart: the owner must reconcile the
+release before another claim. A fresh binding remains distinct from its retained
+predecessor; the owner records that lineage and never treats a new enrollment as
+recovery of an old unknown outcome.
+
+Synthetic validation: real named fs import, exact-path preservation, wrong-scope
+refusal, unrelated deletion behavior, actual pinned `runDev` drain/revoke,
+zero-call binding authorization, incomplete original refusal, inspector port
+collision, failed-install closure and successful acknowledgment/closure.
+These checks make no live calls and are not physical acceptance.
+
+After a retained migration, source rollback keeps the new retention wrapper and
+preload. Set `CLAWDTIME_LINE_RELEASE=/Users/garygao/clawdtime-host/line` when
+starting the new immutable release's `line/host.sh`; this explicit environment
+value overrides the env-file release setting and is passed to both tmux keepers.
+The baseline agent then reads the original private env file while guarded dev
+continues using the pinned retention adapter. The coordinating lead may restore
+the original desktop launcher separately. Never use the unguarded baseline
+`host.sh` to stop or start after migration: it could delete newer journals.
+Rollback still requires confirmed cleanup, retained original journals and no
+unknown outbound owner; selecting old source never clears the ownership fence.

@@ -25,6 +25,7 @@ export interface ProactiveLineOwnerPort {
 export interface ProactiveMediaAttempt {
   prepare(): Promise<{ credentials: TaskAudioCredentials }>;
   close(): Promise<{ closed: boolean }>;
+  inspect?(): Promise<{ ready: boolean }>;
 }
 
 /** Generic source delivery uses the native Calls API and existing warm-media
@@ -214,13 +215,15 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
         this.ports.sessions.status(grant.attemptId)?.prepared !== true
       )
         throw Error("authority_or_media_changed_during_prepare");
+      const exclusive = await this.ports.line.verify(grant.attemptId);
+      const mediaReady = !media.inspect || (await media.inspect()).ready;
       const frame =
         grant.channel === "phone_walkthrough"
           ? await this.ports.freshFrame?.(stored)
           : undefined;
-      const exclusive = await this.ports.line.verify(grant.attemptId);
       if (
         !exclusive ||
+        !mediaReady ||
         !current() ||
         (grant.channel === "phone_walkthrough" &&
           (!frame ||
@@ -273,6 +276,13 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
           terminal = observation.state === "terminal";
         } catch {
           inspectFailed = true;
+        }
+        if (media?.inspect) {
+          try {
+            if (!(await media.inspect()).ready) inspectFailed = true;
+          } catch {
+            inspectFailed = true;
+          }
         }
         const closed = this.ports.sessions.status(grant.attemptId)?.closed;
         if (

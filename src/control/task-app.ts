@@ -132,6 +132,7 @@ export function createTaskApp(
     enroll(input: unknown): void;
     line?: ProactiveLineSessions;
     status?(): unknown;
+    probe?(): Promise<unknown> | undefined;
   },
 ) {
   if (operatorToken.length < 32)
@@ -237,12 +238,13 @@ export function createTaskApp(
         return c.json({ error: "Operator credential required." }, 401);
       await next();
     });
-    app.get("/operator/proactive/doctor", (c) =>
-      c.json({
+    app.get("/operator/proactive/doctor", async (c) => {
+      await proactive.probe?.();
+      return c.json({
         ...proactive.service.doctor(),
         installation: proactive.status?.(),
-      }),
-    );
+      });
+    });
     app.get("/operator/proactive/intents", (c) =>
       c.json({
         intents: proactive.service.coordinator.list().map((r) => ({

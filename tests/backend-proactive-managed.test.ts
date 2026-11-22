@@ -379,6 +379,87 @@ function fixture(question = false) {
 }
 
 describe("managed policy callbacks", () => {
+  it("reports exact common delivery state without requiring legacy calls configuration", () => {
+    const f = fixture();
+    const reviews = new TaskReviewService(f.tasks, f.session.token);
+    cleanup.push(() => reviews.close());
+    reviews.configureProactive({
+      coordinator: f.coordinator,
+      deliveryConfigured: () => true,
+      policyFor: () => ({
+        policyId: "policy",
+        channel: "phone_walkthrough",
+        expiresAt: Date.now() + 60000,
+      }),
+    });
+    expect(reviews.snapshot(f.task)).toMatchObject({
+      state: "preparing_review",
+      phoneConfigured: true,
+      callback: {
+        intentId: f.intent.id,
+        attemptId: f.grant.attemptId,
+        state: "dispatching",
+        deliveryState: "dispatching",
+      },
+    });
+    expect(reviews.snapshot(f.task).callback?.reason).toBeUndefined();
+    f.coordinator.outcome(f.intent.id, f.grant.attemptId, "connected");
+    expect(reviews.snapshot(f.task)).toMatchObject({
+      state: "in_review",
+      callback: { state: "in_review", deliveryState: "connected" },
+    });
+    expect(reviews.snapshot(f.task).message).toContain("connected");
+    f.coordinator.outcome(f.intent.id, f.grant.attemptId, "ended", {
+      cleanupConfirmed: true,
+    });
+    expect(reviews.snapshot(f.task)).toMatchObject({
+      state: "in_review",
+      callback: { state: "delivered", deliveryState: "ended" },
+    });
+    expect(reviews.snapshot(f.task).message).toContain(
+      "Acceptance still requires",
+    );
+  });
+
+  it("distinguishes missing delivery or policy from unknown delivery and does not reuse stale revisions", () => {
+    const f = fixture();
+    const reviews = new TaskReviewService(f.tasks, f.session.token);
+    cleanup.push(() => reviews.close());
+    let configured = false,
+      policy = true;
+    reviews.configureProactive({
+      coordinator: f.coordinator,
+      deliveryConfigured: () => configured,
+      policyFor: () =>
+        policy
+          ? {
+              policyId: "policy",
+              channel: "phone_walkthrough",
+              expiresAt: Date.now() + 60000,
+            }
+          : undefined,
+    });
+    expect(reviews.request(f.task).message).toContain("phone setup is missing");
+    configured = true;
+    policy = false;
+    expect(reviews.request(f.task).message).toContain("phone setup is missing");
+    policy = true;
+    expect(reviews.request(f.task).message).toContain("requested");
+    expect(reviews.request(f.task).message).not.toContain("ready to call");
+    f.coordinator.outcome(f.intent.id, f.grant.attemptId, "unknown");
+    expect(reviews.snapshot(f.task)).toMatchObject({
+      state: "blocked",
+      callback: { state: "unknown" },
+    });
+    expect(reviews.snapshot(f.task).message).toContain("will not be redialed");
+    const changed = structuredClone(f.task);
+    changed.revision++;
+    expect(reviews.snapshot(changed).callback).not.toHaveProperty("intentId");
+    expect(reviews.snapshot(changed).message).not.toContain(
+      "delivery is uncertain",
+    );
+  });
+
   it("distinguishes explicit task questions from failure fallback questions", () => {
     const f = fixture(true);
     expect(f.intent.trigger).toBe("decision");

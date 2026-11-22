@@ -1,8 +1,8 @@
 # Proactive calls implementation and production boundary
 
 November 22, 2026. Implementation is in the `clawdtime-merge` checkout on `main`,
-based on `0b3d5189251ac9f81fbb72208d6aa6a6475c5d0b`. This is a checked source
-candidate, **not a production deployment or handset acceptance record**.
+based on `0b3d5189251ac9f81fbb72208d6aa6a6475c5d0b`. The retained production adapter is undergoing its authorized installation;
+this document distinguishes source checks, installed health and handset evidence.
 
 Candidate implementation commit: `952d49cd581bd237bfbd7e748d1ee7b37ac91523`.
 Validation used Node `v24.22.1`, LiveKit agents `1.8.0`, and the directly pinned
@@ -53,38 +53,41 @@ tasks cannot trigger real calls; real Claude Jobs remain a distinct path.
 See [CONNECTORS.md](CONNECTORS.md), [DEVICE.md](DEVICE.md) and
 [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md) for component contracts and setup.
 
-## Concrete production blocker
+## Journal-preserving production adapter
 
-The installed `@trychert/facetime@0.1.0-beta.19` and latest published beta.22
-delete the original per-binding journal during clean `chert dev` release. The
-published guide documents deletion, and all reviewed exit paths reach it.
-Neither exposes a supported in-place-retention switch or outbound call interface
-on the already-owned incoming host. An idle provider line is still owned.
+The previous blocker is resolved in source by the ClawdTime-owned
+`chert-dev-retained-v1` adapter. Installed provider beta.19 and reviewed beta.22
+both delete clean binding state. Instead of upgrading on assumption or editing a
+global package, the adapter pins beta.19's four relevant source hashes and Node
+v24.22.1's executable hash. It intercepts only the pinned dev cleanup's deletion
+of an exact scoped original journal directory and credentials. Provider drain,
+revoke and release receipts still execute normally. Original state is never
+copied, moved, reset or restored.
 
-This conflicts directly with the requirement to keep journals, cursors, receipts
-and unknown outcomes in place. No production stop, replacement host, competing
-outbound worker, runtime-data copy or journal reset was attempted. Source hashes
-and exact provider evidence are recorded in [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md).
+A lead-only migration installs that tracked guard into the exactly identified
+running Node owner through its documented inspector interface, verifies the
+acknowledgment and closes the inspector. Future dev processes preload the same
+guard. A guarded unexpected exit does not automatically claim again.
 
-The generic transport has tested ports, but the desktop setup deliberately does
-not manufacture a production `ProactiveLineOwnerPort`. Its current provider gate
-reports `provider_journal_retention_unsupported` before any stop. Completing the
-production path requires a supported provider release/ownership interface that
-retains original state through release and reacquisition, then wiring and checking
-that exact adapter. A future provider version is not presumed safe from its name.
+The production factory loads protected native Calls configuration and CLI auth
+in place, validates their destination, and connects the retained line owner,
+dedicated LiveKit worker, room preparation, native dial, cleanup and incoming
+restoration. The owner checks the exact tmux process, original journal scope,
+provider binding and fresh release receipt. New incoming bindings retain lineage
+to old revoked journals; they never replace their receipts or cursors. Source and
+configuration changes, unfinished original work and uncertain effects refuse
+handoff. Every effect has a durable reservation. Lost responses are not retried.
 
-The previously separate outbound backend also retains one uncertain onboarding
-notice and a helper-binding mismatch. Read-only inspection found ended calls with
-released leases and no unresolved call effects, but did not establish the exact
-evidence required to retire that notice. It was left untouched. Its old credentials
-or helper state are not treated as qualified authority for this installation.
+Before dialing, ownership and media are rechecked, then the actual view is
+recaptured and its source/grant revalidated. Slow worker startup is bounded by
+60 seconds and grant expiry, with prompt revocation polling. It never repeats
+room creation. See [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md) for exact pins,
+migration commands and the retained-wrapper rollback requirement.
 
-After provider support exists, finish exact ownership integration, reconcile the
-original outbound evidence where relevant, install the updated hook plan, supply
-the selected project's explicit checks/policy and protected media configuration,
-and install directly at a reconciled boundary under the existing deployment
-authorization. Codex hook trust remains a native client prerequisite. No additional
-pilot or deployment-approval gate is introduced by this implementation.
+The unrelated older outbound backend's uncertain onboarding notice remains
+untouched. Its ended calls and released leases do not prove that notice's exact
+outcome. This adapter uses the configured native Calls interface directly and
+does not adopt the old helper's identity or erase its evidence.
 
 ## Validation and compatibility
 
@@ -92,8 +95,8 @@ Final automated results:
 
 | Check                                            | Result                                                                        |
 | ------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `npm run check`                                  | Passed: TypeScript, 6,682 tests in 171 files, production build                |
-| `npm --prefix line test`                         | 248 passed                                                                    |
+| `npm run check`                                  | Passed: TypeScript, 6,731 tests in 174 files, production build                |
+| `npm --prefix line test`                         | 279 passed                                                                    |
 | Swift package tests                              | 378 passed                                                                    |
 | Native builds                                    | TaskPanel, TaskCapture and Review View passed; Review View signature verified |
 | Media / gateway suites                           | 383 / 29 passed                                                               |
@@ -104,8 +107,7 @@ Synthetic tests cover all source channels, duplicate observations, restart, lost
 responses, incoming/busy lines, slow handoff, stale frames, changed results,
 revocation, resolved decisions, Stop, cleanup and exact continuation boundaries.
 Native review, panel and capture binaries build; the packaged review app passes
-strict ad-hoc signature verification. No new app was installed or launched into
-the production workflow.
+strict ad-hoc signature verification. Installed artifact and service evidence is recorded below after the production switch.
 
 `scripts/verify-proactive-compatibility.ts` loads the saved baseline's actual built
 Store, Vault, TaskLedger and TaskService against a newly created synthetic database.
@@ -124,15 +126,18 @@ under the new owner; preserve all new records when switching binaries.
 
 ## Production and rollback evidence
 
-Production remains clean at `e76989e7d54b883dba97f2410b9c4213f13d34bb`, branch
-`fix-phone-dispatch`, in `/Users/garygao/clawdtime-host`. The installed provider
-remains beta.19. No configuration, calling policy, native app, launcher, hook plan
-or service was replaced. The desktop health endpoint at port 13416 still reports
-simulation with live dispatch, presentation and control disabled. Its separate
-Jobs launcher remains real Claude. The incoming `clawdtime-line` host is running,
-with no active call at final read-only inspection. Updates remain held and
-unscheduled. All 13 checkpoint configuration entries match their saved presence
-and content hashes.
+Release staging and the authorized direct deployment are in progress. Before the
+switch, the original clean `e76989e7d54b883dba97f2410b9c4213f13d34bb` installation
+remains available in `/Users/garygao/clawdtime-host`. The candidate is installed
+alongside it rather than overwriting source, dependencies, the signed Supervisor
+app or original environment file. Automatic source updates remain held.
+
+Pre-switch read-only inspection confirmed the original incoming owner, no active
+call, an available provider line and accepting worker with fresh audio/video
+readiness. All 13 checkpoint configuration entries matched their original hashes
+or absence. The original task database has one existing session and no coding
+tasks; no runtime records were copied. Final installed versions and deployment
+outcomes will replace this staging paragraph after the switch.
 
 The private rollback checkpoint remains:
 
@@ -140,17 +145,20 @@ The private rollback checkpoint remains:
 /Users/garygao/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z
 ```
 
-Its read-only verifier passed all 28,613 integrity entries, saved application
-signature and Git bundle checks during this implementation and again before
-delivery. No services changed during verification. Restoration instructions are
-`RESTORE.md` inside that directory; repository context is in
-[PRODUCTION_ROLLBACK_BASELINE.md](PRODUCTION_ROLLBACK_BASELINE.md). Preserve the
-dated checkpoint. Its older host-stop procedure must also respect the newly
-identified journal-retention blocker; do not exercise it against the working host
-merely to test rollback.
+Its verifier passed 28,613 entries, saved app signature and Git bundle checks.
+Use its `RESTORE.md` together with the retained-wrapper correction in
+[MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md): after migration, **keep the new
+retention host wrapper/preload**, selecting the old incoming agent through
+`CLAWDTIME_LINE_RELEASE=/Users/garygao/clawdtime-host/line`. Never revert to an
+unguarded dev launcher. Disable new admissions, reconcile active/unknown effects,
+then restore source selection and desktop configuration at an idle boundary.
+Preserve the current database, original journals, all newer receipts and cursors.
+The synthetic saved-baseline compatibility check passes; no production database
+restore is involved.
 
 The historical repaired incoming call was user-observed. New proactive ringing,
-spoken alerts, screen visibility and live phone-driven continuation were **not
-handset-observed**. Automated publication metadata and synthetic checks do not
-establish those behaviors. Production installation remains blocked as described
-above; no deployment success is claimed.
+spoken alerts, screen visibility and phone-driven continuation are **not
+handset-observed**. Automated readiness and integration tests do not establish
+those physical behaviors. Codex hooks still require native client trust; arbitrary
+idle external chats cannot be resumed by a completion report. Pending hooks and
+managed-task reviews use their exact native continuation boundaries.

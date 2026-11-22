@@ -306,6 +306,73 @@ test("supported SDK prepares one exact publisher, token and room without dialing
   assert.equal((await media.close()).closed, true);
   assert.equal(f.calls.filter((c) => c[0] === "delete").length, 1);
 });
+test("cold dedicated worker can publish after twenty seconds with only one room creation", async () => {
+  const f = mediaFixture();
+  let clock = now;
+  const readyParticipants = f.ports.roomService.listParticipants;
+  f.config.expiresAt = now + 90_000;
+  f.ports.clock = () => clock;
+  f.ports.sleep = async (ms) => {
+    clock += ms;
+  };
+  f.ports.roomService.listParticipants = async () =>
+    clock >= now + 25_000 ? readyParticipants() : [];
+  const media = await createProactiveOutboundMedia(f.config, f.ports);
+  const result = await media.prepare();
+  assert.equal(clock, now + 25_000);
+  assert.equal(result.publications.audio, "audio-one");
+  await media.prepare();
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
+  assert.equal((await media.close()).closed, true);
+});
+
+test("preparation stops at sixty seconds or the earlier grant expiry without recreating", async () => {
+  for (const lifetime of [12_000, 90_000]) {
+    const f = mediaFixture();
+    let clock = now;
+    f.config.expiresAt = now + lifetime;
+    f.ports.clock = () => clock;
+    f.ports.sleep = async (ms) => {
+      clock += ms;
+    };
+    f.setParticipants([]);
+    const media = await createProactiveOutboundMedia(f.config, f.ports);
+    await assert.rejects(media.prepare(), /publications_not_ready/);
+    assert.equal(clock, now + Math.min(lifetime, 60_000));
+    await assert.rejects(media.prepare(), /publications_not_ready/);
+    assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
+    assert.equal((await media.close()).closed, true);
+  }
+});
+
+test("revocation aborts cold-worker polling on the next bounded poll without recreating", async () => {
+  const f = mediaFixture();
+  let clock = now,
+    revoked = false,
+    polls = 0;
+  f.config.expiresAt = now + 90_000;
+  f.ports.clock = () => clock;
+  f.ports.sleep = async (ms) => {
+    clock += ms;
+    if (clock >= now + 25_000) revoked = true;
+  };
+  f.ports.authorize = async () => {
+    if (revoked) throw Error("grant_revoked");
+  };
+  f.ports.roomService.listParticipants = async () => {
+    assert.equal(revoked, false);
+    polls++;
+    return [];
+  };
+  const media = await createProactiveOutboundMedia(f.config, f.ports);
+  await assert.rejects(media.prepare(), /grant_revoked/);
+  assert.equal(clock, now + 25_000);
+  assert.equal(polls, 250);
+  await assert.rejects(media.prepare(), /grant_revoked/);
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
+  assert.equal((await media.close()).closed, true);
+});
+
 test("wrong publisher and duplicate tracks refuse prepared media", async () => {
   for (const participants of [
     [{ identity: "wrong", tracks: [] }],

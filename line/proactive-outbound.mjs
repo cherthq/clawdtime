@@ -470,7 +470,8 @@ export async function createProactiveOutboundMedia(config, ports) {
           await ports.recordEffect("room_create", "unknown");
           throw Error("proactive_room_create_unknown");
         }
-        const until = Math.min(config.expiresAt, now() + 20_000);
+        // Dedicated workers can need over 20 seconds to cold-start and publish.
+        const until = Math.min(config.expiresAt, now() + 60_000);
         let roster;
         while (now() < until) {
           await authorize();

@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentsCli } from "../cli/agents.js";
@@ -1664,6 +1665,67 @@ describe("supervisor commands", () => {
       else process.env.CLAWDTIME_CONFIG_HOME = previous;
     }
     expect(lines.join("\n")).toContain("Routing works.");
+  });
+
+  it("binds installed hooks to an explicit state root and migrates only this install's prior commands", async () => {
+    const claudeHome = root(),
+      script = join(root(), "agent-hook.cjs");
+    writeFileSync(
+      script,
+      "process.stdout.write(process.env.CLAWDTIME_CONFIG_HOME)",
+    );
+    const chosen = join(root(), "state with 'quotes' $literal");
+    const unrelated = {
+      hooks: [{ type: "command", command: "/usr/bin/true" }],
+    };
+    const original = { model: "fixture", hooks: { Stop: [unrelated] } };
+    const file = join(claudeHome, "settings.json");
+    writeFileSync(
+      file,
+      applyHookPlan(
+        JSON.stringify(original),
+        hookPlan("claude-code", process.execPath, script),
+      ),
+    );
+    const lines: string[] = [];
+    const run = (action: string, selected = chosen) =>
+      agentsCli(
+        ["hooks", action, "--agent", "claude-code", "--state-root", selected],
+        {
+          system: fakeSystem({ now, env: { CLAUDE_CONFIG_DIR: claudeHome } }),
+          print: (value) => lines.push(value),
+          hookScript: script,
+        },
+      );
+    await run("install");
+    const installed = readFileSync(file, "utf8");
+    const parsed = JSON.parse(installed);
+    expect(parsed.model).toBe("fixture");
+    expect(parsed.hooks.Stop).toHaveLength(2);
+    expect(parsed.hooks.Stop[0]).toEqual(unrelated);
+    expect(
+      plannedInstalled(
+        installed,
+        hookPlan("claude-code", process.execPath, script),
+      ),
+    ).toHaveLength(0);
+    const command = parsed.hooks.Stop[1].hooks[0].command;
+    expect(
+      execFileSync("/bin/sh", ["-c", command], {
+        env: { PATH: process.env.PATH, CLAWDTIME_CONFIG_HOME: "/wrong" },
+        encoding: "utf8",
+      }),
+    ).toBe(chosen);
+    await run("install");
+    expect(readFileSync(file, "utf8")).toBe(installed);
+    await run("status");
+    expect(lines.at(-1)).toContain("Installed");
+    await expect(run("install", "relative/state")).rejects.toThrow(
+      "absolute path",
+    );
+    expect(readFileSync(file, "utf8")).toBe(installed);
+    await run("uninstall");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(original);
   });
 });
 

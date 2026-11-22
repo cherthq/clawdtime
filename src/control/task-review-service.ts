@@ -56,6 +56,8 @@ export class TaskReviewService {
   private calls?: { request(input: unknown): unknown };
   private proactive?: {
     coordinator: ProactiveCallCoordinator;
+    /** Configuration only, never a claim that the line/media are currently ready. */
+    deliveryConfigured?: () => boolean;
     policyFor(
       task: CodingTask,
     ):
@@ -67,6 +69,13 @@ export class TaskReviewService {
   configureProactive(options: NonNullable<TaskReviewService["proactive"]>) {
     this.proactive = options;
     this.refresh();
+  }
+  private configuredFor(task?: CodingTask) {
+    if (!this.proactive) return this.phoneConfigured;
+    return (
+      this.proactive.deliveryConfigured?.() === true &&
+      (!task || this.proactive.policyFor(task) !== undefined)
+    );
   }
   applyProactiveAnswer(
     intent: ProactiveCallIntent,
@@ -465,7 +474,7 @@ export class TaskReviewService {
           this.ledger.block(
             session.id,
             record.id,
-            this.phoneConfigured
+            this.configuredFor(task)
               ? "fresh_views_and_call_authorization_required"
               : "phone_setup_missing",
           );
@@ -477,25 +486,37 @@ export class TaskReviewService {
   request(task: CodingTask) {
     this.refresh();
     return {
-      message: this.phoneConfigured
+      message: this.configuredFor(task)
         ? "Review callback requested for this task. It will use the exact checked result; fresh prepared views and call authorization are required before dialing."
         : "Review callback intent is retained for this task, but phone setup is missing. The result will remain available for review here; no call is promised.",
     };
   }
   admissionNotice() {
-    return this.phoneConfigured
+    return this.configuredFor()
       ? " Review follows independent checks. Calling requires fresh authorized views and an available phone line."
       : " Review follows independent checks. Phone callbacks are unavailable until phone setup is connected.";
   }
   snapshot(task: CodingTask) {
     const run = task.runs.at(-1)!;
+    const common = this.proactive?.coordinator
+      .list()
+      .findLast(
+        (intent) =>
+          intent.source.kind === "task" &&
+          intent.source.taskId === task.id &&
+          intent.source.sessionId === task.sessionId &&
+          intent.source.runId === run.id &&
+          intent.source.revision === task.revision &&
+          intent.source.verificationId === task.verification?.id,
+      );
+    const phoneConfigured = this.configuredFor(task);
     const callback = this.ledger
       .list(task.sessionId, task.id)
       .findLast(
         (r) => r.runId === run.id && r.verificationId === task.verification?.id,
       );
     const delivery = callback ? this.deliveries.get(callback.id) : undefined;
-    const state =
+    let state =
       task.state === "accepted"
         ? "accepted"
         : task.state === "canceled"
@@ -529,34 +550,96 @@ export class TaskReviewService {
                                 callback?.state === "dispatching"
                               ? "preparing_review"
                               : "awaiting_call";
+    const commonCallbackState =
+      common &&
+      (
+        {
+          queued: common.reason ? "blocked" : "awaiting_call",
+          preparing: "preparing",
+          ready: "awaiting_call",
+          dispatching: "dispatching",
+          connected: "in_review",
+          ended: "delivered",
+          canceled: "canceled",
+          expired: "failed",
+          refused: "failed",
+          unknown: "unknown",
+        } as const
+      )[common.state];
+    if (
+      common &&
+      ["review_ready", "needs_decision", "review_call"].includes(task.state)
+    ) {
+      state =
+        common.state === "connected" || common.state === "ended"
+          ? "in_review"
+          : ["preparing", "ready", "dispatching"].includes(common.state)
+            ? "preparing_review"
+            : common.state === "queued" &&
+                phoneConfigured &&
+                (!common.reason || common.reason === "waiting_for_line")
+              ? "awaiting_call"
+              : common.state === "refused" || common.state === "expired"
+                ? "failed"
+                : "blocked";
+    }
+    const commonMessage =
+      common?.state === "unknown"
+        ? "Callback delivery is uncertain. Inspect the original attempt; it will not be redialed."
+        : common?.state === "connected"
+          ? "The call for this exact result is connected. Acceptance still requires your explicit approval."
+          : common?.state === "ended"
+            ? "Review call ended. Acceptance still requires your explicit approval of this result."
+            : common?.state === "dispatching"
+              ? "The exact callback attempt is reserved and is being delivered. Connection has not yet been observed."
+              : common?.state === "canceled"
+                ? "This callback was canceled. No replacement call is scheduled."
+                : common?.state === "refused" || common?.state === "expired"
+                  ? "The callback did not complete. No automatic redial is scheduled."
+                  : common && phoneConfigured
+                    ? common.state === "preparing" || common.state === "ready"
+                      ? "Preparing the exact review. Fresh views, media and line availability still gate dialing."
+                      : common.reason
+                        ? `Callback is waiting: ${common.reason}. No call is promised until the requirement is satisfied.`
+                        : "The exact callback intent is queued. Current policy, source, media and line readiness will be checked before dialing."
+                    : undefined;
     return {
       state,
-      phoneConfigured: this.phoneConfigured,
+      phoneConfigured,
       message:
         task.state === "accepted"
           ? "The exact reviewed result was accepted. Deployment remains a separate action."
           : task.state === "unknown"
             ? "The original worker outcome needs reconciliation; no callback or retry will be dispatched."
-            : delivery?.state === "unknown" || callback?.state === "unknown"
-              ? "Callback delivery is uncertain. Inspect the original attempt; it will not be redialed."
-              : !this.phoneConfigured
-                ? "Phone setup is missing. Review is available locally; no callback can be promised."
-                : callback?.state === "blocked"
-                  ? "Review context is prepared. Fresh authorized result views and one-call authorization are required."
-                  : callback?.state === "delivered"
-                    ? "Review call ended. Acceptance still requires your explicit approval of this result."
-                    : callback?.state === "failed"
-                      ? "The review call did not connect. No automatic redial is scheduled."
-                      : "The supervisor retains one callback intent for each checked result.",
+            : commonMessage
+              ? commonMessage
+              : delivery?.state === "unknown" || callback?.state === "unknown"
+                ? "Callback delivery is uncertain. Inspect the original attempt; it will not be redialed."
+                : !phoneConfigured
+                  ? "Phone setup is missing. Review is available locally; no callback can be promised."
+                  : callback?.state === "blocked"
+                    ? "Review context is prepared. Fresh authorized result views and one-call authorization are required."
+                    : callback?.state === "delivered"
+                      ? "Review call ended. Acceptance still requires your explicit approval of this result."
+                      : callback?.state === "failed"
+                        ? "The review call did not connect. No automatic redial is scheduled."
+                        : "The supervisor retains one callback intent for each checked result.",
       callback: callback
         ? {
-            id: callback.id,
+            id: common?.id ?? callback.id,
             runId: callback.runId,
             revision: callback.reviewRevision,
             verificationId: callback.verificationId,
-            state: callback.state,
-            deliveryState: delivery?.state ?? null,
-            reason: callback.reason,
+            state: commonCallbackState ?? callback.state,
+            deliveryState: common?.state ?? delivery?.state ?? null,
+            reason: common ? common.reason : callback.reason,
+            ...(common
+              ? {
+                  intentId: common.id,
+                  attemptId: common.attemptId ?? null,
+                  channel: common.channel,
+                }
+              : {}),
             opening: callback.opening,
             // A preparation checklist, never a claim that pixels have been captured.
             views: [

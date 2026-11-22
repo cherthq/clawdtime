@@ -12,7 +12,9 @@ export type ProactiveTransportEffect =
   | "restore"
   | "session_release"
   | "room_create"
-  | "room_delete";
+  | "room_delete"
+  | "worker_start"
+  | "worker_stop";
 export interface ProactiveTransportReceipt {
   id: string;
   intentId: string;

@@ -18,6 +18,7 @@ import {
   type ProactiveDeliveryPort,
 } from "./proactive-service.js";
 import { ProactiveLineSessions } from "./proactive-line.js";
+import { createProductionDelivery } from "./proactive-production.js";
 import { hash } from "../storage/security.js";
 import type { TaskService } from "./task-service.js";
 import {
@@ -44,14 +45,22 @@ export const proactiveConfigSchema = z
       })
       .strict()
       .optional(),
-    // Current installed provider cannot relinquish ownership while retaining its
-    // journal in place. This declaration exposes that exact gate, never an override.
     outbound: z
-      .object({
-        provider: z.literal("chert-dev"),
-        receiptRetention: z.literal("unsupported"),
-      })
-      .strict()
+      .discriminatedUnion("provider", [
+        // Historical refusal is retained; config cannot silently upgrade authority.
+        z
+          .object({
+            provider: z.literal("chert-dev"),
+            receiptRetention: z.literal("unsupported"),
+          })
+          .strict(),
+        z
+          .object({
+            provider: z.literal("chert-dev-retained-v1"),
+            configurationFile: privatePath,
+          })
+          .strict(),
+      ])
       .optional(),
   })
   .strict();
@@ -63,6 +72,7 @@ export function createProactiveSetup(options: {
   directory: string;
   root: string;
   projectRoot: string;
+  origin?: string;
   board(): BoardFeed | undefined;
   execution(): DesktopExecutionSnapshot | undefined;
   /** Integration port for a provider with proved in-place receipt retention. */
@@ -110,6 +120,7 @@ export function createProactiveSetup(options: {
       })()
     : undefined;
   let views: ProactiveReviewViews | undefined;
+  let production: ReturnType<typeof createProductionDelivery> | undefined;
   const assertIdle = () => {
     const execution = options.execution();
     if (
@@ -157,6 +168,7 @@ export function createProactiveSetup(options: {
   });
   options.reviews.configureProactive({
     coordinator,
+    deliveryConfigured: () => !!options.delivery || !!production,
     policyFor(task) {
       // Simulation receipts are useful locally, but never authorize real calls.
       if (tasks.options.simulation) return;
@@ -268,7 +280,10 @@ export function createProactiveSetup(options: {
       releaseViews: async (id) => views?.release(id) ?? { confirmed: true },
     },
     Date.now,
-    1000,
+    // Initial packet admission permits the bounded provider inventory checks.
+    // Transport captures again after handoff/media startup and requires <=1s
+    // actual frame age immediately before dialing and on every exported frame.
+    5000,
   );
   const line = new ProactiveLineSessions(authority, {
     sourceCurrent: current,
@@ -308,8 +323,29 @@ export function createProactiveSetup(options: {
       views?.release(intent.id) ?? { confirmed: true },
     frame: async (intent) => views?.frame(intent) ?? null,
   });
+  production =
+    config.outbound?.provider === "chert-dev-retained-v1"
+      ? (() => {
+          outside(config.outbound.configurationFile);
+          if (!options.origin)
+            throw Error("Actual desktop service origin is required.");
+          return createProductionDelivery(config.outbound.configurationFile, {
+            projectRoot: options.projectRoot,
+            origin: options.origin,
+            coordinator,
+            sessions: line,
+            packet: (id) => preparation.packetSnapshot(id),
+            current,
+            sourceFingerprint: (intent) => evidence(intent).sourceFingerprint,
+            freshFrame: async (intent) => views?.frame(intent) ?? null,
+            cleanupViews: async (id) =>
+              views?.release(id) ?? { confirmed: true },
+          });
+        })()
+      : undefined;
   const delivery =
     options.delivery ??
+    production ??
     (config.outbound
       ? {
           readiness: async () => ({
@@ -340,16 +376,23 @@ export function createProactiveSetup(options: {
     preparation,
     service,
     line,
+    probe: () => production?.probe(),
     viewOccupied: () => views?.occupied ?? false,
     status: () => ({
       sources: sources.status(),
-      provider: config.outbound
-        ? {
-            configured: true,
-            ready: false,
-            reason: "provider_journal_retention_unsupported",
-          }
-        : { configured: false, ready: false, reason: "outbound_setup_missing" },
+      provider: production
+        ? production.diagnostics()
+        : config.outbound
+          ? {
+              configured: true,
+              ready: false,
+              reason: "provider_journal_retention_unsupported",
+            }
+          : {
+              configured: false,
+              ready: false,
+              reason: "outbound_setup_missing",
+            },
     }),
     enroll(input: unknown) {
       sources.enroll(

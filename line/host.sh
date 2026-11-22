@@ -14,6 +14,9 @@ DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$DIR/.." && pwd)
 STATE=${CLAWDTIME_LINE_STATE:-$HOME/.local/share/clawdtime/line}
 SESSION=${CLAWDTIME_LINE_SESSION:-clawdtime-line}
+ENV_FILE=${CLAWDTIME_LINE_ENV_FILE:-$DIR/.env.local}
+RETENTION_CONFIG=${CLAWDTIME_LINE_RETENTION_CONFIG:-}
+case "$ENV_FILE" in /*) ;; *) echo "Agent env file must be absolute." >&2; exit 1 ;; esac
 MARK="# clawdtime-line update"
 # How long a program that ended waits before it starts again.
 PAUSE=${CLAWDTIME_LINE_RETRY_SECONDS:-10}
@@ -21,13 +24,15 @@ mkdir -p "$STATE"
 
 # One value of .env.local, as node reads it: the last line of that name, without quotes.
 setting() {
-  [ -f "$DIR/.env.local" ] || return 0
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$DIR/.env.local" | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//'
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//'
 }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
-# The folder that holds the agent code: CLAWDTIME_LINE_RELEASE in .env.local, or this folder.
+# Agent code: explicit environment override, then env-file setting, then this folder.
+# The host wrapper and retention preload always remain in DIR, including source rollback.
 release() {
-  code=$(setting CLAWDTIME_LINE_RELEASE); code=${code:-$DIR}
+  code=${CLAWDTIME_LINE_RELEASE:-$(setting CLAWDTIME_LINE_RELEASE)}; code=${code:-$DIR}
+  [ "${#code}" -le 4096 ] || { echo "Agent release path is too long." >&2; return 1; }
   case "$code" in /*) ;; *) echo "Agent release must be an absolute directory." >&2; return 1 ;; esac
   [ -f "$code/agent.mjs" ] && [ -d "$code/node_modules" ] || { echo "The selected agent release is incomplete." >&2; return 1; }
   printf '%s\n' "$code"
@@ -56,19 +61,28 @@ keep() {
         # A private installed release may pin the agent code while credentials remain here. Without one, the
         # agent is the file in this folder, as before.
         program=agent.mjs
-        if [ -n "$(setting CLAWDTIME_LINE_RELEASE)" ]; then
+        if [ -n "${CLAWDTIME_LINE_RELEASE:-$(setting CLAWDTIME_LINE_RELEASE)}" ]; then
           # A release that is not whole is not run, and the reason is one line in host.log.
           code=$(release) || { say "the agent release is not whole: the agent is not started" >> "$STATE/host.log"; break; }
           program="$code/agent.mjs"
         fi
-        (cd "$DIR" && node --env-file=.env.local "$program" start 2>&1 | tee -i -a "$STATE/agent.log") || true ;;
+        (cd "$DIR" && node --env-file="$ENV_FILE" "$program" start 2>&1 | tee -i -a "$STATE/agent.log") || true ;;
       dev)
         agent=$(setting AGENT_NAME); agent=${agent:-clawdtime}
         project=$(setting CLAWDTIME_LINE_CHERT_PROJECT)
         # tee -i ignores Ctrl+C, so the last records of chert dev still reach the file.
-        (cd "$DIR" && chert dev --agent "$agent" --env-file .env.local ${project:+--project "$project"} --json 2>&1 | tee -i -a "$STATE/dev.jsonl") || true ;;
+        if [ -n "$RETENTION_CONFIG" ]; then
+          provider=$(cd "$DIR" && node --input-type=module -e 'import {readRetentionConfig,inspectPinnedProvider} from "./provider-retention.mjs";console.log(inspectPinnedProvider(readRetentionConfig(process.argv[1]).providerRoot).providerRoot)' "$RETENTION_CONFIG") || break
+          (cd "$DIR" && CLAWDTIME_LINE_RETENTION_CONFIG="$RETENTION_CONFIG" node --import "$DIR/provider-retention-preload.mjs" "$provider/dist/src/cli/main.js" dev --agent "$agent" --env-file "$ENV_FILE" ${project:+--project "$project"} --json 2>&1 | tee -i -a "$STATE/dev.jsonl") || true
+        else
+          (cd "$DIR" && chert dev --agent "$agent" --env-file "$ENV_FILE" ${project:+--project "$project"} --json 2>&1 | tee -i -a "$STATE/dev.jsonl") || true
+        fi ;;
       *) echo "Use: ./host.sh keep agent, or ./host.sh keep dev" >&2; exit 2 ;;
     esac
+    if [ "$1" = dev ] && [ -n "$RETENTION_CONFIG" ]; then
+      say "guarded dev exited; ownership must be reconciled before another claim" >> "$STATE/host.log"
+      break
+    fi
     [ -z "$stopped" ] && [ ! -f "$STATE/stopping" ] || break
     say "$1 ended; it starts again in $PAUSE s" >> "$STATE/host.log"
     sleep "$PAUSE"
@@ -76,9 +90,14 @@ keep() {
   done
 }
 
+# tmux may have been launched with an older environment; explicitly pass only these paths/settings.
+shell_quote() { printf "'"; printf '%s' "$1" | sed "s/'/'\"'\"'/g"; printf "'"; }
+host_command() {
+  printf 'env CLAWDTIME_LINE_ENV_FILE=%s CLAWDTIME_LINE_RETENTION_CONFIG=%s CLAWDTIME_LINE_STATE=%s CLAWDTIME_LINE_SESSION=%s CLAWDTIME_LINE_RELEASE=%s %s' "$(shell_quote "$ENV_FILE")" "$(shell_quote "$RETENTION_CONFIG")" "$(shell_quote "$STATE")" "$(shell_quote "$SESSION")" "$(shell_quote "${CLAWDTIME_LINE_RELEASE:-}")" "$(shell_quote "$DIR/host.sh")"
+}
 start() {
   command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed. Install it (brew install tmux), or use ./start.sh in two terminals." >&2; exit 1; }
-  [ -f "$DIR/.env.local" ] || { echo "No .env.local in $DIR. Copy .env.example to .env.local and fill it in." >&2; exit 1; }
+  [ -f "$ENV_FILE" ] || { echo "No .env.local in $DIR. Copy .env.example to .env.local and fill it in." >&2; exit 1; }
   [ -d "$DIR/node_modules" ] || { echo "No node_modules in $DIR. Run: npm install" >&2; exit 1; }
   if running; then echo "Already running. See: ./host.sh status"; return 0; fi
   if [ -e "$STATE/outbound-hold" ] || [ -L "$STATE/outbound-hold" ]; then
@@ -88,9 +107,9 @@ start() {
   # A private installed release may pin the agent code while credentials remain here.
   release >/dev/null || exit 1
   rm -f "$STATE/stopping"
-  tmux new-session -d -s "$SESSION" -n agent "'$DIR/host.sh' keep agent"
+  tmux new-session -d -s "$SESSION" -n agent "$(host_command) keep agent"
   sleep 3
-  tmux new-window -t "$SESSION" -n dev "'$DIR/host.sh' keep dev"
+  tmux new-window -t "$SESSION" -n dev "$(host_command) keep dev"
   echo "Started in the tmux session $SESSION. Records: $STATE/dev.jsonl"
 }
 

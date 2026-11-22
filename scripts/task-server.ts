@@ -554,6 +554,7 @@ const proactive =
         directory,
         root: stateRoot({ env: process.env, home: homedir() }),
         projectRoot,
+        origin: `http://127.0.0.1:${port}`,
         board: () => agentBoard,
         execution: () => execution?.snapshot(),
       })

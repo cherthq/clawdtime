@@ -291,8 +291,13 @@ export const codexHookEvents = [
 const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /** The exact command string. Install and uninstall recognise the entry by it. */
-export const hookCommand = (node: string, script: string, agent: AgentKind) =>
-  `${quote(node)} ${quote(script)} ${agent}`;
+export const hookCommand = (
+  node: string,
+  script: string,
+  agent: AgentKind,
+  root?: string,
+) =>
+  `${root ? `/usr/bin/env ${quote(`CLAWDTIME_CONFIG_HOME=${root}`)} ` : ""}${quote(node)} ${quote(script)} ${agent}`;
 
 type Json = Record<string, unknown>;
 const record = (value: unknown): Json | null =>
@@ -384,8 +389,12 @@ export interface PlannedHook {
 }
 
 /** The second word of the command line turns the receiver into the decision hook. */
-export const decideCommand = (node: string, script: string, agent: AgentKind) =>
-  `${hookCommand(node, script, agent)} decide`;
+export const decideCommand = (
+  node: string,
+  script: string,
+  agent: AgentKind,
+  root?: string,
+) => `${hookCommand(node, script, agent, root)} decide`;
 
 /**
  * Native process status cannot identify an exact turn. Both clients register
@@ -395,9 +404,10 @@ export function hookPlan(
   agent: "claude-code" | "codex",
   node: string,
   script: string,
+  root?: string,
 ): PlannedHook[] {
-  const decide = decideCommand(node, script, agent);
-  const report = hookCommand(node, script, agent);
+  const decide = decideCommand(node, script, agent, root);
+  const report = hookCommand(node, script, agent, root);
   if (agent === "claude-code")
     return [
       {

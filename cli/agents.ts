@@ -5,9 +5,10 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { BoardScanner } from "../connectors/agents/board.js";
@@ -60,7 +61,7 @@ const help = `clawdtime agents: every coding-agent session on this Mac, and on t
   agents incidents [--json]          what the watcher found: a long wait, a stall, a bad end, finished work
   agents watch-rules [set KEY VALUE] the watcher's limits: wait, stall, finished (a time), call (kinds)
   agents doctor                      how exactly each agent's state is known here
-  agents hooks status|install|uninstall --agent claude-code|codex
+  agents hooks status|install|uninstall --agent claude-code|codex [--state-root ABSOLUTE_PATH]
 --all also lists one-shot runs that have no person at a terminal.
 Listing and focus only read. Nothing is sent to a session unless you ask for it below.
 
@@ -177,13 +178,21 @@ function readRegular(file: string) {
     throw new Error("The hooks file is not a regular file. It is unchanged.");
   return readFileSync(file, "utf8");
 }
-function writeAtomic(file: string, text: string) {
+function writeAtomic(file: string, text: string, expected: string | undefined) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const mode = existsSync(file) ? lstatSync(file).mode & 0o777 : 0o600;
   const temp = `${file}.${randomUUID()}.tmp`;
   writeFileSync(temp, text, { mode, flag: "wx" });
-  renameSync(temp, file);
-  chmodSync(file, mode);
+  try {
+    if (readRegular(file) !== expected)
+      throw new Error(
+        "The hooks file changed during installation. It is unchanged; inspect it before trying again.",
+      );
+    renameSync(temp, file);
+    chmodSync(file, mode);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 const stateSources: Partial<Record<AgentKind, string>> = {
@@ -551,7 +560,10 @@ export async function agentsCli(
     });
   if (command === "doctor") return doctor(system, hookScript, print);
   if (command === "hooks") {
-    const { values, positional } = flags(rest, { agent: "value" });
+    const { values, positional } = flags(rest, {
+      agent: "value",
+      "state-root": "value",
+    });
     const action = positional[0];
     if (
       positional.length !== 1 ||
@@ -569,12 +581,18 @@ export async function agentsCli(
       agent === "codex"
         ? codexHooksFile(system)
         : join(claudeHome(system), "settings.json");
-    const plan = hookPlan(agent, process.execPath, hookScript);
+    const root = values["state-root"];
+    if (
+      root &&
+      (!isAbsolute(root) || root.includes("\0") || root.length > 4096)
+    )
+      throw new Error("Hook state root must be an absolute path.");
+    const plan = hookPlan(agent, process.execPath, hookScript, root);
     const current = readRegular(file);
     const trust =
       agent === "codex"
         ? "Codex runs a new hook only after you trust it: open Codex and run /hooks once."
-        : "Claude Code reads the change at once, in sessions that already run too.";
+        : "Claude Code loads settings changes through its native configuration handling; blocked changes do not take effect.";
     if (action === "status") {
       const installed = plannedInstalled(current, plan).length;
       return print(
@@ -592,14 +610,21 @@ export async function agentsCli(
         throw new Error(
           "Run npm run build first: the hook runs the built file.",
         );
-      writeAtomic(file, applyHookPlan(current, plan));
+      const migrated =
+        root && current !== undefined
+          ? removeHookPlan(
+              current,
+              hookPlan(agent, process.execPath, hookScript),
+            )
+          : current;
+      writeAtomic(file, applyHookPlan(migrated, plan), current);
       return print(
         `Added ${plan.length} hooks to ${file}. Everything else in it is unchanged.\n${trust}\nA hook only acts while ClawdTime runs. With no answer in time the agent asks in its own terminal, as before.`,
       );
     }
     if (current === undefined)
       return print("No hooks file. Nothing to remove.");
-    writeAtomic(file, removeHookPlan(current, plan));
+    writeAtomic(file, removeHookPlan(current, plan), current);
     return print(
       `Removed the ClawdTime hooks from ${file}. Everything else in it is unchanged.`,
     );

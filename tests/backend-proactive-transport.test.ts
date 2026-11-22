@@ -138,6 +138,7 @@ function fixture(
     packetFingerprint: config!.packetFingerprint,
   });
   const handle = {
+    inspect: vi.fn(async () => ({ ready: true })),
     prepare: vi.fn(async () => {
       expect(
         coordinator.transport.get(grant.attemptId, "media_prepare")?.state,
@@ -506,6 +507,45 @@ describe("durable generic proactive transport", () => {
       cleanupConfirmed: true,
     });
     expect(g.calls.createProactive).not.toHaveBeenCalled();
+  });
+  it("captures after a slow final owner verification and rejects publication loss before dial", async () => {
+    const f = fixture();
+    f.line.verify.mockImplementation(async () => {
+      f.time(8000);
+      return true;
+    });
+    f.freshFrame.mockImplementation(async () => {
+      expect(f.clock()).toBe(8000);
+      return { capturedAt: f.clock(), sourceFingerprint: digest };
+    });
+    expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
+      state: "ended",
+      cleanupConfirmed: true,
+    });
+    expect(f.calls.createProactive).toHaveBeenCalledTimes(1);
+    const g = fixture();
+    g.handle.inspect.mockResolvedValue({ ready: false });
+    expect(await g.transport.deliver(g.intent, g.grant)).toEqual({
+      state: "refused",
+      cleanupConfirmed: true,
+    });
+    expect(g.calls.createProactive).not.toHaveBeenCalled();
+    expect(g.line.restore).toHaveBeenCalledTimes(1);
+  });
+  it("ends the owned call once if media disappears after preparation", async () => {
+    const f = fixture();
+    f.handle.inspect
+      .mockResolvedValueOnce({ ready: true })
+      .mockResolvedValue({ ready: false });
+    f.calls.inspectProactive
+      .mockResolvedValueOnce(connected)
+      .mockResolvedValue(terminal());
+    expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
+      state: "ended",
+      cleanupConfirmed: true,
+    });
+    expect(f.calls.endProactive).toHaveBeenCalledTimes(1);
+    expect(f.line.restore).toHaveBeenCalledTimes(1);
   });
   it("does not require viewing permission or frames for a spoken alert", async () => {
     const f = fixture("phone_alert");

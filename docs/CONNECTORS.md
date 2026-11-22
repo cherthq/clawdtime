@@ -1580,6 +1580,15 @@ maximum. Decision holds remain separately bounded below their native hook timeou
 Installation must apply the updated hook plan and the person must trust Codex
 hooks through `/hooks`; launch enrollment alone does not install or trust hooks.
 The installer preserves other hooks and upgrades only its own command groups.
+For a supervisor using a nondefault state directory, pass
+`clawdtime agents hooks install --agent claude-code --state-root /absolute/state`
+(or `--agent codex`). The generated command pins that state directory instead of
+depending on a terminal's environment. Use the same option for status/uninstall.
+Installation migrates only the old unbound commands for the same executable and
+hook script; it preserves other hook commands, settings and file permissions.
+It refuses a configuration changed since its initial read. Different previous
+release paths require explicit identification and removal of their own groups;
+the installer never guesses which unrelated commands may be removed.
 Existing chats must load the changed hook configuration according to their native
 client behavior. A `Stop` event observes the end of a turn, not acceptance of its
 result: another Stop hook can request further work. Fresh source checks invalidate
