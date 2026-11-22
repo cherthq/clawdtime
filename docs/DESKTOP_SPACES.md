@@ -81,7 +81,18 @@ predispatch refusal and a possibly completed transition are different outcomes.
 
 Ask the native worker to “switch to the TextEdit window” or “bring the TextEdit
 window named Disposable Spaces Fixture forward.” Its `open_app` action accepts
-an app name or bundle ID and an optional **exact** `window` title. App-only
+an app name or bundle ID and an optional `window` title.
+
+"Arrived" has one definition, in the panel (`DesktopArrival`) and in the worker
+(`verifiedActivation`). The panel finds one app for the name, by its bundle
+identifier, the name of the running app, its file name or its name in Finder,
+and reports the bundle identifier of that app with the result. The worker
+accepts the result when that app is in front, whichever form of the name was
+used: "iTerm" opens an app that calls itself "iTerm2". A window title is
+compared after the cleaning that every observation gets, on both sides: a
+no-break space or a format character counts as a space, and a title over 200
+characters is cut the same way. Two windows with the same cleaned title are
+ambiguous. App-only
 selection requires one matching standard AX window, including a positively
 verified single-display full-screen window. Multiple matching apps or
 windows block without choosing the first. A validated plain app-opening request

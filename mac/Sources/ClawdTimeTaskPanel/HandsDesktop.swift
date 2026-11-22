@@ -27,6 +27,11 @@ import TaskPanelCore
     let title: String
     let minimized: Bool
   }
+  /// A verified arrival at an app: what was seen, and which app the name stood for.
+  struct Arrival {
+    let observation: Observation
+    let bundleID: String
+  }
   private enum WindowSelection {
     case selected(Target)
     case emptyInventory
@@ -141,7 +146,7 @@ import TaskPanelCore
   /// takeover, permission and session checks. Once anything is dispatched, failure
   /// is unknown even if the OS returned false or Stop interrupted the wait.
   func activate(url: URL, windowTitle: String?, allowed: () async -> HandError?, observer: HandsObserver,
-                pointer: () -> CGPoint) async -> Result<Observation?, HandError> {
+                pointer: () -> CGPoint) async -> Result<Arrival, HandError> {
     guard enabled else { return .failure(.desktopDisabled) }
     guard singleDisplay else { return .failure(.unsupportedDesktop) }
     guard windowTitle.map({ HandsTarget.windowTitle($0) != nil }) ?? true,
@@ -157,7 +162,7 @@ import TaskPanelCore
     var dispatched = false
     var ready = false
     defer { if !ready { invalidate(); phase(.blocked) } }
-    func failure(_ error: HandError) -> Result<Observation?, HandError> { .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched)) }
+    func failure(_ error: HandError) -> Result<Arrival, HandError> { .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched)) }
     var app: NSRunningApplication
     if let found = running.first { app = found }
     else {
@@ -262,10 +267,12 @@ import TaskPanelCore
         if let error = await allowed() { return failure(error) }
         let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
+        // The same rule as the worker's: the app in front is the app that the name stood for.
         guard case .success(let seen) = captured, let current = await surface(transition: true), current == matches,
-          seen.surfaceEpoch == epoch else { return failure(.staleObservation) }
+          seen.surfaceEpoch == epoch, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
+          windowTitle.map({ DesktopArrival.sameTitle(seen.app.window, $0) }) ?? true else { return failure(.staleObservation) }
         ready = true; phase(.ready)
-        return .success(seen)
+        return .success(Arrival(observation: seen, bundleID: DesktopArrival.identity(bundleID)))
       }
       try? await Task.sleep(nanoseconds: 150_000_000)
     }
@@ -443,8 +450,11 @@ import TaskPanelCore
       for window in windows {
         guard ProcessInfo.processInfo.systemUptime < deadline else { return .failure(.targetNotVisible) }
         AXUIElementSetMessagingTimeout(window, 0.15)
+        // A title is compared as an observation carries it, so the worker and the hands agree on it.
         if (value(window, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
-          title == nil || (value(window, kAXTitleAttribute) as? String) == title { ordinary.append(window) }
+          title.map({ wanted in (value(window, kAXTitleAttribute) as? String).map { DesktopArrival.sameTitle($0, wanted) } == true }) ?? true {
+          ordinary.append(window)
+        }
       }
       let candidates = ordinary
       guard candidates.count <= 1 else { return .failure(.ambiguousTarget) }

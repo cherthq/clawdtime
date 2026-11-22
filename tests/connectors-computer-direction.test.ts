@@ -140,6 +140,29 @@ describe("explicit directional navigation", () => {
       expect(f.worker.status().state).toBe("completed");
     },
   );
+  it.each([
+    ["iTerm", "iTerm2", "com.googlecode.iterm2"],
+    ["Visual Studio Code", "Code", "com.microsoft.VSCode"],
+    ["Safari.app", "Safari", "com.apple.Safari"],
+  ] as const)(
+    'completes "go to %s" when the app that the hands found is in front',
+    async (said, name, bundleId) => {
+      const f = setup({ kind: "app", name: said });
+      f.hands.answer = (c) =>
+        c.kind === "open_app"
+          ? {
+              observation: { ...after, app: { name, bundleId, window: "~" } },
+              resolvedBundleId: bundleId,
+            }
+          : undefined;
+      await f.worker.submit("one", `Go to ${said}`);
+      await f.worker.idle();
+      expect(f.hands.sent).toEqual([{ kind: "open_app", name: said }]);
+      expect(f.planner.inputs).toEqual([]);
+      expect(f.worker.status().state).toBe("completed");
+      expect(f.journal.unresolved()).toBeNull();
+    },
+  );
   it("rejects a previous-app receipt that still shows the same app", async () => {
     const f = setup({ kind: "previous_app" });
     f.hands.answer = (c) =>

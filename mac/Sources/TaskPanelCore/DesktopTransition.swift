@@ -55,6 +55,27 @@ public enum DesktopEffectOutcome {
   }
 }
 
+/// One definition of "arrived" for a request that names an app, the same as
+/// `verifiedActivation` in the worker. The hands find one app for the name and
+/// report its bundle identifier; arrived means that this app is in front. A name
+/// has four accepted forms (bundle identifier, running name, file name, Finder
+/// name), so the name itself is never compared again after it was resolved.
+/// A window title is compared as every observation carries it: cleaned.
+public enum DesktopArrival {
+  /// The bundle identifier as an observation carries it.
+  public static func identity(_ bundleID: String) -> String { ElementCleaner.line(bundleID, limit: 200) }
+  public static func sameApp(resolved: String, front: String?) -> Bool {
+    guard let front else { return false }
+    let wanted = identity(resolved)
+    return !wanted.isEmpty && wanted.caseInsensitiveCompare(identity(front)) == .orderedSame
+  }
+  /// The same title after the observation's cleaning: a no-break space, a format
+  /// character or a cut at the length limit does not make another window of it.
+  public static func sameTitle(_ one: String, _ other: String) -> Bool {
+    ElementCleaner.line(one) == ElementCleaner.line(other)
+  }
+}
+
 /// One discovered application; aliases can include its localized and file names.
 public struct DesktopAppCandidate: Sendable {
   public let path: String

@@ -12,6 +12,11 @@ import {
   type HandResult,
   type Observation,
 } from "../connectors/computer/ports.js";
+import {
+  cleanTitle,
+  sameTitle,
+  verifiedActivation,
+} from "../connectors/computer/desktop.js";
 import { ComputerWorker } from "../connectors/computer/worker.js";
 import {
   element,
@@ -279,6 +284,170 @@ describe("verified desktop activation", () => {
     expect(f.journal.unresolved()?.reason).toBe("input_unknown");
     expect(f.hands.sent).toEqual([{ kind: "type", text: "fixture" }]);
     expect(f.journal.get("partial")?.steps[0]?.outcome).toBe("input_unknown");
+  });
+});
+
+describe("one definition of arrived", () => {
+  // The name that a person says, the name that the app gives itself, and its
+  // bundle identifier. `mac/Tests/TaskPanelCoreTests/DesktopArrivalTests.swift`
+  // shows that the hands find each app by the name that is said here.
+  const apps = [
+    ["iTerm", "iTerm2", "com.googlecode.iterm2"],
+    ["Visual Studio Code", "Code", "com.microsoft.VSCode"],
+    ["Safari.app", "Safari", "com.apple.Safari"],
+  ] as const;
+  const front = (name: string, bundleId: string, window = "Window") =>
+    observation([], { surfaceEpoch: 4, app: { name, bundleId, window } });
+
+  it.each(apps)(
+    'accepts "%s" when the app that the hands found is in front',
+    async (said, name, bundleId) => {
+      const open: Action = { kind: "open_app", name: said };
+      const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+      f.hands.answer = (c) =>
+        c.kind === "open_app"
+          ? { observation: front(name, bundleId), resolvedBundleId: bundleId }
+          : undefined;
+      await f.worker.submit("named", `Open ${said}`);
+      await f.worker.idle();
+      expect(f.hands.sent).toEqual([open]);
+      expect(f.worker.status().state).toBe("completed");
+      expect(f.journal.unresolved()).toBeNull();
+      expect(f.planner.inputs[1]?.history[0]?.outcome).toBe("ok");
+    },
+  );
+
+  it.each(apps)(
+    'does not accept "%s" when another app is in front',
+    async (said, _name, bundleId) => {
+      const open: Action = { kind: "open_app", name: said };
+      const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+      f.hands.answer = (c) =>
+        c.kind === "open_app"
+          ? {
+              observation: front("Finder", "com.apple.finder"),
+              resolvedBundleId: bundleId,
+            }
+          : undefined;
+      await f.worker.submit("other", `Open ${said}`);
+      await f.worker.idle();
+      expect(f.worker.status().state).toBe("uncertain");
+      expect(f.journal.unresolved()?.reason).toBe("transition_unknown");
+      expect(f.hands.sent).toEqual([open]);
+    },
+  );
+
+  it("compares the app in front with the app that was found, not with the name", () => {
+    const open = { kind: "open_app", name: "iTerm" } as const;
+    const seen = front("iTerm2", "com.googlecode.iterm2");
+    const result = (values: Partial<HandResult>): HandResult => ({
+      seq: 1,
+      ok: true,
+      observation: seen,
+      ...values,
+    });
+    expect(
+      verifiedActivation(
+        open,
+        result({ resolvedBundleId: "com.googlecode.iterm2" }),
+      ),
+    ).toBe(true);
+    expect(
+      verifiedActivation(
+        open,
+        result({ resolvedBundleId: "COM.GoogleCode.iTerm2" }),
+      ),
+    ).toBe(true);
+    for (const resolvedBundleId of ["com.apple.Terminal", "", " "])
+      expect(verifiedActivation(open, result({ resolvedBundleId }))).toBe(
+        false,
+      );
+    // A panel that does not say which app it found is judged by the name.
+    expect(verifiedActivation(open, result({}))).toBe(false);
+    expect(
+      verifiedActivation({ kind: "open_app", name: "iTerm2" }, result({})),
+    ).toBe(true);
+    // The picture and the surface generation are needed in every case.
+    expect(
+      verifiedActivation(
+        open,
+        result({
+          resolvedBundleId: "com.googlecode.iterm2",
+          observation: { ...seen, image: undefined },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      handResultSchema.safeParse({
+        seq: 1,
+        ok: true,
+        resolvedBundleId: "a".repeat(201),
+      }).success,
+    ).toBe(false);
+  });
+
+  const titles = [
+    ["Budget\u00a02026", "Budget 2026"],
+    ["Notes\u200e \u2014 Draft", "Notes \u2014 Draft"],
+    ["  padded\ttitle\u2028here ", "padded title here"],
+    ["Cafe\u0301 menu", "Cafe\u0301 menu"],
+    ["a".repeat(250), `${"a".repeat(199)}\u2026`],
+    [`${"a".repeat(198)} bcd`, `${"a".repeat(198)}\u2026`],
+  ] as const;
+  it.each(titles)(
+    "cleans a window title as the observation does %#",
+    (asked, cleaned) => {
+      // The same pairs are in the panel's test of `ElementCleaner.line`.
+      expect(cleanTitle(asked)).toBe(cleaned);
+      expect(cleanTitle(cleaned)).toBe(cleaned);
+      expect(sameTitle(asked, cleaned)).toBe(true);
+    },
+  );
+  it("keeps titles apart that differ in more than their spaces", () => {
+    expect(sameTitle("Budget 2026", "Budget 2027")).toBe(false);
+    expect(sameTitle("Budget 2026", "budget 2026")).toBe(false);
+    expect(sameTitle("Budget2026", "Budget 2026")).toBe(false);
+  });
+
+  it("accepts a window title with a no-break space that the observation shows with a plain space", async () => {
+    const open: Action = {
+      kind: "open_app",
+      name: "com.apple.TextEdit",
+      window: "Budget\u00a02026",
+    };
+    const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? {
+            observation: front("TextEdit", "com.apple.TextEdit", "Budget 2026"),
+            resolvedBundleId: "com.apple.TextEdit",
+          }
+        : undefined;
+    await f.worker.submit("title", "Show the budget window");
+    await f.worker.idle();
+    expect(f.hands.sent).toEqual([open]);
+    expect(f.worker.status().state).toBe("completed");
+    expect(f.journal.unresolved()).toBeNull();
+  });
+
+  it("does not accept another window of the right app when a title was asked for", async () => {
+    const open: Action = {
+      kind: "open_app",
+      name: "TextEdit",
+      window: "Budget 2026",
+    };
+    const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? {
+            observation: front("TextEdit", "com.apple.TextEdit", "Budget 2027"),
+            resolvedBundleId: "com.apple.TextEdit",
+          }
+        : undefined;
+    await f.worker.submit("sibling", "Show the budget window");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("uncertain");
+    expect(f.hands.sent).toEqual([open]);
   });
 });
 

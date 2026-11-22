@@ -184,6 +184,11 @@ export const handResultSchema = z
     ok: z.boolean(),
     error: z.enum(handErrors).optional(),
     observation: observationSchema.optional(),
+    /**
+     * After open_app: the bundle identifier of the app that the hands found
+     * for the name. The worker compares it with the app in front.
+     */
+    resolvedBundleId: text(200).optional(),
     /** The person moved the mouse or pressed a key while the hands acted. */
     interrupted: z.boolean().optional(),
   })

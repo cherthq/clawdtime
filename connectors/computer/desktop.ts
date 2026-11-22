@@ -34,7 +34,60 @@ export function sameSurface(before: Observation, after: Observation): boolean {
   );
 }
 
-/** Older panels that merely acknowledge activation cannot establish readiness. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * A window title as every observation carries it. This is `ElementCleaner.line`
+ * of the panel, step for step: a control, format or space character becomes
+ * one space, runs of spaces close up, and a title over the limit ends with an
+ * ellipsis. A title that a person asked for is compared only in this form,
+ * because the title in an observation has no other form.
+ */
+export function cleanTitle(title: string, limit = 200): string {
+  const spaced = Array.from(title)
+    .slice(0, limit * 8)
+    .map((character) => (/[\p{C}\p{Z}]/u.test(character) ? " " : character))
+    .join("");
+  const words: string[] = [];
+  let word: string[] = [];
+  for (const { segment } of graphemes.segment(spaced)) {
+    if (segment !== " ") word.push(segment);
+    else if (word.length) {
+      words.push(word.join(""));
+      word = [];
+    }
+  }
+  if (word.length) words.push(word.join(""));
+  const line = words.join(" ");
+  if (line.length <= limit) return line;
+  let kept = "";
+  for (const { segment } of graphemes.segment(line)) {
+    // One unit stays free for the ellipsis.
+    if (kept.length + segment.length > limit - 1) break;
+    kept += segment;
+  }
+  return `${kept.trim()}…`;
+}
+/** Two window titles that are the same title after the observation's cleaning. */
+export const sameTitle = (one: string, other: string) =>
+  cleanTitle(one) === cleanTitle(other);
+/** A bundle identifier names one app, whatever the case of its letters. */
+const sameApp = (one: string, other: string) =>
+  one.trim().toLowerCase() === other.trim().toLowerCase();
+
+/**
+ * One definition of "arrived", the same as `DesktopArrival` in the panel.
+ *
+ * The hands find one app for the name and say which: its bundle identifier.
+ * Arrived means that this app is in front. A name has four forms that the
+ * hands accept (the bundle identifier, the name of the running app, the file
+ * name, the name in Finder), so the name itself says nothing here: "iTerm"
+ * opens an app that calls itself "iTerm2". With a window title, the window in
+ * front also has that title, after the observation's cleaning on both sides.
+ *
+ * A panel that does not say which app it found is judged by the name, as
+ * before. A panel that only acknowledges the command proves nothing.
+ */
 export function verifiedActivation(
   command: HandCommand,
   result: HandResult,
@@ -45,18 +98,26 @@ export function verifiedActivation(
   )
     return true;
   const seen = result.observation;
+  if (
+    !seen ||
+    seen.surfaceEpoch === undefined ||
+    !seen.image ||
+    !seen.imageWidth ||
+    !seen.imageHeight ||
+    !seen.app.bundleId ||
+    !seen.app.name
+  )
+    return false;
+  if (command.kind === "switch_previous_app") return true;
+  const resolved = result.resolvedBundleId;
+  const app =
+    resolved !== undefined
+      ? resolved.trim() !== "" && sameApp(seen.app.bundleId, resolved)
+      : sameApp(seen.app.bundleId, command.name) ||
+        sameApp(seen.app.name, command.name);
   return (
-    !!seen &&
-    seen.surfaceEpoch !== undefined &&
-    !!seen.image &&
-    !!seen.imageWidth &&
-    !!seen.imageHeight &&
-    !!seen.app.bundleId &&
-    !!seen.app.name &&
-    (command.kind === "switch_previous_app" ||
-      ((seen.app.bundleId.toLowerCase() === command.name.toLowerCase() ||
-        seen.app.name.toLowerCase() === command.name.toLowerCase()) &&
-        (command.window === undefined || seen.app.window === command.window)))
+    app &&
+    (command.window === undefined || sameTitle(seen.app.window, command.window))
   );
 }
 
