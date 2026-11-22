@@ -364,7 +364,9 @@ describe("a task by talking, with a language model", () => {
       "what is the login test doing?",
       "chat",
     );
+    // The question is about what runs, so the code reads the state first.
     expect(run.results()).toEqual([
+      expect.stringMatching(/^Sessions: /),
       "The person did not ask for a task in their last message. Ask them.",
     ]);
     expect(tasks.calls).toEqual([]);
@@ -810,8 +812,9 @@ describe("a task by talking, with no language model", () => {
         eventId: expect.stringMatching(/^talk_[0-9a-f]{16}_start$/),
       },
     ]);
+    // With no model, the gate's sentence, which is written for a model, is not the answer.
     expect(await agent.reply([], "start a task", "chat")).toBe(
-      "The person gave no goal. Ask them what the task is.",
+      "Nothing started. Tell me in one sentence what to do.",
     );
     expect(await agent.reply([], "Start a task: write the notes", "chat")).toBe(
       "Finish or reconcile the current task before starting another.",

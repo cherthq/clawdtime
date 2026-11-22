@@ -6,10 +6,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   ChatLog,
-  OpenAIModel,
   Supervisor,
   type ChatMessage,
   type ModelClient,
+  historyForTurn,
+  supervisorModel,
 } from "./brain.js";
 import type { CliFact } from "./inventory.js";
 import {
@@ -26,7 +27,11 @@ import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
 import { openApp } from "./apps.js";
+import { browse, type BrowserAction } from "./browsing.js";
+import { lookAtScreen } from "./eyes.js";
+import { showOnCall, ViewStore } from "./view.js";
 import { Jobs } from "./jobs.js";
+import { JobNews } from "./jobnews.js";
 import { title } from "./render.js";
 import { realSystem, type System } from "./system.js";
 import { tabTitles, titleReader } from "./topics.js";
@@ -217,15 +222,30 @@ export class BoardFeed implements AgentBoardPort {
       options.model !== undefined
         ? options.model
         : key
-          ? new OpenAIModel(
-              key,
-              process.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-            )
+          ? supervisorModel(process.env, key)
           : null;
     this.speech =
       options.speech !== undefined
         ? options.speech
         : speechSettings(process.env);
+    // The jobs exist where a new coding session has a folder to work in.
+    const jobs = options.project
+      ? new Jobs(this.root, {
+          project: options.project,
+          now: options.now ?? Date.now,
+          run: options.runner ?? realRunner,
+          agent:
+            process.env.CLAWDTIME_JOB_AGENT === "codex" ? "codex" : "claude",
+          terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
+        })
+      : undefined;
+    this.news = jobs
+      ? new JobNews(this.root, {
+          jobs: () => jobs.recent(10),
+          log: this.log,
+          now: options.now ?? Date.now,
+        })
+      : undefined;
     this.supervisor = new Supervisor(
       {
         now: options.now ?? Date.now,
@@ -237,18 +257,33 @@ export class BoardFeed implements AgentBoardPort {
         ...(options.project
           ? {
               jobsForTasks: options.jobsForTasks === true,
-              jobs: new Jobs(this.root, {
-                project: options.project,
-                now: options.now ?? Date.now,
-                run: options.runner ?? realRunner,
-                agent:
-                  process.env.CLAWDTIME_JOB_AGENT === "codex"
-                    ? "codex"
-                    : "claude",
-                terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
-              }),
+              jobs: jobs!,
               openApp: (name: string | null, url: URL | null) =>
                 openApp(files, name, url, options.runner ?? realRunner),
+              browse: (
+                action: BrowserAction,
+                choice: { browser?: string; tab?: number },
+              ) => browse(files, options.runner ?? realRunner, action, choice),
+              callView: (session: AgentSession | null) =>
+                showOnCall(
+                  {
+                    store: new ViewStore(this.root, options.now ?? Date.now),
+                    run: options.runner ?? realRunner,
+                    titles: (item) => tabTitles(item, this.titles(item)),
+                  },
+                  session,
+                ),
+              look: (question: string) =>
+                lookAtScreen(
+                  {
+                    run: options.runner ?? realRunner,
+                    key:
+                      process.env.CLAWDTIME_OPENAI_API_KEY ||
+                      process.env.OPENAI_API_KEY,
+                    model: process.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+                  },
+                  question,
+                ),
             }
           : {}),
         // A session of a remote Mac shows its title there: only its name is known here.
@@ -269,6 +304,8 @@ export class BoardFeed implements AgentBoardPort {
     );
   }
   private readonly root: string;
+  /** Says a finished job in the chat. Absent where the service has no jobs. */
+  private readonly news: JobNews | undefined;
   private readonly watchStore: WatchStore;
   private readonly watcher: Watcher;
 
@@ -371,6 +408,15 @@ export class BoardFeed implements AgentBoardPort {
       via: "chat",
     });
   }
+  /**
+   * Says in the chat the answer of each job that finished, once. ClawdTime
+   * promises that when it starts a job. The service calls this on its own
+   * rhythm, and the panel reads the chat while it is in view. Public for
+   * tests.
+   */
+  tellJobs(): ChatMessage[] {
+    return this.news?.tell() ?? [];
+  }
   setMemory(enabled: boolean) {
     this.desk.memory.setEnabled(enabled);
   }
@@ -380,7 +426,7 @@ export class BoardFeed implements AgentBoardPort {
     via: ChatMessage["via"] = "chat",
   ): Promise<ChatMessage> {
     const now = this.options.now ?? Date.now;
-    const history = this.log.recent(24);
+    const history = this.log.recent(historyForTurn);
     this.log.append({
       role: "user",
       text: text.slice(0, 2000),
@@ -464,6 +510,8 @@ export class BoardFeed implements AgentBoardPort {
         } catch {
           // A fault here never costs the board. The next turn tries again.
         }
+        // A job that finished is said in the chat, with no question first.
+        this.tellJobs();
       }, 2000);
       this.awayTimer.unref();
     }

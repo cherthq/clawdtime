@@ -10,10 +10,33 @@ import type { TaskPresentationService } from "./task-presentation-service.js";
 import type { TaskVoiceService } from "./task-voice-service.js";
 import type { TaskDesktopService } from "./task-desktop-service.js";
 import type { TaskDesktopCalls } from "./task-desktop-calls.js";
-import type { DesktopExecutor } from "./desktop-executor.js";
+import type {
+  DesktopExecutionSnapshot,
+  DesktopExecutor,
+} from "./desktop-executor.js";
 import type { BackgroundRuntime } from "./background-runtime.js";
 import type { BundledCuaRuntime } from "./bundled-cua-runtime.js";
 import type { LineRuntime } from "./line-runtime.js";
+
+/**
+ * Computer use as the panel routes see it. The hands that see the screen and
+ * send input live in the panel: it asks for the next command and posts what
+ * happened. A service where no worker runs still answers, with nothing to do.
+ */
+export interface ComputerPort {
+  /** The command that waits for the hands, when its number is after `after`. */
+  next(after: number): unknown;
+  /** The result of one command. False when no command waits for it. */
+  result(raw: unknown): boolean;
+  /** Whether computer use is on, what it does now and what it asks. */
+  status(): unknown;
+  /** Stop. Absent where no worker runs. */
+  stop?(): DesktopExecutionSnapshot;
+}
+const handsAfterSchema = z
+  .string()
+  .regex(/^[0-9]{1,15}$/)
+  .transform(Number);
 
 /**
  * The agent board as the panel routes see it. The board is built in a separate
@@ -85,6 +108,7 @@ export function createTaskApp(
   calls?: TaskDesktopCalls,
   agents?: AgentBoardPort,
   executor?: DesktopExecutor | BundledCuaRuntime | BackgroundRuntime,
+  computer?: ComputerPort,
   lineRuntime?: LineRuntime,
 ) {
   if (operatorToken.length < 32)
@@ -92,7 +116,23 @@ export function createTaskApp(
   const app = new Hono();
   const bearer = (value?: string) =>
     value?.startsWith("Bearer ") ? value.slice(7) : "";
-  app.use("*", bodyLimit({ maxSize: 32768 }));
+  const limit = bodyLimit({ maxSize: 32768 });
+  // A result of the hands can hold a picture of the screen. Only that route
+  // takes a body of up to 6 MB, and the panel credential is checked before any
+  // of it is read.
+  const pictureLimit = bodyLimit({ maxSize: 6 * 1024 * 1024 });
+  app.use("*", (c, next) => {
+    if (
+      desktop &&
+      computer &&
+      c.req.method === "POST" &&
+      c.req.path === "/desktop/hands/result"
+    ) {
+      desktop.authorizePanel(bearer(c.req.header("authorization")));
+      return pictureLimit(c, next);
+    }
+    return limit(c, next);
+  });
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     if (handset) {
@@ -198,11 +238,19 @@ export function createTaskApp(
   }
   if (desktop) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
-    if (executor) {
+    // One stop route for whatever does the computer work here: the connection
+    // to an existing chat, or else the app-owned worker.
+    const stop = executor
+      ? () => executor.stop()
+      : computer?.stop
+        ? () => computer.stop!()
+        : undefined;
+    if (stop)
       app.post("/desktop/execution/stop", (c) => {
         desktop.authorizePanel(credential(c));
-        return c.json({ execution: executor.stop() });
+        return c.json({ execution: stop() });
       });
+    if (executor) {
       if ("command" in executor)
         app.post("/executor/command", async (c) =>
           c.json(executor.command(credential(c), await c.req.json())),
@@ -221,6 +269,24 @@ export function createTaskApp(
             execution: executor.decision(input.actionId, input.approve),
           });
         });
+    }
+    if (computer) {
+      // The panel's hands: the next command, and what came of it. The same
+      // command is served until its result arrives.
+      app.get("/desktop/hands/next", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(
+          computer.next(handsAfterSchema.parse(c.req.query("after") ?? "0")),
+        );
+      });
+      app.post("/desktop/hands/result", async (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json({ ok: computer.result(await c.req.json()) });
+      });
+      app.get("/desktop/computer", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(computer.status());
+      });
     }
     app.get("/desktop/state", (c) => c.json(desktop.snapshot(credential(c))));
     app.get("/desktop/operations/:eventId", (c) =>

@@ -340,11 +340,21 @@ describe("the ClawdTime agent", () => {
       `- ${wipe.id.slice(0, 8)}: claude-code in app asks to run: rm -rf /work/app/build`,
     );
     // Two wait, and the person did not say which one: nothing is decided.
+    // The code asks which one, in fixed words, and no model is asked.
     run = scripted([[decide(tests.id, "c1")], "Which one?"]);
-    await new Supervisor(value, run.model).reply([], "yes, approve it", "chat");
-    expect(results(run)).toEqual([
-      "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.",
-    ]);
+    expect(
+      await new Supervisor(value, run.model).reply(
+        [],
+        "yes, approve it",
+        "chat",
+      ),
+    ).toMatch(
+      // Both requests are of the same moment here: their order follows their ids.
+      /^2 requests wait: "(?:npm test" and "rm -rf \/work\/app\/build|rm -rf \/work\/app\/build" and "npm test)"\. Which one do you approve\? Say a word of it\.$/,
+    );
+    expect(run.seen).toHaveLength(0);
+    expect(desk.take(tests.id)).toBeNull();
+    expect(desk.take(wipe.id)).toBeNull();
     // The person named one, and the model gives the other: refused.
     run = scripted([[decide(wipe.id, "c1")], "ok"]);
     await new Supervisor(value, run.model).reply(
@@ -411,9 +421,11 @@ describe("the ClawdTime agent", () => {
       [call("type_into_session", { session: "deploy fix", text: "rm -rf /" })],
       "I need the exact text.",
     ]);
+    // Two clauses: the code types nothing by itself, and the model's own
+    // words are refused.
     await new Supervisor(value, run.model).reply(
       [],
-      "tell deploy fix to clean up",
+      "tell deploy fix to clean up, and to report back",
       "voice",
     );
     expect(run.seen[1]!.messages.at(-1)!.content).toContain(
@@ -455,9 +467,12 @@ describe("the ClawdTime agent", () => {
       (message) => message.role === "tool",
     ).map((message) => message.content);
     expect(results).toEqual([
+      // The person's words name docs: the code opened it before the model.
       "Opened docs.",
+      // The model asks for it too. One message opens a session once.
+      "docs is open already.",
       // "d" names no single session. The person's own words name docs.
-      "Opened docs.",
+      "docs is open already.",
       "Kept in the trove as a critical decision.",
       // The person said nothing about being away: the model alone changes nothing.
       "The person did not ask for away mode. Ask them.",
@@ -574,9 +589,10 @@ describe("the ClawdTime agent", () => {
       ),
     ).toBe("The person did not ask to type anything into a session. Ask them.");
     // The model picks another session than the one that the person named.
+    // (Two clauses, so that the code types nothing by itself.)
     expect(
       await result(
-        "tell docs to run the tests again",
+        "tell docs to run the tests again, and to report back",
         "deploy fix",
         "run the tests again",
       ),

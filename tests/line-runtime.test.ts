@@ -71,6 +71,8 @@ function fixture() {
         undefined,
         undefined,
         undefined,
+        // The slot before the phone runtime is main's computer port.
+        undefined,
         bridge,
       ),
   };

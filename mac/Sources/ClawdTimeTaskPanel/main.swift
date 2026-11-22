@@ -31,6 +31,8 @@ import TaskPanelCore
   private let boardPanel = SheetController(BoardView(frame: NSRect(x: 0, y: 0, width: BoardView.width, height: 400)))
   private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
   private let voice = VoiceController()
+  /// Computer use: the panel sees the screen and sends input for the worker.
+  private lazy var hands = HandsController(pet: pet)
   private var transcript: ChatTranscript?
   private var executionControl = ChatExecutionControl()
   private let nativeExecutionPanel = NativeExecutionPanel()
@@ -92,6 +94,7 @@ import TaskPanelCore
     // Off by default. On, ClawdTime keeps what the person tells it, on this Mac.
     let memory = menu.addItem(withTitle: "Memory: keep what I tell ClawdTime", action: #selector(toggleMemory(_:)), keyEquivalent: "")
     memory.target = self; memoryItems.append(memory)
+    menu.addItem(hands.menuItem())
     menu.addItem(.separator())
     let sharing = menu.addItem(withTitle: "Stop sharing", action: #selector(stopSharing), keyEquivalent: "")
     sharing.target = self; stopSharingItems.append(sharing)
@@ -189,6 +192,7 @@ import TaskPanelCore
     for item in memoryItems { item.state = transcript?.memory == true ? .on : .off }
     for item in stopSharingItems { item.isEnabled = state.allows(.stopSharing) }
     for item in stopCallItems { item.isEnabled = state.allows(.stopCall) }
+    hands.refreshMenu()
   }
 
   // MARK: start
@@ -220,6 +224,7 @@ import TaskPanelCore
       pet.show()
       if !startTucked { openBoard() }
       beginPolling()
+      if let client { hands.start(client: client) }
     } catch let failure as PanelFailure { showStartupFailure(failure) }
       catch { showStartupFailure(.configuration) }
   }
@@ -247,6 +252,8 @@ import TaskPanelCore
     }
     boardPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.chatPanel.isOpen ?? false }
     chatPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.boardPanel.isOpen ?? false }
+    // ClawdTime starts to use the Mac: the board and the chat get out of its way.
+    hands.onRunStarted = { [weak self] in self?.closeBoard(); self?.chatPanel.close() }
     // The bar under the mascot, and the conversation it starts.
     pet.onChat = { [weak self] in self?.toggleChat(nil) }
     pet.onTalk = { [weak self] in self?.startTalk() }
@@ -330,7 +337,7 @@ import TaskPanelCore
     }
   }
   private func releaseNativeEditor() {
-    guard NativeExecutionPresentation.releasesEditor(executionControl.execution) else { return }
+    guard NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine) else { return }
     // Release only our UI. AppKit returns focus; no AX activation or target
     // restoration is attempted. Native capture still verifies the real focus.
     chatPanel.close(immediately: true)
@@ -390,7 +397,7 @@ import TaskPanelCore
   /// One typed message. The words show at once; the answer follows.
   private func sendChat(_ text: String) {
     guard let client, chatPending == nil else { return }
-    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine)
     releaseNativeEditor()
     chatPending = text; chatNotice = ""; renderChat()
     Task {
@@ -408,7 +415,7 @@ import TaskPanelCore
   /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
   private func heard(_ recording: String) async -> URL? {
     guard let client else { return nil }
-    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution)
+    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine)
     releaseNativeEditor(); renderChat()
     let result = try? await client.hear(recording)
     nativeSubmissionPending = false
@@ -446,7 +453,7 @@ import TaskPanelCore
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
   func applicationWillTerminate(_ notification: Notification) {
     DistributedNotificationCenter.default().removeObserver(self)
-    pet.mascot.stop(); voice.stop()
+    pet.mascot.stop(); voice.stop(); hands.shutdown()
     pollTask?.cancel(); client?.close()
   }
 
@@ -461,6 +468,7 @@ import TaskPanelCore
           let readGeneration = self.state.mutationGeneration
           let snapshot = try await client.state()
           self.state.receive(snapshot, readGeneration: readGeneration)
+          self.hands.service(instance: snapshot.instanceId)
           for operation in snapshot.operations { try self.receipts?.observe(operation) }
           self.state.pending = self.receipts?.entries ?? []
           // The board is optional. A service without one never affects the task state.

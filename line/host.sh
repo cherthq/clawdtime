@@ -7,6 +7,7 @@
 #   ./host.sh update      take the newest main: rebuild and restart only when it changed and no call runs
 #   ./host.sh schedule    run "update" every 15 minutes (a line in your crontab)
 #   ./host.sh unschedule  remove that line
+# Both programs start again by themselves when they end, until ./host.sh stop: see "keep" below.
 # Settings come from .env.local in this folder (see .env.example). Nothing here holds a secret.
 set -eu
 DIR=$(cd "$(dirname "$0")" && pwd)
@@ -14,6 +15,8 @@ ROOT=$(cd "$DIR/.." && pwd)
 STATE=${CLAWDTIME_LINE_STATE:-$HOME/.local/share/clawdtime/line}
 SESSION=${CLAWDTIME_LINE_SESSION:-clawdtime-line}
 MARK="# clawdtime-line update"
+# How long a program that ended waits before it starts again.
+PAUSE=${CLAWDTIME_LINE_RETRY_SECONDS:-10}
 mkdir -p "$STATE"
 
 # One value of .env.local, as node reads it: the last line of that name, without quotes.
@@ -22,6 +25,13 @@ setting() {
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$DIR/.env.local" | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//'
 }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+# The folder that holds the agent code: CLAWDTIME_LINE_RELEASE in .env.local, or this folder.
+release() {
+  code=$(setting CLAWDTIME_LINE_RELEASE); code=${code:-$DIR}
+  case "$code" in /*) ;; *) echo "Agent release must be an absolute directory." >&2; return 1 ;; esac
+  [ -f "$code/agent.mjs" ] && [ -d "$code/node_modules" ] || { echo "The selected agent release is incomplete." >&2; return 1; }
+  printf '%s\n' "$code"
+}
 running() { tmux has-session -t "$SESSION" 2>/dev/null; }
 
 # True while a call runs: the newest call record of chert dev is not its end.
@@ -34,26 +44,56 @@ in_call() {
   esac
 }
 
+# keep agent | keep dev: runs one of the two programs again each time it ends, until ./host.sh stop, or Ctrl+C in
+# its window. A host must outlive a network drop: after one, chert dev gives up and ends, and the agent's worker
+# closes, and nothing else starts them again. Each new start is one line in host.log.
+keep() {
+  stopped=""
+  trap 'stopped=1' INT
+  while :; do
+    case "$1" in
+      agent)
+        # A private installed release may pin the agent code while credentials remain here. Without one, the
+        # agent is the file in this folder, as before.
+        program=agent.mjs
+        if [ -n "$(setting CLAWDTIME_LINE_RELEASE)" ]; then
+          # A release that is not whole is not run, and the reason is one line in host.log.
+          code=$(release) || { say "the agent release is not whole: the agent is not started" >> "$STATE/host.log"; break; }
+          program="$code/agent.mjs"
+        fi
+        (cd "$DIR" && node --env-file=.env.local "$program" start 2>&1 | tee -i -a "$STATE/agent.log") || true ;;
+      dev)
+        agent=$(setting AGENT_NAME); agent=${agent:-clawdtime}
+        project=$(setting CLAWDTIME_LINE_CHERT_PROJECT)
+        # tee -i ignores Ctrl+C, so the last records of chert dev still reach the file.
+        (cd "$DIR" && chert dev --agent "$agent" --env-file .env.local ${project:+--project "$project"} --json 2>&1 | tee -i -a "$STATE/dev.jsonl") || true ;;
+      *) echo "Use: ./host.sh keep agent, or ./host.sh keep dev" >&2; exit 2 ;;
+    esac
+    [ -z "$stopped" ] && [ ! -f "$STATE/stopping" ] || break
+    say "$1 ended; it starts again in $PAUSE s" >> "$STATE/host.log"
+    sleep "$PAUSE"
+    [ -z "$stopped" ] && [ ! -f "$STATE/stopping" ] || break
+  done
+}
+
 start() {
   command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed. Install it (brew install tmux), or use ./start.sh in two terminals." >&2; exit 1; }
   [ -f "$DIR/.env.local" ] || { echo "No .env.local in $DIR. Copy .env.example to .env.local and fill it in." >&2; exit 1; }
   [ -d "$DIR/node_modules" ] || { echo "No node_modules in $DIR. Run: npm install" >&2; exit 1; }
   if running; then echo "Already running. See: ./host.sh status"; return 0; fi
   # A private installed release may pin the agent code while credentials remain here.
-  code=$(setting CLAWDTIME_LINE_RELEASE); code=${code:-$DIR}
-  case "$code" in /*) ;; *) echo "Agent release must be an absolute directory." >&2; exit 1 ;; esac
-  [ -f "$code/agent.mjs" ] && [ -d "$code/node_modules" ] || { echo "The selected agent release is incomplete." >&2; exit 1; }
-  agent=$(setting AGENT_NAME); agent=${agent:-clawdtime}
-  project=$(setting CLAWDTIME_LINE_CHERT_PROJECT)
-  # tee -i ignores Ctrl+C, so the last records of chert dev still reach the file.
-  tmux new-session -d -s "$SESSION" -n agent "cd '$DIR' && node --env-file=.env.local '$code/agent.mjs' start 2>&1 | tee -i -a '$STATE/agent.log'"
+  release >/dev/null || exit 1
+  rm -f "$STATE/stopping"
+  tmux new-session -d -s "$SESSION" -n agent "'$DIR/host.sh' keep agent"
   sleep 3
-  tmux new-window -t "$SESSION" -n dev "cd '$DIR' && chert dev --agent '$agent' --env-file .env.local ${project:+--project '$project'} --json 2>&1 | tee -i -a '$STATE/dev.jsonl'"
+  tmux new-window -t "$SESSION" -n dev "'$DIR/host.sh' keep dev"
   echo "Started in the tmux session $SESSION. Records: $STATE/dev.jsonl"
 }
 
 stop() {
   running || { echo "Not running."; return 0; }
+  # The mark comes first, so that a program that ends now is not started again.
+  : > "$STATE/stopping"
   tmux send-keys -t "$SESSION:dev" C-c 2>/dev/null || true
   i=0
   while [ "$i" -lt 20 ]; do
@@ -68,6 +108,7 @@ status() {
   if running; then echo "Running in the tmux session $SESSION."; else echo "Not running."; fi
   in_call && echo "A call runs now." || echo "No call runs now."
   [ -f "$STATE/dev.jsonl" ] && tail -n 3 "$STATE/dev.jsonl" | grep -o '"code":"[a-z_]*"' | tr '\n' ' ' && echo
+  [ -f "$STATE/host.log" ] && echo "Last start by itself: $(tail -n 1 "$STATE/host.log")"
   crontab -l 2>/dev/null | grep -q "$MARK" && echo "Updates are scheduled." || echo "Updates are not scheduled."
 }
 
@@ -124,6 +165,7 @@ case "${1:-}" in
   status) status ;;
   update) update ;;
   in-call) in_call && echo yes || echo no ;;
+  keep) keep "${2:-}" ;;
   schedule) schedule ;;
   unschedule) unschedule ;;
   *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;

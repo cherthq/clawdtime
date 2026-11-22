@@ -33,9 +33,10 @@ import {
 } from "../connectors/agents/call.js";
 import {
   ChatLog,
-  OpenAIModel,
   Supervisor,
   type ModelClient,
+  historyForTurn,
+  supervisorModel,
 } from "../connectors/agents/brain.js";
 import { focusSession } from "../connectors/agents/focus.js";
 import { rememberable } from "../connectors/agents/trove.js";
@@ -65,7 +66,11 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
+import { sayToDesktop } from "../connectors/agents/desktop-chat.js";
 import { openApp } from "../connectors/agents/apps.js";
+import { browse } from "../connectors/agents/browsing.js";
+import { showOnCall, ViewStore } from "../connectors/agents/view.js";
+import { lookAtScreen } from "../connectors/agents/eyes.js";
 import {
   Jobs,
   jobAgents,
@@ -162,10 +167,12 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   clis [--json]                        agent commands on this Mac, with versions and use
   report [--out FILE] [--open]         the same as a slide deck
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
-  chat [TEXT]                          talk to ClawdTime in text: it answers and can act
+  chat [TEXT]                          talk to ClawdTime in text: it answers and can act. With TEXT,
+                                       the desktop service answers when it runs
   talk                                 the same by voice: you speak, it speaks back
   jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
   jobs retire ID --reason TEXT         retire an unresolved record; does not stop its process or replay it
+  view [--json] | view clear           what the video of a call shows: one window, or the whole screen
   texts run | check                    answer your text messages on your Chert line (check sends nothing)
   agents call me                       ClawdTime calls you on FaceTime, and you talk to it
   agents call check                    ask the backend whether a call would work now; no call is placed
@@ -348,6 +355,23 @@ export async function supervisorCli(
   const trove = desk.trove;
   const command = args[0] ?? "";
 
+  if (group === "view") {
+    // What the video of a call shows: one window, or the whole screen. The line agent reads it.
+    const store = new ViewStore(root, () => system.now());
+    if (command === "clear") {
+      store.set(null);
+      return print("The call shows the whole screen.");
+    }
+    const { flags } = split(args, ["json"], []);
+    const now = store.get();
+    if (flags.json) return print(JSON.stringify(now));
+    return print(
+      now.view
+        ? `The call shows one window: ${Math.round(now.view.w * 100)} by ${Math.round(now.view.h * 100)} percent of the screen.`
+        : "The call shows the whole screen.",
+    );
+  }
+
   if (group === "jobs") {
     const jobs = jobsFor(system, root, runner);
     if (command === "retire") {
@@ -362,9 +386,18 @@ export async function supervisorCli(
     const list = jobs.recent(20);
     if (flags.json) return print(JSON.stringify(list, null, 2));
     if (!list.length) return print("ClawdTime started no job yet.");
+    // The first line is as it was: DONE or WORKING. A job with no answer
+    // gets a second line with what its receipts prove. A job that its
+    // receipts say does not work is not listed as WORKING: it gets the name
+    // of its status.
+    const ended = new Set([
+      "retired_unknown",
+      "launch_failed",
+      "exited_without_result",
+    ]);
     for (const job of list)
       print(
-        `${(job.status ?? (job.done ? "completed" : "unknown")).toUpperCase()}  ${job.id}  ${job.job.slice(0, 80)}\n         ${job.done ? (job.result ?? "").slice(0, 300) : jobStatusDetail(job)}`,
+        `${job.done ? "DONE   " : job.status && ended.has(job.status) ? job.status.toUpperCase() : "WORKING"}  ${job.id}  ${job.job.slice(0, 80)}\n         ${job.done ? (job.result ?? "").slice(0, 300) : `${(job.status ?? "unknown").toUpperCase()}: ${jobStatusDetail(job)}`}`,
       );
     return;
   }
@@ -535,20 +568,38 @@ export async function supervisorCli(
               ),
             jobs: jobsFor(system, root, runner),
             openApp: (name, url) => openApp(system, name, url, runner),
+            callView: (session) =>
+              showOnCall(
+                {
+                  store: new ViewStore(root, () => system.now()),
+                  run: runner,
+                  titles: (item) => tabTitles(item, titles(item)),
+                },
+                session,
+              ),
+            browse: (action, options) =>
+              browse(system, runner, action, options),
+            look: (question) =>
+              lookAtScreen(
+                {
+                  run: runner,
+                  key:
+                    system.env.CLAWDTIME_OPENAI_API_KEY ||
+                    system.env.OPENAI_API_KEY,
+                  model: system.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+                  ...(deps.request ? { request: deps.request } : {}),
+                },
+                question,
+              ),
           },
-          key
-            ? new OpenAIModel(
-                key,
-                system.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-              )
-            : null,
+          key ? supervisorModel(system.env, key) : null,
         );
         const log = new ChatLog(root);
         print("Calling you. Say goodbye to end the call.");
         const result = await converseByCall(
           await openCall(link, `talk-${system.now().toString(36)}`),
           async (spoken) => {
-            const history = log.recent(24);
+            const history = log.recent(historyForTurn);
             log.append({
               role: "user",
               text: spoken.slice(0, 2000),
@@ -812,6 +863,26 @@ export async function supervisorCli(
     return;
   }
 
+  if (group === "chat" && args.length && !args[0]!.startsWith("-")) {
+    // One message: when the desktop service runs, it answers. It has the
+    // task, the engine for computer work and the conversation of the panel,
+    // and this command has none of them. With no service, or one that does
+    // not answer its first reads in two seconds, this command answers as
+    // before. So it does when the service has no language model and this
+    // command has one. A message that may be with the service is never said
+    // again here: two brains must not act on one sentence. Words that start
+    // with a dash are an option of this command, never a message.
+    const said = await sayToDesktop(system, args.join(" "), {
+      ownModel:
+        deps.model !== undefined
+          ? deps.model !== null
+          : !!(
+              system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY
+            ),
+      ...(deps.request ? { request: deps.request } : {}),
+    });
+    if (said.kind !== "absent") return print(said.text);
+  }
   if (group === "chat" || group === "talk" || group === "texts") {
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();
@@ -843,19 +914,38 @@ export async function supervisorCli(
           ),
         jobs: jobsFor(system, root, runner),
         openApp: (name, url) => openApp(system, name, url, runner),
+        callView: (session) =>
+          showOnCall(
+            {
+              store: new ViewStore(root, () => system.now()),
+              run: runner,
+              titles: (item) => tabTitles(item, titles(item)),
+            },
+            session,
+          ),
+        browse: (action, options) => browse(system, runner, action, options),
+        look: (question) =>
+          lookAtScreen(
+            {
+              run: runner,
+              key:
+                system.env.CLAWDTIME_OPENAI_API_KEY ||
+                system.env.OPENAI_API_KEY,
+              model: system.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+              ...(deps.request ? { request: deps.request } : {}),
+            },
+            question,
+          ),
       },
       deps.model !== undefined
         ? deps.model
         : key
-          ? new OpenAIModel(
-              key,
-              system.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-            )
+          ? supervisorModel(system.env, key)
           : null,
     );
     const log = new ChatLog(root);
     const turn = async (words: string, via: "chat" | "voice") => {
-      const history = log.recent(24);
+      const history = log.recent(historyForTurn);
       log.append({
         role: "user",
         text: words.slice(0, 2000),
@@ -916,6 +1006,19 @@ export async function supervisorCli(
         );
       }
       return supervisor.learning;
+    }
+    if (group === "chat" && args[0] === "--recent") {
+      // The newest messages of the conversation, as data: a call that starts reads them, so it knows what came before.
+      const count = Math.min(40, Math.max(1, Number(args[1]) || 12));
+      return print(
+        JSON.stringify(
+          log.recent(count).map((message) => ({
+            role: message.role,
+            text: message.text.slice(0, 400),
+            at: message.at,
+          })),
+        ),
+      );
     }
     if (group === "chat") {
       if (args.length) {
