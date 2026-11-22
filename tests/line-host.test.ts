@@ -75,6 +75,10 @@ esac`,
   mkdirSync(join(upstream, "line"));
   copyFileSync(script, join(upstream, "line", "host.sh"));
   chmodSync(join(upstream, "line", "host.sh"), 0o755);
+  writeFileSync(
+    join(upstream, "line", "agent.mjs"),
+    "// fixture agent; never executed\n",
+  );
   writeFileSync(join(upstream, "package-lock.json"), "{}\n");
   writeFileSync(join(upstream, "line", "package-lock.json"), "{}\n");
   writeFileSync(join(upstream, "line", "package.json"), "{}\n");
@@ -285,6 +289,62 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     const unknown = f.run("keep", "other");
     expect(unknown.status).toBe(2);
     expect(f.called()).toHaveLength(2);
+  });
+
+  it("runs the agent of a pinned release, from this folder, and starts nothing for a release that is not whole", () => {
+    const f = fixture();
+    const bin = join(f.base, "bin"),
+      state = join(f.base, "state"),
+      calls = join(f.base, "calls.log"),
+      release = join(f.base, "release"),
+      settings = join(f.clone, "line", ".env.local");
+    writeFileSync(
+      join(bin, "node"),
+      `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n: > '${state}/stopping'\nexit 1\n`,
+    );
+    chmodSync(join(bin, "node"), 0o755);
+    // A release with no dependencies is not whole: no session starts, and no agent runs.
+    mkdirSync(release);
+    writeFileSync(join(release, "agent.mjs"), "// fixture release\n");
+    writeFileSync(
+      settings,
+      `AGENT_NAME=clawdtime\nCLAWDTIME_LINE_RELEASE=${release}\n`,
+    );
+    const partial = f.run("start");
+    expect(partial.status).toBe(1);
+    expect(partial.out).toContain("The selected agent release is incomplete.");
+    expect(f.run("keep", "agent").status).toBe(0);
+    expect(f.called().filter((line) => line.startsWith("node"))).toEqual([]);
+    expect(f.called()).not.toContain("tmux new-session");
+    // The keeper says why it ended, in one line of its record.
+    const record = readFileSync(join(state, "host.log"), "utf8")
+      .trim()
+      .split("\n");
+    expect(record).toHaveLength(1);
+    expect(record[0]).toMatch(
+      /Z the agent release is not whole: the agent is not started$/,
+    );
+    // A release must be an absolute folder.
+    writeFileSync(
+      settings,
+      "AGENT_NAME=clawdtime\nCLAWDTIME_LINE_RELEASE=release\n",
+    );
+    const relative = f.run("start");
+    expect(relative.status).toBe(1);
+    expect(relative.out).toContain(
+      "Agent release must be an absolute directory.",
+    );
+    // A whole release: its agent runs, with the settings of this folder.
+    mkdirSync(join(release, "node_modules"));
+    writeFileSync(
+      settings,
+      `AGENT_NAME=clawdtime\nCLAWDTIME_LINE_RELEASE=${release}\n`,
+    );
+    expect(f.run("keep", "agent").status).toBe(0);
+    expect(f.called().filter((line) => line.startsWith("node"))).toEqual([
+      `node --env-file=.env.local ${release}/agent.mjs start in line`,
+    ]);
+    expect(f.run("start").out).toContain("Started in the tmux session");
   });
 
   it("marks the stop before it stops, and a start takes the mark away and starts both keepers", () => {

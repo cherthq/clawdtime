@@ -14,7 +14,9 @@ import type {
   DesktopExecutionSnapshot,
   DesktopExecutor,
 } from "./desktop-executor.js";
+import type { BackgroundRuntime } from "./background-runtime.js";
 import type { BundledCuaRuntime } from "./bundled-cua-runtime.js";
+import type { LineRuntime } from "./line-runtime.js";
 
 /**
  * Computer use as the panel routes see it. The hands that see the screen and
@@ -108,8 +110,9 @@ export function createTaskApp(
   desktop?: TaskDesktopService,
   calls?: TaskDesktopCalls,
   agents?: AgentBoardPort,
-  executor?: DesktopExecutor | BundledCuaRuntime,
+  executor?: DesktopExecutor | BundledCuaRuntime | BackgroundRuntime,
   computer?: ComputerPort,
+  lineRuntime?: LineRuntime,
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -122,6 +125,12 @@ export function createTaskApp(
   // of it is read.
   const pictureLimit = bodyLimit({ maxSize: 6 * 1024 * 1024 });
   app.use("*", (c, next) => {
+    // The credential of the phone runtime comes before everything else of a
+    // command: a request with no token or a wrong one gets the same refusal
+    // whatever its body is, and no part of the body is read, measured or
+    // parsed.
+    if (lineRuntime && c.req.path === "/line/command")
+      lineRuntime.authorize(bearer(c.req.header("authorization")));
     if (
       desktop &&
       computer &&
@@ -201,6 +210,40 @@ export function createTaskApp(
       control: false,
     }),
   );
+  if (lineRuntime) {
+    app.get("/line/frame", async (c) => {
+      const frame = await lineRuntime.preview(
+        bearer(c.req.header("authorization")),
+        c.req.query("callId") ?? "",
+      );
+      if (
+        !frame ||
+        !frame.valid() ||
+        Date.now() >= frame.expiresAt ||
+        !frame.layout.visible
+      )
+        return c.body(null, 204, { "cache-control": "no-store" });
+      return c.body(Buffer.from(frame.rgba), 200, {
+        "content-type": "application/octet-stream",
+        "cache-control": "no-store",
+        "x-clawdtime-frame": JSON.stringify({
+          width: frame.width,
+          height: frame.height,
+          frameId: frame.frameId,
+          capturedAt: frame.capturedAt,
+          expiresAt: frame.expiresAt,
+          layout: frame.layout,
+        }),
+      });
+    });
+    app.post("/line/command", async (c) => {
+      // Once more here, so the order does not rest on the middleware alone:
+      // the token first, then the body.
+      const credential = bearer(c.req.header("authorization"));
+      lineRuntime.authorize(credential);
+      return c.json(await lineRuntime.command(credential, await c.req.json()));
+    });
+  }
   if (desktop) {
     const credential = (c: any) => bearer(c.req.header("authorization"));
     // One stop route for whatever does the computer work here: the connection

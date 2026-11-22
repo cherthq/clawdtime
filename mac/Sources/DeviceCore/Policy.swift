@@ -200,6 +200,10 @@ public final class DevicePolicy {
   public let config: HelperConfig
   public private(set) var preferences: ControlPreferences
   public private(set) var armed = false
+  /// Most recent armed-to-disarmed transition (or initial stop before first arm).
+  /// Repeated checks while stopped must not overwrite the initiating cause.
+  public private(set) var lastStopReason: LocalStopReason?
+  public private(set) var lastStopAt: Date?
   public private(set) var lease: Lease?
   public private(set) var frame: FrameStamp?
   public private(set) var localSessionOwner: String?
@@ -217,7 +221,7 @@ public final class DevicePolicy {
     guard next.deviceId == config.deviceId, next.revision > preferences.revision else {
       throw HelperError(409, "Local policy revision must advance.")
     }
-    stop(disarm: true)
+    stop(disarm: true, reason: .policyUpdated)
     preferences = next
   }
   public func arm() { armed = true }
@@ -230,7 +234,11 @@ public final class DevicePolicy {
   public func releaseLocal(_ id: String) {
     if localSessionOwner == id { localSessionOwner = nil; generation += 1 }
   }
-  public func stop(disarm: Bool = false) {
+  public func stop(disarm: Bool = false, reason: LocalStopReason = .explicitLocalStop, now: Date = Date()) {
+    if disarm && (armed || lastStopReason == nil) {
+      lastStopReason = reason
+      lastStopAt = now
+    }
     if let lease { retired.insert(lease.id) }
     lease = nil
     localSessionOwner = nil
@@ -238,9 +246,9 @@ public final class DevicePolicy {
     generation += 1
     if disarm { armed = false }
   }
-  public func check(now: Date, sessionAvailable: Bool) throws {
+  public func check(now: Date, sessionAvailable: Bool, unavailableReason: LocalStopReason = .sessionUnavailable) throws {
     if !sessionAvailable {
-      stop(disarm: true)
+      stop(disarm: true, reason: unavailableReason, now: now)
       throw HelperError(423, "Mac is locked, asleep or not in the active user session.")
     }
     guard armed else {

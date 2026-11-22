@@ -465,7 +465,13 @@ export async function callEntry(ctx) {
   }
 }
 
-const agent = defineAgent({ entry: callEntry });
+// A line that names the background computer runtime (CLAWDTIME_LINE_RUNTIME_CONFIG) gives each call to that
+// runtime's own entry (runtime-agent.mjs). The file is loaded only then: a line without the setting never
+// touches it, and this agent is the same as before.
+const entry = process.env.CLAWDTIME_LINE_RUNTIME_CONFIG
+  ? (await import("./runtime-agent.mjs")).runtimeEntry
+  : callEntry;
+const agent = defineAgent({ entry });
 export default agent;
 
 /** True when this file is the program that node runs. A call's own process only imports it, for `entry`. */

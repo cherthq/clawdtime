@@ -113,9 +113,10 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
       this.records.all().at(-1)
     );
   }
-  snapshot(): DesktopExecutionSnapshot {
-    const r = this.latest();
+  snapshot(requestId?: string): DesktopExecutionSnapshot {
+    const r = requestId ? this.records.get(requestId) : this.latest();
     return {
+      ...(r ? { requestId: r.id } : {}),
       configured: true,
       mode: this.config.mode,
       state: r?.state ?? "idle",
@@ -143,11 +144,6 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
         throw new DomainError(409, "Computer request identity conflicts.");
       return { message: existing.message };
     }
-    if (this.flight || this.records.all().some((r) => !terminal.has(r.state)))
-      return {
-        message:
-          "Computer work is pending or unresolved. Stop or reconcile the original work first.",
-      };
     const record: TaskRecord = {
       id: eventId,
       fingerprint,
@@ -160,6 +156,16 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
       actions: [],
       message: "ClawdTime is starting its own computer runtime.",
     };
+    if (this.flight || this.records.all().some((r) => !terminal.has(r.state))) {
+      // Stop closes admission before asynchronous device cleanup finishes. A
+      // request arriving in that interval is definitely not dispatched, but its
+      // identity still needs a durable result for phone retries and restarts.
+      record.state = "blocked";
+      record.message =
+        "Computer work is pending or unresolved. Stop or reconcile the original work first.";
+      this.records.put(record);
+      return { message: record.message };
+    }
     this.records.put(record);
     this.currentId = record.id;
     this.controller = new AbortController();

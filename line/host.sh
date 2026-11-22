@@ -25,6 +25,13 @@ setting() {
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$DIR/.env.local" | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//'
 }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+# The folder that holds the agent code: CLAWDTIME_LINE_RELEASE in .env.local, or this folder.
+release() {
+  code=$(setting CLAWDTIME_LINE_RELEASE); code=${code:-$DIR}
+  case "$code" in /*) ;; *) echo "Agent release must be an absolute directory." >&2; return 1 ;; esac
+  [ -f "$code/agent.mjs" ] && [ -d "$code/node_modules" ] || { echo "The selected agent release is incomplete." >&2; return 1; }
+  printf '%s\n' "$code"
+}
 running() { tmux has-session -t "$SESSION" 2>/dev/null; }
 
 # True while a call runs: the newest call record of chert dev is not its end.
@@ -46,7 +53,15 @@ keep() {
   while :; do
     case "$1" in
       agent)
-        (cd "$DIR" && node --env-file=.env.local agent.mjs start 2>&1 | tee -i -a "$STATE/agent.log") || true ;;
+        # A private installed release may pin the agent code while credentials remain here. Without one, the
+        # agent is the file in this folder, as before.
+        program=agent.mjs
+        if [ -n "$(setting CLAWDTIME_LINE_RELEASE)" ]; then
+          # A release that is not whole is not run, and the reason is one line in host.log.
+          code=$(release) || { say "the agent release is not whole: the agent is not started" >> "$STATE/host.log"; break; }
+          program="$code/agent.mjs"
+        fi
+        (cd "$DIR" && node --env-file=.env.local "$program" start 2>&1 | tee -i -a "$STATE/agent.log") || true ;;
       dev)
         agent=$(setting AGENT_NAME); agent=${agent:-clawdtime}
         project=$(setting CLAWDTIME_LINE_CHERT_PROJECT)
@@ -66,6 +81,8 @@ start() {
   [ -f "$DIR/.env.local" ] || { echo "No .env.local in $DIR. Copy .env.example to .env.local and fill it in." >&2; exit 1; }
   [ -d "$DIR/node_modules" ] || { echo "No node_modules in $DIR. Run: npm install" >&2; exit 1; }
   if running; then echo "Already running. See: ./host.sh status"; return 0; fi
+  # A private installed release may pin the agent code while credentials remain here.
+  release >/dev/null || exit 1
   rm -f "$STATE/stopping"
   tmux new-session -d -s "$SESSION" -n agent "'$DIR/host.sh' keep agent"
   sleep 3
@@ -97,6 +114,12 @@ status() {
 
 # Takes the newest main. It changes nothing when the checkout is not a clean main, and it never restarts during a call.
 update() {
+  # A locally qualified release must not be replaced by scheduled source updates.
+  # Presence alone is fail-closed, including an unreadable file or a dangling link.
+  if [ -e "$STATE/update-hold" ] || [ -L "$STATE/update-hold" ]; then
+    say "local release hold is active: nothing done"
+    return 0
+  fi
   cd "$ROOT"
   branch=$(git rev-parse --abbrev-ref HEAD)
   [ "$branch" = main ] || { say "not on main ($branch): nothing done"; return 0; }

@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Your agent can FaceTime you \u2014 internal pilot",
+  "description": "Your agent can FaceTime you — internal pilot",
   "engines": {
     "node": ">=24"
   },
@@ -34,6 +34,7 @@
     "@ai-sdk/openai": "4.0.114",
     "@hono/node-server": "2.1.6",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "@trycua/cua-driver": "0.55.0",
     "ai": "7.0.165",
     "hono": "4.13.17",
     "jpeg-js": "0.4.4",

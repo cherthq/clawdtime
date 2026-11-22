@@ -116,6 +116,8 @@ export const noKeyText =
   "Computer use is on, but the service has no key for the language model. Put CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment and start it again.";
 export const chatEngineText =
   "An existing chat connection does the computer work in this service.";
+export const backgroundEngineText =
+  "The background runtime does the computer work in this service.";
 export const bundledEngineText =
   "The bundled runtime does the computer work in this service.";
 export const actorsText =
@@ -178,7 +180,8 @@ export function buildComputer(options: ComputerOptions): {
 }
 
 /** The engines that can do computer work in one desktop service. */
-export type ExecutionEngine = "chat" | "bundled" | "worker" | "none";
+export type ExecutionEngine =
+  "chat" | "background" | "bundled" | "worker" | "none";
 
 /**
  * Picks the one engine that does the computer work in a desktop service. The
@@ -186,8 +189,9 @@ export type ExecutionEngine = "chat" | "bundled" | "worker" | "none";
  *
  * 1. The connection to an existing chat, when `desktop-executor.json` is in
  *    the state folder of the service.
- * 2. The bundled runtime, when `bundled-cua.json` is there.
- * 3. The computer worker, when its switch is on, a key for the language model
+ * 2. The background runtime, when `background-cua.json` is there.
+ * 3. The bundled runtime, when `bundled-cua.json` is there.
+ * 4. The computer worker, when its switch is on, a key for the language model
  *    is in the environment, and no test started the service.
  *
  * The routes of the hands answer in every case. Only with the worker do they
@@ -196,10 +200,13 @@ export type ExecutionEngine = "chat" | "bundled" | "worker" | "none";
 export function chooseExecution<
   Chat extends DesktopExecutorPort,
   Bundled extends DesktopExecutorPort,
+  Background extends DesktopExecutorPort = never,
 >(
   options: Omit<ComputerOptions, "unavailable"> & {
     /** The connection to an existing chat, when the service has one. */
     chat?: Chat | undefined;
+    /** The background runtime, when the service has one. */
+    background?: Background | undefined;
     /** The bundled runtime, when the service has one. */
     bundled?: Bundled | undefined;
     /** Phone or presentation actors run in this service. */
@@ -210,23 +217,25 @@ export function chooseExecution<
 ): {
   engine: ExecutionEngine;
   /** The engine that a file of the service configured: it owns the stop route. */
-  configured: Chat | Bundled | undefined;
+  configured: Chat | Background | Bundled | undefined;
   /** What the person's words are handed to. Undefined when nothing does computer work. */
-  execution: Chat | Bundled | ComputerWorker | undefined;
+  execution: Chat | Background | Bundled | ComputerWorker | undefined;
   /** The worker, and what the routes of the hands use. */
   computer: { worker: ComputerWorker | null; port: ComputerPort };
 } {
-  const { chat, bundled, actors, board, ...rest } = options;
-  const configured = chat ?? bundled;
+  const { chat, background, bundled, actors, board, ...rest } = options;
+  const configured = chat ?? background ?? bundled;
   const unavailable = chat
     ? chatEngineText
-    : bundled
-      ? bundledEngineText
-      : actors
-        ? actorsText
-        : !board
-          ? noBoardText
-          : undefined;
+    : background
+      ? backgroundEngineText
+      : bundled
+        ? bundledEngineText
+        : actors
+          ? actorsText
+          : !board
+            ? noBoardText
+            : undefined;
   const computer = buildComputer({
     ...rest,
     ...(unavailable ? { unavailable } : {}),
@@ -234,11 +243,13 @@ export function chooseExecution<
   return {
     engine: chat
       ? "chat"
-      : bundled
-        ? "bundled"
-        : computer.worker
-          ? "worker"
-          : "none",
+      : background
+        ? "background"
+        : bundled
+          ? "bundled"
+          : computer.worker
+            ? "worker"
+            : "none",
     configured,
     execution: configured ?? computer.worker ?? undefined,
     computer,

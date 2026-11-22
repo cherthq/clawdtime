@@ -32,13 +32,29 @@ import { looksSecret } from "./memory.js";
  * process list while the session runs. The session writes a short answer to a
  * file, and that answer is what ClawdTime says.
  */
+/**
+ * What the files of a job prove about it. A launch or a missing answer is
+ * never evidence of progress.
+ */
+export type JobStatus =
+  | "launch_requested"
+  | "awaiting_result"
+  | "launch_failed"
+  | "exited_without_result"
+  | "unknown"
+  | "retired_unknown"
+  | "completed";
+
 export interface JobFacts {
   id: string;
   /** The job in the person's words, cut for a list. */
   job: string;
   startedAt: number;
   done: boolean;
-  /** The answer that the session wrote, as one plain line for speech. null while it works. */
+  /** What the receipts in the job's folder prove, and one sentence about it. */
+  status?: JobStatus;
+  statusDetail?: string;
+  /** The answer that the session wrote, as one plain line for speech. null while it works, and for a retired job. */
   result: string | null;
   /** The same answer with its lines kept, for a text message. */
   text?: string | null;
@@ -210,6 +226,24 @@ export const cleanJob = (job: string) =>
     .slice(0, 2000);
 
 const idPattern = /^[0-9]{8}T[0-9]{6}-[0-9a-z]{4}$/;
+/**
+ * The receipts in the folder of a job. `requested` and `launch-failed` are
+ * written by this program, `launched` and `exited` by the start script, and
+ * `retired` by `retire`. Each is written once and never changed.
+ */
+const requestedFile = "requested.json";
+const launchFailedFile = "launch-failed.json";
+const launchedFile = "launched.json";
+const exitedFile = "exited.json";
+const retiredFile = "retired.json";
+/** One sentence about what is known of a job, for a list. */
+export function jobStatusDetail(
+  job: Pick<JobFacts, "done" | "status" | "statusDetail">,
+) {
+  if (job.statusDetail) return job.statusDetail;
+  if (job.done) return "The session returned an answer.";
+  return "No result has arrived. Whether the session is working, waiting, or stuck is unverified.";
+}
 /** How long a job with no answer still counts as running. */
 const runningMs = 2 * 60 * 60 * 1000;
 /** How long the question about a job waits for its yes. */
@@ -262,8 +296,13 @@ export class Jobs implements JobPort {
         ok: false,
         said: "That holds a password or a key. I did not start a job with it. Give the job without the secret.",
       };
-    const running = this.recent(50).filter(
-      (item) => !item.done && this.now() - item.startedAt < runningMs,
+    // Every record is read, not only the newest fifty of a list: the size of
+    // a list must not take a job out of the count. A retired job holds no place.
+    const running = this.readRecords(this.recordIds()).filter(
+      (item) =>
+        !item.done &&
+        item.status !== "retired_unknown" &&
+        this.now() - item.startedAt < runningMs,
     );
     if (running.length >= this.limit)
       return {
@@ -352,28 +391,94 @@ export class Jobs implements JobPort {
     // Only paths that this program made stand in the script. The job stays in its file.
     // When the agent is missing, the script writes that as the answer: the
     // job then ends with a true sentence, and holds no place for two hours.
+    // The receipts: the script starts nothing for a retired job, writes that
+    // it started, and refuses to start a second time, so an old script cannot
+    // replay the job. Each receipt is written in a subshell with its own file
+    // mode, with no overwrite and never through a link, so the lines after
+    // it, and the agent, run as they did without the receipts. The agent
+    // runs in a subshell: this shell lives on, and writes how the agent ended.
+    const receipt = (file: string, value: string) => {
+      const path = quoted(join(directory, file));
+      return `( umask 077; setopt NO_CLOBBER; [[ ! -L ${path} ]] && printf ${value} > ${path} )`;
+    };
+    const notRetired = `[[ ! -e ${quoted(join(directory, retiredFile))} ]] || { print -r -- 'This job was retired; it will not be replayed.'; exit 1; }`;
     writeFileSync(
       script,
-      `#!/bin/zsh\ncd ${quoted(this.project)} || exit 1\ncommand -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }\n${waitsFor && newest ? waitBlock({ answer: waitsFor, beforeGaveUp: join(this.folder, newest.id, gaveUpFile), over: join(directory, waitOverFile), result, gaveUp: join(directory, gaveUpFile) }) : ""}${agents[agent](quoted(prompt))}\n`,
+      [
+        "#!/bin/zsh",
+        notRetired,
+        `${receipt(launchedFile, `'{"version":1,"pid":%s}\\n' "$$"`)} || { print -r -- 'This job was already launched; it will not be replayed.'; exit 1; }`,
+        `job_exit_receipt() { local job_exit=$?; ${receipt(exitedFile, `'{"version":1,"exitCode":%s}\\n' "$job_exit"`)}; }`,
+        "trap job_exit_receipt EXIT",
+        `cd ${quoted(this.project)} || exit 1`,
+        `command -v ${agent} >/dev/null 2>&1 || { print -r -- ${quoted(missingAgent(agent))} > ${quoted(result)}; exit 1; }`,
+        // A job can be retired while it waits: the wait can take two hours.
+        // So the script looks once more before it starts the agent.
+        `${waitsFor && newest ? `${waitBlock({ answer: waitsFor, beforeGaveUp: join(this.folder, newest.id, gaveUpFile), over: join(directory, waitOverFile), result, gaveUp: join(directory, gaveUpFile) })}${notRetired}\n` : ""}( ${agents[agent](quoted(prompt))} )`,
+        "exit $?",
+        "",
+      ].join("\n"),
       { mode: 0o700 },
     );
     chmodSync(script, 0o700);
+    writeFileSync(
+      join(directory, requestedFile),
+      JSON.stringify({ version: 1, at: this.now() }),
+      { mode: 0o600, flag: "wx" },
+    );
     const opened = await this.run(
       "/usr/bin/open",
       ["-a", this.terminal, script],
       10_000,
     );
-    if (opened.status !== 0)
+    if (opened.status !== 0) {
+      writeFileSync(
+        join(directory, launchFailedFile),
+        JSON.stringify({ version: 1, at: this.now() }),
+        { mode: 0o600, flag: "wx" },
+      );
       return {
         ok: false,
         said: "The terminal window for the job did not open on this Mac.",
       };
+    }
     return {
       ok: true,
       said: waitsFor
         ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.`
         : `On it. ${jobAgentLabels[agent]} is working on that in a new terminal window, and I will tell you its answer when it is done.`,
     };
+  }
+
+  /** Retire bookkeeping only. Never kill a process, replay work, or certify its outcome. */
+  retire(id: string, reason: string): string {
+    const detail = cleanJob(reason).slice(0, 400);
+    if (!idPattern.test(id) || detail.length < 8 || looksSecret(detail))
+      throw new Error(
+        "Retirement needs an exact job id and a non-secret reason of at least eight characters.",
+      );
+    const directory = join(this.folder, id);
+    if (!lstatSync(directory).isDirectory())
+      throw new Error("The job is not a real directory.");
+    const job = this.readRecords([id])[0];
+    if (!job) throw new Error("That job record could not be read.");
+    if (job.status === "retired_unknown")
+      return "This job is already retired. Its outcome remains unknown; no process was stopped and no action was replayed.";
+    if (job.done)
+      throw new Error(
+        "The job already has a result; retirement will not overwrite it.",
+      );
+    writeFileSync(
+      join(directory, retiredFile),
+      JSON.stringify({
+        version: 1,
+        at: this.now(),
+        reason: detail,
+        outcome: "unknown",
+      }),
+      { mode: 0o600, flag: "wx" },
+    );
+    return "Retired this job from the launch queue. Its outcome remains unknown. This did not stop the terminal process or replay any action; the original records are preserved.";
   }
 
   /** True when the file cannot be read as a plain answer, or holds something shaped like a credential. */
@@ -483,14 +588,24 @@ export class Jobs implements JobPort {
   }
 
   recent(limit = 10): JobFacts[] {
+    return this.readRecords(
+      this.recordIds().slice(0, Math.max(1, Math.min(limit, 50))),
+    );
+  }
+
+  /** The id of every job, the newest first. */
+  private recordIds(): string[] {
     if (!existsSync(this.folder) || !lstatSync(this.folder).isDirectory())
       return [];
-    const found: JobFacts[] = [];
-    for (const id of readdirSync(this.folder)
+    return readdirSync(this.folder)
       .filter((name) => idPattern.test(name))
       .sort()
-      .reverse()
-      .slice(0, Math.max(1, Math.min(limit, 50)))) {
+      .reverse();
+  }
+
+  private readRecords(ids: string[]): JobFacts[] {
+    const found: JobFacts[] = [];
+    for (const id of ids) {
       const directory = join(this.folder, id);
       // A link is never followed: a job is a real folder here, with regular files.
       try {
@@ -527,6 +642,25 @@ export class Jobs implements JobPort {
       };
       const prompt = read("prompt.txt", 8000);
       if (prompt === null) continue;
+      /** One receipt: a regular file with a version 1 object. A link or other text is no evidence. */
+      const receipt = (name: string): Record<string, unknown> | null => {
+        try {
+          const value: unknown = JSON.parse(read(name, 2000) ?? "null");
+          return value !== null &&
+            typeof value === "object" &&
+            !Array.isArray(value) &&
+            (value as Record<string, unknown>).version === 1
+            ? (value as Record<string, unknown>)
+            : null;
+        } catch {
+          return null;
+        }
+      };
+      const retired = receipt(retiredFile);
+      const launched = receipt(launchedFile);
+      const exited = receipt(exitedFile);
+      const failed = receipt(launchFailedFile);
+      const requested = receipt(requestedFile);
       const written = read("result.md", 40_000);
       // A key that the session wrote into its answer is not said aloud or sent as a text.
       const answer =
@@ -537,25 +671,62 @@ export class Jobs implements JobPort {
       // An id from the future is not a job of this program.
       if (Number.isFinite(startedAt) && startedAt > this.now() + 60_000)
         continue;
+      // A retired job stays retired: an answer that comes later is kept in
+      // its folder, and is not reported as the outcome.
+      const retiredUnknown = retired?.outcome === "unknown";
+      const status: JobStatus = retiredUnknown
+        ? "retired_unknown"
+        : answer !== null
+          ? "completed"
+          : exited &&
+              Number.isInteger(exited.exitCode) &&
+              (exited.exitCode as number) >= 0 &&
+              (exited.exitCode as number) <= 255
+            ? "exited_without_result"
+            : failed
+              ? "launch_failed"
+              : launched &&
+                  Number.isInteger(launched.pid) &&
+                  (launched.pid as number) > 0
+                ? "awaiting_result"
+                : requested
+                  ? "launch_requested"
+                  : "unknown";
+      const statusDetail =
+        status === "retired_unknown"
+          ? `Retired from the queue with unknown outcome. Retirement does not stop its process.${answer !== null ? " A later answer is preserved in the job folder, but does not erase the unknown outcome." : ""}`
+          : status === "completed"
+            ? "The session returned an answer; its effects have not been independently verified."
+            : status === "exited_without_result"
+              ? `The launcher exited with code ${exited!.exitCode}, without a result. Its effects are unknown; do not replay it blindly.`
+              : status === "launch_failed"
+                ? "The terminal launch failed. Whether its agent started is unverified."
+                : status === "awaiting_result"
+                  ? "The launcher started, but no result has arrived. Whether the session is working, waiting, or stuck is unverified."
+                  : status === "launch_requested"
+                    ? "A terminal launch was requested, but the launcher has not acknowledged starting."
+                    : "This older job has no launch or completion receipt. Whether it started, is waiting, or is stuck is unknown.";
       found.push({
         id,
+        status,
+        statusDetail,
         job: cleanJob(prompt.split("\n\nWhen you are done,")[0] ?? "").slice(
           0,
           300,
         ),
         startedAt: Number.isFinite(startedAt) ? startedAt : 0,
-        done: answer !== null,
+        done: answer !== null && !retiredUnknown,
         ...(answer === null &&
         read(waitsFile, 1) !== null &&
         !there(waitOverFile)
           ? { waiting: true }
           : {}),
         result:
-          answer === null
+          answer === null || retiredUnknown
             ? null
             : plainAnswer(answer) || "The session wrote an empty answer.",
         text:
-          answer === null
+          answer === null || retiredUnknown
             ? null
             : plainLines(answer) || "The session wrote an empty answer.",
       });

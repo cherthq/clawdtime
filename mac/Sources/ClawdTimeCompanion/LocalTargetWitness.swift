@@ -3,7 +3,14 @@ import ApplicationServices
 import CryptoKit
 import DeviceCore
 
-private struct WitnessRefusal: Error {}
+private struct WitnessRefusal: Error {
+  let site: UInt
+  let reason: String?
+  let attributeStatus: Int32?
+  init(site: UInt = #line, reason: String? = nil, attributeStatus: Int32? = nil) {
+    self.site = site; self.reason = reason; self.attributeStatus = attributeStatus
+  }
+}
 private func digest(_ value: String) -> String {
   SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
 }
@@ -62,13 +69,12 @@ private func digest(_ value: String) -> String {
 }
 
 @MainActor enum LocalTargetCapture {
-  private static let roles: Set<String> = ["AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXToolbar", "AXTabGroup", "AXTab", "AXButton", "AXTextField", "AXTextArea", "AXStaticText", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXComboBox", "AXScrollBar", "AXSlider", "AXMenuButton", "AXDisclosureTriangle", "AXSeparator", "AXRuler", "AXValueIndicator", "AXIncrementor", "AXGrowArea"]
   private static let clickable: Set<String> = ["AXButton", "AXTextField", "AXTextArea", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXComboBox", "AXMenuButton", "AXDisclosureTriangle"]
   private struct Node { let element: AXUIElement; let role: String; let rect: CGRect; let selectedRange: Bool; let scrolling: Bool; let enabled: Bool }
   private final class Budget {
     let deadline = ProcessInfo.processInfo.systemUptime + 0.30
     var nodes = 0, bytes = 0
-    var selectedReferences = [AXUIElement]()
+    var semanticReferences = [AXUIElement]()
     func check() throws { guard ProcessInfo.processInfo.systemUptime < deadline, nodes <= 384, bytes <= 65536 else { throw WitnessRefusal() } }
     func add(_ value: String) throws { bytes += value.utf8.count; try check() }
   }
@@ -76,7 +82,7 @@ private func digest(_ value: String) -> String {
     var raw: CFTypeRef?
     let status = AXUIElementCopyAttributeValue(element, name as CFString, &raw)
     if status == .noValue { return nil }
-    guard status == .success else { throw WitnessRefusal() }
+    guard status == .success else { throw WitnessRefusal(reason: "attribute_\(name)_status_\(status.rawValue)", attributeStatus: status.rawValue) }
     return raw
   }
   private static func scalar(_ raw: CFTypeRef?) throws -> String {
@@ -117,12 +123,12 @@ private func digest(_ value: String) -> String {
       point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite, size.width >= 0, size.height >= 0 else { throw WitnessRefusal() }
     return CGRect(origin: point, size: size)
   }
-  private static func tree(_ element: AXUIElement, budget: Budget, depth: Int, scrolling: Bool, nodes: inout [Node]) throws -> String {
+  private static func tree(_ element: AXUIElement, bundleId: String, budget: Budget, depth: Int, scrolling: Bool, nodes: inout [Node]) throws -> String {
     try budget.check(); budget.nodes += 1
     guard depth <= 16, AXUIElementSetMessagingTimeout(element, 0.04) == .success else { throw WitnessRefusal() }
     var rawNames: CFArray?
     guard AXUIElementCopyAttributeNames(element, &rawNames) == .success, let names = rawNames as? [String],
-      let role = try read(element, "AXRole") as? String, roles.contains(role) else { throw WitnessRefusal() }
+      let role = try read(element, "AXRole") as? String, LocalTargetTreePolicy.roles.contains(role) else { throw WitnessRefusal() }
     if names.contains("AXSubrole"), let subrole = try read(element, "AXSubrole") as? String, subrole == "AXSecureTextField" { throw WitnessRefusal() }
     let frame = try rect(element)
     var semantic = [String]()
@@ -130,13 +136,26 @@ private func digest(_ value: String) -> String {
     var selectedRange = false, enabled = true, hasStringValue = false
     for name in attributes {
       try budget.check()
-      let raw = names.contains(name) ? try read(element, name) : nil
+      let raw: CFTypeRef?
+      var unavailableDescription = false
+      do { raw = names.contains(name) ? try read(element, name) : nil }
+      catch {
+        guard let status = (error as? WitnessRefusal)?.attributeStatus,
+          LocalTargetTreePolicy.allowsUnavailableDescription(bundleId: bundleId, role: role, attribute: name, status: status) else { throw error }
+        raw = nil; unavailableDescription = true
+      }
       if name == "AXValue", let raw, CFGetTypeID(raw) == CFStringGetTypeID() { hasStringValue = true }
       if name == "AXSelectedChildren", let raw {
         guard CFGetTypeID(raw) == CFArrayGetTypeID(), let selected = raw as? [AXUIElement], selected.count <= 128 else { throw WitnessRefusal() }
-        budget.selectedReferences.append(contentsOf: selected)
+        budget.semanticReferences.append(contentsOf: selected)
       }
-      let value = try scalar(raw)
+      let value: String
+      if let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() {
+        guard LocalTargetTreePolicy.allowsElementValue(role: role, attribute: name) else { throw WitnessRefusal() }
+        let reference = raw as! AXUIElement
+        budget.semanticReferences.append(reference)
+        value = "ref:" + String(CFHash(reference))
+      } else { value = unavailableDescription ? "unavailable:AXDescription:failure" : try scalar(raw) }
       if name == "AXSelectedTextRange", let raw, CFGetTypeID(raw) == AXValueGetTypeID(), AXValueGetType(raw as! AXValue) == .cfRange { selectedRange = true }
       if name == "AXEnabled", let number = raw as? NSNumber { enabled = number.boolValue }
       let entry = name + ":" + String(value.utf8.count) + ":" + value
@@ -150,7 +169,7 @@ private func digest(_ value: String) -> String {
     nodes.append(Node(element: element, role: role, rect: frame, selectedRange: selectedRange, scrolling: inScroll, enabled: enabled))
     if names.contains("AXChildren"), let raw = try read(element, "AXChildren") {
       guard CFGetTypeID(raw) == CFArrayGetTypeID(), let children = raw as? [AXUIElement], children.count <= 128 else { throw WitnessRefusal() }
-      for child in children { semantic.append(try tree(child, budget: budget, depth: depth + 1, scrolling: inScroll, nodes: &nodes)) }
+      for child in children { semantic.append(try tree(child, bundleId: bundleId, budget: budget, depth: depth + 1, scrolling: inScroll, nodes: &nodes)) }
     }
     return "(" + semantic.joined(separator: "\u{1f}") + ")"
   }
@@ -169,7 +188,7 @@ private func digest(_ value: String) -> String {
     let y = ((rect.midY - display.minY) / max(1, display.height - 1) * 1_000_000).rounded() / 1_000_000
     return (x, y, CGPoint(x: display.minX + x * max(1, display.width - 1), y: display.minY + y * max(1, display.height - 1)))
   }
-  static func capture(displayId: UInt32) -> LocalTargetSnapshot {
+  static func capture(displayId: UInt32, diagnostic: ((String) -> Void)? = nil) -> LocalTargetSnapshot {
     let display = CGDisplayBounds(displayId), budget = Budget()
     guard AXIsProcessTrusted(), let rows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else { return LocalTargetSnapshot() }
     var result = LocalTargetSnapshot(), visited = Set<String>()
@@ -185,13 +204,13 @@ private func digest(_ value: String) -> String {
       do {
         let raw = try LocalApplicationWindows.read(pid: pid)
         let windows = raw.filter { (try? rect($0)) == cgRect }
-        guard windows.count == 1 else { continue }
+        guard windows.count == 1 else { diagnostic?("window_geometry_unmatched"); continue }
         let window = windows[0]
-        budget.selectedReferences.removeAll()
+        budget.semanticReferences.removeAll()
         var nodes = [Node]()
-        let semantic = digest(try tree(window, budget: budget, depth: 0, scrolling: false, nodes: &nodes))
+        let semantic = digest(try tree(window, bundleId: identity.bundleId, budget: budget, depth: 0, scrolling: false, nodes: &nodes))
         try budget.check()
-        guard budget.selectedReferences.allSatisfy({ selected in nodes.contains { CFEqual($0.element, selected) } }) else { continue }
+        guard LocalTargetTreePolicy.referencesContained(budget.semanticReferences, in: nodes.map(\.element), same: { CFEqual($0, $1) }) else { diagnostic?("reference_outside_window"); continue }
         // A standard native titlebar is offered only with a close-button chrome
         // witness and an actual Window AX hit, never an arbitrary top-strip click.
         if (try? read(window, "AXSubrole") as? String) == "AXStandardWindow",
@@ -219,7 +238,12 @@ private func digest(_ value: String) -> String {
           result.targets.append(target)
           if let focus, focus.process == identity, CFEqual(focus.element, node.element) { result.focusedId = id }
         }
-      } catch { continue } // Unsupported/incomplete windows provide no target proof.
+      } catch {
+        // Only an explicit read-only diagnostic receives fixed refusal codes;
+        // never emit AX values, labels, window titles or other screen content.
+        diagnostic?(identity.bundleId + ":" + ((error as? WitnessRefusal).map { $0.reason ?? "witness_site_\($0.site)" } ?? "window_witness_unavailable"))
+        continue
+      } // Unsupported/incomplete windows provide no target proof.
     }
     return result
   }
