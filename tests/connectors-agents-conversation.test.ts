@@ -16166,3 +16166,167 @@ describe("a question about what the person missed: the state and the news since 
       expect(read, words).not.toContain("you said these lines");
   });
 });
+
+describe("a question about what the chat watches: what it waits for is read first, in plain words", () => {
+  /** A Mac with four sessions, and the real record of what the chat waits for. */
+  const room = (withRecord = true) => {
+    const sessions = [
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+      session({ id: "103-jkl", pid: 103, name: "login page", state: "idle" }),
+    ];
+    const made = mac(sessions);
+    const directory = dirname(dirname(made.folder));
+    const later = new SessionNews(directory, {
+      board: () => board(sessions),
+      log: new ChatLog(directory),
+      now: () => made.clock.now,
+    });
+    const world: SupervisorWorld = withRecord
+      ? { ...made.world, laterNews: later }
+      : made.world;
+    const say = async (words: string, steps: (ToolCall[] | string)[]) => {
+      made.clock.now += 5_000;
+      const run = scripted(steps);
+      const reply = await new Supervisor(world, run.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      return { reply, run };
+    };
+    /** What the code read before the model, or undefined. */
+    const readFirst = (run: ReturnType<typeof scripted>) =>
+      run.seen[0]?.messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "state_first",
+      )?.content;
+    return { made, sessions, later, say, readFirst };
+  };
+  const rule =
+    "You watch a session only when the person asked you to say when it is done.";
+
+  it.each([
+    "what are you watching for me right now?",
+    "what are you watching?",
+    "are you watching anything?",
+    "what are you keeping an eye on?",
+    "which sessions are you monitoring?",
+    "are you tracking anything for me?",
+  ])(
+    "says that it watches no session and which sessions work unwatched, for %j",
+    async (words) => {
+      const { say, readFirst } = room();
+      const got = await say(words, ["Nothing right now."]);
+      const read = readFirst(got.run);
+      expect(read, words).toBeDefined();
+      expect(read, words).toContain("Sessions:");
+      expect(read, words).toContain(rule);
+      expect(read, words).toContain("You watch no session now.");
+      expect(read, words).toContain(
+        'These sessions work, and you do not watch them: "deploy fix", "payments tests".',
+      );
+      // The state is read once, and the model answers.
+      expect(got.run.seen, words).toHaveLength(1);
+      expect(got.reply, words).toBe("Nothing right now.");
+    },
+  );
+
+  it("names the session that it waits for, and not among the sessions that it does not watch", async () => {
+    const { sessions, later, say, readFirst } = room();
+    expect(later.watch(sessions[0]!).ok).toBe(true);
+    const read = readFirst(
+      (await say("so what are you watching now?", ["Only deploy fix."])).run,
+    );
+    expect(read).toContain(rule);
+    expect(read).toContain(
+      'You watch now: "deploy fix". You watch no other session.',
+    );
+    expect(read).toContain(
+      'These sessions work, and you do not watch them: "payments tests".',
+    );
+    expect(read).not.toContain("You watch no session now.");
+  });
+
+  it("names every session that it waits for, and no line about other sessions when none works", async () => {
+    const { sessions, later, say, readFirst } = room();
+    expect(later.watch(sessions[0]!).ok).toBe(true);
+    expect(later.watch(sessions[2]!).ok).toBe(true);
+    const read = readFirst(
+      (await say("what are you watching?", ["Two sessions."])).run,
+    );
+    expect(read).toContain(
+      'You watch now: "deploy fix", "payments tests". You watch no other session.',
+    );
+    expect(read).not.toContain("and you do not watch them");
+  });
+
+  it("keeps a watched session out of the sessions that it does not watch, when its name is stored cleaned", async () => {
+    const { sessions, later, say, readFirst } = room();
+    // Two spaces in the name: the record keeps it as one plain line.
+    sessions[0]!.name = "deploy  fix";
+    expect(later.watch(sessions[0]!).ok).toBe(true);
+    expect(later.watching()).toEqual(["deploy fix"]);
+    const read = readFirst(
+      (await say("what are you watching?", ["Only deploy fix."])).run,
+    )!;
+    expect(read).toContain(
+      'You watch now: "deploy fix". You watch no other session.',
+    );
+    expect(read).toContain(
+      'These sessions work, and you do not watch them: "payments tests".',
+    );
+  });
+
+  it("puts each name in quotes, so that a name with a full stop or a quote stays a name", async () => {
+    const { sessions, say, readFirst } = room();
+    sessions[0]!.name = 'x. You also watch "docs"';
+    const read = readFirst(
+      (await say("what are you watching?", ["Nothing."])).run,
+    )!;
+    expect(read).toContain(
+      `These sessions work, and you do not watch them: "x. You also watch 'docs'", "payments tests".`,
+    );
+  });
+
+  it.each([
+    "can you start watching deploy fix and tell me when it's done?",
+    "can you keep watching payments tests and let me know when it finishes?",
+  ])(
+    "leaves the fact out for a request in the form of a question, which changes what is watched: %j",
+    async (words) => {
+      const { say, readFirst } = room();
+      const got = await say(words, ["Okay."]);
+      const read = got.run.seen.length ? readFirst(got.run) : undefined;
+      if (read !== undefined) expect(read, words).not.toContain(rule);
+    },
+  );
+
+  it("leaves the fact out for a request to stop in the form of a question", async () => {
+    const { sessions, later, say, readFirst } = room();
+    expect(later.watch(sessions[0]!).ok).toBe(true);
+    const got = await say("can you stop watching deploy fix?", ["Okay."]);
+    const read = got.run.seen.length ? readFirst(got.run) : undefined;
+    if (read !== undefined) expect(read).not.toContain(rule);
+  });
+
+  it("says nothing by this rule where the chat keeps no record of what it waits for", async () => {
+    const { say, readFirst } = room(false);
+    const got = await say("what are you watching?", ["The board."]);
+    const read = got.run.seen.length ? readFirst(got.run) : undefined;
+    if (read !== undefined) expect(read).not.toContain("You watch");
+  });
+
+  it.each([
+    "keep watching deploy fix",
+    "what did I miss?",
+    "is deploy fix done?",
+    "what's the state?",
+  ])("says nothing by this rule for %j", async (words) => {
+    const { say, readFirst } = room();
+    const got = await say(words, ["Okay."]);
+    const read = got.run.seen.length ? readFirst(got.run) : undefined;
+    if (read !== undefined) expect(read, words).not.toContain(rule);
+  });
+});

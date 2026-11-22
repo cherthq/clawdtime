@@ -947,6 +947,16 @@ const asksWhatIsWatched = (text: string) =>
     text,
   );
 
+/**
+ * A message that the gate of the watch tool can take: a request to hear
+ * later about a session, said to ClawdTime ("can you watch deploy fix and
+ * tell me when it's done?"), or a request to stop. The same readers as that
+ * gate: a question is a request only when it asks ClawdTime to do it.
+ */
+const changesWhatIsWatched = (text: string) =>
+  (asksToBeTold(text) && (!isQuestion(text) || asksYouTo(text))) ||
+  stopsWatching(text);
+
 /** Added to the instructions only where an application can open. */
 const appBrief = `To open an application or a web address on this Mac, call open_app. It opens at once. Do not answer that you cannot open an application.`;
 
@@ -5540,6 +5550,53 @@ export class Supervisor {
     );
   }
   /**
+   * What the chat watches, for a question about it: the sessions that it
+   * waits for because the person asked to hear when they are done, and the
+   * sessions that work and that it does not watch.
+   *
+   * The state holds this in one line among many, in other words ("The chat
+   * waits for no session now"). The model read "watching" as "the sessions
+   * that work" and answered "I'm watching two sessions working now",
+   * although it waits for none: nothing would be said about them. Here the
+   * fact stands last, in the words of the question.
+   */
+  private watchedNow() {
+    let waitsFor: string[] = [];
+    let sessions: AgentSession[] = [];
+    try {
+      waitsFor = this.world.laterNews?.watching() ?? [];
+      sessions = this.world.board()?.sessions ?? [];
+    } catch {
+      // With no record and no board, nothing is known to be watched.
+    }
+    // A name is text that a session or a person chose: one plain line in
+    // quotes, so that a name with a full stop in it stays a name. The
+    // record keeps a watched name in the same plain form, and the two are
+    // compared in that form.
+    const plain = (name: string) => clean(name, 80);
+    const quoted = (name: string) => `"${plain(name).replace(/"/g, "'")}"`;
+    const watched = new Set(waitsFor.map((name) => plain(name).toLowerCase()));
+    const unwatched = sessions
+      .filter(
+        (session) =>
+          (session.state === "working" || session.state === "needs_you") &&
+          !watched.has(plain(title(session)).toLowerCase()),
+      )
+      .slice(0, 8)
+      .map((session) => quoted(title(session)));
+    return [
+      "About what you watch: You watch a session only when the person asked you to say when it is done. A session that works is not watched for that reason alone, and nothing is said by itself about it.",
+      waitsFor.length
+        ? `You watch now: ${waitsFor.map(quoted).join(", ")}. You watch no other session.`
+        : "You watch no session now.",
+      ...(unwatched.length
+        ? [
+            `These sessions work, and you do not watch them: ${unwatched.join(", ")}. Do not say that you watch them. You can offer to say when one of them is done.`,
+          ]
+        : []),
+    ].join("\n");
+  }
+  /**
    * The lines that the chat said by itself since the person's last message:
    * the answer of a job, or that a session is done. For a question about
    * what the person missed, the code gives them to the model with the
@@ -8592,10 +8649,23 @@ export class Supervisor {
         // The state is cut as in every other read: a shorter cut can hide
         // a request that waits behind a full board. The news stands after
         // it, whole.
-        const state =
-          asksWhatIsNew(words) && !opensWithAVerbOfWork(words)
-            ? `${this.status().slice(0, 6000)}\n${this.newsSince(turn)}`
-            : this.status().slice(0, 6000);
+        const state = [
+          this.status().slice(0, 6000),
+          ...(asksWhatIsNew(words) && !opensWithAVerbOfWork(words)
+            ? [this.newsSince(turn)]
+            : []),
+          // "What are you watching?": what the chat waits for, in the
+          // words of the question. Not for a message that the gate of
+          // the watch tool can take ("can you start watching deploy fix
+          // and tell me when it's done?", "can you stop watching it?"):
+          // that turn changes what is watched, and a fact from before it
+          // would be false after it.
+          ...(this.world.laterNews !== undefined &&
+          asksWhatIsWatched(words) &&
+          !changesWhatIsWatched(words)
+            ? [this.watchedNow()]
+            : []),
+        ].join("\n");
         messages.push(
           {
             role: "assistant",
