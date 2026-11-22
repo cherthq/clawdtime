@@ -10,6 +10,7 @@
 # Both programs start again by themselves when they end, until ./host.sh stop: see "keep" below.
 # Settings come from .env.local in this folder (see .env.example). Nothing here holds a secret.
 set -eu
+umask 077
 DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$DIR/.." && pwd)
 STATE=${CLAWDTIME_LINE_STATE:-$HOME/.local/share/clawdtime/line}
