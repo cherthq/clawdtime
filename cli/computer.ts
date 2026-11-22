@@ -9,7 +9,10 @@ import {
   type JournalRequest,
 } from "../connectors/computer/journal.js";
 import { readTimings, timingLine } from "../connectors/computer/timing.js";
-import { defaultComputerModel } from "../connectors/computer/planner.js";
+import {
+  defaultComputerModel,
+  fallbackComputerModel,
+} from "../connectors/computer/planner.js";
 import type { BrowserPort } from "../connectors/computer/ports.js";
 
 export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself, one checked action at a time
@@ -143,7 +146,9 @@ export async function computerCli(
     );
     row(
       "model",
-      `${env.CLAWDTIME_COMPUTER_MODEL || defaultComputerModel}. CLAWDTIME_COMPUTER_MODEL changes it.`,
+      env.CLAWDTIME_COMPUTER_MODEL
+        ? `${env.CLAWDTIME_COMPUTER_MODEL}. CLAWDTIME_COMPUTER_MODEL chose it.`
+        : `${defaultComputerModel}. CLAWDTIME_COMPUTER_MODEL changes it. A key that may not use it falls back to ${fallbackComputerModel}.`,
     );
     const folder = computerDirectory(root);
     row(

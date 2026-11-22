@@ -148,7 +148,9 @@ describe("clawdtime computer", () => {
     expect(missing).toMatch(
       /model key +missing\. The service needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment\./,
     );
-    expect(missing).toMatch(/model +gpt-4\.1/);
+    expect(missing).toMatch(
+      /model +gpt-5\.4\. CLAWDTIME_COMPUTER_MODEL changes it\. A key that may not use it falls back to gpt-4\.1\./,
+    );
     expect(missing).toMatch(/journal +no request yet/);
     expect(missing).toMatch(/unknown result +none/);
     expect(missing).toMatch(/hands +in the ClawdTime panel/);
@@ -170,7 +172,9 @@ describe("clawdtime computer", () => {
     const text = await ready.run("doctor");
     expect(text).toMatch(/switch +on/);
     expect(text).toMatch(/model key +found in CLAWDTIME_OPENAI_API_KEY/);
-    expect(text).toMatch(/model +gpt-4\.1-mini/);
+    expect(text).toMatch(
+      /model +gpt-4\.1-mini\. CLAWDTIME_COMPUTER_MODEL chose it\./,
+    );
     expect(text).toMatch(/state folder +.*computer, for its owner only/);
     expect(text).toMatch(/journal +1 request kept/);
     expect(text).toMatch(

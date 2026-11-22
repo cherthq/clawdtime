@@ -27,7 +27,17 @@ import {
   type NavigationIntent,
 } from "./navigation.js";
 
-export const defaultComputerModel = "gpt-4.1";
+/**
+ * The model of the planner. It is the one that did best in the planner test
+ * (`npm run eval:computer:planner`): run that test before this line changes.
+ */
+export const defaultComputerModel = "gpt-5.4";
+/**
+ * The model before it. When the service says that a key may not use the
+ * default, or does not know it, the planner goes to this one, once, and stays
+ * there. A model that the person chose is never replaced.
+ */
+export const fallbackComputerModel = "gpt-4.1";
 
 const rules = (browser: boolean) =>
   [
@@ -354,7 +364,9 @@ export function brief(
 
 export class OpenAIPlanner implements Planner {
   private readonly key: string;
-  private readonly model: string;
+  private model: string;
+  /** The model to go to when the service refuses the default one. Null when the person chose the model. */
+  private fallback: string | null;
   private readonly request: typeof fetch;
   private readonly browser: boolean;
   private readonly timeoutMs: number;
@@ -369,36 +381,53 @@ export class OpenAIPlanner implements Planner {
   }) {
     this.key = options.key;
     this.model = options.model || defaultComputerModel;
+    this.fallback = options.model ? null : fallbackComputerModel;
     this.request = options.request ?? fetch;
     this.browser = options.browser === true;
     this.timeoutMs = options.timeoutMs ?? 60_000;
   }
 
-  async navigation(goal: string): Promise<NavigationIntent> {
-    const response = await this.request(
-      "https://api.openai.com/v1/chat/completions",
-      {
+  /**
+   * One request to the language model. When the service answers that this
+   * key may not use the default model (403) or that it does not know the
+   * model (404), the same request goes out once more with the model before
+   * it, and the planner stays on that one.
+   */
+  private async send(body: Record<string, unknown>): Promise<Response> {
+    const post = () =>
+      this.request("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           authorization: `Bearer ${this.key}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: "system", content: navigationRules },
-            { role: "user", content: goal },
-          ],
-          tools: navigationTools.map((tool) => ({
-            type: "function",
-            function: tool,
-          })),
-          tool_choice: "required",
-          parallel_tool_calls: false,
-        }),
+        body: JSON.stringify({ model: this.model, ...body }),
         signal: AbortSignal.timeout(this.timeoutMs),
-      },
-    );
+      });
+    const response = await post();
+    if (
+      this.fallback === null ||
+      (response.status !== 403 && response.status !== 404)
+    )
+      return response;
+    this.model = this.fallback;
+    this.fallback = null;
+    return post();
+  }
+
+  async navigation(goal: string): Promise<NavigationIntent> {
+    const response = await this.send({
+      messages: [
+        { role: "system", content: navigationRules },
+        { role: "user", content: goal },
+      ],
+      tools: navigationTools.map((tool) => ({
+        type: "function",
+        function: tool,
+      })),
+      tool_choice: "required",
+      parallel_tool_calls: false,
+    });
     if (!response.ok)
       throw new Error(`The language model answered ${response.status}.`);
     const body = (await response.json()) as {
@@ -421,44 +450,32 @@ export class OpenAIPlanner implements Planner {
     const browser = this.browser && input.browser !== false;
     const text = brief(input, browser);
     const image = input.observation?.image;
-    const response = await this.request(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.key}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: "system", content: rules(browser) },
-            {
-              role: "user",
-              content: [
-                { type: "text", text },
-                ...(image
-                  ? [
-                      {
-                        type: "image_url",
-                        image_url: {
-                          url: `data:image/jpeg;base64,${image}`,
-                          detail: "high",
-                        },
-                      },
-                    ]
-                  : []),
-              ],
-            },
+    const response = await this.send({
+      messages: [
+        { role: "system", content: rules(browser) },
+        {
+          role: "user",
+          content: [
+            { type: "text", text },
+            ...(image
+              ? [
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: `data:image/jpeg;base64,${image}`,
+                      detail: "high",
+                    },
+                  },
+                ]
+              : []),
           ],
-          tools: browser ? [...screenTools, ...browserTools] : screenTools,
-          // One action for each turn: a function call, and only one.
-          tool_choice: "required",
-          parallel_tool_calls: false,
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      },
-    );
+        },
+      ],
+      tools: browser ? [...screenTools, ...browserTools] : screenTools,
+      // One action for each turn: a function call, and only one.
+      tool_choice: "required",
+      parallel_tool_calls: false,
+    });
     // The body of a failure can echo the request: only the status is reported.
     if (!response.ok)
       throw new Error(`The language model answered ${response.status}.`);
@@ -502,7 +519,10 @@ export function plannerFromEnvironment(
   if (!key) return null;
   return new OpenAIPlanner({
     key,
-    model: env.CLAWDTIME_COMPUTER_MODEL || defaultComputerModel,
+    // No model here means the default, with its fallback.
+    ...(env.CLAWDTIME_COMPUTER_MODEL
+      ? { model: env.CLAWDTIME_COMPUTER_MODEL }
+      : {}),
     ...options,
   });
 }
