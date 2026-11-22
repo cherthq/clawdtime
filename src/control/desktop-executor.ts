@@ -5,8 +5,9 @@ import type { Store } from "../storage/store.js";
 import type { Vault } from "../storage/security.js";
 
 export interface DesktopExecutionSnapshot {
+  requestId?: string;
   configured: boolean;
-  mode?: "native" | "browser";
+  mode?: "native" | "browser" | "background";
   state: string;
   canStop: boolean;
   message: string;
@@ -14,8 +15,18 @@ export interface DesktopExecutionSnapshot {
 }
 export interface DesktopExecutorPort {
   snapshot(): DesktopExecutionSnapshot;
-  submit(eventId: string, text: string): Promise<{ message: string }>;
+  submit(
+    eventId: string,
+    text: string,
+    authority?: DesktopExecutionAuthority,
+  ): Promise<{ message: string }>;
   stop(): DesktopExecutionSnapshot;
+}
+/** Issued only by the authenticated call bridge; never from a model or surface. */
+export interface DesktopExecutionAuthority {
+  callId: string;
+  toolCallId: string;
+  isLive(): boolean;
 }
 export const desktopExecutorConfigSchema = z
   .object({

@@ -235,6 +235,76 @@ describe("direct software requests start without a confirmation loop", () => {
     expect(tasks.calls[0]!.text).toBe(spoken);
   });
 
+  it("preserves a large software goal and trailing navigation prohibition with native execution connected", async () => {
+    const spoken = `Build a landing page. ${"Use supplied brand text. ".repeat(90)}Do not switch desktops or open Messages.`;
+    const tasks = fakeTasks();
+    const run = scripted(["Must not ask model"]);
+    let interpretations = 0;
+    const submitted: string[] = [];
+    run.model.navigation = async () => {
+      interpretations++;
+      return { kind: "app", name: "Messages" };
+    };
+    const value = world(tasks.port).value;
+    value.execution = {
+      snapshot: () => ({
+        configured: true,
+        mode: "native",
+        state: "idle",
+        canStop: false,
+        message: "idle",
+      }),
+      submit: async (_id, text) => {
+        submitted.push(text);
+        return { message: "unexpected" };
+      },
+      stop: () => ({
+        configured: true,
+        mode: "native",
+        state: "idle",
+        canStop: false,
+        message: "stopped",
+      }),
+      answer: async () => ({ message: "unexpected" }),
+    };
+    await new Supervisor(value, run.model).reply([], spoken, "chat");
+    expect(tasks.calls).toHaveLength(1);
+    expect(tasks.calls[0]!.text).toBe(spoken);
+    expect(interpretations).toBe(0);
+    expect(submitted).toEqual([]);
+    expect(run.seen).toEqual([]);
+  });
+  it("rejects oversized non-software requests even when a task service exists", async () => {
+    const tasks = fakeTasks();
+    const run = scripted(["Must not ask model"]);
+    const spoken =
+      "Bring Messages forward. ".padEnd(2000, " ") + "Do not do that yet.";
+    expect(
+      await new Supervisor(world(tasks.port).value, run.model).reply(
+        [],
+        spoken,
+        "chat",
+      ),
+    ).toContain("longer than 2000");
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen).toEqual([]);
+  });
+  it("does not truncate a direct software goal beyond its 8000-character bound", async () => {
+    const tasks = fakeTasks();
+    const run = scripted(["Must not ask model"]);
+    const spoken =
+      "Build a landing page. ".padEnd(8000, "x") + "Do not deploy.";
+    expect(
+      await new Supervisor(world(tasks.port).value, run.model).reply(
+        [],
+        spoken,
+        "chat",
+      ),
+    ).toContain("Nothing was started");
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen).toEqual([]);
+  });
+
   it("acknowledges only a successful real start and keeps an active task unchanged", async () => {
     const tasks = fakeTasks();
     const originalStart = tasks.port.start;
@@ -405,7 +475,9 @@ describe("a task by talking, with a language model", () => {
       "what is the login test doing?",
       "chat",
     );
+    // The question is about what runs, so the code reads the state first.
     expect(run.results()).toEqual([
+      expect.stringMatching(/^Sessions: /),
       "The person did not ask for a task in their last message. Ask them.",
     ]);
     expect(tasks.calls).toEqual([]);
@@ -851,8 +923,9 @@ describe("a task by talking, with no language model", () => {
         eventId: expect.stringMatching(/^talk_[0-9a-f]{16}_start$/),
       },
     ]);
+    // With no model, the gate's sentence, which is written for a model, is not the answer.
     expect(await agent.reply([], "start a task", "chat")).toBe(
-      "The person gave no goal. Ask them what the task is.",
+      "Nothing started. Tell me in one sentence what to do.",
     );
     expect(await agent.reply([], "Start a task: write the notes", "chat")).toBe(
       "Finish or reconcile the current task before starting another.",
@@ -980,8 +1053,9 @@ describe("a task by talking, with no language model", () => {
       "cancel the task",
       "chat",
     );
-    expect(run.seen).toEqual([]);
-    expect(live.calls.map((item) => item.kind)).toEqual(["cancel"]);
+    expect(run.results()).toEqual([
+      "The person spoke about the task, not about this request. Use the task tools, or ask them.",
+    ]);
     expect(both.desk.take(waiting.id)).toBeNull();
     // An ask for a new task wins over the words inside its goal.
     const fresh = fakeTasks();
@@ -1029,9 +1103,10 @@ describe("a task by talking, with no language model", () => {
     expect(await first.agent.reply([], "status", "chat")).toBe("1 working.");
     const running = fakeTasks({ goal: "fix the login test" });
     const second = plain(running.port);
+    await second.agent.reply([], "cancel", "chat");
     await second.agent.reply([], "should I cancel the task?", "chat");
     expect(running.calls).toEqual([]);
-    expect(await second.agent.reply([], "cancel", "chat")).toBe(
+    expect(await second.agent.reply([], "cancel the task", "chat")).toBe(
       "Cancellation requested.",
     );
     expect(running.calls.map((item) => item.kind)).toEqual(["cancel"]);
@@ -1173,6 +1248,324 @@ describe("the door to the desktop task service", () => {
   });
 });
 
+describe("a direct software request, after an independent review", () => {
+  const waiting = (desk: DecisionDesk, options: string[] = []) =>
+    desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: options.length
+        ? {
+            kind: "question",
+            tool: "AskUserQuestion",
+            summary: "What next?",
+            options,
+          }
+        : {
+            kind: "permission",
+            tool: "Bash",
+            summary: "git push origin main",
+            options: [],
+          },
+      holdSeconds: 45,
+    });
+  /** A model that only talks: whatever starts or answers then, the code did it before the model. */
+  const talks = () => scripted(["Okay."]);
+
+  it.each([
+    "Yes, update the config",
+    "Okay, write the script",
+    "Sure, add the test",
+    "Yes, fix the bug",
+  ])(
+    "lets %j answer the agent request that waits, and starts no task with it",
+    async (words) => {
+      for (const model of [null, talks().model]) {
+        const tasks = fakeTasks();
+        const { value, desk } = world(tasks.port);
+        waiting(desk);
+        await new Supervisor(value, model).reply([], words, "call");
+        expect(tasks.calls).toEqual([]);
+      }
+      // With no model the clear yes allows the request, as before the change.
+      const tasks = fakeTasks();
+      const { value, desk } = world(tasks.port);
+      waiting(desk);
+      await new Supervisor(value, null).reply([], words, "call");
+      expect(desk.pending()).toHaveLength(0);
+    },
+  );
+
+  it("starts no task with one of the choices that an agent's question offers", async () => {
+    const tasks = fakeTasks();
+    const { value, desk } = world(tasks.port);
+    waiting(desk, ["Fix the bug", "Add tests", "Update the README"]);
+    await new Supervisor(value, talks().model).reply([], "Fix the bug", "call");
+    expect(tasks.calls).toEqual([]);
+  });
+
+  it.each([
+    [
+      "Okay, update the README first",
+      "Approve the plan?",
+      ["Approve", "Revise"],
+    ],
+    ["Add one more test", "Deploy now or wait?", ["Deploy now", "Wait"]],
+    ["Yes, fix the config first", "Deploy to production now?", ["Yes", "No"]],
+  ] as const)(
+    "sends %j to the waiting task as the person's whole sentence, never as a choice they did not make",
+    async (words, question, choices) => {
+      const tasks = fakeTasks({
+        ...asking,
+        question,
+        choices: [...choices],
+      });
+      const { value } = world(tasks.port);
+      await new Supervisor(value, talks().model).reply([], words, "call");
+      expect(tasks.calls.map((entry) => [entry.kind, entry.text])).toEqual([
+        ["answer", words],
+      ]);
+    },
+  );
+
+  it("still takes a sentence that is exactly one choice as that choice", async () => {
+    const tasks = fakeTasks({
+      ...asking,
+      question: "What do I do first?",
+      choices: ["Fix the bug", "Add the tests"],
+    });
+    const { value } = world(tasks.port);
+    await new Supervisor(value, talks().model).reply(
+      [],
+      "fix the bug.",
+      "call",
+    );
+    expect(tasks.calls.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["answer", "Fix the bug"],
+    ]);
+  });
+
+  it.each([
+    // A question.
+    "Build the app or fix the bug first?",
+    "Write the tests first?",
+    "Add a feature flag?",
+    "Can you write code?",
+    "Can you fix bugs?",
+    "Could you build an app before?",
+    "Will you add tests later?",
+    // The person takes it back, or says not now.
+    "Fix the bug? no, wait",
+    "Build a landing page. Actually no, never mind.",
+    "Build a landing page, but don't do it yet",
+    "Build a landing page, but not now",
+    "Build a landing page, but hold off until I say go",
+    // A request for the state.
+    "update me on the code",
+    "write me the status of the tests",
+    "add up the tests",
+    // No work at all.
+    "Make no changes to the code",
+    "Write no code until I say so",
+    "Fix no bugs",
+    // Work that is not software.
+    "Make a test call to my phone",
+    "Write an email in the Mail app to my manager",
+    "Update the Slack app",
+    "Make a note: the API key rotates monthly",
+    // Reported speech.
+    "Build the app, he said, but I disagree",
+  ])("starts no task before the model for %j", async (words) => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    const run = talks();
+    await new Supervisor(value, run.model).reply([], words, "call");
+    expect(tasks.calls).toEqual([]);
+    // The sentence reached the model: the code did not answer in its place.
+    expect(run.seen.length).toBeGreaterThan(0);
+  });
+
+  it("asks the model where no task service runs, when the sentence is not a plain instruction", async () => {
+    // An answer to a request that waits, words for a session, and a request for the state.
+    for (const [words, request] of [
+      ["Yes, update the config", true],
+      ["Fix the bug, tell deploy fix", false],
+      ["update me on the code", false],
+    ] as const) {
+      const { value, desk } = world();
+      if (request) waiting(desk);
+      const run = talks();
+      const said = await new Supervisor(value, run.model).reply(
+        [],
+        words,
+        "call",
+      );
+      expect(run.seen.length).toBeGreaterThan(0);
+      expect(said).toBe("Okay.");
+    }
+  });
+
+  it.each([
+    "Fix the bug, tell deploy fix",
+    "Add tests for the login function, send that to deploy fix",
+    "Make the deploy fix agent add tests",
+  ])("starts no task with %j: it is for a session", async (words) => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    const run = talks();
+    await new Supervisor(value, run.model).reply([], words, "call");
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    "Um, build a landing page",
+    "Yeah, build a landing page",
+    "Okay. Build a landing page",
+    "Hey ClawdTime, build a landing page",
+    "I want you to build a landing page",
+    "Build an example app",
+  ])("starts the task for normal speech: %j", async (words) => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    await new Supervisor(value, talks().model).reply([], words, "call");
+    expect(tasks.calls.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["start", words],
+    ]);
+  });
+
+  it("still starts a polite request with a question mark when the model asks for the task", async () => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    const run = scripted([
+      [call("start_task", { goal: "build a landing page" })],
+      "Started.",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "Can you build a landing page for the demo?",
+      "call",
+    );
+    expect(tasks.calls.map((entry) => entry.kind)).toEqual(["start"]);
+  });
+});
+
+describe("the start rules, after a second review", () => {
+  const waiting = (desk: DecisionDesk) =>
+    desk.open({
+      agent: "claude-code",
+      sessionId: "s",
+      cwd: "/work/app",
+      pids: [],
+      described: {
+        kind: "permission",
+        tool: "Bash",
+        summary: "git push origin main",
+        options: [],
+      },
+      holdSeconds: 45,
+    });
+  const talks = () => scripted(["Okay."]);
+
+  it("does not let one sentence both allow an agent's request and start a task, also when the model asks for both", async () => {
+    const tasks = fakeTasks();
+    const { value, desk } = world(tasks.port);
+    const request = waiting(desk);
+    const run = scripted([
+      [
+        call("decide", { request: request.id, decision: "allow" }),
+        call("start_task", { goal: "update the config" }, "c-2"),
+      ],
+      "Done.",
+    ]);
+    await new Supervisor(value, run.model).reply(
+      [],
+      "Yes, update the config",
+      "call",
+    );
+    expect(desk.pending()).toHaveLength(0);
+    expect(tasks.calls).toEqual([]);
+    // A sentence that names a task still starts it while a request waits.
+    const named = fakeTasks();
+    const second = world(named.port);
+    waiting(second.desk);
+    await new Supervisor(
+      second.value,
+      scripted([[call("start_task", { goal: "update the config" })], "Done."])
+        .model,
+    ).reply([], "Start a task: update the config of the app", "call");
+    expect(named.calls.map((entry) => entry.kind)).toEqual(["start"]);
+  });
+
+  it.each([
+    "Update me on the tests",
+    "Add up the test results",
+    "Write me the status of the tests",
+    "Make a test call to my phone",
+    "Update the Slack app",
+  ])("starts no task for %j when no model answers", async (words) => {
+    const tasks = fakeTasks();
+    await new Supervisor(world(tasks.port).value, null).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(tasks.calls).toEqual([]);
+  });
+
+  it.each([
+    "Make the API tests window bigger",
+    "Make the dashboard window fill the screen",
+    "Write down that the API key rotates monthly",
+    "Add to memory that the dashboard uses React",
+    "Add that to my notes app",
+    "Build a landing page is what the client said",
+    "Design feature flags are hard",
+    "Make sure you do not touch the code",
+  ])("starts no task before the model for %j", async (words) => {
+    const tasks = fakeTasks();
+    const run = talks();
+    await new Supervisor(world(tasks.port).value, run.model).reply(
+      [],
+      words,
+      "call",
+    );
+    expect(tasks.calls).toEqual([]);
+    expect(run.seen.length).toBeGreaterThan(0);
+  });
+
+  it.each(["Make the test window bigger", "Would you add tests if I asked?"])(
+    "does not send %j to a waiting task as its answer",
+    async (words) => {
+      const tasks = fakeTasks({ ...asking });
+      await new Supervisor(world(tasks.port).value, talks().model).reply(
+        [],
+        words,
+        "call",
+      );
+      expect(tasks.calls).toEqual([]);
+    },
+  );
+
+  it("starts the task at once when a session only sits in a folder named app", async () => {
+    const tasks = fakeTasks();
+    const { value } = world(tasks.port);
+    value.board = () => ({
+      ...board,
+      sessions: [{ ...session, name: null, project: "app" }],
+    });
+    await new Supervisor(value, talks().model).reply(
+      [],
+      "Fix the bug in the app",
+      "call",
+    );
+    expect(tasks.calls.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["start", "Fix the bug in the app"],
+    ]);
+  });
+});
+
 describe("structured semantic task intent", () => {
   function semantic(
     tasks: TaskPort,
@@ -1180,6 +1573,8 @@ describe("structured semantic task intent", () => {
     configure?: (value: SupervisorWorld) => void,
   ) {
     const made = world(tasks);
+    // The intent reader is a switch of the service. These tests are of the reader, so it is on.
+    made.value.semanticTasks = true;
     configure?.(made.value);
     let at = 0;
     const inputs: unknown[] = [];

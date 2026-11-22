@@ -1261,3 +1261,149 @@ app-set or display transitions that move them out of bounds. Resolve both exact
 targets first, use a fresh grant, and retain the existing geometry/freshness gates.
 The script fails and joins its children if that prerequisite stops holding. Do not
 propose a handset visual test until this extended local qualification passes.
+
+## Staged work-window presentation (November 21, 2026)
+
+`media/window-presentation.mjs` is a transient presentation controller for a future
+qualified background capture source. It does not capture windows or submit input.
+The caller binds a call/task, driver generation, process lifetime, exact window,
+geometry generation and expiry. Each observed frame carries those identities plus
+original pixel dimensions, window dimensions in points, capture time and a unique
+observation ID. A changed source or geometry retires the binding; stale, missing or
+invalid capture hides the view and drops old action positions.
+
+`focus` accepts a target rectangle and cursor point from the exact fresh original
+observation, explicitly in window points or screenshot pixels. `layout` returns the
+source crop, output letterbox rectangle and optional ClawdTime cursor. It interpolates
+to a configurable 1–2× crop (default 1.6×) over 400 ms, holds framing while typing,
+and returns to overview on completion or a spoken overview override. The media
+caller must apply these results only to outgoing video; planner/input coordinates
+remain the original observation's coordinates. There is no remote tap-to-click API.
+
+Cursor compositing requires capture metadata proven to exclude the driver overlay.
+An included overlay is not drawn again; unknown capture behavior suppresses the
+synthetic cursor and reports `capture_overlay_unqualified`. Stop/hangup must call
+`revoke`; every `layout` also checks lease and frame expiry. A cursor is an action
+location, not evidence that input succeeded.
+
+`npx vitest run tests/media-window-presentation.test.ts` exercises Retina and
+nonuniform point scaling, letterboxing, edge crops, smooth transitions, typing,
+overview, stale captures, process/window/driver/geometry changes, duplicate cursor
+suppression, completion and expiry. These tests establish presentation math and
+failure behavior only. Exact-window capture, driver overlay inclusion, foreground
+noninterference and phone readability still require physical qualification.
+
+### Bounded exact-window preview source
+
+`media/driver-window-source.mjs` uses the official generic SDK result envelope and
+existing `jpeg-js` dependency. The source requests JPEG with `display_only:true` and
+no AX walk, preserving the planner's action snapshot and tokens. It checks exact
+PID/window, capture validity and decoded dimensions, caps encoded bytes (4 MiB),
+pixels (4 MP) and decoder memory (64 MiB), and returns transient RGBA without retaining
+frames or exposing raw provider errors. Unknown overlay inclusion stays unknown.
+
+The default frame/lease clock is epoch milliseconds, matching the presentation and
+helper contracts; elapsed capture time is checked separately using a monotonic clock.
+Every capture requires positive driver/process/geometry/current-Space witnesses both
+before and after it. Missing current-Space evidence is a refusal because the driver
+omits that field for both true and unknown. Captures are serialized and rate limited
+(default 4 fps); late results after revoke/rebind are discarded. A hung read returns
+a bounded timeout, revokes its source binding, and keeps the pending transport fenced
+until that operation settles. Consumers hide the view on capture failures; a rate-limited or already-in-flight
+read may retain only a still-fresh frame. Presentation checks frame age again at
+consumption.
+
+A local disposable TextEdit window produced seven valid 1280×828 JPEG frames in
+2.545 seconds across ten scheduled attempts; three attempts were rate limited.
+Warm capture/identity/decode time was 213–282 ms; each JPEG was approximately 49 kB.
+This measured about 2.75 delivered fps through the CLI bridge, not 10 fps or phone
+video acceptance. No personal window was captured in that measurement. The
+`media-driver-window-source` tests exercise identity/format/size refusal, rate and
+freshness bounds, epoch timestamps, hang/revoke behavior and content-free errors.
+
+### Transient video bridge
+
+`media/background-window-video.mjs` combines the source and presentation modules.
+The host supplies only `captureWindow(request)` for the fixed exact-window JPEG
+preview and `verifyBinding(binding)` returning positive identity/current-Space
+witnesses. It exposes no generic tool or input dispatch. `bind` retires the old view,
+`tick` performs at most one bounded read, and `latest({width,height})` returns the
+original RGBA pixels plus crop/letterbox/cursor layout. `focus`, `overview` and
+`complete` change presentation only. `revoke` immediately drops retained pixels,
+action positions and issued views on Stop, hangup or ownership loss.
+
+An HTTP bridge can send RGBA as a binary body with small layout metadata in headers;
+do not JSON/base64-expand raw pixels. The renderer must call `isCurrent(view)` just
+before writing a composed or queued frame. That check rejects replaced/revoked
+bindings, newer captures, changed presentation instructions, stale pixels and expired
+action locations. The returned layout also includes `validUntil` for downstream
+freshness enforcement. Failed reads discard pixels while preserving geometry
+continuity, so a resize during a capture gap requires an explicit new binding.
+Neither pixels nor layouts should enter logs, files or durable receipts.
+
+The action observation ID here identifies the current preview solely for framing.
+The trusted host must correlate the exact original-window point rectangle and
+binding with that preview; it must never substitute a display-only preview ID for
+the driver's planner snapshot or input authority token. Phone zoom does not change
+input coordinates. Overlay inclusion remains unknown until separately qualified.
+
+`npx vitest run tests/media-background-window-video.test.ts tests/media-driver-window-source.test.ts tests/media-window-presentation.test.ts`
+passes 33 synthetic tests, including expiry during composition, action expiry,
+late reads after rebind, Stop and a resize across failed capture. These checks do
+not establish physical phone rendering or foreground noninterference.
+
+### Cursor exclusion evidence and upstream capture limits
+
+Pinned Cua Driver 0.55.0 source at commit
+`8f484f30586eef722bede7a5ce315de1148cca96` routes exact-window capture as follows:
+
+| Route                                                  | Target and overlay implication                                                                                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ScreenCaptureKit first on current Space                | A desktop-independent single-window filter, with hardware cursor disabled. Apple's [filter contract](<https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init(desktopindependentwindow:)>) specifies only the chosen window. |
+| `screencapture -l` compatibility fallback              | Captures the specified window ID, without pointer or window shadow; does not intentionally composite the separate overlay window.                                                                                                                    |
+| SkyLight last resort on current Space, first off-Space | Requests one window's backing store. This private API has no public exclusion guarantee; off-Space frames remain refused by our source.                                                                                                              |
+
+The agent overlay is a separate driver-owned borderless `NSWindow`, explicitly
+shareable for display recordings. It is not painted into the target application's
+window. These source facts support exclusion for exact-window captures, but are not
+physical proof. `get_window_state` reports neither the selected backend nor
+`agent_overlay_capture`; the latter belongs to full-display capture. Do not infer
+that full-display fallback behavior applies to an exact-window response.
+
+Relevant pinned source is [capture.rs](https://github.com/trycua/cua/blob/8f484f30586eef722bede7a5ce315de1148cca96/libs/cua-driver/rust/crates/platform-macos/src/capture.rs),
+[overlay.rs](https://github.com/trycua/cua/blob/8f484f30586eef722bede7a5ce315de1148cca96/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs),
+and [skylight.rs](https://github.com/trycua/cua/blob/8f484f30586eef722bede7a5ce315de1148cca96/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs).
+The supported window tool/config schema exposes no SCK-only or no-disk-fallback
+option. Its deprecated `capture_mode` is ignored and does not select a backend.
+The official `screencapture -l` fallback writes a PNG under a unique 0700 temporary
+directory, reads it, then removes file/directory through `Drop`. A process crash can
+leave that temporary file. ClawdTime's decoder and bridge retain pixels only in
+memory, but this must not be described as a strictly memory-only driver pipeline.
+No undocumented environment setting or driver patch is used to suppress fallback.
+
+Physical qualification remains pending until local Enable. Use only a disposable
+static fixture and the exact pinned daemon/session: after one authorized harmless
+input, independently confirm that the driver cursor is visibly over the fixture;
+collect transient exact-window previews while it is visible. Then use supported
+`set_agent_cursor_enabled` with that explicit session and `enabled:false`, confirm
+its visible pixels have disappeared (the acknowledgement alone is insufficient),
+and collect unchanged-scene previews. Compare the cursor region while accounting
+for caret blinking/JPEG differences; restore that session's prior setting afterward.
+Do not capture the desktop or personal windows merely to compare overlays. Keep
+foreground/pointer/clipboard witnesses and verify the phone does not double-draw.
+An identical pair without independent proof that the overlay was visible is not
+exclusion evidence. The stock API cannot force or identify every fallback route,
+so record which cases remain unqualified; request upstream backend/exclusion
+attestation if stronger route-specific assurance is required.
+
+The optional `overlayQualification` constructor argument is for trusted host
+configuration only. It requires the exact 0.55.0 release archive hash, current driver
+generation, OS build, fixed `get_window_state/jpeg/display_only` pipeline, evidence
+ID and qualification/expiry times. The host must validate its OS/release against
+that evidence; this display adapter does not attest the installation itself.
+Only matching, still-valid evidence can mark a frame `excluded`, and it must cover
+the frame's entire freshness lifetime. Replaced generations, expired evidence and
+all ordinary provider responses remain `unknown`. No qualification is enabled by
+this change, and no planner/tool output may create this configuration. Synthetic
+checks exercise expiry, generation mismatch, immutable evidence, release refusal
+and rejection of provider-supplied exclusion claims.

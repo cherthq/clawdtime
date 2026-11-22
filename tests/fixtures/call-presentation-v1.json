@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "producerId": "00000000-0000-4000-8000-000000000001",
+  "sequence": 12,
+  "commandSeq": 7,
+  "at": 1000,
+  "expiresAt": 2400,
+  "kind": "target",
+  "reducedMotion": true,
+  "surface": {
+    "displayId": "1",
+    "width": 1512,
+    "height": 982,
+    "scale": 2,
+    "appId": "com.example.fixture",
+    "windowId": "42",
+    "window": { "x": 20, "y": 30, "w": 1000, "h": 700 }
+  },
+  "target": { "x": 110, "y": 240, "w": 280, "h": 30 }
+}

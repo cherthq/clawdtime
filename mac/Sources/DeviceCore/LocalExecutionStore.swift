@@ -27,6 +27,9 @@ public final class LocalExecutionStore {
   private let lock: ReceiptLock
   private let directory: Int32
   private var failed = false
+  // Not loaded from local JSON. Only the validated background journal may
+  // confirm retirement; standalone and older readers retain the unknown fence.
+  private var confirmedRetiredBackgroundFences = Set<String>()
   public init(folder: URL) throws {
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let descriptor = open(folder.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
@@ -90,6 +93,7 @@ public final class LocalExecutionStore {
   }
   public var unresolvedActions: Int {
     max(failed ? 1 : 0, journal.actions.values.filter {
+      !confirmedRetiredBackgroundFences.contains($0.id) &&
       ($0.state != "rejected" || $0.evidence != "input_not_dispatched") &&
         ($0.state != "submitted" || $0.evidence != "post_input_frame_available_not_application_verified")
     }.count)
@@ -148,4 +152,65 @@ public final class LocalExecutionStore {
     }
     if changed { try persist() }
   }
+  /// Compatibility fence understood by earlier helper binaries. It is never
+  /// cleared by Stop, lease expiry, or observing an unrelated display frame.
+  public func ensureBackgroundFence(_ id: String, fingerprint digest: String,
+      lease: LocalExecutionLease, now: Date, allowResolved: Bool = false, allowRetiredUnknown: Bool = false) throws {
+    guard !failed, validID(id), journal.sessions[lease.id] != nil else {
+      throw HelperError(409, "Background fence has no durably reserved local owner.")
+    }
+    if let old = journal.actions[id] {
+      guard old.leaseId == lease.id, old.fingerprint == digest,
+        old.sessionId == lease.sessionId, old.taskId == lease.taskId,
+        old.executorId == lease.executorId, old.executorEpoch == lease.executorEpoch else {
+        throw HelperError(409, "Background fence conflicts with a retained receipt.")
+      }
+      guard (old.state == "unknown" && old.evidence == "background_controller_unresolved") ||
+        (allowRetiredUnknown && old.state == "unknown" && old.evidence == "background_controller_quiescent_retired_unknown_navigation") ||
+        (allowResolved && ((old.state == "submitted" && old.evidence == "post_input_frame_available_not_application_verified") ||
+          (old.state == "rejected" && old.evidence == "input_not_dispatched"))) else {
+        throw HelperError(409, "Background sentinel contradicts its unresolved controller.")
+      }
+      return
+    }
+    guard journal.actions.count < 10000 else { throw HelperError(503, "Local journal is full.") }
+    journal.actions[id] = LocalActionReceipt(id: id, leaseId: lease.id, deviceId: lease.deviceId,
+      sessionId: lease.sessionId, taskId: lease.taskId, executorId: lease.executorId,
+      executorEpoch: lease.executorEpoch, policyRevision: lease.policyRevision, fingerprint: digest,
+      state: "unknown", updatedAt: now, evidence: "background_controller_unresolved")
+    try persist()
+  }
+  /// Only BackgroundExecutionStore calls this after durable, exact cleanup
+  /// evidence. The legacy terminal spelling keeps rollback helpers compatible.
+  public func resolveBackgroundFence(_ id: String, fingerprint digest: String,
+      leaseId: String, dispatched: Bool, now: Date) throws {
+    guard !failed, var receipt = journal.actions[id], receipt.leaseId == leaseId,
+      receipt.fingerprint == digest else { throw HelperError(409, "Background fence identity changed.") }
+    let state = dispatched ? "submitted" : "rejected"
+    let evidence = dispatched ? "post_input_frame_available_not_application_verified" : "input_not_dispatched"
+    if receipt.state == state && receipt.evidence == evidence { return }
+    guard receipt.state == "unknown", receipt.evidence == "background_controller_unresolved" else {
+      throw HelperError(409, "Background fence cannot transition.")
+    }
+    receipt.state = state; receipt.evidence = evidence; receipt.updatedAt = now
+    journal.actions[id] = receipt; try persist()
+  }
+
+  /// BackgroundExecutionStore calls only after committing and validating its
+  /// exact typed retirement. It remains UNKNOWN to every legacy local reader.
+  public func retireBackgroundFence(_ id: String, fingerprint digest: String,
+      leaseId: String, now: Date) throws {
+    guard !failed, var receipt = journal.actions[id], receipt.leaseId == leaseId,
+      receipt.fingerprint == digest, receipt.state == "unknown",
+      ["background_controller_unresolved", "background_controller_quiescent_retired_unknown_navigation"].contains(receipt.evidence) else {
+      throw HelperError(409, "Background unknown retirement identity or state changed.")
+    }
+    let evidence = "background_controller_quiescent_retired_unknown_navigation"
+    if receipt.evidence != evidence {
+      receipt.evidence = evidence; receipt.updatedAt = now
+      journal.actions[id] = receipt; try persist()
+    }
+    confirmedRetiredBackgroundFences.insert(id)
+  }
+
 }

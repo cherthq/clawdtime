@@ -300,6 +300,8 @@ function fixture(autoDelivery = false) {
     send: async () => ({ ok: false, route: "unavailable" }),
     clis: () => [],
     tasks: port,
+    // The intent reader is a switch of the service. This lifecycle is driven through it, so it is on.
+    semanticTasks: true,
   };
   // Classifier fixture is structured output only; real service authorization and
   // worker protocol handling remain under test. It cannot rewrite task prose.

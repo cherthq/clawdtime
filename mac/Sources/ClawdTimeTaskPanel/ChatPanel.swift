@@ -66,6 +66,18 @@ private final class ChatRowView: NSView {
   }
 }
 
+/// What shows while ClawdTime works on its answer: the breathing dots and a few plain words, so the wait is never a blank.
+private final class ThinkingRowView: NSStackView {
+  init() {
+    super.init(frame: .zero)
+    orientation = .horizontal; alignment = .centerY; spacing = 8
+    addArrangedSubview(ThinkingDotsView())
+    addArrangedSubview(Theme.label("Working on it", font: Theme.sans(12.5), color: .labelSecondary))
+    setAccessibilityElement(true); setAccessibilityRole(.staticText); setAccessibilityLabel("ClawdTime is working on its answer")
+  }
+  required init?(coder: NSCoder) { fatalError("Unavailable") }
+}
+
 /// Three dots that breathe while ClawdTime works on its answer.
 private final class ThinkingDotsView: NSView {
   private var dots: [CALayer] = []
@@ -261,7 +273,9 @@ final class ChatView: NSView, SheetContent {
     denyAction.isEnabled = model.connected && model.executionCanDecide
     if executionChanged || decisionChanged { onResize?() }
     var keys = model.messages.suffix(60).map { "\($0.role)|\($0.at)|\($0.via)|\($0.text)|\($0.offered.joined(separator: "\u{1F}"))" }
-    if let pending = model.pending { keys.append("pending|" + pending); keys.append("thinking") }
+    // The service writes the person's message down before it answers. Once the transcript holds it, it is not drawn a second time.
+    let heldAlready = ChatTranscript.holdsPending(model.messages, pending: model.pending)
+    if let pending = model.pending { if !heldAlready { keys.append("pending|" + pending) }; keys.append("thinking") }
     if model.voice == .thinking && model.pending == nil { keys.append("thinking") }
     if keys != shown {
       shown = keys
@@ -283,8 +297,8 @@ final class ChatView: NSView, SheetContent {
         }
         add(picks, fill: false)
       }
-      if let pending = model.pending { add(ChatRowView(text: pending, mine: true, via: "chat", faded: true), fill: true) }
-      if keys.last == "thinking" { add(ThinkingDotsView(), fill: false) }
+      if let pending = model.pending, !heldAlready { add(ChatRowView(text: pending, mine: true, via: "chat", faded: true), fill: true) }
+      if keys.last == "thinking" { add(ThinkingRowView(), fill: false) }
       ideas.isHidden = !model.messages.isEmpty || model.pending != nil
       onResize?()
       // The newest words are at the bottom, and the view stays there.

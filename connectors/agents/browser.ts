@@ -159,3 +159,34 @@ export async function frontPageText(
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
     .slice(0, limit);
 }
+
+export const frontCommands = ["reload", "back", "forward"] as const;
+export type FrontCommand = (typeof frontCommands)[number];
+
+/**
+ * Reloads the front page, or goes one page back or forward, through the
+ * browser's own scripting. It sends no key and no click. Safari offers only
+ * the reload this way. false: the browser refused, or has no such command.
+ */
+export async function frontCommand(
+  browser: BrowserName,
+  command: FrontCommand,
+  run: Runner,
+) {
+  const script =
+    browser === "Safari"
+      ? command === "reload"
+        ? `tell application "Safari"
+  set page to URL of front document
+  set URL of front document to page
+  return "ok"
+end tell`
+        : null
+      : `tell application "${browser}"
+  ${command === "reload" ? "reload" : command === "back" ? "go back" : "go forward"} active tab of front window
+  return "ok"
+end tell`;
+  if (!script) return false;
+  const result = await run("/usr/bin/osascript", ["-e", script], 8000);
+  return result.status === 0 && result.stdout.trim() === "ok";
+}

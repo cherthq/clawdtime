@@ -6,6 +6,9 @@ struct HelperStatus: Codable {
   let deviceId: String
   let armed: Bool
   let available: Bool
+  let lastStopReason: LocalStopReason?
+  let lastStopAt: Date?
+  let ignoredStableScreenNotifications: Int
   let screenPermission: Bool
   let controlPermission: Bool
   let activeLeaseId: String?
@@ -23,12 +26,16 @@ struct HelperStatus: Codable {
   let localOnly: Bool
   let policy: DevicePolicy
   let localPolicy: LocalExecutionPolicy
+  let backgroundLedger: BackgroundExecutionStore
+  var unresolvedInputCount: Int { ledger.unresolvedActionCount + max(localLedger.unresolvedActions, backgroundLedger.unresolvedActions) }
   let localLedger: LocalExecutionStore
   let ledger: ReceiptStore
   let preferences: ControlPreferenceStore
   let controlPanel = ControlPanelState()
   let capture = ScreenCapture()
   let session = LocalSessionGuard()
+  let displayConfiguration = DisplayConfigurationGuard()
+  var ignoredStableScreenNotifications = 0
   var server: HTTPServer?
   var status: NSStatusItem?
   var panel: NSPanel?
@@ -62,6 +69,7 @@ struct HelperStatus: Codable {
     self.policy = try DevicePolicy(config: config, preferences: preferences.value)
     self.localPolicy = LocalExecutionPolicy(shared: self.policy)
     self.localLedger = try LocalExecutionStore(folder: ledgerURL.deletingLastPathComponent().appendingPathComponent("local-execution", isDirectory: true))
+    self.backgroundLedger = try BackgroundExecutionStore(folder: ledgerURL.deletingLastPathComponent().appendingPathComponent("background-execution", isDirectory: true), local: self.localLedger)
     super.init()
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -85,33 +93,34 @@ struct HelperStatus: Codable {
     ).target = self
     menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q").target = self
     status?.menu = menu
+    _ = displayConfiguration.observe(first: captureDisplayConfiguration(), second: captureDisplayConfiguration())
     NotificationCenter.default.addObserver(
-      self, selector: #selector(stop), name: NSApplication.didChangeScreenParametersNotification,
+      self, selector: #selector(screenParametersChanged(_:)), name: NSApplication.didChangeScreenParametersNotification,
       object: nil)
     let center = NSWorkspace.shared.notificationCenter
     for name in [
       NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification,
       NSWorkspace.screensDidSleepNotification,
     ] {
-      center.addObserver(self, selector: #selector(unavailable), name: name, object: nil)
+      center.addObserver(self, selector: #selector(unavailable(_:)), name: name, object: nil)
     }
     for name in [
       NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification,
       NSWorkspace.screensDidWakeNotification,
     ] {
-      center.addObserver(self, selector: #selector(restored), name: name, object: nil)
+      center.addObserver(self, selector: #selector(restored(_:)), name: name, object: nil)
     }
     DistributedNotificationCenter.default().addObserver(
-      self, selector: #selector(unavailable), name: NSNotification.Name("com.apple.screenIsLocked"),
+      self, selector: #selector(unavailable(_:)), name: NSNotification.Name("com.apple.screenIsLocked"),
       object: nil)
     DistributedNotificationCenter.default().addObserver(
-      self, selector: #selector(restored), name: NSNotification.Name("com.apple.screenIsUnlocked"),
+      self, selector: #selector(restored(_:)), name: NSNotification.Name("com.apple.screenIsUnlocked"),
       object: nil)
     timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self else { return }
-        _ = try? self.policy.check(now: Date(), sessionAvailable: self.session.available)
-        _ = try? self.localPolicy.check(now: Date(), available: self.localExecutionAvailable)
+        _ = try? self.policy.check(now: Date(), sessionAvailable: self.session.available, unavailableReason: .timerSessionUnavailable)
+        _ = try? self.localPolicy.check(now: Date(), available: self.localExecutionAvailable, unavailableReason: self.session.available && self.localHelperConflict ? .timerHelperConflict : .timerSessionUnavailable)
         if self.localTargetGeneration != self.localPolicy.generation || self.localPolicy.lease == nil {
           self.localTargetProofs.clear(); self.localTargetGeneration = self.localPolicy.generation
         }
@@ -125,7 +134,7 @@ struct HelperStatus: Codable {
       }
       server?.start()
     } catch {
-      policy.stop(disarm: true)
+      policy.stop(disarm: true, reason: .listenerUnavailable)
       showError("Unable to bind helper listener.")
     }
     updateIndicator()
@@ -150,23 +159,55 @@ struct HelperStatus: Codable {
       showError("Unlock this Mac's active user session first.")
       return
     }
+    switch displayConfiguration.observe(first: captureDisplayConfiguration(), second: captureDisplayConfiguration()) {
+    case .unavailable:
+      stopWork(reason: .screenParametersUnavailable)
+      showError("Display configuration is changing or unavailable. Enable locally after it stabilizes.")
+      return
+    case .changed:
+      // A direct user Enable may establish new authority, but never carry an
+      // old lease/frame across a changed display configuration.
+      stopWork(reason: .screenParametersChanged)
+    case .unchanged: break
+    }
     policy.arm()
     updateIndicator()
   }
-  @objc func stop() {
+  @objc func stop() { stopWork(reason: .explicitLocalStop) }
+  @objc func screenParametersChanged(_ notification: Notification) {
+    switch displayConfiguration.observe(first: captureDisplayConfiguration(), second: captureDisplayConfiguration()) {
+    case .unchanged:
+      if ignoredStableScreenNotifications < Int.max { ignoredStableScreenNotifications += 1 }
+    case .changed: stopWork(reason: .screenParametersChanged)
+    case .unavailable: stopWork(reason: .screenParametersUnavailable)
+    }
+  }
+  func stopWork(reason: LocalStopReason) {
     localPolicy.stop()
     localFrameFocus = nil
     localTargetProofs.clear()
-    policy.stop(disarm: true)
+    policy.stop(disarm: true, reason: reason)
     updateIndicator()
   }
-  @objc func unavailable() {
+  @objc func unavailable(_ notification: Notification) {
     session.forcedUnavailable = true
-    stop()
+    let reasons: [Notification.Name: LocalStopReason] = [
+      NSWorkspace.willSleepNotification: .workspaceWillSleep,
+      NSWorkspace.sessionDidResignActiveNotification: .sessionResignedActive,
+      NSWorkspace.screensDidSleepNotification: .screensDidSleep,
+      Notification.Name("com.apple.screenIsLocked"): .screenLocked,
+    ]
+    stopWork(reason: reasons[notification.name] ?? .unavailableNotification)
   }
-  @objc func restored() {
+  @objc func restored(_ notification: Notification) {
     session.forcedUnavailable = false
-    stop()
+    let reasons: [Notification.Name: LocalStopReason] = [
+      NSWorkspace.didWakeNotification: .workspaceDidWake,
+      NSWorkspace.sessionDidBecomeActiveNotification: .sessionBecameActive,
+      NSWorkspace.screensDidWakeNotification: .screensDidWake,
+      Notification.Name("com.apple.screenIsUnlocked"): .screenUnlocked,
+    ]
+    stopWork(reason: reasons[notification.name] ?? .restoredNotification)
   }
   @objc func screenPermission() {
     _ = CGRequestScreenCaptureAccess()
@@ -178,7 +219,7 @@ struct HelperStatus: Codable {
     refreshSetup(force: true)
   }
   @objc func quit() {
-    stop()
+    stopWork(reason: .helperQuit)
     server?.stop()
     NSApp.terminate(nil)
   }
@@ -267,10 +308,12 @@ struct HelperStatus: Codable {
         return try .json(
           HelperStatus(
             deviceId: config.deviceId, armed: policy.armed, available: session.available,
+            lastStopReason: policy.lastStopReason, lastStopAt: policy.lastStopAt,
+            ignoredStableScreenNotifications: ignoredStableScreenNotifications,
             screenPermission: CGPreflightScreenCaptureAccess(),
             controlPermission: AXIsProcessTrusted(), activeLeaseId: policy.lease?.id,
             controlPolicy: policy.preferences.policy.rawValue, policyRevision: policy.preferences.revision,
-            unresolvedActionCount: ledger.unresolvedActionCount + localLedger.unresolvedActions,
+            unresolvedActionCount: unresolvedInputCount,
             historicalObservedActionCount: ledger.historicalObservedActionCount,
             historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
             panelCommand: controlPanel.command,
@@ -294,13 +337,14 @@ struct HelperStatus: Codable {
       }
       if request.method == "POST", request.path == "/v1/leases" {
         let lease = try decode(Lease.self, request.body)
+        guard backgroundLedger.unresolvedActions == 0 else { throw HelperError(409, "Unresolved background controller blocks helper admission.") }
         guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(lease.displayId) != 0 else {
           throw HelperError(403, "Screen Recording and a configured active display are required.")
         }
         guard !ledger.isHistoricallyRetiredLease(lease.id) else {
           throw HelperError(409, "This historical lease is retired; its input cannot be replayed.")
         }
-        if (ledger.unresolvedActionCount + localLedger.unresolvedActions) > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
+        if (unresolvedInputCount) > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
         }
         try policy.begin(
@@ -321,7 +365,7 @@ struct HelperStatus: Codable {
         if let existing = try ledger.existing(action, leaseId: leaseId) {
           return try .json(existing)
         }
-        guard localPolicy.lease == nil, localLedger.unresolvedActions == 0 else {
+        guard localPolicy.lease == nil, localLedger.unresolvedActions == 0, backgroundLedger.unresolvedActions == 0 else {
           throw HelperError(409, "Local execution ownership or unresolved input blocks call control.")
         }
         let lease = try policy.validateAction(
@@ -357,7 +401,7 @@ struct HelperStatus: Codable {
       if request.method == "POST", parts.count == 4, parts[3] == "renew" {
         let renewed = try decode(Lease.self, request.body)
         guard renewed.id == leaseId else { throw HelperError(409, "Wrong lease renewal.") }
-        if renewed.executorEpoch != lease.executorEpoch && (ledger.unresolvedActionCount + localLedger.unresolvedActions) > 0 {
+        if renewed.executorEpoch != lease.executorEpoch && (unresolvedInputCount) > 0 {
           throw HelperError(409, "Reconcile outstanding input before changing executor.")
         }
         try policy.renew(

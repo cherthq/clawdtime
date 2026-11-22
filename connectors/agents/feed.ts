@@ -6,12 +6,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   ChatLog,
-  OpenAIModel,
   Supervisor,
   type ChatMessage,
   type ModelClient,
+  historyForTurn,
+  supervisorModel,
 } from "./brain.js";
 import type { CliFact } from "./inventory.js";
+import { SessionNews } from "./sessionnews.js";
 import {
   speak,
   speechSettings,
@@ -25,7 +27,16 @@ import { focusSession, realRunner, type Runner } from "./focus.js";
 import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
+import { openApp } from "./apps.js";
+import { browse, type BrowserAction } from "./browsing.js";
+import { lookAtScreen } from "./eyes.js";
+import { showOnCall, ViewStore } from "./view.js";
+import { Jobs } from "./jobs.js";
+import { JobNews } from "./jobnews.js";
 import { title } from "./render.js";
+import { realSystem, type System } from "./system.js";
+import { tabTitles, titleReader } from "./topics.js";
+import { sessionWindow } from "./windows.js";
 import { rememberable } from "./trove.js";
 import type { TaskPort } from "./tasks.js";
 import {
@@ -176,8 +187,22 @@ export class BoardFeed implements AgentBoardPort {
       notify?: (incident: Incident, sentence: string) => Promise<unknown>;
       /** Whether a process of this Mac still runs, for the watcher. Tests script it. */
       exists?: (pid: number) => boolean;
+      /** Reads the title that a session shows in its terminal. Tests script it. */
+      system?: System;
+      /**
+       * The folder that a new coding session works in. With it, work that no
+       * own tool does goes to a job, and an application can open. Absent, as
+       * in a test: neither exists.
+       */
+      project?: string;
+      /** Where the task service has no coding worker, hand a task to a job. Off by default. */
+      jobsForTasks?: boolean;
+      /** The structured intent reader of the task service is on. Off unless this is true. */
+      semanticTasks?: boolean;
     } = {},
   ) {
+    const files = options.system ?? realSystem();
+    this.titles = titleReader(files);
     this.root =
       options.root ?? stateRoot({ env: process.env, home: homedir() });
     this.desk = new DecisionDesk(this.root, options.now ?? Date.now);
@@ -200,31 +225,99 @@ export class BoardFeed implements AgentBoardPort {
       options.model !== undefined
         ? options.model
         : key
-          ? new OpenAIModel(
-              key,
-              process.env.CLAWDTIME_SUPERVISOR_MODEL || "gpt-4.1-mini",
-            )
+          ? supervisorModel(process.env, key)
           : null;
     this.speech =
       options.speech !== undefined
         ? options.speech
         : speechSettings(process.env);
+    // The jobs exist where a new coding session has a folder to work in.
+    const jobs = options.project
+      ? new Jobs(this.root, {
+          project: options.project,
+          now: options.now ?? Date.now,
+          run: options.runner ?? realRunner,
+          agent:
+            process.env.CLAWDTIME_JOB_AGENT === "codex" ? "codex" : "claude",
+          terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
+        })
+      : undefined;
+    this.news = jobs
+      ? new JobNews(this.root, {
+          jobs: () => jobs.recent(10),
+          log: this.log,
+          now: options.now ?? Date.now,
+        })
+      : undefined;
+    this.sessionNews = new SessionNews(this.root, {
+      board: () => this.snapshot(),
+      log: this.log,
+      now: options.now ?? Date.now,
+    });
     this.supervisor = new Supervisor(
       {
         now: options.now ?? Date.now,
         board: () => this.snapshot(),
+        laterNews: this.sessionNews,
         desk: this.desk,
         focus: (session) => this.focusOne(session),
         send: (session, text) => this.sendOne(session, text, true),
         clis: options.clis ?? (() => []),
+        ...(options.project
+          ? {
+              jobsForTasks: options.jobsForTasks === true,
+              jobs: jobs!,
+              openApp: (name: string | null, url: URL | null) =>
+                openApp(files, name, url, options.runner ?? realRunner),
+              browse: (
+                action: BrowserAction,
+                choice: { browser?: string; tab?: number },
+              ) => browse(files, options.runner ?? realRunner, action, choice),
+              callView: (session: AgentSession | null) =>
+                showOnCall(
+                  {
+                    store: new ViewStore(this.root, options.now ?? Date.now),
+                    run: options.runner ?? realRunner,
+                    titles: (item) => tabTitles(item, this.titles(item)),
+                  },
+                  session,
+                ),
+              look: (question: string) =>
+                lookAtScreen(
+                  {
+                    run: options.runner ?? realRunner,
+                    key:
+                      process.env.CLAWDTIME_OPENAI_API_KEY ||
+                      process.env.OPENAI_API_KEY,
+                    model: process.env.CLAWDTIME_VISION_MODEL || "gpt-4.1-mini",
+                  },
+                  question,
+                ),
+            }
+          : {}),
+        // A session of a remote Mac shows its title there: only its name is known here.
+        titles: (session) =>
+          session.host ? [title(session)] : this.titles(session),
+        window: (session, action) =>
+          sessionWindow(
+            session,
+            action,
+            options.runner ?? realRunner,
+            tabTitles(session, this.titles(session)),
+          ),
         ...(options.tasks ? { tasks: options.tasks } : {}),
         ...(options.execution ? { execution: options.execution } : {}),
         incidents: () => this.incidents().incidents.map((item) => item.text),
+        ...(options.semanticTasks === true ? { semanticTasks: true } : {}),
       },
       model,
     );
   }
   private readonly root: string;
+  /** Says a finished job in the chat. Absent where the service has no jobs. */
+  private readonly news: JobNews | undefined;
+  /** Says in the chat that a session is done, when the person asked for that. */
+  private readonly sessionNews: SessionNews;
   private readonly watchStore: WatchStore;
   private readonly watcher: Watcher;
 
@@ -274,9 +367,16 @@ export class BoardFeed implements AgentBoardPort {
   private readonly book: HostBook;
   private readonly remoteDesk: RemoteDesk;
   /** A session of this Mac comes forward here. One of a remote Mac opens in a new window over ssh. */
+  private readonly titles: (session: AgentSession) => string[];
   private async focusOne(session: AgentSession) {
     const run = this.options.runner ?? realRunner;
-    if (!session.host) return focusSession(session, run);
+    if (!session.host)
+      return focusSession(
+        session,
+        run,
+        "tmux",
+        tabTitles(session, this.titles(session)),
+      );
     const host = this.book.get(session.host);
     return host
       ? focusRemote(host, session, run, this.root)
@@ -320,6 +420,22 @@ export class BoardFeed implements AgentBoardPort {
       via: "chat",
     });
   }
+  /**
+   * Says in the chat the answer of each job that finished, once. ClawdTime
+   * promises that when it starts a job. The service calls this on its own
+   * rhythm, and the panel reads the chat while it is in view. Public for
+   * tests.
+   */
+  tellJobs(): ChatMessage[] {
+    return this.news?.tell() ?? [];
+  }
+  /**
+   * Says in the chat that a session is done, once, when the person asked to
+   * hear that. The service calls this on its own rhythm. Public for tests.
+   */
+  tellSessions(): ChatMessage[] {
+    return this.sessionNews.tell();
+  }
   setMemory(enabled: boolean) {
     this.desk.memory.setEnabled(enabled);
   }
@@ -329,7 +445,7 @@ export class BoardFeed implements AgentBoardPort {
     via: ChatMessage["via"] = "chat",
   ): Promise<ChatMessage> {
     const now = this.options.now ?? Date.now;
-    const history = this.log.recent(24);
+    const history = this.log.recent(historyForTurn);
     this.log.append({
       role: "user",
       text,
@@ -413,6 +529,10 @@ export class BoardFeed implements AgentBoardPort {
         } catch {
           // A fault here never costs the board. The next turn tries again.
         }
+        // A job that finished is said in the chat, with no question first.
+        this.tellJobs();
+        // And a session that is done, when the person asked to hear that.
+        this.tellSessions();
       }, 2000);
       this.awayTimer.unref();
     }
