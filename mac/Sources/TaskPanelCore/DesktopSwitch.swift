@@ -67,13 +67,19 @@ public enum DesktopWindowVisibility {
   /// Match exactly one focused AX window to visible Quartz metadata. At most one
   /// same-app full-width auxiliary top strip may precede it, and only when AX
   /// confirms full screen and does not expose the strip as a real window/dialog.
+  ///
+  /// A sheet (the dialog that hangs from a window: "Do you want to save?") has no Accessibility title, and the
+  /// window server lists it under a name of the app's own ("Save"). It is matched by the app and the frame
+  /// alone, and only as the top ordinary window: a sheet is always in front of the window that it hangs from.
   public static func focusedWindowID(pid: Int, title: String, frame: CGRect, fullScreenConfirmed: Bool,
-                                     display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?) -> Int? {
+                                     display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?,
+                                     sheet: Bool = false) -> Int? {
     let matches = visible.indices.filter {
-      visible[$0].pid == pid && sameTitle(listed: visible[$0].title, accessible: title) && sameFrame(visible[$0].frame, frame)
+      visible[$0].pid == pid && (sheet || sameTitle(listed: visible[$0].title, accessible: title)) && sameFrame(visible[$0].frame, frame)
     }
     guard matches.count == 1, let index = matches.first else { return nil }
     if index == 0 { return visible[index].id }
+    guard !sheet else { return nil }
     guard index == 1, fullScreenConfirmed, DesktopSurfaceScope.fullScreenGeometry(window: frame, display: display),
       let accessibleFrames else { return nil }
     let strip = visible[0]

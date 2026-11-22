@@ -623,9 +623,14 @@ import TaskPanelCore
     }
     static func visibleSurface(pid: pid_t, display: HandsDisplay) -> Surface? {
       let app = app(pid)
-      guard let focused = element(value(app, kAXFocusedWindowAttribute)),
-        (value(focused, kAXMinimizedAttribute) as? Bool) == false,
-        let title = value(focused, kAXTitleAttribute) as? String, let bounds = frame(focused),
+      guard let focused = element(value(app, kAXFocusedWindowAttribute)) else { return nil }
+      // A sheet hangs from a window and takes the focus: "Do you want to save?". It has no title and no
+      // minimized state of its own. Without it as a surface, no button of a sheet could ever be pressed.
+      let sheet = (value(focused, kAXRoleAttribute) as? String) == "AXSheet"
+      let minimized = value(focused, kAXMinimizedAttribute) as? Bool
+      guard sheet ? minimized != true : minimized == false,
+        let title = sheet ? ((value(focused, kAXTitleAttribute) as? String) ?? "") : (value(focused, kAXTitleAttribute) as? String),
+        let bounds = frame(focused),
         !CGDisplayBounds(display.id).intersection(bounds).isEmpty,
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
       let ordinary = windows.filter { row in
@@ -653,7 +658,8 @@ import TaskPanelCore
         }
       }
       guard let windowID = DesktopWindowVisibility.focusedWindowID(pid: Int(pid), title: title, frame: bounds,
-        fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames) else { return nil }
+        fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames,
+        sheet: sheet) else { return nil }
       return Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
         fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed)

@@ -185,6 +185,21 @@ describe("a secure field", () => {
       command: { kind: "type", text: "Ada" },
     });
   });
+  it("does not click a field again that has the focus, so that a selection stays", () => {
+    const focused = observation([
+      element(1, { role: "AXTextArea", title: "Note", focused: true }),
+    ]);
+    const result = run(
+      { kind: "type", text: "finished", element: 1 },
+      view(focused),
+    );
+    expect(result.label).toBe('Type in "Note"');
+    expect(result.send).toEqual({
+      via: "hands",
+      look: true,
+      command: { kind: "type", text: "finished" },
+    });
+  });
   it("refuses text with a line break or another control character", () => {
     expect(refused({ kind: "type", text: "ls\n" }, view(seen))).toMatch(
       /one line/,

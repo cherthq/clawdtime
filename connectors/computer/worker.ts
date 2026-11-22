@@ -143,6 +143,12 @@ export interface StepTiming {
   planMs: number;
   /** The checks, the questions to the person, and the action itself. */
   actMs: number;
+  /**
+   * Why the worker held the step back, when it did: one of its own fixed
+   * sentences ("Another app or window came to the front. Nothing was sent."),
+   * never a text of the screen.
+   */
+  held?: string;
 }
 
 export interface ComputerWorkerOptions {
@@ -180,6 +186,22 @@ interface Question {
   settle: (reply: Reply) => void;
 }
 interface Run {
+  /** Why the step of this turn was not sent, for the timing record. */
+  held?: string;
+  /**
+   * The person said yes to these questions for this action, and the action
+   * was then not sent: the screen had to be read again. The yes holds once,
+   * for a short time, for the same action with the same questions.
+   */
+  approval?: {
+    signature: string;
+    /** The app and the window in front, or the page, when the person said yes. The yes is for that place only. */
+    place: string;
+    questions: string[];
+    at: number;
+    /** How often the yes was used with no new question. Two times at most. */
+    tries: number;
+  };
   /** Why the browser cannot be driven in this request, once it said so. The screen is used from then on. */
   browserClosed?: string;
   navigation?: NavigationIntent;
@@ -232,6 +254,8 @@ const sendsNoInput = (send: Ready["send"]) =>
     ? send.call.name === "read"
     : send.command.kind === "wait" || send.command.kind === "observe";
 
+/** How long a yes holds for the same action, when the first try was not sent. */
+const approvalHoldsMs = 60_000;
 /** The wait before the second look, when the first one failed. */
 const lookAgainMs = 300;
 
@@ -942,6 +966,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         run.plannerFailures = 0;
         run.step++;
         const actFrom = this.now();
+        delete run.held;
         const chosen = (planned as { action?: unknown }).action;
         await this.act(
           run,
@@ -957,6 +982,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               lookMs: planFrom - lookFrom,
               planMs: actFrom - planFrom,
               actMs: this.now() - actFrom,
+              ...(run.held ? { held: run.held } : {}),
             });
           } catch {
             // A listener that fails changes nothing in the request.
@@ -1172,32 +1198,82 @@ export class ComputerWorker implements DesktopExecutorPort {
         "The person is using the Mac.",
       );
     }
+    // A yes that the person gave a moment ago for this same action, which
+    // was then not sent. It is used once.
+    const held = run.approval;
+    delete run.approval;
+    // Where the action goes: a button with the same name in another app, in
+    // another window or on another page is another action.
+    const place =
+      checked.send.via === "browser"
+        ? `page|${run.page?.url ?? ""}`
+        : `${before?.app.bundleId ?? ""}|${before?.app.window ?? ""}`;
+    const kept =
+      held &&
+      checked.signature !== null &&
+      held.signature === checked.signature &&
+      held.place === place &&
+      this.now() - held.at <= approvalHoldsMs
+        ? held
+        : null;
+    const granted = kept?.questions ?? [];
+    // A yes is used with no new question two times at most: an action that
+    // is held back again and again must come back to the person.
+    const tries = kept ? kept.tries + 1 : 0;
+    const answered: string[] = [];
     // The same action with the same arguments does not go out a third time in a row.
     if (
       checked.signature !== null &&
       run.streak?.signature === checked.signature &&
       run.streak.count >= 2
     ) {
-      const reply = await this.ask(
-        run,
-        "yes_no",
-        `I already did this twice in a row: ${checked.label}. Say yes to do it a third time, or no to stop.`,
-        `Canceled. I did not do it a third time: ${checked.label}.`,
-      );
-      if (reply.kind !== "yes") return;
+      const question = `I already did this twice in a row: ${checked.label}. Say yes to do it a third time, or no to stop.`;
+      if (!granted.includes(question)) {
+        const reply = await this.ask(
+          run,
+          "yes_no",
+          question,
+          `Canceled. I did not do it a third time: ${checked.label}.`,
+        );
+        if (reply.kind !== "yes") return;
+      }
+      answered.push(question);
     }
     if (checked.risk) {
-      const reply = await this.ask(
-        run,
-        "yes_no",
-        `${checked.label}? ${checked.risk} Say yes to allow it, or no to stop.`,
-        `Canceled. I did not do it: ${checked.label}.`,
-      );
-      if (reply.kind !== "yes") return;
+      const question = `${checked.label}? ${checked.risk} Say yes to allow it, or no to stop.`;
+      if (!granted.includes(question)) {
+        const reply = await this.ask(
+          run,
+          "yes_no",
+          question,
+          `Canceled. I did not do it: ${checked.label}.`,
+        );
+        if (reply.kind !== "yes") return;
+      }
+      answered.push(question);
     }
+    delete run.held;
     if (checked.send.via === "browser")
-      return this.viaBrowser(run, action, why, checked);
-    return this.viaHands(run, action, why, checked, before, refused);
+      await this.viaBrowser(run, action, why, checked);
+    else await this.viaHands(run, action, why, checked, before, refused);
+    // The question itself changes what is in front, so the look just before
+    // the action can differ from the planner's look, and the action is then
+    // held back. The planner looks again. When it chooses the same action,
+    // the person is not asked the same question a second time.
+    if (
+      answered.length &&
+      run.held &&
+      checked.signature !== null &&
+      this.current === run &&
+      tries < 2
+    )
+      run.approval = {
+        signature: checked.signature,
+        place,
+        questions: answered,
+        at: kept ? kept.at : this.now(),
+        tries,
+      };
   }
 
   /** Text for a secure field: the person types it, and the worker goes on after their yes. */
@@ -1240,6 +1316,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     reason: string,
   ) {
     run.fresh = false;
+    run.held = reason;
     this.note(run, action, why, target, `not sent: ${reason}`, "changed");
   }
 
@@ -1487,7 +1564,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         again.verdict !== "run" ||
         again.send.via !== "browser" ||
         again.risk !== first.risk
-      )
+      ) {
+        run.held = "The page changed since it was read.";
         return this.note(
           run,
           action,
@@ -1496,6 +1574,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           "not sent: the page changed since it was read",
           "changed",
         );
+      }
       call = again.send.call;
     }
     if (this.halted(run)) return;

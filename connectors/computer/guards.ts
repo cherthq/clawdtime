@@ -733,7 +733,10 @@ function checkScreen(
         send: {
           via: "hands",
           look: true,
-          ...(field ? { focus: click(middle(field)) } : {}),
+          // A field that has the focus is not clicked again: a click moves
+          // the caret and drops a selection, so "select all, then type" would
+          // add the text in place of replacing what was selected.
+          ...(field && !field.focused ? { focus: click(middle(field)) } : {}),
           command: { kind: "type", text: action.text },
         },
       };
