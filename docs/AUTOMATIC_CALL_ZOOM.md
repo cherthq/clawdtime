@@ -272,11 +272,9 @@ of preparing this draft PR.
 
 ## Official references consulted
 
-- [Screen Studio Auto Zoom](https://screen.studio/guide/auto-zoom): click-derived framing.
-- [Adding & Editing zooms](https://screen.studio/guide/adding-editing-zooms): adjustable duration/magnification and manual framing.
-- [Product reference](https://screen.studio/create/screen-recorder-with-automatic-zoom): attempted; unavailable through the research tool.
 - [Apple CGGetActiveDisplayList](<https://developer.apple.com/documentation/coregraphics/cggetactivedisplaylist(_:_:_:)>): main display is first.
 - [Official ffmpeg AVFoundation source](https://www.ffmpeg.org/doxygen/trunk/avfoundation_8m_source.html): named screen selection and captured cursor behavior.
 
-Screen Studio's recorded-editing behavior is the inspiration. This live camera
-uses only current/past native events and never depends on future input.
+Editors of recorded video that zoom toward each click are the reference for
+this behavior. This live camera uses only current/past native events and never
+depends on future input.

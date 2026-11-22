@@ -52,8 +52,9 @@ The agent should work naturally on the Mac during a phone screen-sharing call:
   configured Mission Control shortcuts, and support verified previous-desktop
   history. Keep app switching and desktop switching as distinct operations.
 - Type/click in the intended app, including an unsent Codex textbox.
-- Show continuous screen video with Screen Studio-style automatic click/typing
-  zoom, smooth movement, overview, explicit resume and aligned cursor labels.
+- Show continuous screen video with automatic click/typing zoom, as editors of
+  recorded video do, with smooth movement, overview, explicit resume and aligned
+  cursor labels.
 - Widen during app/desktop transitions, retire old coordinates, and zoom again
   only after fresh destination context.
 - Interpret ordinary language dynamically. **Never require exact wording,
@@ -530,7 +531,6 @@ for the uniquely named integration agent; it emits counts and a room digest, no
 identities or media. Recheck fresh ownership before any future live work. The user
 subsequently requested deployment to the normal installation, recorded below;
 do not restart the isolated test sequence automatically.
-
 
 ## Normal installation rollout — November 21, 16:46 ET
 
