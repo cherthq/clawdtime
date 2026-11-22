@@ -190,6 +190,12 @@ interface Run {
   stop: boolean;
   /** The hands said that the person moved the mouse or pressed a key. */
   takeover: boolean;
+  /**
+   * The person used the mouse or the keyboard while the worker looked at the
+   * screen to plan. A look and an answer need no pause for that. An input
+   * does: the worker asks before the next one, and not before.
+   */
+  personNear: boolean;
   halt: () => void;
   halted: Promise<null>;
 }
@@ -203,6 +209,15 @@ interface Handed {
   result: HandResult | null;
 }
 type Ready = Extract<Checked, { verdict: "run" }>;
+
+/** True for what changes nothing on the Mac: a wait, a look, and a reading of the page. */
+const sendsNoInput = (send: Ready["send"]) =>
+  send.via === "browser"
+    ? send.call.name === "read"
+    : send.command.kind === "wait" || send.command.kind === "observe";
+
+/** The wait before the second look, when the first one failed. */
+const lookAgainMs = 300;
 
 class BrowserSilent extends Error {}
 function within<T>(work: Promise<T>, ms: number): Promise<T> {
@@ -513,6 +528,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       question: null,
       stop: false,
       takeover: false,
+      personNear: false,
       halt,
       halted,
       ...(read ? { navigation: read } : {}),
@@ -658,6 +674,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     run: Run,
     command: HandCommand,
     label: string,
+    /** The look before a plan: the person's input during it is kept for the next input, and pauses nothing now. */
+    planning = false,
   ): Promise<Handed> {
     if (this.halted(run)) return { sent: false, over: true, result: null };
     const beforeTransition = run.observation;
@@ -757,7 +775,10 @@ export class ComputerWorker implements DesktopExecutorPort {
       // The person stopped it at the hands. After Stop here, they know already.
       this.finish(run, "canceled", "stopped", stoppedText, !run.stop);
     if (this.halted(run)) return { sent: true, over: true, result };
-    if (result.interrupted) run.takeover = true;
+    if (result.interrupted) {
+      if (planning) run.personNear = true;
+      else run.takeover = true;
+    }
     return { sent: true, over: false, result };
   }
   /** A look with no image, just before an input. Null when the screen could not be read. */
@@ -832,13 +853,32 @@ export class ComputerWorker implements DesktopExecutorPort {
           continue;
         }
         if (!run.fresh || !run.observation) {
-          const handed = await this.hand(
-            run,
-            { kind: "observe", image: true, elements: true },
-            "Look at the screen",
-          );
+          const look = () =>
+            this.hand(
+              run,
+              { kind: "observe", image: true, elements: true },
+              "Look at the screen",
+              true,
+            );
+          let handed = await look();
           if (handed.over) return;
           if (run.takeover) continue;
+          // A look can fail for a moment: the app in front is busy, or a
+          // window is on its way. One more look after a short wait costs less
+          // than a plan with no screen, which ended in a question to the
+          // person about what the screen shows.
+          if (!handed.result?.ok) {
+            const waited = await this.hand(
+              run,
+              { kind: "wait", ms: lookAgainMs },
+              "Wait for the screen",
+            );
+            if (waited.over) return;
+            if (run.takeover) continue;
+            handed = await look();
+            if (handed.over) return;
+            if (run.takeover) continue;
+          }
           run.observation = handed.result?.ok
             ? (handed.result.observation ?? null)
             : null;
@@ -1079,6 +1119,20 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
       case "person_types":
         return this.personTypes(run, action, why, checked);
+    }
+    // The person used the Mac while the worker looked. An input now could
+    // land in their work, so the worker pauses and asks, as for any takeover.
+    // What sends no input goes on: a wait, and a reading of the page.
+    if (run.personNear && !sendsNoInput(checked.send)) {
+      run.personNear = false;
+      run.takeover = true;
+      return this.changed(
+        run,
+        action,
+        why,
+        checked.target,
+        "The person is using the Mac.",
+      );
     }
     // The same action with the same arguments does not go out a third time in a row.
     if (

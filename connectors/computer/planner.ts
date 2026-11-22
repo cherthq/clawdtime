@@ -339,7 +339,7 @@ export function brief(
     );
   } else
     parts.push(
-      "The screen could not be read this time. Wait a moment, or ask the person.",
+      "The screen could not be read this time. Call wait: a new look comes after it. Do not ask the person what the screen shows.",
     );
   if (browser) {
     parts.push("");
