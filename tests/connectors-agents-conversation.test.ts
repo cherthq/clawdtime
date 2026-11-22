@@ -8974,6 +8974,26 @@ describe("a bare yes after ClawdTime's own question, with no request on the desk
       // A hedge after the claim does not take it back.
       "I told deploy fix to go on, so it can finish the push.",
       "No problem, I told deploy fix to go on.",
+      // A word of an earlier time in ANOTHER clause speaks of the session's
+      // work, not of when ClawdTime told it.
+      "I told deploy fix to use the staging key and it is still working on the fix, it started a minute ago. Want me to look at something else in the meantime?",
+      "I told deploy fix to use the staging key and it worked; it finished a minute ago.",
+      "I told it to go on, and it already pushed the branch.",
+      "Told deploy fix to go on, so the push that failed earlier can finish.",
+      // The session by other words than its name.
+      "I told the fix deploy to use the staging key and it is working now to fix the header.",
+      "I told the staging deploy script to go on with the fix, and it's working now.",
+      "I asked the deploy session to use the staging key.",
+      "I told the agent in the other window to go on.",
+      // The other verbs that take a session, with the same words.
+      "I let the deploy session know.",
+      "I gave the fix deploy the go-ahead.",
+      "I messaged the staging deploy script.",
+      "I pinged the staging deploy script to go on.",
+      "I nudged the deploy session along.",
+      // The session's name in quotes is still its name.
+      'I told "deploy fix" to go on with the staging key, and it is working now.',
+      "I told \u201cdeploy fix\u201d to go on.",
     ])(
       "after a yes to an offer to tell a session, %j is sent back and then replaced",
       async (claim) => {
@@ -9065,6 +9085,29 @@ describe("a bare yes after ClawdTime's own question, with no request on the desk
       "I brought up the payments tests results: three failed.",
       "I pulled up the docs logs: no errors.",
       "I opened the docs readme: it lists four steps.",
+      // A word of an earlier time in the claim's own clause: an older turn.
+      "I told deploy fix to run the tests a while back, and it is still working.",
+      "I told it to go on earlier today, and it pushed the branch.",
+      // No claim at all, with a word of an earlier time.
+      "Deploy fix is still working, it started a minute ago.",
+      // "Told" and "asked" with no session after them.
+      "I told you what the staging key is for.",
+      "I asked what to do because the key was missing earlier.",
+      "I asked whether the staging key is right to use.",
+      // "Asked" and "told" with a thing that is no session.
+      "Okay. I asked the question to be sure you want that.",
+      "I asked the same question to confirm. Say it again and I pass it on.",
+      "Nothing was typed. I asked the question to know what you want.",
+      "I told the truth to keep things clear: nothing was typed.",
+      "I told your team to wait.",
+      // ClawdTime's own question by other words: "one" is no word for a
+      // session here, and a word for a session before another noun is none.
+      "I asked the last one because deploy fix needs an answer.",
+      "Nothing is typed yet. I asked the first one only to be sure.",
+      "I asked the same one to confirm.",
+      "I asked the build question to be sure.",
+      // Words of a session in quotes are still not read.
+      'Deploy fix says: "I told the build script to go on."',
     ])("lets %j stand: it claims no typing of this turn", async (answer) => {
       const { told, say } = room();
       told(tellOffer);

@@ -3072,24 +3072,38 @@ const notDone =
  * none ("Deploy fix pushed the branch and opened a pull request"): the
  * claim opens with "I", or it opens the sentence with no subject ("Opened
  * docs and told it to go on"). Quoted words are not read. Not in a
- * question, not with a word of an earlier time, and not where the words
- * between "I" and the verb say the opposite or what could be ("I haven't
- * told it", "I can tell it").
+ * question, not with a word of an earlier time in the claim's own clause
+ * ("I told it to go on earlier today"), and not where the words between "I"
+ * and the verb say the opposite or what could be ("I haven't told it", "I
+ * can tell it").
  */
 const typingOrOpeningClaimed = (
   sentence: string,
   sessions: string[],
 ): { typing: boolean; opening: string[] | null } => {
   const none = { typing: false, opening: null };
-  // What a session said, in quotes, is not ClawdTime's claim.
-  const read = sentence.replace(/"[^"]*"|\u201c[^\u201d]*\u201d/g, " ").trim();
-  if (
-    /\?\s*$/.test(read) ||
-    /\b(?:earlier|before|ago|previously|yesterday|already|today|this\s+(?:morning|afternoon|evening)|a\s+while\s+back)\b/i.test(
-      read,
-    )
-  )
-    return none;
+  // What a session said, in quotes, is not ClawdTime's claim. The name of a
+  // session in quotes is still its name: 'I told "deploy fix" to go on'.
+  const quotedName = sessions.filter((name) => name.trim().length > 0).length
+    ? new RegExp(
+        `["\u201c](${sessions
+          .filter((name) => name.trim().length > 0)
+          .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("|")})["\u201d]`,
+        "giu",
+      )
+    : null;
+  const read = (quotedName ? sentence.replace(quotedName, "$1") : sentence)
+    .replace(/"[^"]*"|\u201c[^\u201d]*\u201d/g, " ")
+    .trim();
+  if (/\?\s*$/.test(read)) return none;
+  // A word of an earlier time in the claim's own clause makes it a word
+  // about an older turn ("I told it to go on earlier today"). In another
+  // clause it speaks of the session's work, and the claim is of this turn:
+  // "I told deploy fix to use the staging key and it is still working, it
+  // started a minute ago".
+  const earlierTime =
+    /\b(?:earlier|before|ago|previously|yesterday|already|today|this\s+(?:morning|afternoon|evening)|a\s+while\s+back)\b/i;
   // "I", then only words of a closed family: "I just told", "I went ahead
   // and told", "I've now gone ahead and told". After "I see deploy fix
   // opened ..." the session did it; after "I haven't told ..." nobody did.
@@ -3112,7 +3126,17 @@ const typingOrOpeningClaimed = (
   const none2 = "(?!\\s+(?:nothing|no|none|anything)\\b)";
   // The check runs only after an offer to tell a session something, so "I
   // sent it" and "I passed it on" speak of that session with no "to".
-  const told = `(?:(?:told|asked|messaged|pinged|nudged)${none2}\\s+${who}${none2}|replied${none2}\\s+to\\s+${who}|(?:sent|forwarded|relayed)${none2}\\s+(?!you\\b)\\S+|said${none2}\\s+.{1,60}?\\bto\\s+${who}|passed${none2}\\s+(?!you\\b)\\S+(?:\\s+\\S+)?\\s+(?:on|along|to\\s+${who})|typed\\b${none2}|let\\s+${who}\\s+know\\b|gave\\s+${who}\\s+(?:the\\s+|your\\s+)?(?:go-ahead|go\\s+ahead|ok|okay)\\b)`;
+  // The session by other words than its name: after "the", "that", "your"
+  // or "my", words that END with a word for a session or a program ("the
+  // staging deploy script", "the deploy session", "the fix deploy"). A list
+  // of what is taken: "the question", "the truth" and "your team" are no
+  // session ("I asked the question to be sure"). "One" is none here ("I
+  // asked the last one" is ClawdTime's own question), and the word must
+  // end the words for the session: after it only "to", "know", "along",
+  // "the go-ahead", a mark or the end ("the build question" is none).
+  const otherWho = `(?:the|that|your|my)\\s+(?:[\\p{L}\\p{N}'-]+\\s+){0,4}?(?:session|agent|script|deploy|job|process|terminal|worker|build|run|bot|window|tab)\\b(?!['\u2019]s)(?=\\s+(?:to|know|along|(?:the|your)\\s+(?:go-ahead|go\\s+ahead|ok|okay))\\b|\\s*[.!,;:]|\\s*$)`;
+  const anyWho = `(?:${who}|${otherWho})`;
+  const told = `(?:(?:told|asked|messaged|pinged|nudged)${none2}\\s+${anyWho}${none2}|replied${none2}\\s+to\\s+${who}|(?:sent|forwarded|relayed)${none2}\\s+(?!you\\b)\\S+|said${none2}\\s+.{1,60}?\\bto\\s+${who}|passed${none2}\\s+(?!you\\b)\\S+(?:\\s+\\S+)?\\s+(?:on|along|to\\s+${who})|typed\\b${none2}|let\\s+${anyWho}\\s+know\\b|gave\\s+${anyWho}\\s+(?:the\\s+|your\\s+)?(?:go-ahead|go\\s+ahead|ok|okay)\\b)`;
   const open = `(?:(?:opened(?:\\s+up)?|brought\\s+up|pulled\\s+up|switched(?:\\s+over)?\\s+to)\\s+(${who})${kind}${end}|(?:brought|pulled)\\s+(${who})${kind}\\s+(?:up|to\\s+the\\s+front)\\b)`;
   // The sentence opens with the verb and has no subject: "Opened docs",
   // "Told it to go on". A verb after "and" or "then" counts only in a
@@ -3131,15 +3155,18 @@ const typingOrOpeningClaimed = (
     "iu",
   );
   const opening = new RegExp(`(?:${i}|${start})${open}`, "iu");
-  // The claim's own clause must not say the opposite before it.
+  // The claim's own clause must not say the opposite before it, and must
+  // hold no word of an earlier time.
   const clear = (found: RegExpExecArray | null) => {
     if (!found) return false;
-    const before = read
-      .slice(0, found.index)
-      .split(/[,;:]\s+|\s+(?:and|but|so|then)\s+/)
-      .at(-1)!;
-    return !/\b(?:not|never|nothing|no|none|cannot|if|when|once|unless|until)\b|n['\u2019]t\b/i.test(
-      before,
+    const boundary = /[,;:]\s+|\s+(?:and|but|so|then)\s+/;
+    const before = read.slice(0, found.index).split(boundary).at(-1)!;
+    // From the claim to the next mark or joining word.
+    const after = read.slice(found.index).split(boundary)[0]!;
+    return (
+      !/\b(?:not|never|nothing|no|none|cannot|if|when|once|unless|until)\b|n['\u2019]t\b/i.test(
+        before,
+      ) && !earlierTime.test(`${before} ${after}`)
     );
   };
   const opened = opening.exec(read);

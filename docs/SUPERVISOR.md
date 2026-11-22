@@ -418,7 +418,14 @@ These rules are in the code, not in the model's instructions:
   nothing, or that it opened a session ("Opened docs.") and the turn did not
   open that session, the model answers once more. The one that is told or
   opened is a session, by its name, the name of its agent, "it", "them",
-  "the session" or "the agent". A thing of a session is none ("I pulled up
+  "the session" or "the agent", or by other words after "the", "that",
+  "your" or "my" that end with a word for a session or a program ("I told
+  the staging deploy script to go on", "I let the deploy session know");
+  "I asked the question to be sure" speaks of no session. A word of
+  an earlier time makes the sentence a word about an older turn only when
+  it stands in the same part as the claim ("I told it to go on earlier
+  today"); "I told deploy fix to go on and it is still working, it started
+  a minute ago" is a claim of this turn. A thing of a session is none ("I pulled up
   deploy fix's output"), and neither is "As I told you", "I typed nothing",
   or what a session did ("I see deploy fix opened a pull request"); quoted
   words are not read. A word about a turn of the last ten minutes stands
