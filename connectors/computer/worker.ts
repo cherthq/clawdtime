@@ -131,6 +131,19 @@ export const computerStatusSchema = z
   .strict();
 export type ComputerStatus = z.infer<typeof computerStatusSchema>;
 
+/** How long the parts of one step took. Numbers and the kind of action only, never a text of the screen. */
+export interface StepTiming {
+  step: number;
+  /** The kind of the planned action: click_element, type, done. */
+  kind: string;
+  /** The look at the screen before the plan. Zero when the last look was still good. */
+  lookMs: number;
+  /** The planner's answer. */
+  planMs: number;
+  /** The checks, the questions to the person, and the action itself. */
+  actMs: number;
+}
+
 export interface ComputerWorkerOptions {
   hands: Hands;
   planner: Planner;
@@ -141,6 +154,8 @@ export interface ComputerWorkerOptions {
   enabled?: () => boolean;
   /** Says something to the person when no message of theirs waits for an answer: a question, the result. */
   notify?: (text: string) => void;
+  /** Hears the time of each step, for a person who looks for the slow part. */
+  timing?: (entry: StepTiming) => void;
   now?: () => number;
   /** The most actions that the planner may choose for one request. */
   maxSteps?: number;
@@ -298,6 +313,7 @@ export class ComputerWorker implements DesktopExecutorPort {
   private readonly planner: Planner;
   private readonly journal: ComputerJournal;
   private readonly browser: BrowserPort | undefined;
+  private readonly timing: ((entry: StepTiming) => void) | undefined;
   private readonly enabled: () => boolean;
   private readonly now: () => number;
   private readonly maxSteps: number;
@@ -314,6 +330,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.maxSteps = options.maxSteps ?? 40;
     this.maxMs = options.maxMs ?? 15 * 60_000;
     this.browserMs = options.browserMs ?? 30_000;
+    this.timing = options.timing;
     // A request that was running when the service stopped has an unknown
     // result. It becomes uncertain here, and nothing runs it again.
     this.journal.recover();
@@ -852,6 +869,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           if (reply.kind !== "yes") return;
           continue;
         }
+        const lookFrom = this.now();
         if (!run.fresh || !run.observation) {
           const look = () =>
             this.hand(
@@ -885,6 +903,7 @@ export class ComputerWorker implements DesktopExecutorPort {
             : null;
           run.fresh = run.observation !== null;
         }
+        const planFrom = this.now();
         let planned: Awaited<ReturnType<Planner["next"]>> | null;
         let late: NodeJS.Timeout | undefined;
         try {
@@ -921,11 +940,27 @@ export class ComputerWorker implements DesktopExecutorPort {
           return this.finish(run, "blocked", "time_limit", this.timeText);
         run.plannerFailures = 0;
         run.step++;
+        const actFrom = this.now();
+        const chosen = (planned as { action?: unknown }).action;
         await this.act(
           run,
-          (planned as { action?: unknown }).action,
+          chosen,
           clean(String((planned as { why?: unknown }).why ?? ""), 200),
         );
+        if (this.timing) {
+          const kind = (chosen as { kind?: unknown } | null)?.kind;
+          try {
+            this.timing({
+              step: run.step,
+              kind: typeof kind === "string" ? clean(kind, 40) : "none",
+              lookMs: planFrom - lookFrom,
+              planMs: actFrom - planFrom,
+              actMs: this.now() - actFrom,
+            });
+          } catch {
+            // A listener that fails changes nothing in the request.
+          }
+        }
       }
     } catch {
       // A fault here is not proof that nothing was sent.
