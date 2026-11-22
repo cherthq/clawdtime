@@ -25,6 +25,7 @@ import {
   type SharedHandsetOwner,
 } from "./task-handset-runtime.js";
 import { readDesktopPrivateBytes } from "./task-desktop-config.js";
+import type { TaskReviewCallbackLedger } from "../attention/task-review-callback-ledger.js";
 
 export type DesktopHandsetAttempt = Awaited<
   ReturnType<typeof runHandsetAttempt>
@@ -47,11 +48,32 @@ export class TaskDesktopCalls implements DesktopControlPort {
   readonly ledger: TaskDesktopCallLedger;
   presentationPort?: TaskVoicePresentationPort;
   selectedTaskId?: () => string | undefined;
+  reviews?: TaskReviewCallbackLedger;
+  executionOwnership?: {
+    acquireReviewOwnership(attemptId: string): void;
+    confirmReviewOwnership?(): Promise<void>;
+    releaseReviewOwnership(attemptId: string): void;
+  };
   private active?: DesktopHandsetAttempt;
   private pending?: Promise<void>;
   private pendingRecord?: TaskDesktopCallRecord;
   private stopPending = false;
   private closing = false;
+  reconcileReview() {
+    const record = this.pendingRecord;
+    if (!record || !this.reviews || !this.active?.status().connectedOnce)
+      return;
+    const callback = this.reviews
+      .list(record.sessionId, record.taskId)
+      .find((r) => r.attemptId === record.attemptId);
+    if (callback?.state === "dispatching")
+      this.reviews.outcome(
+        record.sessionId,
+        callback.id,
+        record.attemptId,
+        "in_review",
+      );
+  }
   constructor(
     readonly tasks: TaskService,
     readonly engine: TaskEngine,
@@ -227,17 +249,41 @@ export class TaskDesktopCalls implements DesktopControlPort {
         "Prepared views and grants must match the exact current verified result.",
       );
     this.validatePaths();
-    const claim = this.ledger.claim(session.id, {
-      eventId: request.eventId,
-      taskId: request.taskId,
-      runId: request.runId,
-      expectedRevision: request.expectedRevision,
-      manifestFingerprint: fingerprint,
-      requestFingerprint,
-      authorizationId: request.authorizationId,
-      authorizedAt: request.authorizedAt,
-      expiresAt: request.expiresAt,
-    });
+    let callbackId: string | undefined;
+    let ownershipId: string | undefined;
+    let claim: ReturnType<TaskDesktopCallLedger["claim"]>;
+    try {
+      claim = this.tasks.store.transaction(() => {
+        const claim = this.ledger.claim(session.id, {
+          eventId: request.eventId,
+          taskId: request.taskId,
+          runId: request.runId,
+          expectedRevision: request.expectedRevision,
+          manifestFingerprint: fingerprint,
+          requestFingerprint,
+          authorizationId: request.authorizationId,
+          authorizedAt: request.authorizedAt,
+          expiresAt: request.expiresAt,
+        });
+        if (this.reviews) {
+          const callback = this.reviews.schedule(session.id, task.id).record;
+          this.reviews.prepared(session.id, callback.id, {
+            manifestFingerprint: fingerprint,
+            opening: brief.opening,
+          });
+          this.reviews.reserve(session.id, callback.id, claim.record.attemptId);
+          callbackId = callback.id;
+        }
+        this.executionOwnership?.acquireReviewOwnership(claim.record.attemptId);
+        ownershipId = claim.record.attemptId;
+        return claim;
+      });
+    } catch (error) {
+      // No factory/effect has started. Roll back the in-memory half of a failed commit.
+      if (ownershipId)
+        this.executionOwnership?.releaseReviewOwnership(ownershipId);
+      throw error;
+    }
     const c = this.options.config,
       record = claim.record;
     this.pendingRecord = record;
@@ -274,7 +320,12 @@ export class TaskDesktopCalls implements DesktopControlPort {
     // Durable claim precedes voice admission, subprocess creation, capture and all external effects.
     this.pending = Promise.resolve()
       .then(async () => {
+        let factoryStarted = false;
         try {
+          await this.executionOwnership?.confirmReviewOwnership?.();
+          if (this.closing || this.stopPending)
+            throw Error("Review preparation stopped before effects.");
+          factoryStarted = true;
           const attempt = await this.factory(config, this.options.configPath, {
             tasks: this.tasks,
             engine: this.engine,
@@ -296,16 +347,60 @@ export class TaskDesktopCalls implements DesktopControlPort {
             await attempt.stop("desktop_preparation_stopped");
           else await attempt.start();
           await attempt.finished;
-          this.ledger.complete(record.id, {
-            cleanupConfirmed: true,
-            outcome: "closed",
+          const connected = attempt.status().connectedOnce === true;
+          this.tasks.store.transaction(() => {
+            this.ledger.complete(record.id, {
+              cleanupConfirmed: true,
+              outcome: "closed",
+            });
+            if (callbackId)
+              this.reviews!.outcome(
+                session.id,
+                callbackId,
+                record.attemptId,
+                connected ? "delivered" : "failed",
+              );
           });
+          if (ownershipId)
+            this.executionOwnership?.releaseReviewOwnership(ownershipId);
           this.active = undefined;
           this.presentationPort = undefined;
           this.pendingRecord = undefined;
         } catch {
+          if (!factoryStarted) {
+            this.tasks.store.transaction(() => {
+              this.ledger.complete(record.id, {
+                cleanupConfirmed: true,
+                outcome: "failed",
+              });
+              if (callbackId)
+                this.reviews!.outcome(
+                  session.id,
+                  callbackId,
+                  record.attemptId,
+                  "failed",
+                );
+            });
+            if (ownershipId)
+              this.executionOwnership?.releaseReviewOwnership(ownershipId);
+            this.pendingRecord = undefined;
+            return;
+          }
           // An exception does not establish that native/media effects were absent or cleaned up.
-          this.ledger.markUnknown(record.id);
+          const settled = this.ledger
+            .list(session.id)
+            .find((r) => r.id === record.id);
+          if (settled && !settled.cleanupConfirmed)
+            this.tasks.store.transaction(() => {
+              this.ledger.markUnknown(record.id);
+              if (callbackId)
+                this.reviews!.outcome(
+                  session.id,
+                  callbackId,
+                  record.attemptId,
+                  "unknown",
+                );
+            });
         }
       })
       .finally(() => {

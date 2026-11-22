@@ -78,6 +78,29 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
   private currentId: string | undefined;
   private dispatching = false;
   private closed = false;
+  private reviewOwner?: string;
+  private ownershipAvailable: () => boolean = () => true;
+  setOwnershipGuard(available: () => boolean) {
+    this.ownershipAvailable = available;
+  }
+  /** Synchronous claim closes admission before a phone actor can capture or input. */
+  acquireReviewOwnership(attemptId: string) {
+    if (
+      this.reviewOwner ||
+      this.flight ||
+      this.records.all().some((r) => !terminal.has(r.state))
+    )
+      throw new DomainError(
+        409,
+        "Local execution must finish with confirmed cleanup before review capture.",
+      );
+    this.reviewOwner = attemptId;
+  }
+  releaseReviewOwnership(attemptId: string) {
+    if (this.reviewOwner !== attemptId)
+      throw new DomainError(409, "Review ownership does not match.");
+    this.reviewOwner = undefined;
+  }
   private approval:
     { id: string; resolve: (allowed: boolean) => void } | undefined;
   constructor(
@@ -144,6 +167,11 @@ export class BundledCuaRuntime implements DesktopExecutorPort {
         throw new DomainError(409, "Computer request identity conflicts.");
       return { message: existing.message };
     }
+    if (this.reviewOwner || !this.ownershipAvailable())
+      return {
+        message:
+          "Review capture owns the computer or its cleanup is unresolved. Finish or reconcile that review before computer input.",
+      };
     const record: TaskRecord = {
       id: eventId,
       fingerprint,

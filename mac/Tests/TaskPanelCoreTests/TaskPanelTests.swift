@@ -74,6 +74,24 @@ final class TaskPanelTests: XCTestCase {
     XCTAssertThrowsError(try PanelSnapshot.CallFlow(state: "preparing", message: String(repeating: "x", count: 2001)).validate())
     XCTAssertThrowsError(try PanelSnapshot.CallFlow(state: "unknown", message: " ").validate())
   }
+  func testCallbackOperationAndReviewStagesDecodeWithoutGrantingCallAuthority() throws {
+    var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot())) as! [String: Any]
+    object["operations"] = [["eventId": "callback_fixture", "action": "callback", "state": "unknown",
+      "message": "Callback request is unconfirmed."]]
+    for stage in ["working", "verifying", "preparing_review", "awaiting_call", "in_review", "revising", "accepted", "blocked", "failed"] {
+      object["callFlow"] = ["state": stage, "message": "Callback setup required."]
+      let decoded = try JSONDecoder().decode(PanelSnapshot.self, from: JSONSerialization.data(withJSONObject: object))
+      try decoded.validate(configuration: config())
+      XCTAssertEqual(decoded.operations.first?.action, .callback)
+      XCTAssertEqual(decoded.callFlow?.state, stage)
+      var state = PanelState(); state.connected = true; state.snapshot = decoded
+      XCTAssertFalse(state.allows(.callback))
+      XCTAssertFalse(state.allows(.accept))
+      XCTAssertTrue(state.allows(.stopCall))
+      XCTAssertTrue(state.allows(.stopSharing))
+    }
+    XCTAssertEqual(PanelAction.callback.label, "Request review callback")
+  }
   func testPendingTaskDoesNotDisableIndependentStopControls() throws {
     var state = PanelState(); state.snapshot = snapshot(); state.connected = true
     state.pending = [.init(eventId: "pending", digest: String(repeating: "b", count: 64), action: .decide, state: "unknown", createdAt: 1)]

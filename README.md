@@ -29,6 +29,13 @@ During a call, the voice layer handles conversation while the task engine coordi
 
 ## Technical details
 
+The [long-running task and review guide](docs/TASK_REVIEW_LIFECYCLE.md) describes
+semantic task admission, coding runs without an overall timer, independent
+verification, durable review callbacks, exact-result acceptance and exclusive
+capture handoff. Phone setup and fresh authorized result views are required before
+delivery; missing setup is reported when work is admitted. The installed pilot
+has not yet been upgraded, and handset capture continuity remains unqualified.
+
 Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DESKTOP.md)
 documents the runnable local task workflow, explicit Codex setup and current
 handset acceptance limits.

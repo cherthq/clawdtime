@@ -19,6 +19,7 @@ import {
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { interpret } from "./call.js";
+import { classifyIntent, intentSchema, type IntentInput } from "./intent.js";
 import { agentLabel } from "./catalog.js";
 import {
   answerInTerminalText,
@@ -71,7 +72,7 @@ const earlierMessageLength = 600;
 export const chatMessageSchema = z
   .object({
     role: z.enum(["user", "assistant"]),
-    text: z.string().max(2000),
+    text: z.string().max(8000),
     at: z.number().int().nonnegative(),
     via: z.enum(chatVias),
     /** Answers that the person can pick with one click, when ClawdTime passes on a question. */
@@ -111,7 +112,9 @@ export class ChatLog {
     // A credential is never kept, here as in memory: a marker stands in its place.
     const text = looksSecret(message.text)
       ? credentialMarker
-      : message.text.slice(0, 2000);
+      : message.text.length <= 8000
+        ? message.text
+        : "[Message exceeded the task input limit; it was not admitted.]";
     appendFileSync(
       this.file,
       `${JSON.stringify(chatMessageSchema.parse({ ...message, text }))}\n`,
@@ -156,6 +159,8 @@ export interface ToolSpec {
 }
 /** The language model, behind one call. Tests script it. */
 export interface ModelClient {
+  /** Structured routing; production models implement this independently of conversation. */
+  classifyIntent?(input: IntentInput): Promise<unknown>;
   /** Interpret only the complete current user message, without screen/history data. */
   navigation?(goal: string): Promise<NavigationIntent>;
   complete(input: {
@@ -182,6 +187,9 @@ export const modelSecondWaitMs = 30_000;
 /** How long the one request of a model with a reasoning effort may take. */
 export const modelLongWaitMs = 45_000;
 export class OpenAIModel implements ModelClient {
+  classifyIntent(input: IntentInput) {
+    return classifyIntent(this, input);
+  }
   constructor(
     private readonly key: string,
     private readonly model: string,
@@ -430,6 +438,12 @@ export interface SupervisorWorld {
   };
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
+  /**
+   * The structured intent reader of the task service is on: a model reads
+   * what each message is for the task (a new task, a revision, an acceptance,
+   * a callback) before the other rules. Off unless the service turns it on.
+   */
+  semanticTasks?: boolean;
   /**
    * Says in the chat, by itself and once, that a session is done. It only
    * reads the board. Absent where nothing looks at the board on its own
@@ -1247,6 +1261,22 @@ const asksAbout = (spoken: string) =>
   asksBehindALead(spoken);
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
+/** Strip only conversational introductions, never the user's actual goal. */
+function requestBody(spoken: string): string {
+  return clean(spoken, 8000)
+    .replace(/^(?:yes|okay|ok|sure)[,!]?\s+/i, "")
+    .replace(
+      /^(?:hey|hi|hello)(?:\s+(?:gpt|chatgpt|clawdtime))?(?:\s*[,!:.]\s*|\s+)/i,
+      "",
+    )
+    .replace(/^(?:yes|okay|ok|sure)[,!]?\s+/i, "")
+    .replace(/^please\s+/i, "")
+    .replace(/^(?:i(?:['’]d|\s+would)\s+like|i\s+want)\s+you\s+to\s+/i, "")
+    .replace(/^(?:can|could|would|will)\s+(?:you|u)\s+/i, "")
+    .replace(/^please\s+/i, "")
+    .replace(/^help\s+me\s+(?:to\s+)?/i, "");
+}
+
 /**
  * The whole message asks to stop, close or restart sessions: "stop all my
  * sessions", "kill every agent", "close the sessions please". No tool does
@@ -1508,7 +1538,7 @@ const clausesOf = (spoken: string) =>
     .filter(Boolean);
 /** What comes before an instruction in speech: a filler, a greeting, a polite opening. */
 const opening =
-  /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|and|also|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime)[,.!]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to)\s+)+/i;
+  /^(?:(?:um+|uh+|er+|hmm+|so|well|oh|ah|now|then|and|also|hey|hi|hello|please|okay|ok|yeah|yes|yep|sure|right|alright|clawdtime|gpt|chatgpt)[,.!:]?\s+|(?:(?:can|could|would|will)\s+(?:you|u)|i\s+(?:want|need)\s+you\s+to|i(?:'|\u2019)?d\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to|help\s+me(?:\s+to)?)\s+)+/i;
 const softwareNoun =
   /\b(?:landing\s+page|web\s*site|web\s*page|web\s*app|application|app|dashboard|feature|component|code|function|endpoint|API|test|tests|bug|bugs|config(?:uration)?|script|scripts|documentation|README)\b/i;
 /**
@@ -1661,6 +1691,10 @@ const asksToStart = (spoken: string) =>
   !asksAbout(spoken) &&
   !/^(?:please\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:do\s+not|don't|don\u2019t|not|never|stop|cancel)\b/i.test(
     spoken.trim(),
+  ) &&
+  // The same behind a greeting or a polite opening: "Hey, don't start a task".
+  !/^(?:do\s+not|don't|don\u2019t|not|never|stop|cancel)\b/i.test(
+    spoken.trim().replace(opening, ""),
   );
 /** The goal in the person's sentence: what follows the word task or job. */
 function goalFrom(spoken: string) {
@@ -1676,13 +1710,19 @@ function goalFrom(spoken: string) {
 }
 const saysAccept = (spoken: string, requestsWaiting: number) =>
   !isQuestion(spoken) &&
+  !/\b(?:do not|don[’']t|never|not)\s+(?:accept|approve|take|keep)\b/i.test(
+    spoken,
+  ) &&
   (/\baccept(?:ed|ing)?\b/i.test(spoken) ||
     /\b(?:approve|take|keep)\b[^.?!]{0,30}\b(?:result|task|work|changes?)\b/i.test(
       spoken,
     ) ||
-    (requestsWaiting === 0 && /\b(?:looks good|lgtm|ship it)\b/i.test(spoken)));
+    (requestsWaiting === 0 && /\b(?:looks good|lgtm)\b/i.test(spoken)));
 const saysCancel = (spoken: string) =>
   !isQuestion(spoken) &&
+  !/\b(?:do not|don[’']t|never|not)\s+(?:cancel|stop|abort|kill|end|drop)\b/i.test(
+    spoken,
+  ) &&
   (/\bcancel\b/i.test(spoken) ||
     /\b(?:abort|drop|stop|kill|end)\b[^.?!]{0,20}\b(?:task|job)\b/i.test(
       spoken,
@@ -3251,7 +3291,12 @@ const needsDesktop =
 /** The task in one or two sentences that can be said aloud. */
 function taskLine(task: TaskFacts) {
   const goal = clean(task.goal, 160);
-  let line = `Task: "${goal}" is ${taskStateWords(task.state)}.`;
+  let line = `Task: "${goal}" is ${taskStateWords(task.reviewState ?? task.state)}.`;
+  if (task.reviewMessage) line += ` ${clean(task.reviewMessage, 400)}`;
+  if (task.progress && ["queued", "running"].includes(task.state))
+    line += ` Latest progress: ${task.progress.phase.replace(/_/g, " ")}.`;
+  if (task.reasonCode)
+    line += ` Reason: ${task.reasonCode.replace(/_/g, " ")}.`;
   if (task.question && task.canAnswer) {
     line += ` It waits for the person and asks: ${clean(task.question, 300)}`;
     if (task.choices.length) line += ` Choices: ${task.choices.join(", ")}.`;
@@ -3268,6 +3313,7 @@ interface Turn {
   /** The turn looked at the task, so its answer may offer the task's choices. */
   sawTask: boolean;
   done: Map<string, string>;
+  semantic?: boolean;
   /** The conversation before this turn, for the context that a job carries. */
   history: ChatMessage[];
   /** The same with the lines of news in it, for the model only. */
@@ -3312,6 +3358,13 @@ const refuse = (turn: Turn, sentence: string) => {
 };
 
 export class Supervisor {
+  private pendingIntent: {
+    id: string;
+    goal: string;
+    expiresAt: number;
+    binding: string;
+  } | null = null;
+  private intentEpoch = 0;
   private navigationGeneration = 0;
   private navigationStops = new Set<() => void>();
   constructor(
@@ -6727,6 +6780,22 @@ export class Supervisor {
     } catch {
       return "The arguments were not valid.";
     }
+    if (
+      turn.semantic &&
+      [
+        "start_task",
+        "answer_task",
+        "accept_task",
+        "cancel_task",
+        "delegate_computer_task",
+        "set_away",
+      ].includes(call.name)
+    ) {
+      const message =
+        "That action was not admitted by the current intent. No task or call was started.";
+      turn.done.set("intent_refused", message);
+      return message;
+    }
     switch (call.name) {
       case "delegate_computer_task":
         return this.delegate(turn, spoken);
@@ -7260,7 +7329,7 @@ export class Supervisor {
     let about = "";
     if (task && !taskIsOver(task)) {
       turn.sawTask = true;
-      about = ` Your task "${clean(task.goal, 80)}" is ${taskStateWords(task.state)}.`;
+      about = ` Your task "${clean(task.goal, 80)}" is ${taskStateWords(task.reviewState ?? task.state)}.`;
       if (asks) {
         about += ` It asks: ${clean(task.question!, 200)}`;
         if (task.choices.length)
@@ -7341,7 +7410,15 @@ export class Supervisor {
     // The desktop/voice transports are bounded at 2,000 characters. Direct
     // task-service callers historically support complete software goals up to
     // 8,000; preserve that route without admitting oversized UI instructions.
-    if (
+    if (this.world.semanticTasks && this.model?.classifyIntent) {
+      // With the intent reader on, the reader takes every message up to the
+      // task service's own limit, and a longer one is refused whole.
+      if (spoken.length > 8000)
+        return {
+          text: "This request exceeds the task service's 8000-character limit. Shorten it without dropping constraints.",
+          choices: [],
+        };
+    } else if (
       spoken.length > userMessageLimit &&
       !(
         spoken.length <= 8000 &&
@@ -7374,6 +7451,141 @@ export class Supervisor {
     return { text, choices };
   }
 
+  private async semantic(spoken: string, turn: Turn): Promise<string | null> {
+    const classify = this.model?.classifyIntent;
+    if (!classify || !this.world.semanticTasks) return null;
+    turn.semantic = true;
+    if (spoken.length > 8000)
+      return "This request exceeds the task service's 8000-character limit. Shorten it without dropping constraints.";
+    const binding = () => {
+      const task = this.world.tasks?.current();
+      return JSON.stringify(
+        task?.identity
+          ? {
+              identity: task.identity,
+              state: task.state,
+              canAnswer: task.canAnswer,
+              canAccept: task.canAccept,
+              canCancel: task.canCancel,
+            }
+          : (task ?? null),
+      );
+    };
+    const before = binding();
+    const epoch = ++this.intentEpoch;
+    if (
+      this.pendingIntent &&
+      (this.pendingIntent.expiresAt <= this.world.now() ||
+        this.pendingIntent.binding !== before)
+    )
+      this.pendingIntent = null;
+    let intent;
+    try {
+      intent = intentSchema.parse(
+        await classify.call(this.model, {
+          text: spoken,
+          task: this.world.tasks?.current() ?? null,
+          pending: this.pendingIntent,
+        }),
+      );
+      if (intent.source !== spoken) throw new Error("source_mismatch");
+    } catch {
+      return "I could not reliably interpret that request. Nothing was started; please restate the task or check its status.";
+    }
+    if (epoch !== this.intentEpoch || before !== binding())
+      return "The task changed while I interpreted that request. Check its current status before continuing.";
+    const tasks = this.world.tasks;
+    const task = tasks?.current();
+    // Short confirmations cannot create an unbound goal, even when misclassified.
+    const confirmation =
+      /^(?:(?:yes|okay|ok|sure)[,!]?\s*)?(?:start building now|start now|proceed|go ahead|do it|yes)[.!]*$/i.test(
+        spoken.trim(),
+      );
+    if (
+      (confirmation &&
+        intent.kind !== "revision" &&
+        intent.kind !== "accept") ||
+      intent.kind === "confirm"
+    ) {
+      const pending = this.pendingIntent;
+      this.pendingIntent = null;
+      if (!pending || pending.expiresAt <= this.world.now())
+        return "There is no current task proposal to confirm. Tell me the task you want started.";
+      if (!tasks?.canStart())
+        return tasks
+          ? "A task cannot start in the current state. Resolve the active or uncertain work first."
+          : needsDesktop;
+      const goal = `${pending.goal}\nHuman clarification: ${spoken}`;
+      if (goal.length > 8000)
+        return "The proposal and clarification exceed the 8000-character task limit. Please restate them together without dropping constraints.";
+      return this.change(turn, "start", (port, eventId) =>
+        port.start(goal, eventId),
+      );
+    }
+    this.pendingIntent = null;
+    switch (intent.kind) {
+      case "clarify":
+        if (!intent.question)
+          return "Please state the task and the missing detail together.";
+        this.pendingIntent = {
+          id: turn.id,
+          goal: spoken,
+          expiresAt: this.world.now() + 120_000,
+          binding: before,
+        };
+        return intent.question;
+      case "new_task":
+        if (!tasks) return needsDesktop;
+        if (!tasks.canStart())
+          return "A task cannot start in the current state. Resolve the active or uncertain work first; a new task was not attached as a revision.";
+        return this.change(turn, "start", (port, eventId) =>
+          port.start(spoken, eventId),
+        );
+      case "revision":
+        if (!tasks) return needsDesktop;
+        if (!task?.canAnswer || taskIsOver(task))
+          return "The current task is not waiting for a revision or answer.";
+        return this.change(turn, "answer", (port, eventId) =>
+          port.answer(spoken, eventId),
+        );
+      case "status":
+        turn.sawTask = true;
+        return this.status();
+      case "cancel":
+        if (!saysCancel(spoken))
+          return "No cancellation was confirmed by your request.";
+        if (!tasks) return needsDesktop;
+        if (!task?.canCancel) return "No active task can be stopped here.";
+        return this.change(turn, "cancel", (port, eventId) =>
+          port.cancel(eventId),
+        );
+      case "accept":
+        if (!tasks) return needsDesktop;
+        if (
+          !task?.canAccept ||
+          !saysAccept(spoken, this.world.desk.pending().length)
+        )
+          return "No exact reviewed result was accepted. State acceptance of the result when it is ready for review.";
+        return this.change(turn, "accept", (port, eventId) =>
+          port.accept(eventId),
+        );
+      case "callback":
+        if (!tasks?.requestCallback)
+          return "Review calling is not configured here. No callback was scheduled.";
+        try {
+          return (await tasks.requestCallback(`${turn.id}_callback`)).message;
+        } catch {
+          return "Callback scheduling is unresolved. Check the existing callback receipt; it was not retried.";
+        }
+      case "deployment":
+        return "Deployment is a separate action and is not available through this task service. Accepting a result does not authorize deployment.";
+      case "computer_action":
+        return this.delegate(turn, spoken, true);
+      case "conversation":
+        return null;
+    }
+  }
+
   private async turn(
     history: ChatMessage[],
     spoken: string,
@@ -7382,6 +7594,44 @@ export class Supervisor {
   ): Promise<string> {
     const words = clean(spoken, 8000);
     if (!words) return "I did not catch that.";
+    // The structured intent reader of the task service (`semantic`). It is on only where the service turned
+    // it on (`semanticTasks`). Then it reads what a message is for the task before every rule below, with
+    // its own stop and "not yet" in front. Where it is off, nothing here runs.
+    if (this.world.semanticTasks && this.model?.classifyIntent) {
+      if (spoken.length > 8000)
+        return "This request exceeds the task service\'s 8000-character limit. Shorten it without dropping constraints.";
+      // Stop remains available before any model request and invalidates an in-flight classification.
+      if (
+        /^(?:please\s+)?(?:stop|cancel|abort)(?:\s+(?:the\s+)?(?:task|job|work|everything))?[.!]*$/i.test(
+          words,
+        )
+      ) {
+        this.intentEpoch++;
+        this.pendingIntent = null;
+        const task = this.world.tasks?.current();
+        if (task?.canCancel)
+          return this.change(turn, "cancel", (port, eventId) =>
+            port.cancel(eventId),
+          );
+        if (this.world.execution?.snapshot().configured)
+          return this.world.execution.stop().message;
+        return "No active work can be stopped here.";
+      }
+      if (
+        /^(?:do not|don't|don’t)\s+(?:start|begin|proceed)\b|^not yet[.!]*$/i.test(
+          requestBody(words),
+        ) ||
+        /\b(?:do not|don't|don’t)\s+(?:start|begin|proceed)\s+(?:yet|now)[.!?]*$/i.test(
+          words,
+        )
+      ) {
+        this.intentEpoch++;
+        this.pendingIntent = null;
+        return "Nothing was started. Your current task state is unchanged.";
+      }
+      const semantic = await this.semantic(spoken, turn);
+      if (semantic !== null) return semantic;
+    }
     // The message after ClawdTime's own words about work that waits for a
     // yes. That is read from the conversation alone: whatever a file holds,
     // however old the question is and on whatever channel the answer comes.
@@ -7642,7 +7892,10 @@ export class Supervisor {
       if (turn.refused === undefined) return said;
       turn.refused = undefined;
     }
-    const directGoal = codingGoal(spoken, taskWaits ? "polite" : "plain");
+    // In a turn that the intent reader took, the reader alone starts a task.
+    const directGoal = turn.semantic
+      ? null
+      : codingGoal(spoken, taskWaits ? "polite" : "plain");
     if (
       directGoal &&
       this.world.desk.pending().length === 0 &&
@@ -7726,6 +7979,7 @@ export class Supervisor {
     // a conversational model must not reinterpret window titles as agent names.
     const executionMode = execution?.snapshot().mode;
     if (
+      !turn.semantic &&
       execution?.snapshot().configured &&
       (executionMode === "native" || executionMode === "browser") &&
       (contextualUiRequest(words) ||
@@ -7741,7 +7995,7 @@ export class Supervisor {
       !/\b(?:status|progress|pending requests?)\b/i.test(words)
     )
       return this.delegate(turn, words);
-    if (directMailboxRequest.test(words))
+    if (!turn.semantic && directMailboxRequest.test(words))
       return execution?.snapshot().configured
         ? this.delegate(turn, words)
         : mailboxUnavailable;
@@ -7825,7 +8079,18 @@ export class Supervisor {
       ? `${base}\nWhat you know about this person, from memory (a line marked inferred is a guess):\n${known}`
       : base;
     const offered = [
-      ...tools,
+      ...tools.filter(
+        (tool) =>
+          !turn.semantic ||
+          ![
+            "start_task",
+            "answer_task",
+            "accept_task",
+            "cancel_task",
+            "delegate_computer_task",
+            "set_away",
+          ].includes(tool.name),
+      ),
       ...(memory ? memoryTools : []),
       ...(this.world.window ? [windowTool] : []),
       ...(this.world.jobs ? jobTools : []),
@@ -8227,6 +8492,13 @@ export class Supervisor {
           tools: offered,
         });
         if (!reply.toolCalls.length) {
+          if (
+            turn.semantic &&
+            /\b(?:I(?:['’]ll| will| am|['’]m)|we(?:['’]ll| will| are))\s+(?:start|get started|begin|build|make|implement|work(?:ing)? on)|\b(?:I|we)(?:['’]ve| have)\s+(?:started|begun)|\b(?:task|run|work)\s+(?:is|has been)\s+(?:started|admitted|queued)/i.test(
+              reply.text,
+            )
+          )
+            return "No task action was admitted for that message. Tell me the work you want performed, or ask about the current task.";
           if (invitesApproval.test(reply.text)) {
             const waiting = computerApproval();
             if (waiting) return waiting;
@@ -8713,6 +8985,8 @@ export class Supervisor {
             toolCallId: call.id,
             content: (await this.run(call, words, via, turn)).slice(0, 6000),
           });
+          const refusedIntent = turn.done.get("intent_refused");
+          if (refusedIntent !== undefined) return refusedIntent;
           const executionResult = turn.done.get("execution");
           if (executionResult !== undefined) return executionResult;
           const jobStarted = turn.done.get("job_started");
@@ -8754,6 +9028,8 @@ export class Supervisor {
       )
         return shown.content;
       // No model now: the plain answer still tells the state and takes a clear yes or no.
+      if (turn.semantic)
+        return "Conversation is unavailable right now. No task was started.";
       const acted = messages.some(
         (message) =>
           message.role === "tool" &&

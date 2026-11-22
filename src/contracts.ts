@@ -53,6 +53,13 @@ export interface CodingRun {
   cancelRequested?: boolean;
   threadId?: string;
   turnId?: string;
+  reasonCode?: string;
+  outcomeHistory?: Array<{
+    state: CodingRun["state"];
+    at: number;
+    reason?: string;
+  }>;
+  progress?: { phase: string; at: number };
 }
 export interface TaskDecision {
   id: string;
@@ -118,6 +125,7 @@ export type TaskCommand = { eventId: string; expectedRevision: number } & (
       decisionOptions?: string[];
       threadId?: string;
       turnId?: string;
+      reasonCode?: string;
     }
   | { action: "verify_result"; verification: TaskVerification }
   | {
@@ -142,6 +150,7 @@ export interface TaskWorkerResult {
   decisionOptions?: string[];
   threadId?: string;
   turnId?: string;
+  reasonCode?: string;
 }
 export interface TaskWorker {
   run(
@@ -153,7 +162,11 @@ export interface TaskWorker {
       context: string;
       dispatchId?: string;
     },
-    emit: (event: { phase: string }) => void,
+    emit: (event: {
+      phase: string;
+      threadId?: string;
+      turnId?: string;
+    }) => void,
     signal: AbortSignal,
   ): Promise<TaskWorkerResult>;
 }

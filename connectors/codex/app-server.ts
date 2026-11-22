@@ -79,10 +79,10 @@ export class CodexAppServerConnection implements AppServerConnection {
     });
     this.child.stderr.resume();
     this.child.on("error", () => this.disconnect());
-    this.child.on("exit", () => this.disconnect());
+    this.child.on("exit", () => this.disconnect("process_exit"));
     this.child.stdin.on("error", () => this.disconnect());
   }
-  private disconnect() {
+  private disconnect(reason = "connection_lost") {
     if (this.closed) return;
     this.closed = true;
     for (const p of this.pending.values()) {
@@ -91,7 +91,7 @@ export class CodexAppServerConnection implements AppServerConnection {
     }
     this.pending.clear();
     for (const listener of this.listeners)
-      listener({ method: "clawdtime/disconnected" });
+      listener({ method: "clawdtime/disconnected", params: { reason } });
   }
   request(method: string, params: unknown): Promise<any> {
     if (this.closed) return Promise.reject(new Error("executor_disconnected"));

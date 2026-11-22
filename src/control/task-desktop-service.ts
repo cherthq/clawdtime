@@ -7,6 +7,7 @@ import { unresolvedTaskAudioCalls } from "../attention/task-audio-call.js";
 import { unresolvedTaskPresentations } from "../attention/task-presentation-ledger.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
+import type { TaskReviewService } from "./task-review-service.js";
 
 const identity = z
   .string()
@@ -39,6 +40,9 @@ const commandSchema = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({ eventId: identity, action: z.literal("cancel"), ...binding })
+    .strict(),
+  z
+    .object({ eventId: identity, action: z.literal("callback"), ...binding })
     .strict(),
   z
     .object({
@@ -115,6 +119,7 @@ const inertControls: DesktopControls = {
 
 /** A native UI capability for one existing service/session. It never grants calls. */
 export class TaskDesktopService {
+  reviews?: TaskReviewService;
   private records: ProtectedTaskStore<StoredOperation>;
   private sessionId: string;
   private projectRoot: string;
@@ -240,6 +245,9 @@ export class TaskDesktopService {
       revision: task.revision,
       goal: task.goal,
       state: task.state,
+      ...(this.reviews ? { review: this.reviews.snapshot(task) } : {}),
+      ...(run.progress ? { progress: run.progress } : {}),
+      ...(run.reasonCode ? { reasonCode: run.reasonCode } : {}),
       summary:
         run.cancelRequested && !terminal.has(task.state)
           ? "Cancellation requested; waiting for the worker's confirmed outcome."
@@ -323,11 +331,19 @@ export class TaskDesktopService {
             .blockedReasons.length),
       task: task ? this.projectTask(task) : null,
       controls: this.controlSnapshot(),
-      ...(this.controls?.status
+      ...(this.controls?.status || (this.reviews && task)
         ? {
             callFlow: (() => {
               try {
-                const { state, message } = this.controls!.status!();
+                const control = this.controls?.status?.();
+                const review = task ? this.reviews?.snapshot(task) : undefined;
+                const { state, message } =
+                  control &&
+                  ["reconciliation_required", "in_call", "preparing"].includes(
+                    control.state,
+                  )
+                    ? control
+                    : (review ?? control!);
                 return { state, message };
               } catch {
                 return {
@@ -435,20 +451,24 @@ export class TaskDesktopService {
               "The displayed task changed. Review its current state.",
             );
           const permitted =
-            command.action === "decide"
-              ? snapshot.task.canDecide
-              : command.action === "accept"
-                ? snapshot.task.canAccept
-                : snapshot.task.canCancel;
+            command.action === "callback"
+              ? !!this.reviews &&
+                !["accepted", "canceled", "unknown"].includes(task.state)
+              : command.action === "decide"
+                ? snapshot.task.canDecide
+                : command.action === "accept"
+                  ? snapshot.task.canAccept
+                  : snapshot.task.canCancel;
           if (!permitted)
             throw new DomainError(
               409,
               "That task action is not available in the current state.",
             );
-          task = this.service.command(this.config.sessionToken, task.id, {
-            ...command,
-            eventId: `desktop:${key}`,
-          }).task;
+          if (command.action !== "callback")
+            task = this.service.command(this.config.sessionToken, task.id, {
+              ...command,
+              eventId: `desktop:${key}`,
+            }).task;
         }
         if (task)
           record = {
@@ -476,9 +496,13 @@ export class TaskDesktopService {
         await this.controls!.stopSharing(command.controlId, command.eventId);
       else if (command.action === "stop_call")
         await this.controls!.stopCall(command.controlId, command.eventId);
-      else if (task && command.action === "cancel")
+      else if (task && command.action === "cancel") {
         this.engine?.cancel(task.id);
-      else if (
+        this.reviews?.ledger.cancel(task.sessionId, task.id);
+        const control = this.controls?.snapshot();
+        if (control?.controlId && control.canStopCall)
+          await this.controls!.stopCall(control.controlId, command.eventId);
+      } else if (
         task &&
         ["submit", "decide"].includes(command.action) &&
         this.engine
@@ -488,15 +512,19 @@ export class TaskDesktopService {
         ...record,
         state: "done",
         ...(task ? { resultRevision: task.revision } : {}),
-        message: isStop
-          ? "Stop requested. Check the current call and sharing status for confirmation."
-          : command.action === "cancel"
-            ? "Cancellation requested. The task status shows whether the worker has stopped."
-            : command.action === "accept"
-              ? "Result accepted. Nothing was deployed."
-              : this.engine
-                ? "Coding run admitted. Independent verification follows completion."
-                : "Simulation task recorded. No coding worker was started.",
+        message:
+          task && command.action === "callback"
+            ? this.reviews!.request(task).message
+            : isStop
+              ? "Stop requested. Check the current call and sharing status for confirmation."
+              : command.action === "cancel"
+                ? "Cancellation requested. The task status shows whether the worker has stopped."
+                : command.action === "accept"
+                  ? "Result accepted. Nothing was deployed."
+                  : this.engine
+                    ? "Coding run admitted. Independent verification follows completion." +
+                      (this.reviews?.admissionNotice() ?? "")
+                    : "Simulation task recorded. No coding worker was started.",
       };
     } catch {
       record = {
@@ -512,6 +540,11 @@ export class TaskDesktopService {
       current.instanceId === this.config.instanceId
     )
       this.records.put(record);
+    try {
+      this.reviews?.refresh();
+    } catch {
+      /* Callback readiness cannot undo admission. */
+    }
     return this.publicOperation(this.records.get(key)!);
   }
 }

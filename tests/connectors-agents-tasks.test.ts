@@ -6,6 +6,7 @@ import {
   ChatLog,
   Supervisor,
   chatMessageSchema,
+  type ChatMessage,
   type ModelClient,
   type ModelMessage,
   type SupervisorWorld,
@@ -198,6 +199,13 @@ describe("direct software requests start without a confirmation loop", () => {
     `Yes, ${demo}`,
     `Can you ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
     `Please ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `Hey GPT, ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `Hi ClawdTime, please ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `Hello ChatGPT, I'd like you to ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `I’d like you to ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `I want you to ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    `Can you help me ${demo[0]!.toLowerCase()}${demo.slice(1)}`,
+    "Hey GPT, build a draft landing page for Chirp using the project’s existing content and branding, run it locally, and check that it works. Call me when it’s ready so we can review it together, and don’t deploy it yet.",
   ])(
     "starts a clear request exactly once without asking the conversational model: %s",
     async (spoken) => {
@@ -338,7 +346,8 @@ describe("direct software requests start without a confirmation loop", () => {
         world(tasks.port).value,
         withModel ? run.model : null,
       );
-      const revision = "Make the landing page blue. Don't deploy it yet.";
+      const revision =
+        "Hi ClawdTime, make the landing page blue. Don't deploy it yet.";
       expect(await supervisor.reply([], revision, "voice")).toBe(
         "Simulation task recorded.",
       );
@@ -363,6 +372,29 @@ describe("direct software requests start without a confirmation loop", () => {
     expect(tasks.task()!.goal).toBe(demo);
   });
 
+  it("does not reconstruct a new task from an unbound confirmation in chat history", async () => {
+    const tasks = fakeTasks();
+    const run = scripted([
+      [call("start_task", { goal: demo })],
+      "No current task request was submitted.",
+    ]);
+    const history: ChatMessage[] = [
+      { role: "user", text: demo, at: now - 120_000, via: "chat" },
+      {
+        role: "assistant",
+        text: "Should I proceed with that task?",
+        at: now - 60_000,
+        via: "chat",
+      },
+    ];
+    await new Supervisor(world(tasks.port).value, run.model).reply(
+      history,
+      "Yes, start building now.",
+      "chat",
+    );
+    expect(tasks.calls).toEqual([]);
+  });
+
   it("reports a missing service instead of saying it started", async () => {
     expect(
       await new Supervisor(
@@ -385,6 +417,15 @@ describe("direct software requests start without a confirmation loop", () => {
     "Click the Save button in the app window.",
     "Type build a landing page into the browser field.",
     "Yes, please proceed.",
+    "Yes, start building now.",
+    "Hey GPT, should we build a landing page?",
+    "Hi ClawdTime, what is the landing page status?",
+    "Hey GPT, don't start a task: build a landing page.",
+    "Hi ClawdTime, could you not start a task to build a landing page?",
+    "I'd like you to explain how to build a landing page.",
+    "I want you to not build a landing page yet.",
+    "Can you help me understand how to build a landing page?",
+    "Hey GPT, click the Save button in the app window.",
   ])(
     "does not let a model turn discussion or a UI instruction into a coding start: %s",
     async (spoken) => {
@@ -1114,6 +1155,7 @@ describe("the door to the desktop task service", () => {
     const made = desktop(shown);
     const port = deskTasks(made.service, "capability");
     expect(port.current()).toEqual({
+      identity: { id: "task_1", runId: "run_1", revision: 4 },
       goal: "fix the login test",
       state: "needs_decision",
       summary: "The test fails on a missing fixture.",
@@ -1521,5 +1563,282 @@ describe("the start rules, after a second review", () => {
     expect(tasks.calls.map((entry) => [entry.kind, entry.text])).toEqual([
       ["start", "Fix the bug in the app"],
     ]);
+  });
+});
+
+describe("structured semantic task intent", () => {
+  function semantic(
+    tasks: TaskPort,
+    kinds: string[],
+    configure?: (value: SupervisorWorld) => void,
+  ) {
+    const made = world(tasks);
+    // The intent reader is a switch of the service. These tests are of the reader, so it is on.
+    made.value.semanticTasks = true;
+    configure?.(made.value);
+    let at = 0;
+    const inputs: unknown[] = [];
+    const model: ModelClient = {
+      async classifyIntent(input) {
+        inputs.push(structuredClone(input));
+        const kind = kinds[Math.min(at++, kinds.length - 1)]!;
+        return {
+          kind,
+          source: input.text,
+          ...(kind === "clarify"
+            ? { question: "Should this draft stay local?" }
+            : {}),
+        };
+      },
+      async complete() {
+        return { text: "Here is the explanation.", toolCalls: [] };
+      },
+    };
+    return { agent: new Supervisor(made.value, model), inputs, model, ...made };
+  }
+  it.each([
+    "Hey GPT, build a draft landing page for Chert. Call me when ready, and don't deploy.",
+    "I’d like you to make a draft landing page. Don't send or deploy anything.",
+    "Can you help me build a landing page? Draft only.",
+    "Please modernize this repository's navigation. Keep the current API unchanged.",
+  ])("admits a semantic request unchanged: %s", async (text) => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["new_task"]);
+    expect(await run.agent.reply([], text, "voice")).toContain(
+      "Simulation task recorded",
+    );
+    expect(tasks.calls).toHaveLength(1);
+    expect(tasks.calls[0]?.text).toBe(text);
+    expect(run.inputs).toEqual([{ text, task: null, pending: null }]);
+  });
+  it.each([
+    ["Can you explain how to build this?", "conversation"],
+    ["The demo shows an agent building a landing page.", "conversation"],
+    ["How is my landing page progressing?", "status"],
+    ["Don't start yet.", "new_task"],
+    ["Yes, start building now.", "new_task"],
+    ["Deploy the result.", "deployment"],
+  ])("does not create work from %s", async (text, kind) => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, [kind]);
+    await run.agent.reply(
+      [
+        {
+          role: "assistant",
+          text: "I will build a site",
+          via: "chat",
+          at: now - 1000,
+        },
+      ],
+      text,
+      "chat",
+    );
+    expect(tasks.calls).toEqual([]);
+  });
+  it("binds a confirmation to one live proposal and consumes it", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["clarify", "confirm", "confirm"]);
+    const goal =
+      "I'd like you to make a local landing page draft; don't deploy.";
+    expect(await run.agent.reply([], goal, "chat")).toBe(
+      "Should this draft stay local?",
+    );
+    expect(tasks.calls).toEqual([]);
+    await run.agent.reply([], "Yes, start building now.", "chat");
+    expect(tasks.calls.map((item) => item.text)).toEqual([
+      `${goal}\nHuman clarification: Yes, start building now.`,
+    ]);
+    expect(
+      await run.agent.reply([], "Yes, start building now.", "chat"),
+    ).toContain("no current task proposal");
+    expect(tasks.calls).toHaveLength(1);
+  });
+  it("expires a proposal and never reconstructs it from old chat", async () => {
+    let clock = now;
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["clarify", "confirm"], (value) => {
+      value.now = () => clock;
+    });
+    await run.agent.reply([], "Make a local draft page", "chat");
+    clock += 120_001;
+    await run.agent.reply([], "Yes, start building now.", "chat");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("keeps revisions on the waiting task and preserves their complete constraints", async () => {
+    const tasks = fakeTasks({
+      goal: "Build a landing page. Don't deploy.",
+      state: "review_ready",
+      canAnswer: true,
+      question: "Any revisions?",
+    });
+    const run = semantic(tasks.port, ["revision"]);
+    const text = "Make the landing page blue. Draft only, don't send anything.";
+    await run.agent.reply([], text, "voice");
+    expect(tasks.calls.map((item) => [item.kind, item.text])).toEqual([
+      ["answer", text],
+    ]);
+  });
+  it("rejects an invented goal or malformed intent without falling back to tool execution", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["new_task"]);
+    run.model.classifyIntent = async () => ({
+      kind: "new_task",
+      source: "Invented task",
+    });
+    expect(await run.agent.reply([], "What can you do?", "chat")).toContain(
+      "could not reliably interpret",
+    );
+    expect(tasks.calls).toEqual([]);
+  });
+  it("does not let conversation tool calls bypass the intent decision", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["conversation"]);
+    let count = 0;
+    run.model.complete = async () =>
+      count++ === 0
+        ? {
+            text: "",
+            toolCalls: [call("start_task", { goal: "Build a website" })],
+          }
+        : { text: "Nothing was started.", toolCalls: [] };
+    await run.agent.reply([], "Can you explain how to build this?", "chat");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("rejects truncation rather than discarding trailing constraints", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["new_task"]);
+    const text = `Build ${"a".repeat(8000)}. Don't deploy.`;
+    expect(await run.agent.reply([], text, "chat")).toContain(
+      "8000-character limit",
+    );
+    expect(run.inputs).toEqual([]);
+    expect(tasks.calls).toEqual([]);
+  });
+  it("does not promise a callback when its capability is missing", async () => {
+    const tasks = fakeTasks({ goal: "Build a site" });
+    const run = semantic(tasks.port, ["callback"]);
+    expect(await run.agent.reply([], "Call me when ready", "chat")).toContain(
+      "not configured",
+    );
+    expect(tasks.calls).toEqual([]);
+  });
+  it("Stop preempts model classification and prevents stale admission", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["new_task"]);
+    let release!: () => void;
+    run.model.classifyIntent = (input) =>
+      new Promise((resolve) => {
+        release = () => resolve({ kind: "new_task", source: input.text });
+      });
+    const starting = run.agent.reply([], "Build a site", "chat");
+    await run.agent.reply([], "Stop", "chat");
+    release();
+    expect(await starting).toContain("task changed");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("does not silently attach unrelated new work as a revision", async () => {
+    const tasks = fakeTasks({
+      goal: "Build a landing page",
+      state: "review_ready",
+      canAnswer: true,
+      question: "Any revisions?",
+    });
+    const run = semantic(tasks.port, ["new_task"]);
+    expect(
+      await run.agent.reply(
+        [],
+        "Build a separate database migration tool",
+        "chat",
+      ),
+    ).toContain("not attached as a revision");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("suppresses a task-start promise without actual admission", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["conversation"]);
+    run.model.complete = async () => ({
+      text: "I'll get started on your new landing page.",
+      toolCalls: [],
+    });
+    expect(
+      await run.agent.reply([], "Explain how landing pages are built", "chat"),
+    ).toContain("No task action was admitted");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("keeps a deployment negation while admitting the requested work", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["new_task"]);
+    const text = "Build the landing page. Deploy it? Not yet.";
+    await run.agent.reply([], text, "chat");
+    expect(tasks.calls.map((item) => item.text)).toEqual([text]);
+  });
+  it.each([
+    "I do not accept the result",
+    "Don't approve this result",
+    "ship it",
+  ])("refuses ambiguous or negated acceptance: %s", async (text) => {
+    const tasks = fakeTasks({
+      goal: "Build a page",
+      state: "review_ready",
+      canAccept: true,
+    });
+    const run = semantic(tasks.port, ["accept"]);
+    await run.agent.reply([], text, "voice");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("refuses acceptance when the exact reviewed identity changes during classification", async () => {
+    const tasks = fakeTasks({
+      goal: "Build a page",
+      state: "review_ready",
+      canAccept: true,
+      identity: { id: "task", runId: "run", revision: 1 },
+    });
+    const run = semantic(tasks.port, ["accept"]);
+    run.model.classifyIntent = async (input) => {
+      tasks.task()!.identity!.revision++;
+      return { kind: "accept", source: input.text };
+    };
+    expect(
+      await run.agent.reply([], "I accept this result", "voice"),
+    ).toContain("task changed");
+    expect(tasks.calls).toEqual([]);
+  });
+  it("speaks callback readiness and fixed progress from task service facts", async () => {
+    const tasks = fakeTasks({
+      goal: "Build a page",
+      state: "running",
+      reviewState: "revising",
+      reviewMessage: "Phone setup is missing.",
+      progress: { phase: "editing", at: now },
+      reasonCode: "connection_lost",
+    });
+    const run = semantic(tasks.port, ["status"]);
+    const text = await run.agent.reply([], "How is it going?", "chat");
+    expect(text).toContain("applying your revision");
+    expect(text).toContain("Phone setup is missing.");
+    expect(text).toContain("Latest progress: editing");
+    expect(text).toContain("Reason: connection lost");
+  });
+
+  it("binds a yes answer to the current task question rather than a missing start proposal", async () => {
+    const tasks = fakeTasks({
+      goal: "Build a landing page",
+      state: "needs_decision",
+      canAnswer: true,
+      question: "Should the background be blue?",
+    });
+    const run = semantic(tasks.port, ["revision"]);
+    await run.agent.reply([], "Yes", "voice");
+    expect(tasks.calls.map((item) => [item.kind, item.text])).toEqual([
+      ["answer", "Yes"],
+    ]);
+  });
+  it("preserves a restriction on background services without vetoing coding", async () => {
+    const tasks = fakeTasks();
+    const run = semantic(tasks.port, ["new_task"]);
+    const text =
+      "Build a landing page. Don't start background services. Don't deploy.";
+    await run.agent.reply([], text, "chat");
+    expect(tasks.calls.map((item) => item.text)).toEqual([text]);
   });
 });

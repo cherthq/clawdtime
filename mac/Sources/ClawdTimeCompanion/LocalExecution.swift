@@ -10,6 +10,8 @@ private struct LocalRevalidation: Decodable {
 }
 
 private struct LocalStatus: Encodable {
+  let nativeCaptureDrain = true
+  let captureActive: Bool
   let deviceId: String
   let localEnabled: Bool
   let armed: Bool
@@ -39,7 +41,7 @@ extension DeviceApp {
   func handleLocal(_ request: HTTPRequest) async throws -> HTTPResponse {
     guard config.bind == "127.0.0.1" else { throw HelperError(403, "Local execution requires loopback.") }
     if request.method == "GET", request.path == "/local/v1/status" {
-      return try .json(LocalStatus(deviceId: config.deviceId,
+      return try .json(LocalStatus(captureActive: capture.busy, deviceId: config.deviceId,
         localEnabled: !(config.localExecutors ?? []).isEmpty,
         armed: policy.armed, available: localExecutionAvailable,
         lastStopReason: policy.lastStopReason, lastStopAt: policy.lastStopAt,
@@ -83,7 +85,11 @@ extension DeviceApp {
       guard localLedger.used(id) else { throw HelperError(404, "Unknown local session.") }
       // A delayed Stop for an old session cannot stop a different current owner.
       if localPolicy.lease?.id == id { localPolicy.stop(); localTargetProofs.clear(); updateIndicator() }
-      return try .json(["stopped": true])
+      // The caller may have aborted its frame request while the native callback
+      // still runs. A revoked lease alone is not capture cleanup confirmation.
+      do { try await CaptureDrain.wait { self.capture.busy } }
+      catch { throw HelperError(503, "Local capture cleanup remains unconfirmed.") }
+      return try .json(["stopped": true, "captureStopped": true])
     }
     if parts.count == 5, parts[4] == "revalidate", request.method == "POST" {
       let lease = try localPolicy.require(id, now: Date(), available: localExecutionAvailable)

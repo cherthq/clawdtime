@@ -197,6 +197,8 @@ export class BoardFeed implements AgentBoardPort {
       project?: string;
       /** Where the task service has no coding worker, hand a task to a job. Off by default. */
       jobsForTasks?: boolean;
+      /** The structured intent reader of the task service is on. Off unless this is true. */
+      semanticTasks?: boolean;
     } = {},
   ) {
     const files = options.system ?? realSystem();
@@ -306,6 +308,7 @@ export class BoardFeed implements AgentBoardPort {
         ...(options.tasks ? { tasks: options.tasks } : {}),
         ...(options.execution ? { execution: options.execution } : {}),
         incidents: () => this.incidents().incidents.map((item) => item.text),
+        ...(options.semanticTasks === true ? { semanticTasks: true } : {}),
       },
       model,
     );
@@ -445,7 +448,7 @@ export class BoardFeed implements AgentBoardPort {
     const history = this.log.recent(historyForTurn);
     this.log.append({
       role: "user",
-      text: text.slice(0, 2000),
+      text,
       at: now(),
       via,
     });

@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexTaskWorker } from "../connectors/codex/task-worker.js";
 import type {
   AppServerConnection,
@@ -93,6 +93,7 @@ class Host implements AppServerConnection {
 }
 const directories: string[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const path of directories.splice(0))
     rmSync(path, { recursive: true, force: true });
 });
@@ -105,7 +106,6 @@ function fixture(host = new Host()) {
     enabled: true,
     projectRoots: [root],
     connectionFactory: () => host,
-    timeoutMs: 200,
     interruptTimeoutMs: 10,
   });
   const input = {
@@ -444,5 +444,195 @@ describe("independent Codex task worker", () => {
     expect(
       f.host.requests.filter((r) => r.method === "turn/start"),
     ).toHaveLength(1);
+  });
+  it("keeps healthy work active beyond three minutes without any interrupt", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.host.onStart = () => {};
+    let settled = false;
+    const run = f.run().then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(181_000);
+    expect(settled).toBe(false);
+    expect(f.host.closed).toBe(false);
+    expect(f.host.requests.some((r) => r.method === "turn/interrupt")).toBe(
+      false,
+    );
+    f.host.message("item/started", {
+      item: { id: "edit", type: "fileChange" },
+    });
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(settled).toBe(false);
+    f.host.message("item/completed", {
+      item: { id: "edit", type: "fileChange" },
+    });
+    f.host.complete();
+    expect(await run).toMatchObject({
+      outcome: "completed",
+      reasonCode: "completed",
+    });
+  });
+  it("keeps listening during Stop until terminal confirmation and accepts a completion racing Stop", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.host.onStart = () => {};
+    f.host.onInterrupt = () => {};
+    const controller = new AbortController();
+    const run = f.run(controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    expect(f.host.closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(5);
+    f.host.complete();
+    expect((await run).outcome).toBe("completed");
+    expect(
+      f.host.requests.filter((r) => r.method === "turn/interrupt"),
+    ).toHaveLength(1);
+  });
+  it("preserves terminal completion arriving before a slow start RPC times out", async () => {
+    const f = fixture();
+    const request = f.host.request.bind(f.host);
+    f.host.request = async (method, params) => {
+      const answer = await request(method, params);
+      if (method === "turn/start") throw new Error("executor_rpc_timeout");
+      return answer;
+    };
+    expect((await f.run()).outcome).toBe("completed");
+  });
+  it("keeps running after a slow start RPC when the accepted event proves submission", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.host.onStart = () => {};
+    const request = f.host.request.bind(f.host);
+    f.host.request = async (method, params) => {
+      const answer = await request(method, params);
+      if (method === "turn/start") throw new Error("executor_rpc_timeout");
+      return answer;
+    };
+    const run = f.run();
+    await vi.advanceTimersByTimeAsync(181_000);
+    expect(f.host.closed).toBe(false);
+    f.host.complete();
+    expect((await run).outcome).toBe("completed");
+  });
+  it("distinguishes process exit and ignores a late terminal event after uncertainty", async () => {
+    const f = fixture();
+    f.host.onStart = () => {
+      f.host.message("clawdtime/disconnected", { reason: "process_exit" });
+      f.host.complete();
+    };
+    expect(await f.run()).toMatchObject({
+      outcome: "unknown",
+      reasonCode: "process_exit",
+    });
+    expect(
+      (
+        await f.worker.run(
+          { ...f.input, runId: "later" },
+          () => {},
+          new AbortController().signal,
+        )
+      ).outcome,
+    ).toBe("blocked");
+  });
+  it("reports genuine terminal failure separately from a disconnected run", async () => {
+    const f = fixture();
+    f.host.onStart = () => f.host.complete("failed");
+    expect(await f.run()).toMatchObject({
+      outcome: "failed",
+      reasonCode: "worker_failed",
+    });
+  });
+  it("emits authoritative thread and turn identities before terminal completion", async () => {
+    const f = fixture();
+    const progress: Array<{
+      phase: string;
+      threadId?: string;
+      turnId?: string;
+    }> = [];
+    const result = await f.worker.run(
+      f.input,
+      (event) => progress.push(event),
+      new AbortController().signal,
+    );
+    expect(result.outcome).toBe("completed");
+    expect(progress).toContainEqual({
+      phase: "connecting",
+      threadId: "thread",
+    });
+    expect(progress).toContainEqual({
+      phase: "accepted",
+      threadId: "thread",
+      turnId: "turn",
+    });
+  });
+  it("blocks submission when the initial progress receipt cannot be persisted", async () => {
+    const f = fixture();
+    const result = await f.worker.run(
+      f.input,
+      () => {
+        throw new Error("private-storage-error");
+      },
+      new AbortController().signal,
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(JSON.stringify(result)).not.toContain("private-storage-error");
+    expect(
+      f.host.requests.some((request) => request.method === "turn/start"),
+    ).toBe(false);
+  });
+  it("fences admitted work if a progress callback fails without throwing from the event handler", async () => {
+    const f = fixture();
+    const result = await f.worker.run(
+      f.input,
+      (event) => {
+        if (event.phase === "accepted")
+          throw new Error("private-storage-error");
+      },
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({
+      outcome: "unknown",
+      reasonCode: "progress_unavailable",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-storage-error");
+    expect(f.host.closed).toBe(true);
+  });
+  it("preserves a bounded context containing all prior human revision constraints", async () => {
+    const f = fixture();
+    const context = JSON.stringify({
+      goal: "Build a local page. Don't deploy.",
+      priorHumanInstructions: Array.from(
+        { length: 5 },
+        (_, i) => `${i}: ${"constraint ".repeat(700)}Don't send or deploy.`,
+      ),
+      instruction: "Make it blue.",
+    });
+    expect(context.length).toBeGreaterThan(24_000);
+    expect(
+      (
+        await f.worker.run(
+          { ...f.input, context },
+          () => {},
+          new AbortController().signal,
+        )
+      ).outcome,
+    ).toBe("completed");
+    expect(
+      f.host.requests.find((request) => request.method === "turn/start")?.params
+        .input[0].text,
+    ).toBe(context);
+  });
+  it("refuses an oversized revision context rather than truncating constraints", async () => {
+    const f = fixture();
+    const result = await f.worker.run(
+      { ...f.input, context: "x".repeat(300_001) },
+      () => {},
+      new AbortController().signal,
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(f.host.requests).toEqual([]);
   });
 });

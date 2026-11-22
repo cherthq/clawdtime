@@ -812,7 +812,7 @@ describe("chat log and speech", () => {
       "line 69",
     ]);
     log.append({ role: "user", text: "x".repeat(5000), at: now, via: "voice" });
-    expect(log.recent(1)[0]!.text).toHaveLength(2000);
+    expect(log.recent(1)[0]!.text).toHaveLength(5000);
   });
 
   it("keeps a marker in place of a message that holds a credential", () => {

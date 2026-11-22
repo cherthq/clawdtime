@@ -1157,6 +1157,69 @@ choices remain supported. Choices without a decision are not exposed, and malfor
 choice output is blocked without replaying the run. The panel must display the
 recorded choices as-is; it must not invent defaults or infer a human selection.
 
+## Long coding runs and semantic task admission (November 20, 2026)
+
+The managed Codex worker has no overall coding-turn deadline. The former
+180-second timer is removed, not increased. Individual app-server RPCs retain
+bounded waits (15 seconds by default), and explicit Stop retains a bounded
+terminal-confirmation wait (5 seconds by default). The worker keeps reading
+`turn/completed`; an interrupt RPC acknowledgement is not proof that execution
+stopped. A completed notification that races a slow `turn/start` response remains
+authoritative. If `turn/started` established admission, a slow start response does
+not terminate healthy work. No command, start, or interrupt is blindly replayed.
+
+Fixed progress phases distinguish connection setup, acceptance, reasoning,
+editing, completed tools, permission blocking, and interruption. Fixed diagnostic
+reason codes distinguish process exit, connection loss, unconfirmed submission,
+unconfirmed interruption, invalid lifecycle events, unresolved effects, and known
+terminal results. A disconnected run remains an unknown effect and fences reuse;
+it is not labeled canceled. The task ledger retains restart uncertainty and the
+original run identity. Thread and turn identities are persisted as soon as the
+worker reports them, before terminal completion, so crash recovery can inspect
+the original dispatch. Progress receipt failure fences an admitted run and never
+logs the underlying error. These changes do not reconcile the historical interrupted
+landing-page run or infer its success from existing files.
+
+The OpenAI-backed supervisor now classifies the latest utterance into a bounded
+structured intent before conversational generation: new task, revision, status,
+cancellation, acceptance, callback, deployment, computer action, clarification,
+confirmation, or ordinary conversation. The classifier receives current task facts
+and one live pending proposal, never chat history or assistant-authored goals.
+Its output is schema-validated and must echo the exact current input. The task
+service still enforces identity, current state, supported capabilities,
+idempotency, and unresolved effects. A task snapshot change or Stop invalidates
+an in-flight classification. The conversation model cannot invoke task mutations
+after the classifier chose conversation.
+
+Clear software requests go directly to task-service admission. Greetings and polite
+questions need no special task keyword. The full original request, including
+"don't deploy", "draft only", and "don't send", becomes the goal. Revisions carry
+the person's complete text to the current task; the task engine also retains the
+original goal and earlier human revision instructions. The worker accepts at most
+300000 characters of assembled context, enough for the ledger's bounded revision
+history; oversized context is refused rather than truncated. A request above
+8000 characters is refused instead of truncated.
+The chat log retains bounded requests intact; oversized messages get an explicit
+non-admission marker. The offline/no-classifier compatibility path remains a
+conservative phrase-based fallback, not a semantic capability claim.
+
+A clarification can create one pending proposal bound to the current task snapshot.
+It expires after two minutes, on task change, on Stop, or on process restart.
+A subsequent confirmation consumes it once and appends the human clarification
+without dropping the original constraints. Without this live proposal, "Yes,
+start building now" cannot reconstruct work from old chat. Acceptance remains a
+separate explicit action against the current review; deployment is not provided by
+this route. Callback requests use the supervisor's task-linked callback service,
+and missing capability is reported rather than promised.
+
+Validation includes synthetic-clock work continuing beyond three minutes and a
+further hour, terminal completion, Stop races, slow RPC responses, disconnect and
+process exit, invalid/late events, and semantic admission/confirmation/revision
+regressions. These are simulated protocol tests, not a paid-model accuracy
+qualification or physical call/screen acceptance. Codex CLI observed locally:
+`0.166.0-alpha.5.1`. Terminal semantics were checked against the
+[official app-server lifecycle documentation](https://learn.chatgpt.com/docs/app-server#lifecycle-overview).
+
 ## Background workflow admission (staged, November 21)
 
 `connectors/agents/background-workflow-policy.ts` adds a separate positive-capability
