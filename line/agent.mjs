@@ -333,7 +333,8 @@ export async function callEntry(ctx) {
           model: "gpt-realtime",
           voice: process.env.CLAWDTIME_LINE_VOICE || "marin",
           // A phone line is noisy: a higher threshold than the default 0.5, so line noise is not a turn of the
-          // caller, and half a second of silence ends a turn.
+          // caller, and half a second of silence ends an item of speech. A request with a longer pause in it
+          // arrives as several items: the binding forwards them together (desktop-intent.mjs).
           turnDetection: {
             type: "server_vad",
             threshold: 0.7,
