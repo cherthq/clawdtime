@@ -153,7 +153,8 @@ export async function callEntry(ctx) {
     // The stone shows what the agent does: it speaks, it works on a request, it listens.
     const state = () =>
       heard === "speaking" ? "speaking" : busy > 0 ? "thinking" : heard;
-    const frame = () => {
+    /** Sends one frame. False when the call ended, or when the frame could not be made or sent. */
+    const draw = () => {
       if (ended) return false;
       try {
         const pixels = picture.frame(tick++, state(), video?.frame());
@@ -162,10 +163,14 @@ export async function callEntry(ctx) {
         );
         return true;
       } catch {
-        if (!frameFailed) log("frame_failed");
-        frameFailed = true;
         return false;
       }
+    };
+    // The frame of the timer. A failure is in the log once for a call, never once for each frame.
+    const frame = () => {
+      if (draw() || ended || frameFailed) return;
+      frameFailed = true;
+      log("frame_failed");
     };
     const quiet = async (step) => {
       try {
@@ -259,8 +264,11 @@ export async function callEntry(ctx) {
     // preferences in memory until it ends.
     if (!zoomSettings.durable) log("zoom_settings", { code: "memory_only" });
     // The picture goes out as the first thing of a call: it is ready, so this is one frame and one publish.
-    if (!frame()) throw new Error("Initial video frame unavailable");
-    mark("first_frame");
+    // A first frame that fails must not end the call. The voice works without it, the camera track is
+    // still published, and the timer below tries every later frame.
+    const first = draw();
+    if (ended) return;
+    mark(first ? "first_frame" : "first_frame_failed");
     try {
       await ctx.room.localParticipant.publishTrack(track, {
         source: TrackSource.SOURCE_CAMERA,
