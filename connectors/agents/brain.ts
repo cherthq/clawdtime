@@ -804,6 +804,70 @@ const besideWatching = (answer: string) =>
         (/\b(?:jobs?|tasks?)\b/i.test(clause) || !isAboutWatching(clause)),
     )
     .join(". ");
+/** Where a message that asks for work begins, with its verb as the group: "find" in "can you find out why the backup fails". */
+const openingVerbOfWork = () =>
+  new RegExp(
+    `^\\s*${fillersBefore}(?:(?:(?:can|could|will|would)\\s+you|i(?:['\\u2019]d|\\s+would)\\s+like\\s+you\\s+to|i\\s+(?:want|need)\\s+you\\s+to)\\s+(?:(?:please|also|just)\\s+)*)?(find\\s+out|figure\\s+out|look\\s+into|dig\\s+into|investigate|${workVerb})\\b`,
+    "i",
+  );
+/**
+ * The answer ends with an offer to start the work that the person asked
+ * for, in place of the start: "Should I start a job to look into it?",
+ * "Want me to go ahead?", "Should I fix the footer now?" after "fix the
+ * footer". The last sentence is a question that opens as an offer and goes
+ * on with a word of starting, or with the verb of the person's own message.
+ * A question about the scope ("Should I update the docs too?" after "fix
+ * the footer"), a choice ("staging or production?") and "something else"
+ * are questions that the person must answer.
+ */
+const offersTheWork = (answer: string, spoken: string) => {
+  const last =
+    answer
+      .trim()
+      .split(/(?<=[.?!;])\s+/)
+      .at(-1) ?? "";
+  if (
+    /\bor\b|\belse\b|\binstead\b|\bfirst\b|\btoo\b|\balso\b|\bas\s+well\b/i.test(
+      last,
+    )
+  )
+    return false;
+  const lead =
+    "^(?:so[,\\s]+)?(?:want\\s+me\\s+to|should\\s+i|shall\\s+i|do\\s+you\\s+want\\s+me\\s+to|would\\s+you\\s+like\\s+me\\s+to|can\\s+i|may\\s+i)\\s+(?:(?:just|now|go\\s+ahead\\s+and)\\s+)*";
+  // A word of starting: "Should I start a job to look into it?".
+  if (
+    new RegExp(
+      `${lead}(?:start|kick\\s+off|launch|begin|go\\s+ahead|proceed|get\\s+started|get\\s+going|spin\\s+up|look\\s+into|dig\\s+into|investigate)\\b[^?]*\\?$`,
+      "i",
+    ).test(last)
+  )
+    return true;
+  // The person's own verb, with nothing new after it: "Should I fix it
+  // now?", "Should I fix the login?" after "fix the login". A new object
+  // or a place ("Should I fix it on staging?", "Should I fix the tests to
+  // match?") is a question that the person must answer.
+  const own = openingVerbOfWork().exec(spoken)?.[1]?.replace(/\s+/g, "\\s+");
+  const after = own
+    ? new RegExp(`${lead}${own}\\b([^?]*)\\?$`, "i").exec(last)?.[1]
+    : undefined;
+  if (after === undefined) return false;
+  const rest = after.replace(/\b(?:now|right\s+away|for\s+you|then)\b/gi, " ");
+  return /^\s*(?:it|that|this|them)?\s*$/i.test(rest) || ownWords(rest, spoken);
+};
+/**
+ * The message opens with a verb of work, said to ClawdTime: "find out why
+ * the backup fails", "can you fix the footer", "please add a dark mode".
+ * "Keep an eye on the logs", "tell it to push", "get deploy fix to rerun the
+ * tests" and "open the settings page" open with another verb.
+ */
+const opensWithAVerbOfWork = (text: string) => openingVerbOfWork().test(text);
+/**
+ * What a message of work for a new agent does not speak of: the sessions
+ * and their state, and the things that ClawdTime's own tools do ("check
+ * what's running", "check the time", "set away mode", "move the window").
+ */
+const speaksOfStateOrOwnTools =
+  /\b(?:sessions?|agents?|status|state|progress|running|waiting|idle|requests?|time|clock|calendar|notes?|reminders?|memory|away|windows?|mic|microphone|camera|screen|volume|call)\b/i;
 /** A question about what ClawdTime waits for: "what are you watching?", "are you still keeping an eye on docs?". */
 const asksWhatIsWatched = (text: string) =>
   isQuestion(text) &&
@@ -4681,6 +4745,32 @@ export class Supervisor {
       )
       .slice(0, 8);
   }
+  /**
+   * The message is new work for sure: it asks for work (`asksForWork`),
+   * opens with a verb of work, names no session, is no request to hear
+   * later about a session, no words for a session and no bare yes, and it
+   * speaks of no state and of nothing that ClawdTime's own tools do. Only
+   * such a message lets the check of an answer that only offers the work
+   * ask the model once more.
+   */
+  private asksForNewWork(spoken: string) {
+    if (
+      !asksForWork(spoken) ||
+      !opensWithAVerbOfWork(spoken) ||
+      asksToBeTold(spoken) ||
+      beginsAsWordsForASession(spoken) ||
+      yesToAnOffer.test(spoken.trim()) ||
+      speaksOfStateOrOwnTools.test(spoken)
+    )
+      return false;
+    try {
+      return (this.world.board()?.sessions ?? []).every(
+        (session) => !saidAsWords(title(session), spoken),
+      );
+    } catch {
+      return false;
+    }
+  }
   /** The job of one sentence, as it is kept and as it is started: the same words both times. */
   private boundJob(sentence: string) {
     return cleanJob(clean(this.jobText(clean(sentence, 2000)), 2000));
@@ -8474,6 +8564,8 @@ export class Supervisor {
       // tool did. It is asked once in a turn, and the note goes when a tool ran.
       let recheck = "";
       let rechecked = false;
+      /** The draft that only offered the work that the person asked for, after which the model was asked once more. */
+      let onlyOffered: string | undefined;
       for (let step = 0; step < 6; step++) {
         const task = this.world.tasks?.current();
         // Only authoritative flags/counts enter this instruction. Request text
@@ -8508,6 +8600,20 @@ export class Supervisor {
           tools: offered,
         });
         if (!reply.toolCalls.length) {
+          // After the note about work that was only offered: this answer
+          // started nothing and tried no start. "Okay, I'm on it." would
+          // say that work is under way. The first draft, the offer, was
+          // true, and it is what the person gets.
+          if (
+            onlyOffered !== undefined &&
+            turn.done.size === 0 &&
+            !ran.has("start_job") &&
+            !ran.has("start_task")
+          ) {
+            if (memory)
+              this.learning = this.learn(memory, words).catch(() => {});
+            return clean(onlyOffered, 900) || "Done.";
+          }
           if (
             turn.semantic &&
             /\b(?:I(?:['’]ll| will| am|['’]m)|we(?:['’]ll| will| are))\s+(?:start|get started|begin|build|make|implement|work(?:ing)? on)|\b(?:I|we)(?:['’]ve| have)\s+(?:started|begun)|\b(?:task|run|work)\s+(?:is|has been)\s+(?:started|admitted|queued)/i.test(
@@ -8981,6 +9087,43 @@ export class Supervisor {
                 ? `Their message speaks to ${title(spokenTo.session)} and holds the words for it: call type_into_session now with their own words, exactly as they said them ("${clean(spokenTo.text, 120).replace(/"/g, "'")}"). Do not offer a sentence.`
                 : "Answer what they asked, or ask one short question. Offer no sentence with words that are not theirs."
             }`;
+            continue;
+          }
+          // The person asked for work, and the answer only offers to start
+          // it: "I see no session about that. Should I start a job to look
+          // into it?". Work that the person asked for starts with no round
+          // of confirmation. The model answers once more and can call the
+          // tool that starts it: the gate of that tool decides as always,
+          // from the person's own words. Only in a turn in which nothing
+          // happened yet: no start was tried, no tool acted and nothing is
+          // recorded (a request that this turn took to watch a session, a
+          // question that the code itself asked about the work), and
+          // nothing waits for the person's answer. And only for a message
+          // that is new work for sure (`this.asksForNewWork`): a request to
+          // watch, words for a session, a message that names a session and
+          // a thing to open are none. When the answer after the note
+          // starts nothing, the person gets the first draft: the offer was
+          // true. The code starts nothing by itself here. This check stands
+          // after every check of a claim: a draft that it keeps has passed
+          // them all, so "I started looking into it. Should I start a job?"
+          // never reaches the person through it.
+          if (
+            !rechecked &&
+            this.world.jobs &&
+            turn.closed === undefined &&
+            turn.done.size === 0 &&
+            !ran.has("start_job") &&
+            !ran.has("start_task") &&
+            !acted() &&
+            this.world.desk.pending().length === 0 &&
+            (!task || taskIsOver(task)) &&
+            this.asksForNewWork(words) &&
+            offersTheWork(reply.text, words)
+          ) {
+            rechecked = true;
+            onlyOffered = reply.text;
+            recheck =
+              "\nA check of your last draft: the person's last message asks for work, and your draft only offered to start it. Work that the person asked for starts with no question first: start it now, with their own words.";
             continue;
           }
           // The answer is ready. What the message teaches is written after it.

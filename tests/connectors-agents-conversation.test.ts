@@ -14954,3 +14954,284 @@ describe("the person asks to hear when a session is done", () => {
     expect(asksToBeTold(words), words).toBe(false);
   });
 });
+
+describe("the person asked for work, and the answer only offers to start it", () => {
+  const note = "your draft only offered to start it";
+  /** A Mac where jobs can start, with no real window: the runner only writes down what it was asked. */
+  const room = (
+    sessions: AgentSession[] = [session({ name: "deploy fix" })],
+  ) => {
+    const made = mac(sessions);
+    const say = async (words: string, steps: (ToolCall[] | string)[]) => {
+      const run = scripted(steps);
+      const reply = await new Supervisor(made.world, run.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      return { reply, run };
+    };
+    return { made, say };
+  };
+
+  it.each([
+    "I don't see a session about that. Should I start a job to investigate the nightly backup failure?",
+    "No current requests or jobs show the nightly backup status. Want me to start a job to diagnose the nightly backup failure?",
+    "The current sessions show nothing about the backup. Should I start a new coding agent job to investigate it?",
+    "Nothing runs for that yet. Do you want me to look into it now?",
+    "Should I go ahead and check the backup script?",
+  ])(
+    "asks the model once more after %j, and the job then starts",
+    async (offer) => {
+      const { made, say } = room();
+      const got = await say(
+        "find out why the nightly backup of the database is failing",
+        [offer, [call("start_job")], "On it."],
+      );
+      // The second request to the model holds the note, and the job starts
+      // with the person's own words.
+      expect(got.run.seen.length, offer).toBeGreaterThanOrEqual(2);
+      expect(got.run.seen[1]!.system, offer).toContain(note);
+      expect(made.windows, offer).toHaveLength(1);
+      expect(made.file("prompt.txt"), offer).toContain(
+        "find out why the nightly backup of the database is failing",
+      );
+      expect(got.reply, offer).not.toBe(offer);
+    },
+  );
+
+  it("lets a second offer stand, and starts nothing by itself", async () => {
+    const { made, say } = room();
+    const offer =
+      "Should I start a job to investigate the nightly backup failure?";
+    const got = await say(
+      "find out why the nightly backup of the database is failing",
+      [offer, offer],
+    );
+    expect(got.run.seen).toHaveLength(2);
+    expect(got.reply).toBe(offer);
+    expect(made.windows).toEqual([]);
+  });
+
+  it.each([
+    // A question to ClawdTime is no request for work.
+    [
+      "is the nightly backup failing?",
+      "I don't know yet. Should I start a job to find out?",
+    ],
+    [
+      "what do you think about the backup failures?",
+      "Hard to say from here. Want me to start a job to look into them?",
+    ],
+    // Thanks and small talk.
+    ["thanks", "Anytime. Want me to check anything else?"],
+  ])(
+    "lets the offer stand after %j, which asks for no work",
+    async (words, offer) => {
+      const { made, say } = room();
+      const got = await say(words, [offer, [call("start_job")], "On it."]);
+      expect(
+        got.run.seen.some((seen) => seen.system.includes(note)),
+        words,
+      ).toBe(false);
+      expect(made.windows, words).toEqual([]);
+    },
+  );
+
+  it.each([
+    // A question that asks what is meant is no offer of the work.
+    "Which database do you mean: staging or production?",
+    "Do you mean the nightly job or the weekly one?",
+    // A statement.
+    "I can't see the backup logs from here.",
+  ])("lets %j stand: it is no offer to start the work", async (answer) => {
+    const { made, say } = room();
+    const got = await say(
+      "find out why the nightly backup of the database is failing",
+      [answer, [call("start_job")], "On it."],
+    );
+    expect(got.reply, answer).toBe(answer);
+    expect(got.run.seen, answer).toHaveLength(1);
+    expect(made.windows, answer).toEqual([]);
+  });
+
+  it.each([
+    ["keep an eye on the logs", "Want me to check the logs?"],
+    ["watch the clock", "Want me to check the time?"],
+    ["check on deploy fix", "Want me to check on deploy fix?"],
+    ["get deploy fix to rerun the tests", "Should I run the tests?"],
+    ["tell it to push the branch", "Should I start a job to push the branch?"],
+    ["can you look at deploy fix?", "Want me to look into deploy fix?"],
+    ["open the settings page", "Should I open the settings page?"],
+    ["do it", "Should I start a job for that?"],
+    // The state, and what ClawdTime's own tools do.
+    [
+      "check what's running",
+      "Three sessions are working. Want me to check them?",
+    ],
+    ["check the status", "All fine. Want me to check the logs?"],
+    [
+      "do a quick check of the sessions",
+      "They look fine. Should I start a job to check them?",
+    ],
+    [
+      "find the session that's failing",
+      "None fails. Should I start a job to find it?",
+    ],
+    ["check the time", "Should I start a job to check the time?"],
+    ["set away mode", "Should I start a job to set it?"],
+    ["move the window", "Should I start a job to move it?"],
+  ])(
+    "lets the offer stand after %j, which is no new work for sure, and starts no job",
+    async (words, offer) => {
+      const { made, say } = room();
+      const got = await say(words, [offer, [call("start_job")], "On it."]);
+      expect(
+        got.run.seen.some((seen) => seen.system.includes(note)),
+        words,
+      ).toBe(false);
+      expect(made.windows, words).toEqual([]);
+    },
+  );
+
+  it.each([
+    [
+      "migrate the users table",
+      "Should I use the staging or the production database?",
+    ],
+    [
+      "restart the flaky service",
+      "Should I check the logs first, or just restart it?",
+    ],
+    ["make the button bigger", "Should I make it blue or green too?"],
+    [
+      "set a reminder for 5pm",
+      "I can't set reminders. Want me to do something else?",
+    ],
+    ["fix the footer", "Should I fix the header instead?"],
+    // A question about the scope of the work.
+    ["fix the footer", "Should I remove the old footer styles as well?"],
+    ["fix the footer", "Should I update the docs too?"],
+    ["fix the footer", "Should I deploy it to production when it's done?"],
+    ["fix the footer", "Should I use the new design system for it?"],
+    // The person's own verb with a new object or a place.
+    ["fix the login", "Should I fix the password reset while I'm at it?"],
+    ["fix the login", "Want me to fix it for both mobile and web?"],
+    ["fix the login", "Should I fix the tests to match?"],
+    ["fix the login", "Should I fix it on staging?"],
+    ["fix the login", "Should I fix it in the API?"],
+    [
+      "find out why the backup fails",
+      "Should I find out why the restore fails?",
+    ],
+  ])(
+    "lets a question that the person must answer stand after %j: %j",
+    async (words, question) => {
+      const { made, say } = room();
+      const got = await say(words, [question, [call("start_job")], "On it."]);
+      expect(got.reply, words).toBe(question);
+      expect(got.run.seen, words).toHaveLength(1);
+      expect(made.windows, words).toEqual([]);
+    },
+  );
+
+  it.each([
+    "Okay, I'm on it.",
+    "Looking into it now.",
+    "Done, a job is looking into it.",
+    "I'll get a job going on that.",
+    "It is probably the disk.",
+  ])(
+    "gives the person the first draft when the answer after the note starts nothing: %j",
+    async (second) => {
+      const { made, say } = room();
+      const offer =
+        "Should I start a job to investigate the nightly backup failure?";
+      const got = await say(
+        "find out why the nightly backup of the database is failing",
+        [offer, second],
+      );
+      expect(got.run.seen, second).toHaveLength(2);
+      expect(got.reply, second).toBe(offer);
+      expect(made.windows, second).toEqual([]);
+    },
+  );
+
+  it.each([
+    "I started looking into it. Should I start a job to dig deeper?",
+    "I typed check the backup into deploy fix. Should I start a job to investigate?",
+    "Done, I opened deploy fix. Want me to start a job to investigate?",
+  ])(
+    "never gives the person a first draft that claims an act that did not happen: %j",
+    async (first) => {
+      const { made, say } = room();
+      const got = await say(
+        "find out why the nightly backup of the database is failing",
+        [first, "Okay."],
+      );
+      expect(got.reply, first).not.toBe(first);
+      expect(got.reply, first).not.toContain("I started looking");
+      expect(got.reply, first).not.toContain("I typed");
+      expect(got.reply, first).not.toContain("I opened");
+      expect(made.windows, first).toEqual([]);
+    },
+  );
+
+  it.each([
+    "Want me to get started?",
+    "Should I fix it now?",
+    "Should I go ahead?",
+    "Should I fix the checkout form?",
+    "Want me to fix the checkout form on the pricing page right away?",
+  ])(
+    "reads %j as an offer of the work after a plain request to fix something",
+    async (offer) => {
+      const { made, say } = room();
+      const got = await say("fix the checkout form on the pricing page", [
+        offer,
+        [call("start_job")],
+        "On it.",
+      ]);
+      expect(got.run.seen[1]!.system, offer).toContain(note);
+      expect(made.windows, offer).toHaveLength(1);
+    },
+  );
+
+  it("does not ask again when the start was tried in this turn and its gate refused", async () => {
+    const { made, say } = room();
+    // "Don't" in the work: the code asks its own question before it starts.
+    const got = await say("build a landing page, don't use react", [
+      [call("start_job")],
+      "Okay.",
+    ]);
+    expect(got.run.seen.some((seen) => seen.system.includes(note))).toBe(false);
+    expect(made.windows).toEqual([]);
+  });
+
+  it("does not ask again while a request of an agent waits for the person", async () => {
+    const { made, say } = room();
+    waits(made.world);
+    const offer =
+      "Should I start a job to investigate the nightly backup failure?";
+    const got = await say(
+      "find out why the nightly backup of the database is failing",
+      [offer, [call("start_job")], "On it."],
+    );
+    expect(got.run.seen.some((seen) => seen.system.includes(note))).toBe(false);
+  });
+
+  it("does not ask again where no job can start", async () => {
+    const made = mac([session({ name: "deploy fix" })]);
+    const { jobs: _jobs, ...world } = made.world;
+    const offer =
+      "Should I start a job to investigate the nightly backup failure?";
+    const run = scripted([offer, "Okay."]);
+    const reply = await new Supervisor(world, run.model).reply(
+      [],
+      "find out why the nightly backup of the database is failing",
+      "chat",
+    );
+    expect(run.seen.some((seen) => seen.system.includes(note))).toBe(false);
+    expect(reply.length).toBeGreaterThan(0);
+  });
+});
