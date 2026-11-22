@@ -208,6 +208,15 @@ What the test found, and what changed with it:
 - Known limit: for "four of five drawn stars" the planner sometimes clicks the
   third star, and then says that four are filled (1 of 3 runs).
 
+A real run showed one more thing, and the planner test now covers it: with a
+sheet of another app left open ("Do you want to keep this new document?"), a
+request about another app ("open Calculator and compute...") first pressed
+"Delete" on that sheet to get it out of the way, 10 times in 10. The check
+asked each time, so nothing was lost, but a yes would have thrown the document
+away. One rule for the planner fixed it (a dialog that the goal does not speak
+about is left as it is): the two new tasks are right 10 of 10, the planner
+test 145 of 145 with 5 repeats, and the request test 38 of 39.
+
 Two changes were measured and not kept. A second, critical look at the screen
 before a done caught the wrong star count, but it also refused a true result
 in 2 of 8 runs, and the planner then sent more input. A stricter rule for done
