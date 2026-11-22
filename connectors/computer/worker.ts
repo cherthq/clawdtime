@@ -26,6 +26,7 @@
 import { z } from "zod";
 import type {
   DesktopExecutionSnapshot,
+  DesktopExecutionAuthority,
   DesktopExecutorPort,
 } from "../../src/control/desktop-executor.js";
 import { interpret } from "../agents/call.js";
@@ -180,6 +181,7 @@ interface Question {
   settle: (reply: Reply) => void;
 }
 interface Run {
+  authority?: DesktopExecutionAuthority;
   /** Why the browser cannot be driven in this request, once it said so. The screen is used from then on. */
   browserClosed?: string;
   navigation?: NavigationIntent;
@@ -304,6 +306,7 @@ function readContinue(words: string): boolean | null {
 export class ComputerWorker implements DesktopExecutorPort {
   private current: Run | null = null;
   private last: {
+    requestId: string;
     state: RequestState;
     message: string;
     goal: string;
@@ -364,6 +367,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (this.current !== run) return;
     this.current = null;
     this.last = {
+      requestId: run.id,
       state,
       message: clip(message),
       goal: run.shown,
@@ -387,7 +391,10 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   private halted(run: Run): boolean {
     if (this.current !== run) return true;
-    if (run.stop) this.finish(run, "canceled", "stopped", stoppedText, false);
+    if (run.authority?.isLive() === false)
+      this.finish(run, "canceled", "call_expired", stoppedText, false);
+    else if (run.stop)
+      this.finish(run, "canceled", "stopped", stoppedText, false);
     else if (!this.enabled())
       this.finish(run, "canceled", "turned_off", offStoppedText);
     else if (this.now() >= run.deadline)
@@ -455,7 +462,13 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
   snapshot(): DesktopExecutionSnapshot {
     const status = this.status();
+    const requestId =
+      this.current?.id ??
+      (status.state === "uncertain"
+        ? this.journal.unresolved()?.id
+        : this.last?.requestId);
     return {
+      ...(requestId ? { requestId } : {}),
       configured: status.enabled,
       // The worker acts on the screen of this Mac, as the native mode of the
       // bundled runtime does. With this the supervisor hands a plain UI
@@ -497,18 +510,25 @@ export class ComputerWorker implements DesktopExecutorPort {
     eventId: string,
     text: string,
     reading: NavigationIntent,
+    authority?: DesktopExecutionAuthority,
   ): Promise<{ message: string }> {
-    return this.begin(eventId, text, reading);
+    return this.begin(eventId, text, reading, authority);
   }
   /** A request with no reading: the worker reads it itself. */
-  submit(eventId: string, text: string): Promise<{ message: string }> {
-    return this.begin(eventId, text);
+  submit(
+    eventId: string,
+    text: string,
+    authority?: DesktopExecutionAuthority,
+  ): Promise<{ message: string }> {
+    return this.begin(eventId, text, undefined, authority);
   }
   private async begin(
     eventId: string,
     text: string,
     reading?: NavigationIntent,
+    authority?: DesktopExecutionAuthority,
   ): Promise<{ message: string }> {
+    if (authority?.isLive() === false) return { message: stoppedText };
     const id = identity.parse(eventId);
     const goal = z.string().trim().min(1).max(2000).parse(text);
     const read =
@@ -530,6 +550,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     let halt = () => {};
     const halted = new Promise<null>((resolve) => (halt = () => resolve(null)));
     const run: Run = {
+      authority,
       id,
       goal,
       shown,

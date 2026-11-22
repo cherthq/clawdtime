@@ -24,7 +24,8 @@ function runtime(options = {}) {
     replies = [],
     sharing = [],
     zoom = [],
-    shapes = [];
+    shapes = [],
+    requests = [];
   const microtasks = [],
     timers = new Map();
   let timerId = 0;
@@ -68,13 +69,18 @@ function runtime(options = {}) {
     tool: llm.tool,
     binding,
     ended: () => ended,
-    ask: async (text) => {
+    ask: async (text, context) => {
       calls.push(text);
-      return options.ask ? options.ask(text) : "accepted";
+      requests.push({ text, context });
+      return options.ask ? options.ask(text, context) : "accepted";
+    },
+    stop: async () => {
+      calls.push("stop");
+      return "Stopped owned work.";
     },
     showScreen: (on) => {
       sharing.push(on);
-      return "sharing changed";
+      return { applied: true, message: "sharing changed" };
     },
     setZoom: (action) => {
       zoom.push(action);
@@ -148,6 +154,7 @@ function runtime(options = {}) {
     context,
     invoke,
     calls,
+    requests,
     replies,
     codes,
     sharing,
@@ -205,6 +212,7 @@ test("factory disables automatic responses and binds only after SDK user item in
   r.item();
   r.flush();
   assert.equal(r.replies.length, 1);
+  assert.equal(r.replies[0].opts.toolChoice, "required");
   assert.equal(r.replies[0].items.at(-1).id, "one");
   assert.equal(r.binding.take(r.context()).ok, true);
   r.end();
@@ -500,7 +508,7 @@ test("unknown delivery failure never retries through root or nested response", a
     },
   });
   const root = r.turn();
-  await assert.rejects(r.invoke("ask_clawdtime"), /unknown delivery/);
+  assert.match(await r.invoke("ask_clawdtime"), /outcome is unknown/);
   await r.invoke("ask_clawdtime", {}, r.context(root));
   await r.invoke(
     "ask_clawdtime",
@@ -508,6 +516,82 @@ test("unknown delivery failure never retries through root or nested response", a
     r.context(voice.SpeechHandle.create({ parent: root })),
   );
   assert.equal(r.calls.length, 1);
+  r.end();
+});
+
+test("a plain spoken acknowledgement without any dispatch is an explicit failure, never completion", async () => {
+  const r = runtime();
+  const handle = r.turn("Start a new Claude session.");
+  assert.equal(r.replies[0].opts.toolChoice, "required");
+  await said(handle); // Simulate a provider ignoring the tool requirement.
+  r.flush();
+  assert.deepEqual(r.calls, []);
+  assert.equal(r.codes.includes("answer_finished"), false);
+  assert.ok(r.codes.includes("dispatch_missing"));
+  assert.equal(r.replies[1].opts.toolChoice, "none");
+  assert.match(
+    r.replies[1].opts.instructions,
+    /did not reach the Mac supervisor/,
+  );
+  await r.invoke("ask_clawdtime", {}, r.context(handle));
+  assert.deepEqual(r.calls, []);
+  await said(r.replies[1].handle);
+  assert.ok(r.codes.includes("answer_finished"));
+  r.end();
+});
+
+test("showing the screen cannot consume a compound app request without supervisor dispatch", async () => {
+  const r = runtime();
+  const text =
+    "Show the screen, open Messages and check the visible messages. Do not send anything.";
+  const handle = r.turn(text);
+  const result = JSON.parse(await r.invoke("show_screen", { on: true }));
+  assert.deepEqual(r.calls, [text]);
+  assert.deepEqual(r.sharing, [true]);
+  assert.equal(result.supervisor, "accepted");
+  assert.deepEqual(r.requests[0].context.presentation, {
+    kind: "sharing",
+    action: "show",
+    applied: true,
+  });
+  assert.match(r.requests[0].context.requestId, /^[a-f0-9-]{36}$/);
+  await r.invoke("ask_clawdtime", {}, r.context(followUp(r, handle)));
+  assert.deepEqual(r.calls, [text]);
+  r.end();
+});
+
+test("parallel root and child tools share pending delivery without an extra request", async () => {
+  const pending = Promise.withResolvers();
+  const r = runtime({ ask: () => pending.promise });
+  const root = r.turn("Start a new Claude session.");
+  const first = r.invoke("ask_clawdtime");
+  const second = r.invoke("ask_clawdtime", {}, r.context(followUp(r, root)));
+  assert.equal(r.calls.length, 1);
+  pending.resolve("Launch requested; session launch has not been observed.");
+  assert.equal(
+    await first,
+    "Launch requested; session launch has not been observed.",
+  );
+  assert.equal(await second, await first);
+  r.end();
+});
+
+test("hide and Stop remain immediate while another supervisor request is pending", async () => {
+  const pending = Promise.withResolvers();
+  const r = runtime({
+    ask: (text) => (text === "stop" ? "Stopped owned work." : pending.promise),
+  });
+  const root = r.turn("Read the screen.");
+  const reading = r.invoke("ask_clawdtime");
+  const hiding = r.invoke("show_screen", { on: false }, r.context(root));
+  assert.deepEqual(r.sharing, [false]);
+  assert.equal(await r.invoke("stop_computer"), "Stopped owned work.");
+  assert.deepEqual(r.calls, ["Read the screen.", "stop"]);
+  pending.resolve("The read was canceled.");
+  await reading;
+  await hiding;
+  await r.invoke("ask_clawdtime", {}, r.context(root));
+  assert.deepEqual(r.calls, ["Read the screen.", "stop"]);
   r.end();
 });
 
@@ -771,11 +855,12 @@ test("a notice that the caller cut does not free the refused request", async () 
 test("an answer that was said in full ends the request: the next forward holds only the next request", async () => {
   const r = runtime();
   const first = r.turn("Hello, are you there?", "a");
+  await r.invoke("ask_clawdtime");
   await said(first);
   assert.ok(r.codes.includes("answer_finished"));
   r.turn("Give me the status.", "b");
   await r.invoke("ask_clawdtime");
-  assert.deepEqual(r.calls, ["Give me the status."]);
+  assert.deepEqual(r.calls, ["Hello, are you there?", "Give me the status."]);
   r.end();
 });
 
@@ -795,9 +880,7 @@ test("an answer counts only when the reply after its tools was also said in full
     assert.equal(r.codes.includes("answer_finished"), full);
     r.turn("Give me the status.", "b");
     await r.invoke("ask_clawdtime");
-    assert.deepEqual(r.calls, [
-      full ? "Give me the status." : "Hide the screen. Give me the status.",
-    ]);
+    assert.deepEqual(r.calls, ["Hide the screen.", "Give me the status."]);
     r.end();
   }
 });
@@ -816,23 +899,24 @@ test("a forwarded request is not forwarded again: new speech after it goes out a
   r.end();
 });
 
-test("a zoom or sharing tool forwards no words, so it leaves the request open", async () => {
+test("a presentation tool forwards the complete request and shares that outcome with a continuation", async () => {
   const r = runtime();
-  const first = r.turn("Show the whole screen and don't", "a");
-  await r.invoke("call_zoom", { action: "overview" });
-  r.start("b");
-  await cut(first);
-  r.stop("b");
-  r.final("touch the terminal.", "b");
-  r.item("b");
+  spoken(r, "a", "Show the whole screen and don't")();
+  spoken(r, "b", "touch the terminal.")();
   r.flush();
-  await r.invoke("ask_clawdtime");
+  const first = r.replies.at(-1).handle;
+  await r.invoke("call_zoom", { action: "overview" });
+  const continuation = followUp(r, first);
+  await r.invoke("ask_clawdtime", {}, r.context(continuation));
   assert.deepEqual(r.calls, [
     "Show the whole screen and don't touch the terminal.",
   ]);
-  // Each response has its own one-use lanes.
-  await r.invoke("call_zoom", { action: "resume" });
-  assert.deepEqual(r.zoom, ["overview", "resume"]);
+  assert.deepEqual(r.zoom, ["overview"]);
+  assert.deepEqual(r.requests[0].context.presentation, {
+    kind: "zoom",
+    action: "overview",
+    applied: true,
+  });
   r.end();
 });
 

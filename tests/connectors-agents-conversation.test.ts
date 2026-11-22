@@ -189,7 +189,7 @@ async function talk(
   return answer;
 }
 const started =
-  "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+  "Requested a new Claude Code terminal session. Its launch has not been verified yet.";
 
 describe("words for a session that runs are never a job", () => {
   const two = () => [
@@ -290,7 +290,7 @@ describe("words for a session that runs are never a job", () => {
   ])("still starts the job for %j, and types nothing", async (words) => {
     const said = await run(words, [[call("start_job")], "Okay."]);
     expect(said.windows, words).toHaveLength(1);
-    expect(said.answer, words).toContain("On it.");
+    expect(said.answer, words).toContain("Requested a new ");
     expect(said.typed, words).toEqual([]);
   });
 
@@ -1199,7 +1199,7 @@ describe("words for a session that runs are never a job", () => {
         history,
         "write the changelog",
       );
-      expect(answer).toContain("On it.");
+      expect(answer).toContain("Requested a new ");
       expect(made.windows).toHaveLength(1);
     });
 
@@ -1568,7 +1568,7 @@ describe("a coding agent that the person names for work", () => {
     );
     expect(file("start.command")).toContain("exec codex ");
     expect(file("start.command")).not.toContain("exec claude ");
-    expect(answer).toContain("Codex is working on that");
+    expect(answer).toContain("Requested a new Codex terminal session.");
   });
 
   it("runs the job on the agent that the person chose, and not on the one that they excluded", async () => {
@@ -1722,7 +1722,7 @@ describe('"build me a ..." is a direct instruction, as "build a ..." is', () => 
     const got = await direct(words);
     expect(got.windows, words).toHaveLength(1);
     expect(got.seen, words).toHaveLength(0);
-    expect(got.answer, words).toContain("On it.");
+    expect(got.answer, words).toContain("Requested a new ");
     // The job is the person's whole sentence.
     expect(got.job!.job, words).toBe(words);
   });
@@ -2139,7 +2139,7 @@ describe("work with a don't in it waits for the person's yes", () => {
       "open codex and build a landing page, don't use a framework",
     );
     expect(await talk(world, null, history, "yes")).toContain(
-      "Codex is working",
+      "Requested a new Codex terminal session",
     );
     expect(file("start.command")).toContain("exec codex ");
     expect(jobs.recent()[0]!.job).toBe(
@@ -3116,7 +3116,7 @@ describe("an agent and its work, with typos", () => {
       const { model, seen } = scripted(["Which session do you mean?"]);
       expect(
         await new Supervisor(made.world, model).reply([], words, "chat"),
-      ).toMatch(/^On it\. /);
+      ).toMatch(/^Requested a new /);
       expect(seen).toHaveLength(0);
       // The job is the person's own text, typos and all.
       expect(made.jobs.recent()[0]!.job).toBe(words);
@@ -3134,7 +3134,7 @@ describe("an agent and its work, with typos", () => {
     const words = "open codex and write tests for the login page";
     expect(
       await new Supervisor(made.world, model).reply([], words, "chat"),
-    ).toMatch(/^On it\. /);
+    ).toMatch(/^Requested a new /);
     expect(seen).toHaveLength(0);
     // The job is the work that the person gave the agent, in their words.
     expect(made.jobs.recent()[0]!.job).toBe("write tests for the login page");
@@ -5649,7 +5649,7 @@ describe("a job that still works: only what is known of it is said", () => {
 describe("a correction to a job that still works waits for that job", () => {
   const request = "build a small landing page for my bakery in one html file";
   const waiting =
-    "On it. Claude Code starts on that in a new terminal window when the job before it is done";
+    "Requested a new Claude Code terminal session, queued behind the previous job.";
   /**
    * The request starts a job. Then `words`, with a model that starts a job
    * for them: the answer, and whether the new job waits for the first.
@@ -10528,7 +10528,7 @@ describe("an offer to cancel a job that still works is not said", () => {
     expect(await say(wantsJob().model, request)).toBe(started);
     made.clock.now += 3 * 60_000;
     expect(await say(wantsJob().model, correction)).toContain(
-      "when the job before it is done",
+      "queued behind the previous job",
     );
     made.clock.now += 30_000;
     return { made, say };
@@ -10960,7 +10960,7 @@ describe("an answer that offers words to type that the person did not say", () =
       ],
     );
     expect(got.windows).toHaveLength(1);
-    expect(got.answer).toContain("On it.");
+    expect(got.answer).toContain("Requested a new ");
     expect(got.typed).toEqual([]);
     expect(got.seen[0]!.system).not.toContain("A check of your last draft");
     expect(got.seen[1]!.system).toContain("A check of your last draft");
@@ -11484,7 +11484,7 @@ describe("shorthand and slang mean what the long form means", () => {
       "chat",
     );
     expect(made.windows, words).toHaveLength(1);
-    expect(answer, words).toContain("On it.");
+    expect(answer, words).toContain("Requested a new ");
   });
 
   it.each([
@@ -11595,7 +11595,7 @@ describe("shorthand and slang mean what the long form means", () => {
 describe("an answer that claims an action that no tool did", () => {
   const work = "build a small landing page for my bakery in one html file";
   const started =
-    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+    "Requested a new Claude Code terminal session. Its launch has not been verified yet.";
   const claim =
     "I added the contact form request to the bakery landing page job and it's still working on it.";
   const notDone =
@@ -11938,7 +11938,7 @@ describe("an answer that claims an action that no tool did", () => {
       "nice, now add a dark mode to it",
     );
     expect(made.windows).toHaveLength(2);
-    expect(answer).toContain("On it.");
+    expect(answer).toContain("Requested a new ");
     expect(seen[1]!.system).toContain("so call start_job now");
   });
 
@@ -12242,9 +12242,9 @@ describe("the state says when no job was started", () => {
 describe("more work on a job that still runs", () => {
   const work = "build a small landing page for my bakery in one html file";
   const started =
-    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+    "Requested a new Claude Code terminal session. Its launch has not been verified yet.";
   const waiting =
-    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.";
+    "Requested a new Claude Code terminal session, queued behind the previous job. Its launch has not been verified yet. At the Mac, Return in that window starts it sooner.";
 
   it("waits for that job when the message points back at it, and says so", async () => {
     const made = mac();
@@ -13133,7 +13133,7 @@ describe("a question about the state", () => {
 
   it('reads the job first for "is it done?" right after the person started it', async () => {
     const started =
-      "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+      "Requested a new Claude Code terminal session. Its launch has not been verified yet.";
     const work = "build a small landing page for my bakery in one html file";
     const jobSeed = (
       messages: { role: string; toolCallId?: string; content?: string }[],
@@ -15383,8 +15383,8 @@ describe("an answer that promises to tell, watch or remind later, with nothing b
         "Okay.",
       ]);
       expect(made.windows).toHaveLength(1);
-      // The code's own sentence promises the answer of the job.
-      expect(got.reply).toContain("I will tell you its answer when it is done");
+      // The dispatch receipt does not claim that a session is already working.
+      expect(got.reply).toContain("Its launch has not been verified yet.");
     });
 
     it("about a job that still runs", async () => {

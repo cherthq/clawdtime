@@ -40,6 +40,7 @@ import { startSetupSession } from "../connectors/shared/setup-session.js";
 import { retryExistingSetup } from "./setup-retry.js";
 import { taskCli } from "./tasks.js";
 import { agentsCli } from "./agents.js";
+import { phoneCli } from "./phone.js";
 import { computerCli } from "./computer.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
 
@@ -55,6 +56,7 @@ function options(args: string[]) {
 }
 export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
+  if (command === "phone") return phoneCli(args.slice(1));
   if (command === "task") return taskCli(args.slice(1));
   if (command === "agents") return agentsCli(args.slice(1));
   if (command === "hosts") return agentsCli(["--hosts", ...args.slice(1)]);
@@ -486,10 +488,19 @@ export async function main(args = process.argv.slice(2)) {
   }
   throw new Error("Unknown command. Run help.");
 }
-if (
-  process.argv[1] &&
-  fileURLToPath(import.meta.url) === resolve(process.argv[1])
-)
+// npm link invokes this file through its bin symlink. Compare real files so
+// the linked command runs, while importing this module still starts nothing.
+function isMain() {
+  try {
+    return (
+      !!process.argv[1] &&
+      fileURLToPath(import.meta.url) === realpathSync(resolve(process.argv[1]))
+    );
+  } catch {
+    return false;
+  }
+}
+if (isMain())
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : "ClawdTime failed.");
     process.exitCode = 1;

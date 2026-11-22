@@ -36,6 +36,7 @@ import { BoardFeed } from "../connectors/agents/feed.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { chooseExecution } from "../connectors/computer/service.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
+import { PhoneDesktop } from "../src/control/phone-desktop.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
@@ -537,7 +538,12 @@ const chosen = desktop
       ...(connectedBrowser ? { browser: connectedBrowser } : {}),
     })
   : undefined;
-const execution = chosen?.execution;
+// Phone ownership applies to the panel worker only. Other runtime types retain
+// their own admission and must not acquire a second phone authority path.
+const phoneDesktop = chosen?.computer.worker
+  ? new PhoneDesktop(chosen.computer.worker)
+  : undefined;
+const execution = phoneDesktop?.execution ?? chosen?.execution;
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -578,6 +584,9 @@ const app = createTaskApp(
   executor,
   chosen?.computer.port,
   lineRuntime,
+  phoneDesktop && desktopSetup
+    ? { scope: phoneDesktop, instanceId: desktopSetup.descriptor.instanceId }
+    : undefined,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
@@ -610,6 +619,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    phoneDesktop?.shutdown();
     if (presentationWatch) clearInterval(presentationWatch);
     if (reviewWatch) clearInterval(reviewWatch);
     reviews?.close();

@@ -133,3 +133,43 @@ describe("goal-only semantic navigation interpretation", () => {
     },
   );
 });
+
+it("routes new coding sessions only through Supervisor and rejects them as native navigation", async () => {
+  const text =
+    "Start a new Claude Code session in a separate terminal window. Only reply READY; do not edit files or run commands.";
+  const net = network([
+    {
+      name: "coding_session",
+      arguments: JSON.stringify({ source: text, agent: "claude" }),
+    },
+  ]);
+  const supervisor = new OpenAIModel(
+    "fixture-key",
+    "fixture-model",
+    net.request,
+  );
+  expect(await supervisor.reading(text)).toEqual({
+    intent: { kind: "none" },
+    work: false,
+    codingSession: { source: text, agent: "claude" },
+  });
+  expect(net.sent[0]!.messages[1]!.content).toBe(text);
+  await expect(
+    new OpenAIPlanner({ key: "fixture-key", request: net.request }).navigation(
+      text,
+    ),
+  ).rejects.toThrow("Supervisor Jobs");
+});
+
+it("rejects session interpretations that rewrite or omit constraints", async () => {
+  const text = "Start Claude in a new terminal. Do not edit files.";
+  const net = network([
+    {
+      name: "coding_session",
+      arguments: JSON.stringify({ source: "Start Claude", agent: "claude" }),
+    },
+  ]);
+  await expect(
+    new OpenAIModel("fixture-key", "fixture-model", net.request).reading(text),
+  ).rejects.toThrow("complete request");
+});

@@ -1,3 +1,5 @@
+import type { PhoneTurnContext } from "../../src/phone-desktop-contracts.js";
+import { phoneTurn, phoneGuard } from "./phone-turn.js";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -75,7 +77,11 @@ export interface AgentBoardPort {
   incidents(): IncidentsView;
   /** The person has seen one incident. False when it is not open. */
   dismissIncident(id: string): boolean;
-  say(text: string): Promise<ChatMessage>;
+  say(
+    text: string,
+    via?: ChatMessage["via"],
+    context?: PhoneTurnContext,
+  ): Promise<ChatMessage>;
   hear(recording: string): Promise<{
     heard: string;
     reply: ChatMessage | null;
@@ -201,6 +207,7 @@ export class BoardFeed implements AgentBoardPort {
       semanticTasks?: boolean;
     } = {},
   ) {
+    this.run = phoneGuard(options.runner ?? realRunner);
     const files = options.system ?? realSystem();
     this.titles = titleReader(files);
     this.root =
@@ -209,7 +216,7 @@ export class BoardFeed implements AgentBoardPort {
     this.book = new HostBook(this.root);
     this.remoteDesk = new RemoteDesk({
       book: this.book,
-      run: options.runner ?? realRunner,
+      run: this.run,
       now: options.now ?? Date.now,
     });
     this.log = new ChatLog(this.root);
@@ -236,7 +243,7 @@ export class BoardFeed implements AgentBoardPort {
       ? new Jobs(this.root, {
           project: options.project,
           now: options.now ?? Date.now,
-          run: options.runner ?? realRunner,
+          run: this.run,
           agent:
             process.env.CLAWDTIME_JOB_AGENT === "codex" ? "codex" : "claude",
           terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
@@ -268,16 +275,16 @@ export class BoardFeed implements AgentBoardPort {
               jobsForTasks: options.jobsForTasks === true,
               jobs: jobs!,
               openApp: (name: string | null, url: URL | null) =>
-                openApp(files, name, url, options.runner ?? realRunner),
+                openApp(files, name, url, this.run),
               browse: (
                 action: BrowserAction,
                 choice: { browser?: string; tab?: number },
-              ) => browse(files, options.runner ?? realRunner, action, choice),
+              ) => browse(files, this.run, action, choice),
               callView: (session: AgentSession | null) =>
                 showOnCall(
                   {
                     store: new ViewStore(this.root, options.now ?? Date.now),
-                    run: options.runner ?? realRunner,
+                    run: this.run,
                     titles: (item) => tabTitles(item, this.titles(item)),
                   },
                   session,
@@ -285,7 +292,7 @@ export class BoardFeed implements AgentBoardPort {
               look: (question: string) =>
                 lookAtScreen(
                   {
-                    run: options.runner ?? realRunner,
+                    run: this.run,
                     key:
                       process.env.CLAWDTIME_OPENAI_API_KEY ||
                       process.env.OPENAI_API_KEY,
@@ -302,7 +309,7 @@ export class BoardFeed implements AgentBoardPort {
           sessionWindow(
             session,
             action,
-            options.runner ?? realRunner,
+            this.run,
             tabTitles(session, this.titles(session)),
           ),
         ...(options.tasks ? { tasks: options.tasks } : {}),
@@ -313,6 +320,7 @@ export class BoardFeed implements AgentBoardPort {
       model,
     );
   }
+  private readonly run: Runner;
   private readonly root: string;
   /** Says a finished job in the chat. Absent where the service has no jobs. */
   private readonly news: JobNews | undefined;
@@ -369,7 +377,7 @@ export class BoardFeed implements AgentBoardPort {
   /** A session of this Mac comes forward here. One of a remote Mac opens in a new window over ssh. */
   private readonly titles: (session: AgentSession) => string[];
   private async focusOne(session: AgentSession) {
-    const run = this.options.runner ?? realRunner;
+    const run = this.run;
     if (!session.host)
       return focusSession(
         session,
@@ -383,7 +391,7 @@ export class BoardFeed implements AgentBoardPort {
       : { ok: false, precision: "none" as const };
   }
   private async sendOne(session: AgentSession, text: string, enter: boolean) {
-    const run = this.options.runner ?? realRunner;
+    const run = this.run;
     if (!session.host) return sendText(session, text, { enter }, run);
     const host = this.book.get(session.host);
     return host
@@ -443,6 +451,16 @@ export class BoardFeed implements AgentBoardPort {
   async say(
     text: string,
     via: ChatMessage["via"] = "chat",
+    context?: PhoneTurnContext,
+  ): Promise<ChatMessage> {
+    return phoneTurn.run(context ?? {}, () =>
+      this.sayInTurn(text, via, context),
+    );
+  }
+  private async sayInTurn(
+    text: string,
+    via: ChatMessage["via"],
+    context?: PhoneTurnContext,
   ): Promise<ChatMessage> {
     const now = this.options.now ?? Date.now;
     const history = this.log.recent(historyForTurn);
@@ -452,7 +470,7 @@ export class BoardFeed implements AgentBoardPort {
       at: now(),
       via,
     });
-    const answer = await this.supervisor.answer(history, text, via);
+    const answer = await this.supervisor.answer(history, text, via, context);
     const reply: ChatMessage = {
       role: "assistant",
       text: answer.text,

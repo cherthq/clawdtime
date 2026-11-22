@@ -169,6 +169,19 @@ permission.
 
 ## 5. Call it
 
+Before calling, verify the capabilities you intend to use. `agent_warm` and a
+successful status answer establish connectivity, not computer-action readiness.
+Run `clawdtime computer doctor --json` with the same environment as the line.
+It reports the desktop connection and computer worker separately from coding-task
+admission. A configured desktop that is missing or has restarted must refuse
+phone actions; it must not silently use a second executor.
+
+The standalone supervisor can list agents, request a coding-session launch, open
+an app, and read the visible screen when macOS permits it. Clicking, typing, and
+navigating inside apps require the desktop service and native panel in step 7.
+A launch request is not proof that Claude started. Verify the actual terminal
+and the resulting agent session before counting that action as successful.
+
 Place a **FaceTime Video** call to the number that `chert dev` shows. ClawdTime
 greets you when FaceTime is ready. Things to say:
 
@@ -291,6 +304,31 @@ missing:
 - The ClawdTime panel, open. The panel looks at the screen and sends the input.
 - Accessibility, and Screen & System Audio Recording, for the panel, in System
   Settings, Privacy & Security.
+
+The phone and desktop must use the same intended supervisor state and an explicit
+`CLAWDTIME_DESKTOP_STATE` pointing to that desktop service's protected directory.
+Do not start a second worker on an existing computer journal. Check that the old
+worker is idle, stop it cleanly, and preserve all receipts before changing the
+installation. Do not copy or clear a journal to get around an unknown outcome.
+
+The panel's coding-task session and computer worker are separate. An expired
+task session does not itself prove that the computer worker is unavailable.
+For a desktop configured with the simulation task engine, real Claude terminal
+jobs require `CLAWDTIME_SIMULATION_JOBS=on`, `CLAWDTIME_JOB_AGENT=claude`, and a
+current task session for task-to-job routing. The switch means that coding goals
+go to real terminal jobs; it does not make simulated results real. See
+[the desktop guide](docs/CODING_DEMO_DESKTOP.md) for service and panel installation.
+
+With the explicit desktop connection, each call opens one short-lived admission.
+It renews while the call is active and closes on hangup. Only native computer
+work owned by that call is stopped. Already-launched coding jobs can continue.
+Missing heartbeats, a service restart, and uncertain delivery prevent new input;
+the line never resends an uncertain command through another route.
+
+Before calling setup complete, test a disposable local action and observe its
+result, then test the same request on the phone. Include a compound request such
+as showing the screen and opening an app, Stop, and hangup. Opening a room,
+submitting input, and passing automated tests are not physical acceptance.
 
 Things to say, on a call or with `clawdtime chat`:
 
