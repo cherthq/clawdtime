@@ -273,3 +273,29 @@ passed before this build was installed. The unknown receipt was preserved
 byte-for-byte during installation; the next physical check requires its observed
 result to be reconciled first. The prior failure's exact layout cause remains
 unproven until the new runtime trace and physical check establish it.
+
+### Paired local desktop acceptance — passed
+
+With the operator's fresh hands-off confirmation, installed `3ba05cc` completed
+one rightward move and then one leftward return through the authenticated phone
+bridge. Each request completed in one native step. The rightward trace recorded
+one Space event, zero environment changes, five stable destination candidates,
+and verified arrival in 2,396 ms. The return recorded one Space event, zero
+environment changes, five stable candidates, and verified arrival in 2,816 ms.
+The rightward destination used composite evidence; that same evidence qualified
+the leftward source. No unknown receipt remains unresolved. No request was
+replayed, and both scoped admissions closed afterward.
+
+The installed routing repair, configured shortcuts, and directional verifier
+are now ready for the FaceTime acceptance checklist above. The desktop service,
+model connection, task admission, permissions, and warm phone host all pass
+readiness checks. Validation totals are 6,461 backend/connector tests, 173 voice
+tests, and 372 Swift tests; TypeScript/build and changed-file checks passed.
+The final Mac changes were independently reviewed. The exact earlier layout
+refusal was not captured with the newer detailed diagnostic, so successful
+qualification does not retroactively prove that narrower historical cause.
+
+Actual handset transcription-to-action, repaired "test document" wording, Stop,
+and hangup acceptance remain pending. This is readiness for the phone test, not
+a claim that unattended production acceptance is complete. Automatic updates
+remain held to protect the local patch until the upstream repair is integrated.
