@@ -47,6 +47,19 @@ import type {
   RequestState,
 } from "./journal.js";
 import { HandsTimeout } from "./panel-hands.js";
+import {
+  activationRefusal,
+  clearHint,
+  desktopBlockedText,
+  noOtherAppText,
+  verifiedDesktopSwitch,
+  inputUnknownText,
+  sameSurface,
+  transitionUnknownText,
+  verifiedActivation,
+} from "./desktop.js";
+import { handErrors } from "./ports.js";
+import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import type {
   Action,
   BrowserPage,
@@ -81,8 +94,7 @@ const plannerText =
   "The planner did not answer, so I stopped. Nothing more was sent.";
 const refusalsText =
   "The planner chose 3 actions in a row that the checks refused, so I stopped.";
-const faultText =
-  "Something failed inside the worker, so I stopped. An action may have been sent. Look at the screen, then run: clawdtime computer clear";
+const faultText = `Something failed inside the worker, so I stopped. An action may have been sent. ${clearHint}`;
 const secretText =
   "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.";
 const unwrittenText =
@@ -94,11 +106,13 @@ const grantText = {
     "ClawdTime may not see the screen yet. Open System Settings, Privacy & Security, Screen & System Audio Recording, and turn on the ClawdTime panel. Then ask again.",
 } as const;
 const lostText = (label: string) =>
-  `I sent this and its result never came back: ${label}. It may have happened or not. I do not send it again. Look at the screen, then run: clawdtime computer clear`;
+  `I sent this and its result never came back: ${label}. It may have happened or not. I do not send it again. ${clearHint}`;
 const uncertainText = (request: JournalRequest) =>
   request.reason === "unreadable_journal"
-    ? "The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until you run: clawdtime computer clear"
-    : `An earlier computer task has an unknown result: "${request.goal}". It is not run again. Look at the screen to see what happened, then run: clawdtime computer clear`;
+    ? `The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until it is cleared. ${clearHint}`
+    : `An earlier computer task has an unknown result: "${request.goal}". It is not run again. ${clearHint}`;
+const unclearedText =
+  "The record of computer tasks could not be cleared now. Say it again in a moment.";
 
 /** What `GET /desktop/computer` answers. */
 export const computerStatusSchema = z
@@ -150,6 +164,7 @@ interface Question {
   settle: (reply: Reply) => void;
 }
 interface Run {
+  navigation?: NavigationIntent;
   id: string;
   /** The person's words, for the planner. */
   goal: string;
@@ -214,19 +229,23 @@ const tidy = (page: BrowserPage): BrowserPage => ({
 });
 const clip = (text: string) => text.slice(0, 1900);
 const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
-const sameFront = (before: Observation, after: Observation) =>
-  before.app.bundleId === after.app.bundleId &&
-  before.app.window === after.app.window;
 /** How a step ended, in words for the planner and in one word for the journal. */
 const outcome = (handed: Handed): [string, string] =>
   !handed.result
     ? ["no result came back", "lost"]
     : handed.result.ok
       ? ["ok", "ok"]
-      : [
-          `did not run: ${handed.result.error ?? "failed"}`,
-          handed.result.error ?? "failed",
-        ];
+      : handed.result.error === "transition_unknown"
+        ? [
+            "activation was requested; the target was not verified",
+            "transition_unknown",
+          ]
+        : handed.result.error === "input_unknown"
+          ? ["input began; its outcome is unknown", "input_unknown"]
+          : [
+              `did not run: ${handed.result.error ?? "failed"}`,
+              handed.result.error ?? "failed",
+            ];
 
 /** A clear yes, a clear no, or null. The reader is the one that reads a yes on a call. */
 function readYes(words: string): boolean | null {
@@ -494,6 +513,33 @@ export class ComputerWorker implements DesktopExecutorPort {
     return this.snapshot();
   }
 
+  /**
+   * The person looked at the screen and says so: "clear the computer task".
+   * This does what `clawdtime computer clear` does, for a person who has no
+   * terminal at hand: on a call, or away from the Mac. The request with the
+   * unknown result is marked as seen, so that new work can start. Its record
+   * stays. Nothing is started and nothing is sent again. The answer is one
+   * line that can be said aloud.
+   */
+  clear(): { message: string } {
+    let done: ReturnType<ComputerJournal["clear"]>;
+    try {
+      done = this.journal.clear();
+    } catch {
+      return { message: unclearedText };
+    }
+    if (done.setAside)
+      return {
+        message: `The record of computer requests could not be read. It was set aside as ${done.setAside} and is not removed. New work can start.`,
+      };
+    if (!done.cleared.length) return { message: "Nothing to clear." };
+    return {
+      message: done.cleared
+        .map((request) => `Cleared: "${request.goal}". New work can start.`)
+        .join(" "),
+    };
+  }
+
   /** The person's reply to what the worker asks. Words that are not clear change nothing. */
   async answer(text: string): Promise<{ message: string }> {
     this.expire();
@@ -584,12 +630,19 @@ export class ComputerWorker implements DesktopExecutorPort {
     label: string,
   ): Promise<Handed> {
     if (this.halted(run)) return { sent: false, over: true, result: null };
+    const beforeTransition = run.observation;
     const effect = command.kind !== "observe" && command.kind !== "wait";
     // After anything but a look, the screen and the page may be other ones.
     // That holds for a wait too: it waits for the screen to change.
     if (command.kind !== "observe") {
       run.fresh = false;
       run.page = null;
+      if (
+        command.kind === "open_app" ||
+        command.kind === "switch_desktop" ||
+        command.kind === "switch_previous_app"
+      )
+        run.observation = null;
     }
     let result: HandResult;
     try {
@@ -604,13 +657,73 @@ export class ComputerWorker implements DesktopExecutorPort {
       this.finish(run, "blocked", "hands_silent", silentText);
       return { sent: false, over: true, result: null };
     }
-    if (
+    // Unknown effects survive Stop and takeover. Never let the planner retry
+    // activation, or continue using its former observation after a transition.
+    if (result.error === "input_unknown") {
+      this.finish(run, "uncertain", "input_unknown", inputUnknownText);
+    } else if (
+      result.error === "transition_unknown" ||
+      !verifiedActivation(command, result) ||
+      (command.kind === "switch_previous_app" &&
+        result.ok &&
+        (!beforeTransition ||
+          !result.observation ||
+          result.observation.app.bundleId === beforeTransition.app.bundleId ||
+          result.observation.surfaceEpoch === undefined ||
+          beforeTransition.surfaceEpoch === undefined ||
+          result.observation.surfaceEpoch <= beforeTransition.surfaceEpoch)) ||
+      (command.kind === "switch_desktop" &&
+        result.ok &&
+        (!beforeTransition || !verifiedDesktopSwitch(beforeTransition, result)))
+    ) {
+      result = { ...result, ok: false, error: "transition_unknown" };
+      this.finish(
+        run,
+        "uncertain",
+        "transition_unknown",
+        transitionUnknownText,
+      );
+    } else if (activationRefusal(command, result)) {
+      // Nothing was sent, so the request goes on: the caller hands the
+      // reason to the planner, as it does for an action that a check refused.
+    } else if (
+      !result.ok &&
+      command.kind === "switch_previous_app" &&
+      result.error === "not_found"
+    ) {
+      // The hands sent no key: there was no other app. That is known.
+      this.finish(run, "blocked", "no_other_app", noOtherAppText);
+    } else if (
+      !result.ok &&
+      result.error &&
+      result.error in desktopBlockedText
+    ) {
+      // A desktop switch is the person's own one-step request. The planner
+      // cannot send it, so a refusal ends the request with its reason.
+      this.finish(
+        run,
+        "blocked",
+        result.error,
+        desktopBlockedText[result.error as keyof typeof desktopBlockedText],
+      );
+    } else if (
       !result.ok &&
       (result.error === "no_accessibility" ||
         result.error === "no_screen_recording")
-    )
-      this.finish(run, "blocked", result.error, grantText[result.error]);
-    else if (!result.ok && result.error === "stopped_by_person")
+    ) {
+      const initialDesktopRead =
+        command.kind === "observe" &&
+        run.navigation?.kind !== undefined &&
+        run.navigation.kind !== "none";
+      this.finish(
+        run,
+        "blocked",
+        result.error,
+        initialDesktopRead
+          ? `The initial desktop observation failed (${result.error}). No switch was attempted. ${grantText[result.error]}`
+          : grantText[result.error],
+      );
+    } else if (!result.ok && result.error === "stopped_by_person")
       // The person stopped it at the hands. After Stop here, they know already.
       this.finish(run, "canceled", "stopped", stoppedText, !run.stop);
     if (this.halted(run)) return { sent: true, over: true, result };
@@ -630,6 +743,40 @@ export class ComputerWorker implements DesktopExecutorPort {
 
   private async loop(run: Run) {
     try {
+      if (this.planner.navigation) {
+        try {
+          const intent = await Promise.race([
+            within(
+              this.planner.navigation(run.goal),
+              Math.max(1, run.deadline - this.now()),
+            ),
+            run.halted,
+          ]);
+          if (this.halted(run) || !intent) return;
+          run.navigation = navigationIntentSchema.parse(intent);
+        } catch {
+          return this.finish(
+            run,
+            "blocked",
+            "navigation_unavailable",
+            "I could not interpret the navigation request reliably. Nothing was sent; please ask again.",
+          );
+        }
+        if (run.navigation.kind === "clarify")
+          return this.finish(
+            run,
+            "blocked",
+            "navigation_ambiguous",
+            run.navigation.question,
+          );
+        // Only an app that the hands refused to open comes back from here
+        // to the planner. Every other end of a navigation request is final.
+        if (
+          run.navigation.kind !== "none" &&
+          (await this.navigate(run, run.navigation)) !== "plan"
+        )
+          return;
+      }
       for (;;) {
         if (this.halted(run)) return;
         if (run.step >= this.maxSteps)
@@ -710,6 +857,122 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
   }
 
+  /** A user-authored direction is a one-shot operation outside the planner loop.
+   * Neither a model, a continuation, nor a failed verification can repeat it.
+   * "plan": the hands refused to open the named app before anything was
+   * sent, and the planner goes on with that reason. */
+  private async navigate(
+    run: Run,
+    intent: Exclude<NavigationIntent, { kind: "none" | "clarify" }>,
+  ): Promise<"plan" | void> {
+    const looked = await this.hand(
+      run,
+      { kind: "observe", image: true, elements: true },
+      "Check desktop before switching",
+    );
+    if (looked.over) return;
+    const before = looked.result?.observation;
+    if (run.takeover)
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_ready",
+        "You moved the mouse or pressed a key during the initial desktop observation. No switch was attempted. Ask again when ready.",
+      );
+    if (!looked.result?.ok) {
+      // Only the bounded wire error vocabulary may enter this diagnostic. Do
+      // not reflect a panel payload, screenshot, title, or field content.
+      const error = handErrors.find((known) => known === looked.result?.error);
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_ready",
+        error
+          ? `The initial desktop observation failed (${error}). No switch was attempted. Check the panel and ask again when ready.`
+          : "The initial desktop observation failed without a recognized error code. No switch was attempted. Check the panel and ask again when ready.",
+      );
+    }
+    if (before?.surfaceEpoch === undefined)
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_ready",
+        "The initial observation did not include a verified desktop surface epoch. No switch was attempted. Check that the panel supports desktop verification, then ask again.",
+      );
+    run.observation = before;
+    run.step++;
+    const command: HandCommand =
+      intent.kind === "desktop"
+        ? { kind: "switch_desktop", direction: intent.direction }
+        : intent.kind === "previous_app"
+          ? { kind: "switch_previous_app" }
+          : {
+              kind: "open_app",
+              name: intent.name,
+              ...(intent.window ? { window: intent.window } : {}),
+            };
+    const handed = await this.hand(
+      run,
+      command,
+      intent.kind === "desktop"
+        ? `Switch one desktop ${intent.direction}`
+        : intent.kind === "previous_app"
+          ? "Switch to the previous app"
+          : `Bring ${intent.name} forward`,
+    );
+    if (handed.over) return;
+    const refusal = activationRefusal(command, handed.result);
+    if (refusal && command.kind === "open_app") {
+      // "Open Chrome" names an app as people do, and the hands know it by
+      // another name. The planner sees the reason and the screen: it can use
+      // the name that this Mac knows, or tell the person why it cannot.
+      this.note(
+        run,
+        command,
+        "The person asked for this app.",
+        clean(command.name, 80),
+        `refused: ${refusal}`,
+        handed.result?.error ?? "failed",
+      );
+      run.refusals = 1;
+      return "plan";
+    }
+    if (!handed.result?.ok)
+      return this.finish(
+        run,
+        "blocked",
+        "desktop_not_sent",
+        "The panel refused the desktop switch before dispatch. No retry was attempted; check permissions and shortcut setup, then ask again.",
+      );
+    if (
+      run.takeover ||
+      (intent.kind === "desktop"
+        ? !verifiedDesktopSwitch(before, handed.result)
+        : !verifiedActivation(command, handed.result))
+    )
+      return this.finish(
+        run,
+        "uncertain",
+        "transition_unknown",
+        transitionUnknownText,
+      );
+    // Do not carry the old action target or start another planned action. A later
+    // user request always obtains its own full observation and native input lease.
+    run.observation = null;
+    run.page = null;
+    run.fresh = false;
+    return this.finish(
+      run,
+      "completed",
+      "desktop_switched",
+      intent.kind === "desktop"
+        ? `Verified one desktop transition ${intent.direction}.`
+        : intent.kind === "previous_app"
+          ? "Verified the switch to the previous app."
+          : `Verified ${intent.name} is in front.`,
+    );
+  }
+
   /** Checks one planned action and, when it may run, sends it. */
   private async act(run: Run, raw: unknown, why: string) {
     const before = run.observation;
@@ -739,6 +1002,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         this.finish(run, "blocked", "too_many_refusals", refusalsText);
       return;
     }
+    // The hands can still refuse to open an app. That refusal joins the row.
+    const refused = run.refusals;
     run.refusals = 0;
     switch (checked.verdict) {
       case "done":
@@ -805,7 +1070,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     if (checked.send.via === "browser")
       return this.viaBrowser(run, action, why, checked);
-    return this.viaHands(run, action, why, checked, before);
+    return this.viaHands(run, action, why, checked, before, refused);
   }
 
   /** Text for a secure field: the person types it, and the worker goes on after their yes. */
@@ -857,6 +1122,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     why: string,
     first: Ready,
     before: Observation | null,
+    /** The refusals in a row before this action. */
+    refused: number,
   ) {
     let ready = first;
     if (first.send.via !== "hands") return;
@@ -931,7 +1198,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           "clicked the field. The text was not typed.",
           "clicked",
         );
-      if (!seen || !before || !sameFront(before, seen))
+      if (!seen || !before || !sameSurface(before, seen))
         return this.note(
           run,
           action,
@@ -942,9 +1209,35 @@ export class ComputerWorker implements DesktopExecutorPort {
         );
       if (focusedSecure(seen)) return this.personTypes(run, action, why, ready);
     }
+    const streak = run.streak;
     this.count(run, ready.signature);
     const handed = await this.hand(run, send.command, ready.label);
     if (!handed.sent) return;
+    const refusal = handed.over
+      ? null
+      : activationRefusal(send.command, handed.result);
+    if (refusal) {
+      // The hands opened nothing. The planner reads why and chooses again,
+      // as after a refusal of the checks: it counts in the same row of three,
+      // and it is not a repeat of an action that went out.
+      run.streak = streak;
+      this.note(
+        run,
+        action,
+        why,
+        ready.target,
+        `refused: ${refusal}`,
+        handed.result?.error ?? "failed",
+      );
+      if ((run.refusals = refused + 1) >= 3)
+        this.finish(
+          run,
+          "blocked",
+          "too_many_refusals",
+          `${refusalsText} The last reason: ${refusal}`,
+        );
+      return;
+    }
     this.note(run, action, why, ready.target, ...outcome(handed));
   }
 

@@ -262,8 +262,8 @@ so does a person who watches the shared screen on a phone.
 - **The glide.** The cursor goes on from where it is. The first time it comes
   out of the mascot. A glide takes 0.45 to 0.70 seconds, longer for a longer
   way, and the cursor then waits 0.3 seconds at the target. It stays 1.5
-  seconds after the command and then fades. The picture of a call has 10
-  frames a second, so the shortest glide is in four of them or more.
+  seconds after the command and then fades. The picture of a call defaults to
+  20 frames a second, so the shortest glide is in nine of them or more.
 - **Typed keys.** A command that types names no place. The cursor goes to the
   field that has the keyboard: to the lower edge of a field of one line, so
   the pointer is under the text. With no field known it stays where it last
@@ -275,6 +275,13 @@ so does a person who watches the shared screen on a phone.
 - **Reduce Motion.** With the macOS setting Reduce Motion the cursor jumps to
   the target with no glide, waits 0.4 seconds, and the ring of a click shows
   with no growth.
+
+The outgoing call video can now automatically frame these agent targets and
+focused typing fields. Capture stays continuous and input coordinates stay
+unchanged. “Show the whole screen” holds overview until “resume automatic
+zoom”; the automatic switch is independent of computer use. See
+[automatic call-video zoom](AUTOMATIC_CALL_ZOOM.md) for the event contract,
+manual-view precedence, measured performance and physical acceptance gaps.
 
 The bar at the top of the screen and the other windows of ClawdTime stay out
 of a screen share while the worker runs. Only the cursor is in it.
@@ -288,7 +295,10 @@ Two things make a request `uncertain`:
 
 An uncertain request is never run again, and no new request starts. Look at the
 screen to see what happened. Then run `clawdtime computer clear`. Its record
-stays in the journal.
+stays in the journal. The worker has the same step as a method, `clear()`, for
+a person who has no terminal: its messages about an unknown result say "After
+you looked at the screen, say "clear the computer task", or run: clawdtime
+computer clear". `clear()` starts nothing and sends nothing again.
 
 A look or a wait whose result never came back is not uncertain, because it
 changed nothing. The same holds for a command that the panel never fetched.
@@ -338,6 +348,17 @@ no command, and the reason in `message`. That holds for a service with another
 engine, with the switch off, with no key, and for one that a test started.
 
 ## Limits
+
+The native worker supports [desktop navigation and verified activation](DESKTOP_SPACES.md).
+`open_app` brings a named app forward, or one window by its title; separate
+complete requests such as “Move one
+desktop right” dispatch one `switch_desktop` action outside the planner loop.
+Directional navigation requires explicit enabled Mission Control shortcut mappings.
+Both paths settle and retire old coordinates; unverified transitions never retry.
+Initial switching scope is distinguishable ordinary desktops on one main display;
+physical acceptance remains pending. That restriction does not gate unrelated
+click/type input. The guide covers setup, previous-desktop history, full-display
+sharing, independent disable control, zoom integration and acceptance gaps.
 
 | Limit                          | Value                                       |
 | ------------------------------ | ------------------------------------------- |

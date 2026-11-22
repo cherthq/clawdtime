@@ -1,5 +1,13 @@
 import { randomBytes } from "node:crypto";
+import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
+import {
+  navigationRules,
+  navigationTools,
+  parseNavigationCalls,
+  navigationIntentSchema,
+  type NavigationIntent,
+} from "../computer/navigation.js";
 import {
   appendFileSync,
   chmodSync,
@@ -143,16 +151,28 @@ export interface ToolSpec {
 }
 /** The language model, behind one call. Tests script it. */
 export interface ModelClient {
+  /** Interpret only the complete current user message, without screen/history data. */
+  navigation?(goal: string): Promise<NavigationIntent>;
   complete(input: {
     system: string;
     messages: ModelMessage[];
     tools: ToolSpec[];
+    requireTool?: boolean;
   }): Promise<{ text: string; toolCalls: ToolCall[] }>;
 }
 
 /** OpenAI chat completions with function tools. */
 /** How long the first request to the model may take, and the one after it. */
 export const modelWaitMs = 15_000;
+/**
+ * The person says that the unknown result of a computer task can be cleared:
+ * "clear the computer task", "I looked, clear it". The whole message is that
+ * one order, so a sentence that only speaks of clearing does not count.
+ */
+export const clearsComputer = (words: string) =>
+  /^(?:please\s+)?(?:i(?:'ve|\s+have)?\s+(?:looked|checked)(?:\s+(?:at\s+)?(?:the\s+|my\s+)?(?:screen|mac))?[,.;]?\s+(?:and\s+)?(?:please\s+)?)?(?:clear|reset)\s+(?:it|that|(?:the\s+)?computer(?:\s+(?:task|state|use))?)[.!]*$/i.test(
+    words.trim(),
+  );
 export const modelSecondWaitMs = 30_000;
 /** How long the one request of a model with a reasoning effort may take. */
 export const modelLongWaitMs = 45_000;
@@ -177,10 +197,20 @@ export class OpenAIModel implements ModelClient {
       retryWaitMs?: number;
     } = {},
   ) {}
+  async navigation(goal: string): Promise<NavigationIntent> {
+    const result = await this.complete({
+      system: navigationRules,
+      messages: [{ role: "user", content: goal }],
+      tools: navigationTools,
+      requireTool: true,
+    });
+    return parseNavigationCalls(result.toolCalls);
+  }
   async complete(input: {
     system: string;
     messages: ModelMessage[];
     tools: ToolSpec[];
+    requireTool?: boolean;
   }) {
     const messages = [
       { role: "system", content: input.system },
@@ -224,6 +254,9 @@ export class OpenAIModel implements ModelClient {
           // A request with no tools carries no tool list: an empty one is refused.
           ...(input.tools.length
             ? {
+                ...(input.requireTool
+                  ? { tool_choice: "required", parallel_tool_calls: false }
+                  : {}),
                 tools: input.tools.map((tool) => ({
                   type: "function",
                   function: tool,
@@ -384,6 +417,11 @@ export interface SupervisorWorld {
    */
   execution?: DesktopExecutorPort & {
     answer?(text: string): Promise<{ message: string }>;
+    /**
+     * Clears a request whose result nobody knows, as `clawdtime computer
+     * clear` does. It starts and repeats nothing.
+     */
+    clear?(): { message: string };
   };
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
@@ -2938,6 +2976,8 @@ const refuse = (turn: Turn, sentence: string) => {
 };
 
 export class Supervisor {
+  private navigationGeneration = 0;
+  private navigationStops = new Set<() => void>();
   constructor(
     private readonly world: SupervisorWorld,
     private readonly model: ModelClient | null,
@@ -3646,6 +3686,19 @@ export class Supervisor {
         return "The person did not give that address. Ask them for it, or hand the search to a job.";
     }
     if (!name && !url) return "Say which application or address to open.";
+    // Plain app opening belongs to the native worker when it owns these hands:
+    // its activation verification, Stop, busy and unknown-outcome fences must
+    // not be bypassed by the supervisor's older Launch Services opener.
+    const execution = this.world.execution;
+    const snapshot = execution?.snapshot();
+    if (
+      name &&
+      !url &&
+      execution?.answer &&
+      snapshot?.configured &&
+      snapshot.mode === "native"
+    )
+      return this.delegate(turn, spoken);
     const key = `open:${name ?? ""}:${url?.href ?? ""}`;
     const before = turn.done.get(key);
     if (before !== undefined) return before;
@@ -6017,22 +6070,28 @@ export class Supervisor {
     return done;
   }
 
-  private async delegate(turn: Turn, spoken: string): Promise<string> {
+  private async delegate(
+    turn: Turn,
+    spoken: string,
+    navigation = false,
+  ): Promise<string> {
     const execution = this.world.execution;
     if (!execution?.snapshot().configured)
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
     const action =
+      navigation ||
       contextualUiRequest(spoken) ||
       /^(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+)?(?:check|read|summari[sz]e|review|open|search|find|browse|navigate|click|type|fill|download|compare|inspect|use|look|go|scroll|select|switch|focus|bring|show|refresh|reload|press)\b/i.test(
         spoken,
       );
     if (
-      !action ||
-      asksAbout(spoken) ||
-      bareDecision.test(spoken) ||
-      asksToStart(spoken) ||
-      /\b(?:status|progress|pending requests?)\b/i.test(spoken)
+      !navigation &&
+      (!action ||
+        asksAbout(spoken) ||
+        bareDecision.test(spoken) ||
+        asksToStart(spoken) ||
+        /\b(?:status|progress|pending requests?)\b/i.test(spoken))
     )
       return "That message is not a computer action request. Nothing was delegated.";
     const previous = turn.done.get("execution");
@@ -6603,6 +6662,18 @@ export class Supervisor {
     spoken: string,
     via: ChatMessage["via"],
   ): Promise<{ text: string; choices: string[] }> {
+    // The desktop/voice transports are bounded at 2,000 characters. Direct
+    // task-service callers historically support complete software goals up to
+    // 8,000; preserve that route without admitting oversized UI instructions.
+    if (
+      spoken.length > userMessageLimit &&
+      !(
+        spoken.length <= 8000 &&
+        this.world.tasks &&
+        codingGoal(spoken, "polite") !== null
+      )
+    )
+      return { text: userMessageTooLong, choices: [] };
     // A line of news stands between two messages by chance: the answer of a
     // job that finished. Every rule that reads ClawdTime's last answer (a
     // question that waits for a yes, the session that was just spoken of)
@@ -6633,7 +6704,7 @@ export class Supervisor {
     via: ChatMessage["via"],
     turn: Turn,
   ): Promise<string> {
-    const words = clean(spoken, 2000);
+    const words = clean(spoken, 8000);
     if (!words) return "I did not catch that.";
     // The message after ClawdTime's own words about work that waits for a
     // yes. That is read from the conversation alone: whatever a file holds,
@@ -6647,6 +6718,10 @@ export class Supervisor {
       /^(?:please\s+)?(?:stop|cancel|abort)\b/i.test(words) &&
       (this.world.execution?.snapshot().configured === true ||
         (!!liveTask && !taskIsOver(liveTask)));
+    if (stopsSomething) {
+      this.navigationGeneration++;
+      for (const stop of this.navigationStops) stop();
+    }
     // The notice that a request arrived was the last message. A yes can
     // still mean the work. Only a word for a request decides it now: every
     // other message gets the request in words again, and decides nothing.
@@ -6664,7 +6739,10 @@ export class Supervisor {
       turn.closed = "after notice";
       if (!stopsSomething) return this.closedAnswer(turn);
     }
-    if (asked?.role === "assistant" && aboutOfferedWork(asked.text)) {
+    if (
+      asked?.role === "assistant" &&
+      (aboutOfferedWork(asked.text) || asked.text === userMessageTooLong)
+    ) {
       // A request of an agent arrived after it. Nothing in this turn decides
       // that request, whatever the words: the person meant the work.
       turn.closed = "after work";
@@ -6741,6 +6819,73 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    // Interpret navigation before coding/session heuristics, from only this message.
+    // No keyword allowlist, prior conversation, screen or model paraphrase supplies authority.
+    if (
+      spoken.length <= userMessageLimit &&
+      this.model?.navigation &&
+      this.world.execution?.snapshot().configured &&
+      this.world.execution.snapshot().mode === "native" &&
+      !stopsSomething &&
+      !turn.closed &&
+      !taskWaits &&
+      this.world.desk.pending().length === 0 &&
+      this.world.execution.snapshot().state !== "waiting_for_person" &&
+      !this.world.execution.snapshot().pendingAction
+    ) {
+      const generation = this.navigationGeneration;
+      // With no reading, the message goes on as it did before this reader
+      // existed. A reader that is slow or fails must not answer every message,
+      // a question about the state among them, with a refusal.
+      let navigation: NavigationIntent | undefined;
+      let timer: NodeJS.Timeout | undefined;
+      let stop!: () => void;
+      try {
+        const halted = new Promise<null>((resolve) => {
+          stop = () => resolve(null);
+          this.navigationStops.add(stop);
+          timer = setTimeout(stop, modelWaitMs);
+          timer.unref();
+        });
+        const result = await Promise.race([
+          this.model.navigation(spoken),
+          halted,
+        ]);
+        if (generation !== this.navigationGeneration)
+          return "Stopped. The pending navigation interpretation was discarded.";
+        if (result !== null) navigation = navigationIntentSchema.parse(result);
+      } catch {
+        navigation = undefined;
+      } finally {
+        clearTimeout(timer);
+        this.navigationStops.delete(stop);
+      }
+      // Another turn may have started work or put a question in front of the
+      // person while interpretation waited. Never consume that answer as input.
+      const waitingTask = this.world.tasks?.current();
+      if (
+        (waitingTask &&
+          !taskIsOver(waitingTask) &&
+          waitingTask.canAnswer &&
+          !!waitingTask.question) ||
+        this.world.desk.pending().length ||
+        this.world.execution.snapshot().pendingAction ||
+        this.world.execution.snapshot().state === "waiting_for_person"
+      )
+        return "Another request now waits for your answer. Nothing was switched.";
+      if (navigation?.kind === "clarify") return navigation.question;
+      if (navigation && navigation.kind !== "none") {
+        const execution = this.world.execution;
+        const selected = execution.snapshot();
+        if (
+          !execution.answer ||
+          !selected.configured ||
+          selected.mode !== "native"
+        )
+          return "App and desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
+        return this.delegate(turn, spoken, true);
+      }
+    }
     // "Stop all my sessions": no tool stops or closes a session, so the code
     // says that, where nothing else can own the words: no request and no
     // task waits (a "stop" can answer those), the turn is open, and no
@@ -6801,9 +6946,10 @@ export class Supervisor {
     // a session of that agent that already runs: the model routes that.
     // The reader also takes the sentence with its common typos put right
     // ("opn codex nd write tests"). The job is the person's own text.
-    const viaAgent = this.world.jobs
-      ? (agentJob(words, "plain") ?? agentJob(typosFixed(words), "plain"))
-      : null;
+    const viaAgent =
+      spoken.length <= userMessageLimit && this.world.jobs
+        ? (agentJob(words, "plain") ?? agentJob(typosFixed(words), "plain"))
+        : null;
     if (
       viaAgent &&
       // A sentence with a "don't" gets the question, never a start.
@@ -6835,6 +6981,9 @@ export class Supervisor {
       if (turn.refused === undefined) return said;
       turn.refused = undefined;
     }
+    // A large direct request may only take the full-goal task route above.
+    // Refusal/ambiguity must not fall through to another action interpreter.
+    if (spoken.length > userMessageLimit) return userMessageTooLong;
     // A change of mind about the job that the person's last message started
     // and that still works: "nah make the buttons bigger instead". It is an
     // instruction, and it corrects or replaces that job, so it is a job of
@@ -6864,6 +7013,17 @@ export class Supervisor {
         )
       )
         return execution.stop().message;
+      // An earlier request has a result that nobody knows, and nothing new
+      // starts until a person looked at the screen. On a call the person is
+      // away from the Mac and sees its screen in the video: these plain words
+      // are that person saying that they looked. Only in that state, and it
+      // starts nothing.
+      if (
+        execution.clear &&
+        execution.snapshot().state === "uncertain" &&
+        clearsComputer(words)
+      )
+        return execution.clear().message;
       if (
         /^(?:(?:what(?:'s| is)|check)\s+)?(?:computer(?: task)?|execution|browser(?: task)?)\s+status[.!?]*$/i.test(
           words,

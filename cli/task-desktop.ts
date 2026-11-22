@@ -111,7 +111,7 @@ function privateJSON(path: string, project: string): unknown {
     );
   }
 }
-function childEnvironment(): NodeJS.ProcessEnv {
+function childEnvironment(panel = false): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) =>
@@ -148,7 +148,14 @@ function childEnvironment(): NodeJS.ProcessEnv {
           // A service that a test started must know it: it then opens no
           // window on the person's screen.
           "VITEST",
-        ].includes(key) || key.startsWith("LC_"),
+        ].includes(key) ||
+        (panel &&
+          [
+            "CLAWDTIME_SPACE_LEFT_SHORTCUT",
+            "CLAWDTIME_SPACE_RIGHT_SHORTCUT",
+            "CLAWDTIME_DESKTOP_SWITCHING",
+          ].includes(key)) ||
+        key.startsWith("LC_"),
     ),
   );
 }
@@ -460,7 +467,9 @@ export async function desktopCli(
       cwd: root,
       detached: true,
       stdio: "ignore",
-      env: childEnvironment(),
+      // Only the native panel consumes the operator's explicit Space mappings.
+      // Preserve absence: the launcher must never invent shortcut defaults.
+      env: childEnvironment(true),
     });
     await new Promise<void>((done, reject) => {
       panel.once("spawn", done);

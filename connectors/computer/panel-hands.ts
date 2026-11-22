@@ -46,6 +46,7 @@ interface Waiting {
 export class PanelHands implements Hands {
   private seq: number;
   private waiting: Waiting | undefined;
+  private presentedCommand = 0;
   private readonly timeoutMs: number;
   constructor(
     options: {
@@ -84,6 +85,7 @@ export class PanelHands implements Hands {
         const waiting = this.waiting;
         if (waiting?.seq !== seq) return;
         this.waiting = undefined;
+        this.presentedCommand = 0;
         waiting.reject(new HandsTimeout(waiting.served));
       }, this.timeoutMs + own);
       timer.unref();
@@ -104,6 +106,7 @@ export class PanelHands implements Hands {
     const waiting = this.waiting;
     if (!waiting || waiting.seq <= after) return null;
     waiting.served = true;
+    this.presentedCommand = waiting.seq;
     return {
       seq: waiting.seq,
       command: waiting.command,
@@ -122,6 +125,7 @@ export class PanelHands implements Hands {
     if (!waiting || waiting.seq !== result.seq) return false;
     this.waiting = undefined;
     clearTimeout(waiting.timer);
+    if (!result.ok || result.interrupted) this.presentedCommand = 0;
     waiting.resolve(result);
     return true;
   }
@@ -132,6 +136,7 @@ export class PanelHands implements Hands {
    * in the middle of it, and its result is still awaited.
    */
   withdraw(): boolean {
+    this.presentedCommand = 0;
     const waiting = this.waiting;
     if (!waiting || waiting.served) return false;
     this.waiting = undefined;
@@ -142,5 +147,10 @@ export class PanelHands implements Hands {
       error: "stopped_by_person",
     });
     return true;
+  }
+
+  /** Presentation only: the last command actually fetched by the panel, never an input grant. */
+  presentationCommand(): number {
+    return this.presentedCommand;
   }
 }

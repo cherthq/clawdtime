@@ -28,6 +28,9 @@ export interface ComputerPort {
   result(raw: unknown): boolean;
   /** Whether computer use is on, what it does now and what it asks. */
   status(): unknown;
+  /** Transient presentation metadata, separate from observations and action receipts. */
+  present?(raw: unknown): boolean;
+  presentation?(): unknown;
   /** Stop. Absent where no worker runs. */
   stop?(): DesktopExecutionSnapshot;
 }
@@ -244,6 +247,14 @@ export function createTaskApp(
       app.post("/desktop/hands/result", async (c) => {
         desktop.authorizePanel(credential(c));
         return c.json({ ok: computer.result(await c.req.json()) });
+      });
+      app.post("/desktop/hands/presentation", async (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json({ ok: computer.present?.(await c.req.json()) ?? false });
+      });
+      app.get("/desktop/presentation", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(computer.presentation?.() ?? { version: 1, event: null });
       });
       app.get("/desktop/computer", (c) => {
         desktop.authorizePanel(credential(c));

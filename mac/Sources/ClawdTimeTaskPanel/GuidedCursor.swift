@@ -129,6 +129,7 @@ private final class GuidedCursorView: NSView {
   private var shown: CGPoint?
   private var label = ""
   private var pillWidth = 0.0
+  private var shownLayout: GuidedLayout?
   private var fade: Task<Void, Never>?
 
   init(pet: PetController) {
@@ -151,6 +152,20 @@ private final class GuidedCursorView: NSView {
 
   /// Where the tip is now, while the cursor is on the screen.
   var place: CGPoint? { window.isVisible ? shown : nil }
+  /// Geometry only: label text stays in this process and never enters metadata.
+  func presentationBounds(at target: CGPoint, label text: String) -> CGRect {
+    GuidedLayout(tip: target, pillWidth: GuidedCursorView.pillWidth(for: GuidedLook.label(text)), screen: screen)
+      .paintedBounds.intersection(screen)
+  }
+  /// The parts actually drawn now, rather than the transparent overlay window.
+  /// Read afresh by typing heartbeats; moving/fading overlays are not cached in
+  /// presentation state. Account for a window repositioned by the window server.
+  var visiblePresentationBounds: CGRect? {
+    guard window.isVisible, window.alphaValue > 0, let layout = shownLayout else { return nil }
+    let bounds = layout.paintedBounds.offsetBy(dx: window.frame.minX - layout.window.minX,
+      dy: window.frame.minY - layout.window.minY).intersection(screen)
+    return bounds.isNull || bounds.isEmpty ? nil : bounds
+  }
   /// The main display: the one that the hands use.
   private var screen: CGRect { (NSScreen.screens.first ?? NSScreen.main)?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900) }
 
@@ -159,6 +174,7 @@ private final class GuidedCursorView: NSView {
   private func put(_ tip: CGPoint) {
     shown = tip
     let layout = GuidedLayout(tip: tip, pillWidth: pillWidth, screen: screen)
+    shownLayout = layout
     if size == layout.window.size { window.setFrameOrigin(layout.window.origin) }
     else { size = layout.window.size; window.setFrame(layout.window, display: false) }
     view.show(layout, label: label)
