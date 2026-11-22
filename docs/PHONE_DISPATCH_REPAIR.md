@@ -196,3 +196,15 @@ next attempt detected external mouse/keyboard activity during its initial
 observation and stopped before any switch. Both call admissions were closed.
 Left/right switching therefore remains physically unverified; a fresh hands-off
 window was requested. These refusals are not successful movement evidence.
+
+A fresh hands-off attempt successfully brought TextEdit forward, then refused
+the rightward move with `unsupported_desktop` before dispatch. A read-only native
+`--check-desktop` probe was added and installed; it reports only fixed reasons,
+counts, and booleans, with no screenshots, titles, input, or service access.
+All 356 Swift tests passed. The probe confirmed one active display, permission
+grants, and a contained/confirmed full-screen window, but rejected AX/Quartz
+window matching. Visible metadata showed additional overlapping windows of the
+full-screen foreground app. The existing source-window guard remains intact.
+The operator was asked to exit Codex full-screen manually before the next test;
+the computer-use tool does not permit operating Codex itself. No successful
+desktop transition is claimed yet.

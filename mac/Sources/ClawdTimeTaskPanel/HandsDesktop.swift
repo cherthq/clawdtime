@@ -89,6 +89,44 @@ import TaskPanelCore
   }
   private var singleDisplay: Bool { activeDisplays == 1 }
 
+  /// Read-only preflight using the same AX/Quartz matcher as real transitions.
+  /// No controller, observers, lease, capture or input source is constructed.
+  static func sourceDiagnostics() -> PanelDesktopSnapshot {
+    var report = PanelDesktopSnapshot()
+    var count: UInt32 = 0
+    let counted = CGGetActiveDisplayList(0, nil, &count) == .success
+    report.activeDisplays = counted ? Int(count) : 0
+    report.checks["displayInventoryAvailable"] = counted
+    report.checks["accessibility"] = AXIsProcessTrusted()
+    report.checks["screenRecording"] = CGPreflightScreenCaptureAccess()
+    guard report.checks["accessibility"] == true else { report.reason = "accessibility_unavailable"; return report }
+    guard let display = HandsDisplay.main else { report.reason = "main_display_unavailable"; return report }
+    guard let app = NSWorkspace.shared.frontmostApplication else { report.reason = "front_app_unavailable"; return report }
+    let pid = app.processIdentifier
+    report.checks["frontAppIsProbe"] = pid == getpid()
+    report.checks["frontAppSameBundleAsProbe"] = app.bundleIdentifier != nil && app.bundleIdentifier == Bundle.main.bundleIdentifier
+    guard pid != getpid() else { report.reason = "front_app_is_probe"; return report }
+    let surface = DesktopAX.visibleSurface(pid: pid, display: display,
+      diagnostic: { report.reason = $0 }, fact: { report.checks[$0] = $1 })
+    report.checks["frontAppUnchanged"] = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+    guard report.checks["frontAppUnchanged"] == true else { report.reason = "front_app_changed"; return report }
+    guard let surface else {
+      report.checks["noOrdinaryWindow"] = DesktopAX.noOrdinaryWindow(display: display.id)
+      return report
+    }
+    report.checks["ordinaryWindow"] = surface.ordinary
+    report.checks["fullScreen"] = surface.fullScreen
+    report.checks["fullScreenConfirmed"] = surface.fullScreenConfirmed
+    report.checks["containedInMainDisplay"] = CGDisplayBounds(display.id).contains(surface.frame)
+    report.checks["fullScreenGeometry"] = DesktopSurfaceScope.fullScreenGeometry(window: surface.frame, display: CGDisplayBounds(display.id))
+    let permitted = DesktopSurfaceScope.permits(window: surface.frame, display: CGDisplayBounds(display.id), ordinary: surface.ordinary,
+      fullScreen: surface.fullScreen, activeDisplays: report.activeDisplays, transition: true, fullScreenConfirmed: surface.fullScreenConfirmed)
+    report.checks["transitionSourcePermitted"] = permitted
+    report.reason = permitted ? "source_ready" : !counted || count != 1 ? "display_scope" : !surface.ordinary ? "window_not_ordinary" :
+      report.checks["containedInMainDisplay"] != true ? "window_outside_main_display" : "fullscreen_scope"
+    return report
+  }
+
   /// A focused AX window must agree with the top ordinary Quartz window on the
   /// current display. A front-app name alone, or an off-Space AX tree, is insufficient.
   func surface(transition: Bool = false) async -> Surface? {
@@ -621,18 +659,22 @@ import TaskPanelCore
         return !bounds.intersection(frame).isEmpty
       }
     }
-    static func visibleSurface(pid: pid_t, display: HandsDisplay) -> Surface? {
+    static func visibleSurface(pid: pid_t, display: HandsDisplay,
+                               diagnostic: ((String) -> Void)? = nil, fact: ((String, Bool) -> Void)? = nil) -> Surface? {
       let app = app(pid)
-      guard let focused = element(value(app, kAXFocusedWindowAttribute)) else { return nil }
+      guard let focused = element(value(app, kAXFocusedWindowAttribute)) else { diagnostic?("ax_focused_window_unavailable"); return nil }
       // A sheet hangs from a window and takes the focus: "Do you want to save?". It has no title and no
       // minimized state of its own. Without it as a surface, no button of a sheet could ever be pressed.
       let sheet = (value(focused, kAXRoleAttribute) as? String) == "AXSheet"
       let minimized = value(focused, kAXMinimizedAttribute) as? Bool
-      guard sheet ? minimized != true : minimized == false,
-        let title = sheet ? ((value(focused, kAXTitleAttribute) as? String) ?? "") : (value(focused, kAXTitleAttribute) as? String),
-        let bounds = frame(focused),
-        !CGDisplayBounds(display.id).intersection(bounds).isEmpty,
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+      fact?("focusedSheet", sheet); fact?("minimizedKnown", minimized != nil); fact?("minimized", minimized == true)
+      guard sheet ? minimized != true : minimized == false else { diagnostic?("ax_minimized_or_unknown"); return nil }
+      guard let title = sheet ? ((value(focused, kAXTitleAttribute) as? String) ?? "") : (value(focused, kAXTitleAttribute) as? String)
+        else { diagnostic?("ax_title_unavailable"); return nil }
+      guard let bounds = frame(focused) else { diagnostic?("ax_frame_unavailable"); return nil }
+      guard !CGDisplayBounds(display.id).intersection(bounds).isEmpty else { diagnostic?("window_outside_main_display"); return nil }
+      guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { diagnostic?("quartz_inventory_unavailable"); return nil }
       let ordinary = windows.filter { row in
         guard (row[kCGWindowLayer as String] as? Int) == 0, (row[kCGWindowOwnerPID as String] as? Int) != Int(getpid()),
           let raw = row[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: raw) else { return false }
@@ -644,8 +686,15 @@ import TaskPanelCore
         return .init(id: id, pid: owner, title: row[kCGWindowName as String] as? String, frame: bounds)
       }
       // Dropping an incomplete leading row must not expose the window behind it.
-      guard evidence.count == ordinary.count else { return nil }
+      guard evidence.count == ordinary.count else { diagnostic?("quartz_inventory_incomplete"); return nil }
+      fact?("quartzHasVisibleWindow", !evidence.isEmpty)
+      fact?("quartzTopOwnedByFrontApp", evidence.first?.pid == Int(pid))
+      fact?("quartzHasOwnerFrameMatch", evidence.contains { $0.pid == Int(pid) && abs($0.frame.minX - bounds.minX) <= 1 && abs($0.frame.minY - bounds.minY) <= 1 && abs($0.frame.width - bounds.width) <= 1 && abs($0.frame.height - bounds.height) <= 1 })
+      fact?("quartzHasOwnerTitleMatch", evidence.contains { row in row.pid == Int(pid) && (row.title == title || [" - ", " – ", " — "].contains { separator in !(row.title ?? "").isEmpty && title.hasPrefix((row.title ?? "") + separator) }) })
       let confirmed = (value(focused, "AXFullScreen") as? Bool) == true
+      fact?("ordinaryWindow", (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole)
+      fact?("fullScreen", fullScreen(focused)); fact?("fullScreenConfirmed", confirmed)
+      fact?("containedInMainDisplay", CGDisplayBounds(display.id).contains(bounds))
       // Only the auxiliary-strip case needs an additional AX window inventory.
       // Ordinary focused windows avoid extra off-Space reads and their latency.
       var frames: [CGRect]?
@@ -659,7 +708,8 @@ import TaskPanelCore
       }
       guard let windowID = DesktopWindowVisibility.focusedWindowID(pid: Int(pid), title: title, frame: bounds,
         fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames,
-        sheet: sheet) else { return nil }
+        sheet: sheet) else { diagnostic?("ax_quartz_window_mismatch"); return nil }
+      diagnostic?("ax_quartz_matched")
       return Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
         fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed)

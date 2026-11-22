@@ -709,3 +709,14 @@ the probe completed, even when permissions are false; exit 1 is a probe error.
 Combining `--check-access` with other arguments emits a bounded error and exits
 2 rather than launching the panel. A bare build's permissions do not qualify a
 different signed/installed app: probe the exact deployed executable.
+
+For a source-window refusal, the exact deployed executable also supports the
+standalone `--check-desktop` flag. It reads the current front window's AX and
+Quartz metadata through the same source matcher used for desktop transitions.
+Output contains only fixed reason codes, a display count and boolean facts:
+front-app/visible-window agreement, ordinary/full-screen scope and containment.
+It emits no app identities, titles, text, frames or images, and starts no input
+tap, capture, service connection, configuration/receipt access or application UI.
+The current surface must remain unchanged while it runs. `source_ready` is a
+source preflight only; it does not verify a shortcut or a destination. Do not
+combine the flag with launch arguments or `--check-access`.
