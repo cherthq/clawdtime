@@ -41,6 +41,28 @@ final class AppNavigationTests: XCTestCase {
     XCTAssertNil(match([row(1, frame: CGRect(x: 0, y: 37, width: 1500, height: 100)), row(2, frame: full)], frames: [full]))
   }
 
+  func testAListNameWithTheAppsOwnWordsAfterItIsTheSameWindow() {
+    func found(_ rows: [DesktopWindowEvidence], accessible: String) -> Int? {
+      DesktopWindowVisibility.focusedWindowID(pid: 10, title: accessible, frame: full,
+        fullScreenConfirmed: false, display: display, visible: rows, accessibleFrames: [])
+    }
+    // A browser: the window list has the page title, Accessibility adds the app and the profile.
+    XCTAssertEqual(found([row(1, title: "Inbox (3)", frame: full)], accessible: "Inbox (3) - Browser \u{2013} Work"), 1)
+    XCTAssertEqual(found([row(1, title: "Notes", frame: full)], accessible: "Notes \u{2014} Editor"), 1)
+    XCTAssertEqual(found([row(1, title: "Same", frame: full)], accessible: "Same"), 1)
+    // Two windows of the app in the same place: only the one whose title it is.
+    XCTAssertEqual(found([row(1, title: "Inbox", frame: full), row(2, title: "Inbox (2)", frame: full)], accessible: "Inbox - Browser"), 1)
+    XCTAssertNil(found([row(1, title: "Inbox (2)", frame: full), row(2, title: "Inbox", frame: full)], accessible: "Inbox - Browser"),
+      "the window of that title is behind another one")
+    // A part of a word, another title, an empty or a missing list name: no window.
+    XCTAssertNil(found([row(1, title: "Fix", frame: full)], accessible: "Fixture"))
+    XCTAssertNil(found([row(1, title: "Fix", frame: full)], accessible: "Fix-ture"))
+    XCTAssertNil(found([row(1, title: "Sibling", frame: full)], accessible: "Fixture - Browser"))
+    XCTAssertNil(found([row(1, title: "", frame: full)], accessible: "Bluetooth"))
+    XCTAssertNil(found([row(1, title: nil, frame: full)], accessible: "Fixture"))
+    XCTAssertEqual(found([row(1, title: "", frame: full)], accessible: ""), 1)
+  }
+
   func testDuplicateOrMismatchedWindowEvidenceCannotGrantArrival() {
     XCTAssertNil(match([row(1, frame: full), row(2, frame: full)]))
     XCTAssertNil(match([row(1, title: "Sibling", frame: full)]))
