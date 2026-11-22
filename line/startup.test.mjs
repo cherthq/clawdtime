@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { JobContext, initializeLogger } from "@livekit/agents";
 import {
   LocalVideoTrack,
@@ -61,12 +61,12 @@ test("startup diagnostics retain only bounded error names and allowlisted source
 // the room/network boundary is synthetic: avatar pixels, RTC source/track,
 // caller lifecycle, and preference isolation use the real implementation.
 // Every case stops before model creation, desktop lookup, or screen capture.
-async function fixture(run) {
+async function fixture(run, { configHome } = {}) {
   const home = mkdtempSync(join(tmpdir(), "clawdtime-startup-"));
   const priorHome = process.env.CLAWDTIME_CONFIG_HOME;
   const priorLog = console.log;
   const events = [];
-  process.env.CLAWDTIME_CONFIG_HOME = home;
+  process.env.CLAWDTIME_CONFIG_HOME = configHome ?? home;
   console.log = (line) => {
     try {
       const event = JSON.parse(line);
@@ -237,6 +237,41 @@ for (const alreadyPresent of [false, true]) {
     });
   });
 }
+
+test("a relative CLAWDTIME_CONFIG_HOME does not stop the call: the zoom preferences live in memory", async () => {
+  const relative = `clawdtime-startup-relative-${process.pid}`;
+  for (const configHome of [relative, undefined]) {
+    await fixture(
+      async (f) => {
+        f.start();
+        await f.flush();
+        f.add(f.participant());
+        // The call gets as far as every other call of this fixture: the camera publication, which is
+        // synthetic here and fails.
+        assert.match(
+          (await f.result()).error?.message,
+          /^Call startup failed at /,
+        );
+        assert.equal(f.publications(), 1);
+        assert.equal(
+          f.events.find((event) => event.clawdtime_line === "startup_failed")
+            ?.code,
+          "first_frame",
+        );
+        // One line says that nothing is kept for later calls. A usual folder gives no such line.
+        assert.deepEqual(
+          f.events
+            .filter((event) => event.clawdtime_line === "zoom_settings")
+            .map((event) => event.code),
+          configHome ? ["memory_only"] : [],
+        );
+        endedOnce(f);
+      },
+      { configHome },
+    );
+  }
+  assert.equal(existsSync(resolve(relative)), false);
+});
 
 test("another agent joining cannot start a call", async () => {
   await fixture(async (f) => {

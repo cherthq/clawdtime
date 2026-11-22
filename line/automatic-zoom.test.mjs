@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import {
+  existsSync,
   mkdtempSync,
   rmSync,
   mkdirSync,
@@ -9,7 +10,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 const { test } = process.env.VITEST
   ? await import("vitest")
   : await import("node:test");
@@ -689,6 +690,50 @@ test("overview and enable switches persist independently, and malformed settings
     mkdirSync(outside);
     symlinkSync(outside, join(root, "line-presentation"));
     assert.throws(() => store.set("resume"), /Private/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a relative state folder keeps the zoom preferences in memory and writes nothing", () => {
+  const name = `clawdtime-zoom-relative-${process.pid}`;
+  const store = makeZoomSettings({ env: { CLAWDTIME_CONFIG_HOME: name } });
+  assert.equal(store.durable, false);
+  assert.deepEqual(store.read(), { enabled: true, overview: false });
+  const set = store.set("overview");
+  assert.equal(set.overview, true);
+  assert.equal(set.action, "overview");
+  assert.match(set.revision, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(store.read(), set);
+  store.set("disable");
+  assert.equal(store.read().enabled, false);
+  assert.equal(store.read().overview, true);
+  assert.notEqual(store.read().revision, set.revision);
+  // The call video takes them as it takes the ones from the file.
+  const video = makeCallVideo({ enabled: true, overview: false });
+  video.settings(store.read());
+  assert.equal(video.status().overview, true);
+  assert.equal(video.status().enabled, false);
+  store.set("resume");
+  video.settings(store.read());
+  assert.equal(video.status().overview, false);
+  assert.equal(video.status().enabled, true);
+  video.close();
+  assert.throws(() => store.set("anything"), /Unknown zoom control/);
+  // Memory lasts for one store, which is one call. The next one starts from the defaults.
+  assert.deepEqual(
+    makeZoomSettings({
+      env: { CLAWDTIME_CONFIG_HOME: name, CLAWDTIME_LINE_AUTO_ZOOM: "off" },
+    }).read(),
+    { enabled: false, overview: false },
+  );
+  assert.equal(existsSync(resolve(name)), false);
+  const root = mkdtempSync(join(tmpdir(), "clawdtime-zoom-"));
+  try {
+    assert.equal(
+      makeZoomSettings({ env: { CLAWDTIME_CONFIG_HOME: root } }).durable,
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

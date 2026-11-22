@@ -54,6 +54,11 @@ Preferences live in the owner-only `line-presentation/zoom.json` under
 the switches and command revision. Each explicit command gets a new revision,
 so repeating overview after a temporary manual view works. Active calls read
 preferences every 500 ms. Corrupt/unreadable settings fall back to overview.
+The file needs an absolute `CLAWDTIME_CONFIG_HOME`. With a relative one a call
+still starts: it keeps the preferences in memory until it ends, so nothing
+persists to later calls, and it logs `zoom_settings` with the code
+`memory_only` once. The local controls then save nothing and exit with an
+error.
 
 Precedence: an explicit manual terminal view takes precedence, and it stays
 until the person asks, on the call or with a local control, for another view,

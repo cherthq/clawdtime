@@ -255,6 +255,9 @@ export async function callEntry(ctx) {
     // Preferences only: no events/media are persisted. Local controls apply during a call.
     settingsTimer = setInterval(() => video.settings(zoomSettings.read()), 500);
     log("call_started");
+    // A relative CLAWDTIME_CONFIG_HOME gives the zoom preferences no file. The call goes on, with the
+    // preferences in memory until it ends.
+    if (!zoomSettings.durable) log("zoom_settings", { code: "memory_only" });
     // The picture goes out as the first thing of a call: it is ready, so this is one frame and one publish.
     if (!frame()) throw new Error("Initial video frame unavailable");
     mark("first_frame");
