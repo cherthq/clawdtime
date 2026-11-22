@@ -776,6 +776,31 @@ describe("a yes after which the action was not sent", () => {
     worker.stop();
   });
 
+  it("does not hold for a button of the same name in another app or window", async () => {
+    const elsewhere = observation(
+      [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+      {
+        surfaceEpoch: 2,
+        app: {
+          name: "Photos",
+          bundleId: "com.apple.Photos",
+          window: "Library",
+        },
+      },
+    );
+    const { worker, hands, said, waiting } = setup([press, press, done], {
+      screens: [dialog(1), dialog(2), elsewhere],
+    });
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    await worker.answer("yes");
+    await waiting();
+    // Another app is in front now. Its "Delete" is another deletion: the person is asked.
+    expect(questions(said)).toBe(2);
+    expect(hands.sent).toEqual([]);
+    worker.stop();
+  });
+
   it("does not hold for another action, nor after a minute", async () => {
     const other = observation(
       [element(1, { title: "Cancel" }), element(2, { title: "Remove" })],

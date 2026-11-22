@@ -195,6 +195,8 @@ interface Run {
    */
   approval?: {
     signature: string;
+    /** The app and the window in front, or the page, when the person said yes. The yes is for that place only. */
+    place: string;
     questions: string[];
     at: number;
     /** How often the yes was used with no new question. Two times at most. */
@@ -1200,10 +1202,17 @@ export class ComputerWorker implements DesktopExecutorPort {
     // was then not sent. It is used once.
     const held = run.approval;
     delete run.approval;
+    // Where the action goes: a button with the same name in another app, in
+    // another window or on another page is another action.
+    const place =
+      checked.send.via === "browser"
+        ? `page|${run.page?.url ?? ""}`
+        : `${before?.app.bundleId ?? ""}|${before?.app.window ?? ""}`;
     const kept =
       held &&
       checked.signature !== null &&
       held.signature === checked.signature &&
+      held.place === place &&
       this.now() - held.at <= approvalHoldsMs
         ? held
         : null;
@@ -1260,6 +1269,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     )
       run.approval = {
         signature: checked.signature,
+        place,
         questions: answered,
         at: kept ? kept.at : this.now(),
         tries,
