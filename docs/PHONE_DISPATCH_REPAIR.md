@@ -179,3 +179,20 @@ leave the Mac mouse/keyboard untouched while requesting actions. Verify:
 These handset checks are outstanding. Ready for acceptance testing is not a
 claim of unattended production qualification. Automatic updates remain held to
 preserve the local repair until upstream contains and verifies it.
+
+### Local switching attempt after two-desktop confirmation
+
+The operator confirmed two desktops. The first rightward request reached the
+native worker but was refused before dispatch; the old generic journal reason
+was `desktop_not_sent`. No opposite move or blind retry followed. Read-only
+checks confirmed the actual running panel's shortcut environment and an unlocked
+console session. The worker now preserves only the allowlisted native refusal
+code in its message and journal, so future failures can be diagnosed without
+recording screen content. Unknown input outcomes retain their existing fences.
+TypeScript, build, and all 6,461 tests passed after this diagnostic change.
+
+After preparing a normal TextEdit window and restarting the idle service, the
+next attempt detected external mouse/keyboard activity during its initial
+observation and stopped before any switch. Both call admissions were closed.
+Left/right switching therefore remains physically unverified; a fresh hands-off
+window was requested. These refusals are not successful movement evidence.

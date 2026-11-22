@@ -1096,13 +1096,17 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.refusals = 1;
       return "plan";
     }
-    if (!handed.result?.ok)
+    if (!handed.result?.ok) {
+      // Keep only the fixed wire vocabulary. Raw panel errors or screen fields
+      // must never become user-facing diagnostics or journal reason codes.
+      const error = handErrors.find((known) => known === handed.result?.error);
       return this.finish(
         run,
         "blocked",
-        "desktop_not_sent",
-        "The panel refused the desktop switch before dispatch. No retry was attempted; check permissions and shortcut setup, then ask again.",
+        error ?? "desktop_not_sent",
+        `The panel refused the desktop switch before dispatch${error ? ` (${error})` : ""}. No retry was attempted; check permissions and shortcut setup, then ask again.`,
       );
+    }
     if (
       run.takeover ||
       (intent.kind === "desktop"
