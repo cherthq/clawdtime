@@ -710,6 +710,91 @@ describe("the time of each step", () => {
   });
 });
 
+describe("a yes after which the action was not sent", () => {
+  // The question itself changes what is in front: the look just before the
+  // click has another generation than the planner's look.
+  const dialog = (surfaceEpoch: number) =>
+    observation(
+      [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+      { surfaceEpoch },
+    );
+  const press: Action = { kind: "click_element", element: 2 };
+  const questions = (said: string[]) =>
+    said.filter((text) => text.startsWith('Click "Delete"?')).length;
+
+  it("holds for the same action: the person is not asked a second time", async () => {
+    const { worker, hands, planner, said, waiting } = setup(
+      [press, press, done],
+      { screens: [dialog(1), dialog(2), dialog(2), dialog(2), dialog(2)] },
+    );
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    expect((await worker.answer("yes")).message).toBe("Continuing.");
+    await worker.idle();
+    // The first try was held back, the planner looked again and chose the same click, and it went out.
+    expect(planner.inputs[1]!.history[0]!.outcome).toMatch(
+      /^not sent: The desktop or display changed/,
+    );
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(questions(said)).toBe(1);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("is used once: the same action a second time asks again", async () => {
+    const { worker, hands, said, waiting } = setup(
+      [press, press, press, done],
+      {
+        screens: [dialog(1), dialog(2), dialog(2)],
+      },
+    );
+    await worker.submit("r1", "Delete it twice");
+    await waiting();
+    await worker.answer("yes");
+    await waiting();
+    // One click went out with the first yes. The third plan of the click asks.
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(questions(said)).toBe(2);
+    worker.stop();
+  });
+
+  it("does not hold for another action, nor after a minute", async () => {
+    const other = observation(
+      [element(1, { title: "Cancel" }), element(2, { title: "Remove" })],
+      { surfaceEpoch: 2 },
+    );
+    const changed = setup([press, press, done], {
+      screens: [dialog(1), dialog(2), other],
+    });
+    await changed.worker.submit("r1", "Delete it");
+    await changed.waiting();
+    await changed.worker.answer("yes");
+    await changed.waiting();
+    // The screen now has another button under that number: a new question, for its name.
+    expect(changed.worker.snapshot().message).toMatch(/^Click "Remove"\?/);
+    expect(changed.hands.sent).toEqual([]);
+    changed.worker.stop();
+
+    const late = setup(
+      [
+        press,
+        () => {
+          late.clock.now += 61_000;
+          return press;
+        },
+        done,
+      ],
+      { screens: [dialog(1), dialog(2), dialog(2)] },
+    );
+    await late.worker.submit("r1", "Delete it");
+    await late.waiting();
+    await late.worker.answer("yes");
+    await late.waiting();
+    expect(questions(late.said)).toBe(2);
+    expect(late.hands.sent).toEqual([]);
+    late.worker.stop();
+  });
+});
+
 describe("typed text and the focus", () => {
   it("tells the planner when no text field had the focus, and says ok when one had", async () => {
     // No element of this screen has the focus.
