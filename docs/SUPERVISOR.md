@@ -1215,7 +1215,11 @@ of the desktop panel: the answer of a job that it started, and that a session
 is done, when you asked to hear that.
 
 - "Tell me when deploy fix is done", "keep an eye on deploy fix", "watch docs
-  for me" and "let me know if deploy fix fails" ask for one session. When the
+  for me" and "let me know if deploy fix fails" ask for one session. The
+  same request with the when first is taken too: "when deploy fix is done,
+  let me know", "once it finishes, tell me", "if deploy fix fails, ping
+  me". There the request ends the sentence: "when it's done, tell me what
+  it found" asks for something else. When the
   request is said to ClawdTime and names one session in full right at the
   request, with nothing more named after it, the code takes the request by
   itself. "I'll watch docs", "watch the docs build logs" and "did you watch

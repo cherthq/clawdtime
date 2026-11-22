@@ -14952,6 +14952,199 @@ describe("the person asks to hear when a session is done", () => {
     });
   });
 
+  describe('a request with the when first: "when payments tests is done, let me know"', () => {
+    const pairs: [string, string][] = [
+      // The when first, and the same request with the when last.
+      [
+        "when payments tests is done, let me know",
+        "let me know when payments tests is done",
+      ],
+      [
+        "once payments tests finishes, tell me",
+        "tell me once payments tests finishes",
+      ],
+      ["if payments tests fails, ping me", "ping me if payments tests fails"],
+      [
+        "as soon as payments tests is done let me know",
+        "let me know as soon as payments tests is done",
+      ],
+      [
+        "when payments tests is done, then tell me please",
+        "tell me when payments tests is done please",
+      ],
+      [
+        "ok when payments tests is done, notify me",
+        "ok notify me when payments tests is done",
+      ],
+    ];
+
+    it.each(pairs)("reads %j as a request, as %j is", (first, last) => {
+      expect(asksToBeTold(last), last).toBe(true);
+      expect(asksToBeTold(first), first).toBe(true);
+      expect(stopsWatching(first), first).toBe(false);
+    });
+
+    it.each(pairs)(
+      "the code takes %j by itself, as it takes %j",
+      async (first, last) => {
+        for (const words of [first, last]) {
+          const { later, say, toolSaid } = room();
+          const got = await say(words, ["Okay."]);
+          expect(later.watching(), words).toEqual(["payments tests"]);
+          expect(toolSaid(got.run), words).toContain("payments tests");
+        }
+      },
+    );
+
+    it.each(pairs)("the gate takes the model's call for %j", async (first) => {
+      const { later, say } = room();
+      await say(first, [
+        [call("watch_session", { session: "payments tests" })],
+        "Will do.",
+      ]);
+      expect(later.watching(), first).toEqual(["payments tests"]);
+    });
+
+    it.each([
+      // More follows the request: it asks for something else.
+      "when payments tests is done, tell me what it found",
+      "if payments tests fails, tell me why",
+      "when payments tests is done, let me know how long it took",
+      // Turned around, or said of someone else.
+      "when payments tests is done, don't tell me",
+      "when payments tests is done, I'll let you know",
+      "when payments tests is done, no need to tell me",
+      // A question.
+      "when is payments tests done? let me know",
+      "when payments tests is done, will you tell me?",
+      // No end of work in the when.
+      "when you have a minute, tell me",
+      "if you can, let me know",
+    ])("takes no request by this form for %j", async (words) => {
+      const { later, say } = room();
+      await say(words, ["Okay."]);
+      expect(later.watching(), words).toEqual([]);
+    });
+
+    it.each([
+      // The word order of a question: a verb stands right after the when.
+      "when is payments tests done, tell me",
+      "when will payments tests finish, let me know",
+      "when does payments tests finish, tell me",
+      "when did payments tests finish, tell me",
+      "if is payments tests done, tell me",
+      // Any verb of a question, joined to the when, or behind other words.
+      "when might payments tests finish, tell me",
+      "when may payments tests finish, tell me",
+      "when must payments tests finish, tell me",
+      "when shall payments tests finish, let me know",
+      "when can payments tests finish, let me know",
+      "when's payments tests done, tell me",
+      "when'll payments tests finish, tell me",
+      "when exactly is payments tests done, tell me",
+      "when roughly does payments tests finish, let me know",
+      "when the heck is payments tests done, tell me",
+      "when on earth will payments tests finish, tell me",
+      "when do you think payments tests is done, tell me",
+      "when won't payments tests finish, tell me",
+      "when isn't payments tests done, tell me",
+      "when has payments tests finished, let me know",
+      "when are payments tests done, tell me",
+      "when would payments tests be done, tell me",
+      "when is it that payments tests is done, tell me",
+      // The helping verb is left out, as in fast speech: still a question
+      // about the time. Nothing joins the subject and the word of the end.
+      "when payments tests gonna finish, tell me",
+      "when it gonna finish, tell me",
+      "when payments tests going to finish, tell me",
+      "when payments tests supposed to finish, tell me",
+      "when payments tests need to finish, tell me",
+      "when payments tests likely finish, tell me",
+      "when payments tests probably done, tell me",
+      "when deploy fix finish, tell me",
+      "when it finish, tell me",
+      // A question in the order of a statement: it asks for the time.
+      "when payments tests is going to finish, tell me",
+      "when payments tests is probably done, tell me",
+      "when exactly payments tests finishes, tell me",
+      // The past: it asks when that was.
+      "when payments tests finished, tell me",
+      "when it completed, let me know",
+      "when roughly is done, tell me",
+      "when approximately payments tests is done, let me know",
+      // The when stands behind words that ask or wonder.
+      "I wonder when payments tests is done, tell me",
+      "do you know when payments tests is done, tell me",
+      "any idea when payments tests finishes, let me know",
+      "what happens when payments tests is done, tell me",
+      "not sure when payments tests is done, tell me",
+    ])(
+      "takes no request for the question %j, whatever the model calls",
+      async (words) => {
+        expect(asksToBeTold(words), words).toBe(false);
+        const { later, say } = room();
+        await say(words, [
+          [call("watch_session", { session: "payments tests" })],
+          "Okay.",
+        ]);
+        expect(later.watching(), words).toEqual([]);
+      },
+    );
+
+    it.each([
+      // The subject first, then the word of the end, with "is" or the like
+      // right before it at most.
+      "when it's done, let me know",
+      "when they're all done, tell me",
+      "when everything has finished, let me know",
+      "when payments tests gets done, ping me",
+      "when payments tests has been completed, tell me",
+      "the moment payments tests finishes, tell me",
+      "if ever payments tests is done, tell me",
+      "when payments tests is finally done, let me know",
+      // More than one, with the plain verb.
+      "when payments tests finish, tell me",
+      "when they finish, ping me",
+      "once both of them finish, let me know",
+      "if the agents fail, tell me",
+    ])("reads %j as a request", (words) => {
+      expect(asksToBeTold(words), words).toBe(true);
+    });
+
+    it.each([
+      ["when it's done, let me know", "let me know when it's done"],
+      ["when you're done, let me know", "let me know when you're done"],
+      [
+        "if payments tests is done tell me, otherwise wait",
+        "tell me if payments tests is done, otherwise wait",
+      ],
+      [
+        "when everything has finished, let me know",
+        "let me know when everything has finished",
+      ],
+    ])("the gate takes no more for %j than for %j", async (first, last) => {
+      const watched: string[][] = [];
+      for (const words of [first, last]) {
+        const { later, say } = room();
+        await say(words, [
+          [call("watch_session", { session: "payments tests" })],
+          "Okay.",
+        ]);
+        watched.push(later.watching());
+      }
+      // Never more than the other order takes.
+      for (const session of watched[0] ?? [])
+        expect(watched[1], `${first}: ${session}`).toContain(session);
+    });
+
+    it("says that an idle session has nothing to wait for, as for the other order", async () => {
+      const { later, say, toolSaid } = room();
+      const got = await say("when docs is done, let me know", ["Okay."]);
+      expect(later.watching()).toEqual([]);
+      expect(toolSaid(got.run)).toContain("docs");
+    });
+  });
+
   describe("a plain request to stop: the code takes it by itself, whatever the model calls", () => {
     /** A room in which the chat waits for deploy fix and for payments tests. */
     const watched = async () => {
@@ -16987,6 +17180,9 @@ describe("a brain with no record of watched sessions: nothing is said later, and
     "ok can you keep an eye on deploy fix and tell me when it's done",
     "please let me know once deploy fix finishes",
     "tell me when deploy fix is done, thanks",
+    // The when first.
+    "when deploy fix is done, let me know",
+    "once deploy fix finishes, tell me please",
     "watch docs for me please",
   ])(
     "gives the fact before the model answers the request %j",
