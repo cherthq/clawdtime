@@ -295,7 +295,10 @@ Two things make a request `uncertain`:
 
 An uncertain request is never run again, and no new request starts. Look at the
 screen to see what happened. Then run `clawdtime computer clear`. Its record
-stays in the journal.
+stays in the journal. The worker has the same step as a method, `clear()`, for
+a person who has no terminal: its messages about an unknown result say "After
+you looked at the screen, say "clear the computer task", or run: clawdtime
+computer clear". `clear()` starts nothing and sends nothing again.
 
 A look or a wait whose result never came back is not uncertain, because it
 changed nothing. The same holds for a command that the panel never fetched.
@@ -347,7 +350,8 @@ engine, with the switch off, with no key, and for one that a test started.
 ## Limits
 
 The native worker supports [desktop navigation and verified activation](DESKTOP_SPACES.md).
-`open_app` selects an exact window; separate complete requests such as “Move one
+`open_app` brings a named app forward, or one window by its title; separate
+complete requests such as “Move one
 desktop right” dispatch one `switch_desktop` action outside the planner loop.
 Directional navigation requires explicit enabled Mission Control shortcut mappings.
 Both paths settle and retire old coordinates; unverified transitions never retry.

@@ -44,16 +44,46 @@ export function zoomIntent(text) {
   return null;
 }
 
+/** The settings after one control. Each control gets its own revision. */
+function controlled(settings, action) {
+  if (!ZOOM_ACTIONS.includes(action)) throw Error("Unknown zoom control");
+  const next = { ...settings };
+  if (action === "enable") next.enabled = true;
+  if (action === "disable") next.enabled = false;
+  if (action === "overview") next.overview = true;
+  if (action === "resume") {
+    next.enabled = true;
+    next.overview = false;
+  }
+  next.revision = randomUUID();
+  next.action = action;
+  return next;
+}
+
+/**
+ * The zoom preferences. `durable` is true when they are kept in the file, for later calls too.
+ * With a relative CLAWDTIME_CONFIG_HOME there is no fixed place for that file. A call must still start, so
+ * the preferences then live in memory for as long as this store does, and nothing is read or written.
+ */
 export function makeZoomSettings({ env = process.env, home = homedir() } = {}) {
   const root =
     env.CLAWDTIME_CONFIG_HOME || join(home, ".local/share/clawdtime");
-  if (!isAbsolute(root))
-    throw Error("Zoom settings require an absolute state path");
-  const file = join(root, "line-presentation", "zoom.json");
   const defaults = {
     enabled: env.CLAWDTIME_LINE_AUTO_ZOOM !== "off",
     overview: false,
   };
+  if (!isAbsolute(root)) {
+    let kept = { ...defaults };
+    return {
+      durable: false,
+      read: () => ({ ...kept }),
+      set(action) {
+        kept = controlled(kept, action);
+        return { ...kept };
+      },
+    };
+  }
+  const file = join(root, "line-presentation", "zoom.json");
   const safeDir = () => {
     const s = lstatSync(dirname(file));
     if (
@@ -65,6 +95,7 @@ export function makeZoomSettings({ env = process.env, home = homedir() } = {}) {
       throw Error("Private zoom settings directory required");
   };
   return {
+    durable: true,
     read() {
       let fd;
       try {
@@ -104,17 +135,7 @@ export function makeZoomSettings({ env = process.env, home = homedir() } = {}) {
       }
     },
     set(action) {
-      if (!ZOOM_ACTIONS.includes(action)) throw Error("Unknown zoom control");
-      const next = this.read();
-      if (action === "enable") next.enabled = true;
-      if (action === "disable") next.enabled = false;
-      if (action === "overview") next.overview = true;
-      if (action === "resume") {
-        next.enabled = true;
-        next.overview = false;
-      }
-      next.revision = randomUUID();
-      next.action = action;
+      const next = controlled(this.read(), action);
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
       safeDir();
       const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -142,6 +163,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "Usage: node line/zoom-settings.mjs status|enable|disable|overview|resume",
     );
     process.exitCode = 2;
+  } else if (!settings.durable) {
+    // This command lives only to read or change the file. Without a file it must not report a success.
+    console.error(
+      "CLAWDTIME_CONFIG_HOME must be an absolute path. Nothing was read or saved.",
+    );
+    process.exitCode = 1;
   } else
     console.log(
       JSON.stringify(

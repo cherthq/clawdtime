@@ -348,6 +348,8 @@ public enum HandError: String, Codable, CaseIterable, Error, Sendable {
   case ambiguousTarget = "ambiguous_target"
   case unsupportedDesktop = "unsupported_desktop"
   case targetNotVisible = "target_not_visible"
+  /// The shortcut for a desktop switch went out and the desktop is known not to have moved.
+  case desktopUnchanged = "desktop_unchanged"
   case transitionUnknown = "transition_unknown"
   case inputUnknown = "input_unknown"
   case staleObservation = "stale_observation"
@@ -359,21 +361,27 @@ public struct HandResult: Codable, Equatable, Sendable {
   public let ok: Bool
   public let error: HandError?
   public let observation: Observation?
+  /// After open_app: the bundle identifier of the app that the hands found for the name.
+  /// The worker compares it with the app in front, so the form of the name does not matter.
+  public let resolvedBundleId: String?
   /// The person moved the mouse or pressed a key while the hands acted.
   public let interrupted: Bool?
-  public init(seq: Int, ok: Bool, error: HandError? = nil, observation: Observation? = nil, interrupted: Bool? = nil) {
+  public init(seq: Int, ok: Bool, error: HandError? = nil, observation: Observation? = nil, interrupted: Bool? = nil,
+              resolvedBundleId: String? = nil) {
     self.seq = seq; self.ok = ok; self.error = error; self.observation = observation; self.interrupted = interrupted
+    self.resolvedBundleId = resolvedBundleId
   }
   /// The command ran. Input that was sent is not proof of what the app did with it.
-  public static func done(_ seq: Int, observation: Observation? = nil, interrupted: Bool = false) -> HandResult {
-    HandResult(seq: seq, ok: true, observation: observation, interrupted: interrupted ? true : nil)
+  public static func done(_ seq: Int, observation: Observation? = nil, interrupted: Bool = false,
+                          resolvedBundleId: String? = nil) -> HandResult {
+    HandResult(seq: seq, ok: true, observation: observation, interrupted: interrupted ? true : nil, resolvedBundleId: resolvedBundleId)
   }
   /// The command did not run, and why.
   public static func failure(_ seq: Int, _ error: HandError, interrupted: Bool = false) -> HandResult {
     HandResult(seq: seq, ok: false, error: error, interrupted: interrupted ? true : nil)
   }
   public func validate() throws {
-    guard seq > 0, !ok || error == nil else { throw PanelFailure.configuration }
+    guard seq > 0, !ok || error == nil, resolvedBundleId.map({ HandsShape.fits($0, 200) }) ?? true else { throw PanelFailure.configuration }
     try observation?.validate()
   }
 }

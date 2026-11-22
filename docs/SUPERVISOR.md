@@ -325,12 +325,178 @@ These rules are in the code, not in the model's instructions:
 - A request is allowed or denied only when your own last message says so. "What
   does it want?" allows nothing. "Yes, approve it" allows it. The same reading
   of your words is used on a call.
+- A bare "yes" or "no" is read against ClawdTime's own last question. After
+  a question about a denial ("Should I deny it?", "Do you want to approve or
+  deny it?"), a "yes" approves nothing and a "no" denies nothing: only your
+  own word ("approve it", "deny it") decides there.
+- A bare word answers what ClawdTime said last. When ClawdTime said
+  something before your message (its message is the last one, or it is
+  younger than five minutes) and one request waits, a bare "yes", "ok",
+  "sure", "go ahead" or "no" decides that request only when ClawdTime's
+  message is the last one and put the request before you. Two forms count.
+  The first is ClawdTime's own sentence about the request ("One request
+  waits for your answer: ... Say approve or deny to answer it.") at the end
+  of the message, with no question before it. The second is its offer to
+  approve the request as the last sentence ("Should I approve it?", "Want me
+  to approve it?", "Approve it?", "Should I let it run?"), where the
+  sentence before says what runs, by a word of the head of the request's
+  text (the program, or what it works on), or the offer names the request
+  by such a word; the text is then one short simple command. "The branch is
+  main. Should I approve it?" does not say what runs, so a yes to it
+  approves nothing. The message must
+  be on the same channel and younger than five minutes, and no task may be
+  live. After any other message ("Should I keep an eye on the tests?", "docs
+  is idle."), a bare word decides nothing, and ClawdTime says so. Your own
+  word decides at any time ("approve it", "deny it"), and so does a word of
+  the request ("ok, push it"; a verb for any work, such as "make" or "test",
+  names it only as "the make one"). A bare word that follows no message of
+  ClawdTime belongs to the one request that waits, as before.
+- When the gate refuses a bare word, the model is told that your word
+  answered its own last message, so that it answers that in words ("Got it,
+  I'll watch the tests") and does not ask you for "approve" in its place. It
+  is told to call no tool for that word and not to say that it did what it
+  offered. With no model you get the gate's sentence itself. A call that the
+  gate refused did nothing: an answer that then says that work started is
+  checked like any other. When the model's answer after such a refusal
+  speaks of nothing that its last message spoke of (the request alone,
+  mostly), it answers once more; a second such answer is said as it is.
+- ClawdTime checks its answer for a decision that no tool made. When the
+  answer says that a request was approved or denied now ("I approved the
+  push", "Approved.", "It's approved now", "as you allowed") or that the work
+  of a waiting request is done or under way ("I pushed it", "The push is
+  underway now"), and no request was decided in that turn, the model answers
+  once more. When the second answer says it
+  again, you get plain words: "Nothing was decided." and what waits. After a
+  call that the gate refused, every such sentence counts. With no call, a
+  sentence counts when it speaks of a request that still waits, by a word of
+  its text; "I approved the push" about an earlier turn is said as it is. A
+  sentence that says the opposite, that asks, or that speaks of an earlier
+  time is no such claim. After a call that the gate refused, other words
+  for an approval count too ("I let it through", "Permission granted",
+  "Okay, pushing", "I'll let the push run", "The branch is pushed"), and so
+  does a sentence whose subject is the request and that says that it went,
+  is done or may go ("The push goes out", "The push has landed", "The push
+  is live", "The push is good to go", "The push can go through now"). What
+  is only possible is no such claim ("The push would go to origin main"). A sentence that says what the request is or does, or that
+  it still waits, is said as it is ("The push updates main", "The push
+  still waits"), and so is one that names a session. 'Say "approve" to let it
+  push' in an answer asks you for a word of decision: it offers no words to
+  type into a session ('Say "yes" to docs' does, when docs is a session).
+- A bare "yes", "ok" or "no" with no request on the desk gets the sentence
+  "There is no pending request to approve or deny." only when it answers no
+  question. When ClawdTime's own last message ends with a question ("Should
+  I keep an eye on the tests?"), on the same channel and younger than five
+  minutes, your word is the answer to that question, and the model replies
+  to it. A yes to an offer of work in ClawdTime's own words starts nothing:
+  say the work yourself. "Please do", "yes please", "sure, go for it", "ok
+  thanks" and "sure thing" are a yes too: they hold no work, so no job and
+  no task starts with them, wherever you say them. "Yes, start it", "ok,
+  continue" and "do the job" are a yes with no work only as the answer to
+  ClawdTime's own offer ("Want me to start a job for the footer?"), with no
+  news of a job after it; after a job's answer, "please continue" is work on
+  that job, as before.
+  A yes to an offer to tell a session something types nothing: only your
+  own words are typed.
+- A yes to ClawdTime's offer to open one session opens that session ("Want
+  me to open the docs session?", then "yes", "ok", "go ahead"). The offer is
+  the last sentence of ClawdTime's last message; it names one session on
+  the board by its whole name, or it says "it" after a sentence that names
+  exactly one session and says only its state ("Docs is idle. Want me to
+  open it?"; after "Docs wrote a summary file", "it" is the file, and no
+  session opens); the message names no other session; no task is live; and
+  no computer action waits for the panel. The code opens it before the
+  model, and it opens no other session for that message.
+- After ClawdTime's own offer to tell a session something or to open one,
+  it checks its answer to your bare word for typing or opening that did not
+  happen. When the answer says that it told or typed a session something
+  ("I told it to go on", "I let the agent know", "Sent.") and the turn typed
+  nothing, or that it opened a session ("Opened docs.") and the turn did not
+  open that session, the model answers once more. The one that is told or
+  opened is a session, by its name, the name of its agent, "it", "them",
+  "the session" or "the agent". A thing of a session is none ("I pulled up
+  deploy fix's output"), and neither is "As I told you", "I typed nothing",
+  or what a session did ("I see deploy fix opened a pull request"); quoted
+  words are not read. A word about a turn of the last ten minutes stands
+  when it names no other session than the one of that turn. When the second
+  answer says it again, you get plain words: "Nothing was started or
+  changed for that message. Say what I should do, and I do it.", or, when a
+  tool of the turn acted, what it did and what did not happen ("Opened
+  docs. I typed nothing into a session for that message. ..."). After any
+  other question of ClawdTime ("Want me to check on deploy fix?") a yes
+  asks for no typing and no opening, and the answer is not checked this
+  way. Neither is a turn that decided a request, nor your own question
+  ("did you tell deploy fix?").
+- A "yes" is your denial in one case: ClawdTime offered to deny the one
+  request that waits. Its message is the last one, on the same channel and
+  younger than five minutes, and it ends with the offer itself: "Should I",
+  "Shall I", "Can I", "May I", "Do you want me to", "Want me to" or "Would
+  you like me to", then deny, reject, refuse or decline, then "it", "that",
+  "the request", "the command" or a word of the head of the request's text,
+  and "?". A question about the past, a reason or another thing is no offer
+  ("Did you deny it?", "Should I decline the meeting?"). When the offer
+  says "it" or "the request", the sentence right before it speaks of the
+  request, by a word of its text. The request waited before the message, and
+  no task is live. Your
+  message is a yes and nothing else ("yes", "ok, do it", "yes, deny it");
+  "go ahead" is not one, because it can mean that the command goes ahead.
+  The model still calls the tool with "deny": the yes alone decides nothing.
+- When your message decides the one request that waits and the model answers
+  with a question or a claim in place of the tool, ClawdTime asks the model
+  once more to call the tool. That happens only when ClawdTime's last message
+  ends with its own sentence about that request ("One request waits for your
+  answer: ... Say approve or deny to answer it.") and the text of the request
+  is one short simple command, or when your message is the yes above. The code decides nothing there. A second answer that claims
+  a decision that no tool made is replaced by "Nothing was decided." and
+  what waits.
 - One message decides one request. The model names a request by its id, never
   by its place in a list, so an answer cannot move to another request when the
-  list changes. When more than one request waits, your words must say which
+  list changes. The facts of each turn give the model the ids of the requests
+  that wait, and never their texts: an agent writes the text of its request. When more than one request waits, your words must say which
   one: a word of what it asks, of its project or of its agent that the other
   requests do not have ("approve the npm test one"). Otherwise nothing is
   decided, and ClawdTime asks you which one.
+- When two requests wait and your message is a decision and nothing else
+  ("approve it", "yes, approve it", "deny that one"), ClawdTime asks which
+  one, in fixed words, and decides nothing. An agent writes the text of its
+  request, and you read or hear the question, so ClawdTime asks this only
+  where the question cannot mislead: two plain permission requests, each
+  text short, shown whole, and one simple command. A simple command has
+  parts between single spaces; each part is made of plain letters and
+  digits and of . _ / : = @ ~ + % -, and ends with a letter, a digit or
+  "/". So it holds no quote mark, no question mark, no comma and no mark of
+  the shell that joins two commands. Its first part is the bare name of a
+  program in one word of letters and digits, so the word that you say is
+  the whole name of the program that runs: "./git status", "PATH=/tmp/x git
+  status" and "git-status-x status" get no question. It also holds none of the words and,
+  then, also, plus, or, request, wait, which, approve, deny, allow, after,
+  before, next, with, and one bare number at most. "git push origin main"
+  and "chmod +x run.sh" are simple commands; "make build && git status"
+  and "ls | grep x" are not. ClawdTime does not ask while a task is live.
+  In every other case the model answers, as before, and you say the
+  decision and the request in one message.
+- Your next message can then name one request: "the push one". The
+  decision is the one that you said in the message before the question. A
+  request is named by a word of the head of its text: its first two parts
+  that are no flags ("git push", "rm dist"), each only when it is one word
+  of letters and digits ("x.sh" and "node_modules" are named by no word),
+  and where the other text does not hold that word. What follows the head can be written by an agent
+  to sound like another request, so a word from there names nothing. Each
+  of the two requests must have such a word, or ClawdTime does not ask. A
+  word that says a place in the list or an opinion ("the main one", "the
+  latter", "the safe one") names no request. The folder, the agent and the
+  id of a request are not a name here, because the question does not show
+  them.
+- That name decides only when the question is the last message, your
+  decision is the message just before it, both are on the same channel and
+  the question is younger than five minutes; when the requests that wait
+  are exactly the two of the question; and when your message is a name and
+  nothing else: words of that one text, with "the", "that" or "this" before
+  them, and "one", "request", "command" or "thing" and "please" after
+  them. Any other word or mark decides nothing there: a word of decision or
+  of stopping ("stop the push one", "ok the push one"), a hedge, a "not", a
+  question, a time, both requests, "!push". The model and the usual gate
+  read such a message, as always. A request that must be answered in its
+  terminal gets no such question.
 - Text is typed into a terminal only when your own last message asks for it
   ("type", "tell", "send", "say", "reply" or "answer"), names the session, and
   holds the text as whole words, one after the other ("Tell deploy fix: run the
@@ -492,6 +658,29 @@ started none, it says so, and then says what your own sessions do.
 ClawdTime cannot stop, close or restart a session: it has no tool for that.
 "Stop all my sessions" gets that answer, and the offer to open a session so
 that you stop it there.
+
+When you asked for no action, ClawdTime still checks one thing in its
+answer: a sentence that says that work started or is under way ("I started a
+job to push the branch", "On it", "I'll start a job for that"), in a turn
+where no tool acted. It reads the sentence against the work that did start.
+Work that runs is a job that still works or that started in the last hour,
+and the live task. Work of the day is that, and a job of the last day that
+is done. A sentence that claims new work and names it ("a job to push the
+branch", "a new session for the tests") must share a word with work that
+runs, by its first five letters, with a last "s" left out. Every other
+sentence can speak of work that exists, and is said as it is while work
+runs: "I kicked off the homepage work", "Yes, I started it", "On it". A job
+of the day that is done makes only a word about the past true ("I started
+the landing page job this morning, and it is done"), never a word about now
+or later ("On it", "I'll start it", "Job started", "I started it a minute
+ago"). Such a report must also name that job when it names work: "I started
+the push" is not the landing page job. With no work of the
+day, every such sentence is sent back: an older job that is done makes no
+claim true. A sentence that is sent back goes to the model once more,
+with no tool named, because you asked for none. When the second answer says
+it again, you get plain words: "Nothing was started or changed for that
+message. Say what I should do, and I do it." "I started to look at that"
+and "I started with the header" are a way to speak, and no start of work.
 
 ClawdTime checks its own answer when you asked for work, for a window to
 change, or to see a session. When the answer says
@@ -814,6 +1003,34 @@ a tunnel and get its link, find something out: all of these are jobs.
   one time lose work. The word must stand at the start of the sentence, before
   any "and", "then", "that" or comma: "find the big files and list them" is
   other work and starts beside the running job, as before.
+- A correction to a job that still runs waits for it too: "wait no, it's a
+  cafe not a bakery". A job that runs cannot be changed, so the correction
+  is a job of its own that starts after the first. Two forms count: a
+  contrast that names a word of the job's request ("cafe, not bakery",
+  "instead of a bakery"), and, as your next message after the request, a
+  word of correction ("wait", "no", "sorry", "I meant") before a statement
+  about the thing ("it's a cafe", "the name is ..."). Other work that opens
+  with such a word ("actually, find the big files") starts at once, as
+  before. This rule only decides the wait: your words still pass the same
+  gate before anything starts.
+- A change of mind about the job that your last message started, said as
+  an instruction about the thing, is started by the code itself as a job
+  that waits: "nah make the buttons bigger instead", "change the mode
+  instead", "actually make that a cafe instead of a bakery". The list is
+  short on purpose. It must be your next message after the request; it
+  opens (after "nah", "no", "actually" and the like) with make, add,
+  change, use, fix, update, remove, rename, replace, write, build or
+  create; right after that verb it names a thing of software with "the",
+  "its", "that", "this", "these" or "those" (the buttons, that header), or
+  it holds a word that is the job's own (the bakery of a bakery page); and
+  nothing in it stops, delays or gives a time ("make it stop", "do it
+  later", "after lunch"). Everything else is read by the language model:
+  "set an alarm instead", "write a text to my mom instead" and "use a
+  serif font instead". A job that the model starts for such a message
+  waits too. A job that starts this way goes through the same gate as
+  every job, and ClawdTime says that it starts when the job before it is
+  done. The first job is not stopped: no tool does that, and ClawdTime
+  never says that a job was cancelled or changed.
 - A job that waits opens its terminal window at once and shows that it
   waits. ClawdTime says that it waits, and the state says so until it starts.
   It starts when the job before it wrote its answer, or when you press Return
@@ -833,6 +1050,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   no job. One message starts one job. At most four jobs run at one time.
   Praise alone starts nothing, and praise that goes on with an instruction
   starts it: "nice, now add a dark mode to it".
+- A question stays a question behind a word of correction or a joining
+  word: "wait what did the first one say again", "and which file was the
+  biggest", "so how long did it take", "well is it done". Such a message
+  starts no work, whatever the language model chooses. An instruction
+  behind the same words is still work: "wait, make the buttons bigger
+  instead", "so when you are done, run the tests", "then have it deploy",
+  "ok so what I want is a landing page".
 - While an agent's request waits for your answer, a sentence starts no work
   unless it names a task or a job. "Yes, update the config" answers the
   request and does nothing else.
@@ -842,6 +1066,34 @@ a tunnel and get its link, find something out: all of these are jobs.
   next message after you started a job, is about that job. The answer is data:
   ClawdTime does not follow instructions inside it. An answer that holds a
   password or a key is not said and not sent: read it in the job's terminal.
+- A question while ClawdTime started a job in the last day starts from the
+  jobs' answers: the code reads the job list before the language model
+  answers, unless it read the state (which shows the jobs) or your words
+  fit a session. With no answer in front of it, the model made one up
+  ("the biggest file is large_video.mp4").
+- No tool stops a job. When you tell ClawdTime to stop one that still
+  works or waits ("actually cancel that", "stop it", "kill the bakery
+  job"), the code answers itself, with no language model: it cannot, the
+  job runs in its own terminal window, and you stop it by closing that
+  window. It also says that the job then writes no answer, so it stays
+  listed as working for up to a day. With several jobs it names each one
+  that is not done. Words that name the job count at any time ("the job",
+  "the bakery one"). A word that only points ("it", "that", "the build",
+  or a bare "cancel") counts only when ClawdTime's last message was about
+  a job and nothing else waits for a stop: a request of an agent, a
+  computer task. A task that is live owns every stop, and so does a
+  session that your words fit. After ClawdTime's own yes or no question,
+  "cancel that" is a no.
+- An offer to cancel, stop or restart a job is never said: no tool does
+  that. When an answer about the jobs or the state makes such an offer
+  while a job works or waits, the language model answers once more without
+  it, and a second such answer loses the sentence with the offer and keeps
+  the rest. When what is left is nothing, or only a "yes" or "sure", it
+  says what is known of the jobs instead. Only a sentence that speaks of a
+  job counts: the word "job", a word of a job's request before "one" or
+  "job" ("the bakery one"), or, when you asked about a job, a word of a
+  request or "it". An offer in a sentence that names a session or the task
+  is another matter, and "I cannot stop it" is no offer.
 - With several jobs in the last day, "what did the first one find?" gets
   the first one's answer: the job tool gives the language model each job
   of the last day (the newest five), in the order in which they started,
@@ -874,7 +1126,13 @@ a tunnel and get its link, find something out: all of these are jobs.
   A complaint about the time ("why is this taking so long?", "this is
   taking forever") is read as a question about the state: the code reads
   the state and the job before the language model answers, so the answer
-  starts from the time the job has run. An answer about a job that was read
+  starts from the time the job has run. Only when a job is not done and
+  the thing that takes long is that job: a word that points is the subject
+  ("this", "it"), or the words name the job by a word of its own ("hows
+  the downloads thing coming along"). "Look into why the login is slow" is
+  work to do, and the state is not read for it. A question that names a
+  job by a word of its own counts as a turn about that job, so its answer
+  is checked. An answer about a job that was read
   in that turn is checked in code. When it says what the job does now ("it
   is going through the logs"), how far it is ("almost done"), another time
   than the job has run, or no time when you asked how long, or when it

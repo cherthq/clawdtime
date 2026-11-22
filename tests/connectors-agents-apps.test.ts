@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appName,
   findApp,
@@ -9,6 +9,8 @@ import {
   webAddress,
 } from "../connectors/agents/apps.js";
 import {
+  clearsComputer,
+  modelWaitMs,
   Supervisor,
   type ModelClient,
   type SupervisorWorld,
@@ -296,6 +298,115 @@ describe("the brain opens an application", () => {
     expect(f.submitted).toEqual([]);
     expect(f.opened).toEqual([]);
     expect(f.started).toEqual([]);
+  });
+
+  it("goes on with the message as before when the reader of navigation fails or is slow", async () => {
+    // The reader throws: a question about the state is still answered.
+    const f = withExecution();
+    const run = scripted(["Two sessions work."]);
+    let read = 0;
+    run.model.navigation = async () => {
+      read++;
+      throw new Error("the reader is down");
+    };
+    expect(
+      await new Supervisor(f.value, run.model).reply(
+        [],
+        "what is every agent doing?",
+        "call",
+      ),
+    ).toBe("Two sessions work.");
+    expect(read).toBe(1);
+    expect(f.submitted).toEqual([]);
+    // The reader gives no answer in time: the same.
+    vi.useFakeTimers();
+    try {
+      const slow = withExecution();
+      const later = scripted(["One session waits for you."]);
+      later.model.navigation = () => new Promise(() => {});
+      const reply = new Supervisor(slow.value, later.model).reply(
+        [],
+        "is anything waiting for me?",
+        "chat",
+      );
+      await vi.advanceTimersByTimeAsync(modelWaitMs + 1);
+      expect(await reply).toBe("One session waits for you.");
+      expect(slow.submitted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears a computer task with an unknown result on the person's plain words, and only then", async () => {
+    const uncertain = () => {
+      const f = withExecution("uncertain");
+      let cleared = 0;
+      f.value.execution!.clear = () => {
+        cleared++;
+        return { message: 'Cleared: "open the terminal". New work can start.' };
+      };
+      return { f, cleared: () => cleared };
+    };
+    for (const words of [
+      "clear the computer task",
+      "Clear the computer task.",
+      "please clear it",
+      "I looked, clear it",
+      "I checked the screen and clear the computer task",
+      "I've looked at the screen, please reset the computer state.",
+    ]) {
+      const { f, cleared } = uncertain();
+      const said = await new Supervisor(f.value, scripted(["No."]).model).reply(
+        [],
+        words,
+        "call",
+      );
+      expect([words, said]).toEqual([
+        words,
+        'Cleared: "open the terminal". New work can start.',
+      ]);
+      expect(cleared()).toBe(1);
+      expect(f.submitted).toEqual([]);
+    }
+    // Words that only speak of it, or that are for another thing, clear nothing.
+    for (const words of [
+      "do not clear the computer task",
+      "should I clear it?",
+      "clear my calendar",
+      "what does clear the computer task do",
+      "clear it and then open Safari",
+    ]) {
+      expect(clearsComputer(words)).toBe(false);
+      const { f, cleared } = uncertain();
+      await new Supervisor(f.value, scripted(["No."]).model).reply(
+        [],
+        words,
+        "call",
+      );
+      expect([words, cleared()]).toEqual([words, 0]);
+    }
+    // With no unknown result the words clear nothing.
+    const idle = withExecution("idle");
+    let cleared = 0;
+    idle.value.execution!.clear = () => {
+      cleared++;
+      return { message: "Nothing to clear." };
+    };
+    await new Supervisor(idle.value, scripted(["No."]).model).reply(
+      [],
+      "clear the computer task",
+      "chat",
+    );
+    expect(cleared).toBe(0);
+    // An engine with no such command is left alone.
+    const old = withExecution("uncertain");
+    expect(
+      await new Supervisor(old.value, scripted(["No."]).model).reply(
+        [],
+        "clear the computer task",
+        "chat",
+      ),
+    ).not.toContain("Cleared");
   });
 
   it("hands plain app opening to the native worker once, in the person's original words", async () => {

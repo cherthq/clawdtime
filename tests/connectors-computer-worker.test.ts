@@ -1,6 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import type {
@@ -740,7 +746,7 @@ describe("what is not known", () => {
       canStop: false,
     });
     expect(second.worker.snapshot().message).toBe(
-      'An earlier computer task has an unknown result: "Pay the invoice". It is not run again. Look at the screen to see what happened, then run: clawdtime computer clear',
+      'An earlier computer task has an unknown result: "Pay the invoice". It is not run again. After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear',
     );
     // The same request and a new one: neither runs.
     for (const [id, text] of [
@@ -787,7 +793,7 @@ describe("what is not known", () => {
       canStop: false,
     });
     expect(worker.snapshot().message).toBe(
-      'I sent this and its result never came back: Click "Save". It may have happened or not. I do not send it again. Look at the screen, then run: clawdtime computer clear',
+      'I sent this and its result never came back: Click "Save". It may have happened or not. I do not send it again. After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear',
     );
     expect(said).toEqual([worker.snapshot().message]);
     expect(journal.get("r1")).toMatchObject({
@@ -799,6 +805,117 @@ describe("what is not known", () => {
       /unknown result/,
     );
     expect(hands.sent).toHaveLength(1);
+  });
+
+  it("clear() is the spoken clear: it marks the unknown result as seen, starts nothing and sends nothing again", async () => {
+    const { worker, hands, planner, journal } = setup([click, click, done]);
+    hands.answer = (command) => (command.kind === "click" ? "lost" : undefined);
+    await worker.submit("r1", "Click it");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("uncertain");
+    const commands = hands.commands.length;
+
+    expect(worker.clear()).toEqual({
+      message: 'Cleared: "Click it". New work can start.',
+    });
+    // Nothing ran because of it: no command, no plan, no request that runs.
+    expect(hands.commands).toHaveLength(commands);
+    expect(hands.sent).toHaveLength(1);
+    expect(planner.inputs).toHaveLength(1);
+    expect(worker.run().active).toBe(false);
+    expect(worker.snapshot()).toMatchObject({ state: "idle", canStop: false });
+    // The record stays, with the time of the look. Only the block is gone.
+    expect(journal.get("r1")).toMatchObject({
+      state: "uncertain",
+      reason: "lost_result",
+      clearedAt: expect.any(Number),
+    });
+    expect(journal.unresolved()).toBeNull();
+    // The cleared request itself never starts again, under its own id.
+    expect((await worker.submit("r1", "Click it")).message).not.toMatch(
+      /^Started/,
+    );
+    expect(hands.sent).toHaveLength(1);
+    expect(worker.clear()).toEqual({ message: "Nothing to clear." });
+    hands.answer = () => undefined;
+    expect((await worker.submit("r2", "Other")).message).toMatch(/^Started/);
+    await worker.idle();
+  });
+
+  it("clear() with nothing unknown says so and leaves a request that runs alone", async () => {
+    const { worker, hands, waiting } = setup([
+      { kind: "ask", question: "Which one?" },
+      done,
+    ]);
+    expect(worker.clear()).toEqual({ message: "Nothing to clear." });
+    await worker.submit("r1", "Click it");
+    await waiting();
+    const commands = hands.commands.length;
+    expect(worker.clear()).toEqual({ message: "Nothing to clear." });
+    expect(worker.snapshot().state).toBe("waiting_for_person");
+    expect(hands.commands).toHaveLength(commands);
+    await worker.answer("the first one");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("clear() names every request that it cleared, in one line", () => {
+    const { worker, journal } = setup([done]);
+    journal.open("a", "Pay the invoice");
+    journal.set("a", "uncertain", "lost_result");
+    journal.open("b", "Move one desktop right");
+    journal.set("b", "uncertain", "transition_unknown");
+    expect(worker.clear()).toEqual({
+      message:
+        'Cleared: "Pay the invoice". New work can start. Cleared: "Move one desktop right". New work can start.',
+    });
+    expect(worker.snapshot().state).toBe("idle");
+  });
+
+  it("clear() sets a record aside that cannot be read, as the command does, and answers in words when it cannot", async () => {
+    const { worker, journal, hands } = setup([done]);
+    mkdirSync(dirname(journal.file), { recursive: true });
+    writeFileSync(journal.file, "not a journal");
+    expect(worker.snapshot().state).toBe("uncertain");
+    expect(worker.snapshot().message).toBe(
+      'The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until it is cleared. After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear',
+    );
+    expect(worker.clear().message).toMatch(
+      /^The record of computer requests could not be read\. It was set aside as \S+journal\.unreadable-1000000\.json and is not removed\. New work can start\.$/,
+    );
+    // The clock of this test stands still, so the same name is taken: no throw, a plain line.
+    writeFileSync(journal.file, "not a journal");
+    expect(worker.clear()).toEqual({
+      message:
+        "The record of computer tasks could not be cleared now. Say it again in a moment.",
+    });
+    expect(hands.commands).toEqual([]);
+  });
+
+  it("every sentence that names the command also says the spoken way", async () => {
+    const spoken =
+      /After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear$/;
+    for (const error of ["input_unknown", "transition_unknown"] as const) {
+      const { worker, hands } = setup([click, done]);
+      hands.answer = (command) =>
+        command.kind === "click" ? { ok: false, error } : undefined;
+      await worker.submit("r1", "Click it");
+      await worker.idle();
+      expect(worker.snapshot().state).toBe("uncertain");
+      expect(worker.snapshot().message).toMatch(spoken);
+    }
+    // A fault inside the worker: the journal breaks under a request that runs.
+    const { worker, journal } = setup([click, done]);
+    journal.step = () => {
+      throw new Error("The disk is full.");
+    };
+    await worker.submit("r1", "Click it");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("uncertain");
+    expect(worker.snapshot().message).toMatch(
+      /^Something failed inside the worker/,
+    );
+    expect(worker.snapshot().message).toMatch(spoken);
   });
 
   it("a look that never came back is not uncertain: nothing was sent", async () => {
