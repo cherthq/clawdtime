@@ -107,6 +107,21 @@ identified relevant change. Never use broad process-name termination commands.
    Install directly once implementation and checks pass, as the operator requested;
    no separate scoped-call test or new deployment-confirmation step is required.
 
+## Post-deployment retention correction
+
+The proactive deployment on November 22 installed a pinned journal-retention
+adapter. The historical stop/start commands below describe the captured baseline;
+**do not run its unguarded host wrapper after this migration**. Keep the new
+immutable release's `line/host.sh` and retention preload. To select baseline agent
+code, supply `CLAWDTIME_LINE_RELEASE=/Users/garygao/clawdtime-host/line`, the original
+`CLAWDTIME_LINE_ENV_FILE`, and the installed protected
+`CLAWDTIME_LINE_RETENTION_CONFIG`. Disable new admissions and reconcile ownership
+before switching. Restore the desktop's original configuration fingerprint only
+at an idle offline boundary, preserving IDs, credentials and all current state.
+The original/new fingerprint and exact source/config hashes are in the private
+`proactive-v1/deployment.json`. See [PROACTIVE_CALLS_STATUS.md](PROACTIVE_CALLS_STATUS.md)
+and [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md) for the installed interface.
+
 ## Rollback procedure
 
 1. Disable new proactive-call admissions in the new release. Let an active call

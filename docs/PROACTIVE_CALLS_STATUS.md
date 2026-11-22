@@ -1,22 +1,23 @@
 # Proactive calls implementation and production boundary
 
-November 22, 2026. Implementation is in the `clawdtime-merge` checkout on `main`,
-based on `0b3d5189251ac9f81fbb72208d6aa6a6475c5d0b`. The retained production adapter is undergoing its authorized installation;
-this document distinguishes source checks, installed health and handset evidence.
+November 22, 2026. **Production deployed** from immutable source commit
+`b680e896eb512cfffe875066c3a6bcbfe89d0fe6`. The original proactive implementation
+is `952d49c`; retained delivery is `5b681c5`, with private-log and mapped-executable
+fixes in `4f993bd` and `b680e89`. Main includes these commits. The working baseline
+remains untouched in `/Users/garygao/clawdtime-host` at `e76989e`.
 
-Candidate implementation commit: `952d49cd581bd237bfbd7e748d1ee7b37ac91523`.
-Validation used Node `v24.22.1`, LiveKit agents `1.8.0`, and the directly pinned
-LiveKit server SDK `2.20.1`. The locally packaged Review View executable SHA-256 is
-`878b6ee558fcf35ad50b0060ec342070d4f5c525feb1aa6e2374c9b06e82d110`.
-These are candidate artifacts; production versions below did not change.
+Validation and installation use Node `v24.22.1`, provider
+`@trychert/facetime@0.1.0-beta.19`, LiveKit agents `1.8.0`, and LiveKit server SDK
+`2.20.1`. Deployment health and physical phone evidence are separate below.
 
 ## Implemented behavior
 
 - Decision hooks, eligible incidents, explicit completion watches, Claude Jobs
   and managed reviews share an encrypted durable coordinator. Exact source/run,
   decision or result identities deduplicate observations. Dispatch is reserved
-  before effects; interrupted preparation, allocation, dial and cleanup retain
-  uncertainty instead of automatically retrying.
+  before effects. Interrupted preparation invalidates stale packets and requires
+  fresh preparation; reserved delivery and cleanup effects retain uncertainty
+  without retry.
 - Version-2 policies explicitly bind calling and optional viewing to a person,
   device, project and optional session/task. Bounded attempts have independent
   identities, expiry and revocation checks. They confer no input permission.
@@ -101,13 +102,19 @@ Final automated results:
 | Native builds                                    | TaskPanel, TaskCapture and Review View passed; Review View signature verified |
 | Media / gateway suites                           | 383 / 29 passed                                                               |
 | Saved-baseline synthetic compatibility           | Passed                                                                        |
-| Changed-source formatting and `git diff --check` | Passed; supplied plan/baseline documents preserved verbatim                   |
+| Changed-source formatting and `git diff --check` | Passed                                                                        |
+
+Focused follow-up checks passed 8 retention tests (including the actual installed
+provider runDev cleanup and Node inspector migration), 20 owner tests, 11 production
+adapter tests, 27 transport tests and 16 host tests. The post-check changes were
+limited to log umask and mapped-executable verification; their relevant suites and
+the installed production build passed.
 
 Synthetic tests cover all source channels, duplicate observations, restart, lost
 responses, incoming/busy lines, slow handoff, stale frames, changed results,
 revocation, resolved decisions, Stop, cleanup and exact continuation boundaries.
 Native review, panel and capture binaries build; the packaged review app passes
-strict ad-hoc signature verification. Installed artifact and service evidence is recorded below after the production switch.
+strict ad-hoc signature verification. Installed artifact and service evidence is recorded below.
 
 `scripts/verify-proactive-compatibility.ts` loads the saved baseline's actual built
 Store, Vault, TaskLedger and TaskService against a newly created synthetic database.
@@ -126,18 +133,59 @@ under the new owner; preserve all new records when switching binaries.
 
 ## Production and rollback evidence
 
-Release staging and the authorized direct deployment are in progress. Before the
-switch, the original clean `e76989e7d54b883dba97f2410b9c4213f13d34bb` installation
-remains available in `/Users/garygao/clawdtime-host`. The candidate is installed
-alongside it rather than overwriting source, dependencies, the signed Supervisor
-app or original environment file. Automatic source updates remain held.
+The authorized direct switch completed at approximately 19:43 UTC; read-only
+owner inspection at 19:44 UTC and continued installed monitoring through
+19:45:42 UTC passed.
+No scoped-call pilot or outbound rehearsal was used.
 
-Pre-switch read-only inspection confirmed the original incoming owner, no active
-call, an available provider line and accepting worker with fresh audio/video
-readiness. All 13 checkpoint configuration entries matched their original hashes
-or absence. The original task database has one existing session and no coding
-tasks; no runtime records were copied. Final installed versions and deployment
-outcomes will replace this staging paragraph after the switch.
+| Installed component | Version / evidence                                                                                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source              | `b680e896eb512cfffe875066c3a6bcbfe89d0fe6` at `~/.local/share/clawdtime-host/releases/proactive-20261122`                                                             |
+| Provider            | Existing beta.19 unchanged; exact Node/source-pinned ClawdTime retention guard                                                                                        |
+| Desktop             | Same port 13416, state directory, desktop ID, UI token, registration ID and task session; worker now `codex`, idle `standby`, existing computer enablement retained   |
+| Incoming owner      | One active connected provider binding, exact guarded tmux process; fresh `dev_ready`/`dev_connected`; no active call                                                  |
+| Original journal    | Same filesystem device, inode and SHA-256 after clean release and reacquisition; original receipts unchanged                                                          |
+| Line readiness      | Actual fresh provider audio and video checks pass; incoming warm startup observed in host receipts                                                                    |
+| Proactive doctor    | Delivery and preparation configured, provider ready, one policy, zero pending/active/unknown intents and no blockers                                                  |
+| Review View         | Existing built artifact installed alongside release; SHA-256 `878b6ee558fcf35ad50b0060ec342070d4f5c525feb1aa6e2374c9b06e82d110`; strict signature verification passed |
+| TaskCapture         | Release build SHA-256 `ea8d86975afe516bad5b2cfdcf6e71f16f0d2b65e3c0bbbe1976821fc4a95722`; screen permission, unlocked console and login preflight passed              |
+| Supervisor app      | Original signed app unchanged                                                                                                                                         |
+| Configuration       | Protected `~/.local/share/clawdtime-host/proactive-v1`; original native/provider credentials and `.env.local` referenced in place                                     |
+| Hooks               | Nine Claude and seven Codex events installed with exact immutable script and explicit state root; Codex native `/hooks` trust remains required                        |
+| Updates             | Existing update hold retained; no scheduled update; outbound ownership hold cleared only after confirmed restoration                                                  |
+
+The initial guard migration kept the old owner alive, acknowledged installation,
+and closed the inspector. The real retained owner then reserved the deployment
+handoff, gracefully drained/revoked the old binding, required its fresh zero-work
+release receipt and verified the original journal unchanged. It restored incoming
+ownership through one new claim, retaining original binding lineage. There were
+no competing owners, copied journals, removed receipts or bypassed unknown effects.
+The read-only preflight found Darwin's `ps comm` was only `node`; before migration,
+executable verification was corrected to use the mapped executable and its pinned
+hash, with an actual bare-argv0 synthetic-process regression test.
+
+All 13 baseline configuration entries matched before switching. Changes are the
+new private configuration, exact desktop fingerprint for Codex plus checks, desktop
+launcher, global ClawdTime CLI wrapper, own hook groups, installation record, and
+private mode on the existing dev log. IDs, credentials and panel receipts were
+preserved. The original desktop and panel exited at a confirmed idle boundary;
+new startup replayed the existing registration without renewing its 24-hour
+session. Existing task state was neither copied nor reset. The service retains
+its normal session expiry/reauthorization boundary.
+
+The policy covers only the selected project, all five requested trigger types,
+100 bounded attempts over 30 days, at least 60 seconds between attempts, and
+five-minute attempt authority. Walkthrough viewing is limited to `prepared-review`;
+no input permission or silent alert fallback is granted. TypeScript and Vitest
+checks are protected outside the worker project. New explicit Claude Jobs retain
+the Claude launcher and enroll their exact run before launch. Managed tasks use
+the real Codex worker. Existing legacy Jobs without launch provenance remain
+ineligible; deployment does not invent their identities or call about them.
+
+Private installation evidence includes `deployment.json`, `config-drift.json`,
+`installed-health.json`, `owner-health.json`, the retained owner ledger, guard
+receipts and exact configuration hashes under `proactive-v1`. It contains no copied
+task database, journal, screen or audio. Original journals remain under `.chert/dev`.
 
 The private rollback checkpoint remains:
 
@@ -162,3 +210,8 @@ handset-observed**. Automated readiness and integration tests do not establish
 those physical behaviors. Codex hooks still require native client trust; arbitrary
 idle external chats cannot be resumed by a completion report. Pending hooks and
 managed-task reviews use their exact native continuation boundaries.
+
+Unknown handoff, worker, dial or cleanup outcomes can retain the outbound hold
+and leave incoming calling unavailable until exact operator reconciliation.
+There is no automatic redial or replacement claim after uncertainty. Preserve
+the original effect evidence when resolving that operational state.
