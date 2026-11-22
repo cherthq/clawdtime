@@ -32,6 +32,13 @@ public struct ChatTranscript: Codable, Equatable {
     self.version = version; self.model = model; self.speech = speech; self.voiceDirectory = voiceDirectory; self.messages = messages
     self.memory = memory; self.execution = execution
   }
+  /// True when the transcript already holds what the person just sent. The service writes the person's message
+  /// down before it answers, so the message that is still being answered must not be drawn a second time.
+  public static func holdsPending(_ messages: [Message], pending: String?) -> Bool {
+    guard let pending, let last = messages.last, last.mine else { return false }
+    let plain: (String) -> String = { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    return plain(last.text) == plain(pending)
+  }
   public func validate() throws {
     try execution?.validate()
     guard version == 1, messages.count <= 400, voiceDirectory.hasPrefix("/"), voiceDirectory.count <= 4096,
@@ -186,10 +193,17 @@ public struct VoiceActivity: Equatable, Sendable {
 
 /// UI-only handoff policy: withdrawing our editor never activates another app.
 public enum NativeExecutionPresentation {
-  public static func releasesEditor(_ execution: ChatExecution?) -> Bool {
+  /// The engine works on the screen of this Mac.
+  public static func native(_ execution: ChatExecution?) -> Bool {
     execution?.configured == true && execution?.mode == "native"
   }
+  /// A sent message withdraws our editor for a native engine, because that engine can act at once.
+  /// The panel's own hands are the exception: they close the chat and the board when a run really
+  /// starts, so a plain question keeps its chat open.
+  public static func releasesEditor(_ execution: ChatExecution?, ownHands: Bool = false) -> Bool {
+    native(execution) && !ownHands
+  }
   public static func visible(_ execution: ChatExecution?, submissionPending: Bool, stopping: Bool) -> Bool {
-    releasesEditor(execution) && (submissionPending || stopping || execution?.canStop == true || execution?.pendingAction != nil)
+    native(execution) && (submissionPending || stopping || execution?.canStop == true || execution?.pendingAction != nil)
   }
 }

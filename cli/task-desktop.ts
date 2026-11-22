@@ -111,7 +111,7 @@ function privateJSON(path: string, project: string): unknown {
     );
   }
 }
-function childEnvironment(): NodeJS.ProcessEnv {
+function childEnvironment(panel = false): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) =>
@@ -131,10 +131,33 @@ function childEnvironment(): NodeJS.ProcessEnv {
           "CLAWDTIME_OPENAI_API_KEY",
           "OPENAI_API_KEY",
           "CLAWDTIME_SUPERVISOR_MODEL",
+          // The structured intent reader of the task service, when it is "on".
+          "CLAWDTIME_SEMANTIC_TASKS",
+          // The language model that plans each action of computer use.
+          "CLAWDTIME_COMPUTER_MODEL",
           "CLAWDTIME_TRANSCRIBE_MODEL",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",
-        ].includes(key) || key.startsWith("LC_"),
+          // Jobs and applications from the panel's chat: the coding agent, the
+          // terminal, the switch for work in a service with no coding worker,
+          // and the switch that turns both off.
+          // The model that reads a picture of the screen.
+          "CLAWDTIME_VISION_MODEL",
+          "CLAWDTIME_JOB_AGENT",
+          "CLAWDTIME_JOB_TERMINAL",
+          "CLAWDTIME_SIMULATION_JOBS",
+          "CLAWDTIME_DESKTOP_WINDOWS",
+          // A service that a test started must know it: it then opens no
+          // window on the person's screen.
+          "VITEST",
+        ].includes(key) ||
+        (panel &&
+          [
+            "CLAWDTIME_SPACE_LEFT_SHORTCUT",
+            "CLAWDTIME_SPACE_RIGHT_SHORTCUT",
+            "CLAWDTIME_DESKTOP_SWITCHING",
+          ].includes(key)) ||
+        key.startsWith("LC_"),
     ),
   );
 }
@@ -446,7 +469,9 @@ export async function desktopCli(
       cwd: root,
       detached: true,
       stdio: "ignore",
-      env: childEnvironment(),
+      // Only the native panel consumes the operator's explicit Space mappings.
+      // Preserve absence: the launcher must never invent shortcut defaults.
+      env: childEnvironment(true),
     });
     await new Promise<void>((done, reject) => {
       panel.once("spawn", done);

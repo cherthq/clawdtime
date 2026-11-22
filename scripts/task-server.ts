@@ -11,6 +11,7 @@ import {
   existsSync,
 } from "node:fs";
 import { resolve, join, relative, isAbsolute, sep } from "node:path";
+import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { Store } from "../src/storage/store.js";
 import { Vault, token } from "../src/storage/security.js";
@@ -32,9 +33,19 @@ import {
 } from "../src/task-presentation-contracts.js";
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
+import { stateRoot } from "../connectors/agents/hooks.js";
+import { chooseExecution } from "../connectors/computer/service.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
 import { queueDesktopRequest } from "../connectors/agents/desktop-executor.js";
 import { BundledCuaRuntime } from "../src/control/bundled-cua-runtime.js";
+import { BackgroundRuntime } from "../src/control/background-runtime.js";
+import { QualifiedBackgroundWorker } from "../src/control/background-worker.js";
+import { backgroundConfigSchema } from "../src/control/background-config.js";
+import {
+  LineRuntime,
+  assertSeparateLineToken,
+  lineRuntimeConfigSchema,
+} from "../src/control/line-runtime.js";
 import { BundledCuaNative } from "../src/control/bundled-cua-native.js";
 import { bundledCuaConfigSchema } from "../src/control/cua-contracts.js";
 import { BundledCuaBrowser } from "../connectors/agents/bundled-cua-browser.js";
@@ -368,31 +379,68 @@ if (
   throw Error(
     "Select exactly one desktop executor; standalone presentation actors cannot share its ownership.",
   );
-const bundled = bundledConfig
-  ? new BundledCuaRuntime(
+const backgroundPath = join(directory, "background-cua.json");
+const backgroundConfig =
+  desktop && existsSync(backgroundPath)
+    ? backgroundConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(backgroundPath).toString("utf8")),
+      )
+    : undefined;
+if (
+  backgroundConfig &&
+  (executorConfig || calls || presentation || flags.get("--agents") === "false")
+)
+  throw Error(
+    "Background execution requires exclusive local runtime selection.",
+  );
+// A service that a test started never has the background runtime, as it never
+// has the computer worker: no input for the driver can come out of a test.
+if (backgroundConfig && process.env.VITEST)
+  throw Error(
+    "Background execution does not run in a service that a test started.",
+  );
+const background = backgroundConfig
+  ? new BackgroundRuntime(
       store,
       vault,
-      bundledConfig,
-      openAiBundledCuaPlanner({
-        apiKey:
-          process.env.CLAWDTIME_OPENAI_API_KEY ??
-          process.env.OPENAI_API_KEY ??
-          "",
-        model: bundledConfig.model,
-        reasoningEffort: bundledConfig.reasoningEffort,
-      }),
       () =>
-        bundledConfig.mode === "browser"
-          ? new BundledCuaBrowser(bundledConfig.browser!)
-          : new BundledCuaNative(
-              bundledConfig.native!,
-              fetch,
-              Date.now,
-              !!calls,
-            ),
+        new QualifiedBackgroundWorker(
+          backgroundConfig,
+          join(directory, "background-driver-owner.json"),
+          process.env.CLAWDTIME_OPENAI_API_KEY ??
+            process.env.OPENAI_API_KEY ??
+            "",
+        ),
+      backgroundConfig.timeoutMs,
       (text) => agentBoard?.appendExecutionResult(text),
     )
   : undefined;
+const bundled =
+  bundledConfig && !backgroundConfig
+    ? new BundledCuaRuntime(
+        store,
+        vault,
+        bundledConfig,
+        openAiBundledCuaPlanner({
+          apiKey:
+            process.env.CLAWDTIME_OPENAI_API_KEY ??
+            process.env.OPENAI_API_KEY ??
+            "",
+          model: bundledConfig.model,
+          reasoningEffort: bundledConfig.reasoningEffort,
+        }),
+        () =>
+          bundledConfig.mode === "browser"
+            ? new BundledCuaBrowser(bundledConfig.browser!)
+            : new BundledCuaNative(
+                bundledConfig.native!,
+                fetch,
+                Date.now,
+                !!calls,
+              ),
+        (text) => agentBoard?.appendExecutionResult(text),
+      )
+    : undefined;
 if (calls && bundled) {
   calls.executionOwnership = {
     acquireReviewOwnership: (id) => bundled.acquireReviewOwnership(id),
@@ -407,6 +455,7 @@ if (calls && bundled) {
   bundled.setOwnershipGuard(() => calls!.ledger.unresolved().length === 0);
 }
 const executor =
+  background ??
   bundled ??
   (executorConfig
     ? new DesktopExecutor(
@@ -424,11 +473,87 @@ const executor =
         (text) => agentBoard?.appendExecutionResult(text),
       )
     : undefined);
+// The file of the phone runtime is a private desktop file as the three before
+// it: it is read only in a desktop service, and only as a regular file of
+// this user for its owner alone, never through a link.
+const lineRuntimePath = join(directory, "line-runtime.json");
+const lineRuntimeConfig =
+  desktop && existsSync(lineRuntimePath)
+    ? lineRuntimeConfigSchema.parse(
+        JSON.parse(readDesktopPrivateBytes(lineRuntimePath).toString("utf8")),
+      )
+    : undefined;
+// A phone process never holds the operator, panel or session credential.
+if (lineRuntimeConfig)
+  assertSeparateLineToken(lineRuntimeConfig.token, [
+    config.operatorToken,
+    desktopSetup?.config.token,
+    desktopSetup?.config.sessionToken,
+  ]);
+if (
+  lineRuntimeConfig &&
+  !background &&
+  (!bundled || bundledConfig?.mode !== "native")
+)
+  throw Error("Phone computer control requires the app-owned native runtime.");
+const lineRuntime =
+  lineRuntimeConfig && (background ?? bundled)
+    ? new LineRuntime(
+        store,
+        vault,
+        lineRuntimeConfig.token,
+        (background ?? bundled)!,
+      )
+    : undefined;
+const lineRuntimeWatch = lineRuntime
+  ? setInterval(() => lineRuntime.expire(), 1000)
+  : undefined;
+// One engine does the computer work of this service. A file in the state
+// folder keeps priority: the connection to an existing chat, then the
+// background runtime, then the bundled runtime. With none of them, the
+// app-owned computer worker runs, when the person turned it on with
+// `clawdtime computer on` and a key for the language model is in this
+// environment. A service that a test started never has that worker, so no
+// command for the hands can come out of a test.
+const chosen = desktop
+  ? chooseExecution({
+      root: stateRoot({ env: process.env, home: homedir() }),
+      env: process.env,
+      chat: executorConfig ? executor : undefined,
+      background,
+      bundled,
+      actors: !!(calls || presentation),
+      board: flags.get("--agents") !== "false",
+      notify: (text) => agentBoard?.appendExecutionResult(text),
+      // The browser goes in here, as one more line:
+      //   browser: new AppleEventsBrowser(),
+      // Without it the worker refuses the browser actions and uses the screen.
+    })
+  : undefined;
+const execution = chosen?.execution;
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
+        // Work that no own tool does goes to a new coding session in the
+        // selected project, and an application can open. CLAWDTIME_DESKTOP_WINDOWS=off
+        // turns both off. A service that a test started never opens a window
+        // on the person's screen, whatever else is set.
+        ...(process.env.CLAWDTIME_DESKTOP_WINDOWS !== "off" &&
+        !process.env.VITEST
+          ? {
+              project: projectRoot,
+              jobsForTasks: process.env.CLAWDTIME_SIMULATION_JOBS === "on",
+            }
+          : {}),
         tasks: deskTasks(desktop, desktopSetup.config.token),
-        ...(executor ? { execution: executor } : {}),
+        ...(execution ? { execution } : {}),
+        // The structured intent reader of the task service: a model reads what
+        // each message is for the task, before the other rules of the chat. It
+        // is a switch, off unless CLAWDTIME_SEMANTIC_TASKS=on, so that a
+        // service that does not ask for it talks exactly as before.
+        ...(process.env.CLAWDTIME_SEMANTIC_TASKS === "on"
+          ? { semanticTasks: true }
+          : {}),
       })
     : undefined;
 agentBoard?.start();
@@ -444,6 +569,8 @@ const app = createTaskApp(
   calls,
   agentBoard,
   executor,
+  chosen?.computer.port,
+  lineRuntime,
 );
 const presentationWatch = presentation
   ? setInterval(() => {
@@ -468,7 +595,7 @@ const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, () => {
       desktopSetup.descriptor,
     );
   console.log(
-    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${calls ? "Review callbacks retain exact result intent. Fresh prepared call authorization and exclusive capture handoff are required." : bundled ? "App-owned computer runtime configured. Phone setup missing; callbacks cannot be delivered." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
+    `Task ${realWorker ? "Codex worker" : "simulation"} listening on 127.0.0.1:${port}. ${background ? "Qualified background runtime configured; admitted call and local Enable required." : calls ? "Review callbacks retain exact result intent. Fresh prepared call authorization and exclusive capture handoff are required." : bundled ? "App-owned computer runtime configured. Phone setup missing; callbacks cannot be delivered." : presentation ? "Explicit local presentation configured; capture requires local Start. No phone or control." : "Local fixture pairing only; no phone, capture or control."} Operator credential file: ${operatorPath}`,
   );
 });
 let shuttingDown = false;
@@ -479,8 +606,11 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     if (presentationWatch) clearInterval(presentationWatch);
     if (reviewWatch) clearInterval(reviewWatch);
     reviews?.close();
+    if (lineRuntimeWatch) clearInterval(lineRuntimeWatch);
+    lineRuntime?.close();
     agentBoard?.close();
     void (async () => {
+      await background?.close();
       await bundled?.close();
       await calls?.close();
       await presentation?.close();

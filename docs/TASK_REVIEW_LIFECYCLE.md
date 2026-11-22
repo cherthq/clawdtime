@@ -26,6 +26,21 @@ Canceled tasks do not schedule completion callbacks. Original goals and their
 restrictions remain in worker context and review context across revisions.
 Acceptance applies to the current verified result and never deploys anything.
 
+## The intent reader is a switch
+
+The structured intent reader of the first paragraph is off by default. Start
+the desktop service with `CLAWDTIME_SEMANTIC_TASKS=on` to turn it on. Then a
+model reads each message for the task service before the other rules of the
+chat: a new task, a revision, an acceptance, a cancel, a callback. With the
+switch off the supervisor talks exactly as it does without this change, with
+the rules for jobs, sessions and tasks that `main` has. The rest of this page
+does not depend on the switch: the coding worker has no overall deadline, and
+each known checked result schedules its callback record.
+
+While the reader is on, it stands in front of every message, so one more model
+call comes before each answer. A reader that fails refuses the message and
+starts nothing.
+
 ## Preparation and delivery
 
 `TaskReviewService` prepares the result summary, independent check results,

@@ -357,7 +357,6 @@ The native Control Panel distinguishes blocking input from historical observed o
 unverified results. Existing `unresolvedActionCount` status now reports only
 blocking input; separate historical counts are available from helper status.
 
-
 ## Independent task desktop panel
 
 `ClawdTimeTaskPanel` is a separate AppKit executable. It does not load the companion,
@@ -411,3 +410,209 @@ config is refused, and a live lock is never stolen. Process exit releases the lo
 Swift tests cover private storage, no-replay receipts, stale action gating, option
 selection, independent Stop controls, exact receipt binding, and real loopback HTTP
 redirect/POST refusal behavior. They do not establish physical handset acceptance.
+
+## Cua Driver qualification pin (November 21, 2026)
+
+The staged background backend pins official Cua Driver and
+`@trycua/cua-driver` **0.55.0**, source commit
+`8f484f30586eef722bede7a5ce315de1148cca96`, under MIT. The
+[official release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.55.0)
+macOS universal archive has SHA-256
+`faf11948f8f9b410a76750e65ae14cb1d95cc321aa61fc158f70de8a68c270b1`.
+A freshly downloaded archive matched that digest. Its `CuaDriver.app` passed
+`codesign --verify --deep --strict`; Gatekeeper accepted its stapled notarization
+as Developer ID Application **Cua AI, Inc. (YCK386LBJ7)**. The app identifies as
+`com.trycua.driver`, version 0.55.0. The manifest minimum is macOS 13.0 while the
+[current supported setup](https://cua.ai/docs/cua-driver/quickstart) requires
+macOS 14+; the qualification machine meets that requirement. The release publishes
+a Sigstore bundle; that separate signature had not yet been verified at this
+checkpoint. The TypeScript SDK's package license is MIT; optional perception-model
+licenses in the source are separate and no such model was enabled by this work.
+
+The separately installed daemon owns its Accessibility and Screen Recording grants.
+Existing companion grants do not transfer. Connect with `CuaDriver.connect` to an
+explicit protected socket; `create` can auto-start a standard daemon or fall back
+to an embedded runtime, which is not this integration's contract. Use bounded
+startup, an approved capability manifest and a narrowing policy; keep both outside
+Git. In 0.55.0, `resources` belongs at the manifest root. Input policy requires
+background delivery and exact PID/window, excludes control characters in text and
+submission keys, and does not expose scripts, process killing or full desktop input.
+These mechanical restrictions supplement the host's semantic read/draft-only check.
+
+Start the installed app by its exact path with bounded flags and the intended
+socket. The normal permission gate walks the person through System Settings.
+`permissions status --json` performs a nonprompting own-app check, but
+**`permissions grant` ignores a custom `--socket` and may start a standard daemon
+on the default socket**; do not use it to configure this isolated backend. Socket
+permissions are 0600 inside a 0700 directory. Session names label the supported
+cursor; only `cua.default` is built in. No custom art is required.
+
+Inspection of pinned macOS/core source found protected launch checks for the
+driver's own bundle IDs and no hard-coded Codex bundle denylist. That is not proof
+that Codex can be controlled: any runtime refusal remains authoritative, and actual
+Messages/Codex workflows must pass separately before backend cutover. No historical
+message request is replayed as qualification.
+
+### Durable background-controller ownership
+
+The helper now advertises `backgroundProtocol: 1` and a separate
+`backgroundUnresolvedActions` count in authenticated `/local/v1/status`.
+A missing protocol field is an unsupported helper, never implicit permission.
+`POST /local/v1/background-driver` verifies the exact installed, signed pinned
+driver and returns an opaque kernel-lifetime fingerprint. The active local lease
+can request read-only `background-application` and `background-target` witnesses:
+installed bundle/version/path, allowlisted running process, exact window membership,
+geometry and conservative current-Space status. These routes do not activate apps,
+read window contents, weaken native foreground checks or submit input.
+
+Before starting a driver session or launching an app, the trusted controller reserves
+`POST /local/v1/sessions/:lease/background-actions` with kind `controller`, stable ID,
+fingerprint, driver generation/PID/lifetime and fresh observation time. Both a new
+background journal and an unresolved sentinel in the existing local action journal
+are committed before `admitted:true` returns. A duplicate returns `admitted:false`;
+it authorizes status reconciliation only. The sentinel uses the old helper's unknown
+receipt state, so rollback helpers still block native control rather than ignoring a
+new journal they do not understand. Neither journal contains screenshots, typed text
+or secrets; the runtime's encrypted receipts retain detailed action outcomes.
+
+Stop and lease expiry release active ownership but never clear the durable fence.
+Restart converts reserved controllers to unknown and repairs incomplete paired
+journal writes conservatively. New local and legacy admission/input remain blocked.
+The authenticated cleanup-only `background-actions/:id/resolve` route remains
+available after Stop. It requires the exact receipt/driver identities, explicit
+session quiescence, all detailed outcomes reconciled, a fresh observation ID/time
+and an observed-completed or definite-not-dispatched outcome. The controller must
+obtain this evidence; an acknowledgement, timeout or cursor disappearance is not
+quiescence. Unknown effects remain unresolved. No helper route starts a process,
+runs a command, or dispatches a driver action.
+
+Swift failure tests cover paired-journal interruption, Stop/expiry cleanup, restart,
+wrong-driver resolution, duplicates, unknown outcomes and the legacy local-store
+fence. They are not physical Stop or driver-restart acceptance.
+
+### Updating the staged helper
+
+The current packaging script builds a new artifact and signs ad hoc unless an
+explicit identity is supplied to `mac/scripts/package.sh`. The bundled-runtime
+packager currently forces ad-hoc signing. The inspected installed local helper has
+bundle ID `com.clawdtime.local-control`, no signing team, and a designated requirement
+bound to its current code hash. Changing its executable changes that requirement;
+keeping the path and bundle ID alone does not establish preserved TCC authorization.
+Do not reset TCC or copy permission databases to work around this. An updated helper
+requires permission/status requalification on this Mac; stable distribution signing
+must be established separately before promising identity continuity across updates.
+
+Only the coordinating lead may switch the idle installed runtime to a separately
+built and verified version. Preserve the existing private configuration and both
+receipt journals, retain the previous artifact for rollback, stop the exact former
+controller/helper before starting its replacement, and reject helpers missing
+`backgroundProtocol:1`. Ad-hoc build validation is not notarization, physical local
+Stop acceptance, or proof that prior permission grants still apply.
+
+After the lead installed the updated local helper, its read-only status reported
+both required macOS permissions granted. This verifies retained grants for this
+particular update; it does not change the ad-hoc signing limitation above. Local
+Enable remained off at that observation, which is a separate user-controlled gate.
+
+### Diagnosing an unexpected local disarm
+
+`mac/scripts/background-session-event-witness.swift` is a bounded read-only
+notification witness. Compile it outside the installed runtime and run with
+`--helper-pid <exact-current-helper-pid> --seconds 300` (maximum 600 seconds).
+It opens no window, requests no activation, reads no helper secrets/configuration
+or screen content, and submits no input. Its stdout contains only fixed event names,
+wall/elapsed timestamps and session/conflicting-helper availability booleans.
+It watches the helper's screen-parameter, sleep/wake, session and lock/unlock events,
+plus display-reconfiguration callbacks and 50 ms availability changes. The raw
+availability observation does not expose the helper's private forced-unavailable
+latch. Start it before local Enable and let startup notifications settle.
+
+The previous helper's screen-parameter callback always called the full Stop path,
+even when the current session remained available. The staged display-signature guard
+below retains Stop for changed or uncertain display facts. Wake/unlock/restored
+callbacks still require a fresh local Enable. A temporary unavailable session or competing helper
+can similarly disarm through policy checks before a later status reads available.
+By contrast, the local session-stop route and ordinary lease expiry release the
+lease without explicitly disarming. These distinctions narrow the diagnosis but
+do not identify an observed cause without matching event timestamps.
+
+Apple documents [screen-parameter notifications](https://developer.apple.com/documentation/appkit/nsapplication/didchangescreenparametersnotification)
+as display-configuration changes; the notification contains no cause payload.
+The inspected pinned driver's exact-window capture uses capture APIs and software
+image resizing, with no display-mode setter found on that path. The helper's status
+panel uses a nonactivating floating panel. Neither finding proves what triggered a
+particular notification. Preserve local Stop and all meaningful display/session
+boundaries; do not automatically re-arm after a capture or notification.
+
+### Operator retirement of one uncertain New Chat navigation
+
+An uncertain navigation must not be relabeled as successful or never dispatched.
+The authenticated operator-only route
+`POST /local/v1/sessions/:lease/background-actions/:controller/retire-navigation`
+accepts a narrow trusted attestation after the exact driver controller is quiescent.
+It is separate from ordinary worker shutdown and generic resolution. It uses the
+existing helper bearer, so this is a trusted operator boundary, not a second
+cryptographic privilege. The coordinating runtime must first independently verify
+its immutable encrypted action manifest: exactly the designated Codex New Chat
+navigation, no text or submission dispatched, and no replay. The helper receives
+only linked IDs/hashes and cannot inspect that manifest itself.
+
+The request contains the original controller fingerprint, driver generation/PID/
+process-start fingerprint, `driverQuiescent:true`, an observation ID/time, and
+`evidence` with `kind:"codex_new_chat_navigation"`, exact session/task IDs,
+action receipt ID/fingerprint, `originalOutcome:"unknown"`, `noReplay:true`, and
+`noTextOrSubmissionDispatched:true`. Initial evidence must be fresh within five
+seconds and after the reservation. Exact retries are idempotent; changing any
+retained evidence is rejected. Generic resolve cannot create or reclassify this
+retirement, and a resolved controller cannot become a retired unknown.
+
+The background receipt becomes `retired_unknown_navigation` with a separate
+`retirement` object, while its original reservation remains intact and no success
+resolution is recorded. That record commits before the local sentinel changes to
+state `unknown` with evidence
+`background_controller_quiescent_retired_unknown_navigation`. The new helper
+exempts the sentinel from active exclusivity only after validating the matching
+durable background retirement in memory. A standalone local-journal reader or
+older helper still counts it unresolved; rollback therefore fails closed without
+inventing an old-format successful outcome. Restart reconstructs the exemption
+only from the exact durable proof and repairs interrupted sentinel updates.
+
+This cleanup neither arms the helper nor recreates a lease, dispatches input, clears
+unknown application history, or authorizes replay. Runtime owner release occurs
+last, after helper retirement and its own linked no-replay disposition are durable.
+Tests cover Stop/expiry cleanup, exact retry/conflict, rejected classes/contexts,
+missing assurances, both journal interruption orders, and old-reader blocking.
+
+### Stable display-notification guard
+
+`DisplayConfigurationGuard` distinguishes a duplicate screen-parameter notification
+from an actual change by comparing complete, canonical display facts. The native
+reader enumerates active and online display IDs, main-display identity, bounds,
+mode ID/flags, logical and backing-pixel sizes, refresh rate, rotation, mirroring,
+and NSScreen backing scale. It rejects incomplete/duplicate/mismatched IDs,
+nonfinite/invalid geometry and changes in enumeration during a read. Two consecutive
+complete identical reads are required before comparing against the prior baseline.
+Ordering alone does not change the signature. The signature stays in memory; no
+screen pixels, window titles, application content or device serial numbers are read.
+
+A notification whose complete signature equals the baseline increments
+`ignoredStableScreenNotifications` in authenticated status without disarming.
+Any different signature still runs the full Stop path and clears old local frame/
+target proofs. Missing or unstable metadata stops with
+`screen_parameters_unavailable` and retires the baseline. Explicit local Enable
+also checks two complete reads, refuses uncertainty and retires prior authority
+before establishing an explicitly enabled changed configuration. No notification
+arms the helper. Sleep/wake/lock/session events and explicit Stop remain unchanged.
+
+NSScreen `visibleFrame` is intentionally excluded: Dock/menu-bar work-area insets can
+change with application presentation without changing display identity, screenshot
+bounds, pixel scale or absolute input coordinates. Exact target-window geometry is
+still independently validated before input. This exception does not ignore display
+origin/size, scaling, rotation, mirroring, online membership or mode changes.
+
+Six regression tests cover stable duplicates, enumeration reordering, every stored
+coordinate/mode fact, attachment/removal/main-display/active/mirror changes and
+missing/unstable/invalid reads. The native reader returned two complete identical
+snapshots on the qualification Mac. Local Enable followed by ordinary app switching
+and an increased ignored-notification counter remains a physical acceptance check;
+these tests do not establish that outcome or a specific cause of OS notifications.

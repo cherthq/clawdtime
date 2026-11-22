@@ -90,7 +90,8 @@ the next hook event arrives.
 | tmux                      | The window and pane, then the terminal of the attached tmux client |
 | Terminal, iTerm2          | The exact tab                                                      |
 | Ghostty 1.4 or later      | The exact tab                                                      |
-| Ghostty before 1.4, other | The application. You choose the tab                                |
+| Ghostty before 1.4        | The exact tab, when one terminal shows the session's title         |
+| Other                     | The application. You choose the tab                                |
 | Remote (ssh) session      | Nothing: its terminal is not on this Mac                           |
 | A session of a remote Mac | A new window here: see [Remote Macs](#remote-macs)                 |
 

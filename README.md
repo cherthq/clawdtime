@@ -18,6 +18,8 @@ Setup: Install one desktop app → connect models and tools (essentially need to
 
 The goal is a simple, one-click installation followed by guided setup.
 
+To put ClawdTime on a FaceTime line today, follow [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md).
+
 1. **Chat from the desktop or phone.** A floating companion or command bar lives on your desktop. Click it to open chat, assign a task, and answer clarifying questions through selectable options. You can also text it a task.
 2. **Let it work.** ClawdTime plans the task, chooses tools or agents, and tracks progress. It drives workers through APIs and command-line tools by default, with computer use for apps that need it. You can request a call to watch it perform a task.
 3. **Resolve issues together.** When it needs human input, it diagnoses the problem and prepares the walkthrough before calling. During FaceTime, it shares the live screen, zooms in on the relevant area, and explains the decision. You discuss the fix while it coordinates edits or computer actions and verifies the result.

@@ -45,6 +45,7 @@ import {
   type Incident,
 } from "../connectors/agents/watch.js";
 import { realSystem, type System } from "../connectors/agents/system.js";
+import { sessionTitles, tabTitles } from "../connectors/agents/topics.js";
 import type {
   AgentKind,
   AgentSession,
@@ -68,6 +69,8 @@ ${supervisorHelp}`;
 export interface AgentsDependencies {
   /** The language model of the ClawdTime agent. Tests script it. */
   model?: ModelClient | null;
+  /** The HTTP client of the text message channel. Tests script it. */
+  request?: typeof fetch;
   system?: System;
   runner?: Runner;
   print?: (line: string) => void;
@@ -253,6 +256,7 @@ async function watch(
   runner: Runner,
   desk: DecisionDesk,
   store: WatchStore,
+  system: System,
 ) {
   const output = process.stdout;
   const input = process.stdin;
@@ -356,7 +360,12 @@ async function watch(
       if (value === "\r" || value === "\n") {
         const session = snapshot.sessions[index()];
         if (!session) return;
-        void focusSession(session, runner).then((result) => {
+        void focusSession(
+          session,
+          runner,
+          "tmux",
+          tabTitles(session, sessionTitles(system, session)),
+        ).then((result) => {
           message = result.ok
             ? `Focused ${precisionText[result.precision]}.`
             : "That session has no terminal on this Mac to focus.";
@@ -387,6 +396,7 @@ export async function agentsCli(
       hookScript: dependencies.hookScript ?? hookScriptPath(),
       findSession,
       model: dependencies.model,
+      ...(dependencies.request ? { request: dependencies.request } : {}),
     });
   const command = args[0] && !args[0].startsWith("--") ? args[0] : "list";
   const rest = command === args[0] ? args.slice(1) : args;
@@ -446,6 +456,7 @@ export async function agentsCli(
       runner,
       new DecisionDesk(stateRoot(system), () => system.now()),
       new WatchStore(stateRoot(system)),
+      system,
     );
   }
   if (command === "incidents") {
@@ -507,7 +518,12 @@ export async function agentsCli(
     const remote = new HostBook(stateRoot(system)).get(session.host);
     const result = remote
       ? await focusRemote(remote, session, runner, stateRoot(system))
-      : await focusSession(session, runner);
+      : await focusSession(
+          session,
+          runner,
+          "tmux",
+          tabTitles(session, sessionTitles(system, session)),
+        );
     if (!result.ok) {
       process.exitCode = 2;
       return print(

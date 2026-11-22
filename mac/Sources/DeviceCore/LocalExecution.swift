@@ -31,8 +31,8 @@ public final class LocalExecutionPolicy {
     if let lease { retired.insert(lease.id); shared.releaseLocal(lease.id) }
     lease = nil; frame = nil; generation += 1
   }
-  public func check(now: Date, available: Bool) throws {
-    do { try shared.check(now: now, sessionAvailable: available) }
+  public func check(now: Date, available: Bool, unavailableReason: LocalStopReason = .sessionUnavailable) throws {
+    do { try shared.check(now: now, sessionAvailable: available, unavailableReason: unavailableReason) }
     catch { stop(); throw error }
     if let lease, lease.expiresAt <= now || shared.localSessionOwner != lease.id {
       stop(); throw HelperError(410, "Local session ended or expired.")

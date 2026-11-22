@@ -33,6 +33,8 @@ final class MascotView: NSView {
   var motion = BodyPhysics.Frame()
   /// A hand holds the mascot.
   var held = false
+  /// Computer use types on the person's Mac: the mascot looks down and taps.
+  var typing = false
   /// Another animation is running and wants the full frame rate.
   var boost = false
   /// Runs after each frame of the mascot, on the same clock.
@@ -108,9 +110,10 @@ final class MascotView: NSView {
     input.gait = motion.gait; input.gaitPhase = motion.gaitPhase; input.held = held
     var pose = animator.step(step, input)
     pose.roll += lean
+    if typing { TypingBeat.apply(to: &pose, at: animator.time, still: Theme.reduceMotion) }
     if pose != lastPose { flat.pose = pose; lastPose = pose }
     jelly(stretch: Theme.reduceMotion ? 0 : motion.stretch, angle: motion.stretchAngle)
-    clock.framesPerSecond = boost ? 120 : animator.preferredFramesPerSecond(input)
+    clock.framesPerSecond = boost ? 120 : typing ? 60 : animator.preferredFramesPerSecond(input)
     afterFrame?(step)
   }
 }

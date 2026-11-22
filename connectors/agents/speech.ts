@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
+import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 
 /** Speech in and speech out, through the OpenAI audio API. Only a status is ever reported on failure. */
 export interface SpeechSettings {
@@ -46,9 +47,9 @@ export async function transcribe(
   if (!response.ok)
     throw new Error(`Transcription answered ${response.status}.`);
   const body = (await response.json()) as { text?: unknown };
-  return typeof body.text === "string"
-    ? body.text.replace(/\p{C}/gu, " ").trim().slice(0, 2000)
-    : "";
+  if (typeof body.text !== "string") return "";
+  if (body.text.length > userMessageLimit) throw new Error(userMessageTooLong);
+  return body.text.replace(/\p{C}/gu, " ").trim();
 }
 
 /** The answer as speech: the bytes of one MP3. */
