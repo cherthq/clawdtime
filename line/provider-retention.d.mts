@@ -56,3 +56,5 @@ export function authorizeRetentionBinding(
   },
 ): void;
 export function assertRetainedJournalsClean(configFile: string): void;
+
+export function mappedNodeExecutable(pid: number): string;

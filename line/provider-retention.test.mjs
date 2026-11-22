@@ -116,7 +116,7 @@ const installed = process.execPath.replace(
   "/lib/node_modules/@trychert/facetime",
 );
 test(
-  "controlled inspector installs into synthetic process, acknowledges and closes debugger",
+  "controlled inspector resolves bare argv0 from mapped executable, installs, acknowledges and closes debugger",
   {
     skip:
       process.version !== RETENTION_PIN.nodeVersion ||
@@ -157,6 +157,7 @@ test(
           "synthetic",
         ],
         {
+          argv0: "node",
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
@@ -164,6 +165,12 @@ test(
         child.stdout.once("data", r);
         child.once("error", j);
       });
+      assert.equal(
+        execFileSync("/bin/ps", ["-p", String(child.pid), "-o", "comm="], {
+          encoding: "utf8",
+        }).trim(),
+        "node",
+      );
       const { describeRetentionTarget, migrateRetention } = await import(
         migrationURL
       );

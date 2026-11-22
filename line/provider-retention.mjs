@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { dirname, join, resolve, isAbsolute } from "node:path";
+import { basename, dirname, join, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const RETENTION_PIN = Object.freeze({
@@ -71,6 +71,48 @@ export function processIdentity(pid = process.pid) {
   }).trim();
   if (!start) throw Error("retention_process_missing");
   return { pid, startedAt: start };
+}
+/** Darwin ps comm can be bare argv0; use mapped text files, never PATH resolution. */
+export function mappedNodeExecutable(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 2)
+    throw Error("retention_pid_invalid");
+  let output;
+  try {
+    output = execFileSync(
+      "/usr/sbin/lsof",
+      ["-a", "-p", String(pid), "-d", "txt", "-F", "n"],
+      {
+        encoding: "utf8",
+        maxBuffer: 262144,
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+  } catch {
+    throw Error("retention_mapped_executable_unavailable");
+  }
+  const candidates = [
+    ...new Set(
+      output
+        .split("\n")
+        .filter((line) => line.startsWith("n/"))
+        .map((line) => line.slice(1)),
+    ),
+  ];
+  if (candidates.length > 64)
+    throw Error("retention_mapped_executable_ambiguous");
+  const matches = [];
+  for (const candidate of candidates) {
+    if (candidate.length > 4096 || basename(candidate) !== "node") continue;
+    const path = fs.realpathSync(candidate),
+      stat = fs.statSync(path);
+    if (!stat.isFile() || stat.size > 268435456) continue;
+    if (sha256(fs.readFileSync(path)) === RETENTION_PIN.nodeSha256)
+      matches.push(path);
+  }
+  const exact = [...new Set(matches)];
+  if (exact.length !== 1) throw Error("retention_mapped_executable_mismatch");
+  return exact[0];
 }
 export function readRetentionConfig(path) {
   const c = privateJSON(path);
@@ -256,12 +298,7 @@ export function readRetentionEvidence(configFile, pid) {
     e.commandHash !== proof.commandHash ||
     e.nodeVersion !== RETENTION_PIN.nodeVersion ||
     e.nodeHash !== RETENTION_PIN.nodeSha256 ||
-    e.execPath !==
-      fs.realpathSync(
-        execFileSync("/bin/ps", ["-p", String(pid), "-o", "comm="], {
-          encoding: "utf8",
-        }).trim(),
-      ) ||
+    e.execPath !== mappedNodeExecutable(pid) ||
     e.processCommandHash !==
       sha256(
         execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], {

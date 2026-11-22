@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import {
   inspectPinnedProvider,
+  mappedNodeExecutable,
   privateJSON,
   processIdentity,
   readRetentionConfig,
@@ -31,11 +32,7 @@ export function describeRetentionTarget(configFile, pid) {
   );
   if (/(?:^|\s)NODE_OPTIONS=/.test(environment))
     throw Error("retention_migration_node_options_present");
-  const executable = execFileSync(
-    "/bin/ps",
-    ["-p", String(pid), "-o", "comm="],
-    { encoding: "utf8" },
-  ).trim();
+  const executable = mappedNodeExecutable(pid);
   if (
     !command.split(/\s+/).some((arg, index, args) => {
       if (args[index + 1] !== "dev") return false;
