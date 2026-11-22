@@ -1,5 +1,69 @@
 # Proactive calls implementation and production boundary
 
+## November 22: observed completion walkthrough
+
+A real managed documentation task completed, passed the normal TypeScript and
+repository checks, and automatically called the paired human. The human confirmed
+ringing, the spoken completion summary, and the prepared review visible on the
+phone. The exact task subsequently reached `accepted` through the phone path.
+This establishes this managed-task completion/review flow; it does not establish
+arbitrary external-session hooks or follow-on coding execution.
+
+The live run exposed and corrected three issues:
+
+- `479b442`: wait for the exact worker's authenticated readiness acknowledgement
+  after LiveKit publications appear. Keep authority, liveness, fresh-frame and
+  one-shot dial checks. Return only fixed, non-sensitive refusal codes.
+- `4926009`: establish the hooks test fixture's intended mode with `chmod`.
+  The production `077` umask correctly removed group-read during creation; the
+  test had assumed another umask. Preserve both the production privacy settings
+  and the permission-preservation assertion. The same fixture correction is
+  installed in the selected project, with its other uncommitted work preserved.
+- `682a1a6`: observe bounded provider idle/media-readiness convergence before
+  reserving the incoming claim. No claim or host start is retried. Changed
+  ownership, holds or journals still fail closed, and uncertainty retains the hold.
+
+One capture refusal was explained by the human moving the review window partly
+off-screen. Exact-window guards were retained unchanged. A later stationary review
+was physically observed on the phone.
+
+The completion call's restoration initially stopped before any incoming claim
+reservation. Exact provider cleanup, unchanged retained journals, the original
+hold, absent host/worker, completed media/capture receipts, and the absence of any
+new claim reservation were verified before an audited reconciliation. One incoming
+claim was then performed and confirmed; the original unknown history was retained
+and its transport outcome reconciled from the new receipts. No call was redialed
+as part of that recovery.
+
+The installed runtime overlay is
+`~/.local/share/clawdtime-host/releases/proactive-handoff-682a1a6`: backend base
+`479b442`, with the owner adapter from `682a1a6`. `RELEASE_MANIFEST.json` records
+the exact overlay. Later upstream conversation/planner changes are integrated on
+main but are not silently included in this runtime overlay. The incoming host,
+provider CLI, credentials, policy/session authority, update hold and journal guard
+are retained. Temporary test diagnostics and their configuration fingerprint were
+restored to the original check plan; raw diagnostic test output was removed after
+recording the cause.
+
+Final validation: TypeScript, build, formatting, 6,746 tests across 174 files
+(`vitest run --maxWorkers=4`), and 282 line tests passed. Two earlier default-
+parallelism runs each hit a different timing limit (browser targeting and the
+local inspector fixture); the browser test passed separately and the complete
+four-worker run passed without weakening assertions or timeouts. Fresh installed
+doctor checks report provider ready and zero pending, active or unknown calls.
+The final restoration wait was unit-tested and installed after the observed call;
+no additional handset call was placed solely to exercise that wait.
+
+Private installation/reconciliation evidence is under
+`~/.local/share/clawdtime-host/proactive-v1/production-task-check`. Preserve the
+current journals and receipts during rollback. At an idle, reconciled boundary,
+the prior desktop release is `proactive-ready-479b442`; retain the corrected owner
+adapter and existing retention guard when reverting desktop code. The older
+baseline rollback requirements below still apply. Never reset the task ledger,
+restore a stale cursor, or use an unguarded incoming host launcher.
+
+## Initial production deployment
+
 November 22, 2026. **Production deployed** from immutable source commit
 `b680e896eb512cfffe875066c3a6bcbfe89d0fe6`. The original proactive implementation
 is `952d49c`; retained delivery is `5b681c5`, with private-log and mapped-executable
