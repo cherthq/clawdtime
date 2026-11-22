@@ -11,6 +11,7 @@ import {
   CUA_DRIVER_PROBE_VERSION,
   cuaDriverProbeConfigSchema,
   probePinnedCuaDaemon,
+  refuseDriverInTest,
 } from "./cua-driver-probe.js";
 
 const id = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
@@ -690,6 +691,7 @@ export async function connectPinnedBackgroundDaemon(
   host: BackgroundPortHostWitness,
   signal: AbortSignal,
 ) {
+  refuseDriverInTest();
   const config = pinnedBackgroundPortConfigSchema.parse(raw);
   const probe = await probePinnedCuaDaemon(
     cuaDriverProbeConfigSchema.parse({

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { connectPinnedBackgroundDaemon } from "../connectors/agents/cua-driver-background-port.js";
 import {
+  driverRefusedInTest,
   inspectCuaDriverDaemon,
+  probePinnedCuaDaemon,
+  refuseDriverInTest,
   verifyCuaDriverStatus,
   type CuaDriverProbeConfig,
   type CuaDriverProbePort,
@@ -211,5 +215,32 @@ describe("pinned read-only Cua daemon preflight", () => {
     await expect(failed.inspect()).rejects.toThrow();
     expect(calls).toBe(1);
     expect(failed.events).toEqual(["shutdown", "destroy"]);
+  });
+});
+
+describe("the installed driver and a test", () => {
+  it("is never reached from a process that a test started", async () => {
+    // This process is a test: the refusal comes before the configuration is
+    // read, so no file is opened, no command runs and no SDK is loaded.
+    expect(process.env.VITEST).toBeTruthy();
+    const signal = new AbortController().signal;
+    await expect(probePinnedCuaDaemon(config, signal)).rejects.toThrow(
+      driverRefusedInTest,
+    );
+    await expect(
+      probePinnedCuaDaemon("not a configuration", signal),
+    ).rejects.toThrow(driverRefusedInTest);
+    const host = {
+      withLease: async () => {
+        throw Error("The host must not be asked.");
+      },
+    };
+    await expect(
+      connectPinnedBackgroundDaemon("not a configuration", host, signal),
+    ).rejects.toThrow(driverRefusedInTest);
+    expect(() => refuseDriverInTest({ VITEST: "true" })).toThrow(
+      driverRefusedInTest,
+    );
+    expect(() => refuseDriverInTest({})).not.toThrow();
   });
 });

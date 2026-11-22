@@ -380,6 +380,12 @@ if (
   throw Error(
     "Background execution requires exclusive local runtime selection.",
   );
+// A service that a test started never has the background runtime, as it never
+// has the computer worker: no input for the driver can come out of a test.
+if (backgroundConfig && process.env.VITEST)
+  throw Error(
+    "Background execution does not run in a service that a test started.",
+  );
 const background = backgroundConfig
   ? new BackgroundRuntime(
       store,
