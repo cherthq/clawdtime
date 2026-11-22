@@ -89,9 +89,20 @@ showed the same surface as before. That is the last desktop on that side, or a
 shortcut that did nothing. It is known, so it is not `transition_unknown` and
 nothing locks. The worker says "The desktop did not change. There may be no
 desktop on that side." One look that shows nothing or another surface, one
-Space change, Stop or a takeover in the wait, and the result stays unknown. A
-move to an empty desktop reports a Space change and shows no window, so it
-still ends as unknown.
+Space change, Stop or a takeover in the wait, and the result stays unknown.
+
+A fourth outcome is an arrival on **a desktop with no window**. No window can
+be the evidence there, so the evidence is the window server itself: exactly one
+Space change was reported, no window of the app in front was read, and the
+window server lists no ordinary window on the display, for four looks in a row
+over one second. A window, a look that is not empty, a second Space change or a
+new epoch starts the count again. The observation of such a desktop gives no
+lease for input, as before; an app can be opened from it. A desktop with no
+window can also be left: the arrival is then a window that holds, by the rule
+of every arrival. "Previous desktop" is not available from it, and a move
+between two desktops that both have no window stays unknown: they look the
+same. Before this, a move to an empty desktop ended as unknown and locked new
+work, and a move from one was refused.
 
 ## Target-window activation
 
