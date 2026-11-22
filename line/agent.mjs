@@ -153,7 +153,8 @@ export async function callEntry(ctx) {
     // The stone shows what the agent does: it speaks, it works on a request, it listens.
     const state = () =>
       heard === "speaking" ? "speaking" : busy > 0 ? "thinking" : heard;
-    const frame = () => {
+    /** Sends one frame. False when the call ended, or when the frame could not be made or sent. */
+    const draw = () => {
       if (ended) return false;
       try {
         const pixels = picture.frame(tick++, state(), video?.frame());
@@ -162,10 +163,14 @@ export async function callEntry(ctx) {
         );
         return true;
       } catch {
-        if (!frameFailed) log("frame_failed");
-        frameFailed = true;
         return false;
       }
+    };
+    // The frame of the timer. A failure is in the log once for a call, never once for each frame.
+    const frame = () => {
+      if (draw() || ended || frameFailed) return;
+      frameFailed = true;
+      log("frame_failed");
     };
     const quiet = async (step) => {
       try {
@@ -255,9 +260,15 @@ export async function callEntry(ctx) {
     // Preferences only: no events/media are persisted. Local controls apply during a call.
     settingsTimer = setInterval(() => video.settings(zoomSettings.read()), 500);
     log("call_started");
+    // A relative CLAWDTIME_CONFIG_HOME gives the zoom preferences no file. The call goes on, with the
+    // preferences in memory until it ends.
+    if (!zoomSettings.durable) log("zoom_settings", { code: "memory_only" });
     // The picture goes out as the first thing of a call: it is ready, so this is one frame and one publish.
-    if (!frame()) throw new Error("Initial video frame unavailable");
-    mark("first_frame");
+    // A first frame that fails must not end the call. The voice works without it, the camera track is
+    // still published, and the timer below tries every later frame.
+    const first = draw();
+    if (ended) return;
+    mark(first ? "first_frame" : "first_frame_failed");
     try {
       await ctx.room.localParticipant.publishTrack(track, {
         source: TrackSource.SOURCE_CAMERA,
@@ -279,7 +290,10 @@ export async function callEntry(ctx) {
         ? "The screen is on the call now."
         : "The screen capture did not start on this Mac.";
     };
-    /** After a request to ClawdTime: the view that it set, when it set one during this call. */
+    /**
+     * After a request to ClawdTime: the view that it set, when it set one during this call. The camera keeps
+     * that view until the person asks for another: nothing here has to set it again after a hide or a gap.
+     */
     const syncView = async () => {
       const now = await readView();
       if (!now || now.at < callStarted || ended) return;
@@ -333,7 +347,8 @@ export async function callEntry(ctx) {
           model: "gpt-realtime",
           voice: process.env.CLAWDTIME_LINE_VOICE || "marin",
           // A phone line is noisy: a higher threshold than the default 0.5, so line noise is not a turn of the
-          // caller, and half a second of silence ends a turn.
+          // caller, and half a second of silence ends an item of speech. A request with a longer pause in it
+          // arrives as several items: the binding forwards them together (desktop-intent.mjs).
           turnDetection: {
             type: "server_vad",
             threshold: 0.7,

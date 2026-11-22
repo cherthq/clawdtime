@@ -1,17 +1,19 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { JobContext, initializeLogger } from "@livekit/agents";
 import {
   LocalVideoTrack,
   ParticipantKind,
   RoomEvent,
   TrackSource,
+  VideoSource,
   dispose,
 } from "@livekit/rtc-node";
 import agent from "./agent.mjs";
+import { settings } from "./desk.mjs";
 import { startupError } from "./startup-diagnostics.mjs";
 
 const runner = process.env.VITEST
@@ -61,12 +63,12 @@ test("startup diagnostics retain only bounded error names and allowlisted source
 // the room/network boundary is synthetic: avatar pixels, RTC source/track,
 // caller lifecycle, and preference isolation use the real implementation.
 // Every case stops before model creation, desktop lookup, or screen capture.
-async function fixture(run) {
+async function fixture(run, { configHome } = {}) {
   const home = mkdtempSync(join(tmpdir(), "clawdtime-startup-"));
   const priorHome = process.env.CLAWDTIME_CONFIG_HOME;
   const priorLog = console.log;
   const events = [];
-  process.env.CLAWDTIME_CONFIG_HOME = home;
+  process.env.CLAWDTIME_CONFIG_HOME = configHome ?? home;
   console.log = (line) => {
     try {
       const event = JSON.parse(line);
@@ -234,6 +236,124 @@ for (const alreadyPresent of [false, true]) {
       f.disconnect();
       for (const cleanup of f.ctx.shutdownCallbacks) await cleanup();
       endedOnce(f);
+    });
+  });
+}
+
+test("a relative CLAWDTIME_CONFIG_HOME does not stop the call: the zoom preferences live in memory", async () => {
+  const relative = `clawdtime-startup-relative-${process.pid}`;
+  for (const configHome of [relative, undefined]) {
+    await fixture(
+      async (f) => {
+        f.start();
+        await f.flush();
+        f.add(f.participant());
+        // The call gets as far as every other call of this fixture: the camera publication, which is
+        // synthetic here and fails.
+        assert.match(
+          (await f.result()).error?.message,
+          /^Call startup failed at /,
+        );
+        assert.equal(f.publications(), 1);
+        assert.equal(
+          f.events.find((event) => event.clawdtime_line === "startup_failed")
+            ?.code,
+          "first_frame",
+        );
+        // One line says that nothing is kept for later calls. A usual folder gives no such line.
+        assert.deepEqual(
+          f.events
+            .filter((event) => event.clawdtime_line === "zoom_settings")
+            .map((event) => event.code),
+          configHome ? ["memory_only"] : [],
+        );
+        endedOnce(f);
+      },
+      { configHome },
+    );
+  }
+  assert.equal(existsSync(resolve(relative)), false);
+});
+
+// A first video frame that fails. The call must go on: before, the entry threw and the caller got no voice.
+// The fixture stops every call before the model. To see the frames of the timer, this one holds the call at
+// the read of the earlier talk, which is a command: here a script that waits until the test lets it go.
+for (const failing of ["first", "every"]) {
+  test(`a call goes on when ${failing} video frame fails: the camera is published and later frames are tried`, async () => {
+    await fixture(async (f) => {
+      const folder = process.env.CLAWDTIME_CONFIG_HOME;
+      const command = join(folder, "recall-wait.sh");
+      writeFileSync(
+        command,
+        '#!/bin/sh\nwhile [ ! -e "$0.go" ]; do sleep 0.02; done\n',
+        { mode: 0o700 },
+      );
+      const prior = {
+        capture: VideoSource.prototype.captureFrame,
+        command: settings.clawdtime,
+        key: process.env.OPENAI_API_KEY,
+      };
+      let frames = 0;
+      VideoSource.prototype.captureFrame = function (...args) {
+        frames++;
+        if (failing === "every" || frames === 1)
+          throw new Error("synthetic frame failure: private-data");
+        return prior.capture.apply(this, args);
+      };
+      settings.clawdtime = command;
+      // Without a key no model session can open, whatever this test does.
+      delete process.env.OPENAI_API_KEY;
+      try {
+        f.setPublish(async () => ({}));
+        const caller = f.participant();
+        let over = false;
+        f.start().then(() => {
+          over = true;
+        });
+        await f.flush();
+        f.add(caller);
+        const until = Date.now() + 5000;
+        while (frames < 3 && !over && Date.now() < until)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.ok(frames >= 3, "the timer tries later frames");
+        assert.equal(f.publications(), 1);
+        const stages = f.diagnostics();
+        assert.equal(stages.includes("first_frame"), false);
+        assert.equal(
+          stages.filter((stage) => stage === "first_frame_failed").length,
+          1,
+        );
+        assert.ok(
+          stages.indexOf("camera_published") >
+            stages.indexOf("first_frame_failed"),
+        );
+        // A later frame that fails too is in the log once, not once for each frame.
+        assert.equal(
+          f.events.filter((event) => event.clawdtime_line === "frame_failed")
+            .length,
+          failing === "every" ? 1 : 0,
+        );
+        assert.equal(
+          f.events.some((event) => event.clawdtime_line === "startup_failed"),
+          false,
+        );
+        assert.equal(
+          f.events.some((event) => event.clawdtime_line === "call_ended"),
+          false,
+        );
+        assert.equal(JSON.stringify(f.events).includes("private-data"), false);
+        // The caller hangs up before the model: the call ends as every call does.
+        f.room.remoteParticipants.delete(caller.identity);
+        f.room.emit(RoomEvent.ParticipantDisconnected, caller);
+        writeFileSync(`${command}.go`, "");
+        assert.equal((await f.result()).error, null);
+        endedOnce(f);
+      } finally {
+        writeFileSync(`${command}.go`, "");
+        VideoSource.prototype.captureFrame = prior.capture;
+        settings.clawdtime = prior.command;
+        if (prior.key !== undefined) process.env.OPENAI_API_KEY = prior.key;
+      }
     });
   });
 }

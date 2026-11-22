@@ -223,7 +223,8 @@ test("new successful turn is not dropped behind a superseded queued callback", a
   r.flush();
   assert.equal(r.replies.length, 1);
   await r.invoke("ask_clawdtime");
-  assert.deepEqual(r.calls, ["new"]);
+  // The first item was never answered, so it is a part of the request.
+  assert.deepEqual(r.calls, ["old new"]);
   r.end();
 });
 
@@ -272,7 +273,8 @@ test("older completion and duplicate events cannot authorize or replay", async (
   r.item("b");
   r.flush();
   await r.invoke("ask_clawdtime");
-  assert.deepEqual(r.calls, ["new"]);
+  // The older final cannot start a reply, but its words belong to the request.
+  assert.deepEqual(r.calls, ["old new"]);
   assert.equal(r.replies.length, 1);
   r.end();
 });
@@ -566,4 +568,356 @@ test("actual room/session close events synchronously retire queued speech and to
       0,
     );
   }
+});
+
+// One request in several provider items. The provider ends an item at each
+// pause, so the words of one request can arrive as two or more finals.
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+// The voice library marks a reply done when it was said in full or cut.
+const said = async (handle) => {
+  handle._markDone();
+  await tick();
+};
+const cut = async (handle) => {
+  handle.interrupt();
+  handle._markDone();
+  await tick();
+};
+// The reply that says the answer of a tool, as the voice library creates it.
+const followUp = (r, parent) => {
+  const handle = voice.SpeechHandle.create({ parent });
+  r.session.emit(voice.AgentSessionEventTypes.SpeechCreated, {
+    type: "speech_created",
+    userInitiated: false,
+    source: "tool_response",
+    speechHandle: handle,
+  });
+  return handle;
+};
+// One item whose final comes after the caller has gone on to speak.
+const spoken = (r, id, text) => {
+  r.start(id);
+  r.stop(id);
+  return () => {
+    r.final(text, id);
+    r.item(id);
+  };
+};
+
+test("a request with a pause is forwarded whole, in the order spoken, once", async () => {
+  for (const [first, second, whole] of [
+    [
+      "Please don't",
+      "switch to the desktop on the right.",
+      "Please don't switch to the desktop on the right.",
+    ],
+    [
+      "Open the browser and",
+      "type hello in the search box",
+      "Open the browser and type hello in the search box",
+    ],
+  ]) {
+    const r = runtime();
+    const firstFinal = spoken(r, "a", first);
+    // The caller goes on before the first final is there.
+    r.start("b");
+    firstFinal();
+    r.flush();
+    assert.equal(r.replies.length, 0);
+    r.stop("b");
+    r.final(second, "b");
+    r.item("b");
+    r.flush();
+    assert.equal(r.replies.length, 1);
+    assert.equal(await r.invoke("ask_clawdtime"), "accepted");
+    assert.deepEqual(r.calls, [whole]);
+    await r.invoke("ask_clawdtime");
+    assert.deepEqual(r.calls, [whole]);
+    r.end();
+  }
+});
+
+test("a reply to the first part that new speech cut leaves that part in the request", async () => {
+  const r = runtime();
+  const early = r.turn("Please don't", "a");
+  r.start("b");
+  await cut(early);
+  // The reply to the first part alone can no longer act.
+  await r.invoke("ask_clawdtime", {}, r.context(early));
+  assert.deepEqual(r.calls, []);
+  r.stop("b");
+  r.final("switch to the desktop on the right.", "b");
+  r.item("b");
+  r.flush();
+  assert.equal(r.replies.length, 2);
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    "Please don't switch to the desktop on the right.",
+  ]);
+  r.end();
+});
+
+test("three items make one request, with one space at each joint and the outer ends kept", async () => {
+  const r = runtime();
+  spoken(r, "a", "  Go to the session \n")();
+  spoken(r, "b", "\tthat runs the tests ")();
+  spoken(r, "c", " and show me its last lines.  ")();
+  r.flush();
+  assert.equal(r.replies.length, 1);
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    "  Go to the session that runs the tests and show me its last lines.  ",
+  ]);
+  r.end();
+});
+
+test("finals that arrive out of order are still forwarded in the order spoken", async () => {
+  const r = runtime();
+  const firstFinal = spoken(r, "a", "Do not");
+  spoken(r, "b", "close the window.")();
+  r.flush();
+  // The newest item is final, but a part of the request is still missing.
+  assert.equal(r.replies.length, 0);
+  firstFinal();
+  r.flush();
+  assert.equal(r.replies.length, 1);
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, ["Do not close the window."]);
+  r.end();
+});
+
+test("one failed transcript in the middle refuses the whole request and asks for it again", async () => {
+  const r = runtime();
+  spoken(r, "a", "Please don't")();
+  r.start("b");
+  r.stop("b");
+  r.raw({
+    type: "conversation.item.input_audio_transcription.failed",
+    item_id: "b",
+  });
+  r.start("c");
+  r.flush();
+  // Nothing is said while the caller still speaks.
+  assert.equal(r.replies.length, 0);
+  r.stop("c");
+  r.final("switch to the desktop on the right.", "c");
+  r.item("c");
+  r.flush();
+  assert.equal(r.replies.length, 1);
+  assert.equal(r.replies[0].opts.toolChoice, "none");
+  assert.match(r.replies[0].opts.instructions, /whole request again/);
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, []);
+  assert.ok(r.codes.includes("transcription_notice"));
+  assert.equal(r.codes.includes("response_bound"), false);
+  // The notice was said in full: what the caller says now is a new request.
+  await said(r.replies[0].handle);
+  r.turn("Please don't switch to the desktop on the right.", "d");
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    "Please don't switch to the desktop on the right.",
+  ]);
+  r.end();
+});
+
+test("one missing transcript refuses the whole request after the wait", async () => {
+  const r = runtime();
+  spoken(r, "a", "Open the browser and")();
+  r.start("b");
+  r.stop("b");
+  spoken(r, "c", "type hello in the search box")();
+  r.flush();
+  assert.equal(r.replies.length, 0);
+  assert.equal(r.timers.size, 1);
+  r.timeout();
+  r.flush();
+  assert.equal(r.timers.size, 0);
+  assert.equal(r.replies.length, 1);
+  assert.equal(r.replies[0].opts.toolChoice, "none");
+  // A final that comes after the wait cannot repair the request.
+  r.final("too late", "b");
+  r.item("b");
+  r.flush();
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, []);
+  assert.equal(r.replies.length, 1);
+  r.end();
+});
+
+test("a notice that the caller cut does not free the refused request", async () => {
+  const r = runtime();
+  r.start("a");
+  r.stop("a");
+  r.raw({
+    type: "conversation.item.input_audio_transcription.failed",
+    item_id: "a",
+  });
+  r.flush();
+  assert.equal(r.replies.length, 1);
+  r.start("b");
+  await cut(r.replies[0].handle);
+  r.stop("b");
+  r.final("switch to the desktop on the right.", "b");
+  r.item("b");
+  r.flush();
+  // The first part is still lost, so this is the notice again and no forward.
+  assert.equal(r.replies.length, 2);
+  assert.equal(r.replies[1].opts.toolChoice, "none");
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, []);
+  r.end();
+});
+
+test("an answer that was said in full ends the request: the next forward holds only the next request", async () => {
+  const r = runtime();
+  const first = r.turn("Hello, are you there?", "a");
+  await said(first);
+  assert.ok(r.codes.includes("answer_finished"));
+  r.turn("Give me the status.", "b");
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, ["Give me the status."]);
+  r.end();
+});
+
+test("an answer counts only when the reply after its tools was also said in full", async () => {
+  for (const full of [true, false]) {
+    const r = runtime();
+    const root = r.turn("Hide the screen.", "a");
+    await r.invoke("show_screen", { on: false });
+    const answer = followUp(r, root);
+    await said(root);
+    assert.equal(r.codes.includes("answer_finished"), false);
+    if (full) await said(answer);
+    else {
+      r.start("b");
+      await cut(answer);
+    }
+    assert.equal(r.codes.includes("answer_finished"), full);
+    r.turn("Give me the status.", "b");
+    await r.invoke("ask_clawdtime");
+    assert.deepEqual(r.calls, [
+      full ? "Give me the status." : "Hide the screen. Give me the status.",
+    ]);
+    r.end();
+  }
+});
+
+test("a forwarded request is not forwarded again: new speech after it goes out alone", async () => {
+  const r = runtime();
+  r.turn("Go to the session about the payment tests.", "a");
+  await r.invoke("ask_clawdtime");
+  // The caller speaks again while the answer is still on its way.
+  r.turn("And make its text bigger.", "b");
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    "Go to the session about the payment tests.",
+    "And make its text bigger.",
+  ]);
+  r.end();
+});
+
+test("a zoom or sharing tool forwards no words, so it leaves the request open", async () => {
+  const r = runtime();
+  const first = r.turn("Show the whole screen and don't", "a");
+  await r.invoke("call_zoom", { action: "overview" });
+  r.start("b");
+  await cut(first);
+  r.stop("b");
+  r.final("touch the terminal.", "b");
+  r.item("b");
+  r.flush();
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    "Show the whole screen and don't touch the terminal.",
+  ]);
+  // Each response has its own one-use lanes.
+  await r.invoke("call_zoom", { action: "resume" });
+  assert.deepEqual(r.zoom, ["overview", "resume"]);
+  r.end();
+});
+
+test("a greeting or a job notice cannot forward a request of several items", async () => {
+  const r = runtime();
+  spoken(r, "a", "Please don't")();
+  spoken(r, "b", "switch to the desktop on the right.")();
+  r.flush();
+  const proactive = voice.SpeechHandle.create();
+  r.session.emit(voice.AgentSessionEventTypes.SpeechCreated, {
+    type: "speech_created",
+    userInitiated: true,
+    source: "generate_reply",
+    speechHandle: proactive,
+  });
+  await r.invoke("ask_clawdtime", {}, r.context(proactive));
+  assert.deepEqual(r.calls, []);
+  // Its end is no answer to the caller: the request stays whole.
+  await said(proactive);
+  assert.equal(r.codes.includes("answer_finished"), false);
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    "Please don't switch to the desktop on the right.",
+  ]);
+  r.end();
+});
+
+test("a request over the bounds is refused whole, never cut", async () => {
+  // Too many items.
+  const many = runtime({ maxItems: 3 });
+  for (const id of ["a", "b", "c", "d"]) spoken(many, id, `part ${id}`)();
+  many.flush();
+  assert.equal(many.replies.length, 1);
+  assert.equal(many.replies[0].opts.toolChoice, "none");
+  assert.ok(many.codes.includes("request_too_long"));
+  await many.invoke("ask_clawdtime");
+  assert.deepEqual(many.calls, []);
+  many.end();
+  // Too many characters in all.
+  const long = runtime({ maxChars: 30 });
+  spoken(long, "a", "a".repeat(20))();
+  spoken(long, "b", "b".repeat(20))();
+  long.flush();
+  assert.equal(long.replies.length, 1);
+  assert.equal(long.replies[0].opts.toolChoice, "none");
+  assert.ok(long.codes.includes("request_too_long"));
+  await long.invoke("ask_clawdtime");
+  assert.deepEqual(long.calls, []);
+  long.end();
+  // Longer than the transport takes, inside the bounds: it goes on complete,
+  // and the transport refuses it.
+  const r = runtime();
+  spoken(r, "a", "a".repeat(1500))();
+  spoken(r, "b", `${"b".repeat(1500)}; do not switch desktops`)();
+  r.flush();
+  await r.invoke("ask_clawdtime");
+  assert.deepEqual(r.calls, [
+    `${"a".repeat(1500)} ${"b".repeat(1500)}; do not switch desktops`,
+  ]);
+  r.end();
+});
+
+test("the codes of a request of several items hold no words, and the call end removes the speech listener", async () => {
+  const r = runtime();
+  assert.equal(
+    r.session.listenerCount(voice.AgentSessionEventTypes.SpeechCreated),
+    1,
+  );
+  spoken(r, "private-id-one", "private words one")();
+  r.start("private-id-two");
+  r.stop("private-id-two");
+  r.raw({
+    type: "conversation.item.input_audio_transcription.failed",
+    item_id: "private-id-two",
+  });
+  r.flush();
+  await said(r.replies[0].handle);
+  const answer = r.turn("private words three", "private-id-three");
+  await r.invoke("ask_clawdtime");
+  await said(answer);
+  r.end();
+  for (const code of r.codes) assert.match(code, /^[a-z_]{1,40}$/);
+  assert.equal(JSON.stringify(r.codes).includes("private"), false);
+  assert.equal(
+    r.session.listenerCount(voice.AgentSessionEventTypes.SpeechCreated),
+    0,
+  );
 });
