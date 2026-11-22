@@ -118,9 +118,14 @@ panel reports Accessibility and Screen Recording access. Desktop service, chat,
 task admission, and native worker readiness checks pass. Desktop Space shortcut
 mappings remain unconfigured; those moves are not qualified on this installation.
 
-The real compound TextEdit request reached the worker. Mouse/keyboard activity
-paused the attempt before the typing result could be verified; closing its call
-admission canceled that attempt. Do not count this as successful typing.
+The first compound TextEdit attempt paused on mouse/keyboard activity and was
+canceled when its call admission closed. After the operator explicitly confirmed
+a hands-off window, a new request completed: TextEdit opened a new unsaved
+document and typed exactly `CLAWDTIME UPDATE VERIFIED`. An independent read-only
+AppleScript query confirmed one document with exactly that content and TextEdit
+as the foreground application. The scoped admission closed afterward. This
+qualifies local compound app opening/document creation/typing through the phone
+bridge; actual handset transcription remains unverified.
 
 An existing upstream routing limitation remains: the phrase "test document"
 triggers the conservative coding-work keyword filter, despite a correct model
