@@ -157,6 +157,40 @@ const login = (typed: boolean) =>
     </div></div></div>`,
   );
 
+// A board app: what is on the board is drawn, and the Accessibility tree names none of it. Only a click at a
+// point in the picture reaches a sticky note, a tool of the floating bar, the x of the banner or a star.
+const tool = (name: string, drawing: string) =>
+  `<span class="tool" data-key="tool-${name}"><svg viewBox="0 0 24 24">${drawing}</svg></span>`;
+const star = (index: number, on: boolean) =>
+  `<svg class="star" data-key="star-${index}" viewBox="0 0 24 24"><path d="M12 3l2.7 5.7 6.3.8-4.6 4.3 1.2 6.2L12 17l-5.6 3 1.2-6.2L3 9.5l6.3-.8z" fill="${on ? "#f5b301" : "none"}" stroke="#b98900" stroke-width="1.4"/></svg>`;
+const board = page(
+  "Board",
+  `.board { flex: 1; position: relative; background: #fafafa; background-image: radial-gradient(#d9d9d9 1px, transparent 1px); background-size: 22px 22px; }
+   .banner { position: absolute; left: 250px; top: 16px; width: 600px; height: 38px; background: #fff4cc; border: 1px solid #e6cf7a; border-radius: 8px; display: flex; align-items: center; padding: 0 12px; }
+   .banner span.msg { flex: 1; } .banner .x { width: 18px; height: 18px; line-height: 16px; text-align: center; border-radius: 4px; color: #6b5a12; font-size: 16px; }
+   .sticky { position: absolute; width: 160px; height: 120px; padding: 14px; font-size: 17px; font-weight: 600; box-shadow: 0 3px 8px rgba(0,0,0,.2); }
+   .bar { position: absolute; left: 24px; top: 150px; width: 46px; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; padding: 7px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+   .tool { width: 30px; height: 30px; border-radius: 6px; display: block; padding: 4px; }
+   .tool svg { width: 22px; height: 22px; stroke: #333; fill: none; stroke-width: 1.7; }
+   .rating { position: absolute; left: 760px; top: 560px; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; gap: 4px; }
+   .rating b { margin-right: 10px; font-weight: 600; } .star { width: 22px; height: 22px; display: block; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Board</div></div><div class="content">
+    <div class="board" data-role="AXGroup" data-title="" data-key="board">
+      <div class="banner"><span class="msg">Two people are looking at this board.</span><span class="x" data-key="banner-x">×</span></div>
+      <div class="bar">
+        ${tool("pointer", `<path d="M6 3l12 9-5 1 3 7-3 1-3-7-4 3z"/>`)}
+        ${tool("pen", `<path d="M4 20l1-5L16 4l4 4L9 19z"/><path d="M14 6l4 4"/>`)}
+        ${tool("shape", `<rect x="4" y="4" width="16" height="16" rx="1"/>`)}
+        ${tool("text", `<path d="M5 6V4h14v2"/><path d="M12 4v16"/><path d="M9 20h6"/>`)}
+        ${tool("zoom", `<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5"/>`)}
+      </div>
+      <div class="sticky" style="left:170px;top:170px;background:#ffe27a" data-key="sticky-launch">Launch</div>
+      <div class="sticky" style="left:420px;top:300px;background:#a9e5a1" data-key="sticky-pricing">Pricing</div>
+      <div class="sticky" style="left:700px;top:150px;background:#ffb3c1" data-key="sticky-hiring">Hiring</div>
+      <div class="rating"><b>Rate this board</b>${[1, 2, 3, 4, 5].map((index) => star(index, false)).join("")}</div>
+    </div></div></div>`,
+);
+
 export interface Screen {
   app: { name: string; bundleId: string; window: string };
   html: string;
@@ -193,6 +227,10 @@ export const screens: Record<string, Screen> = {
       window: "Sign in to Ledger",
     },
     html: login(false),
+  },
+  board: {
+    app: { name: "Board", bundleId: "com.example.board", window: "Board" },
+    html: board,
   },
   loginTyped: {
     app: {

@@ -147,6 +147,15 @@ Results of November 22, 2026, 17 tasks, three runs with 2, 5 and 3 repeats:
 | `gpt-4.1`, `:low` | 80 of 85   | 1.06 to 1.09 s | Icons with no name                                             |
 | `gpt-4.1-mini`    | 74 of 85   | 1.09 to 1.12 s | "Don't Save" where the goal said to keep the changes, and more |
 
+Five more tasks, added the same day, have a target that the Accessibility tree
+does not name: a sticky note, two tools of 30 pixels, an x of 18 pixels and one
+of five stars, all drawn on a board. Only a click at a point in the picture
+reaches them. With 22 tasks and 5 repeats, `gpt-5.4` was right 110 of 110
+times, and each of its points was within 2 pixels of the middle of a small
+target. `gpt-4.1` was right 85 of 110 times: on the four small drawn targets
+it was right 0 of 20 times, and gave the number of an element that the screen
+does not have.
+
 On a real desktop service, for a request that only looks, the answer of the
 planner took 1.25 to 1.27 seconds with `gpt-5.4` and 1.40 to 1.82 seconds with
 `gpt-4.1`. The test is not physical acceptance: its screens are rendered pages,
