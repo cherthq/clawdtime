@@ -28,6 +28,7 @@ import {
   videoFPS,
 } from "./continuous-screen.mjs";
 import { makeCallVideo } from "./call-video.mjs";
+import { screenLayout } from "./layout.mjs";
 import { makeVideoRenderer, videoTransform } from "./video-transform.mjs";
 import { makeZoomSettings, zoomIntent } from "./zoom-settings.mjs";
 import { validPresentationEvent } from "./presentation-source.mjs";
@@ -229,7 +230,7 @@ test("manual overview survives events, Stop and enable; only resume restores aut
   assert.deepEqual(r.camera.crop(), OVERVIEW);
 });
 
-test("manual terminal crop wins over auto and is retired on identity changes", () => {
+test("manual terminal crop wins over auto and holds through identity changes", () => {
   const r = rig(),
     manual = { x: 0.1, y: 0.2, w: 0.8, h: 0.5 };
   r.camera.manual(manual);
@@ -241,27 +242,73 @@ test("manual terminal crop wins over auto and is retired on identity changes", (
     target: undefined,
     surface: { ...surface, windowId: "new" },
   });
+  // The view is the person's choice. It does not widen, not even for a frame.
+  assert.deepEqual(r.camera.crop(), manual);
   r.at(1800);
-  assert.deepEqual(r.camera.crop(), OVERVIEW);
+  assert.deepEqual(r.camera.crop(), manual);
+  assert.equal(r.camera.status().manual, true);
 });
 
-test("manual crop retires on explicit transition/Stop; temporary manual view never releases overview latch", () => {
+test("manual crop holds through transition, Stop and the end of an action; it never releases the overview latch", () => {
   for (const kind of ["transition", "reset", null]) {
-    const r = rig();
+    const r = rig(),
+      manual = { x: 0.1, y: 0.2, w: 0.8, h: 0.5 };
     r.camera.control("overview");
     r.send(1);
-    r.camera.manual({ x: 0.1, y: 0.2, w: 0.8, h: 0.5 });
+    r.camera.manual(manual);
     r.at(1400);
-    assert.equal(r.camera.crop().w, 0.8);
+    assert.deepEqual(r.camera.crop(), manual);
     if (kind) r.send(2, { kind, surface: undefined, target: undefined });
     else r.camera.event(null);
+    assert.deepEqual(r.camera.crop(), manual);
     r.at(1800);
-    assert.deepEqual(r.camera.crop(), OVERVIEW);
+    assert.deepEqual(r.camera.crop(), manual);
+    // A later action of the agent does not move the person's view either.
     r.send(3);
     r.at(2200);
+    assert.deepEqual(r.camera.crop(), manual);
+    assert.equal(r.camera.status().overview, true);
+    // Only the person ends it. The overview that was latched before is still on.
+    r.camera.manual(null);
+    r.at(2600);
+    assert.deepEqual(r.camera.crop(), OVERVIEW);
+    r.send(4);
+    r.at(3000);
     assert.deepEqual(r.camera.crop(), OVERVIEW);
     assert.equal(r.camera.status().overview, true);
   }
+});
+
+test("a manual crop holds when an action target expires and when the frame has another shape", () => {
+  const r = rig(),
+    manual = { x: 0.1, y: 0.2, w: 0.8, h: 0.5 };
+  r.camera.manual(manual);
+  r.send(1);
+  r.at(1400);
+  assert.deepEqual(r.camera.crop(), manual);
+  // The hint of the action runs out without a newer one.
+  r.at(2500);
+  assert.deepEqual(r.camera.crop(), manual);
+  assert.equal(r.camera.status().manual, true);
+  r.at(2900);
+  assert.deepEqual(r.camera.crop(), manual);
+  // A frame of another shape than the screen of the action.
+  r.send(2);
+  assert.deepEqual(r.camera.crop({ width: 900, height: 1440 }), manual);
+  assert.equal(r.camera.status().manual, true);
+  r.at(3300);
+  assert.deepEqual(r.camera.crop(), manual);
+  // Hide and a capture gap reset the camera.
+  r.camera.reset();
+  assert.equal(r.camera.status().manual, true);
+  r.at(3700);
+  assert.deepEqual(r.camera.crop(), manual);
+  // The person's own commands end it.
+  r.camera.control("resume");
+  assert.equal(r.camera.status().manual, false);
+  r.camera.manual(manual);
+  r.camera.control("overview");
+  assert.equal(r.camera.status().manual, false);
 });
 
 test("repeated source events do not restart animations; reduce motion removes animation", () => {
@@ -447,6 +494,124 @@ test("call video keeps one capture for zoom, manual view and layout; Stop/hangup
   assert.equal(await call.show(), false);
   assert.equal(stopped, 2);
   assert.equal(sourceStops, 2);
+});
+
+// A screen that is red, with one blue window in its right quarter. The middle
+// of the outgoing picture is red for the whole screen, and blue for the window.
+const windowView = { x: 0.75, y: 0, w: 0.25, h: 1 };
+const twoPartScreen = () => {
+  const width = 16,
+    height = 10,
+    data = new Uint8Array(width * height * 3);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++)
+      data[(y * width + x) * 3 + (x < 12 ? 0 : 2)] = 255;
+  return { width, height, data };
+};
+const middle = (pixels) => {
+  const { box } = screenLayout(1280, 720, "wide");
+  const i =
+    (Math.floor(box.y + box.h / 2) * 1280 + Math.floor(box.x + box.w / 2)) * 4;
+  return pixels[i] > 200 ? "screen" : pixels[i + 2] > 200 ? "window" : "other";
+};
+const sharing = async () => {
+  const s = { at: 1000, shot: twoPartScreen(), send: null, captures: 0 };
+  s.call = makeCallVideo({
+    since: 1000,
+    now: () => s.at,
+    capture: () => {
+      s.captures++;
+      return {
+        supportsAutomaticZoom: true,
+        latest: () => s.shot,
+        started: async () => true,
+        stop() {},
+      };
+    },
+    presentation: ({ onEvent }) => {
+      s.send = onEvent;
+      return { stop() {} };
+    },
+  });
+  assert.equal(await s.call.show(), true);
+  assert.equal(middle(s.call.frame()), "screen");
+  s.call.manual(windowView);
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "window");
+  return s;
+};
+
+test("the one-window view holds when a computer-use action starts, ends or is stopped", async () => {
+  const s = await sharing();
+  // An action of the agent gives automatic zoom a target.
+  s.send(event(s.at));
+  assert.equal(middle(s.call.frame()), "window");
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "window");
+  // The action ends: the presentation source clears its event.
+  s.send(null);
+  assert.equal(middle(s.call.frame()), "window");
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "window");
+  // Stop, and a change of app or desktop.
+  for (const [sequence, kind] of [
+    [2, "reset"],
+    [3, "transition"],
+  ]) {
+    s.send(
+      event(s.at, sequence, { kind, surface: undefined, target: undefined }),
+    );
+    assert.equal(middle(s.call.frame()), "window");
+    s.at += 400;
+    assert.equal(middle(s.call.frame()), "window");
+  }
+  // The settings of the call are read again and again. Unchanged, they change nothing.
+  s.call.settings({ enabled: true, overview: false });
+  assert.equal(middle(s.call.frame()), "window");
+  assert.equal(s.call.status().manual, true);
+  // The person asks for the whole screen again.
+  s.call.manual(null);
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "screen");
+  assert.equal(s.call.status().manual, false);
+  s.call.close();
+});
+
+test("the one-window view holds through hide and show, with no frame of the whole screen", async () => {
+  const s = await sharing();
+  s.call.hide();
+  assert.equal(s.call.frame(), null);
+  assert.equal(s.call.status().manual, true);
+  s.at += 5000;
+  assert.equal(await s.call.show(), true);
+  assert.equal(s.captures, 2);
+  // The first frame after the show is the window already.
+  assert.equal(middle(s.call.frame()), "window");
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "window");
+  // A new view of the person replaces it.
+  s.call.manual({ x: 0, y: 0, w: 0.5, h: 1 });
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "screen");
+  assert.equal(s.call.status().manual, true);
+  s.call.close();
+});
+
+test("the one-window view holds through a capture gap", async () => {
+  const s = await sharing();
+  const shot = s.shot;
+  // The capture drops a frame that is older than half a second.
+  s.shot = null;
+  assert.equal(s.call.frame(), null);
+  s.at += 600;
+  assert.equal(s.call.frame(), null);
+  s.shot = shot;
+  assert.equal(middle(s.call.frame()), "window");
+  s.at += 400;
+  assert.equal(middle(s.call.frame()), "window");
+  assert.equal(s.call.status().manual, true);
+  assert.equal(s.captures, 1);
+  s.call.close();
 });
 
 test("display reconfiguration stops capture until explicitly shown; custom devices never consume targets", async () => {

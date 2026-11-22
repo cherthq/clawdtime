@@ -79,7 +79,10 @@ export function interpolate(from, to, fraction) {
 }
 
 /** One camera per call. Overview persists through events, hiding, and Stop;
- * only resume releases it. Manual window views take precedence over auto. */
+ * only resume releases it. A manual window view is the person's choice: it
+ * takes precedence over auto, and it stays until the person asks for another
+ * view, the whole screen or automatic zoom. No event, hide or capture gap
+ * retires it. */
 export function makeCamera({
   since = Date.now(),
   now = Date.now,
@@ -111,14 +114,16 @@ export function makeCamera({
       began = at;
     }
   };
-  const retire = (at, clearManual = false) => {
-    if (clearManual) manual = null;
+  // Retires what automatic zoom knows. The camera widens only when the person
+  // chose no view: with a chosen view, even one wide frame would show the
+  // whole screen to the call.
+  const retire = (at) => {
     surface = null;
     identity = null;
     expires = 0;
     holdUntil = 0;
     pending = null;
-    aim(OVERVIEW, at);
+    if (!manual) aim(OVERVIEW, at);
   };
   const wantsAuto = () => enabled && !overview && !manual;
   const follow = (target, at) => {
@@ -141,7 +146,7 @@ export function makeCamera({
     event(event) {
       const at = now();
       if (!event) {
-        retire(at, true);
+        retire(at);
         return false;
       }
       if (
@@ -159,7 +164,7 @@ export function makeCamera({
         event.expiresAt <= event.at ||
         event.expiresAt - event.at > 2000
       ) {
-        retire(at, true);
+        retire(at);
         return false;
       }
       if (producer === event.producerId && event.sequence <= sequence)
@@ -171,7 +176,7 @@ export function makeCamera({
       acceptedAt = event.at;
       still = reducedMotion || event.reducedMotion === true;
       if (event.kind === "reset" || event.kind === "transition") {
-        retire(at, true);
+        retire(at);
         barrier = at + CAMERA.duration;
         return true;
       }
@@ -183,15 +188,13 @@ export function makeCamera({
         !s.appId ||
         !s.windowId
       ) {
-        retire(at, true);
+        retire(at);
         return false;
       }
       const nextIdentity = surfaceKey(s);
       if (changedProducer || (identity && identity !== nextIdentity)) {
-        retire(at, true);
+        retire(at);
         barrier = at + CAMERA.duration;
-        // A fixed manual crop cannot follow a different/moved window safely.
-        manual = null;
       }
       surface = s;
       identity = nextIdentity;
@@ -199,7 +202,7 @@ export function makeCamera({
       if (event.kind === "context") return true;
       const target = normalizedTarget(event.target, s);
       if (!target || !["target", "typing"].includes(event.kind)) {
-        retire(at, true);
+        retire(at);
         return false;
       }
       follow(target, at);
@@ -207,17 +210,15 @@ export function makeCamera({
     },
     crop(frame = null) {
       const at = now();
-      if (expires && at >= expires) retire(at, true);
+      if (expires && at >= expires) retire(at);
       if (
         surface &&
         frame &&
         Math.abs(
           frame.width / frame.height / (surface.width / surface.height) - 1,
         ) > 0.01
-      ) {
-        manual = null;
-        retire(at, true);
-      }
+      )
+        retire(at);
       if ((overview || !enabled) && !manual) aim(OVERVIEW, at);
       else if (manual) aim(manual, at);
       else if (pending && at >= barrier && at < holdUntil && expires > at) {
@@ -254,8 +255,10 @@ export function makeCamera({
       pending = null;
       aim(manual ?? OVERVIEW, now());
     },
+    // Sharing stopped or a frame was late. Targets of automatic zoom are stale
+    // then. The view that the person chose is not: it is there again with the
+    // next frame.
     reset() {
-      manual = null;
       retire(now());
     },
     status: () => ({

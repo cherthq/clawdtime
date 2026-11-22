@@ -279,7 +279,10 @@ export async function callEntry(ctx) {
         ? "The screen is on the call now."
         : "The screen capture did not start on this Mac.";
     };
-    /** After a request to ClawdTime: the view that it set, when it set one during this call. */
+    /**
+     * After a request to ClawdTime: the view that it set, when it set one during this call. The camera keeps
+     * that view until the person asks for another: nothing here has to set it again after a hide or a gap.
+     */
     const syncView = async () => {
       const now = await readView();
       if (!now || now.at < callStarted || ended) return;

@@ -55,14 +55,19 @@ the switches and command revision. Each explicit command gets a new revision,
 so repeating overview after a temporary manual view works. Active calls read
 preferences every 500 ms. Corrupt/unreadable settings fall back to overview.
 
-Precedence: an explicit manual terminal view temporarily takes precedence;
-otherwise overview, then the automatic switch, then fresh action hints.
-Manual view never releases the persistent overview latch. A transition, Stop,
-loss of previously known context, capture loss or hangup retires the manual
-crop and action target; overview still applies until resume. A new call has
-no inherited targets or manual crop. Without the native worker running,
-the existing manual terminal view remains a fixed crop: it is not a window
-tracking API. No app title or terminal content enters presentation metadata.
+Precedence: an explicit manual terminal view takes precedence, and it stays
+until the person asks, on the call or with a local control, for another view,
+the whole screen or automatic zoom; otherwise overview, then the automatic
+switch, then fresh action hints. Manual view never releases the persistent
+overview latch. A transition, Stop, loss of previously known context or
+capture loss retires the action target, never the manual view: the end of an
+agent action, hiding and showing the screen, and a capture gap all keep it.
+Overview still applies until resume. Two more things end the manual view:
+corrupt or unreadable settings, with their fallback to overview, and hangup.
+A new call has no inherited targets or manual crop. With or without the
+native worker running, the manual terminal view is a fixed crop of the
+screen: it is not a window tracking API. No app title or terminal content
+enters presentation metadata.
 
 ## Capture, geometry and privacy
 
@@ -95,6 +100,7 @@ On an observed change of display ID, dimensions or scale, sharing stops and
 requires an explicit show. Existing avfoundation input must not be assumed to
 follow a changed main-display identity. App/window identity or window movement
 widens and invalidates the previous target. Aspect mismatch also widens.
+A manual view stays in each of these cases.
 Multi-display and full-screen capture behavior require separate qualification.
 
 `CLAWDTIME_LINE_REDUCED_MOTION=on` removes camera animation. Native macOS
