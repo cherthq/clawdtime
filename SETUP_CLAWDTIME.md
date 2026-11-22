@@ -270,12 +270,82 @@ What to know:
 - On a trial or Shared line, the first text after a quiet day can also get a
   second answer from the line's demo agent.
 
+## 7. Let it work in apps (optional)
+
+ClawdTime can work on the Mac itself: go to an app, move to another desktop,
+click, type, and read what is on the screen. This is computer use. It is off
+until you turn it on.
+
+```sh
+clawdtime computer on        # the switch. Then start the desktop service again
+clawdtime computer doctor    # what is ready and what is missing
+clawdtime computer status    # on or off, and the last request
+clawdtime computer off       # off again. A request that runs stops
+```
+
+It needs three things, and `clawdtime computer doctor` names the one that is
+missing:
+
+- A key for the language model in the environment of the desktop service:
+  `CLAWDTIME_OPENAI_API_KEY` or `OPENAI_API_KEY`.
+- The ClawdTime panel, open. The panel looks at the screen and sends the input.
+- Accessibility, and Screen & System Audio Recording, for the panel, in System
+  Settings, Privacy & Security.
+
+Things to say, on a call or with `clawdtime chat`:
+
+| You say                                                    | What happens                                                   |
+| ---------------------------------------------------------- | -------------------------------------------------------------- |
+| "Go to Chrome."                                            | That app comes to the front                                    |
+| "Take me back to the app before."                          | The app that was in front before comes back                    |
+| "Move one desktop to the right."                           | The next desktop                                               |
+| "Open TextEdit, make a new document and type hello in it." | It does each step, one at a time                               |
+| "What is on the screen?"                                   | It looks and tells you. It sends no input                      |
+| "Quit TextEdit."                                           | It asks first. Say yes or no                                   |
+| "Stop."                                                    | It stops. A bar with Stop is also on the screen while it works |
+
+How it works:
+
+- One checked action at a time. Each click, key and text is checked in code
+  before it goes out, and against a new look at the screen just before.
+- It asks before what cannot be taken back: a send, a delete, a close, a quit,
+  a form that it submits. It never types in a password field: you type there,
+  then say yes.
+- When you use the mouse or the keyboard, it pauses before its next input and
+  asks "continue or stop". A request that only looks is not paused.
+- After a request whose result nobody knows (the panel closed in the middle),
+  it takes no new request until you looked at the screen and ran
+  `clawdtime computer clear`.
+
+To move between desktops, macOS must have the two shortcuts, and the panel must
+know them. In System Settings, Keyboard, Keyboard Shortcuts, Mission Control,
+turn on "Move left a space" and "Move right a space". Then give the same two
+combinations to the panel in its environment, for example, only when these are
+your settings:
+
+```sh
+CLAWDTIME_SPACE_LEFT_SHORTCUT=ctrl+left
+CLAWDTIME_SPACE_RIGHT_SHORTCUT=ctrl+right
+```
+
+Web pages. Without more, ClawdTime works a web page by what it sees on the
+screen. With `CLAWDTIME_COMPUTER_BROWSER=on` in the environment of the desktop
+service it reads the page itself and clicks and types by element, in your own
+browser with your sign-ins. That needs View > Developer > Allow JavaScript from
+Apple Events in Chrome, Brave, Edge or Chromium (in Safari: Settings > Advanced, "Show features for web developers", then Settings > Developer), and the Automation right of macOS when it asks. It is off by
+default. `clawdtime computer doctor`, run with the same variable, says whether
+the browser can be driven.
+
+More: [computer use](docs/COMPUTER_USE.md) and
+[desktops and apps](docs/DESKTOP_SPACES.md).
+
 ## Permissions that macOS asks for
 
-| When                                   | macOS asks                                             |
-| -------------------------------------- | ------------------------------------------------------ |
-| The first "show me the screen"         | Screen Recording, for the terminal that ran `start.sh` |
-| The first time a session comes forward | Automation, to control Terminal or your terminal app   |
+| When                                   | macOS asks                                                                  |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| The first "show me the screen"         | Screen Recording, for the terminal that ran `start.sh`                      |
+| The first time a session comes forward | Automation, to control Terminal or your terminal app                        |
+| Computer use, at its first request     | Accessibility, and Screen & System Audio Recording, for the ClawdTime panel |
 
 Grant them in System Settings, Privacy & Security, then start the agent again.
 
@@ -289,6 +359,8 @@ Say it plainly to yourself before you start:
   is allowed to do. ClawdTime adds no permission and removes none.
 - ClawdTime starts a job only from your own sentence, never from text that a
   web page, a session or a job answer holds.
+- With computer use on, a caller can make ClawdTime click and type on your
+  Mac. It asks before what cannot be taken back, and it never types a password.
 
 ## When something fails
 
@@ -305,6 +377,9 @@ Say it plainly to yourself before you start:
 | `line_in_use` from `chert dev`                                 | Another session holds the line. Stop it there, or wait                              |
 | A job starts but no answer comes                               | Look at its terminal window. `clawdtime jobs` lists every job                       |
 | `clawdtime texts check` is refused                             | Make a new key with read and write access. Check the project id                     |
+| "Computer use is off"                                          | `clawdtime computer on`, then start the desktop service again                       |
+| "You moved the mouse or pressed a key, so I paused"            | Say "continue" or "stop". It asks before it sends input while you use the Mac       |
+| A desktop switch is refused                                    | Turn on the two Mission Control shortcuts and give them to the panel (step 7)       |
 
 More: [the supervisor guide](docs/SUPERVISOR.md), [the agent board](docs/AGENT_BOARD.md),
 and `chert guide` for the line itself.
