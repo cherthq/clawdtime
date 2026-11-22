@@ -139,7 +139,8 @@ import TaskPanelCore
     guard let surface else {
       report.checks["noOrdinaryWindow"] = DesktopAX.noOrdinaryWindow(display: display.id)
       report.checks["directionalCompositionEligible"] = report.activeDisplays == 1 &&
-        DesktopAX.directionalSurface(pid: pid, display: display, diagnostic: nil) != nil &&
+        DesktopAX.directionalSurface(pid: pid, display: display, diagnostic: { report.directionalReason = $0 },
+          fact: { report.checks[$0] = $1 }, count: { report.counts[$0] = $1 }) != nil &&
         NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
       return report
     }
@@ -808,11 +809,12 @@ import TaskPanelCore
       guard case .strict(let value) = readSurface(pid: pid, display: display, directional: false, diagnostic: diagnostic, fact: fact) else { return nil }
       return value
     }
-    static func directionalSurface(pid: pid_t, display: HandsDisplay, diagnostic: ((String) -> Void)?) -> NavigationSurface? {
-      readSurface(pid: pid, display: display, directional: true, diagnostic: diagnostic, fact: nil)
+    static func directionalSurface(pid: pid_t, display: HandsDisplay, diagnostic: ((String) -> Void)?,
+                                   fact: ((String, Bool) -> Void)? = nil, count: ((String, Int) -> Void)? = nil) -> NavigationSurface? {
+      readSurface(pid: pid, display: display, directional: true, diagnostic: diagnostic, fact: fact, count: count)
     }
     private static func readSurface(pid: pid_t, display: HandsDisplay, directional: Bool,
-                                    diagnostic: ((String) -> Void)?, fact: ((String, Bool) -> Void)?) -> NavigationSurface? {
+                                    diagnostic: ((String) -> Void)?, fact: ((String, Bool) -> Void)?, count: ((String, Int) -> Void)? = nil) -> NavigationSurface? {
       let app = app(pid)
       guard let focused = element(value(app, kAXFocusedWindowAttribute)) else { diagnostic?("ax_focused_window_unavailable"); return nil }
       // A sheet hangs from a window and takes the focus: "Do you want to save?". It has no title and no
@@ -854,7 +856,7 @@ import TaskPanelCore
         let rows = ordinary.map { row in
           DesktopDirectionalRow(id: row[kCGWindowNumber as String] as? Int, pid: row[kCGWindowOwnerPID as String] as? Int,
             frame: (row[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) },
-            title: row[kCGWindowName as String] as? String)
+            title: row[kCGWindowName as String] as? String, alpha: row[kCGWindowAlpha as String] as? Double)
         }
         guard let complete = DesktopDirectionalEvidence.inventory(rows) else { diagnostic?("quartz_inventory_incomplete"); return nil }
         evidence = complete
@@ -875,6 +877,7 @@ import TaskPanelCore
       fact?("ordinaryWindow", (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole)
       fact?("fullScreen", fullScreen(focused)); fact?("fullScreenConfirmed", confirmed)
       fact?("containedInMainDisplay", CGDisplayBounds(display.id).contains(bounds))
+      fact?("fullScreenGeometry", DesktopSurfaceScope.fullScreenGeometry(window: bounds, display: CGDisplayBounds(display.id)))
       // Only the auxiliary-strip case needs an additional AX window inventory.
       // Ordinary focused windows avoid extra off-Space reads and their latency.
       var frames: [CGRect]?
@@ -889,10 +892,12 @@ import TaskPanelCore
       let windowID: Int
       var group: DesktopDirectionalGroup?
       if directional {
-        guard !sheet, (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
-          let matched = DesktopDirectionalEvidence.group(pid: Int(pid), title: title, parent: bounds,
-            display: CGDisplayBounds(display.id), fullScreenConfirmed: confirmed, visible: evidence)
-          else { diagnostic?("directional_composition_unavailable"); return nil }
+        guard !sheet, (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole
+          else { diagnostic?("directional_parent_not_ordinary"); return nil }
+        guard let matched = DesktopDirectionalEvidence.group(pid: Int(pid), title: title, parent: bounds,
+          display: CGDisplayBounds(display.id), fullScreenConfirmed: confirmed, visible: evidence, diagnostic: diagnostic, count: count)
+          else { return nil }
+        fact?("directionalToolbarCoverage", matched.usesToolbarCoverage)
         group = matched; windowID = matched.parentID
       } else {
         guard let matched = DesktopWindowVisibility.focusedWindowID(pid: Int(pid), title: title, frame: bounds,

@@ -242,3 +242,34 @@ The original failure was `target_not_visible` after 5.1 seconds, correctly
 reported as `transition_unknown` after dispatch. No opposite move was sent.
 This establishes the runtime failure rather than inferring it from a later
 window snapshot. Destination matching remains the outstanding local repair.
+
+### Directional verification repair and qualification
+
+Installed `62e1916` after all 366 Swift tests passed and independent review
+found no remaining blocker. Explicit left/right moves can use a bounded,
+complete compositor group around an independently matched full-screen parent.
+The source settles before dispatch; arrival needs exactly one Space event, a
+changed parent, stable evidence, and a bracketed fresh capture. This evidence
+never grants an input lease or previous-desktop history. Strict window matching
+for clicking, typing, app activation, and previous-desktop navigation is intact.
+
+The subsequent rightward qualification still returned `transition_unknown`: one
+Space event, zero environment changes, but no eligible directional composition
+in 24 samples. No leftward input followed. A later metadata snapshot showed a
+different layout, with full-width toolbar/content windows. The current guard
+may reject its focused content window's top inset. This is being diagnosed
+with a precise fixed refusal reason before any further policy change. The
+unknown result remains held; this build is not physically qualified for the
+requested paired desktop test or handset production acceptance.
+
+A follow-up adds exact parent-match counts and fixed refusal reasons, then
+supports an additional generic full-screen toolbar/content layout. An explicitly
+full-screen, full-width, bottom-aligned parent must still cover at least 85% of
+the display; bounded same-owner toolbar strips must continuously cover any
+excess top gap beyond the original inset. Every row stays in the compositor
+fingerprint. Missing, transparent, or invalid opacity rejects the complete
+directional inventory. Strict input matching is unchanged. All 372 Swift tests
+passed before this build was installed. The unknown receipt was preserved
+byte-for-byte during installation; the next physical check requires its observed
+result to be reconciled first. The prior failure's exact layout cause remains
+unproven until the new runtime trace and physical check establish it.

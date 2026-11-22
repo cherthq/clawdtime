@@ -15,5 +15,7 @@ public struct PanelDesktopSnapshot: Encodable {
   public var reason = "not_checked"
   public var activeDisplays = 0
   public var checks: [String: Bool] = [:]
+  public var counts: [String: Int] = [:]
+  public var directionalReason: String?
   public init() {}
 }

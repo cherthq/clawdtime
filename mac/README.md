@@ -744,7 +744,9 @@ Explicit left/right moves can separately recognize a stable full-screen
 composition when the focused AX parent uniquely matches its Quartz owner,
 title and frame, and up to eight smaller ordinary windows of that same app
 precede it. Every leading row must have complete, finite metadata and a unique
-window ID. Overlay frames must intersect the sole display and be no wider or
+window ID. Every ordinary row in the directional inventory must also report a
+finite alpha greater than zero and at most one; missing or transparent rows
+reject the inventory rather than being dropped. Overlay frames must intersect the sole display and be no wider or
 taller than the contained full-screen parent. Their full, unclipped geometry
 and ordering are retained, including partly offscreen edges; overlays are not
 declared harmless or ignored. Foreign leading windows, duplicate IDs, missing
@@ -759,3 +761,14 @@ click/type targeting keep their original strict matcher. This fallback is not
 used for “previous” or for departures from an empty desktop. The read-only
 `--check-desktop` report adds `directionalCompositionEligible` when the strict
 source matcher fails; it is a source preflight, not physical acceptance.
+
+Some full-screen apps expose content below separate toolbar rows. Directional
+evidence can recognize this layout only when the exact AX/Quartz content parent
+is full width, bottom aligned and at least 85% of the display height, with
+affirmative AX full-screen status. Beyond the existing 80-point menu/notch
+allowance, every part of the top gap must be covered continuously by actual
+same-app, full-width toolbar rows. Supporting rows must fit the display, be at
+most 80 points tall and at most 12% of the parent height. Gaps, missing rows or
+oversized substitutes are not inferred away. All rows remain in the unchanged
+composition fingerprint. `directionalToolbarCoverage` identifies this proof in
+the read-only diagnostic; the strict input/window matcher is unchanged.

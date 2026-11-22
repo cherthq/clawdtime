@@ -32,10 +32,10 @@ final class DesktopDirectionalEvidenceTests: XCTestCase {
     XCTAssertNil(group(rows, confirmed: false))
   }
   func testIncompleteUnpositionedRowsCannotBeDroppedFromInventory() {
-    let valid = DesktopDirectionalRow(id: 4, pid: 10, frame: parent, title: "Fixture")
-    for missing in [DesktopDirectionalRow(id: 1, pid: nil, frame: overlay, title: nil),
-                    DesktopDirectionalRow(id: nil, pid: 20, frame: overlay, title: nil),
-                    DesktopDirectionalRow(id: 1, pid: 20, frame: nil, title: nil)] {
+    let valid = DesktopDirectionalRow(id: 4, pid: 10, frame: parent, title: "Fixture", alpha: 1)
+    for missing in [DesktopDirectionalRow(id: 1, pid: nil, frame: overlay, title: nil, alpha: 1),
+                    DesktopDirectionalRow(id: nil, pid: 20, frame: overlay, title: nil, alpha: 1),
+                    DesktopDirectionalRow(id: 1, pid: 20, frame: nil, title: nil, alpha: 1)] {
       XCTAssertNil(DesktopDirectionalEvidence.inventory([missing, valid]))
     }
     XCTAssertNil(DesktopDirectionalEvidence.inventory([valid, valid]))
@@ -90,5 +90,78 @@ final class DesktopDirectionalEvidenceTests: XCTestCase {
     XCTAssertFalse(matches(expected, environment: 1)); XCTAssertFalse(matches(expected, displays: 2))
     var changed = rows; changed.swapAt(1, 2)
     XCTAssertFalse(matches(group(changed)))
+  }
+  func testDiagnosticIdentifiesMatchedButTooInsetFullscreenParentWithoutRelaxingIt() {
+    let inset = CGRect(x: 0, y: 120, width: 1600, height: 880)
+    var reason = "", counts: [String: Int] = [:]
+    let result = DesktopDirectionalEvidence.group(pid: 10, title: "Fixture", parent: inset, display: display,
+      fullScreenConfirmed: true, visible: [row(1, frame: strip), row(2, title: "Fixture", frame: inset)],
+      diagnostic: { reason = $0 }, count: { counts[$0] = $1 })
+    XCTAssertNil(result)
+    XCTAssertEqual(reason, "directional_parent_geometry")
+    XCTAssertEqual(counts, ["directionalParentMatches": 1, "directionalLeadingRows": 1])
+  }
+  func testJointMatchDiagnosticDoesNotConflateIndependentTitleAndFrameMatches() {
+    var reason = "", counts: [String: Int] = [:]
+    let result = DesktopDirectionalEvidence.group(pid: 10, title: "Fixture", parent: parent, display: display,
+      fullScreenConfirmed: true, visible: [row(1, title: "Different", frame: parent), row(2, title: "Fixture", frame: overlay)],
+      diagnostic: { reason = $0 }, count: { counts[$0] = $1 })
+    XCTAssertNil(result)
+    XCTAssertEqual(reason, "directional_parent_match_missing")
+    XCTAssertEqual(counts, ["directionalParentMatches": 0])
+  }
+  func testDirectionalFullscreenContentWithContiguousToolbarRowsKeepsEveryRow() throws {
+    let content = CGRect(x: 0, y: 120, width: 1600, height: 880)
+    let chrome = [row(1, frame: CGRect(x: 0, y: 40, width: 1600, height: 40)),
+                  row(2, frame: CGRect(x: 0, y: 80, width: 1600, height: 40)),
+                  row(3, frame: CGRect(x: 0, y: 40, width: 1600, height: 140))]
+    let visible = chrome + [row(4, title: "Fixture", frame: content)]
+    let matched = try XCTUnwrap(DesktopDirectionalEvidence.group(pid: 10, title: "Fixture", parent: content,
+      display: display, fullScreenConfirmed: true, visible: visible))
+    XCTAssertTrue(matched.usesToolbarCoverage)
+    XCTAssertEqual(matched.overlays.map(\.id), [1, 2, 3])
+    XCTAssertEqual(matched.overlays.map(\.frame), chrome.map(\.frame))
+    XCTAssertFalse(DesktopSurfaceScope.fullScreenGeometry(window: content, display: display))
+    XCTAssertNil(DesktopWindowVisibility.focusedWindowID(pid: 10, title: "Fixture", frame: content,
+      fullScreenConfirmed: true, display: display, visible: visible, accessibleFrames: [content]))
+  }
+  func testToolbarCoverageCannotBridgeGapsOrUseForeignOversizedOrNarrowRows() {
+    let content = CGRect(x: 0, y: 120, width: 1600, height: 880)
+    let upper = row(1, frame: CGRect(x: 0, y: 40, width: 1600, height: 40))
+    let lower = row(2, frame: CGRect(x: 0, y: 80, width: 1600, height: 40))
+    let invalid: [[DesktopWindowEvidence]] = [
+      [upper, row(2, frame: CGRect(x: 0, y: 90, width: 1600, height: 30))],
+      [upper, row(2, pid: 20, frame: lower.frame)],
+      [row(1, frame: CGRect(x: 0, y: 40, width: 1600, height: 100))],
+      [upper, row(2, frame: CGRect(x: 20, y: 80, width: 1580, height: 40))],
+      [row(1, frame: CGRect(x: 0, y: 81, width: 1600, height: 39))],
+    ]
+    for chrome in invalid {
+      XCTAssertNil(DesktopDirectionalEvidence.group(pid: 10, title: "Fixture", parent: content, display: display,
+        fullScreenConfirmed: true, visible: chrome + [row(4, title: "Fixture", frame: content)]))
+    }
+    XCTAssertNil(DesktopDirectionalEvidence.group(pid: 10, title: "Fixture", parent: content, display: display,
+      fullScreenConfirmed: false, visible: [upper, lower, row(4, title: "Fixture", frame: content)]))
+  }
+  func testToolbarCoverageStillRequiresLargeBottomAnchoredFullWidthParent() {
+    for content in [CGRect(x: 0, y: 120, width: 1600, height: 850),
+                    CGRect(x: 20, y: 120, width: 1580, height: 880),
+                    CGRect(x: 0, y: 200, width: 1600, height: 800)] {
+      let chrome = [row(1, frame: CGRect(x: 0, y: 40, width: 1600, height: 80)),
+                    row(2, frame: CGRect(x: 0, y: 120, width: 1600, height: 80))]
+      XCTAssertNil(DesktopDirectionalEvidence.group(pid: 10, title: "Fixture", parent: content, display: display,
+        fullScreenConfirmed: true, visible: chrome + [row(4, title: "Fixture", frame: content)]))
+    }
+  }
+  func testMissingTransparentOrInvalidAlphaRejectsEntireDirectionalInventory() {
+    let valid = DesktopDirectionalRow(id: 4, pid: 10, frame: parent, title: "Fixture", alpha: 1)
+    for alpha: Double? in [nil, 0, -.infinity, .infinity, .nan, -0.1, 1.1] {
+      let bad = DesktopDirectionalRow(id: 1, pid: 10, frame: strip, title: nil, alpha: alpha)
+      XCTAssertNil(DesktopDirectionalEvidence.inventory([bad, valid]))
+      let badParent = DesktopDirectionalRow(id: 4, pid: 10, frame: parent, title: "Fixture", alpha: alpha)
+      XCTAssertNil(DesktopDirectionalEvidence.inventory([badParent]))
+    }
+    let translucent = DesktopDirectionalRow(id: 1, pid: 10, frame: strip, title: nil, alpha: 0.5)
+    XCTAssertEqual(DesktopDirectionalEvidence.inventory([translucent, valid])?.count, 2)
   }
 }
