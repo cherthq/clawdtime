@@ -9,7 +9,9 @@ import {
 import { taskPresentationFingerprint } from "../task-presentation-contracts.js";
 import {
   desktopCallRequestSchema,
+  policyDesktopCallRequestSchema,
   type DesktopCallsConfig,
+  type DesktopCallRequest,
 } from "./task-desktop-calls-config.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
@@ -25,6 +27,8 @@ import {
   type SharedHandsetOwner,
 } from "./task-handset-runtime.js";
 import { readDesktopPrivateBytes } from "./task-desktop-config.js";
+import type { ProactiveCallCoordinator } from "../attention/proactive-coordinator.js";
+import type { ProactiveReviewPacket } from "./proactive-preparation.js";
 import type { TaskReviewCallbackLedger } from "../attention/task-review-callback-ledger.js";
 
 export type DesktopHandsetAttempt = Awaited<
@@ -49,6 +53,10 @@ export class TaskDesktopCalls implements DesktopControlPort {
   presentationPort?: TaskVoicePresentationPort;
   selectedTaskId?: () => string | undefined;
   reviews?: TaskReviewCallbackLedger;
+  proactive?: {
+    coordinator: ProactiveCallCoordinator;
+    packet(intentId: string): ProactiveReviewPacket | undefined;
+  };
   executionOwnership?: {
     acquireReviewOwnership(attemptId: string): void;
     confirmReviewOwnership?(): Promise<void>;
@@ -61,6 +69,19 @@ export class TaskDesktopCalls implements DesktopControlPort {
   private closing = false;
   reconcileReview() {
     const record = this.pendingRecord;
+    if (
+      record?.policyIntentId &&
+      this.proactive &&
+      this.active?.status().connectedOnce
+    ) {
+      const intent = this.proactive.coordinator.get(record.policyIntentId);
+      if (intent.state === "dispatching")
+        this.proactive.coordinator.outcome(
+          intent.id,
+          record.attemptId,
+          "connected",
+        );
+    }
     if (!record || !this.reviews || !this.active?.status().connectedOnce)
       return;
     const callback = this.reviews
@@ -129,6 +150,7 @@ export class TaskDesktopCalls implements DesktopControlPort {
     return {
       id: r.id,
       eventId: r.eventId,
+      attemptId: r.attemptId,
       taskId: r.taskId,
       runId: r.runId,
       revision: r.expectedRevision,
@@ -181,6 +203,29 @@ export class TaskDesktopCalls implements DesktopControlPort {
       attempts: records.slice(-20).map((r) => this.publicRecord(r)),
     };
   }
+  requestPolicy(input: unknown) {
+    return this.request(policyDesktopCallRequestSchema.parse(input));
+  }
+  async waitForAttempt(attemptId: string) {
+    const session = this.tasks.authenticate(this.options.sessionToken);
+    const before = this.ledger
+      .list(session.id)
+      .find((record) => record.attemptId === attemptId);
+    if (!before)
+      throw new DomainError(404, "Exact desktop attempt is unavailable.");
+    if (this.pendingRecord?.attemptId === attemptId && this.pending)
+      await this.pending;
+    const record = this.ledger.get(session.id, before.id);
+    return {
+      state:
+        record.state === "closed"
+          ? ("ended" as const)
+          : record.state === "failed"
+            ? ("refused" as const)
+            : ("unknown" as const),
+      cleanupConfirmed: record.cleanupConfirmed,
+    };
+  }
   request(input: unknown) {
     if (this.closing)
       throw new DomainError(409, "Desktop call service is stopping.");
@@ -216,7 +261,19 @@ export class TaskDesktopCalls implements DesktopControlPort {
         "A paired task with a known result and clean call state is required.",
       );
     const task = this.tasks.ledger.get(session.id, request.taskId);
-    if (this.selectedTaskId?.() !== task.id)
+    const policyRequest = "policyAttempt" in request;
+    if (
+      !policyRequest &&
+      this.proactive &&
+      (this.proactive.coordinator.doctor().active ||
+        this.proactive.coordinator.doctor().unknown.length)
+    )
+      throw new DomainError(
+        409,
+        "Shared phone ownership is active or unresolved.",
+      );
+    if (policyRequest) this.validatePolicyRequest(request, "admission");
+    if (!policyRequest && this.selectedTaskId?.() !== task.id)
       throw new DomainError(
         409,
         "The call must belong to the task selected in the desktop panel.",
@@ -262,6 +319,13 @@ export class TaskDesktopCalls implements DesktopControlPort {
           manifestFingerprint: fingerprint,
           requestFingerprint,
           authorizationId: request.authorizationId,
+          ...(policyRequest
+            ? {
+                policyAttemptId: request.policyAttempt.attemptId,
+                policyGrantId: request.policyAttempt.id,
+                policyIntentId: request.policyAttempt.intentId,
+              }
+            : {}),
           authorizedAt: request.authorizedAt,
           expiresAt: request.expiresAt,
         });
@@ -304,17 +368,20 @@ export class TaskDesktopCalls implements DesktopControlPort {
       destination: c.destination,
       railway: { ...c.railway, ...request.standby },
       ...(c.ports ? { ports: c.ports } : {}),
-      authorization: {
-        id: request.authorizationId,
-        userAuthorizedOneCall: true,
-      },
+      authorization: policyRequest
+        ? { version: 2, policyAttempt: request.policyAttempt }
+        : { id: request.authorizationId, userAuthorizedOneCall: true },
       walkthrough: {
         presentationFile: this.options.configPath,
         helperBinary: c.helperBinary,
         checksFile: this.options.checksPath,
         callDurationMs: request.callDurationMs,
-        userAuthorizedPreparedWindowExport: true,
-        userAuthorizedTaskInstructions: true,
+        ...(policyRequest
+          ? { version: 2 as const }
+          : {
+              userAuthorizedPreparedWindowExport: true as const,
+              userAuthorizedTaskInstructions: true as const,
+            }),
       },
     };
     // Durable claim precedes voice admission, subprocess creation, capture and all external effects.
@@ -337,6 +404,15 @@ export class TaskDesktopCalls implements DesktopControlPort {
             prepared: request.prepared,
             authorizedAt: request.authorizedAt,
             dispatchExpiresAt: request.expiresAt,
+            ...(policyRequest
+              ? {
+                  policy: {
+                    grant: request.policyAttempt,
+                    assertCurrent: (phase: "initial" | "ongoing") =>
+                      this.validatePolicyRequest(request, phase),
+                  },
+                }
+              : {}),
             bindPresenter: (value) => {
               this.presentationPort = value;
             },
@@ -361,6 +437,13 @@ export class TaskDesktopCalls implements DesktopControlPort {
                 connected ? "delivered" : "failed",
               );
           });
+          if (policyRequest)
+            this.proactive!.coordinator.outcome(
+              request.policyAttempt.intentId,
+              record.attemptId,
+              "ended",
+              { cleanupConfirmed: true },
+            );
           if (ownershipId)
             this.executionOwnership?.releaseReviewOwnership(ownershipId);
           this.active = undefined;
@@ -383,6 +466,13 @@ export class TaskDesktopCalls implements DesktopControlPort {
             });
             if (ownershipId)
               this.executionOwnership?.releaseReviewOwnership(ownershipId);
+            if (policyRequest)
+              this.proactive!.coordinator.outcome(
+                request.policyAttempt.intentId,
+                record.attemptId,
+                "refused",
+                { cleanupConfirmed: true },
+              );
             this.pendingRecord = undefined;
             return;
           }
@@ -393,6 +483,12 @@ export class TaskDesktopCalls implements DesktopControlPort {
           if (settled && !settled.cleanupConfirmed)
             this.tasks.store.transaction(() => {
               this.ledger.markUnknown(record.id);
+              if (policyRequest)
+                this.proactive!.coordinator.outcome(
+                  request.policyAttempt.intentId,
+                  record.attemptId,
+                  "unknown",
+                );
               if (callbackId)
                 this.reviews!.outcome(
                   session.id,
@@ -407,6 +503,94 @@ export class TaskDesktopCalls implements DesktopControlPort {
         this.pending = undefined;
       });
     return { attempt: this.publicRecord(record), replayed: false };
+  }
+  private validatePolicyRequest(
+    request: Extract<DesktopCallRequest, { version: 2 }>,
+    phase: "admission" | "initial" | "ongoing",
+  ) {
+    const p = this.proactive,
+      grant = request.policyAttempt;
+    if (!p || !p.coordinator.authority.validateGrant(grant))
+      throw new DomainError(403, "Current policy attempt authority required.");
+    const intent = p.coordinator.get(grant.intentId),
+      session = this.tasks.authenticate(this.options.sessionToken);
+    const source = grant.source,
+      task = this.tasks.ledger.get(session.id, request.taskId);
+    if (
+      source.kind !== "task" ||
+      grant.channel !== "phone_walkthrough" ||
+      intent.grantId !== grant.id ||
+      intent.attemptId !== grant.attemptId ||
+      !["dispatching", "connected"].includes(intent.state) ||
+      grant.scope.personId !== session.memberId ||
+      grant.scope.deviceId !== session.deviceId ||
+      grant.scope.projectRoot !== session.projectRoot ||
+      grant.scope.sessionId !== session.id ||
+      grant.scope.taskId !== task.id ||
+      request.authorizationId !== grant.id ||
+      request.authorizedAt !== grant.issuedAt ||
+      request.expiresAt > grant.expiresAt ||
+      request.authorizedAt + request.callDurationMs > grant.expiresAt ||
+      source.sessionId !== session.id ||
+      source.taskId !== task.id ||
+      source.runId !== request.runId ||
+      source.revision !== request.expectedRevision
+    )
+      throw new DomainError(
+        403,
+        "Policy call context differs from the exact task attempt.",
+      );
+    if (
+      phase !== "ongoing" &&
+      (task.runs.at(-1)?.id !== source.runId ||
+        task.revision !== source.revision ||
+        task.verification?.id !== source.verificationId)
+    )
+      throw new DomainError(409, "Policy call result is no longer current.");
+    const packet = p.packet(intent.id);
+    if (
+      !packet ||
+      packet.fingerprint !== grant.packetFingerprint ||
+      packet.source.kind !== "task" ||
+      packet.source.taskId !== source.taskId ||
+      packet.source.runId !== source.runId ||
+      packet.source.revision !== source.revision ||
+      packet.source.verificationId !== source.verificationId
+    )
+      throw new DomainError(
+        403,
+        "Exact policy-authorized preparation packet required.",
+      );
+    if (phase === "admission" && packet.expiresAt <= Date.now())
+      throw new DomainError(409, "Policy prepared frames are stale.");
+    const manifest = request.prepared.manifest;
+    if (packet.views.length !== manifest.scenes.length)
+      throw new DomainError(
+        403,
+        "Policy packet must bind every prepared scene.",
+      );
+    for (const scene of manifest.scenes) {
+      const view = packet.views.find(
+        (v) => v.id === scene.id && v.windowId === scene.target.windowId,
+      );
+      const exact = `window:${scene.target.appId}:${scene.target.windowId}:${scene.target.processIdentity}`;
+      if (
+        !view ||
+        !grant.viewScope.includes(view.scope) ||
+        ![
+          exact,
+          `presentation:${manifest.id}`,
+          ...(scene.target.appId === "com.clawdtime.review-view"
+            ? ["prepared-review"]
+            : []),
+        ].includes(view.scope) ||
+        (scene.artifact && scene.artifact.sha256 !== view.artifactDigest)
+      )
+        throw new DomainError(
+          403,
+          "Prepared scene exceeds exact policy view scope.",
+        );
+    }
   }
   private validatePaths() {
     const c = this.options.config;

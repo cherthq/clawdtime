@@ -616,3 +616,38 @@ missing/unstable/invalid reads. The native reader returned two complete identica
 snapshots on the qualification Mac. Local Enable followed by ordinary app switching
 and an increased ignored-notification counter remains a physical acceptance check;
 these tests do not establish that outcome or a specific cause of OS notifications.
+
+## App-owned prepared review view
+
+`mac/scripts/package-review-window.sh` builds and locally signs
+`mac/build/ClawdTime Review View.app`, bundle ID `com.clawdtime.review-view`.
+It does not install or launch it. The service starts its executable with
+`--config /absolute/private/review.json`, where the owner-only configuration is:
+
+```json
+{
+  "version": 1,
+  "title": "ClawdTime review synthetic-attempt",
+  "sections": [
+    { "heading": "Decision", "text": "A bounded plain-text brief." }
+  ],
+  "expiresAt": 1800000060000
+}
+```
+
+Expiry must be in the next 30 minutes. The renderer accepts no HTML, script,
+navigation or capture commands. It displays literal text in one identified
+window and emits bounded ready metadata. `ClawdTimeTaskCapture --resolve-target`
+then independently resolves the exact app/title/process/window before any capture;
+window creation alone is not capture or export authority. Keep each prepared page
+short enough to read without scrolling. Local Stop, closing the window, expiry or
+EOF on the controlling stdin pipe ends the view.
+
+The only stdin command is a bounded JSON line
+`{"id":"invalidate-one","op":"invalidate"}`. It permanently replaces old
+content with a fixed notice that work changed and awaits a fresh checked review,
+without changing the window identity. The acknowledgment
+`{"id":"invalidate-one","invalidated":true}` follows main-thread layout and
+display. A fresh independently captured frame is still required before resuming
+sharing; this acknowledgment is not proof of handset visibility. Invalid commands
+close the renderer. No arbitrary content replacement or native input is exposed.

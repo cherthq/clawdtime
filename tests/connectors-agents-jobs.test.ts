@@ -80,6 +80,8 @@ describe("a job for a coding session", () => {
     expect(script).toBe(
       [
         "#!/bin/zsh",
+        `export CLAWDTIME_JOB_RUN_ID='${JSON.parse(readFileSync(join(folder, id!, "requested.json"), "utf8")).runId}'`,
+        `export CLAWDTIME_CONFIG_HOME='${directory}'`,
         `[[ ! -e ${at("retired.json")} ]] || { print -r -- 'This job was retired; it will not be replayed.'; exit 1; }`,
         `( umask 077; setopt NO_CLOBBER; [[ ! -L ${at("launched.json")} ]] && printf '{"version":1,"pid":%s}\\n' "$$" > ${at("launched.json")} ) || { print -r -- 'This job was already launched; it will not be replayed.'; exit 1; }`,
         `job_exit_receipt() { local job_exit=$?; ( umask 077; setopt NO_CLOBBER; [[ ! -L ${at("exited.json")} ]] && printf '{"version":1,"exitCode":%s}\\n' "$job_exit" > ${at("exited.json")} ); }`,

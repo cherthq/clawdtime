@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { callAttemptGrantSchema } from "../attention/proactive-contracts.js";
 import {
   taskPresentationManifestSchema,
   taskPresentationGrantSchema,
@@ -56,7 +57,7 @@ export const desktopCallsConfigSchema = z
 export type DesktopCallsConfig = z.infer<typeof desktopCallsConfigSchema>;
 
 /** Only the protected operator may submit this. The UI capability grants no calls. */
-export const desktopCallRequestSchema = z
+export const legacyDesktopCallRequestSchema = z
   .object({
     eventId: id,
     taskId: id,
@@ -66,7 +67,9 @@ export const desktopCallRequestSchema = z
     authorizedAt: z.number().int().nonnegative().safe(),
     expiresAt: z.number().int().nonnegative().safe(),
     callDurationMs: z.number().int().min(30_000).max(900_000),
-    standby: z.object({ deploymentId: z.string().uuid(), restoreRecord: text }).strict(),
+    standby: z
+      .object({ deploymentId: z.string().uuid(), restoreRecord: text })
+      .strict(),
     userAuthorizedOneCall: z.literal(true),
     userAuthorizedPreparedWindowExport: z.literal(true),
     userAuthorizedTaskInstructions: z.literal(true),
@@ -78,4 +81,16 @@ export const desktopCallRequestSchema = z
       .strict(),
   })
   .strict();
+export const policyDesktopCallRequestSchema = legacyDesktopCallRequestSchema
+  .omit({
+    userAuthorizedOneCall: true,
+    userAuthorizedPreparedWindowExport: true,
+    userAuthorizedTaskInstructions: true,
+  })
+  .extend({ version: z.literal(2), policyAttempt: callAttemptGrantSchema })
+  .strict();
+export const desktopCallRequestSchema = z.union([
+  legacyDesktopCallRequestSchema,
+  policyDesktopCallRequestSchema,
+]);
 export type DesktopCallRequest = z.infer<typeof desktopCallRequestSchema>;

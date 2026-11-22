@@ -1147,15 +1147,12 @@ describe("terminal input", () => {
 describe("hook plans", () => {
   const node = "/usr/local/bin/node",
     script = "/opt/clawdtime/dist/cli/agent-hook.js";
-  it("gives Claude Code only the hooks that decide, and Codex the state hooks too", () => {
+  it("registers ordered lifecycle evidence and bounded decision hooks for each supported client", () => {
     const claude = hookPlan("claude-code", node, script);
     expect(
-      claude.map((hook) => [
-        hook.event,
-        hook.matcher,
-        hook.async,
-        hook.timeout,
-      ]),
+      claude
+        .filter((hook) => hook.command.endsWith(" decide"))
+        .map((hook) => [hook.event, hook.matcher, hook.async, hook.timeout]),
     ).toEqual([
       ["PermissionRequest", undefined, false, 570],
       ["PreToolUse", "AskUserQuestion|ExitPlanMode", false, 570],
@@ -1165,14 +1162,46 @@ describe("hook plans", () => {
     );
     const codex = hookPlan("codex", node, script);
     expect(
-      codex.filter((hook) => !hook.async).map((hook) => hook.event),
+      codex
+        .filter((hook) => hook.command.endsWith(" decide"))
+        .map((hook) => hook.event),
     ).toEqual(["PermissionRequest"]);
     expect(codex.find((hook) => hook.event === "Stop")).toMatchObject({
-      async: true,
+      async: false,
       timeout: 5,
       command:
         "'/usr/local/bin/node' '/opt/clawdtime/dist/cli/agent-hook.js' codex",
     });
+    expect(claude.map((hook) => hook.event)).toEqual(
+      expect.arrayContaining([
+        "UserPromptSubmit",
+        "Stop",
+        "StopFailure",
+        "SessionEnd",
+      ]),
+    );
+    expect(codex.some((hook) => hook.event === "StopFailure")).toBe(false);
+    expect(codex.find((hook) => hook.event === "Interrupt")?.timeout).toBe(3);
+    const old = JSON.stringify({
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: codex.find((hook) => hook.event === "Stop")!.command,
+                timeout: 5,
+                async: true,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(plannedInstalled(old, codex)).toHaveLength(0);
+    const upgraded = applyHookPlan(old, codex);
+    expect(JSON.parse(upgraded).hooks.Stop).toHaveLength(1);
+    expect(plannedInstalled(upgraded, codex)).toHaveLength(codex.length);
   });
 
   it("adds its hooks to a settings file, keeps the rest, and removes only itself", () => {
@@ -1194,7 +1223,8 @@ describe("hook plans", () => {
     const parsed = JSON.parse(installed);
     expect(parsed.model).toBe("fable");
     expect(parsed.permissions).toEqual(original.permissions);
-    expect(parsed.hooks.Stop).toEqual(original.hooks.Stop);
+    expect(parsed.hooks.Stop[0]).toEqual(original.hooks.Stop[0]);
+    expect(parsed.hooks.Stop).toHaveLength(2);
     expect(parsed.hooks.PreToolUse).toHaveLength(2);
     expect(parsed.hooks.PreToolUse[1]).toEqual({
       matcher: "AskUserQuestion|ExitPlanMode",
@@ -1203,7 +1233,7 @@ describe("hook plans", () => {
     expect(parsed.hooks.PermissionRequest).toEqual([
       { hooks: [{ type: "command", command: plan[0]!.command, timeout: 570 }] },
     ]);
-    expect(plannedInstalled(installed, plan)).toHaveLength(2);
+    expect(plannedInstalled(installed, plan)).toHaveLength(plan.length);
     expect(applyHookPlan(installed, plan)).toBe(installed);
     expect(JSON.parse(removeHookPlan(installed, plan))).toEqual(original);
     expect(plannedInstalled(JSON.stringify(original), plan)).toEqual([]);
@@ -1590,11 +1620,17 @@ describe("supervisor commands", () => {
       readFileSync(join(claudeHome, "settings.json"), "utf8"),
     );
     expect(settings.model).toBe("fable");
-    expect(settings.hooks.Stop).toHaveLength(1);
+    expect(settings.hooks.Stop).toHaveLength(2);
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "PermissionRequest",
+      "PostToolUse",
+      "PostToolUseFailure",
       "PreToolUse",
+      "SessionEnd",
+      "SessionStart",
       "Stop",
+      "StopFailure",
+      "UserPromptSubmit",
     ]);
     await run("hooks", "status", "--agent", "claude-code");
     expect(lines.at(-1)).toContain("Installed");

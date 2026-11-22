@@ -1,4 +1,13 @@
+import type { ProactiveCallCoordinator } from "../attention/proactive-coordinator.js";
+import type {
+  CallChannel,
+  CallTrigger,
+  ProactiveCallIntent,
+} from "../attention/proactive-contracts.js";
+import type { ProactiveSourceEvidence } from "./proactive-preparation.js";
 import type { CodingTask } from "../contracts.js";
+import { isTaskResultAcceptance } from "./task-voice-acceptance.js";
+import { buildTaskBrief } from "../attention/task-ledger.js";
 import { TaskReviewCallbackLedger } from "../attention/task-review-callback-ledger.js";
 import type { TaskService } from "./task-service.js";
 import type { TaskEngine } from "./task-engine.js";
@@ -7,7 +16,6 @@ import {
   type DesktopCallRequest,
 } from "./task-desktop-calls-config.js";
 import type { TaskReviewCallbackRecord } from "../attention/task-review-callback-ledger.js";
-import type { TaskDesktopCalls } from "./task-desktop-calls.js";
 import { ProtectedTaskStore } from "../storage/task-store.js";
 import { DomainError, hash } from "../storage/security.js";
 import { taskPresentationFingerprint } from "../task-presentation-contracts.js";
@@ -29,6 +37,13 @@ export interface ReviewPreparationPort {
 }
 
 const ready = new Set(["review_ready", "needs_decision"]);
+/** Explicit worker questions are decision triggers; failed runs/checks retain
+ * failure eligibility even when their ledger includes a fallback question. */
+export function managedReviewTrigger(task: CodingTask): CallTrigger {
+  if (task.decision && !task.decision.answer && task.runs.at(-1)?.decision)
+    return "decision";
+  return task.state === "review_ready" ? "review" : "failure";
+}
 
 /** Supervisor-owned preparation. Worker output never supplies call authority. */
 export class TaskReviewService {
@@ -38,11 +53,193 @@ export class TaskReviewService {
   private pumping = false;
   private closed = false;
   private preparation?: ReviewPreparationPort;
-  private calls?: Pick<TaskDesktopCalls, "request">;
+  private calls?: { request(input: unknown): unknown };
+  private proactive?: {
+    coordinator: ProactiveCallCoordinator;
+    policyFor(
+      task: CodingTask,
+    ):
+      { policyId: string; channel: CallChannel; expiresAt: number } | undefined;
+    viewEvidence?(
+      task: CodingTask,
+    ): Pick<ProactiveSourceEvidence, "artifacts" | "views">;
+  };
+  configureProactive(options: NonNullable<TaskReviewService["proactive"]>) {
+    this.proactive = options;
+    this.refresh();
+  }
+  applyProactiveAnswer(
+    intent: ProactiveCallIntent,
+    text: string,
+    eventId: string,
+  ) {
+    const session = this.tasks.authenticate(this.sessionToken),
+      p = this.proactive;
+    if (
+      !p ||
+      intent.source.kind !== "task" ||
+      intent.source.sessionId !== session.id ||
+      !text.trim() ||
+      text.length > 4000 ||
+      !/^[A-Za-z0-9_:-]{1,200}$/.test(eventId)
+    )
+      throw new DomainError(
+        403,
+        "Exact authorized managed review answer required.",
+      );
+    const receipts = new ProtectedTaskStore<{
+      id: string;
+      fingerprint: string;
+      result: {
+        status: "accepted" | "continued";
+        taskId: string;
+        message: string;
+      };
+    }>(this.tasks.store, this.tasks.vault, "proactive-task-answer-v1");
+    const receiptId = hash(JSON.stringify([intent.id, eventId])),
+      fingerprint = hash(JSON.stringify([intent.source, text]));
+    const prior = receipts.get(receiptId);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint)
+        throw new DomainError(409, "Review answer event conflicts.");
+      return prior.result;
+    }
+    const current = p.coordinator.get(intent.id);
+    if (JSON.stringify(current.source) !== JSON.stringify(intent.source))
+      throw new DomainError(
+        403,
+        "Review answer source differs from the connected intent.",
+      );
+    const grant = current.grantId
+      ? p.coordinator.authority.grant(current.grantId)
+      : undefined;
+    if (
+      current.state !== "connected" ||
+      !grant ||
+      !p.coordinator.authority.validateGrant(grant)
+    )
+      throw new DomainError(
+        403,
+        "Answer requires the exact currently connected authorized call.",
+      );
+    const source = intent.source,
+      task = this.tasks.ledger.get(session.id, source.taskId),
+      run = task.runs.at(-1)!;
+    if (
+      source.runId !== run.id ||
+      source.revision !== task.revision ||
+      source.verificationId !== task.verification?.id ||
+      !ready.has(task.state)
+    )
+      throw new DomainError(
+        409,
+        "This answer no longer matches the pending result.",
+      );
+    const accepted = isTaskResultAcceptance(text);
+    const choice = task.decision?.options?.some(
+      (option) => option.toLowerCase() === text.trim().toLowerCase(),
+    );
+    const revision =
+      /^(?:please\s+)?(?:revise|change|update|make|fix|use|add|remove|replace|keep|choose|select)\b/i.test(
+        text.trim(),
+      );
+    if (!accepted && !choice && !revision)
+      return {
+        status: "clarification_required" as const,
+        taskId: task.id,
+        message:
+          "Please explicitly accept this result, choose an offered option, or state the revision you want.",
+      };
+    if (!accepted && !this.engine)
+      throw new DomainError(409, "Managed continuation worker is unavailable.");
+    const result = this.tasks.store.transaction(() => {
+      this.tasks.command(this.sessionToken, task.id, {
+        eventId: `proactive:${hash(eventId)}`,
+        expectedRevision: task.revision,
+        runId: run.id,
+        ...(accepted
+          ? { action: "accept" as const }
+          : { action: "decide" as const, instruction: text.trim() }),
+      });
+      const result = {
+        status: accepted ? ("accepted" as const) : ("continued" as const),
+        taskId: task.id,
+        message: accepted
+          ? "The exact checked result was accepted. Deployment remains a separate action."
+          : "The revision is retained for this exact task under its existing permissions.",
+      };
+      receipts.put({ id: receiptId, fingerprint, result });
+      return result;
+    });
+    if (!accepted) this.engine!.start(session.id, task.id);
+    return result;
+  }
+  /** Current managed result evidence for the shared effectful preparer. No work or
+   * views are opened here, and arbitrary external Jobs never enter this adapter. */
+  proactiveEvidence(intent: ProactiveCallIntent): ProactiveSourceEvidence {
+    const session = this.tasks.authenticate(this.sessionToken);
+    if (intent.source.kind !== "task" || intent.source.sessionId !== session.id)
+      throw new DomainError(403, "Exact managed task source required.");
+    const task = this.tasks.ledger.get(session.id, intent.source.taskId),
+      run = task.runs.at(-1)!;
+    const current =
+      run.id === intent.source.runId &&
+      task.revision === intent.source.revision &&
+      task.verification?.id === intent.source.verificationId &&
+      ready.has(task.state) &&
+      !run.cancelRequested;
+    const checks =
+      task.verification?.checks.map((check, index) => ({
+        id: `${task.verification!.id}:${index}`,
+        name: check.name,
+        status:
+          check.state === "passed"
+            ? ("passed" as const)
+            : check.state === "failed"
+              ? ("failed" as const)
+              : ("unknown" as const),
+        resultDigest: hash(JSON.stringify(check)),
+      })) ?? [];
+    const summary = (run.summary ?? buildTaskBrief(task).opening).slice(
+      0,
+      2000,
+    );
+    return {
+      current,
+      sourceFingerprint: hash(
+        JSON.stringify([
+          task.id,
+          run.id,
+          task.revision,
+          task.verification,
+          task.decision,
+          run.summary,
+        ]),
+      ),
+      goal: task.goal.slice(0, 2000),
+      summary,
+      status:
+        task.decision && !task.decision.answer
+          ? "decision"
+          : task.verification?.state === "passed" && run.state === "completed"
+            ? "verified"
+            : "failed",
+      ...(task.decision && !task.decision.answer
+        ? {
+            question: task.decision.question.slice(0, 2000),
+            choices: task.decision.options?.map((option) =>
+              option.slice(0, 2000),
+            ),
+          }
+        : {}),
+      checks,
+      ...(this.proactive?.viewEvidence?.(task) ?? { artifacts: [], views: [] }),
+    };
+  }
   constructor(
     readonly tasks: TaskService,
     private sessionToken: string,
-    engine?: TaskEngine,
+    private readonly engine?: TaskEngine,
     private phoneConfigured = false,
   ) {
     this.ledger = new TaskReviewCallbackLedger(
@@ -90,7 +287,7 @@ export class TaskReviewService {
     this.unsubscribe?.();
   }
   configureDelivery(
-    calls: Pick<TaskDesktopCalls, "request">,
+    calls: { request(input: unknown): unknown },
     preparation?: ReviewPreparationPort,
   ) {
     this.calls = calls;
@@ -161,6 +358,9 @@ export class TaskReviewService {
         )
           continue;
         let delivery = this.deliveries.get(record.id);
+        // Automatic managed callbacks belong to the shared coordinator. Explicit
+        // staged legacy envelopes retain their single-call operator path.
+        if (!delivery && this.proactive) continue;
         if (!delivery && this.preparation) {
           const prepared = await this.preparation.prepare(record);
           if (prepared) {
@@ -214,9 +414,53 @@ export class TaskReviewService {
     for (const task of this.tasks.ledger.list(session.id)) {
       try {
         this.ledger.reconcile(session.id, task.id);
+        if (this.proactive)
+          for (const intent of this.proactive.coordinator.list()) {
+            if (
+              intent.source.kind === "task" &&
+              intent.source.taskId === task.id &&
+              intent.source.sessionId === session.id
+            )
+              this.proactive.coordinator.reconcile(intent.id, {
+                current:
+                  ready.has(task.state) &&
+                  !task.runs.at(-1)?.cancelRequested &&
+                  intent.source.runId === task.runs.at(-1)?.id &&
+                  intent.source.revision === task.revision &&
+                  intent.source.verificationId === task.verification?.id,
+              });
+          }
+
         if (!ready.has(task.state) || task.runs.at(-1)?.cancelRequested)
           continue;
         const { record } = this.ledger.schedule(session.id, task.id);
+        if (this.proactive) {
+          const enrollment = this.proactive.policyFor(task);
+          if (enrollment)
+            this.proactive.coordinator.enqueue({
+              ...enrollment,
+              source: {
+                kind: "task",
+                taskId: task.id,
+                sessionId: session.id,
+                runId: record.runId,
+                revision: record.reviewRevision,
+                verificationId: record.verificationId,
+                ...(task.decision && !task.decision.answer
+                  ? { decisionId: task.decision.id }
+                  : {}),
+              },
+              scope: {
+                personId: session.memberId,
+                deviceId: session.deviceId,
+                projectRoot: session.projectRoot,
+                sessionId: session.id,
+                taskId: task.id,
+              },
+              trigger: managedReviewTrigger(task),
+              brief: record.opening,
+            });
+        }
         if (record.state === "preparing")
           this.ledger.block(
             session.id,

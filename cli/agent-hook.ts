@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import {
+  ScopedSupervision,
+  sessionKey,
+} from "../connectors/agents/proactive-sessions.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -128,7 +132,21 @@ async function handle(raw: string) {
     return;
   }
 
-  const policy = holdPolicy({ attended: desk.attended(), away: desk.away() });
+  const supervision = new ScopedSupervision(root);
+  const scoped = supervision.match(
+    cwd,
+    sessionKey(sessionId),
+    process.env.CLAWDTIME_JOB_RUN_ID,
+  );
+  const policy = scoped
+    ? {
+        hold: true,
+        seconds: Math.min(
+          scoped.responseSeconds,
+          Math.floor((scoped.expiresAt - Date.now()) / 1000),
+        ),
+      }
+    : holdPolicy({ attended: desk.attended(), away: desk.away() });
   if (!policy.hold) return;
 
   const request = desk.open({
@@ -154,11 +172,30 @@ async function handle(raw: string) {
   let answer = desk.take(request.id);
   while (!answer && Date.now() < request.holdUntil) {
     await sleep(150);
+    if (
+      scoped &&
+      !supervision.match(
+        cwd,
+        sessionKey(sessionId),
+        process.env.CLAWDTIME_JOB_RUN_ID,
+      )
+    )
+      break;
+    if (!scoped && !desk.attended()) break;
     answer = desk.take(request.id);
     const now = status?.();
     if (now === "waiting") prompted = true;
     else if (prompted && now) break;
   }
+  if (
+    scoped &&
+    !supervision.match(
+      cwd,
+      sessionKey(sessionId),
+      process.env.CLAWDTIME_JOB_RUN_ID,
+    )
+  )
+    answer = null;
   desk.close(request, answer);
   if (!answer) return;
   // The session works again: the board must not keep showing that it waits.

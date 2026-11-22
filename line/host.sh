@@ -81,6 +81,10 @@ start() {
   [ -f "$DIR/.env.local" ] || { echo "No .env.local in $DIR. Copy .env.example to .env.local and fill it in." >&2; exit 1; }
   [ -d "$DIR/node_modules" ] || { echo "No node_modules in $DIR. Run: npm install" >&2; exit 1; }
   if running; then echo "Already running. See: ./host.sh status"; return 0; fi
+  if [ -e "$STATE/outbound-hold" ] || [ -L "$STATE/outbound-hold" ]; then
+    echo "Outbound ownership is retained; reconcile its receipt before restoring incoming." >&2
+    return 1
+  fi
   # A private installed release may pin the agent code while credentials remain here.
   release >/dev/null || exit 1
   rm -f "$STATE/stopping"
@@ -94,12 +98,20 @@ stop() {
   running || { echo "Not running."; return 0; }
   # The mark comes first, so that a program that ends now is not started again.
   : > "$STATE/stopping"
+  boundary=$(node "$DIR/host-receipts.mjs" boundary "$STATE/dev.jsonl") || {
+    echo "Cannot establish a fresh release boundary; host was not stopped." >&2
+    return 1
+  }
   tmux send-keys -t "$SESSION:dev" C-c 2>/dev/null || true
   i=0
   while [ "$i" -lt 20 ]; do
-    tail -n 5 "$STATE/dev.jsonl" 2>/dev/null | grep -q '"dev_stopped"' && break
+    node "$DIR/host-receipts.mjs" released "$STATE/dev.jsonl" "$boundary" && break
     i=$((i + 1)); sleep 1
   done
+  if ! node "$DIR/host-receipts.mjs" released "$STATE/dev.jsonl" "$boundary"; then
+    echo "Release or cleanup remains unknown; session and receipts retained. No replacement owner may start." >&2
+    return 1
+  fi
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   echo "Stopped."
 }

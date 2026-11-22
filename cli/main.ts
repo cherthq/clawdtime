@@ -40,6 +40,7 @@ import { startSetupSession } from "../connectors/shared/setup-session.js";
 import { retryExistingSetup } from "./setup-retry.js";
 import { taskCli } from "./tasks.js";
 import { agentsCli } from "./agents.js";
+import { proactiveCli } from "./proactive.js";
 import { phoneCli } from "./phone.js";
 import { computerCli } from "./computer.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
@@ -56,6 +57,7 @@ function options(args: string[]) {
 }
 export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
+  if (command === "proactive") return proactiveCli(args.slice(1));
   if (command === "phone") return phoneCli(args.slice(1));
   if (command === "task") return taskCli(args.slice(1));
   if (command === "agents") return agentsCli(args.slice(1));
@@ -82,7 +84,7 @@ export async function main(args = process.argv.slice(2)) {
     return agentsCli(["--supervisor", command, ...args.slice(1)]);
   if (command === "help" || command === "--help") {
     console.log(
-      "ClawdTime internal build (no npm publication implied)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nagents [--json] | watch | focus | pending | approve | deny | answer | send | away | doctor | hooks (every coding-agent session on this Mac, and answers to them; see agents help)\ntrove | clis | report | browser (what ClawdTime remembers, the agent commands and their use, a slide deck, browser tabs)\nhosts add | list | check | remove (other Macs that this Mac supervises over ssh; see hosts help)\ncomputer status | on | off | doctor | clear (ClawdTime does a task on this Mac by itself, one checked action at a time; off until you turn it on; see computer help)\nKeep pairing files private; never pass a credential in command arguments.",
+      "ClawdTime internal build (no npm publication implied)\nproactive doctor | intents | policy | enroll | revoke | stop (protected calling policy and exact source watches; see proactive help)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nagents [--json] | watch | focus | pending | approve | deny | answer | send | away | doctor | hooks (every coding-agent session on this Mac, and answers to them; see agents help)\ntrove | clis | report | browser (what ClawdTime remembers, the agent commands and their use, a slide deck, browser tabs)\nhosts add | list | check | remove (other Macs that this Mac supervises over ssh; see hosts help)\ncomputer status | on | off | doctor | clear (ClawdTime does a task on this Mac by itself, one checked action at a time; off until you turn it on; see computer help)\nKeep pairing files private; never pass a credential in command arguments.",
     );
     return;
   }

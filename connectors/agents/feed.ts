@@ -1,3 +1,5 @@
+import type { ProactiveCallIntent } from "../../src/attention/proactive-contracts.js";
+import type { ProactiveSourceAdapter } from "./proactive.js";
 import type { PhoneTurnContext } from "../../src/phone-desktop-contracts.js";
 import { phoneTurn, phoneGuard } from "./phone-turn.js";
 import type { DesktopExecutorPort } from "../../src/control/desktop-executor.js";
@@ -167,6 +169,7 @@ export class BoardFeed implements AgentBoardPort {
   private readonly told = new Set<string>();
   constructor(
     private readonly options: {
+      proactive?: ProactiveSourceAdapter;
       intervalMs?: number;
       now?: () => number;
       spawn?: typeof spawn;
@@ -242,6 +245,9 @@ export class BoardFeed implements AgentBoardPort {
     const jobs = options.project
       ? new Jobs(this.root, {
           project: options.project,
+          beforeLaunch: options.proactive
+            ? (input) => options.proactive!.beforeLaunch(input)
+            : undefined,
           now: options.now ?? Date.now,
           run: this.run,
           agent:
@@ -249,6 +255,7 @@ export class BoardFeed implements AgentBoardPort {
           terminal: process.env.CLAWDTIME_JOB_TERMINAL || "Terminal",
         })
       : undefined;
+    if (jobs) options.proactive?.attachJobs(() => jobs.recent(50));
     this.news = jobs
       ? new JobNews(this.root, {
           jobs: () => jobs.recent(10),
@@ -258,6 +265,7 @@ export class BoardFeed implements AgentBoardPort {
       : undefined;
     this.sessionNews = new SessionNews(this.root, {
       board: () => this.snapshot(),
+      proactive: options.proactive,
       log: this.log,
       now: options.now ?? Date.now,
     });
@@ -340,6 +348,10 @@ export class BoardFeed implements AgentBoardPort {
    * allow. Never two calls for one incident, and never while another call runs.
    */
   private report() {
+    if (this.options.proactive) {
+      this.pumpProactive();
+      return;
+    }
     if (this.telling || this.flights > 0 || !this.desk.away()) return;
     if (!this.options.notify && loadCallLink(this.root) === null) return;
     // An agent that waits comes before news: its request gets the line first.
@@ -528,7 +540,36 @@ export class BoardFeed implements AgentBoardPort {
    * request becomes a call. With no phone link nothing here can answer, so
    * nothing is held. At the desk (away off) only a panel that reads attends.
    */
+  pendingDecisions() {
+    return this.desk.pending();
+  }
+  applyProactiveAnswer(
+    intent: ProactiveCallIntent,
+    answer: { decision: "allow" | "deny" | "answer"; text: string | null },
+  ) {
+    if (
+      intent.source.kind !== "decision" ||
+      !this.options.proactive?.validate(intent, this.desk.pending())
+    )
+      return false;
+    return this.desk.answer(intent.source.decisionId, {
+      ...answer,
+      via: "call",
+    });
+  }
+  pumpProactive() {
+    this.options.proactive?.pump({
+      pending: this.desk.pending(),
+      incidents: this.watcher.open(),
+      sessions: this.snapshot()?.sessions ?? [],
+      away: this.desk.away(),
+    });
+  }
   superviseAway() {
+    if (this.options.proactive) {
+      this.pumpProactive();
+      return;
+    }
     if (!this.desk.away()) return;
     const link = this.options.call ? true : loadCallLink(this.root) !== null;
     if (!link) return;
@@ -635,7 +676,8 @@ export class BoardFeed implements AgentBoardPort {
     const away = this.desk.away();
     const link = this.options.call ? true : loadCallLink(this.root) !== null;
     const pending = this.desk.pending();
-    if (away && link) {
+    if (this.options.proactive) this.pumpProactive();
+    else if (away && link) {
       this.forgetCalls(pending);
       for (const request of pending) this.escalate(request);
     }

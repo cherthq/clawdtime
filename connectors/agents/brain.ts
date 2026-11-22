@@ -1,3 +1,4 @@
+import { requestedWatchChannel, type WatchChannel } from "./proactive.js";
 import {
   readScreenOwnership,
   type ScreenOwnership,
@@ -581,9 +582,15 @@ export interface SupervisorWorld {
    */
   laterNews?: {
     /** Takes the person's request for one session. The sentence is for the model. */
-    watch(session: AgentSession): { ok: boolean; said: string };
+    watch(
+      session: AgentSession,
+      options?: { channel?: WatchChannel },
+    ): { ok: boolean; said: string };
     /** Ends that request: nothing is said about the session later. */
-    unwatch(session: AgentSession): { ok: boolean; said: string };
+    unwatch(
+      session: AgentSession,
+      options?: { channel?: WatchChannel },
+    ): { ok: boolean; said: string };
     /** The names of the sessions that the chat waits for. */
     watching(): string[];
   };
@@ -618,11 +625,17 @@ const jobBrief = `You can get any work done on this Mac. When the person asks fo
 const laterTool: ToolSpec = {
   name: "watch_session",
   description:
-    "The chat says by itself, once, when this session's work is done. Call it when the person asks to be told when a session is done, or to keep an eye on one; with stop true when they say to stop. It reads the board and changes no session. Nothing else is said later about a session, and there is no timer and no reminder.",
+    "Retain the requested delivery channel: tell me here means chat; call me means phone_alert; call and show me means phone_walkthrough. A phone watch requires exact run registration and configured policy; never substitute chat. The chat says by itself, once, when this session's work is done. Call it when the person asks to be told when a session is done, or to keep an eye on one; with stop true when they say to stop. It reads the board and changes no session. Nothing else is said later about a session, and there is no timer and no reminder.",
   parameters: {
     type: "object",
     properties: {
       session: { type: "string", description: "The name of the session." },
+      channel: {
+        type: "string",
+        enum: ["chat", "phone_alert", "phone_walkthrough"],
+        description:
+          "The channel explicitly requested in the latest human message.",
+      },
       stop: {
         type: "boolean",
         description: "True when the person says to stop watching it.",
@@ -632,7 +645,7 @@ const laterTool: ToolSpec = {
   },
 };
 const hearCue =
-  "(?:tell|let|ping|notify|message|text|alert|update|warn|call)\\s+me\\b";
+  "(?:tell|let|ping|notify|message|text|alert|update|warn|call(?:\\s+and\\s+show)?)\\s+me\\b";
 const keepAnEyeOn =
   "keep(?:ing)?\\s+(?:an?\\s+|a\\s+close\\s+|your\\s+)?(?:(?:eyes?|watch|tabs)\\s+on|track\\s+of)";
 /** How the work of a session ends, in the person's words. */
@@ -8115,7 +8128,11 @@ export class Supervisor {
               return "The person's message names no session, and what it says to watch is something else. No session was taken. Ask which session they mean, if they mean one.";
           }
         }
-        const result = stop ? later.unwatch(session) : later.watch(session);
+        const result = stop
+          ? later.unwatch(session)
+          : later.watch(session, { channel: requestedWatchChannel(spoken) });
+        if (!stop && requestedWatchChannel(spoken) !== "chat")
+          turn.done.set("phonewatch_result", result.said);
         if (result.ok)
           turn.done.set(
             `${stop ? "unwatched" : "watching"} ${session.id}`,
@@ -8397,7 +8414,8 @@ export class Supervisor {
       whole: history,
       via,
     };
-    const text = await this.turn(spokenHistory, spoken, via, turn);
+    const draft = await this.turn(spokenHistory, spoken, via, turn);
+    const text = turn.done.get("phonewatch_result") ?? draft;
     let choices: string[] = [];
     try {
       choices = this.offer(turn);

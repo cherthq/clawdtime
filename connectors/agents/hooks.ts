@@ -1,3 +1,4 @@
+import { ProactiveSessions } from "./proactive-sessions.js";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -134,6 +135,13 @@ export function receiveHook(options: {
   const sessionId = input?.session_id;
   if (!input || typeof sessionId !== "string" || !sessionId) return "ignored";
   if (sessionId.length > 200) return "ignored";
+  new ProactiveSessions(options.root).observe(
+    options.agent,
+    input,
+    options.at,
+    options.pids,
+    process.env.CLAWDTIME_JOB_RUN_ID,
+  );
   const next = hookState(input);
   if (!next) return "ignored";
   const file = eventFile(options.root, options.agent, sessionId);
@@ -380,8 +388,8 @@ export const decideCommand = (node: string, script: string, agent: AgentKind) =>
   `${hookCommand(node, script, agent)} decide`;
 
 /**
- * The hooks one agent gets. Claude Code reports its own state, so it only gets
- * the hooks that let the desk answer it. Codex also gets the state hooks.
+ * Native process status cannot identify an exact turn. Both clients register
+ * lifecycle hooks for proactive provenance as well as bounded decision hooks.
  */
 export function hookPlan(
   agent: "claude-code" | "codex",
@@ -389,6 +397,7 @@ export function hookPlan(
   script: string,
 ): PlannedHook[] {
   const decide = decideCommand(node, script, agent);
+  const report = hookCommand(node, script, agent);
   if (agent === "claude-code")
     return [
       {
@@ -404,12 +413,25 @@ export function hookPlan(
         timeout: 570,
         async: false,
       },
+      ...[
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+        "StopFailure",
+        "SessionEnd",
+      ].map((event) => ({ event, command: report, timeout: 5, async: false })),
     ];
-  const report = hookCommand(node, script, agent);
   return codexHookEvents.map((event) =>
     event === "PermissionRequest"
       ? { event, command: decide, timeout: 570, async: false }
-      : { event, command: report, timeout: 5, async: true },
+      : {
+          event,
+          command: report,
+          timeout: event === "Interrupt" || event === "SessionEnd" ? 3 : 5,
+          async: false,
+        },
   );
 }
 
@@ -435,7 +457,11 @@ export function plannedInstalled(
     const groups = hooks[hook.event];
     return (
       Array.isArray(groups) &&
-      groups.some((group) => isOwnGroup(group, hook.command))
+      groups.some(
+        (group) =>
+          isOwnGroup(group, hook.command) &&
+          JSON.stringify(group) === JSON.stringify(plannedGroup(hook)),
+      )
     );
   });
 }
@@ -451,8 +477,10 @@ export function applyHookPlan(text: string | undefined, plan: PlannedHook[]) {
         "The hooks file has an unexpected shape. It is unchanged.",
       );
     const groups = existing ?? [];
-    if (groups.some((group) => isOwnGroup(group, hook.command))) continue;
-    hooks[hook.event] = [...groups, plannedGroup(hook)];
+    hooks[hook.event] = [
+      ...groups.filter((group) => !isOwnGroup(group, hook.command)),
+      plannedGroup(hook),
+    ];
   }
   return `${JSON.stringify({ ...root, hooks }, null, 2)}\n`;
 }

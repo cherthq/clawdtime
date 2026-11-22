@@ -1,3 +1,4 @@
+import type { ProactiveSourceAdapter, WatchChannel } from "./proactive.js";
 /**
  * The chat says that a session is done, by itself and once, when the person
  * asked for that ("tell me when deploy fix is done", "keep an eye on docs").
@@ -80,6 +81,7 @@ export class SessionNews {
       board: () => BoardSnapshot | null;
       log: ChatLog;
       now: () => number;
+      proactive?: ProactiveSourceAdapter;
     },
   ) {
     this.file = join(root, "agents", "chat-watches.json");
@@ -105,14 +107,28 @@ export class SessionNews {
 
   /** The names of the sessions that the chat waits for. */
   watching(): string[] {
-    return this.read().map((watch) => plain(watch.title));
+    return [
+      ...this.read().map((watch) => plain(watch.title)),
+      ...(this.options.proactive?.watching() ?? []),
+    ];
   }
 
   /**
    * Takes the person's request for one session. The sentence is for the
    * model: it says what the chat will do, or why nothing was taken.
    */
-  watch(session: AgentSession): { ok: boolean; said: string } {
+  watch(
+    session: AgentSession,
+    options: { channel?: WatchChannel } = {},
+  ): { ok: boolean; said: string } {
+    if (options.channel && options.channel !== "chat") {
+      if (!this.options.proactive)
+        return {
+          ok: false,
+          said: "No phone-call watch service is configured. No call was scheduled, and this request was not converted to chat.",
+        };
+      return this.options.proactive.watch(session, options.channel);
+    }
     const name = plain(title(session));
     if (session.state === "idle")
       return {
@@ -159,12 +175,24 @@ export class SessionNews {
    * Ends the person's request for one session: nothing is said about it
    * later. The sentence is for the model.
    */
-  unwatch(session: AgentSession): { ok: boolean; said: string } {
+  unwatch(
+    session: AgentSession,
+    options: { channel?: WatchChannel } = {},
+  ): { ok: boolean; said: string } {
+    if (options.channel && options.channel !== "chat") {
+      if (!this.options.proactive)
+        return {
+          ok: false,
+          said: "No phone-call watch service is configured. No call was scheduled, and this request was not converted to chat.",
+        };
+      return this.options.proactive.watch(session, options.channel);
+    }
     const name = plain(title(session));
+    const phoneCanceled = this.options.proactive?.unwatch(session) ?? false;
     try {
       const watches = this.read();
       const kept = watches.filter((watch) => watch.sessionId !== session.id);
-      if (kept.length === watches.length)
+      if (kept.length === watches.length && !phoneCanceled)
         return { ok: false, said: `The chat did not wait for ${name}.` };
       this.write(kept);
     } catch {

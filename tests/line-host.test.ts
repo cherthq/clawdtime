@@ -6,6 +6,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +33,7 @@ function fixture() {
   const calls = join(base, "calls.log");
   mkdirSync(bin);
   mkdirSync(state);
+  symlinkSync(process.execPath, join(bin, "node"));
   const stand = (name: string, body: string) => {
     writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
     chmodSync(join(bin, name), 0o755);
@@ -45,6 +48,14 @@ function fixture() {
 case "$1" in
   has-session) [ -f '${base}/session' ] ;;
   new-session) touch '${base}/session' ;;
+  send-keys)
+    if [ ! -f '${base}/no-release' ]; then
+      if [ -f '${base}/retained' ]; then
+        echo '{"code":"dev_stopped","retained":1}' >> '${state}/dev.jsonl'
+      else
+        echo '{"code":"dev_stopped","retained":0}' >> '${state}/dev.jsonl'
+      fi
+    fi ;;
   kill-session) rm -f '${base}/session' ;;
 esac`,
   );
@@ -74,6 +85,10 @@ esac`,
   execFileSync("git", ["init", "--quiet", "-b", "main", upstream], { env });
   mkdirSync(join(upstream, "line"));
   copyFileSync(script, join(upstream, "line", "host.sh"));
+  copyFileSync(
+    resolve(script, "..", "host-receipts.mjs"),
+    join(upstream, "line", "host-receipts.mjs"),
+  );
   chmodSync(join(upstream, "line", "host.sh"), 0o755);
   writeFileSync(
     join(upstream, "line", "agent.mjs"),
@@ -275,6 +290,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     const bin = join(f.base, "bin"),
       state = join(f.base, "state"),
       calls = join(f.base, "calls.log");
+    unlinkSync(join(bin, "node"));
     writeFileSync(
       join(bin, "node"),
       `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n[ "$(grep -c '^node' '${calls}')" -lt 2 ] || : > '${state}/stopping'\nexit 1\n`,
@@ -298,6 +314,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
       calls = join(f.base, "calls.log"),
       release = join(f.base, "release"),
       settings = join(f.clone, "line", ".env.local");
+    unlinkSync(join(bin, "node"));
     writeFileSync(
       join(bin, "node"),
       `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n: > '${state}/stopping'\nexit 1\n`,
@@ -375,5 +392,40 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     const use = f.run("nope");
     expect(use.status).toBe(2);
     expect(use.out).toContain("./host.sh update");
+  });
+
+  it("does not mistake historical clean release for this shutdown", () => {
+    const f = fixture();
+    writeFileSync(join(f.base, "session"), "");
+    writeFileSync(join(f.base, "no-release"), "");
+    writeFileSync(
+      join(f.base, "state", "dev.jsonl"),
+      '{"code":"dev_stopped","retained":0}\n',
+    );
+    const result = f.run("stop");
+    expect(result.status).toBe(1);
+    expect(result.out).toContain("cleanup remains unknown");
+    expect(f.called()).not.toContain("tmux kill-session");
+    expect(existsSync(join(f.base, "session"))).toBe(true);
+  });
+
+  it("retains the session when fresh shutdown reports unfinished call work", () => {
+    const f = fixture();
+    writeFileSync(join(f.base, "session"), "");
+    writeFileSync(join(f.base, "retained"), "");
+    f.records("agent_warm");
+    expect(f.run("stop").status).toBe(1);
+    expect(f.called()).not.toContain("tmux kill-session");
+    expect(existsSync(join(f.base, "session"))).toBe(true);
+  });
+
+  it("does not restore incoming while an outbound ownership hold exists", () => {
+    const f = fixture();
+    writeFileSync(join(f.base, "state", "outbound-hold"), "fixture-receipt");
+    expect(f.run("start").status).toBe(1);
+    expect(f.called()).not.toContain("tmux new-session");
+    expect(readFileSync(join(f.base, "state", "outbound-hold"), "utf8")).toBe(
+      "fixture-receipt",
+    );
   });
 });

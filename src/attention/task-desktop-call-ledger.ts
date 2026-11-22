@@ -14,6 +14,9 @@ const claimSchema = z
     manifestFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     requestFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     authorizationId: identity,
+    policyAttemptId: identity.optional(),
+    policyGrantId: identity.optional(),
+    policyIntentId: identity.optional(),
     authorizedAt: z.number().int().nonnegative().safe(),
     expiresAt: z.number().int().positive().safe(),
   })
@@ -114,6 +117,14 @@ export class TaskDesktopCallLedger {
           409,
           "An unresolved desktop call admission remains.",
         );
+      if (
+        parsed.policyAttemptId &&
+        records.some((record) => record.attemptId === parsed.policyAttemptId)
+      )
+        throw new DomainError(
+          409,
+          "Policy attempt already belongs to another desktop admission.",
+        );
       const now = this.clock();
       if (
         parsed.authorizedAt > now ||
@@ -153,7 +164,7 @@ export class TaskDesktopCallLedger {
         ...parsed,
         id: id("desktop_call"),
         sessionId,
-        attemptId: id("call_attempt"),
+        attemptId: parsed.policyAttemptId ?? id("call_attempt"),
         fingerprint,
         verificationId: task.verification.id,
         callKind: brief.kind,

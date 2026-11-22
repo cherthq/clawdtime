@@ -1407,3 +1407,67 @@ all ordinary provider responses remain `unknown`. No qualification is enabled by
 this change, and no planner/tool output may create this configuration. Synthetic
 checks exercise expiry, generation mismatch, immutable evidence, release refusal
 and rejection of provider-supplied exclusion claims.
+
+## Proactive call media — November 22, 2026
+
+`line/proactive-agent.mjs` is a dedicated, single-attempt worker. It reuses the
+incoming worker's warm audio/video publication and transcript provenance, while
+replacing its general desktop tools, conversation recall, job announcements and
+screen capture with an authenticated exact-source client. Its protected config
+binds attempt, room, agent, caller, source and packet fingerprints and expiry.
+The worker accepts exactly one matching LiveKit dispatch. A different participant
+cannot receive the brief or supply an answer.
+
+`line/proactive-outbound.mjs` creates the dedicated room through the supported
+LiveKit SDK, waits for exactly one expected participant and one unmuted audio and
+video publication, and issues a bounded token for the provider's exact caller
+identity. Creation/deletion must first be reserved through the service's durable
+effect port. Lost creation responses remain unknown; repeated calls do not retry.
+Cleanup joins late preparation before deleting only the reserved room and checks
+its absence. These publications are server metadata evidence, not received media
+or handset playback evidence. Native call submission and reconciliation remain
+with the shared coordinator and existing Calls adapter.
+
+The protected loopback `/proactive/line/:attemptId` API delivers the bounded
+brief and routes each complete authenticated caller transcript with a stable turn
+ID. A lost answer response is not resent. Alert calls have no screen-frame path.
+Walkthroughs pull only exact prepared-view RGBA frames; source/packet/view identity,
+pixel length and a one-second freshness bound are checked before rendering. The
+whole authorized frame is letterboxed locally. There is no desktop fallback.
+Stop sharing is sticky for the call; it does not cancel independent work. Hangup,
+revocation, changed source, expired authority and heartbeat loss retire sharing.
+
+### Local line release prerequisite
+
+`line/local-readiness.mjs` makes bounded GET-only provider checks and validates
+original local ownership evidence twice around the network reads. Connector
+inventory uses the separate protected CLI account credential when needed; a
+project API key does not imply connector-management access. BYOR v2 journals
+have receipts rather than the older numeric message cursor. The receipt witness
+reads the original private journal in place, rejects removed/changed receipts,
+checks complete entry cleanup, and emits only hashes/counts. It never copies or
+rewrites runtime data.
+
+The installed `@trychert/facetime@0.1.0-beta.19` and the registry's latest
+`0.1.0-beta.22` both delete the original per-binding journal after clean `dev`
+release. Every exit path, including displaced/drained, reaches that cleanup. The
+published `CLI_GUIDE.md` explicitly documents this behavior. No supported
+preserve-state switch or outbound control interface on the existing `dev` host
+was found. `assertIncomingReleaseSupported` therefore refuses this handoff
+before a stop request; a future release is not presumed compatible.
+
+Published beta.22 was downloaded for source inspection only, without replacing
+any installed package. The registry tarball SHA-256 is
+`e21acbc21595cc8fd685501ab0378dc5b30f4b826742b9dcd7736b9566e89363`.
+Its `CLI_GUIDE.md` SHA-256 is
+`7053326cea826eaf5b349db20e9e4dd6b9d79cb9d9be8a57b620ddbece83dc3d`;
+`dist/src/dev/command.js` SHA-256 is
+`7d35b1595ca77c103d652ffcf9371a7e48629f5a43d86d223eb1b22ccfc6e080`.
+The guide's clean-stop rule is at line 57; source deletion is at lines 615–619.
+
+The strengthened `host.sh stop` additionally requires a fresh `dev_stopped` with
+zero retained work after the exact pre-stop log inode/byte boundary. Historical
+records, rotation, lost release and retained cleanup cannot authorize killing the
+session. An `outbound-hold` prevents incoming restart until the coordinating
+service reconciles cleanup. These checks do not override the unsupported journal
+retention prerequisite or turn an idle line into an unowned line.

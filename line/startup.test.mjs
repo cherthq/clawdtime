@@ -14,7 +14,7 @@ import {
   VideoSource,
   dispose,
 } from "@livekit/rtc-node";
-import agent from "./agent.mjs";
+import agent, { callEntry } from "./agent.mjs";
 import { settings } from "./desk.mjs";
 import { startupError } from "./startup-diagnostics.mjs";
 
@@ -193,9 +193,9 @@ async function fixture(run, { configHome } = {}) {
       calls,
       until,
       setPublish: (kind, fn) => policies.set(kind, fn),
-      start: () => {
+      start: (options) => {
         assert.equal(task, undefined);
-        task = agent.entry(ctx).then(
+        task = (options ? callEntry(ctx, options) : agent.entry(ctx)).then(
           () => ({ error: null }),
           (error) => ({ error }),
         );
@@ -254,6 +254,41 @@ test("warm room publishes static synthetic audio/video before waiting, without m
     assert.equal(f.room.metadata, JSON.stringify({ chert_warm: true }));
     f.disconnect();
     assert.equal((await f.result()).error, null);
+    endedOnce(f);
+  });
+});
+
+test("proactive warm startup preserves publications but rejects an unbound caller before voice or general desktop tools", async () => {
+  await fixture(async (f) => {
+    f.room.localParticipant.identity = "fixture-proactive-agent";
+    let prepared = 0,
+      closed = 0,
+      caller;
+    f.start({
+      proactive: {
+        prepared: async (room, identity) => {
+          assert.equal(room, f.room.name);
+          assert.equal(identity, "fixture-proactive-agent");
+          prepared++;
+        },
+        bindCaller: async (identity) => {
+          caller = identity;
+          return false;
+        },
+        close: async () => {
+          closed++;
+        },
+      },
+    });
+    await f.until(() => f.diagnostics().includes("caller_waiting"));
+    assert.deepEqual(f.calls, ["audio", "camera"]);
+    f.add(f.participant("unbound-caller"));
+    await f.result();
+    assert.equal(prepared, 1);
+    assert.equal(caller, "unbound-caller");
+    assert.equal(closed, 1);
+    assert.equal(f.recalled(), false);
+    assert.equal(f.diagnostics().includes("video_created"), false);
     endedOnce(f);
   });
 });

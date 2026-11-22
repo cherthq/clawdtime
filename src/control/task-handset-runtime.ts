@@ -24,6 +24,10 @@ import {
 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import {
+  callAttemptGrantSchema,
+  type CallAttemptGrant,
+} from "../attention/proactive-contracts.js";
 import { handsetPortsSchema } from "./task-desktop-calls-config.js";
 import { Store } from "../storage/store.js";
 import { Vault, hash, token } from "../storage/security.js";
@@ -93,15 +97,27 @@ export const handsetConfigSchema = z
       .enum(["handset_audio_smoke", "handset_walkthrough"])
       .default("handset_audio_smoke"),
     walkthrough: z
-      .object({
-        presentationFile: text,
-        helperBinary: text,
-        checksFile: text,
-        callDurationMs: z.number().int().min(30_000).max(1_800_000),
-        userAuthorizedPreparedWindowExport: z.literal(true),
-        userAuthorizedTaskInstructions: z.literal(true),
-      })
-      .strict()
+      .union([
+        z
+          .object({
+            presentationFile: text,
+            helperBinary: text,
+            checksFile: text,
+            callDurationMs: z.number().int().min(30_000).max(1_800_000),
+            userAuthorizedPreparedWindowExport: z.literal(true),
+            userAuthorizedTaskInstructions: z.literal(true),
+          })
+          .strict(),
+        z
+          .object({
+            version: z.literal(2),
+            presentationFile: text,
+            helperBinary: text,
+            checksFile: text,
+            callDurationMs: z.number().int().min(30_000).max(1_800_000),
+          })
+          .strict(),
+      ])
       .optional(),
     stateDirectory: text,
     desktopPanel: z.boolean().default(false),
@@ -142,9 +158,15 @@ export const handsetConfigSchema = z
         restoreRecord: text,
       })
       .strict(),
-    authorization: z
-      .object({ id: text, userAuthorizedOneCall: z.literal(true) })
-      .strict(),
+    authorization: z.union([
+      z.object({ id: text, userAuthorizedOneCall: z.literal(true) }).strict(),
+      z
+        .object({
+          version: z.literal(2),
+          policyAttempt: callAttemptGrantSchema,
+        })
+        .strict(),
+    ]),
   })
   .strict()
   .refine(
@@ -166,6 +188,10 @@ export interface SharedHandsetOwner {
   };
   authorizedAt: number;
   dispatchExpiresAt: number;
+  policy?: {
+    grant: CallAttemptGrant;
+    assertCurrent(phase: "initial" | "ongoing"): void;
+  };
   bindPresenter(value: TaskWalkthroughPresentation | undefined): void;
 }
 export async function runHandsetAttempt(
@@ -176,6 +202,24 @@ export async function runHandsetAttempt(
   const setupCleanups: Array<() => void | Promise<void>> = [];
   let setupCleanupFailed = false;
   try {
+    if ("policyAttempt" in c.authorization) {
+      if (
+        !shared?.policy ||
+        shared.policy.grant.id !== c.authorization.policyAttempt.id ||
+        shared.policy.grant.attemptId !== shared.attemptId ||
+        !c.walkthrough ||
+        !("version" in c.walkthrough)
+      )
+        throw Error(
+          "Versioned policy calls require the exact shared service authority.",
+        );
+      shared.policy.assertCurrent("initial");
+    } else if (
+      shared?.policy ||
+      (c.walkthrough && "version" in c.walkthrough)
+    ) {
+      throw Error("Legacy one-call consent cannot become a policy call.");
+    }
     const ports = c.ports ?? { task: 13323, media: 3322, stop: 13324 };
     const taskOrigin = `http://127.0.0.1:${ports.task}`;
     const mediaOrigin = `http://127.0.0.1:${ports.media}`;
@@ -379,7 +423,12 @@ export async function runHandsetAttempt(
           ...permissions,
         });
     const authorization: TaskHandsetAuthorization = {
-      id: c.authorization.id,
+      // This is a fresh internal native proof derived from the validated bounded
+      // v2 attempt, never a reinterpretation of legacy user consent.
+      id:
+        "policyAttempt" in c.authorization
+          ? c.authorization.policyAttempt.id
+          : c.authorization.id,
       planFingerprint: taskHandsetFingerprint(plan),
       authorizedAt: shared?.authorizedAt ?? now,
       expiresAt: dispatchExpiresAt,
@@ -417,6 +466,7 @@ export async function runHandsetAttempt(
           expiresAt,
           ...permissions,
         };
+    if (shared?.policy) put("policy-attempt.json", shared.policy.grant);
     put("plan.json", plan);
     put("authorization.json", authorization);
     put("grant.json", grant);
@@ -462,13 +512,26 @@ export async function runHandsetAttempt(
           (p) => hasConnectedTaskWalkthroughCall(store, vault, p),
         )
       : undefined;
-    const assertInitial = () =>
-      isTaskWalkthroughPlan(plan)
+    const assertInitial = () => {
+      shared?.policy?.assertCurrent("initial");
+      return isTaskWalkthroughPlan(plan)
         ? walkthroughAuthority!.assertInitial(
             plan,
             taskWalkthroughAuthorizationSchema.parse(authorization),
           )
         : authority!.assert(plan, authorization);
+    };
+    const assertOngoing = () => {
+      if (!isTaskWalkthroughPlan(plan))
+        throw Error(
+          "Ongoing walkthrough authority requires a walkthrough plan.",
+        );
+      shared?.policy?.assertCurrent("ongoing");
+      return walkthroughAuthority!.assertOngoing(
+        plan,
+        taskWalkthroughAuthorizationSchema.parse(authorization),
+      );
+    };
     const media = new HttpTaskHandsetMediaPort({
       origin: mediaOrigin,
       token: controlToken,
@@ -538,6 +601,7 @@ export async function runHandsetAttempt(
       }
     };
     const readiness = async () => {
+      assertInitial();
       const result = (await remote()) as TaskAudioReadiness;
       if (Date.now() - result.checkedAt > 10_000)
         throw Error("Native evidence expired in transit.");
@@ -631,10 +695,7 @@ export async function runHandsetAttempt(
         )
           throw Error("Call capture authority ended.");
         if (state.state === "connected") {
-          walkthroughAuthority!.assertOngoing(
-            plan,
-            taskWalkthroughAuthorizationSchema.parse(authorization),
-          );
+          assertOngoing();
         } else {
           // Before connection only the exact initial verified preparation is valid.
           assertInitial();
@@ -662,11 +723,7 @@ export async function runHandsetAttempt(
         (frame) => videoHost.evidenceFor(frame),
         {
           initial: assertInitial,
-          ongoing: () =>
-            walkthroughAuthority!.assertOngoing(
-              plan,
-              taskWalkthroughAuthorizationSchema.parse(authorization),
-            ),
+          ongoing: assertOngoing,
           preparing: () => {
             const s = coordinator.status(plan.id);
             return (
@@ -693,11 +750,7 @@ export async function runHandsetAttempt(
         if (isTaskWalkthroughPlan(plan)) {
           try {
             const state = coordinator.status(plan.id).state;
-            if (state === "connected")
-              walkthroughAuthority!.assertOngoing(
-                plan,
-                taskWalkthroughAuthorizationSchema.parse(authorization),
-              );
+            if (state === "connected") assertOngoing();
             else assertInitial();
           } catch {
             return false;
@@ -993,6 +1046,7 @@ export async function runHandsetAttempt(
       }
       starting = true;
       try {
+        assertInitial();
         if (presentation)
           await presentation.prepare(capability.token, task.id, {
             eventId: `${attemptId}_presentation_prepare`,

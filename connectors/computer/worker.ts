@@ -84,6 +84,8 @@ const startedText =
   "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
 const busyText =
   "A computer task is already running. Stop it, or wait for it to end, before a new one.";
+const ownershipText =
+  "Screen input is held by the current phone walkthrough or an unresolved owner. No new computer action was sent.";
 const idleText =
   "Computer use is on. Ask me to do something on this Mac, and I take one checked action at a time.";
 export const offText =
@@ -328,6 +330,17 @@ function readContinue(words: string): boolean | null {
 }
 
 export class ComputerWorker implements DesktopExecutorPort {
+  private ownershipGuard: () => boolean = () => true;
+  setOwnershipGuard(guard: () => boolean) {
+    this.ownershipGuard = guard;
+  }
+  private ownsScreen() {
+    try {
+      return this.ownershipGuard();
+    } catch {
+      return false;
+    }
+  }
   private current: Run | null = null;
   private last: {
     requestId: string;
@@ -415,7 +428,9 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   private halted(run: Run): boolean {
     if (this.current !== run) return true;
-    if (run.authority?.isLive() === false)
+    if (!this.ownsScreen())
+      this.finish(run, "blocked", "screen_owned_by_call", ownershipText);
+    else if (run.authority?.isLive() === false)
       this.finish(run, "canceled", "call_expired", stoppedText, false);
     else if (run.stop)
       this.finish(run, "canceled", "stopped", stoppedText, false);
@@ -552,6 +567,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     reading?: NavigationIntent,
     authority?: DesktopExecutionAuthority,
   ): Promise<{ message: string }> {
+    if (!this.ownsScreen()) return { message: ownershipText };
     if (authority?.isLive() === false) return { message: stoppedText };
     const id = identity.parse(eventId);
     const goal = z.string().trim().min(1).max(2000).parse(text);

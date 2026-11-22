@@ -58,6 +58,7 @@ import {
 } from "../src/control/desktop-executor.js";
 import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
 import { TaskReviewService } from "../src/control/task-review-service.js";
+import { createProactiveSetup } from "../src/control/proactive-setup.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
   prepareTaskDesktop,
@@ -544,9 +545,36 @@ const phoneDesktop = chosen?.computer.worker
   ? new PhoneDesktop(chosen.computer.worker)
   : undefined;
 const execution = phoneDesktop?.execution ?? chosen?.execution;
+const proactive =
+  desktopSetup && reviews
+    ? createProactiveSetup({
+        tasks: service,
+        reviews,
+        sessionToken: desktopSetup.config.sessionToken,
+        directory,
+        root: stateRoot({ env: process.env, home: homedir() }),
+        projectRoot,
+        board: () => agentBoard,
+        execution: () => execution?.snapshot(),
+      })
+    : undefined;
+if (calls && proactive)
+  calls.proactive = {
+    coordinator: proactive.coordinator,
+    packet: (id) => proactive.preparation.packetSnapshot(id),
+  };
+if (proactive)
+  chosen?.computer.worker?.setOwnershipGuard(
+    () =>
+      !proactive.viewOccupied() &&
+      !proactive.coordinator
+        .list()
+        .some((i) => ["dispatching", "connected", "unknown"].includes(i.state)),
+  );
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
+        ...(proactive ? { proactive: proactive.sources } : {}),
         // Work that no own tool does goes to a new coding session in the
         // selected project, and an application can open. CLAWDTIME_DESKTOP_WINDOWS=off
         // turns both off. A service that a test started never opens a window
@@ -587,7 +615,15 @@ const app = createTaskApp(
   phoneDesktop && desktopSetup
     ? { scope: phoneDesktop, instanceId: desktopSetup.descriptor.instanceId }
     : undefined,
+  proactive,
 );
+const proactiveWatch = proactive
+  ? setInterval(() => {
+      void proactive.service.pump().catch(() => {
+        /* Durable state remains authoritative after scheduling errors. */
+      });
+    }, 1000)
+  : undefined;
 const presentationWatch = presentation
   ? setInterval(() => {
       void presentation!.reconcile().catch(() => {});
@@ -622,11 +658,29 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     phoneDesktop?.shutdown();
     if (presentationWatch) clearInterval(presentationWatch);
     if (reviewWatch) clearInterval(reviewWatch);
+    if (proactiveWatch) clearInterval(proactiveWatch);
+    proactive?.service.close();
     reviews?.close();
     if (lineRuntimeWatch) clearInterval(lineRuntimeWatch);
     lineRuntime?.close();
     agentBoard?.close();
     void (async () => {
+      if (proactive) {
+        await Promise.allSettled(
+          proactive.coordinator
+            .list()
+            .filter((intent) =>
+              [
+                "queued",
+                "preparing",
+                "ready",
+                "dispatching",
+                "connected",
+              ].includes(intent.state),
+            )
+            .map((intent) => proactive.service.stop(intent.id)),
+        );
+      }
       await background?.close();
       await bundled?.close();
       await calls?.close();

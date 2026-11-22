@@ -1,3 +1,7 @@
+import {
+  ScopedSupervision,
+  sessionKey,
+} from "../connectors/agents/proactive-sessions.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -168,3 +172,35 @@ describe("the hook as a program", () => {
     expect(left(folder, "answers")).toEqual([]);
   }, 60_000);
 });
+
+it("holds the exact scoped session with Away off and releases without approving after revocation", async () => {
+  const folder = home();
+  const supervision = new ScopedSupervision(state(folder));
+  supervision.register({
+    policyId: "explicit-policy",
+    projectRoot: "/work/app",
+    sessionKey: sessionKey("session-1"),
+    expiresAt: Date.now() + 60000,
+    responseSeconds: 30,
+  });
+  let sawPending = false;
+  const result = await runHook(
+    folder,
+    permission("git status"),
+    async (desk) => {
+      expect(desk.away()).toBe(false);
+      for (let tries = 0; tries < 80; tries++) {
+        if (desk.pending().length) {
+          sawPending = true;
+          supervision.revoke("explicit-policy");
+          return;
+        }
+        await new Promise((done) => setTimeout(done, 25));
+      }
+      throw Error("Scoped hook never registered its pending request.");
+    },
+  );
+  expect(sawPending).toBe(true);
+  expect(result).toEqual({ code: 0, out: "" });
+  expect(left(folder, "pending")).toEqual([]);
+}, 10000);

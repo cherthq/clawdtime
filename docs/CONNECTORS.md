@@ -1521,3 +1521,82 @@ not require a project to be selected or visible before global New Chat navigatio
 The `codex-empty` and `codex-draft` phases still require the exact configured project;
 all Messages phases still require the configured conversation. This phase distinction
 does not add a new action or relax the independent checks before text insertion.
+
+## Proactive source adapters
+
+The desktop service can inject one `ProactiveSourceAdapter` into `BoardFeed`.
+With that adapter present, decision hooks, eligible Away-mode incidents, explicit
+completion watches and independently checked Jobs submit to the shared durable
+call coordinator. The old in-memory automatic dialing path is bypassed. Phone
+submission, preparation and line cleanup remain service-owned.
+
+`watch_session` derives its channel from the latest human request. "Tell me here"
+uses the existing chat watch file. "Call me" retains a phone-alert watch;
+"call and show me" retains a walkthrough watch. Phone watches live in a separate
+owner-only version-2 file with watch ID, exact hook session/run, policy, expiry,
+channel and state. Chat delivery cannot consume them. Missing hook enrollment or
+policy stays visible as `needs_setup`; the response does not claim a phone was
+scheduled when no phone-watch service exists. A timeout expires the watch. Board
+idle, disappearance and an answer file alone are not verified completion.
+
+New hook sidecars record a hashed native session identity and a new run generation
+at `UserPromptSubmit`/`BeforeAgent`. Terminal hooks establish observed completion,
+failure or cancellation; they do not establish independent verification. Short
+explicit watches do not use the generic incident watcher's three-minute minimum.
+A changed run cancels an unsent old watch. Pending questions bind to their exact
+decision ID and cancel unsent delivery after local resolution.
+
+The existing Claude/Codex Jobs launcher remains in use. New launch receipts add
+project, agent, launch and run provenance. The launched process inherits the exact
+ClawdTime state root and run ID. Explicit project policy can register bounded
+scoped supervision before the terminal opens. Hook attendance is refreshed by the
+service without panel reads, even with Away off; lost heartbeat, revocation or
+expiry releases the hook without granting permission. Native approval rules remain
+in force. One project policy can enroll several distinct runs without overwriting
+their attendance.
+
+`JobReviews` runs only a protected, configured independent verification plan under
+the service's execution guard. Exact terminal hook or launcher-exit evidence and
+bounded result digest are required before checks. Check intent is written before
+execution; lost responses and interrupted checks remain unknown and are not
+rerun automatically. The result digest and hook run are checked again afterward.
+Registered headless Jobs use their launch/exit receipts without generic board
+completion notifications. Legacy Jobs without provenance and arbitrary unhooked
+sessions report concrete limitations instead of becoming fabricated managed tasks.
+No adapter can universally wake an idle Codex chat.
+
+Hook compatibility was checked against installed Claude Code 2.1.311 and
+codex-cli 0.166.0-alpha.5.1 and the current primary references:
+[Claude hooks](https://code.claude.com/docs/en/hooks) and
+[Codex hooks](https://learn.chatgpt.com/docs/hooks). Claude registers
+`UserPromptSubmit`, `Stop`, `StopFailure`, tool-result and session lifecycle
+events in addition to its existing decision hooks. Codex registers
+`UserPromptSubmit`, `Stop`, `Interrupt`, session lifecycle and tool-result events;
+it does not register Claude's unsupported `StopFailure` event. Lifecycle reporters
+run synchronously with short timeouts so a later completion cannot overtake its
+run-start record. Codex interrupt/end handlers respect the documented three-second
+maximum. Decision holds remain separately bounded below their native hook timeout.
+
+Installation must apply the updated hook plan and the person must trust Codex
+hooks through `/hooks`; launch enrollment alone does not install or trust hooks.
+The installer preserves other hooks and upgrades only its own command groups.
+Existing chats must load the changed hook configuration according to their native
+client behavior. A `Stop` event observes the end of a turn, not acceptance of its
+result: another Stop hook can request further work. Fresh source checks invalidate
+the old completion when resumed activity is observed. Independent result checks
+and explicit phone policy are still required for a verified review.
+
+The protected operator CLI provides `clawdtime proactive doctor`, `intents`,
+`policy`, `enroll`, `revoke` and `stop`; use `proactive help` for exact arguments.
+It reads the operator credential from an owner-only file and contacts an explicit
+loopback origin. It never accepts a token in arguments or retries an uncertain
+write. Version-2 policy registration requires explicit calling/viewing consent;
+legacy single-call authorization is not upgraded. Doctor output reports watch,
+supervision and verification state without printing credentials or result text.
+
+All new source files and receipt fields are additive. Legacy chat watches remain
+chat-only, and old Jobs retain their original receipts and unknown outcomes.
+Synthetic connector tests cover channel preservation, short completion, restart,
+changed runs/results, exact decision cancellation, scoped hook release, headless
+failure receipts and verification uncertainty. These tests do not establish
+handset playback, visible screen delivery or live agent continuation.

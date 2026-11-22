@@ -755,6 +755,13 @@ export class HttpTaskHandsetMediaPort implements TaskHandsetMediaPort {
 }
 
 /** Narrow Calls HTTP adapter. It does not supply ownership/readiness or enable dispatch. */
+export interface NativeProactiveCallBinding {
+  attemptId: string;
+  lineId: string;
+  recipientHash: string;
+  agentIdentity: string;
+  channel: "phone_alert" | "phone_walkthrough";
+}
 export class NativeTaskAudioCalls implements TaskAudioCallsPort {
   constructor(
     private readonly config: {
@@ -809,6 +816,78 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
       this.request,
     );
   }
+  private boundProactive(binding: NativeProactiveCallBinding) {
+    z.object({
+      attemptId: opaque,
+      lineId: z.string().uuid(),
+      recipientHash: z.string().regex(/^[a-f0-9]{64}$/),
+      agentIdentity: opaque,
+      channel: z.enum(["phone_alert", "phone_walkthrough"]),
+    })
+      .strict()
+      .parse(binding);
+    if (
+      binding.lineId !== this.config.lineId ||
+      binding.recipientHash !== hash(this.config.recipient)
+    )
+      throw new DomainError(
+        403,
+        "Proactive call destination differs from protected configuration.",
+      );
+  }
+  /** Exact caller-owned intent receipt supplies this binding. No managed task or
+   * fake result is synthesized for an external Job or mid-run question. */
+  async createProactive(
+    binding: NativeProactiveCallBinding,
+    credentials: TaskAudioCredentials,
+    effectId: string,
+  ) {
+    this.boundProactive(binding);
+    const media = validateTaskAudioCredentials(credentials);
+    if (media.remote_participant_identity !== binding.agentIdentity)
+      throw new DomainError(403, "Proactive outgoing media identity differs.");
+    const response = await this.api(
+      "/api/v1/calls",
+      {
+        direction: "outbound",
+        mode: "customer_managed",
+        line_id: binding.lineId,
+        media: { audio: true, video: binding.channel === "phone_walkthrough" },
+        destination: this.config.recipient,
+        destination_type: "phone",
+        ...media,
+      },
+      effectId,
+    );
+    const call = z
+      .object({ id: z.string().uuid(), line_id: z.literal(binding.lineId) })
+      .parse(response.data);
+    return { providerCallId: call.id, lineId: call.line_id };
+  }
+  async inspectProactive(
+    binding: NativeProactiveCallBinding,
+    providerCallId: string,
+  ): Promise<TaskAudioNativeObservation> {
+    this.boundProactive(binding);
+    return this.inspectNative(
+      providerCallId,
+      binding.channel === "phone_walkthrough",
+    );
+  }
+  async endProactive(
+    binding: NativeProactiveCallBinding,
+    providerCallId: string,
+    effectId: string,
+  ) {
+    this.boundProactive(binding);
+    z.string().uuid().parse(providerCallId);
+    await this.api(
+      `/api/v1/calls/${encodeURIComponent(providerCallId)}/end`,
+      { reason: "ClawdTime authorized call ended" },
+      effectId,
+    );
+    return { accepted: true as const, providerCallId };
+  }
   async create(
     plan: TaskHandsetPlan,
     credentials: TaskAudioCredentials,
@@ -844,6 +923,12 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
     providerCallId: string,
   ): Promise<TaskAudioNativeObservation> {
     this.bound(plan);
+    return this.inspectNative(providerCallId, isTaskWalkthroughPlan(plan));
+  }
+  private async inspectNative(
+    providerCallId: string,
+    video: boolean,
+  ): Promise<TaskAudioNativeObservation> {
     z.string().uuid().parse(providerCallId);
     const response = await this.api(
       `/api/v1/calls/${encodeURIComponent(providerCallId)}/events`,
@@ -883,9 +968,7 @@ export class NativeTaskAudioCalls implements TaskAudioCallsPort {
           ? "connected"
           : "allocated",
       cleanupComplete,
-      ...(isTaskWalkthroughPlan(plan)
-        ? { remoteVideoReady: events.has("remote_video_ready") }
-        : {}),
+      ...(video ? { remoteVideoReady: events.has("remote_video_ready") } : {}),
     };
   }
   async end(plan: TaskHandsetPlan, providerCallId: string, effectId: string) {

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -47,6 +48,17 @@ export type JobStatus =
 
 export interface JobFacts {
   id: string;
+  /** Additive launch provenance. Older receipts intentionally have no automatic review authority. */
+  provenance?: {
+    version: 1;
+    launchId: string;
+    runId: string;
+    projectRoot: string;
+    agent: JobAgent;
+    launcherPid: number | null;
+    exitCode: number | null;
+    resultDigest: string | null;
+  };
   /** The job in the person's words, cut for a list. */
   job: string;
   startedAt: number;
@@ -253,12 +265,22 @@ const beforeMs = 30 * 60 * 1000;
 
 export class Jobs implements JobPort {
   private readonly folder: string;
+  private readonly stateRoot: string;
   private readonly now: () => number;
   private readonly run: Runner;
   private readonly project: string;
   private readonly agent: JobAgent;
   private readonly terminal: string;
   private readonly limit: number;
+  private readonly beforeLaunch:
+    | ((input: {
+        jobId: string;
+        runId: string;
+        launchId: string;
+        projectRoot: string;
+        agent: JobAgent;
+      }) => void)
+    | undefined;
   constructor(
     root: string,
     options: {
@@ -271,15 +293,25 @@ export class Jobs implements JobPort {
       terminal?: string;
       /** How many jobs may run at one time. */
       limit?: number;
+      /** Register authorized scoped supervision before the terminal can start. */
+      beforeLaunch?: (input: {
+        jobId: string;
+        runId: string;
+        launchId: string;
+        projectRoot: string;
+        agent: JobAgent;
+      }) => void;
     },
   ) {
     this.folder = join(root, "agents", "jobs");
+    this.stateRoot = root;
     this.now = options.now ?? Date.now;
     this.run = options.run ?? realRunner;
     this.project = options.project;
     this.agent = options.agent ?? "claude";
     this.terminal = options.terminal ?? "Terminal";
     this.limit = options.limit ?? 4;
+    this.beforeLaunch = options.beforeLaunch;
   }
 
   async start(
@@ -338,6 +370,15 @@ export class Jobs implements JobPort {
       .replace(/[-:]/g, "")
       .slice(0, 15);
     const id = `${stamp}-${Math.random().toString(36).slice(2, 6).padEnd(4, "0")}`;
+    const runId = randomUUID(),
+      launchId = randomUUID();
+    this.beforeLaunch?.({
+      jobId: id,
+      runId,
+      launchId,
+      projectRoot: this.project,
+      agent,
+    });
     const directory = join(this.folder, id);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(this.folder, 0o700);
@@ -406,6 +447,8 @@ export class Jobs implements JobPort {
       script,
       [
         "#!/bin/zsh",
+        `export CLAWDTIME_JOB_RUN_ID=${quoted(runId)}`,
+        `export CLAWDTIME_CONFIG_HOME=${quoted(this.stateRoot)}`,
         notRetired,
         `${receipt(launchedFile, `'{"version":1,"pid":%s}\\n' "$$"`)} || { print -r -- 'This job was already launched; it will not be replayed.'; exit 1; }`,
         `job_exit_receipt() { local job_exit=$?; ${receipt(exitedFile, `'{"version":1,"exitCode":%s}\\n' "$job_exit"`)}; }`,
@@ -423,7 +466,14 @@ export class Jobs implements JobPort {
     chmodSync(script, 0o700);
     writeFileSync(
       join(directory, requestedFile),
-      JSON.stringify({ version: 1, at: this.now() }),
+      JSON.stringify({
+        version: 1,
+        at: this.now(),
+        runId,
+        launchId,
+        projectRoot: this.project,
+        agent,
+      }),
       { mode: 0o600, flag: "wx" },
     );
     const opened = await this.run(
@@ -708,6 +758,30 @@ export class Jobs implements JobPort {
                     : "This older job has no launch or completion receipt. Whether it started, is waiting, or is stuck is unknown.";
       found.push({
         id,
+        ...(requested &&
+        typeof requested.runId === "string" &&
+        typeof requested.launchId === "string" &&
+        typeof requested.projectRoot === "string" &&
+        (requested.agent === "claude" || requested.agent === "codex")
+          ? {
+              provenance: {
+                version: 1 as const,
+                runId: requested.runId,
+                launchId: requested.launchId,
+                projectRoot: requested.projectRoot,
+                agent: requested.agent,
+                launcherPid:
+                  typeof launched?.pid === "number" ? launched.pid : null,
+                exitCode:
+                  typeof exited?.exitCode === "number" ? exited.exitCode : null,
+                resultDigest:
+                  written !== null &&
+                  lstatSync(join(directory, "result.md")).size <= 40000
+                    ? createHash("sha256").update(written).digest("hex")
+                    : null,
+              },
+            }
+          : {}),
         status,
         statusDetail,
         job: cleanJob(prompt.split("\n\nWhen you are done,")[0] ?? "").slice(

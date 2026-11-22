@@ -1911,3 +1911,30 @@ it("refuses an already expired call before opening a worker request", async () =
   expect(hands.commands).toHaveLength(0);
   expect(journal.get("expired")).toBeNull();
 });
+
+describe("phone walkthrough execution ownership", () => {
+  it("refuses new input and capture while the phone owns the screen", async () => {
+    const { worker, hands } = setup([click, done]);
+    worker.setOwnershipGuard(() => false);
+    expect(
+      (await worker.submit("call-owned-request", "Save the note")).message,
+    ).toContain("held by the current phone");
+    expect(hands.commands).toEqual([]);
+  });
+  it("rechecks ownership after the planner awaits and before dispatch", async () => {
+    let allowed = true;
+    const { worker, hands } = setup([
+      async () => {
+        allowed = false;
+        return click;
+      },
+    ]);
+    worker.setOwnershipGuard(() => allowed);
+    await worker.submit("owner-changed-request", "Save the note");
+    await worker.idle();
+    expect(hands.commands.every((command) => command.kind === "observe")).toBe(
+      true,
+    );
+    expect(worker.snapshot().state).toBe("blocked");
+  });
+});

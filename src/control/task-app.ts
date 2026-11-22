@@ -19,6 +19,12 @@ import type { BundledCuaRuntime } from "./bundled-cua-runtime.js";
 import type { LineRuntime } from "./line-runtime.js";
 import type { PhoneDesktop } from "./phone-desktop.js";
 import { mountPhoneDesktop } from "./phone-desktop-routes.js";
+import type { ProactiveService } from "./proactive-service.js";
+import { proactivePolicySchema } from "../attention/proactive-policy.js";
+import {
+  mountProactiveLine,
+  type ProactiveLineSessions,
+} from "./proactive-line.js";
 import type { PhoneTurnContext } from "../phone-desktop-contracts.js";
 
 /**
@@ -121,6 +127,12 @@ export function createTaskApp(
   computer?: ComputerPort,
   lineRuntime?: LineRuntime,
   phone?: { scope: PhoneDesktop; instanceId: string },
+  proactive?: {
+    service: ProactiveService;
+    enroll(input: unknown): void;
+    line?: ProactiveLineSessions;
+    status?(): unknown;
+  },
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -218,6 +230,52 @@ export function createTaskApp(
       control: false,
     }),
   );
+  if (proactive) {
+    if (proactive.line) mountProactiveLine(app, proactive.line);
+    app.use("/operator/proactive/*", async (c, next) => {
+      if (!equal(bearer(c.req.header("authorization")), operatorToken))
+        return c.json({ error: "Operator credential required." }, 401);
+      await next();
+    });
+    app.get("/operator/proactive/doctor", (c) =>
+      c.json({
+        ...proactive.service.doctor(),
+        installation: proactive.status?.(),
+      }),
+    );
+    app.get("/operator/proactive/intents", (c) =>
+      c.json({
+        intents: proactive.service.coordinator.list().map((r) => ({
+          id: r.id,
+          source: r.source,
+          channel: r.channel,
+          state: r.state,
+          reason: r.reason,
+          attemptId: r.attemptId,
+        })),
+      }),
+    );
+    app.post("/operator/proactive/policies", async (c) => {
+      const policy = proactive.service.coordinator.authority.register(
+        proactivePolicySchema.parse(await c.req.json()),
+      );
+      return c.json({ id: policy.id, revision: policy.revision }, 201);
+    });
+    app.post("/operator/proactive/policies/:id/revoke", (c) => {
+      const policy = proactive.service.coordinator.authority.revoke(
+        c.req.param("id"),
+      );
+      return c.json({ id: policy.id, revoked: true });
+    });
+    app.post("/operator/proactive/enroll", async (c) => {
+      proactive.enroll(await c.req.json());
+      return c.json({ enrolled: true });
+    });
+    app.post("/operator/proactive/intents/:id/stop", async (c) => {
+      const result = await proactive.service.stop(c.req.param("id"));
+      return c.json({ id: result.id, state: result.state });
+    });
+  }
   if (phone && desktop && agents)
     mountPhoneDesktop(app, {
       ...phone,

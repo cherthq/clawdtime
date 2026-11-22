@@ -5,9 +5,11 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     .executable(name: "ClawdTimeTaskCapture", targets: ["ClawdTimeTaskCapture"]),
     .library(name: "DeviceCore", targets: ["DeviceCore"]),
     .executable(name: "ClawdTimeTaskPanel", targets: ["ClawdTimeTaskPanel"]),
+    .executable(name: "ClawdTimeReviewWindow", targets: ["ClawdTimeReviewWindow"]),
 ], targets: [
     .target(name: "DeviceCore"),
     .target(name: "TaskPanelCore"),
+    .executableTarget(name: "ClawdTimeReviewWindow", dependencies: ["TaskPanelCore"]),
     // The panel is a bare executable. Its Info.plist is linked in, so macOS can
     // say why it asks for the microphone when the person talks to ClawdTime.
     .executableTarget(name: "ClawdTimeTaskPanel", dependencies: ["TaskPanelCore"], exclude: ["Info.plist"],
