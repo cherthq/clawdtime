@@ -5531,6 +5531,46 @@ export class Supervisor {
     );
   }
   /**
+   * A bare word that answers ClawdTime's own question about a session:
+   * "yes" after "Deploy fix has been quiet. Want me to tell you what it
+   * last did?". The message is a yes or a bare word of decision and nothing
+   * else, ClawdTime's last message is a question on this channel that is
+   * young enough (`answersItsQuestion`), and that message names a session
+   * of the board. Not when the code itself takes the yes: an offer to open
+   * that session, or to watch it.
+   *
+   * The answer to such a word is about that session. With no state in
+   * front of it, the model tried to open the session to look, was refused,
+   * and then answered from memory, from the list of jobs, or made
+   * something up.
+   */
+  private answersAboutASession(
+    turn: Turn,
+    spoken: string,
+    via: ChatMessage["via"],
+  ) {
+    const words = spoken.trim();
+    if (
+      turn.closed !== undefined ||
+      !(yesToAnOffer.test(words) || bareDecision.test(words)) ||
+      !this.answersItsQuestion(turn, via)
+    )
+      return false;
+    try {
+      if (
+        this.offeredToOpen(turn, spoken, via) ||
+        this.offeredToWatch(turn, spoken, via).length
+      )
+        return false;
+      const asked = turn.history.at(-1)!.text;
+      return (this.world.board()?.sessions ?? []).some((session) =>
+        saidAsWords(title(session), asked),
+      );
+    } catch {
+      return false;
+    }
+  }
+  /**
    * "Yes", after ClawdTime's own offer to open one session: that session.
    * All of this holds, or null:
    * - the message is a yes and nothing else (`yesToAnOffer`);
@@ -8496,7 +8536,11 @@ export class Supervisor {
       (asksHowLong(words) && this.complainsAboutAJob(words)) ||
       // "What are you watching for me?": which sessions the chat waits for
       // is in the state, and nowhere else.
-      (this.world.laterNews !== undefined && asksWhatIsWatched(words))
+      (this.world.laterNews !== undefined && asksWhatIsWatched(words)) ||
+      // "Yes", after ClawdTime's own question about a session ("Deploy
+      // fix has been quiet. Want me to tell you what it last did?"): the
+      // answer is about that session, so it starts from the state too.
+      this.answersAboutASession(turn, words, via)
     ) {
       // When the state cannot be read here, the model reads it as before.
       try {

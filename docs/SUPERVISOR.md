@@ -397,6 +397,11 @@ These rules are in the code, not in the model's instructions:
   that job, as before.
   A yes to an offer to tell a session something types nothing: only your
   own words are typed.
+  When that question of ClawdTime names a session ("Deploy fix has been
+  quiet. Want me to tell you what it last did?"), the code reads the state
+  before the language model answers your word, as it does for a question
+  about the state: the answer is about that session. This also holds while
+  a request waits, and it decides nothing.
 - A yes to ClawdTime's offer to open one session opens that session ("Want
   me to open the docs session?", then "yes", "ok", "go ahead"). The offer is
   the last sentence of ClawdTime's last message; it names one session on
