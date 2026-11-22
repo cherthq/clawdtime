@@ -28,6 +28,7 @@
     "cua:install-browser": "playwright install chromium",
     "test:computer:browser": "tsx tests/computer-browser.browser.ts",
     "eval:computer:planner": "tsx tests/computer-planner.eval.ts",
+    "eval:computer:request": "tsx tests/computer-request.eval.ts",
     "cua:qualify": "npm run build && node dist/scripts/qualify-bundled-cua.js",
     "cua:package": "node scripts/package-bundled-cua.mjs",
     "cua:qualify-native-planner": "npm run build && node dist/scripts/qualify-native-planner.js"

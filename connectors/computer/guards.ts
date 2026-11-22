@@ -132,9 +132,7 @@ export const dangerWords = [
   "overwrite",
   "revert",
   "don't save",
-  // What was open is gone, with work that was not saved, or with a program
-  // that still ran in it.
-  "close",
+  // A program that still ran is gone.
   "terminate",
   // A name that gives a yes in the person's place: a permission of macOS, a
   // request of an agent, the terms of a site.
@@ -156,8 +154,44 @@ const danger = new RegExp(
     .join("|")})\\b`,
   "i",
 );
-const dangerRisk = (name: string) => {
-  const found = danger.exec(name);
+/**
+ * A close takes away what was open. It asks, except when the person's own
+ * request says to close or to dismiss: then the person asked for it already,
+ * and a question for each banner, tab and window is one too many. What can
+ * be lost with a close keeps its own question: "Don't Save", "Delete",
+ * "Terminate". A request that says not to close asks as before: a word of
+ * denial up to four words before the close counts, which errs to a question.
+ *
+ * Only a plain close control goes without the question: a name that is
+ * "Close" alone, or with the thing that closes on the screen ("Close tab").
+ * "Close account" or "Close issue" ends something that is not a view, and
+ * asks whatever the request says.
+ */
+const closing = /\bclose\b/i;
+const plainClose =
+  /^(?:close|dismiss)(?:\s+(?:this|the))?(?:\s+(?:button|tab|window|banner|dialog|panel|sidebar|pop-?up|notification|message|sheet|drawer|menu|search|alert|preview))?$/i;
+export const askedToClose = (goal: string | undefined) =>
+  !!goal &&
+  /\b(?:close|dismiss)\b/i.test(goal) &&
+  !/\b(?:don['\u2019]?t|do not|never|not|without)\s+(?:\w+\s+){0,4}(?:close|dismiss)\b/i.test(
+    goal,
+  );
+/**
+ * `words` is true when the name is the planner's own sentence about a point
+ * with no named element: a sentence is no name of a control, so only the
+ * request decides for it.
+ */
+const dangerRisk = (name: string, goal?: string, words = false) => {
+  let found = danger.exec(name);
+  if (!found) {
+    found = closing.exec(name);
+    if (
+      found &&
+      askedToClose(goal) &&
+      (words || plainClose.test(clean(name, 80)))
+    )
+      found = null;
+  }
   return found
     ? `"${clean(found[0], 40)}" may be something that cannot be undone, or that speaks for you.`
     : null;
@@ -288,6 +322,7 @@ export function parseCombo(raw: string) {
 function keyRisk(
   parsed: NonNullable<ReturnType<typeof parseCombo>>,
   observation: Observation,
+  goal?: string,
 ) {
   const { key, modifiers } = parsed;
   if (inTerminal(observation)) return terminalRisk;
@@ -298,7 +333,8 @@ function keyRisk(
   if (modifiers.has("cmd") && (key === "delete" || key === "forwarddelete"))
     return removeRisk;
   // Close a window or a tab, in any form (with shift: all of them).
-  if (modifiers.has("cmd") && key === "w") return closeRisk;
+  if (modifiers.has("cmd") && key === "w")
+    return askedToClose(goal) ? null : closeRisk;
   if (key === "return" && (modifiers.has("cmd") || modifiers.has("ctrl")))
     return sendRisk;
   if (key === "return" && !modifiers.size && sendsOnReturn(observation.app))
@@ -362,6 +398,9 @@ const textRoles = new Set([
   "AXComboBox",
   "AXSecureTextField",
 ]);
+/** True when a field that takes text has the focus: typed text goes there. */
+export const hasTextFocus = (observation: Observation) =>
+  observation.elements.some((item) => item.focused && textRoles.has(item.role));
 const middle = (item: ScreenElement) => ({
   x: item.x + item.w / 2,
   y: item.y + item.h / 2,
@@ -418,6 +457,8 @@ export interface View {
   fresh: boolean;
   /** A browser is connected. */
   browser: boolean;
+  /** The person's own request, word for word. Only it can say that a close was asked for. */
+  goal?: string;
 }
 
 export type BrowserCall =
@@ -616,7 +657,9 @@ function checkScreen(
         label: `${verb(action.double, action.right)} ${nameOf(found)}`,
         target: clean(found.title, 80),
         // A click on a text field only gives it the focus.
-        risk: textRoles.has(found.role) ? null : dangerRisk(found.title),
+        risk: textRoles.has(found.role)
+          ? null
+          : dangerRisk(found.title, view.goal),
         signature: `click|${found.role}|${found.title || `${Math.round(point.x)},${Math.round(point.y)}`}|${!!action.double}|${!!action.right}`,
         send: {
           via: "hands",
@@ -646,8 +689,8 @@ function checkScreen(
         risk: named
           ? textRoles.has(named.role)
             ? null
-            : dangerRisk(named.title)
-          : dangerRisk(why),
+            : dangerRisk(named.title, view.goal)
+          : dangerRisk(why, view.goal, true),
         signature: `click_at|${Math.round(point.x / 8)}|${Math.round(point.y / 8)}|${!!action.double}|${!!action.right}`,
         send: {
           via: "hands",
@@ -715,7 +758,7 @@ function checkScreen(
         verdict: "run",
         label: `Press ${parsed.combo}`,
         target: parsed.combo,
-        risk: keyRisk(parsed, seen),
+        risk: keyRisk(parsed, seen, view.goal),
         signature: `key|${parsed.combo}`,
         send: {
           via: "hands",
@@ -813,7 +856,7 @@ function checkBrowser(
       return ready(
         `Click ${pageName(found)} on the page`,
         clean(found.label, 80),
-        pageTextEntry(found) ? null : dangerRisk(found.label),
+        pageTextEntry(found) ? null : dangerRisk(found.label, view.goal),
         `browser_click|${found.tag}|${found.role}|${found.label}`,
         { name: "click", index: action.index, element: found },
       );

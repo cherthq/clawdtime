@@ -40,6 +40,7 @@ import {
   type BrowserCall,
   type Checked,
   type View,
+  hasTextFocus,
 } from "./guards.js";
 import type {
   ComputerJournal,
@@ -1092,6 +1093,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       page: run.page,
       fresh: run.fresh,
       browser: this.drives(run),
+      goal: run.goal,
     };
     const parsed = actionSchema.safeParse(raw);
     // The history needs an action even for output that was none.
@@ -1252,6 +1254,8 @@ export class ComputerWorker implements DesktopExecutorPort {
   ) {
     let ready = first;
     if (first.send.via !== "hands") return;
+    /** The look just before the input, when there was one. */
+    let lastLook: Observation | null = null;
     if (first.send.look) {
       // Just before the input: look again, and check the same action against
       // that look. The planner took seconds to choose, and the person may
@@ -1274,6 +1278,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           first.target,
           "The screen could not be read just before the action.",
         );
+      lastLook = seen;
       const moved = retarget(action, before, seen);
       if (!moved.ok)
         return this.changed(run, action, why, first.target, moved.reason);
@@ -1284,6 +1289,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           page: null,
           fresh: true,
           browser: this.drives(run),
+          goal: run.goal,
         },
         why,
       );
@@ -1370,6 +1376,23 @@ export class ComputerWorker implements DesktopExecutorPort {
         );
       return;
     }
+    // Text with no field to take it went nowhere, or into the keys of the
+    // app. The planner reads that, and looks for the text before it says done.
+    if (
+      handed.result?.ok &&
+      action.kind === "type" &&
+      !send.focus &&
+      lastLook &&
+      !hasTextFocus(lastLook)
+    )
+      return this.note(
+        run,
+        action,
+        why,
+        ready.target,
+        "sent, but no text field had the focus. Look for the text on the next screen: it may not be there.",
+        "ok",
+      );
     this.note(run, action, why, ready.target, ...outcome(handed));
   }
 
@@ -1454,6 +1477,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               page: now,
               fresh: run.fresh,
               browser: true,
+              goal: run.goal,
             },
             why,
           )
