@@ -630,6 +630,42 @@ describe("a secure field", () => {
   });
 });
 
+describe("a look that fails", () => {
+  it("is tried once more after a short wait, and the planner then has the screen", async () => {
+    const { worker, hands, planner } = setup([done]);
+    let failures = 1;
+    hands.answer = (command) =>
+      command.kind === "observe" && command.image && failures-- > 0
+        ? { ok: false, error: "failed" }
+        : undefined;
+    await worker.submit("r1", "What is in front?");
+    await worker.idle();
+    expect(hands.commands.map((command) => command.kind)).toEqual([
+      "observe",
+      "wait",
+      "observe",
+    ]);
+    expect(hands.commands[1]).toEqual({ kind: "wait", ms: 300 });
+    expect(planner.inputs).toHaveLength(1);
+    expect(planner.inputs[0]!.observation).not.toBeNull();
+    expect(worker.snapshot().state).toBe("completed");
+  });
+  it("goes to the planner without the screen only after the second look failed too", async () => {
+    const { worker, hands, planner } = setup([done]);
+    hands.answer = (command) =>
+      command.kind === "observe" ? { ok: false, error: "failed" } : undefined;
+    await worker.submit("r1", "What is in front?");
+    await worker.idle();
+    // Each turn of the planner has the two looks before it.
+    expect(hands.commands.slice(0, 3).map((command) => command.kind)).toEqual([
+      "observe",
+      "wait",
+      "observe",
+    ]);
+    expect(planner.inputs[0]!.observation).toBeNull();
+  });
+});
+
 describe("the person takes over", () => {
   const interrupted = (hands: FakeHands) => {
     hands.answer = (command) =>
@@ -677,6 +713,92 @@ describe("the person takes over", () => {
     await worker.submit("r1", "Click it");
     await waiting();
     expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    worker.stop();
+  });
+  // The person works on the Mac while the worker looks at the screen to plan.
+  const duringTheLook = (hands: FakeHands, times = 1) => {
+    let left = times;
+    hands.answer = (command) =>
+      command.kind === "observe" && command.image && left-- > 0
+        ? { interrupted: true }
+        : undefined;
+  };
+  it("does not pause a request that only looks and answers", async () => {
+    const { worker, hands, said } = setup([done]);
+    duringTheLook(hands);
+    await worker.submit("r1", "What is in front?");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent).toEqual([]);
+    expect(said).toEqual(["Done. The note is saved."]);
+  });
+  it("pauses before the next input, and goes on after continue", async () => {
+    const { worker, hands, planner, waiting } = setup([click, click, done]);
+    duringTheLook(hands);
+    await worker.submit("r1", "Click it");
+    await waiting();
+    // Nothing went out: the question comes before the click.
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    expect((await worker.answer("continue")).message).toBe("Continuing.");
+    await worker.idle();
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(
+      "not sent: The person is using the Mac.",
+    );
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+  const shop = page([pageElement(5, { label: "Next" })]);
+  it("lets a wait and a reading of the page through, and pauses before the input after them", async () => {
+    const browser = new FakeBrowser(shop);
+    const { worker, hands, waiting } = setup(
+      [{ kind: "wait", ms: 200 }, { kind: "browser_read" }, click, done],
+      { browser },
+    );
+    // The person is there at each look.
+    duringTheLook(hands, 9);
+    await worker.submit("r1", "Wait, read, then click");
+    await waiting();
+    expect(browser.calls).toEqual(["read"]);
+    // The wait ran, and no input went out.
+    const ran = hands.commands.map((command) => command.kind);
+    expect(ran).toContain("wait");
+    expect(ran).not.toContain("click");
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    worker.stop();
+  });
+  it("keeps the person's input during a wait for the next input", async () => {
+    const { worker, hands, waiting } = setup([
+      { kind: "wait", ms: 200 },
+      click,
+      done,
+    ]);
+    hands.answer = (command) =>
+      command.kind === "wait" ? { interrupted: true } : undefined;
+    await worker.submit("r1", "Wait, then click");
+    await waiting();
+    // The wait did not pause the request. The click after it did.
+    expect(hands.commands.map((command) => command.kind)).toEqual([
+      "observe",
+      "wait",
+      "observe",
+    ]);
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    worker.stop();
+  });
+  it("pauses before a click on a page too", async () => {
+    const browser = new FakeBrowser(shop);
+    const { worker, hands, waiting } = setup(
+      [{ kind: "browser_read" }, { kind: "browser_click", index: 5 }, done],
+      { browser },
+    );
+    duringTheLook(hands, 9);
+    await worker.submit("r1", "Next");
+    await waiting();
+    expect(browser.calls).toEqual(["read"]);
     expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
     worker.stop();
   });
