@@ -71,8 +71,10 @@ public enum DesktopArrival {
   }
   /// The same title after the observation's cleaning: a no-break space, a format
   /// character or a cut at the length limit does not make another window of it.
+  /// A title that cleans to nothing names no window, so it never fits an untitled one.
   public static func sameTitle(_ one: String, _ other: String) -> Bool {
-    ElementCleaner.line(one) == ElementCleaner.line(other)
+    let title = ElementCleaner.line(one)
+    return !title.isEmpty && title == ElementCleaner.line(other)
   }
 }
 

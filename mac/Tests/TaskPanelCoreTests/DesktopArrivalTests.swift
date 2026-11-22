@@ -64,5 +64,13 @@ final class DesktopArrivalTests: XCTestCase {
     XCTAssertFalse(DesktopArrival.sameTitle("Budget 2026", "Budget 2027"))
     XCTAssertFalse(DesktopArrival.sameTitle("Budget 2026", "budget 2026"))
     XCTAssertFalse(DesktopArrival.sameTitle("Budget2026", "Budget 2026"))
+    // The same letters stored in two ways are one title, as in the worker.
+    XCTAssertTrue(DesktopArrival.sameTitle("R\u{00E9}sum\u{00E9}.pdf", "Re\u{0301}sume\u{0301}.pdf"))
+    // A title that cleans to nothing names no window: it never fits an untitled one.
+    for nothing in ["", " ", "\u{200B}", "\u{200B}\u{00A0}\u{FEFF}"] {
+      XCTAssertFalse(DesktopArrival.sameTitle(nothing, ""))
+      XCTAssertFalse(DesktopArrival.sameTitle("", nothing))
+      XCTAssertFalse(DesktopArrival.sameTitle(nothing, nothing))
+    }
   }
 }

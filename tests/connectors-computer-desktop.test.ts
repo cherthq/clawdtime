@@ -547,6 +547,45 @@ describe("one definition of arrived", () => {
     expect(sameTitle("Budget 2026", "budget 2026")).toBe(false);
     expect(sameTitle("Budget2026", "Budget 2026")).toBe(false);
   });
+  it("takes the same letters stored in two ways as one title, as the panel does", () => {
+    expect(sameTitle("R\u00e9sum\u00e9.pdf", "Re\u0301sume\u0301.pdf")).toBe(
+      true,
+    );
+    const open = {
+      kind: "open_app",
+      name: "Preview",
+      window: "R\u00e9sum\u00e9.pdf",
+    } as const;
+    expect(
+      verifiedActivation(open, {
+        seq: 1,
+        ok: true,
+        observation: front(
+          "Preview",
+          "com.apple.Preview",
+          "Re\u0301sume\u0301.pdf",
+        ),
+        resolvedBundleId: "com.apple.Preview",
+      }),
+    ).toBe(true);
+  });
+  it("never takes a title that cleans to nothing for an untitled window", () => {
+    for (const nothing of ["", " ", "\u200b", "\u200b\u00a0\ufeff"]) {
+      expect(sameTitle(nothing, "")).toBe(false);
+      expect(sameTitle("", nothing)).toBe(false);
+      expect(
+        verifiedActivation(
+          { kind: "open_app", name: "TextEdit", window: nothing },
+          {
+            seq: 1,
+            ok: true,
+            observation: front("TextEdit", "com.apple.TextEdit", ""),
+            resolvedBundleId: "com.apple.TextEdit",
+          },
+        ),
+      ).toBe(false);
+    }
+  });
 
   it("accepts a window title with a no-break space that the observation shows with a plain space", async () => {
     const open: Action = {

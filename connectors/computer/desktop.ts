@@ -130,9 +130,16 @@ export function cleanTitle(title: string, limit = 200): string {
   }
   return `${kept.trim()}…`;
 }
-/** Two window titles that are the same title after the observation's cleaning. */
-export const sameTitle = (one: string, other: string) =>
-  cleanTitle(one) === cleanTitle(other);
+/**
+ * Two window titles that are the same title after the observation's cleaning.
+ * The panel compares strings by their letters, not by how the letters are
+ * stored, so "é" as one character equals "e" with an accent after it. The
+ * same holds here. A title that cleans to nothing names no window.
+ */
+export function sameTitle(one: string, other: string): boolean {
+  const title = cleanTitle(one).normalize("NFC");
+  return title !== "" && title === cleanTitle(other).normalize("NFC");
+}
 /** A bundle identifier names one app, whatever the case of its letters. */
 const sameApp = (one: string, other: string) =>
   one.trim().toLowerCase() === other.trim().toLowerCase();
