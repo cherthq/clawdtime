@@ -559,6 +559,69 @@ describe("the service and the files of the phone runtime", () => {
   );
 
   it(
+    "does not start with a background configuration when a test started the service",
+    { timeout: 60_000 },
+    () => {
+      const inTest =
+        "Background execution does not run in a service that a test started.";
+      // Made-up values in the shape of a background configuration. No path
+      // here exists, and no start in this test gets as far as a use of them.
+      const background = {
+        version: 1,
+        backend: "cua-driver-background",
+        model: "fixture-model",
+        native: {
+          origin: "http://127.0.0.1:12345",
+          token: "fixture".repeat(8),
+          deviceId: "device",
+          executorId: "executor",
+          displayId: 1,
+        },
+        driver: {
+          sdkDirectory: "/private/fixture/sdk",
+          socketPath: "/private/fixture/driver.sock",
+          executablePath: "/private/fixture/driver",
+          expectedPid: 77,
+          manifestSha256: "a".repeat(64),
+          policySha256: "b".repeat(64),
+          targets: [],
+        },
+        messages: {
+          bundleId: "com.apple.MobileSMS",
+          executablePath: "/private/fixture/Messages",
+          bundleVersion: "1.0",
+          destination: "Fixture Contact",
+        },
+        codex: {
+          bundleId: "com.openai.codex",
+          executablePath: "/private/fixture/Codex",
+          bundleVersion: "1.0",
+          destination: "Fixture Project",
+        },
+      };
+      // Two things keep these starts from ever going on. The file of the
+      // phone runtime is readable by others, so the check after this one
+      // refuses the start. And the operator token is too short for the task
+      // app, so the service cannot listen.
+      const f = folders("short");
+      f.secret("line-runtime.json", { version: 1, token: lineToken });
+      chmodSync(join(f.state, "line-runtime.json"), 0o644);
+      const env = { ...process.env, VITEST: "true" };
+      // With no background configuration the start ends at that next check.
+      const without = f.start(["--desktop", "true"], env);
+      expect(without.status).toBe(1);
+      expect(without.stderr).toContain(ownerOnly);
+      expect(without.stderr).not.toContain(inTest);
+      // With one, the start ends here: no background runtime is built.
+      f.secret("background-cua.json", background);
+      const refused = f.start(["--desktop", "true"], env);
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain(inTest);
+      expect(refused.stderr).not.toContain(ownerOnly);
+    },
+  );
+
+  it(
     "does not read the file of the phone runtime in a service that is no desktop service",
     { timeout: 60_000 },
     () => {
