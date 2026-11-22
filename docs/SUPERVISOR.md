@@ -1233,6 +1233,20 @@ is done, when you asked to hear that.
   same way.
 - ClawdTime keeps no timer and no reminder, and it watches nothing else. It
   says so when you ask for one.
+- An answer never promises to tell, watch or remind later with nothing
+  behind it. "Got it, I'll remind you in ten minutes" and, after "is deploy
+  fix done?", "Not yet. I'll let you know when it's done" go back to the
+  language model once. A second such answer keeps what it says about now
+  and loses the promise: you get "I keep no timer and no reminder. Ask me
+  when you want to know.", or the offer "Want me to tell you when deploy
+  fix is done?" for the one session that the promise named, and a yes then
+  takes the request. A promise stands when it is true: this turn took the
+  request, the chat already waits for that session, or away mode is on and
+  the promise is not only about the end of the work (away mode calls for a
+  request and for a failure). While a job that ClawdTime started still
+  runs, a promise to tell when something is done stands: the chat says the
+  answer of that job. When you asked for work and the answer only promises
+  ("Sure, I'll report back when I know more."), the work starts first.
 - The desktop service says the line on its own rhythm. In `clawdtime chat`
   with no desktop service nothing runs between your messages.
 

@@ -5346,7 +5346,7 @@ describe("a job that still works: only what is known of it is said", () => {
     ["how long does the build take?", "The build takes 10 minutes."],
     [
       "is the readme done yet?",
-      "The readme is done; I will check the rest again in 5 minutes.",
+      "The readme is done; the rest takes about 5 more minutes.",
     ],
     ["how long will the deploy take?", "The deploy usually runs quickly."],
     [
@@ -8038,9 +8038,9 @@ describe("a decision that the person said: the model is asked once more, and a y
       const made = pushDesk();
       const got = await made.say("ok", [
         [decide(made.ids[0]!, "allow")],
-        "Got it, I'll watch the payments tests.",
+        "Got it: the payments tests it is.",
       ]);
-      expect(got.reply).toBe("Got it, I'll watch the payments tests.");
+      expect(got.reply).toBe("Got it: the payments tests it is.");
       expect(
         got.run.seen[1]!.messages.filter(
           (message) => message.role === "tool",
@@ -8091,9 +8091,9 @@ describe("a decision that the person said: the model is asked once more, and a y
         const got = await first.say("ok", [
           [decide(first.ids[0]!, "allow")],
           claim,
-          "Got it, I'll watch the payments tests.",
+          "Got it: the payments tests it is.",
         ]);
-        expect(got.reply, claim).toBe("Got it, I'll watch the payments tests.");
+        expect(got.reply, claim).toBe("Got it: the payments tests it is.");
         expect(
           got.run.seen
             .at(-1)!
@@ -8149,7 +8149,7 @@ describe("a decision that the person said: the model is asked once more, and a y
       "I have not pushed anything.",
       "I will watch the tests, and I have not approved the push.",
       "Should I approve the push?",
-      "Got it, I'll watch the payments tests.",
+      "Got it: the payments tests it is.",
     ])("lets %j stand: it claims no decision of this turn", async (answer) => {
       // The draft comes twice: it can go back to the model once when it
       // leaves the person's word with no reply, and it is never replaced.
@@ -8270,18 +8270,18 @@ describe("a decision that the person said: the model is asked once more, and a y
       // It can answer the other offer: the tests.
       "Consider it done.",
       "Sure thing.",
-      "All set, I'll watch the tests.",
+      "All set, the tests it is.",
       "It will go through once you say approve.",
       "Nothing goes out until you say approve.",
       // Words that are about the other work: the sentence names no request.
       "I'll go through the logs and keep an eye on the tests.",
       "I'll go through the payments tests.",
-      "Sure, I'll keep an eye on the tests and let them run.",
+      "Sure, the tests can run.",
       "I'll let it run and watch it.",
       "The tests are going out to the CI.",
       "I'll go ahead, it will go out now.",
       // A word of the request's text in talk about other work.
-      "I'll keep an eye on the main branch tests and let them run.",
+      "The main branch tests can run.",
       "The main tests are going out to CI.",
       "I'll go through the git log for the flaky tests.",
       "The push to staging goes out at noon in deploy fix.",
@@ -8294,7 +8294,7 @@ describe("a decision that the person said: the model is asked once more, and a y
       "The push is waiting.",
       "The push request is still open.",
       "The push to main still waits.",
-      "Sure, I'll keep an eye on the payments tests. The push still waits.",
+      "Sure, the payments tests then. The push still waits.",
       "The push is a request of the agent, and it waits.",
       "The push asks to run git push origin main, and it waits for you.",
       "Git is the tool that the request uses.",
@@ -8329,8 +8329,8 @@ describe("a decision that the person said: the model is asked once more, and a y
       // about the tests that ClawdTime asked about.
       "Test results are in: two flaky ones.",
       "The test results are in: two flaky ones.",
-      "I'll keep an eye on them. The test suite is slow today.",
-      "Npm is fine, and I'll watch the payments tests.",
+      "They are fine for now. The test suite is slow today.",
+      "Npm is fine, and so are the payments tests.",
     ])(
       "with npm test on the desk, the answer %j about the tests stands",
       async (answer) => {
@@ -8359,10 +8359,10 @@ describe("a decision that the person said: the model is asked once more, and a y
         const got = await made.say("ok", [
           [decide(made.ids[0]!, "allow")],
           draft,
-          "Got it, I'll watch the payments tests. The push still waits.",
+          "Got it: the payments tests it is. The push still waits.",
         ]);
         expect(got.reply, draft).toBe(
-          "Got it, I'll watch the payments tests. The push still waits.",
+          "Got it: the payments tests it is. The push still waits.",
         );
         expect(
           got.run.seen
@@ -8389,8 +8389,8 @@ describe("a decision that the person said: the model is asked once more, and a y
 
     it("does not ask again when the draft speaks to what ClawdTime asked, or when no word was refused", async () => {
       for (const draft of [
-        "Got it, I'll watch the payments tests.",
-        "Okay, I'll keep an eye on those flaky tests. The push still waits for approve or deny.",
+        "Got it: the payments tests it is.",
+        "Okay, those flaky tests then. The push still waits for approve or deny.",
       ]) {
         const made = pushDesk();
         const got = await made.say("ok", [
@@ -8532,10 +8532,8 @@ describe("a bare yes after ClawdTime's own question, with no request on the desk
       async (words) => {
         const { told, say } = room();
         told("The payments tests look flaky. Should I keep an eye on them?");
-        const got = await say(words, [
-          "Got it, I'll watch the payments tests.",
-        ]);
-        expect(got.reply, words).toBe("Got it, I'll watch the payments tests.");
+        const got = await say(words, ["Got it: the payments tests it is."]);
+        expect(got.reply, words).toBe("Got it: the payments tests it is.");
         expect(got.run.seen, words).toHaveLength(1);
       },
     );
@@ -8914,7 +8912,7 @@ describe("a bare yes after ClawdTime's own question, with no request on the desk
       // Quoted words of a session.
       'Deploy fix says: "I opened a pull request for the footer."',
       // "I asked" about ClawdTime's own question.
-      "Okay, I'll watch them. I asked because they failed twice today.",
+      "Okay. I asked because they failed twice today.",
       "I asked since they were flaky this morning.",
       // A word about an older time.
       "Will do. I told deploy fix to run the tests a while back.",
@@ -15233,5 +15231,603 @@ describe("the person asked for work, and the answer only offers to start it", ()
     );
     expect(run.seen.some((seen) => seen.system.includes(note))).toBe(false);
     expect(reply.length).toBeGreaterThan(0);
+  });
+});
+
+describe("an answer that promises to tell, watch or remind later, with nothing behind it", () => {
+  const note = "it promised to tell, watch or remind later";
+  /** A Mac with three sessions, jobs that can start, and the real record of what the chat waits for. */
+  const room = () => {
+    const sessions = [
+      session({ name: "deploy fix" }),
+      session({ id: "101-def", pid: 101, name: "docs", state: "idle" }),
+      session({ id: "102-ghi", pid: 102, name: "payments tests" }),
+    ];
+    const made = mac(sessions);
+    const directory = dirname(dirname(made.folder));
+    const later = new SessionNews(directory, {
+      board: () => board(sessions),
+      log: new ChatLog(directory),
+      now: () => made.clock.now,
+    });
+    const world: SupervisorWorld = { ...made.world, laterNews: later };
+    const history: ChatMessage[] = [];
+    const say = async (words: string, steps: (ToolCall[] | string)[]) => {
+      const run = scripted(steps);
+      const at = made.clock.now;
+      const reply = await new Supervisor(world, run.model).reply(
+        [...history],
+        words,
+        "chat",
+      );
+      history.push(
+        { ...said("user", words), at },
+        { ...said("assistant", reply), at },
+      );
+      made.clock.now += 5_000;
+      return { reply, run };
+    };
+    return { made, later, world, say };
+  };
+
+  it.each([
+    [
+      "remind me in ten minutes to check the payments tests",
+      "Got it, I'll remind you in ten minutes to check the payments tests.",
+    ],
+    [
+      "is payments tests done?",
+      "The payments tests are still running. I'll keep an eye and tell you when they're done.",
+    ],
+    [
+      "is deploy fix done yet?",
+      "Not yet. I'll let you know as soon as it's done.",
+    ],
+    [
+      "how is deploy fix doing?",
+      "Still working. I'm keeping an eye on it for you.",
+    ],
+    ["thanks", "Anytime. I'll ping you when deploy fix finishes."],
+  ])(
+    "asks the model once more after %j and the promise %j",
+    async (words, promise) => {
+      const { later, say } = room();
+      const got = await say(words, [promise, "It is still running."]);
+      expect(got.run.seen, words).toHaveLength(2);
+      expect(got.run.seen[1]!.system, words).toContain(note);
+      expect(got.reply, words).toBe("It is still running.");
+      expect(later.watching(), words).toEqual([]);
+    },
+  );
+
+  it("replaces a second promise of a reminder by what is true", async () => {
+    const { say } = room();
+    const promise =
+      "Got it, I'll remind you in ten minutes to check the payments tests.";
+    const got = await say(
+      "remind me in ten minutes to check the payments tests",
+      [promise, promise],
+    );
+    expect(got.reply).toBe(
+      "I keep no timer and no reminder. Ask me when you want to know.",
+    );
+  });
+
+  it("keeps what the second answer says about the state, and offers what works for the one session that it names", async () => {
+    const { later, say } = room();
+    const promise =
+      "The payments tests are still running, 3 minutes in. I'll tell you when payments tests is done.";
+    const got = await say("is payments tests done?", [promise, promise]);
+    expect(got.reply).toBe(
+      "The payments tests are still running, 3 minutes in. Want me to tell you when payments tests is done?",
+    );
+    expect(later.watching()).toEqual([]);
+    // A yes to that sentence of the code takes the request.
+    const yes = await say("yes", ["Will do."]);
+    expect(later.watching()).toEqual(["payments tests"]);
+    expect(yes.reply).toBe("Will do.");
+  });
+
+  it("says that nothing is said later, when the second promise names no one session that works", async () => {
+    const { say } = room();
+    const promise = "Not yet. I'll let you know as soon as they're done.";
+    const got = await say("are they done?", [promise, promise]);
+    expect(got.reply).toBe(
+      "Not yet. I do not say that later by myself. Ask me again when you want to know.",
+    );
+  });
+
+  describe("a promise with something behind it stands", () => {
+    it.each([
+      "Got it, I'll tell you when deploy fix is done.",
+      "On it. I'm watching deploy fix and I'll let you know when it's done.",
+      "Will do, I'll keep an eye on it.",
+    ])("after a request that this turn took: %j", async (answer) => {
+      const { later, say } = room();
+      const got = await say("keep an eye on deploy fix", [answer, answer]);
+      expect(later.watching(), answer).toEqual(["deploy fix"]);
+      expect(got.reply, answer).toBe(answer);
+      expect(got.run.seen, answer).toHaveLength(1);
+    });
+
+    it("about a session that the chat waits for since an earlier turn", async () => {
+      const { later, say } = room();
+      await say("keep an eye on deploy fix", ["Will do."]);
+      const answer = "Yes, I'll tell you when deploy fix is done.";
+      const got = await say("are you still watching deploy fix?", [answer]);
+      expect(later.watching()).toEqual(["deploy fix"]);
+      expect(got.reply).toBe(answer);
+      // With no name, it is about what the chat waits for.
+      const short = "Yes, I'll tell you when it's done.";
+      expect((await say("are you still watching it?", [short])).reply).toBe(
+        short,
+      );
+    });
+
+    it("about a job that this turn started", async () => {
+      const { made, say } = room();
+      const got = await say("build a landing page for the bakery", [
+        [call("start_job")],
+        "Okay.",
+      ]);
+      expect(made.windows).toHaveLength(1);
+      // The code's own sentence promises the answer of the job.
+      expect(got.reply).toContain("I will tell you its answer when it is done");
+    });
+
+    it("about a job that still runs", async () => {
+      const { made, say } = room();
+      await say("build a landing page for the bakery", [
+        [call("start_job")],
+        "Okay.",
+      ]);
+      expect(made.windows).toHaveLength(1);
+      const answer = "Sure. I'll tell you its answer when it's done.";
+      const got = await say("thanks", [answer, answer]);
+      expect(got.reply).toBe(answer);
+    });
+  });
+
+  it.each([
+    // No promise: it says what it does not do, asks, or names a condition.
+    "I can't set reminders. Ask me when you want to know.",
+    "I won't watch it by myself. Want me to tell you when deploy fix is done?",
+    'Say "tell me when deploy fix is done" and I will tell you.',
+    "Just tell me which session to watch and I'll let you know when it finishes.",
+    "If you want, I can tell you when it's done.",
+    // Telling now is no promise for later.
+    "I'll tell you what it did: it pushed the branch.",
+    "Deploy fix is still working, and docs is idle.",
+  ])("lets %j stand: it promises nothing for later", async (answer) => {
+    const { say } = room();
+    const got = await say("is deploy fix done yet?", [answer, "Other."]);
+    expect(got.reply, answer).toBe(answer);
+    expect(got.run.seen, answer).toHaveLength(1);
+  });
+
+  it("still catches a promise about a session that the chat does not wait for, when it waits for another one", async () => {
+    const { later, say } = room();
+    await say("keep an eye on deploy fix", ["Will do."]);
+    const promise =
+      "Payments tests still runs. I'll tell you when payments tests is done.";
+    const got = await say("is payments tests done?", [promise, promise]);
+    expect(later.watching()).toEqual(["deploy fix"]);
+    expect(got.reply).toBe(
+      "Payments tests still runs. Want me to tell you when payments tests is done?",
+    );
+  });
+
+  it('reads "it" in the promise from the sentence before, when the chat waits for another session', async () => {
+    const { later, say } = room();
+    await say("keep an eye on deploy fix", ["Will do."]);
+    const promise =
+      "Payments tests is still working, 3 minutes in. I'll alert you when it finishes.";
+    const got = await say("is payments tests done?", [promise, promise]);
+    expect(later.watching()).toEqual(["deploy fix"]);
+    expect(got.reply).toBe(
+      "Payments tests is still working, 3 minutes in. Want me to tell you when payments tests is done?",
+    );
+    // The same form about the session that the chat waits for is true.
+    const truth =
+      "Deploy fix is still working. I'll alert you when it finishes.";
+    expect((await say("and deploy fix?", [truth, truth])).reply).toBe(truth);
+  });
+
+  it("lets the promise of a call stand while away mode is on: away mode places that call", async () => {
+    const { world, say } = room();
+    const first = "Away mode is on. I'll call you if a request comes in.";
+    const got = await say("I'm away for an hour", [
+      [call("set_away", { away: true })],
+      first,
+      first,
+    ]);
+    expect(world.desk.away()).toBe(true);
+    expect(got.reply).toBe(first);
+    const second = "Nothing yet. I'll call you when a request waits.";
+    expect((await say("anything waiting?", [second, second])).reply).toBe(
+      second,
+    );
+    // A promise about a session is still empty in away mode.
+    const promise = "Not yet. I'll tell you when payments tests is done.";
+    expect(
+      (await say("is payments tests done?", [promise, promise])).reply,
+    ).toBe("Not yet. Want me to tell you when payments tests is done?");
+  });
+
+  it.each([
+    "Away mode is on. I'll notify you if an agent needs your approval.",
+    "Away mode is on. I'll let you know if anything is waiting on you.",
+    "Away mode is on. I'll alert you the moment an agent needs permission.",
+    "Away mode is on. I'll let you know if deploy fix fails.",
+    "Away mode is on. I'll call you if a request comes in.",
+  ])(
+    "lets %j stand with away mode on: it is about a request or a failure",
+    async (answer) => {
+      const { world, say } = room();
+      const got = await say("I'm away for an hour", [
+        [call("set_away", { away: true })],
+        answer,
+        answer,
+      ]);
+      expect(world.desk.away(), answer).toBe(true);
+      expect(got.reply, answer).toBe(answer);
+    },
+  );
+
+  it("still replaces a promise about the end of a session with away mode on", async () => {
+    const { world, say } = room();
+    const promise = "Away mode is on. I'll call you when deploy fix is done.";
+    const got = await say("I'm away for an hour", [
+      [call("set_away", { away: true })],
+      promise,
+      promise,
+    ]);
+    expect(world.desk.away()).toBe(true);
+    expect(got.reply).toBe(
+      "Away mode is on. Want me to tell you when deploy fix is done?",
+    );
+  });
+
+  it("lets a true word about what it watches stand, also when the sentence names sessions that it does not watch", async () => {
+    const { later, say } = room();
+    await say("keep an eye on payments tests", ["Will do."]);
+    const answer =
+      "I'm watching payments tests for you right now, and I have stopped watching deploy fix and docs.";
+    const got = await say("what are you watching for me right now?", [
+      answer,
+      answer,
+    ]);
+    expect(later.watching()).toEqual(["payments tests"]);
+    expect(got.reply).toBe(answer);
+  });
+
+  it("does not let the promise of a call stand while away mode is off", async () => {
+    const { world, say } = room();
+    const promise = "Okay. I'll call you if a request comes in.";
+    const got = await say("I'm heading out", [promise, promise]);
+    expect(world.desk.away()).toBe(false);
+    expect(got.reply).toBe(
+      "Okay. I do not say that later by myself. Ask me again when you want to know.",
+    );
+  });
+
+  it("makes its own offer only when a yes can take it: the sentences that stay name no other session", async () => {
+    const { later, say } = room();
+    const promise =
+      "Docs is done. Deploy fix is still working. I'll tell you when deploy fix is done.";
+    const got = await say("is docs done?", [promise, promise]);
+    expect(got.reply).toBe(
+      "Docs is done. Deploy fix is still working. I do not say that later by myself. Ask me again when you want to know.",
+    );
+    expect(later.watching()).toEqual([]);
+  });
+
+  it("names every session that the chat waits for, in a turn that took one more", async () => {
+    const { later, say } = room();
+    await say("keep an eye on payments tests", ["Will do."]);
+    // The promise names only a session that the chat does not wait for.
+    const promise = "Got it. I'll also keep an eye on docs.";
+    const got = await say("keep an eye on deploy fix", [promise, promise]);
+    expect(later.watching()).toEqual(["payments tests", "deploy fix"]);
+    expect(got.reply).toBe(
+      "Got it. I tell you when deploy fix and payments tests are done.",
+    );
+    // A sentence that also names a session that it waits for stands: the
+    // true part is not lost.
+    const mixed =
+      "Still on it. I'll tell you when deploy fix is done, and I'll watch docs too.";
+    expect((await say("thanks", [mixed, mixed])).reply).toBe(mixed);
+  });
+
+  it('does not take "in a second" for a timer', async () => {
+    const { say } = room();
+    const answer = "I'll tell you in a second: the payments tests passed.";
+    const got = await say("did the payments tests pass?", [answer, answer]);
+    expect(got.reply).toBe(answer);
+  });
+
+  it.each([
+    "Not yet. The docs job is still running. I'll tell you its answer when it's done.",
+    "The job on the payments tests is still running. I'll tell you when it's done.",
+    "Not yet. The job is still running. I'll tell you its answer when it's done.",
+    // The job is named by its work, with no word "job".
+    "Not yet. The docs update is still running. I'll tell you when it's done.",
+    "The payments tests update is still running. I'll tell you when it's done.",
+  ])(
+    "lets %j stand while a job runs, also when the job's words hold the name of a session",
+    async (answer) => {
+      const { made, say } = room();
+      await say("update the docs for the payments tests", [
+        [call("start_job")],
+        "Okay.",
+      ]);
+      expect(made.windows, answer).toHaveLength(1);
+      const got = await say("thanks", [answer, answer]);
+      expect(got.reply, answer).toBe(answer);
+    },
+  );
+
+  it.each([
+    "Away mode is on. I'll call you if anything comes up.",
+    "Away mode is on. I'll call you if a session needs a hand.",
+    "Away mode is on. I'll keep an eye on things.",
+  ])(
+    "lets %j stand with away mode on: it says nothing of the end of the work",
+    async (answer) => {
+      const { world, say } = room();
+      const got = await say("I'm away for an hour", [
+        [call("set_away", { away: true })],
+        answer,
+        answer,
+      ]);
+      expect(world.desk.away(), answer).toBe(true);
+      expect(got.reply, answer).toBe(answer);
+    },
+  );
+
+  it("still replaces a promise of a time while a job runs", async () => {
+    const { made, say } = room();
+    await say("update the docs for the payments tests", [
+      [call("start_job")],
+      "Okay.",
+    ]);
+    expect(made.windows).toHaveLength(1);
+    const promise = "Sure, I'll remind you in ten minutes.";
+    const got = await say("remind me in ten minutes to stretch", [
+      promise,
+      promise,
+    ]);
+    expect(got.reply).toBe(
+      "I keep no timer and no reminder. Ask me when you want to know.",
+    );
+  });
+
+  it("reads the offer of the work in the draft without its promise, whatever their order", async () => {
+    const draft =
+      "Should I start a job to investigate it? I'll report back when it's done.";
+    const first = room();
+    const started = await first.say(
+      "find out why the nightly backup of the database is failing",
+      [draft, [call("start_job")], "On it."],
+    );
+    expect(started.run.seen[1]!.system).toContain(
+      "your draft only offered to start it",
+    );
+    expect(first.made.windows).toHaveLength(1);
+    const second = room();
+    const got = await second.say(
+      "find out why the nightly backup of the database is failing",
+      [draft, "Okay."],
+    );
+    expect(got.reply).toBe("Should I start a job to investigate it?");
+  });
+
+  it.each([
+    "Sure, I'll let you know what I find once it's done.",
+    "Sure, I'll report back when I know more.",
+  ])(
+    "starts the work that the person asked for, when the draft only promises: %j",
+    async (draft) => {
+      const first = room();
+      const started = await first.say(
+        "find out why the nightly backup of the database is failing",
+        [draft, [call("start_job")], "On it."],
+      );
+      expect(started.run.seen[1]!.system, draft).toContain(
+        "nothing started, and your draft promised something for later",
+      );
+      expect(started.run.seen[1]!.system, draft).not.toContain("Call no tool");
+      expect(first.made.windows, draft).toHaveLength(1);
+      // With no start after the note, the person hears that nothing started.
+      const second = room();
+      const got = await second.say(
+        "find out why the nightly backup of the database is failing",
+        [draft, "Okay."],
+      );
+      expect(got.reply, draft).toBe(
+        "Nothing has started for that yet. Say it once more.",
+      );
+      expect(second.made.windows, draft).toEqual([]);
+    },
+  );
+
+  it.each([
+    [
+      "deploy the app to production",
+      "Production deploys are safest after hours, so I'd hold it until tonight. I'll let you know when it's done.",
+    ],
+    [
+      "remove the old migrations",
+      "Removing them cannot be undone, and staging still reads two of them. I'll let you know when it's done.",
+    ],
+    [
+      "find out why the nightly backup of the database is failing",
+      "That is best done after the release is merged. I'll let you know when it's done.",
+    ],
+  ])(
+    "asks for no start after %j when the draft holds a warning beside the promise",
+    async (words, draft) => {
+      const { made, say } = room();
+      const got = await say(words, [draft, [call("start_job")], "On it."]);
+      expect(got.run.seen[1]!.system, words).not.toContain("start it now");
+      expect(got.run.seen[1]!.system, words).toContain(
+        "it promised to tell, watch or remind later",
+      );
+      void made;
+    },
+  );
+
+  it("asks for no second start while the job for the same work runs", async () => {
+    const { made, say } = room();
+    const words = "find out why the nightly backup of the database is failing";
+    await say(words, [[call("start_job")], "Okay."]);
+    expect(made.windows).toHaveLength(1);
+    const draft =
+      "That job is already running. I'll check back in ten minutes.";
+    const got = await say(words, [draft, draft]);
+    expect(got.run.seen[1]!.system).not.toContain("start it now");
+    expect(got.reply).toBe(
+      "That job is already running. I keep no timer and no reminder. Ask me when you want to know.",
+    );
+    expect(made.windows).toHaveLength(1);
+  });
+
+  it("puts the true sentence right before a last question, so that the answer keeps its order", async () => {
+    const { say } = room();
+    const draft =
+      "No. Deploy fix is still working. I'll ping you when it finishes. Anything else?";
+    const got = await say("is deploy fix done?", [draft, draft]);
+    expect(got.reply).toBe(
+      "No. Deploy fix is still working. I do not say that later by myself. Ask me again when you want to know. Anything else?",
+    );
+  });
+
+  it("counts a job that still works after a day: its answer is still due", async () => {
+    const { made, say } = room();
+    await say("update the docs for the payments tests", [
+      [call("start_job")],
+      "Okay.",
+    ]);
+    expect(made.windows).toHaveLength(1);
+    made.clock.now += 25 * 60 * 60 * 1000;
+    const answer =
+      "Not yet. The docs update is still running. I'll tell you when it's done.";
+    const got = await say("thanks", [answer, answer]);
+    expect(got.reply).toBe(answer);
+  });
+
+  it.each([
+    "deploy the app tonight",
+    "run the full test suite tomorrow",
+    "fix the footer after lunch",
+  ])("pushes no start for %j: the person named a later time", async (words) => {
+    const { made, say } = room();
+    const draft = "Sure, I'll let you know when it's done.";
+    const got = await say(words, [draft, [call("start_job")], "On it."]);
+    expect(got.run.seen[1]!.system, words).not.toContain("start it now");
+    // Nor for an offer of that work.
+    const other = room();
+    const offer = await other.say(words, [
+      "Should I start a job for that?",
+      [call("start_job")],
+      "On it.",
+    ]);
+    expect(
+      offer.run.seen.some((seen) => seen.system.includes("start it now")),
+      words,
+    ).toBe(false);
+    expect(other.made.windows, words).toEqual([]);
+    void made;
+  });
+
+  it("pushes no second job when the draft offers another one for work that already runs", async () => {
+    const { made, say } = room();
+    const words = "find out why the nightly backup of the database is failing";
+    await say(words, [[call("start_job")], "Okay."]);
+    expect(made.windows).toHaveLength(1);
+    const draft =
+      "That job is already running. Should I start another one? I'll check back in ten minutes.";
+    const got = await say(words, [draft, [call("start_job")], "On it."]);
+    expect(
+      got.run.seen.some((seen) => seen.system.includes("start it now")),
+    ).toBe(false);
+  });
+
+  it("lets a question that the person must answer stand, and only takes the promise out", async () => {
+    const { made, say } = room();
+    const draft =
+      "I'll let you know once it's migrated. Which database: staging or production?";
+    const got = await say("migrate the users table", [draft, draft]);
+    expect(got.run.seen[1]!.system).toContain(
+      "it promised to tell, watch or remind later",
+    );
+    expect(got.run.seen[1]!.system).not.toContain("start it now");
+    expect(made.windows).toEqual([]);
+    // The question stays last, so that the person's next word answers it.
+    expect(got.reply).toBe(
+      "I do not say that later by myself. Ask me again when you want to know. Which database: staging or production?",
+    );
+  });
+
+  it("starts the work first, when an empty promise stands before an offer of the work that the person asked for", async () => {
+    const draft =
+      "I'll report back once I know more. Should I start a job to investigate it?";
+    // The note is the one for an offer of work, and the job starts.
+    const first = room();
+    const started = await first.say(
+      "find out why the nightly backup of the database is failing",
+      [draft, [call("start_job")], "On it."],
+    );
+    expect(started.run.seen[1]!.system).toContain(
+      "your draft only offered to start it",
+    );
+    expect(first.made.windows).toHaveLength(1);
+    // With no start after the note, the person gets the offer without the promise.
+    const second = room();
+    const got = await second.say(
+      "find out why the nightly backup of the database is failing",
+      [draft, "Okay."],
+    );
+    expect(got.reply).toBe("Should I start a job to investigate it?");
+    expect(second.made.windows).toEqual([]);
+  });
+
+  it("still catches a reminder while the chat waits for a session", async () => {
+    const { say } = room();
+    await say("keep an eye on deploy fix", ["Will do."]);
+    const promise = "Sure, I'll remind you in ten minutes.";
+    const got = await say("remind me in ten minutes to stretch", [
+      promise,
+      promise,
+    ]);
+    expect(got.reply).toBe(
+      "I keep no timer and no reminder. Ask me when you want to know.",
+    );
+  });
+
+  it("checks nothing where the chat can say nothing later and no promise was made", async () => {
+    const { made } = room();
+    const run = scripted(["Deploy fix is still working."]);
+    const reply = await new Supervisor(made.world, run.model).reply(
+      [],
+      "is deploy fix done yet?",
+      "chat",
+    );
+    expect(reply).toBe("Deploy fix is still working.");
+    expect(run.seen).toHaveLength(1);
+  });
+
+  it("catches the promise also where nothing can be said later", async () => {
+    const { made } = room();
+    const promise = "Not yet. I'll let you know when deploy fix is done.";
+    const run = scripted([promise, promise]);
+    const reply = await new Supervisor(made.world, run.model).reply(
+      [],
+      "is deploy fix done yet?",
+      "chat",
+    );
+    expect(reply).toBe(
+      "Not yet. I do not say that later by myself. Ask me again when you want to know.",
+    );
   });
 });

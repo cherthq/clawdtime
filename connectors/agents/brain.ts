@@ -875,7 +875,7 @@ const offersTheWork = (answer: string, spoken: string) => {
       .split(/(?<=[.?!;])\s+/)
       .at(-1) ?? "";
   if (
-    /\bor\b|\belse\b|\binstead\b|\bfirst\b|\btoo\b|\balso\b|\bas\s+well\b/i.test(
+    /\bor\b|\belse\b|\binstead\b|\bfirst\b|\btoo\b|\balso\b|\bas\s+well\b|\banother\b|\bagain\b|\bsecond\b|\balready\b/i.test(
       last,
     )
   )
@@ -916,6 +916,21 @@ const opensWithAVerbOfWork = (text: string) => openingVerbOfWork().test(text);
  */
 const speaksOfStateOrOwnTools =
   /\b(?:sessions?|agents?|status|state|progress|running|waiting|idle|requests?|time|clock|calendar|notes?|reminders?|memory|away|windows?|mic|microphone|camera|screen|volume|call)\b/i;
+/** A sentence that is no promise whatever else it holds: it says what is not done, asks, or names a condition ("Just tell me which session and I'll let you know"). */
+const noPromiseForm =
+  /\?\s*$|\b(?:not|never|no|nothing|cannot|unable)\b|n['\u2019]t\b|\b(?:if\s+you|when\s+you|once\s+you|ask\s+me|tell\s+me\s+which|just\s+(?:tell|say|name|ask))\b|^\s*say\b/i;
+/** A promise of a reminder or of a time: "I'll remind you in ten minutes", "Reminder set", "I'll check again at 5". "I'll tell you in a second: ..." says it now. */
+const promisesATime =
+  /\b(?:I(?:['\u2019]ll|\s+will)\s+(?:\w+\s+){0,2}?remind\s+you|reminder\s+(?:is\s+)?set|I(?:['\u2019]ve|\s+have)\s+set\s+(?:a|the|up\s+a)\s+(?:reminder|timer|alarm)|I(?:['\u2019]ll|\s+will)\s+(?:\w+\s+){0,4}?(?:in\s+(?:\d+|two|three|five|ten|fifteen|twenty|thirty|a\s+few|a\s+couple\s+of)\s+(?:seconds?|minutes?|hours?)|in\s+(?:an?|one)\s+hour|at\s+\d))\b/i;
+/** A promise to watch a session, or to say something when it changes: "I'll let you know when it's done", "I'm keeping an eye on it", "You'll hear from me". "I'll tell you what it did" says it now. */
+const promisesToWatch =
+  /\b(?:I(?:['\u2019]ll|\s+will|['\u2019]m\s+going\s+to|\s+am\s+going\s+to)\s+(?:\w+\s+){0,2}?(?:(?:let\s+you\s+know|tell\s+you|notify\s+you|ping\s+you|alert\s+you|update\s+you|message\s+you|text\s+you|call\s+you)\b[^.!?]{0,30}?\b(?:when|once|as\s+soon\s+as|if|after|the\s+moment)\b|keep\s+(?:an?\s+|a\s+close\s+)?(?:eyes?|watch|track|tabs)\b|keep\s+you\s+(?:posted|updated)\b|watch\b|monitor\b|check\s+back\b|report\s+back\b|get\s+back\s+to\s+you\b)|I(?:['\u2019]m|\s+am)\s+(?:(?:now|still|already)\s+)?(?:watching|monitoring|keeping\s+(?:an?\s+|a\s+close\s+)?(?:eyes?|track|watch|tabs))\b|\byou(?:['\u2019]ll|\s+will)\s+hear\s+from\s+me\b)/i;
+/** A sentence that speaks of a request that waits for the person, or of a failure: what away mode calls for. */
+const aboutARequestOrAFailure =
+  /\b(?:approv\w*|permissions?|input|decisions?|requests?|prompts?|needs?\s+(?:you|your)|wait(?:s|ing)?(?:\s+(?:for|on)\s+you)?|asks?|asking|stuck|blocked|fail(?:s|ed|ure|ures)?|errors?|crash(?:es|ed)?|breaks?|goes\s+wrong)\b/i;
+/** A sentence that speaks of the end of the work: "done", "finishes", "passes". */
+const aboutTheEnd =
+  /\b(?:done|finish(?:es|ed)?|complet(?:e|es|ed)|pass(?:es|ed)?|ready|ends?|wraps?\s+up)\b/i;
 /** A question about what ClawdTime waits for: "what are you watching?", "are you still keeping an eye on docs?". */
 const asksWhatIsWatched = (text: string) =>
   isQuestion(text) &&
@@ -4794,10 +4809,172 @@ export class Supervisor {
       .slice(0, 8);
   }
   /**
+   * A job of ClawdTime whose answer is still due: one that this turn
+   * started, or one of the newest ten that waits for its turn, was launched
+   * or works. A job that failed to launch, exited with no answer or was
+   * retired says nothing more: it does not count.
+   */
+  private aJobIsDue(turn: Turn) {
+    if (turn.done.has("job_started")) return true;
+    // The same jobs that the news of a job reads: a job that still works
+    // after a day is told when it is done, as any other.
+    return this.jobsNow(10).some(
+      (job) =>
+        !job.done &&
+        (job.waiting === true ||
+          job.status === undefined ||
+          job.status === "launch_requested" ||
+          job.status === "awaiting_result"),
+    );
+  }
+  /**
+   * The sentences of an answer that promise something for later with
+   * nothing behind them, and the answer that is true in their place. Null
+   * when the answer holds no such sentence.
+   *
+   * A promise of a time ("I'll remind you in ten minutes") is always empty:
+   * nothing keeps a timer. A promise to watch or to tell when something
+   * changes is true when it speaks of a session that the chat waits for
+   * (those that this turn took, and those of earlier turns), or names no
+   * session while the chat waits for one. While a job of ClawdTime still
+   * runs, every such promise stands: the news of a job says its answer. With away mode on, a promise about
+   * a request that waits or about a failure is true: away mode calls.
+   */
+  private emptyPromises(
+    answer: string,
+    turn: Turn,
+  ): { instead: string; kept: string } | null {
+    const sentences = answer.trim().split(/(?<=[.!?])\s+/);
+    const tookNow = [...turn.done]
+      .filter(([key]) => key.startsWith("watching "))
+      .map(([, name]) => name);
+    let waitsFor: string[] = [];
+    let sessions: AgentSession[] = [];
+    try {
+      waitsFor = this.world.laterNews?.watching() ?? [];
+      sessions = this.world.board()?.sessions ?? [];
+    } catch {
+      // With no board and no record, a promise names nothing that is known.
+    }
+    const known = new Set(
+      [...tookNow, ...waitsFor].map((name) => name.toLowerCase()),
+    );
+    const jobRuns = this.aJobIsDue(turn);
+    const namedIn = (sentence: string) =>
+      sessions.filter((session) => saidAsWords(title(session), sentence));
+    // The sessions that a sentence speaks of: those that it names, or, for
+    // a sentence with "it" or "they" and no name, those of the sentence
+    // before it ("Payments tests is still working. I'll tell you when it's
+    // done.").
+    const about = (index: number) => {
+      const named = namedIn(sentences[index]!);
+      return named.length ||
+        index === 0 ||
+        !/\b(?:it|its|they|them|that\s+one|both)\b/i.test(sentences[index]!)
+        ? named
+        : namedIn(sentences[index - 1]!);
+    };
+    // Away mode places a phone call when a request waits or a session
+    // fails: with it on, a promise about one of those is true.
+    let away = false;
+    try {
+      away = this.world.desk.away();
+    } catch {
+      away = false;
+    }
+    const isEmpty = (sentence: string, index: number) => {
+      if (noPromiseForm.test(sentence)) return false;
+      if (promisesATime.test(sentence)) return true;
+      if (!promisesToWatch.test(sentence)) return false;
+      // By its kind: away mode calls for a request that waits and for a
+      // session that fails. With it on, a promise is empty only when it
+      // speaks of the end of the work and of no request and no failure
+      // ("I'll call you when deploy fix is done"); "I'll call you if
+      // anything comes up" stands.
+      if (
+        away &&
+        !(aboutTheEnd.test(sentence) && !aboutARequestOrAFailure.test(sentence))
+      )
+        return false;
+      // A job of ClawdTime that still runs says its own answer. A job is
+      // named by its work ("The docs update is still running. I'll tell
+      // you when it's done."), and its words often hold the name of a
+      // session, so which of the two a promise is about cannot be read
+      // for sure: while a job runs, a promise to tell when something is
+      // done stands.
+      if (jobRuns) return false;
+      const named = about(index);
+      // A sentence that speaks of a session that the chat waits for
+      // stands, also when it names more ("I'm watching payments tests, and
+      // I have stopped watching deploy fix"): which names the promise is
+      // for cannot be read for sure, and the true part must not be lost.
+      return named.length
+        ? !named.some((session) => known.has(title(session).toLowerCase()))
+        : known.size === 0;
+    };
+    const emptyAt = sentences
+      .map((sentence, index) => (isEmpty(sentence, index) ? index : -1))
+      .filter((index) => index >= 0);
+    if (!emptyAt.length) return null;
+    const empty = emptyAt.map((index) => sentences[index]!);
+    const kept = sentences.filter((_, index) => !emptyAt.includes(index));
+    // The one session that works and that the promise speaks of: the offer
+    // that a yes then takes.
+    const offered = [
+      ...new Set(
+        emptyAt
+          .flatMap(about)
+          .filter(
+            (session) =>
+              session.name !== null &&
+              !known.has(title(session).toLowerCase()) &&
+              (session.state === "working" || session.state === "needs_you"),
+          ),
+      ),
+    ];
+    // In a turn that took a request: every session that the chat waits
+    // for, those of earlier turns too.
+    const waited = [
+      ...new Map(
+        [...tookNow, ...waitsFor].map((name) => [name.toLowerCase(), name]),
+      ).values(),
+    ];
+    // The offer is made only when a yes can take it: the sentences that
+    // stay name no other session (`offeredToWatch` takes an offer only
+    // from a message that names the offered session alone).
+    const canOffer =
+      !!this.world.laterNews &&
+      offered.length === 1 &&
+      kept.flatMap(namedIn).every((session) => session === offered[0]);
+    const general =
+      "I do not say that later by myself. Ask me again when you want to know.";
+    const tail = tookNow.length
+      ? `I tell you when ${waited.join(" and ")} ${waited.length > 1 ? "are" : "is"} done.`
+      : empty.some((sentence) => promisesATime.test(sentence))
+        ? "I keep no timer and no reminder. Ask me when you want to know."
+        : canOffer
+          ? `Want me to tell you when ${clean(title(offered[0]!), 80)} is done?`
+          : general;
+    // A question that stays must stay last: the person answers it. The
+    // true sentence then stands right before it ("No. Deploy fix is still
+    // working. I do not say that later by myself. ... Anything else?"),
+    // and it is never a second question.
+    const keptAsks = /\?\s*$/.test(kept.at(-1) ?? "");
+    const said = keptAsks && /\?\s*$/.test(tail) ? general : tail;
+    return {
+      instead: (keptAsks
+        ? [...kept.slice(0, -1), said, kept.at(-1)!]
+        : [...kept, said]
+      ).join(" "),
+      kept: kept.join(" "),
+    };
+  }
+  /**
    * The message is new work for sure: it asks for work (`asksForWork`),
    * opens with a verb of work, names no session, is no request to hear
-   * later about a session, no words for a session and no bare yes, and it
-   * speaks of no state and of nothing that ClawdTime's own tools do. Only
+   * later about a session, no words for a session and no bare yes, it
+   * speaks of no state and of nothing that ClawdTime's own tools do, and it
+   * names no later time. Only
    * such a message lets the check of an answer that only offers the work
    * ask the model once more.
    */
@@ -4808,7 +4985,10 @@ export class Supervisor {
       asksToBeTold(spoken) ||
       beginsAsWordsForASession(spoken) ||
       yesToAnOffer.test(spoken.trim()) ||
-      speaksOfStateOrOwnTools.test(spoken)
+      speaksOfStateOrOwnTools.test(spoken) ||
+      // "Deploy the app tonight": work for a later time. Nothing keeps a
+      // time here, so it is no work to start now.
+      putsOff(spoken)
     )
       return false;
     try {
@@ -9202,6 +9382,15 @@ export class Supervisor {
             }`;
             continue;
           }
+          // The answer promises to tell, watch or remind later, and nothing
+          // will do that: "Got it, I'll remind you in ten minutes", "Not
+          // yet. I'll let you know when it's done" after a question about
+          // the state. The chat says something later by itself only for a
+          // job that it started and for a session after the person asked
+          // to hear about it. The model answers once more. A second such
+          // answer keeps what it says about now, loses the promise, and
+          // gets what is true in its place. Not while a task is live: a
+          // task has its own news.
           // The person asked for work, and the answer only offers to start
           // it: "I see no session about that. Should I start a job to look
           // into it?". Work that the person asked for starts with no round
@@ -9220,9 +9409,12 @@ export class Supervisor {
           // after every check of a claim: a draft that it keeps has passed
           // them all, so "I started looking into it. Should I start a job?"
           // never reaches the person through it.
-          if (
+          // Whether the message is new work for sure, in a turn in which
+          // nothing happened yet: the conditions of the check of an offer
+          // of work.
+          const newWork =
             !rechecked &&
-            this.world.jobs &&
+            !!this.world.jobs &&
             turn.closed === undefined &&
             turn.done.size === 0 &&
             !ran.has("start_job") &&
@@ -9230,13 +9422,64 @@ export class Supervisor {
             !acted() &&
             this.world.desk.pending().length === 0 &&
             (!task || taskIsOver(task)) &&
-            this.asksForNewWork(words) &&
-            offersTheWork(reply.text, words)
-          ) {
+            this.asksForNewWork(words);
+          const empty =
+            !task || taskIsOver(task)
+              ? this.emptyPromises(reply.text, turn)
+              : null;
+          // The offer is read in the draft without its empty promises:
+          // "Should I start a job to look into it? I'll report back when
+          // it's done." is an offer of the work.
+          const onlyOffersTheWork =
+            newWork && offersTheWork(empty ? empty.kept : reply.text, words);
+          const startNote =
+            "\nA check of your last draft: the person's last message asks for work, and your draft only offered to start it. Work that the person asked for starts with no question first: start it now, with their own words.";
+          if (empty) {
+            // What stays of the draft asks the person something that is
+            // no offer of the work ("Which database: staging or
+            // production? I'll let you know once it's migrated."): that
+            // question stands, so no start is asked for.
+            const keptAsks =
+              !onlyOffersTheWork && /\?\s*$/.test(empty.kept.trim());
+            // An empty promise in the answer to new work: the work starts
+            // first. With an offer of the work beside it, as for any
+            // offer. With no offer, only when the promise is all that the
+            // draft holds beside a word of acceptance ("Sure, I'll report
+            // back when I know more.") and no job of ClawdTime is due: a
+            // draft with a warning ("I'd hold it until tonight. I'll let
+            // you know when it's done.") or with "that job is already
+            // running" is no start to push. The draft that is kept for
+            // the person is the offer without the promise, or the word
+            // that nothing started.
+            const onlyAccepts =
+              !this.aJobIsDue(turn) &&
+              /^(?:(?:sure(?:\s+thing)?|ok(?:ay)?|on\s+it|will\s+do|got\s+it|of\s+course|no\s+problem|alright|yes|yep|absolutely)[.!,]?\s*)*$/i.test(
+                empty.kept.trim(),
+              );
+            if (newWork && !keptAsks && (onlyOffersTheWork || onlyAccepts)) {
+              rechecked = true;
+              onlyOffered = onlyOffersTheWork
+                ? empty.kept
+                : [
+                    empty.kept,
+                    "Nothing has started for that yet. Say it once more.",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+              recheck = onlyOffersTheWork
+                ? startNote
+                : "\nA check of your last draft: the person's last message asks for work, nothing started, and your draft promised something for later. Work that the person asked for starts with no question first: start it now, with their own words.";
+              continue;
+            }
+            if (rechecked) return clean(empty.instead, 900) || "Done.";
+            rechecked = true;
+            recheck = `\nA check of your last draft: it promised to tell, watch or remind later, and nothing will do that. You keep no timer and no reminder, and you say that a session is done only after the person asked to hear it. ${newWork ? "" : "Call no tool for this. "}Answer again with what is true now, and promise nothing for later. When they may want to hear when one session is done, you can ask "Want me to tell you when NAME is done?".`;
+            continue;
+          }
+          if (onlyOffersTheWork) {
             rechecked = true;
             onlyOffered = reply.text;
-            recheck =
-              "\nA check of your last draft: the person's last message asks for work, and your draft only offered to start it. Work that the person asked for starts with no question first: start it now, with their own words.";
+            recheck = startNote;
             continue;
           }
           // The answer is ready. What the message teaches is written after it.
