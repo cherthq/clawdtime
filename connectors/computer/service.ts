@@ -20,6 +20,7 @@ import {
   type PresentationEvent,
 } from "./presentation.js";
 import { plannerFromEnvironment } from "./planner.js";
+import { recordTiming } from "./timing.js";
 import {
   handResultSchema,
   handsNextSchema,
@@ -148,13 +149,7 @@ export interface ComputerOptions {
   planner?: Planner;
   /** Why no worker may run in this service. With it, none is built. */
   unavailable?: string;
-  /** Where the time of each step is printed, with CLAWDTIME_COMPUTER_TIMING=on. The default is the log of the service. */
-  log?: (line: string) => void;
 }
-
-/** The log line for one step: numbers and the kind of action only. */
-export const timingLine = (entry: StepTiming) =>
-  `computer step ${entry.step} ${entry.kind}: look ${entry.lookMs} ms, plan ${entry.planMs} ms, act ${entry.actMs} ms`;
 
 export function buildComputer(options: ComputerOptions): {
   worker: ComputerWorker | null;
@@ -182,12 +177,10 @@ export function buildComputer(options: ComputerOptions): {
     enabled: () => readComputerSwitch(options.root).enabled,
     ...(options.browser ? { browser: options.browser } : {}),
     ...(options.notify ? { notify: options.notify } : {}),
-    // One line for each step, with numbers and the kind of action only.
+    // The time of each step goes to a file in the state folder: the service
+    // runs with no terminal, so a printed line would reach nobody.
     ...(options.env.CLAWDTIME_COMPUTER_TIMING === "on"
-      ? {
-          timing: (entry: StepTiming) =>
-            (options.log ?? console.log)(timingLine(entry)),
-        }
+      ? { timing: (entry: StepTiming) => recordTiming(options.root, entry) }
       : {}),
   });
   return { worker, port: computerPort(worker, hands) };

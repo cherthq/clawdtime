@@ -8,6 +8,7 @@ import {
   setComputerSwitch,
   type JournalRequest,
 } from "../connectors/computer/journal.js";
+import { readTimings, timingLine } from "../connectors/computer/timing.js";
 import { defaultComputerModel } from "../connectors/computer/planner.js";
 import type { BrowserPort } from "../connectors/computer/ports.js";
 
@@ -17,9 +18,10 @@ export const computerHelp = `clawdtime computer: ClawdTime does a task on this M
   computer off      turn it off. A request that runs stops before its next action
   computer doctor   what is ready and what is missing
   computer clear    you looked at the result of a request with an unknown result: new work can start
+  computer timing   the time of the newest steps: the look, the plan and the action of each
 It is off until you turn it on. Every action is checked in code, and a click that
 cannot be undone needs your yes. See docs/COMPUTER_USE.md.`;
-const usage = "Use: clawdtime computer status|on|off|doctor|clear";
+const usage = "Use: clawdtime computer status|on|off|doctor|clear|timing";
 
 export interface ComputerCliDependencies {
   /** The environment. It says where the state folder is and whether a key is there. */
@@ -110,6 +112,15 @@ export async function computerCli(
       print(
         `Cleared: "${request.goal}". Its record stays in the journal. New work can start.`,
       );
+    return;
+  }
+  if (command === "timing") {
+    const timed = readTimings(root).slice(-20);
+    if (!timed.length)
+      return print(
+        "No step was timed yet. Start the desktop service with CLAWDTIME_COMPUTER_TIMING=on, then ask for something.",
+      );
+    for (const step of timed) print(timingLine(step));
     return;
   }
   if (command === "doctor") {
