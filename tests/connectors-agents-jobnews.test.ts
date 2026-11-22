@@ -151,6 +151,7 @@ describe("the chat says the answer of a job when the job is done", () => {
     'This has a "don\'t" in it. Should I start this just as you said it: "build a landing page, don\'t use react"? Say yes or no.',
     "One request waits for your answer: git push. Say approve or deny to answer it.",
     'Say "tell docs: run the tests" and I type it.',
+    '2 requests wait: "git push origin main" and "rm -rf node_modules". Which one do you approve? Say a word of it.',
   ])(
     "waits while ClawdTime's last message waits for a word: %j",
     async (question) => {

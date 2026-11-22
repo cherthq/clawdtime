@@ -137,6 +137,12 @@ records of `chert dev` go to `~/.local/share/clawdtime/line/dev.jsonl`: they
 show the number of your line and say `agent_warm` when the agent is in a
 waiting room. `./host.sh stop` frees the line and stops the agent.
 
+Both programs start again by themselves when they end. After a network drop
+`chert dev` gives up and the agent's worker closes; ten seconds later each
+starts again, and goes on until the network is back. Each such start is a line
+in `~/.local/share/clawdtime/line/host.log`, and `./host.sh status` shows the
+newest one.
+
 When you belong to several projects, put the id of the one to use in
 `.env.local` as `CLAWDTIME_LINE_CHERT_PROJECT`.
 

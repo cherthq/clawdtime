@@ -44,6 +44,7 @@ import { appName, webAddress } from "./apps.js";
 import { browserActions, type BrowserAction } from "./browsing.js";
 import type { JobFacts, JobPort, JobAgent, JobStartOptions } from "./jobs.js";
 import { cleanJob } from "./jobs.js";
+import { questionHoldMs } from "./jobnews.js";
 import { pickSession, type SessionPick } from "./topics.js";
 import type { AgentSession, BoardSnapshot } from "./types.js";
 import { windowActions, type WindowAction } from "./windows.js";
@@ -825,6 +826,59 @@ const invitesApproval =
 // chooses a tool; these decide whether the tool acts.
 const startCue =
   /\b(?:start|begin|take|open|create|add|queue|launch|kick off|give (?:you|yourself|it|clawdtime))\b[^.?!]{0,40}\b(?:task|job)\b|\b(?:new|a|another|this|one)\s+(?:task|job)\s*[:,-]|^\s*(?:task|job)\s*[:,-]|\b(?:task|job)\s+for\s+you\b/i;
+/** The words that open a question to ClawdTime. */
+const questionWord =
+  "(?:did|has|have|had|is|are|was|were|what|wat|wut|whats|wats|why|how|hows|when|where|wheres|who|whos|which)";
+/**
+ * Words that can stand before the question word and change nothing about
+ * it: a word of correction ("wait", "sorry", "no wait"), or a word that
+ * joins the question to what came before ("and", "so", "but"). "Wait what
+ * did the first one say again" is a question, as "what did the first one
+ * say" is.
+ */
+const beforeTheQuestion =
+  "(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+|hmm+|oh|ah|er|wait|hold\\s+on|hang\\s+on|sorry|oops|actually|no|nah|yeah|yes|so|well|and|but|also|then|now|anyway|btw|right|alright)[,.!\\s]+)+";
+/**
+ * A clause of work after the question word: "so when you are done, run the
+ * tests", "yes is fine, start it", "now have a look at the header and fix
+ * it". The verb stands after a mark, "and" or "then", with a word for its
+ * thing after it. "Why did it fail and then run again" has none.
+ */
+const laterClauseOfWork =
+  /(?:[,:;]\s*(?:(?:and|then|please|just)\s+)*|\s+and\s+(?:then\s+)?|\s+then\s+)(?:build|make|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|move|run|deploy|test|check|find|install|upgrade|clean|set|put|try|use|do|start|merge|ship|push)\s+(?:the|a|an|it|that|this|these|those|them|one|my|our|all|some|every|another|its|their|\d)\b/i;
+/**
+ * A question behind such words. An instruction or a statement that only
+ * looks like one is none, so that it still starts work or is kept as what
+ * the person said:
+ * - a clause of work follows ("so when you are done, run the tests");
+ * - "have" that makes something do something ("then have it deploy"): it
+ *   asks only before you, we, they or I, or with a question mark at the end;
+ * - "what I want is ...", "where we deploy is ...", "how about you build
+ *   the page".
+ */
+const asksBehindALead = (spoken: string) => {
+  const found = new RegExp(
+    `^\\s*${beforeTheQuestion}(${questionWord})\\b(.*)$`,
+    "is",
+  ).exec(spoken);
+  if (!found) return false;
+  const word = found[1]!.toLowerCase();
+  const rest = found[2]!;
+  if (
+    word === "have" &&
+    !/^\s+(?:you|we|they|i)\b/i.test(rest) &&
+    !/\?\s*$/.test(spoken)
+  )
+    return false;
+  if (
+    /^(?:what|where|how)$/.test(word) &&
+    /^\s+(?:i|we|you)\s+(?:\w+\s+){1,3}?is\b/i.test(rest)
+  )
+    return false;
+  if (word === "how" && /^\s+about\s+(?:you|we)\s+\w+/i.test(rest))
+    return false;
+  return !laterClauseOfWork.test(rest);
+};
 /** A sentence that asks about something. It never changes the task. */
 const asksAbout = (spoken: string) =>
   // A filler can stand before the question word, and the word can be in
@@ -832,12 +886,15 @@ const asksAbout = (spoken: string) =>
   // "R" is "are" only where a question goes on ("r u", "r the tests done")
   // or the message ends with a question mark: "R script failed, fix it" is
   // work.
-  /^\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\s]+)*(?:did|has|have|had|is|are|was|were|what|wat|wut|whats|wats|why|how|hows|when|where|wheres|who|whos|which)\b/i.test(
-    spoken,
-  ) ||
+  new RegExp(
+    `^\\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\\s]+)*${questionWord}\\b`,
+    "i",
+  ).test(spoken) ||
   /^\s*(?:(?:yo|hey|hi|ok|okay|okie|oki|k|kk|bro|bruh|dude|u+m+|u+h+)[,\s]+)*r\s+(?:(?:u|you|we|they|the|my|all)\b|[^?]*\?\s*$)/i.test(
     spoken,
-  );
+  ) ||
+  // The same behind a word of correction or a word that joins.
+  asksBehindALead(spoken);
 const isQuestion = (spoken: string) =>
   asksAbout(spoken) || /\?\s*$/.test(spoken);
 /**
@@ -1483,6 +1540,190 @@ const namesDecision = (text: string) =>
   /\b(?:approve|approved|allow|allowed|deny|denied|reject|rejected|refuse)\b/i.test(
     text,
   );
+/** A question of ClawdTime that asks about a denial: a "yes" to it is no approval. */
+const asksAboutADenial =
+  /\b(?:deny|denied|denying|denial|reject|rejected|rejecting|refuse|refused|refusing|decline|declined|declining|block|blocked|blocking|stop|stopped|stopping|cancel|cancelled|canceled|cancelling|turn\s+(?:it|that|this|them)?\s*down|say\s+no|not\s+(?:approve|allow))\b/i;
+/**
+ * ClawdTime's offer to deny a request, as the whole sentence: "Should I
+ * deny it?", "Do you want me to just reject that request now?". What it
+ * offers to deny is the group.
+ */
+const offerToDeny =
+  /^(?:so[,\s]+)?(?:should i|shall i|can i|may i|do you want me to|want me to|would you like me to)\s+(?:just\s+)?(?:deny|reject|refuse|decline)\s+(.+?)(?:\s+(?:now|for you))?\?$/i;
+/**
+ * ClawdTime's offer to approve a request, as the whole sentence: "Should I
+ * approve it?", "Want me to allow the push one now?", "Do you want to
+ * approve it?", "Approve it?", "Should I let it run?". What it offers to
+ * approve is the first group that matched.
+ */
+const offerToApprove =
+  /^(?:so[,\s]+)?(?:(?:should i|shall i|can i|may i|do you want me to|want me to|would you like me to|do you want to|would you like to|want to)\s+(?:just\s+)?)?(?:(?:approve|allow)\s+(.+?)|let\s+(.+?)\s+(?:run|through))(?:\s+(?:now|for you))?\?$/i;
+/** A verb that people use for any work: as a word of a request's text it names that request only with "the ... one". */
+const commonVerb = new RegExp(
+  `^(?:${workVerb.slice(3, -1)}|open|see|show|look|keep|let|go|start|stop|get|give|take|send|read|save|load|call|ask|tell|help|watch|wait|time|sleep|ship|kill|touch|sort|head|tail|cut|link|print|say|play|pass|yes|true|false)$`,
+);
+/** What the gate answers for a bare word that follows no question of ClawdTime about the request. */
+const bareYesHasNoQuestion =
+  'A "yes" approves a request only as the answer to my own question about that request. Nothing is approved. The request still waits: say "approve" or "deny".';
+/** Words of a question that say nothing about what it is about. */
+const topicFiller = new Set(
+  "should would could want like tell what which when where have been will with that this your them they there here about some more just also then than into from over look looks keep last while know need make take give does done sure okay yes".split(
+    " ",
+  ),
+);
+/** What the model is told after such a refusal, behind the sentence for the person. */
+const bareWordForTheModel =
+  "(For you, the model: their word is the answer to your own last message, which was not about this request. Reply to that answer first, in words: say what your last message offered, and do not say that you did it. You may add one short sentence that the request still waits. Call no tool for this word.)";
+const bareNoHasNoQuestion =
+  'A "no" denies a request only as the answer to my own question about that request. Nothing is denied. The request still waits: say "approve" or "deny".';
+/**
+ * A message that says yes to an offer of ClawdTime and nothing else: "yes",
+ * "ok", "go ahead", "please do", "yes, open it", "ok show me".
+ */
+const yesToAnOffer =
+  /^(?:(?:um+|uh+|oh|so|well)[,.!\s]+)*(?:yes|yeah|yep|yup|sure|ok|okay|please\s+do|please|do\s+it|do\s+that|go\s+ahead)(?:[,.!\s]+(?:yes|please|do\s+it|do\s+that|go\s+ahead|open\s+it|show\s+me|show\s+it|thanks|thank\s+you))*[.!\s]*$/i;
+/**
+ * ClawdTime's offer to open or show a session, as the whole sentence: "Want
+ * me to open the docs session?", "Should I pull it up?". What it offers to
+ * open is the group.
+ */
+const offerToOpen =
+  /^(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i)\s+(?:just\s+)?(?:(?:open|show(?:\s+you)?|bring\s+up|pull\s+up|switch(?:\s+over)?\s+to|go\s+to|focus)\s+(.+?)|(?:bring|pull)\s+(.+?)\s+(?:up|to\s+the\s+front))(?:\s+(?:for\s+you|now))*\?$/i;
+/**
+ * In "Docs is idle. Want me to open it?", "it" is the session only when the
+ * sentence before says nothing but the state of that session: its name and
+ * these words. "Docs wrote a summary file. Want me to open it?" speaks of a
+ * file.
+ */
+const stateOfASession = new Set(
+  "is was has just now still idle waiting waits for you your answer finished done stopped working needs asks ready the session one and it".split(
+    " ",
+  ),
+);
+/** What such an offer can name with no word of the request: the request itself. */
+const offeredThing =
+  /^(?:it|that|this|(?:this|that) one|(?:the|that|this) (?:request|command))$/;
+/**
+ * A message that is a yes and nothing else: "yes", "ok, do it", "yes
+ * please", "yes, deny it". After ClawdTime's question whether to deny a
+ * request, it is the person's denial. "Go ahead" is not in it: it can mean
+ * that the command goes ahead.
+ */
+const yesAndNothingElse =
+  /^(?:(?:um+|uh+|oh|so|well)[,.!\s]+)*(?:yes|yeah|yep|yup|sure|ok|okay|please do|do it|do that)(?:[,.!\s]+(?:yes|please|do it|do that|deny it|deny that|deny|reject it|thanks|thank you))*[.!\s]*$/i;
+/**
+ * A sentence of an answer that says that a request was decided now: "I
+ * approved the push", "Approved.", "It's approved now", "The push is
+ * approved", "as you allowed", "with your approval". Not a sentence that
+ * says the opposite, that asks, or that speaks of an earlier time.
+ */
+const saysDecidedNow = (sentence: string) =>
+  !/\?\s*$/.test(sentence) &&
+  // A condition or an earlier time holds for the whole sentence.
+  !/\b(?:earlier|before|ago|previously|yesterday|last\s+time|if|when|once|unless|until)\b/i.test(
+    sentence,
+  ) &&
+  // The claim stands in a clause of its own: "I approved the push to main
+  // and will watch the tests" claims it, "I have not approved it" does not.
+  sentence
+    .trim()
+    .split(/[,;:]\s+|\s+(?:and|but|so|then)\s+/)
+    .some(
+      (clause) =>
+        !/\b(?:not|never|nothing|no|none|can|could|would|will|should|may|might)\b|n['\u2019]t\b/i.test(
+          clause,
+        ) &&
+        /\bI(?:['\u2019]ve|\s+have)?\s+(?:(?:just|also|now)\s+)*(?:approved|allowed|denied|rejected|declined)\b|^(?:(?:ok|okay|done|sure|yes|got it)[.!\s]+)*(?:approved|allowed|denied|rejected)\b|\b(?:is|are|it['\u2019]s|that['\u2019]s|has\s+been|have\s+been|got)\s+(?:now\s+)?(?:approved|allowed|denied|rejected)\b|\byou(?:['\u2019]ve|\s+have)?\s+(?:just\s+)?(?:approved|allowed)\b|\bwith\s+your\s+(?:approval|permission|okay|ok|go-ahead)\b/i.test(
+          clause.trim(),
+        ),
+    );
+/**
+ * What can follow "the push" in a sentence that claims no approval: the
+ * request still waits, or the sentence says what it is.
+ */
+const stillWaits =
+  /^(?:(?:still|just|only|now|also|will|does|did|has\s+to|have\s+to|must)\s+)*(?:wait|waits|waited|await|awaits|need|needs|stay|stays|remain|remains|sit|sits|ask|asks|want|wants|request|requests|come|comes|came)\b|^(?:is|are|was)\s+(?:(?:still|now|just)\s+)*(?:waiting|awaiting|pending|open|held|on\s+hold|blocked|unanswered|undecided|up\s+to\s+you|yours|from|for|about|an?\b(?!\s+go\b)|the\b|what|one)\b/i;
+/**
+ * What follows "the push" in a sentence that says that the request went, is
+ * done, or may go. One family of meaning, in three forms:
+ * - a verb of going or of success, in any form, after "will", "'ll", "can",
+ *   "must", "has", "have", "had" and the like ("goes out", "will run", "can
+ *   go through", "has landed", "succeeded"). Not after "would", "could",
+ *   "should", "may" or "might": those say what is possible ("The push would
+ *   go to origin main").
+ * - "is", "was", "has been", "will be" and a word for done, sent, allowed
+ *   or under way ("is live", "is merged", "is good to go", "is running").
+ */
+const goesOrIsDone =
+  /^(?:(?:will|['\u2019]ll|can|must|now|just|then|also|already|has|have|had)\s+)*(?:go|goes|went|gone|going(?!\s+to\b)|run|runs|ran|running|proceed|proceeds|proceeded|proceeding|continue|continues|continued|continuing|land|lands|landed|landing|happen|happens|happened|happening|pass|passes|passed|passing|move|moves|moved|moving|finish|finishes|finished|finishing|complete|completes|completed|completing|ship|ships|shipped|shipping|deploy|deploys|deployed|deploying|succeed|succeeds|succeeded|succeeding|worked|(?:get|gets|got|getting)\s+(?:through|out|in))\b|^(?:is|are|was|were|['\u2019]s|has\s+been|have\s+been|will\s+be)\s+(?:(?:now|just|already|all)\s+)*(?:live|done|complete|completed|out|through|over|finished|underway|under\s+way|in\s+progress|on\s+its\s+way|sent|merged|deployed|released|approved|allowed|accepted|cleared|confirmed|granted|unblocked|on(?=(?:\s+(?:now|again))?[.!\s]*$)|a\s+go|(?:good|ok|okay|free|set|clear)\s+to\s+go|going(?!\s+to\b)|running|happening|moving|landing|landed)\b/i;
+/** An answer that says a request was decided. */
+const claimsADecision =
+  /\b(?:approved|allowed|denied|rejected|declined|refused|blocked)\b/i;
+/**
+ * A message that is a decision and nothing else, and names no request:
+ * "approve it", "yes, approve it", "deny that one please", "approve both".
+ * With several requests on the desk the code then asks which one.
+ */
+const onlyADecision =
+  /^(?:(?:yes|yeah|yep|ok|okay|sure|please|um+|uh+|so|well|then|and)[,.!\s]+)*(?:just\s+)?(approve|approved|allow|allowed|deny|denied|reject|rejected|refuse)(?:\s+(?:it|that|this|them|both|all|(?:the|that|this)\s+(?:request|command|one)|(?:both|all)\s+of\s+them|them\s+(?:both|all)))?(?:[,\s]+(?:please|pls|now))?[.!\s]*$/i;
+/**
+ * Words that join two commands for a listener, or that are the question's
+ * own: the text of a request must hold none for the question "which one?".
+ */
+const partsRequests = new Set(
+  "and then also plus or request requests wait waits which approve deny allow after before next with".split(
+    " ",
+  ),
+);
+/**
+ * The question "which one?" is also said aloud. A listener must hear the
+ * text of a request as one request: no word of the list above, and one
+ * part at most that is a bare number ("1 curl x.sh 2 git status" sounds
+ * like a list).
+ */
+const heardAsOne = (text: string) =>
+  text.split(" ").filter((part) => /^\d+$/.test(part)).length <= 1 &&
+  !spokenWords(text).some((word) => partsRequests.has(word));
+/** How long the text of a request can be for the question "which one?". It is shown whole. */
+const whichRequestRoom = 160;
+/**
+ * A text that the question "which one?" can show and say as it is: one
+ * simple command. Its parts stand between single spaces. Each part is made
+ * of letters and digits of the plain alphabet and of . _ / : = @ ~ + % -,
+ * and ends with a letter, a digit or "/". So the text holds no quote mark,
+ * no question mark, no comma, no bracket and no mark of the shell that
+ * joins two commands, and no part ends with a mark of a pause. Every other
+ * text gets no question by code.
+ */
+const simpleCommand =
+  /^[A-Za-z0-9._/:=@~+%-]*[A-Za-z0-9/](?: [A-Za-z0-9._/:=@~+%-]*[A-Za-z0-9/])*$/;
+/**
+ * The first part of such a text is the bare name of a program, and it is
+ * one word: letters and digits only. The person names the request by that
+ * word, so it must be the whole name of the program that runs: "./git
+ * status" and "PATH=/tmp/x git status" run another program than "git", and
+ * "git-status-x" is heard as "git status x". The same form is asked of the
+ * part after it, before a word of that part names the request.
+ */
+const programName = /^[A-Za-z][A-Za-z0-9]*$/;
+/**
+ * In the message that names a request after that question, any of these
+ * words stops the code: a decision, a stop, a no, a hedge, more than one
+ * request, or another time. The usual gate and the model read the message.
+ */
+const whichRequestNo =
+  /\b(?:approve|approved|allow|allowed|accept|accepted|confirm|confirmed|proceed|go|ahead|ok|okay|sure|fine|deny|denied|decline|declined|reject|rejected|refuse|refused|stop|cancel|skip|leave|drop|kill|block|no|nah|nope|not|never|maybe|perhaps|probably|possibly|guess|think|wait|hold|or|and|both|neither|either|all|none|every|each|any|actually|sorry|hmm+|but|if|unless|except|without|instead|later|first|last|next|other|another|rather|only|just)\b|n['\u2019]t\b/i;
+/**
+ * Words that never name a request after that question, also when a request
+ * holds one: they say a place in the list or an opinion, and an agent can
+ * write them into its own request ("the latter", "the main one", "the safe
+ * one").
+ */
+const neverNames = new Set(
+  "new newer newest old older oldest latest earlier top bottom upper lower former latter previous prior recent final initial original main up down above below middle left right safe safer unsafe dangerous risky harmless good bad better worse right wrong same different big bigger small smaller long longer short shorter quick fast slow real true false correct proper normal usual simple easy hard important needed".split(
+    " ",
+  ),
+);
 /** Said in place of a request's text that looks like a credential. The person has then not heard what waits. */
 const withheldText =
   "Its text is not said here, because it looks like a credential: read it in the agent's terminal.";
@@ -1611,6 +1852,49 @@ export function agentNamed(spoken: string): JobAgent | null {
   const out = excluded ? agentOf(excluded[1]!) : null;
   return out ? otherAgent(out) : null;
 }
+/** A part of a page or an app, as a person names it in a change of mind. */
+const softwareThing =
+  /\b(?:pages?|buttons?|headers?|footers?|fonts?|colou?rs?|layouts?|menus?|forms?|logos?|images?|texts?|titles?|themes?|modes?|styles?|backgrounds?|sections?|links?|files?)\b/i;
+/**
+ * A word that opens a correction, with the fillers before it and what
+ * separates it from the rest. "Wait for ..." is an instruction and "no rush"
+ * is none of this. "I meant" leaves the thing that was meant.
+ */
+const correctionWord =
+  /^(?:(?:um+|uh+|oh|hmm+|ok|okay|so|well)[,.!\s]+)*(?:wait(?!\s+(?:for|until|till)\b)|no(?!\s+(?:rush|problem|worries|need|hurry|big\s+deal)\b)|nope|nah|oops|sorry|hold\s+on|hang\s+on|scratch\s+that|correction|my\s+bad|actually|i\s+meant?)\b[\s,.!:;-]*/i;
+/** Words of a job's request that say nothing about its thing. */
+const correctionStop = new Set([
+  "with",
+  "from",
+  "into",
+  "that",
+  "this",
+  "these",
+  "those",
+  "then",
+  "them",
+  "small",
+  "some",
+  "file",
+  "files",
+  "make",
+  "build",
+  "create",
+  "please",
+  "also",
+  "just",
+  "have",
+  "want",
+  "need",
+  "should",
+  "would",
+  "could",
+  "about",
+  "there",
+  "their",
+  "your",
+  "mine",
+]);
 /** The person's sentence can be about something from before: it has a word that points back. */
 /**
  * The sentence is more work on a thing from before: "add a form to it",
@@ -2054,7 +2338,10 @@ const claimsSize = (text: string) =>
  * run the tests" and I type it', 'Say "run the tests" to docs'. Null when
  * the answer offers none.
  */
-const offeredWords = (answer: string): string | null => {
+const offeredWords = (
+  answer: string,
+  sessions: string[] = [],
+): string | null => {
   const colon =
     /\bsay\s+["\u201c]\s*tell\s+[^:"\u201c\u201d]{1,80}:\s*([^"\u201c\u201d]+)["\u201d]/i.exec(
       answer,
@@ -2063,7 +2350,16 @@ const offeredWords = (answer: string): string | null => {
   const to = /\bsay\s+["\u201c]([^"\u201c\u201d]+)["\u201d]\s+to\s+/i.exec(
     answer,
   );
-  return to ? to[1]!.trim() : null;
+  if (!to) return null;
+  // 'Say "approve" to let it push' asks for a word of decision: it offers
+  // no words for a session. 'Say "yes" to docs' does, when docs is a
+  // session.
+  const after = answer.slice(to.index + to[0].length).toLowerCase();
+  return /^(?:approve|deny|allow|reject|yes|no)(?:\s+(?:it|that))?$/i.test(
+    to[1]!.trim(),
+  ) && !sessions.some((name) => after.startsWith(name.toLowerCase()))
+    ? null
+    : to[1]!.trim();
 };
 /** What ClawdTime says when a second answer offers words of its own again. */
 const ownWordsOnly =
@@ -2073,6 +2369,160 @@ const sizeNotDone =
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
+/**
+ * What a sentence of an answer claims: that ClawdTime told or typed a
+ * session something ("I told it to go on", "I went ahead and sent ok to
+ * deploy fix", "I let deploy fix know", "Sent."), and that it opened a
+ * session ("Opened docs.", "I've brought up docs", "Switched to docs").
+ *
+ * The one that is told is a session: its name, "it" or "them". What was
+ * told or sent to the person is no such claim ("As I told you", "I sent you
+ * the summary", "I asked because they failed"), and what a session did is
+ * none ("Deploy fix pushed the branch and opened a pull request"): the
+ * claim opens with "I", or it opens the sentence with no subject ("Opened
+ * docs and told it to go on"). Quoted words are not read. Not in a
+ * question, not with a word of an earlier time, and not where the words
+ * between "I" and the verb say the opposite or what could be ("I haven't
+ * told it", "I can tell it").
+ */
+const typingOrOpeningClaimed = (
+  sentence: string,
+  sessions: string[],
+): { typing: boolean; opening: string[] | null } => {
+  const none = { typing: false, opening: null };
+  // What a session said, in quotes, is not ClawdTime's claim.
+  const read = sentence.replace(/"[^"]*"|\u201c[^\u201d]*\u201d/g, " ").trim();
+  if (
+    /\?\s*$/.test(read) ||
+    /\b(?:earlier|before|ago|previously|yesterday|already|today|this\s+(?:morning|afternoon|evening)|a\s+while\s+back)\b/i.test(
+      read,
+    )
+  )
+    return none;
+  // "I", then only words of a closed family: "I just told", "I went ahead
+  // and told", "I've now gone ahead and told". After "I see deploy fix
+  // opened ..." the session did it; after "I haven't told ..." nobody did.
+  const i =
+    "\\bI(?:['\u2019]ve|\\s+have)?(?:\\s+(?:just|also|now|then|went|gone|ahead|and|have|actually|finally|quickly|simply))*\\s+";
+  // The one that is told or opened is a session: its name, the name of its
+  // agent, "it", "them", "the session", "the agent", "your coding agent",
+  // "the terminal". Not a thing of the session: "deploy fix's output",
+  // "the docs logs".
+  const names = sessions
+    .filter((name) => name.trim().length > 0)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const who = `(?:(?:the|that|your)\\s+)?(?:it|them|(?:coding\\s+)?(?:agent|terminal|one|session)${names.length ? `|${names.join("|")}` : ""})\\b(?!['\u2019]s)`;
+  // After the session that is opened: the end of the clause, or a word
+  // that still means the session.
+  const kind = "(?:\\s+(?:session|one|agent|window|terminal|tab))?";
+  const end =
+    "(?=\\s*(?:[.!,;:]|$)|\\s+(?:for\\s+you|now|so|and|up|to\\s+the\\s+front)\\b)";
+  // "I sent nothing to deploy fix", "I told it nothing": no claim.
+  const none2 = "(?!\\s+(?:nothing|no|none|anything)\\b)";
+  // The check runs only after an offer to tell a session something, so "I
+  // sent it" and "I passed it on" speak of that session with no "to".
+  const told = `(?:(?:told|asked|messaged|pinged|nudged)${none2}\\s+${who}${none2}|replied${none2}\\s+to\\s+${who}|(?:sent|forwarded|relayed)${none2}\\s+(?!you\\b)\\S+|said${none2}\\s+.{1,60}?\\bto\\s+${who}|passed${none2}\\s+(?!you\\b)\\S+(?:\\s+\\S+)?\\s+(?:on|along|to\\s+${who})|typed\\b${none2}|let\\s+${who}\\s+know\\b|gave\\s+${who}\\s+(?:the\\s+|your\\s+)?(?:go-ahead|go\\s+ahead|ok|okay)\\b)`;
+  const open = `(?:(?:opened(?:\\s+up)?|brought\\s+up|pulled\\s+up|switched(?:\\s+over)?\\s+to)\\s+(${who})${kind}${end}|(?:brought|pulled)\\s+(${who})${kind}\\s+(?:up|to\\s+the\\s+front)\\b)`;
+  // The sentence opens with the verb and has no subject: "Opened docs",
+  // "Told it to go on". A verb after "and" or "then" counts only in a
+  // sentence that is ClawdTime's own: it opens with "I" and a claim verb,
+  // or with a claim verb. After "Deploy fix pushed the branch and opened a
+  // pull request", and after "I checked: deploy fix pushed and opened one",
+  // the session did it.
+  const opener = "^(?:(?:ok|okay|done|sure|yes|got it)[,.!:\\s]+)*";
+  const own = new RegExp(
+    `${opener}(?:${i.replace("\\b", "")}(?:told|asked|messaged|pinged|nudged|replied|sent|forwarded|relayed|passed|said|typed|let|gave|opened|brought|pulled|switched)\\b|(?:told|typed|sent|opened|brought|pulled|switched)\\b)`,
+    "i",
+  ).test(read);
+  const start = own ? `(?:${opener}|\\b(?:and|then)\\s+(?:also\\s+)?)` : opener;
+  const typing = new RegExp(
+    `${i}${told}|${start}(?:told${none2}(?:\\s+${who}${none2}|\\s*[.!]?$)|typed\\b${none2}|sent${none2}(?:\\s*[.!]?$|\\s+(?!you\\b)\\S+))`,
+    "iu",
+  );
+  const opening = new RegExp(`(?:${i}|${start})${open}`, "iu");
+  // The claim's own clause must not say the opposite before it.
+  const clear = (found: RegExpExecArray | null) => {
+    if (!found) return false;
+    const before = read
+      .slice(0, found.index)
+      .split(/[,;:]\s+|\s+(?:and|but|so|then)\s+/)
+      .at(-1)!;
+    return !/\b(?:not|never|nothing|no|none|cannot|if|when|once|unless|until)\b|n['\u2019]t\b/i.test(
+      before,
+    );
+  };
+  const opened = opening.exec(read);
+  // What the sentence says was opened, without "the" before it: the one
+  // after the verb, and one more after "and" ("Opened docs and deploy fix").
+  const bare = (text: string) =>
+    text.replace(/^(?:the|that|your)\s+/i, "").toLowerCase();
+  const second = opened
+    ? new RegExp(
+        `^${kind}\\s*(?:,|and|,\\s*and)\\s+(${who})${kind}${end}`,
+        "iu",
+      ).exec(read.slice(opened.index + opened[0].length))?.[1]
+    : undefined;
+  return {
+    typing: clear(typing.exec(read)),
+    opening: clear(opened)
+      ? [opened![1] ?? opened![2] ?? "", ...(second ? [second] : [])].map(bare)
+      : null,
+  };
+};
+/**
+ * ClawdTime's offer to tell or type a session something, as the whole
+ * sentence: "Want me to tell it to go on?", "Should I send that to deploy
+ * fix?". Not an offer to tell the person ("Should I tell you what it
+ * did?").
+ */
+const offerToTell =
+  /^(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i)\s+(?:just\s+)?(?:tell|type|send|ask|message|reply|answer|pass|forward|let|say|give|have|nudge|ping|ok)\b(?!\s+(?:you|me|us)\b).+\?$/i;
+/** Said in place of a second answer that claims typing or opening that this turn did not do, when another tool of the turn acted. */
+const nothingTyped =
+  "I typed nothing into a session for that message. Only your own words are typed: say them, with the name of the session.";
+const noSessionOpened =
+  "I opened no session for that message. Say which session to open.";
+/** Said in place of an answer that says twice that work started, when the person asked for none and none started. */
+const nothingStarted =
+  "Nothing was started or changed for that message. Say what I should do, and I do it.";
+/** A sentence of an answer that speaks of a start of work: "started", "kicked off", "on it", "working on it". */
+const startWord =
+  /\b(?:start(?:ed|ing|s)?|launch(?:ed|ing|es)?|kick(?:ed|ing|s)?\s+(?:(?:it|that|this|things)\s+)?off|queu(?:ed|e?ing|es?)|spun\s+up|spinning\s+up|on\s+it|working\s+on\s+(?:it|that|this))\b/i;
+/** "I started to look at that", "I started with the header", "I started reading": a way to speak, and no start of work. */
+const startOfNoWork =
+  /\bstarted\s+(?:with\b|(?:to\s+)?(?:look|read|think|wonder|check|see)\b|(?:looking|reading|thinking|wondering|checking)\b)/i;
+/** A sentence that claims new work: "a job", "another task", "a new session". "The job" is work that exists. */
+const claimsNewWork =
+  /\b(?:an?|another|one\s+more)\s+(?:new\s+)?(?:job|task|agent|session)\b|\ba\s+new\b/i;
+/**
+ * A sentence that reports a start in the past, in the first person: "I
+ * started it", "I kicked off the build this morning". Not with a word of
+ * now or of later in it.
+ */
+const reportsAPastStart = (sentence: string) =>
+  /\bI(?:['\u2019]ve|\s+have)?\s+(?:(?:also|already)\s+)?(?:started|launched|queued|kicked\s+(?:(?:it|that|this|things)\s+)?off)\b/i.test(
+    sentence,
+  ) &&
+  !/\b(?:now|just|right\s+away|about\s+to|going\s+to|shortly|soon|I['\u2019]ll|I\s+will|I['\u2019]m|I\s+am)\b/i.test(
+    sentence,
+  );
+/** "A minute ago", "a moment ago", "seconds ago": a start of now, as this check reads it. */
+const momentsAgo =
+  /\b(?:(?:a|one|a\s+few|few|some|a\s+couple\s+of)\s+)?(?:minute|moment|second|sec|min)s?\s+ago\b/gi;
+/** A word of work as it is compared: its first five letters, with a last "s" left out. */
+const workStem = (word: string) => word.replace(/s$/, "").slice(0, 5);
+/** Words of such a sentence that say nothing about which work it is. */
+const startFiller = new Set(
+  "started starting start starts launched launching launch kicked kicking kick queued queueing queuing queue spun spinning working work works job jobs task tasks agent agents session sessions claude code codex with then when done tell told will have just also that this your here there about them they what which while into from once after before soon right away now already okay sure great morning afternoon evening tonight today yesterday earlier later minute minutes moment moments hour hours second seconds back noon midnight three four five seven eight nine eleven twelve finished still should".split(
+    " ",
+  ),
+);
+/** The words of a text that say which work it is. */
+const workWords = (text: string) =>
+  spokenWords(text).filter(
+    (word) =>
+      word.length >= 4 && !plainWord.has(word) && !startFiller.has(word),
+  );
 /** What the job tool answers when ClawdTime started no job. The sessions of the person are not jobs. */
 const noJobYet =
   "ClawdTime started no job yet. The person's sessions are not jobs: tell the person that you started no job, and then what their sessions do.";
@@ -2140,6 +2590,159 @@ const jobProgress =
 /** An offer or a promise to look into a job, to hurry it or to stop it: no tool does that. */
 const jobOffer =
   /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:speed|hurry|rush|nudge|push|poke|ping|check|look|peek|inspect|dig|investigate|try|run|restart|redo|scan|test|debug|fix|cancel|stop|kill|abort)\b/i;
+/**
+ * The whole message tells ClawdTime to stop something, and gives what: "stop
+ * it", "actually cancel that", "kill the bakery job", "can you stop that?".
+ * "I want to cancel that" and "cancel it, thanks" are the same instruction.
+ * It gives the words that name the thing ("" for a bare "cancel"), or null
+ * when the message is no such instruction: a question about stopping ("what
+ * happens if I cancel it?", "should I cancel that?"), a "don't", or a stop
+ * with more work in the same breath ("cancel that and build a page").
+ */
+const stopsWhat = (spoken: string): string | null => {
+  const found =
+    /^(?:(?:actually|ok|okay|so|well|hmm+|um+|uh+|oh|no|nah|wait|please|pls|plz|hey|just|now|never\s*mind|nvm|forget\s+it|scratch\s+that|clawdtime)[,.!\s]+)*(?:(?:(?:can|could|would|will)\s+(?:you|u|we)|i\s+want\s+to|i['\u2019]?d\s+like\s+to|i\s+would\s+like\s+to|let['\u2019]?s)\s+(?:please\s+|pls\s+|just\s+)?)?(?:stop|cancel|abort|kill|halt|end|quit)\b([^,;:.!?]*?)(?:\s+(?:please|pls|plz|now|for\s+now|right\s+now|then|anyway))*(?:,\s*(?:thanks|thank\s+you|thx|please|sorry|my\s+bad|i\s+changed\s+my\s+mind))?[.!?\s]*$/i.exec(
+      spoken.trim(),
+    );
+  if (!found) return null;
+  const thing = found[1]!.trim().toLowerCase();
+  // More than a thing: "that and build a page", "it if the tests fail".
+  return /\b(?:and|then|but|if|when|unless|before|after|so|because|or)\b/.test(
+    thing,
+  )
+    ? null
+    : thing;
+};
+/** An offer or a promise to cancel, stop or restart: no tool does that for a job. */
+const jobCancelOffer =
+  /\b(?:(?:want|like|need)\s+me\s+to|(?:should|shall|can|could)\s+i|i\s+(?:can|could)(?!\s+not\b)|i['\u2019]ll|i\s+will|let\s+me)\s+(?:\w+\s+){0,6}?(?:cancel|stop|kill|abort|restart)\b/i;
+/**
+ * The sentences of an answer that offer to cancel, stop or restart A JOB.
+ *
+ * A sentence speaks of a job when it holds "job", or a word of a job's
+ * request right before "one" or "job" ("the bakery one"). When the person's
+ * own message is about a job ("is the first one done?"), a word of a request
+ * anywhere in the sentence counts too, and so does a word that points
+ * ("cancel it"). A word that points also counts after a sentence that speaks
+ * of a job. A sentence that names a session or a task is about that: a task
+ * can be cancelled, and words can be typed into a session.
+ *
+ * "There is nothing I can do to stop it" is no offer. The words that deny
+ * are read in the offer's own clause only: the "not" of "Not yet; want me to
+ * cancel the bakery job?" denies nothing.
+ */
+const jobCancelOffers = (
+  answer: string,
+  jobs: JobFacts[],
+  spoken: string,
+  namesASession: (text: string) => boolean,
+): string[] => {
+  const requested = new Set(
+    jobs.flatMap((job) =>
+      (job.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) => !correctionStop.has(word),
+      ),
+    ),
+  );
+  const words = (text: string) => text.toLowerCase().match(/\p{L}+/gu) ?? [];
+  const namesARequest = (text: string) =>
+    words(text).some((word) => requested.has(word));
+  // "The bakery one", "the landing page job".
+  const namesAJob = (text: string) =>
+    /\bjobs?\b/i.test(text) ||
+    words(text).some(
+      (word, index, all) =>
+        requested.has(word) && /^(?:one|job)$/.test(all[index + 1] ?? ""),
+    );
+  const other = (text: string) =>
+    /\btasks?\b/i.test(text) || namesASession(text);
+  // The person asks about a job: then the answer is about it.
+  const asked =
+    !other(spoken) &&
+    (namesAJob(spoken) ||
+      namesARequest(spoken) ||
+      /\b(?:first|second|third|last|other|newest|older|earlier)\s+ones?\b/i.test(
+        spoken,
+      ));
+  const points = (text: string) =>
+    /\b(?:it|that|this|them|that\s+one|this\s+one)\b/i.test(text);
+  const sentences = answer.split(/(?<=[.!?])\s+/);
+  return sentences.filter((sentence, index) => {
+    const offer = jobCancelOffer.exec(sentence);
+    if (!offer) return false;
+    // The offer's own clause: from the last mark before it to its verb.
+    const clause = sentence
+      .slice(0, offer.index + offer[0].length)
+      .split(/[,;:\u2014]|\s-\s/)
+      .at(-1)!;
+    if (
+      /\b(?:nothing|no\s+way|not|never|cannot|can['\u2019]t|unable|no\s+tool)\b/i.test(
+        clause,
+      )
+    )
+      return false;
+    if (other(sentence)) return false;
+    const before = index > 0 ? sentences[index - 1]! : "";
+    return (
+      namesAJob(sentence) ||
+      (asked && (namesARequest(sentence) || points(sentence))) ||
+      (points(sentence) && !other(before) && namesAJob(before))
+    );
+  });
+};
+/**
+ * The person's message is a yes and holds no work: "please do", "yes
+ * please", "yeah do it", "sure, go for it". It answers an offer; a job or a
+ * task with that text would have nothing to do.
+ */
+const yesAndNoWork = (text: string) => {
+  const words = spokenWords(text);
+  if (words.length === 0 || words.length > 12) return false;
+  const yes = words.filter((word) => yesWords.has(word)).length;
+  const go = words.filter((word) => goWords.has(word)).length;
+  const start = words.filter((word) => startWords.has(word)).length;
+  return (
+    // Nothing is left after the yes, the fillers, the verbs for "go" and
+    // "start", and "it", "the job" and the like.
+    words.every(
+      (word) =>
+        yesWords.has(word) ||
+        goWords.has(word) ||
+        startWords.has(word) ||
+        yesFillers.has(word),
+    ) &&
+    yes + go + start > 0 &&
+    // "Run it" and "start it" can point at a thing that the person named
+    // before: they are a yes only with a yes word.
+    (start === 0 || yes > 0)
+  );
+};
+/** A message of yes words and nothing else: "yes", "please do", "sure thing", "ok thanks". */
+const onlyYesWords = (text: string) =>
+  /^(?:(?:um+|uh+|oh|so|well)[,.!\s]+)*(?:(?:yes|yeah|yep|yup|sure\s+thing|sure|ok|okay|alright|fine|please\s+do|please|absolutely|definitely|of\s+course|sounds\s+good|great|perfect)[,.!\s]*)+(?:(?:thanks|thank\s+you)[.!\s]*)?$/i.test(
+    text.trim(),
+  );
+const yesWords = new Set(
+  "yes yeah yep yup sure ok okay alright fine please absolutely definitely course sounds good great perfect thing".split(
+    " ",
+  ),
+);
+const goWords = new Set("do go".split(" "));
+const startWords = new Set(
+  "start run launch begin kick proceed continue carry get started make".split(
+    " ",
+  ),
+);
+const yesFillers = new Set(
+  "um uh oh so well then now thanks thank you of and just with ahead on off for let lets s it that this the job task work".split(
+    " ",
+  ),
+);
+/** What is left of an answer says only yes: it would promise what was dropped. */
+const onlyAYes = (text: string) =>
+  /^(?:(?:yes|yeah|yep|yup|sure|okay|ok|of\s+course|alright|all\s+right|will\s+do|no\s+problem|certainly|absolutely|got\s+it|on\s+it)[\s,.!]*)+$/i.test(
+    text.trim(),
+  );
 /**
  * The answer says what a job that still works does now, in words that
  * neither its request, nor the person, nor a tool used ("it is going through
@@ -2242,7 +2845,7 @@ const wrongTimeOfAJob = (
 };
 /** The person asks how long it takes: the answer to that is a time. */
 const asksHowLong = (spoken: string) =>
-  /\b(?:how\s+long|so\s+long|too\s+long|taking\s+(?:forever|ages|long|so)|forever|ages|slow|stuck)\b/i.test(
+  /\b(?:how\s+long|so\s+long|too\s+long|taking\s+(?:forever|ages|long|so)|forever|ages|slow|stuck|coming\s+along|how\s+far)\b/i.test(
     spoken,
   );
 /**
@@ -2264,12 +2867,10 @@ const requestSaid = (job: JobFacts) => {
  */
 const jobsStillWork = (listed: JobFacts[], now: number) => {
   const working = listed.filter((job) => !job.done && !job.waiting).slice(-3);
+  const waiting = listed.filter((job) => !job.done && job.waiting).slice(-2);
   const done = listed.filter((job) => job.done).at(-1);
   return [
-    ...working.map(
-      (job) =>
-        `${requestSaid(job)} still works: ${ranFor(now - job.startedAt)} so far.`,
-    ),
+    // The job that is done comes first: what follows is about the others.
     ...(done
       ? [
           `${requestSaid(done)} is done: "${clean(done.result ?? "", 300)
@@ -2277,9 +2878,16 @@ const jobsStillWork = (listed: JobFacts[], now: number) => {
             .replace(/[.\s]+$/, "")}".`,
         ]
       : []),
+    ...working.map(
+      (job) =>
+        `${requestSaid(job)} still works: ${ranFor(now - job.startedAt)} so far.`,
+    ),
+    ...waiting.map((job) => `${requestSaid(job)} waits for the job before it.`),
     working.length > 1
       ? "Each job that works runs in its own terminal window, where you can watch it. Ask me again for an answer."
-      : "It runs in its own terminal window, where you can watch it. Ask me again for its answer.",
+      : working.length === 1
+        ? "The job that works runs in its own terminal window, where you can watch it. Ask me again for its answer."
+        : "Ask me again for an answer.",
   ].join(" ");
 };
 /** Before the state, when the model of this Mac's settings did not answer a message that was not about the state. */
@@ -2328,6 +2936,10 @@ interface Turn {
    * model, such a sentence is never the answer: the turn goes on to the model.
    */
   refused?: string;
+  /** The gate of decide refused a bare word in this turn: the word answered ClawdTime's own last message. */
+  bareWordRefused?: boolean;
+  /** The channel of the person's message. */
+  via?: ChatMessage["via"];
   /**
    * The call to type that the code itself makes for the plain form ("ask the
    * deploy one to run the tests"). Only that call goes without a cue word
@@ -2939,7 +3551,7 @@ export class Supervisor {
         "The person's message was words for a session, and they are typed. No job and no task starts for the same message.",
       );
     // The person's own last words must ask for a task. The model alone cannot start one.
-    if (!asksToStart(spoken))
+    if (!asksToStart(spoken) || this.isAYesWithNoWork(turn, spoken))
       return refuse(
         turn,
         "The person did not ask for a task in their last message. Ask them.",
@@ -3086,6 +3698,84 @@ export class Supervisor {
     return said;
   }
   /**
+   * The words that are an unfinished job's own: four letters or more, and
+   * none that many requests share: no stop word, no word that any software
+   * has ("page", "file"), no verb of work ("find", "make"), no number word,
+   * no superlative ("biggest"), and not "folder", "home" or "desktop". Of
+   * "find the three biggest files in my downloads folder" that leaves
+   * "downloads".
+   */
+  private ownWordsOfJobs(): Set<string> {
+    const now = this.world.now();
+    const verbs = new RegExp(`^${workVerb}$`, "i");
+    return new Set(
+      this.jobsNow(jobsListed)
+        .filter((job) => !job.done && now - job.startedAt < 24 * 60 * 60 * 1000)
+        .flatMap((job) =>
+          (job.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+            (word) =>
+              !correctionStop.has(word) &&
+              !softwareThing.test(word) &&
+              !softwareNoun.test(word) &&
+              !verbs.test(word) &&
+              !/^(?:zero|three|four|five|seven|eight|nine|eleven|twelve|twenty|thirty|forty|fifty|hundred|thousand|first|second|third|fourth|fifth|folder|folders|home|desktop)$/.test(
+                word,
+              ) &&
+              !/est$/.test(word),
+          ),
+        ),
+    );
+  }
+  /** The text names a job that is not done by a word that is the job's own. */
+  private namesAJobAtWork(text: string): boolean {
+    const own = this.ownWordsOfJobs();
+    return (text.toLowerCase().match(/\p{L}{4,}/gu) ?? []).some((word) =>
+      own.has(word),
+    );
+  }
+  /**
+   * A complaint about how long a job takes: a job is not done, and the thing
+   * that takes long is that job. Either the words name it by a word of its
+   * own, or a word that points is the subject of the time ("this is taking
+   * forever", "why is it so slow", "how long will it take"), or the message
+   * is four words at most ("so slow", "taking ages"): with a job at work,
+   * that is about it. In "the checkout is too slow, profile it" the slow
+   * thing is the checkout, and the sentence is work to do.
+   */
+  private complainsAboutAJob(words: string): boolean {
+    const now = this.world.now();
+    if (
+      !this.jobsNow(jobsListed).some(
+        (job) => !job.done && now - job.startedAt < 24 * 60 * 60 * 1000,
+      )
+    )
+      return false;
+    return (
+      this.namesAJobAtWork(words) ||
+      words.trim().split(/\s+/).length <= 4 ||
+      /\b(?:this|it|that|it['\u2019]s|that['\u2019]s|this\s+one|that\s+one|the\s+jobs?)\b[^.,;!?]{0,40}?\b(?:taking|slow|stuck|long|forever|ages|coming\s+along|far)\b/i.test(
+        words,
+      ) ||
+      /\bhow\s+(?:long|far)\b[^.,;!?]{0,30}\b(?:it|this|that|the\s+jobs?)\b/i.test(
+        words,
+      )
+    );
+  }
+  /** What the job tool answers: no job, the one job, or the list of the last day. */
+  private jobsReport(now: number): string {
+    const listed = this.jobsOfTheDay(now);
+    if (!listed.length) return noJobYet;
+    if (listed.length < 2) return jobLine(listed[0]!, now);
+    // Each job of the last day, in the order in which the jobs started:
+    // "what did the first one find?" has no answer in the newest job alone,
+    // and the model then says that the answer never came.
+    const more =
+      this.jobsNow(jobsListed + 1).filter(
+        (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
+      ).length > jobsListed;
+    return `${more ? `The newest ${jobsListed} jobs` : "The jobs"} that ClawdTime started in the last day, in the order in which they started:\n${listed.map((job, index) => `${index + 1}. ${jobListLine(job, now)}`).join("\n")}`;
+  }
+  /**
    * The jobs that the job tool reports: those that started in the last day,
    * the newest five, in the order in which they started. With fewer than two
    * of them: the newest job alone, whatever its age, or none.
@@ -3096,6 +3786,117 @@ export class Supervisor {
       .reverse()
       .slice(-jobsListed);
     return day.length < 2 ? this.jobsNow(1) : day;
+  }
+  /**
+   * The person tells ClawdTime to stop a job that still works or waits. No
+   * tool stops a job, and a model that is asked reaches for the task tool,
+   * which knows no job: it then says that nothing runs, and offers to start
+   * the work once more. So the code answers, with what is true: it cannot,
+   * and how the person can. Null when the message is no such instruction,
+   * when no job is unfinished, or when something else can be meant.
+   *
+   * The thing is the job when the words say so: "the job", or words of an
+   * unfinished job's request ("the bakery job", "the landing page one"). A
+   * thing that only points ("it", "that", "the build", or nothing) is the
+   * job only when ClawdTime's last message was about a job, and when
+   * nothing else waits for a stop: a request on the desk, a computer task.
+   * A task that is live owns every stop, and so does a session that the
+   * words fit.
+   */
+  private stopsAJob(words: string, turn: Turn): string | null {
+    if (!this.world.jobs) return null;
+    const thing = stopsWhat(words);
+    if (thing === null) return null;
+    const bare = thing.replace(/^(?:the|that|this|my|your)\s+/, "");
+    const points =
+      /^(?:|it|that|this|them|that\s+one|this\s+one)$/.test(thing) ||
+      /^(?:one|thing|build|run|work)$/.test(bare);
+    const last = (turn.whole ?? turn.history).at(-1);
+    // A stop belongs first to what runs: the task, or a computer task.
+    const task = this.world.tasks?.current();
+    const taskLive = !!task && !taskIsOver(task);
+    const execution = this.world.execution?.snapshot();
+    const computerBusy =
+      !!execution?.configured &&
+      (!!execution.pendingAction ||
+        !["idle", "completed", "canceled", "blocked"].includes(
+          execution.state,
+        ));
+    // "Cancel that" after ClawdTime's own yes or no question is a no to it.
+    // The question is used up by then. A bare "stop" or "cancel" has its own
+    // rule there, and so has a stop while something runs.
+    const afterOffer =
+      !taskLive &&
+      !computerBusy &&
+      last?.role === "assistant" &&
+      isOfferQuestion(last.text);
+    if (points && thing !== "" && afterOffer) return "Okay. Nothing started.";
+    const now = this.world.now();
+    const unfinished = this.jobsNow(3)
+      .filter((job) => !job.done && now - job.startedAt < 24 * 60 * 60 * 1000)
+      .reverse();
+    const requested = new Set(
+      unfinished.flatMap((job) =>
+        (job.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+          (word) => !correctionStop.has(word),
+        ),
+      ),
+    );
+    const saysJob = /\bjobs?\b/.test(thing);
+    const named = (bare.match(/\p{L}+/gu) ?? []).filter(
+      (word) => !/^(?:job|jobs|one|thing|build|run|work)$/.test(word),
+    );
+    const namesIt =
+      !points && named.length > 0 && named.every((word) => requested.has(word));
+    // "Cancel the job" after that question is the offered job, unless the
+    // words name a job that runs ("stop the bakery one").
+    if (afterOffer && saysJob && !namesIt) return "Okay. Nothing started.";
+    if (!unfinished.length) return null;
+    if (!points && !saysJob && !namesIt) return null;
+    // Something else that a stop can mean.
+    if (taskLive) return null;
+    if (points) {
+      // A bare "stop" goes to the computer engine wherever one is set up.
+      if (computerBusy || (execution?.configured && thing === "")) return null;
+      if (this.world.desk.pending().length > 0) return null;
+      // ClawdTime's last message was about a job: its start, its state, its
+      // answer, or this same sentence. After talk about a session ("deploy
+      // fix finished"), "kill it" is not about a job.
+      const saysAJob = !!last && /\bjobs?\b/i.test(last.text);
+      // A message that names a session is about that session ("deploy fix
+      // still works on the tests"), unless it also says "job".
+      const namesASession =
+        !!last &&
+        (this.world.board()?.sessions ?? []).some(
+          (session) =>
+            session.name !== null && saidAsWords(title(session), last.text),
+        );
+      const aboutAJob =
+        last?.role === "assistant" &&
+        (last.news === true ||
+          saysAJob ||
+          (!namesASession &&
+            (/^On it\. .* in a new terminal window\b/.test(last.text) ||
+              /\bstill works\b/.test(last.text) ||
+              (last.text.toLowerCase().match(/\p{L}{4,}/gu) ?? []).some(
+                (word) => requested.has(word),
+              ))));
+      if (!aboutAJob) return null;
+    }
+    if (this.pick("", words).kind !== "none") return null;
+    const head = "I cannot stop a job: no tool does that.";
+    if (unfinished.length === 1) {
+      const job = unfinished[0]!;
+      return job.waiting
+        ? `${head} ${requestSaid(job)} waits in its own terminal window for the job before it. To stop it, close that window. It then writes no answer, so I still list it for up to a day.`
+        : `${head} ${requestSaid(job)} has run ${ranFor(now - job.startedAt)} in its own terminal window. To stop it, close that window. It then writes no answer, so I still list it as working for up to a day.`;
+    }
+    return `${head} Each job runs in its own terminal window: to stop one, close its window. It then writes no answer, so I still list it for up to a day. Not done: ${unfinished
+      .map(
+        (job) =>
+          `${requestSaid(job)} (${job.waiting ? "waits for the job before it" : `works, ${ranFor(now - job.startedAt)}`})`,
+      )
+      .join(", ")}.`;
   }
   private jobsNow(limit: number): JobFacts[] {
     try {
@@ -3137,6 +3938,14 @@ export class Supervisor {
         "The person did not ask for work in their last message. Ask them what to do.",
       );
     }
+    // "Please do", "yes please", "sure, go for it": a yes, and no work. The
+    // reader of work takes such words for an instruction, and a job with
+    // that text has nothing to do.
+    if (this.isAYesWithNoWork(turn, this.boundJob(spoken)))
+      return refuse(
+        turn,
+        "The person's message is a yes and holds no work: nothing starts. Ask them to say the work in one sentence.",
+      );
     let said: string;
     try {
       const started = await jobs.start(
@@ -3185,8 +3994,167 @@ export class Supervisor {
         .slice(-6)
         .map((message) => message.text),
       refersBack: pointsBack(spoken),
-      followsUp: followsUp(spoken),
+      // More work on the thing of the job before, or a correction to a job
+      // that still works: the new job then waits for that job.
+      followsUp: followsUp(spoken) || this.correctsARunningJob(spoken, turn),
     };
+  }
+  /**
+   * What the CODE starts by itself as a change of mind: a short list, and
+   * everything else goes to the model. All of these must hold.
+   * - It is the next message after the request that started the job, and
+   *   that job is not done. Never the contrast at a later time.
+   * - It passes `correctsARunningJob` (a word of correction, a contrast, or
+   *   "instead" at its end), so the new job waits.
+   * - After the words of correction and the lead-ins it opens with a verb
+   *   that changes a thing: make, add, change, use, fix, update, remove,
+   *   rename, replace, write, build, create.
+   * - Right after the verb stands a thing of software with a definite word
+   *   ("the buttons", "that header", "its background", at most two words
+   *   between), or the message holds a word of the running job's request.
+   *   "A text to my mom" begins a new thing, and "it" alone names nothing.
+   * - Nothing in it stops, delays or gives a time: stop, pause, hold, wait,
+   *   later, tomorrow, after lunch, when I'm back, in an hour, at 5.
+   * A model reads "set an alarm instead", "make a reservation instead" and
+   * "find a cafe not a bakery near me": those are no work for a coding agent.
+   */
+  private changesTheRunningJob(spoken: string, turn: Turn): boolean {
+    const newest = this.jobsNow(1)[0];
+    const before = [...turn.history]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (
+      !newest ||
+      newest.done ||
+      !before ||
+      newest.startedAt < Math.floor(before.at / 1000) * 1000
+    )
+      return false;
+    if (!this.correctsARunningJob(spoken, turn)) return false;
+    let rest = spoken.trim();
+    for (let step = 0; step < 4; step++) {
+      const opens = correctionWord.exec(rest);
+      if (!opens) break;
+      rest = rest.slice(opens[0].length);
+    }
+    rest = rest.replace(
+      /^(?:(?:ok|okay|so|and|then|also|now|next|please|pls|just)[,.!\s]+)+/i,
+      "",
+    );
+    const verb =
+      /^(?:make|add|change|use|fix|update|remove|rename|replace|write|build|create)\s+(.+)$/i.exec(
+        rest,
+      );
+    if (!verb) return false;
+    // A stop, a delay or a time that the person gave: not now, so not by code.
+    if (
+      /\b(?:stop|pause|hold|wait|later|tomorrow|tonight|aside|after|when|until|next|morning|evening|weekend)\b|\bin\s+an?\s+(?:hour|minute)|\bin\s+\d+|\bat\s+\d/i.test(
+        rest,
+      ) ||
+      putsOff(rest)
+    )
+      return false;
+    // The thing goes to a person or to a place of the person's own: "add the
+    // link to my calendar", "write the text to mom", "use the text as my
+    // status". That is no work in the project.
+    if (
+      /\b(?:to|as|into|onto)\s+(?:my|me|mom|dad|him|her|them|his|our)\b/i.test(
+        rest,
+      )
+    )
+      return false;
+    const thing = verb[1]!;
+    // A word of the job's request that is its own: "bakery". A word that
+    // any page has ("page", "file") says nothing by itself: "write a page in
+    // my diary instead".
+    const requested = new Set(
+      (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) =>
+          !correctionStop.has(word) &&
+          !softwareThing.test(word) &&
+          !softwareNoun.test(word),
+      ),
+    );
+    // "The buttons", "that header", "its background": a thing of the work
+    // that runs is named with a definite word. "A text to my mom" and "a
+    // menu for dinner" begin a new thing, and are no software.
+    const definite =
+      /^(?:the|its|that|this|these|those)\s+(\S+(?:\s+\S+){0,2})/i.exec(thing);
+    return (
+      (definite !== null &&
+        (softwareNoun.test(definite[1]!) ||
+          softwareThing.test(definite[1]!))) ||
+      (thing.toLowerCase().match(/\p{L}{4,}/gu) ?? []).some((word) =>
+        requested.has(word),
+      )
+    );
+  }
+  /**
+   * The message corrects a job that still works: "wait no, it's a cafe not a
+   * bakery". A job that runs cannot be changed, so the correction is a job of
+   * its own, and it must wait for the first: two sessions that change the
+   * same files at one time lose work. This only decides whether a new job
+   * waits. It starts nothing: the person's words still pass the gate.
+   *
+   * Two forms count. A contrast that names a word of the job's request
+   * ("cafe, not bakery", "instead of a bakery"), at any time while the job
+   * works. And, right after the request that started the job, a word of
+   * correction ("wait", "no", "sorry", "I meant") before a statement about
+   * the thing ("it's a cafe", "the name is ...", "make it ..."), or a
+   * message that ends with "instead" ("make the buttons bigger instead"):
+   * it replaces what that job was asked to do. Other work
+   * that opens with such a word ("actually, find the big files") starts at
+   * once, as before: a wait costs the person time.
+   */
+  private correctsARunningJob(spoken: string, turn: Turn): boolean {
+    const newest = this.jobsNow(1)[0];
+    if (
+      !newest ||
+      newest.done ||
+      this.world.now() - newest.startedAt > 2 * 60 * 60 * 1000
+    )
+      return false;
+    const words = spoken.trim();
+    // The words of the job's request that carry meaning.
+    const requested = new Set(
+      (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) => !correctionStop.has(word),
+      ),
+    );
+    if (
+      [
+        ...words.matchAll(
+          /\b(?:not|instead\s+of|rather\s+than)\s+(?:(?:a|an|the|for|in|on|with|my|our|your)\s+)*(\p{L}+)/giu,
+        ),
+      ].some((match) => requested.has(match[1]!.toLowerCase()))
+    )
+      return true;
+    // Right after the request that started the job. A job's start time has
+    // whole seconds.
+    const before = [...turn.history]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (!before || newest.startedAt < Math.floor(before.at / 1000) * 1000)
+      return false;
+    // "Make the buttons bigger instead": the message ends with "instead",
+    // so it replaces what that job was asked to do.
+    if (/\binstead(?:\s+(?:please|pls|plz|now|then))?[.!?\s]*$/i.test(words))
+      return true;
+    let rest = words;
+    let corrected = false;
+    for (let step = 0; step < 4; step++) {
+      const opens = correctionWord.exec(rest);
+      if (!opens) break;
+      corrected = true;
+      rest = rest.slice(opens[0].length);
+    }
+    return (
+      corrected &&
+      (followsUp(rest) ||
+        /^(?:it|it['\u2019]s|its|that|that['\u2019]s|this|the|a|an|not|for|with|should|must|is|was|make\s+it|call\s+it|name\s+it|change\s+it|use)\b/i.test(
+          rest,
+        ))
+    );
   }
   /** What the person hears in a turn that decides no request. */
   private closedAnswer(turn: Turn) {
@@ -3649,6 +4617,216 @@ export class Supervisor {
     return named.size === 1 && only && only.name !== null ? only : null;
   }
   /**
+   * The answer claims typing or opening that did not happen. A claim of
+   * this turn is true only when this turn typed (for telling and typing) or
+   * opened (for opening): "Opened docs and told it to go on" is false when
+   * the turn only opened docs. With nothing of that kind in this turn, the
+   * claim can speak of a turn of the last ten minutes, which the desk
+   * records: it stands when it names no session other than the ones of
+   * that record.
+   */
+  private claimsTypingOrOpeningThatWasNot(
+    text: string,
+    turn: Turn,
+  ): "typing" | "opening" | null {
+    const keys = [...turn.done.keys()];
+    const typed = keys.some((key) => key.startsWith("typed "));
+    const opened = keys.some((key) => key.startsWith("opened "));
+    let before: ReturnType<DecisionDesk["lastActed"]> = null;
+    let sessions: AgentSession[] = [];
+    try {
+      before = this.world.desk.lastActed?.() ?? null;
+      sessions = this.world.board()?.sessions ?? [];
+    } catch {
+      // The record cannot be read: the answer is not checked.
+      return null;
+    }
+    const lately =
+      !!before &&
+      before.turn !== turn.id &&
+      this.world.now() - before.at < 10 * 60 * 1000;
+    // A session is spoken of by its name, and by the name of its agent.
+    const names = [
+      ...new Set(
+        sessions.flatMap((session) => [
+          title(session),
+          agentKinds[session.agent] ?? "",
+        ]),
+      ),
+    ].filter(Boolean);
+    for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+      const claim = typingOrOpeningClaimed(sentence, names);
+      // The session that the sentence says was opened, when it names one.
+      const target =
+        claim.opening === null
+          ? []
+          : sessions.filter((session) =>
+              claim.opening!.includes(title(session).toLowerCase()),
+            );
+      // Each kind that the sentence claims needs its own act in this turn,
+      // and an open of this turn covers only the session that it opened.
+      const kind =
+        claim.typing && !typed
+          ? "typing"
+          : claim.opening !== null &&
+              (!opened ||
+                !target.every((session) =>
+                  keys.includes(`opened ${session.id}`),
+                ))
+            ? "opening"
+            : null;
+      if (!kind) continue;
+      // An older turn: the sentence names only sessions of that record.
+      const named = sessions.filter((session) =>
+        saidAsWords(title(session), sentence),
+      );
+      if (
+        lately &&
+        !typed &&
+        !opened &&
+        named.every((session) => before!.sessions.includes(session.id))
+      )
+        continue;
+      return kind;
+    }
+    return null;
+  }
+  /**
+   * The person's message answers ClawdTime's own offer to tell or type a
+   * session something, or to open one: the last sentence of ClawdTime's
+   * last message is that offer.
+   */
+  private offeredToTellOrOpen(turn: Turn, via: ChatMessage["via"]) {
+    if (!this.answersItsQuestion(turn, via)) return false;
+    const offer =
+      turn.history
+        .at(-1)!
+        .text.trim()
+        .split(/(?<=[.?!])\s+/)
+        .at(-1) ?? "";
+    return offerToOpen.test(offer) || offerToTell.test(offer);
+  }
+  /** "Opened docs. " for the sessions that this turn opened, or "". */
+  private openedInTurn(turn: Turn) {
+    try {
+      const sessions = (this.world.board()?.sessions ?? []).filter((session) =>
+        turn.done.has(`opened ${session.id}`),
+      );
+      // Only the application came forward: never "opened".
+      const tabs = sessions.filter(
+        (session) => turn.done.get(`opened ${session.id}`) !== "app",
+      );
+      const apps = sessions.filter(
+        (session) => turn.done.get(`opened ${session.id}`) === "app",
+      );
+      return `${tabs.length ? `Opened ${tabs.map(title).join(" and ")}. ` : ""}${apps.length ? `I brought the terminal of ${apps.map(title).join(" and ")} to the front. ` : ""}`;
+    } catch {
+      return "";
+    }
+  }
+  /**
+   * The person's message answers ClawdTime's own question: ClawdTime's
+   * message is the last one of the conversation, on this channel and
+   * younger than five minutes, and it ends with a question.
+   */
+  private answersItsQuestion(turn: Turn, via: ChatMessage["via"]) {
+    const last = turn.history.at(-1);
+    const now = this.world.now();
+    return (
+      !!last &&
+      last.role === "assistant" &&
+      last.via === via &&
+      now - last.at < questionHoldMs &&
+      now >= last.at &&
+      /\?\s*$/.test(last.text.trim())
+    );
+  }
+  /**
+   * "Yes", after ClawdTime's own offer to open one session: that session.
+   * All of this holds, or null:
+   * - the message is a yes and nothing else (`yesToAnOffer`);
+   * - no task is live: the yes can be for the task;
+   * - ClawdTime's message is the last one, on this channel and younger than
+   *   five minutes, and it ENDS with the offer as a whole sentence
+   *   (`offerToOpen`): "Want me to open the docs session?";
+   * - what the offer names is one session on the board, by its whole name
+   *   ("docs", "the docs session"), or it is "it" or "that one" and the
+   *   sentence right before names exactly one session and says only its
+   *   state; and the message names no other session. Only a session with a
+   *   name of its own;
+   * - no computer action waits for an approval in the panel.
+   */
+  private offeredToOpen(
+    turn: Turn,
+    spoken: string,
+    via: ChatMessage["via"],
+  ): AgentSession | null {
+    if (turn.closed !== undefined || !yesToAnOffer.test(spoken.trim()))
+      return null;
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+      // A computer action that waits for the panel owns a bare word.
+      if (this.world.execution?.snapshot().pendingAction) return null;
+    } catch {
+      return null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    const last = turn.history.at(-1);
+    const now = this.world.now();
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      now - last.at >= questionHoldMs ||
+      now < last.at
+    )
+      return null;
+    const sentences = last.text.trim().split(/(?<=[.?!])\s+/);
+    const found = offerToOpen.exec(sentences.at(-1) ?? "");
+    const thing = found?.[1] ?? found?.[2];
+    if (thing === undefined) return null;
+    let sessions: AgentSession[] = [];
+    try {
+      sessions = (this.world.board()?.sessions ?? []).filter(
+        (session) => session.name !== null,
+      );
+    } catch {
+      return null;
+    }
+    const inMessage = sessions.filter((session) =>
+      saidAsWords(title(session), last.text),
+    );
+    const name = thing
+      .trim()
+      .replace(/^(?:the|that|this|your)\s+/i, "")
+      .replace(/\s+(?:session|one|agent|window|terminal|tab)$/i, "")
+      .trim()
+      .toLowerCase();
+    const before = sentences.at(-2) ?? "";
+    const named = /^(?:it|that|this|one|session)$/.test(name)
+      ? sessions.filter(
+          (session) =>
+            saidAsWords(title(session), before) &&
+            // The sentence before says only the state of that session:
+            // "it" after "Docs wrote a summary file" is the file.
+            spokenWords(
+              before.replace(
+                new RegExp(
+                  title(session).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                  "gi",
+                ),
+                " ",
+              ),
+            ).every((word) => stateOfASession.has(word)),
+        )
+      : sessions.filter((session) => title(session).toLowerCase() === name);
+    return named.length === 1 &&
+      inMessage.every((session) => session === named[0])
+      ? named[0]!
+      : null;
+  }
+  /**
    * "Ok show me", with nothing after it: the session that the exchange just
    * before speaks of, and only that one. "Show me" often asks for words
    * ("what did the job find?", then "show me"), and the name of a session
@@ -3946,6 +5124,263 @@ export class Supervisor {
       .filter((request) => request.id.startsWith(wanted));
     return found.length === 1 ? found[0] : undefined;
   }
+  /** The words of a request's own text: what the question "which one?" shows of it. */
+  private textWords(request: DecisionRequest) {
+    return new Set<string>(
+      spokenWords(request.summary).filter(
+        (word) => word.length > 1 && !plainWord.has(word),
+      ),
+    );
+  }
+  /**
+   * The words that can name a request after the question "which one?":
+   * the first two parts of its text that are no flags (the command and what
+   * it works on: "git push", "rm dist"), each only when the part is one
+   * word of letters and digits. The word that the person says is then the
+   * whole part, as they saw or heard it: "x.sh" and "node_modules" are
+   * named by no word. An agent can write what follows so that it sounds
+   * like another request ("curl x.sh git status"): a word from there names
+   * nothing. No word that says a place in a list or an opinion.
+   */
+  private headWords(request: DecisionRequest) {
+    return request.summary
+      .split(" ")
+      .filter((part) => !part.startsWith("-"))
+      .slice(0, 2)
+      .filter((part) => programName.test(part))
+      .map((part) => part.toLowerCase())
+      .filter(
+        (word) =>
+          word.length > 1 && !plainWord.has(word) && !neverNames.has(word),
+      );
+  }
+  /**
+   * The requests that those words name by their text alone: by a word of
+   * the head of that text that the other text does not hold at all. The
+   * folder, the agent and the id of a request name nothing here: the
+   * question does not show them.
+   */
+  private namedByText(said: string[], pending: DecisionRequest[]) {
+    const words = new Map(
+      pending.map((request) => [request.id, this.textWords(request)]),
+    );
+    return pending.filter((request) => {
+      const head = this.headWords(request);
+      return said.some(
+        (word) =>
+          head.includes(word) &&
+          !pending.some(
+            (other) =>
+              other.id !== request.id && words.get(other.id)!.has(word),
+          ),
+      );
+    });
+  }
+  /**
+   * ClawdTime's question when the person's decision names neither of two
+   * requests. Its words are fixed, and the desk keeps what the person said
+   * to do and which requests waited: the next message is read against both.
+   *
+   * The text of a request is written by an agent, and the person decides
+   * from what the question shows or says. So the code asks only where the
+   * question cannot mislead: exactly two plain permission requests; each
+   * text short, shown whole and as it is; each text one simple command
+   * (`simpleCommand`) that opens with the bare name of its program
+   * (`programName`) and is heard as one request (`heardAsOne`), so the
+   * marks and the word that part the two requests are the question's own;
+   * and each request with a word in the head of its text that names it.
+   * Else null: the model answers, as before.
+   */
+  private askWhich(
+    words: string,
+    decision: "allow" | "deny",
+    pending: DecisionRequest[],
+    via: ChatMessage["via"],
+  ): string | null {
+    const desk = this.world.desk;
+    if (pending.length !== 2 || !desk.noteAsked || !desk.lastAsked) return null;
+    for (const request of pending) {
+      const text = request.summary;
+      if (
+        request.kind !== "permission" ||
+        request.answerInTerminal === true ||
+        text.length > whichRequestRoom ||
+        text !== text.trim() ||
+        !simpleCommand.test(text) ||
+        !programName.test(text.split(" ")[0]!) ||
+        !heardAsOne(text) ||
+        looksSecret(text) ||
+        !this.namedByText(this.headWords(request), pending).some(
+          (named) => named.id === request.id,
+        )
+      )
+        return null;
+    }
+    const question = `2 requests wait: "${pending[0]!.summary}" and "${pending[1]!.summary}". Which one do you ${decision === "allow" ? "approve" : "deny"}? Say a word of it.`;
+    if (looksSecret(question)) return null;
+    try {
+      desk.noteAsked(
+        words,
+        question,
+        via,
+        decision,
+        pending.map((request) => request.id),
+      );
+    } catch {
+      return null;
+    }
+    return question;
+  }
+  /**
+   * "Approve it", and more than one request waits: the message is a decision
+   * and nothing else, and it names no request. The code asks which one. A
+   * message with other words in it (work, a "don't", a question, a bare
+   * "yes" or "ok") is not read here: the model answers it, and the gate of
+   * the decide tool reads it as before. Not while a task is live: the word
+   * can then be for the task.
+   */
+  private asksWhichRequest(
+    words: string,
+    via: ChatMessage["via"],
+  ): string | null {
+    const pending = this.world.desk.pending();
+    if (pending.length < 2) return null;
+    const found = onlyADecision.exec(words.trim());
+    if (!found || this.namesTask(words)) return null;
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+    } catch {
+      return null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    const decision = /^(?:approve|allow)/i.test(found[1]!) ? "allow" : "deny";
+    // The gate's own reading of the words gives the same, for every request.
+    if (
+      pending.some(
+        (request) =>
+          request.kind !== "permission" ||
+          interpret(words, request)?.decision !== decision,
+      )
+    )
+      return null;
+    if (this.named(words, pending).length !== 0) return null;
+    return this.askWhich(words, decision, pending, via);
+  }
+  /**
+   * The message after that question names one request: "the push one". The
+   * decision is the person's own, from their message before the question,
+   * and this message says which request it is for. All of these must hold,
+   * or nothing is decided here:
+   * - the question is the last message, the message before it is the one
+   *   that said the decision, both are on this channel, and the question
+   *   is younger than five minutes;
+   * - the requests that wait now are exactly the two of the question: none
+   *   arrived and none left;
+   * - the message has only letters, digits and plain marks, no word of
+   *   decision or of stopping (then the usual gate reads it), and nothing
+   *   that asks, hedges or says no;
+   * - what it holds is a name and nothing else: words of one request, with
+   *   "the", "that" or "this" before them, and "one", "request", "command"
+   *   or "thing" and "please" after them;
+   * - a word of the head of that request's text (its first two parts that
+   *   are no flags, each one plain word) that the other text does not hold
+   *   names it, and that
+   *   word says no place in a list and no opinion ("the main one", "the
+   *   safe one"). The folder, the agent and the id of a request are not a
+   *   name here: the question does not show them.
+   */
+  private answersWhichRequest(
+    words: string,
+    turn: Turn,
+    via: ChatMessage["via"],
+  ): string | null {
+    const desk = this.world.desk;
+    let asked: ReturnType<DecisionDesk["lastAsked"]> = null;
+    try {
+      asked = desk.lastAsked?.() ?? null;
+    } catch {
+      asked = null;
+    }
+    const last = turn.history.at(-1);
+    const before = turn.history.at(-2);
+    const now = this.world.now();
+    if (
+      !asked ||
+      !last ||
+      !before ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      // The message before the question is the one that said the decision.
+      before.role !== "user" ||
+      before.via !== via ||
+      saidDigest(before.text) !== asked.said ||
+      asked.via !== via ||
+      asked.requests.length !== 2 ||
+      saidDigest(last.text) !== asked.question ||
+      now - asked.at >= questionHoldMs ||
+      now < asked.at
+    )
+      return null;
+    const pending = desk.pending();
+    if (
+      pending.length !== asked.requests.length ||
+      pending.some(
+        (request) =>
+          !asked.requests.includes(request.id) ||
+          request.kind !== "permission" ||
+          request.answerInTerminal === true ||
+          looksSecret(request.summary),
+      )
+    )
+      return null;
+    if (
+      // It opens and ends with a letter or a digit ("!push", "-push" and
+      // "push -" can mean "not push"), with "." or "!" after its end.
+      !/^["']?[\p{L}\p{N}](?:[\p{L}\p{N}\s.,'"_/-]*[\p{L}\p{N}"'])?[.!]*$/u.test(
+        words.trim(),
+      ) ||
+      namesDecision(words) ||
+      isQuestion(words) ||
+      takesBack(words) ||
+      whichRequestNo.test(words)
+    )
+      return null;
+    let said: string[] = spokenWords(words);
+    if (said.length === 0 || said.length > 8) return null;
+    // Before the name: a filler, then "the", "that" or "this". A "yes"
+    // agrees with an approval only.
+    while (
+      said.length &&
+      (/^(?:um+|uh+|er+|so|well)$/.test(said[0]!) ||
+        (asked.decision === "allow" && /^(?:yes|yeah|yep)$/.test(said[0]!)))
+    )
+      said = said.slice(1);
+    if (/^(?:the|that|this)$/.test(said[0] ?? "")) said = said.slice(1);
+    // After the name: "one", "request", "command" or "thing", then "please".
+    if (/^(?:please|pls|plz)$/.test(said.at(-1) ?? ""))
+      said = said.slice(0, -1);
+    if (/^(?:one|request|command|thing)$/.test(said.at(-1) ?? ""))
+      said = said.slice(0, -1);
+    if (said.length === 0 || said.length > 5) return null;
+    // The name: a word of the head of one text that the other text does
+    // not hold. Then every word is a word of that text.
+    const named = this.namedByText(said, pending);
+    if (named.length !== 1) return null;
+    const request = named[0]!;
+    const own = this.textWords(request);
+    if (!said.every((word) => own.has(word))) return null;
+    const ok = desk.answer(request.id, {
+      decision: asked.decision,
+      text: null,
+      via: via === "call" ? "call" : "panel",
+    });
+    desk.clearAsked?.();
+    if (!ok) return "That request no longer waits here.";
+    const done = `${asked.decision === "allow" ? "Allowed" : "Denied"}: "${request.summary}". ${asked.decision === "allow" ? "The agent continues." : "The agent is told."}`;
+    turn.done.set("decide", done);
+    return desk.pending().length ? `${done} ${this.waitingRequest()}` : done;
+  }
   /**
    * The waiting requests that the person's words name: by a word that only
    * that request has in what it asks, in its project or in its agent, or by
@@ -3971,6 +5406,572 @@ export class Supervisor {
       );
     });
   }
+  /** The last question in ClawdTime's last message, or "". News of a job is no such message. */
+  private lastQuestion(turn: Turn) {
+    const last = turn.history.at(-1);
+    if (!last || last.role !== "assistant") return "";
+    return (
+      last.text
+        .split(/(?<=[.?!])\s+/)
+        .filter((sentence) => /\?\s*$/.test(sentence))
+        .at(-1) ?? ""
+    );
+  }
+  /**
+   * The person's message decides only by a bare word, "yes" for an approval
+   * or "no" for a denial (it holds no "approve", "allow", "deny" or the
+   * like of its own), and the last question in ClawdTime's last message
+   * asks about a denial: "Should I deny it?", "Do you want to approve or
+   * deny it?". A yes to that is no approval, and a no to that is no denial.
+   * The model words such a question; the reader of the gate reads the
+   * person's message alone, and would take the yes as an approval and the
+   * no as a denial.
+   */
+  private bareWordAfterADenialQuestion(
+    spoken: string,
+    decision: "allow" | "deny",
+    turn: Turn,
+  ) {
+    if (
+      (decision === "allow"
+        ? /\b(?:approve|approved|allow|allowed)\b/i
+        : /\b(?:deny|denied|reject|rejected|refuse|decline|declined)\b/i
+      ).test(spoken)
+    )
+      return false;
+    return asksAboutADenial.test(this.lastQuestion(turn));
+  }
+  /**
+   * "Yes", after ClawdTime asked whether it should deny the one request
+   * that waits: the yes is the person's denial. All of this holds:
+   * - the message is a yes and nothing else ("yes", "ok, do it", "yes, deny
+   *   it");
+   * - ClawdTime's last message is the last message, on this channel and
+   *   younger than five minutes, and it ENDS with ClawdTime's offer to deny
+   *   (`offerToDeny`): "Should I deny it?", "Do you want me to reject that
+   *   request?". A question about the past, about a reason or about
+   *   another thing is no offer ("Did you deny it?", "Should I decline the
+   *   meeting?");
+   * - that request is the only one that waits, it is a plain permission,
+   *   and it waited before ClawdTime asked;
+   * - the question is about it: the offer names it by a word of the head
+   *   of its text, or the sentence right before the offer holds a word of
+   *   its text;
+   * - no task is live.
+   * The model still calls the tool, with "deny": the yes alone decides
+   * nothing.
+   */
+  private yesToTheDenial(
+    spoken: string,
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+  ) {
+    return (
+      turn.closed === undefined &&
+      !this.namesTask(spoken) &&
+      yesAndNothingElse.test(spoken.trim()) &&
+      this.offeredFor(via, turn, request, offerToDeny)
+    );
+  }
+  /**
+   * ClawdTime's last message, when it can be about this one request: no
+   * task is live ("it" can be the task's question); the request is the
+   * only one that waits and a plain permission; and the message is the
+   * last one, ClawdTime's, on this channel and younger than five minutes.
+   * Else null.
+   */
+  private lastMessageFor(
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+  ): ChatMessage | null {
+    let task: TaskFacts | null = null;
+    try {
+      task = this.world.tasks?.current() ?? null;
+    } catch {
+      return null;
+    }
+    if (task && !taskIsOver(task)) return null;
+    const pending = this.world.desk.pending();
+    const last = turn.history.at(-1);
+    const now = this.world.now();
+    if (
+      pending.length !== 1 ||
+      pending[0]!.id !== request.id ||
+      request.kind !== "permission" ||
+      !last ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      now - last.at >= questionHoldMs ||
+      now < last.at
+    )
+      return null;
+    return last;
+  }
+  /**
+   * ClawdTime's last message ends with its own offer about this request
+   * (`offerToDeny` or `offerToApprove`, the whole last sentence). What it
+   * offers to decide is this request by a word of the head of its text
+   * ("the rm one"), or "it", "the request" or the like: then the sentence
+   * right before the offer speaks of this request, by a word of its text
+   * (for an offer to approve: by a word of the head of its text). A word of
+   * it somewhere else in the message does not tie "it" to the request.
+   */
+  private offeredFor(
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+    offer: RegExp,
+  ) {
+    const last = this.lastMessageFor(via, turn, request);
+    // The model worded the offer: the request must have waited before it.
+    if (!last || request.createdAt >= last.at) return false;
+    const sentences = last.text.trim().split(/(?<=[.?!])\s+/);
+    const found = offer.exec(sentences.at(-1) ?? "");
+    const offered = (found?.[1] ?? found?.[2])?.toLowerCase();
+    if (offered === undefined) return false;
+    if (offeredThing.test(offered)) {
+      const before = new Set(spokenWords(sentences.at(-2) ?? ""));
+      // An offer to approve must say what runs: the sentence before it
+      // holds a word of the head of the text (the program, or what it
+      // works on). "The branch is main. Should I approve it?" does not.
+      // For a denial, any word of the text ties "it" to the request.
+      return offer === offerToApprove
+        ? this.headWords(request).some((word) => before.has(word))
+        : [...this.textWords(request)].some(
+            (word) => word.length >= 3 && before.has(word),
+          );
+    }
+    const named = /^(?:the\s+)?(\S+)(?:\s+(?:one|request|command))?$/.exec(
+      offered,
+    )?.[1];
+    return !!named && this.headWords(request).includes(named);
+  }
+  /**
+   * ClawdTime said something before the person's message: its message is
+   * the last one of the conversation, or one of its messages is younger
+   * than five minutes (a message of the person can stand after it). News of
+   * a job is not in the history that the code reads.
+   */
+  private saidLately(turn: Turn) {
+    const now = this.world.now();
+    return turn.history.some(
+      (message, at) =>
+        message.role === "assistant" &&
+        (at === turn.history.length - 1 || now - message.at < questionHoldMs),
+    );
+  }
+  /**
+   * The person's message decides only by a bare word: it holds no word of
+   * that decision of its own ("approve", "allow"; "deny", "reject",
+   * "refuse", "decline"), and it does not name the request by a word of
+   * the head of its text ("ok, push it" names the push). "Yes", "ok",
+   * "sure", "go ahead", "do it"; "no", "nope", "don't".
+   */
+  private isBareWord(
+    spoken: string,
+    decision: "allow" | "deny",
+    request: DecisionRequest,
+  ) {
+    if (
+      (decision === "allow"
+        ? /\b(?:approve|approved|allow|allowed)\b/i
+        : /\b(?:deny|denied|reject|rejected|refuse|decline|declined)\b/i
+      ).test(spoken)
+    )
+      return false;
+    // A word of the head of the text names the request: "ok, push it". A
+    // common verb does not ("ok, make it so", "yes test it", with "make
+    // build" or "npm test" on the desk): the person can mean other work.
+    // With "the ... one", "request" or "command" every head word names it.
+    const head = this.headWords(request);
+    const words = spokenWords(spoken);
+    return !words.some(
+      (word, at) =>
+        head.includes(word) &&
+        (!commonVerb.test(word) ||
+          (words[at - 1] === "the" &&
+            /^(?:one|request|command)$/.test(words[at + 1] ?? ""))),
+    );
+  }
+  /**
+   * ClawdTime's last message put this one request before the person, so a
+   * bare "yes" or "no" answers it. Two forms count, and nothing else:
+   * - the message ends with the code's own sentence about the request ("One
+   *   request waits for your answer: ... Say approve or deny to answer
+   *   it."), and no question stands before it in the message;
+   * - the message ends with ClawdTime's offer to approve it ("Should I
+   *   approve it?"), bound to the request as above; the text is then one
+   *   short simple command.
+   * After any other message of ClawdTime
+   * ("Should I keep an eye on the tests?", "docs is idle."), a bare word
+   * decides nothing: the model can call the tool for it, and the reader of
+   * the gate would take "ok" as an approval.
+   */
+  private putBefore(
+    via: ChatMessage["via"],
+    turn: Turn,
+    request: DecisionRequest,
+  ) {
+    const text = request.summary;
+    if (turn.closed !== undefined || looksSecret(text)) return false;
+    const last = this.lastMessageFor(via, turn, request);
+    if (!last) return false;
+    // The code's own sentence, at the end, with no question before it in
+    // the message: a model can copy the sentence after a question of its
+    // own. A text with a full stop, a question mark or the sentence's own
+    // words in it could make the sentence read as two requests.
+    const said = clean(last.text, 2000);
+    const waits = this.waitingRequest();
+    if (
+      said.endsWith(waits) &&
+      !said.slice(0, -waits.length).includes("?") &&
+      !/[.?!]\s|\?|say\s+approve/i.test(text)
+    )
+      return true;
+    // ClawdTime's offer to approve it, bound to the request. The model
+    // worded that message, so the text must be one short simple command.
+    return (
+      text.length <= whichRequestRoom &&
+      simpleCommand.test(text) &&
+      heardAsOne(text) &&
+      this.offeredFor(via, turn, request, offerToApprove)
+    );
+  }
+  /**
+   * The message is a yes and holds no work. A message of yes words alone
+   * ("please do", "yes please", "sure thing") is one everywhere. A message
+   * with a word for "go" or "start" ("yes, start it", "ok, continue", "do
+   * the job") is one only as the answer to ClawdTime's own offer ("Want me
+   * to start a job for the footer?"): after a job's answer, "please
+   * continue" is work on that job, and after "the next task is in
+   * TODO.md", "do the task" is work that the person named.
+   */
+  private isAYesWithNoWork(turn: Turn, text: string) {
+    if (onlyYesWords(text)) return true;
+    if (
+      !yesAndNoWork(text) ||
+      turn.via === undefined ||
+      !this.answersItsQuestion(turn, turn.via)
+    )
+      return false;
+    // ClawdTime's question is an offer ("Want me to ...?", "Should I
+    // ...?"), and it is the last thing in the conversation: after the news
+    // of a job, "please continue" answers that news.
+    const offer =
+      turn.history
+        .at(-1)!
+        .text.trim()
+        .split(/(?<=[.?!])\s+/)
+        .at(-1) ?? "";
+    return (
+      /^(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i)\b/i.test(
+        offer,
+      ) && turn.whole?.at(-1)?.news !== true
+    );
+  }
+  /**
+   * The answer says that ClawdTime started work ("I started a job to push
+   * the branch", "On it", "I'll kick that off"), and that is not true. The
+   * caller knows that nothing acted in this turn.
+   *
+   * Work that runs is a job that still works or that started in the last
+   * hour, and a live task. Work of the day is that, and a job of the last
+   * day that is done. An older job that is done makes no claim true.
+   * - A sentence that claims NEW work and names it ("a job to push the
+   *   branch", "a new session for the tests") must share a word with work
+   *   that runs: by its first five letters, with a last "s" left out
+   *   ("bakeries" and "bakery", "pages" and "page").
+   * - Every other sentence can speak of work that exists ("I kicked off
+   *   the homepage work", "Yes, I started it", "On it"): it stands while
+   *   work runs. A done job of the day makes only a word about the past
+   *   true ("I started the landing page job this morning"), never one
+   *   about now or later ("On it", "I'll start that", "Job started"), and
+   *   a sentence that names work must share a word with that job.
+   */
+  private startsNothing(answer: string): boolean {
+    // "A minute ago" is a word of now here: the detector of claims reads
+    // every "ago" as earlier work.
+    const text = answer.replace(momentsAgo, "just now");
+    if (!claimsAction(text)) return false;
+    const now = this.world.now();
+    // The words of work that runs, and of the done jobs of the day.
+    const running = new Set<string>();
+    const daily = new Set<string>();
+    let runs = false;
+    let ofTheDay = false;
+    for (const job of this.jobsNow(20)) {
+      const age = now - job.startedAt;
+      if (!job.done || age < 60 * 60 * 1000) {
+        runs = true;
+        for (const word of workWords(job.job)) running.add(workStem(word));
+      } else if (age < 24 * 60 * 60 * 1000) {
+        ofTheDay = true;
+        for (const word of workWords(job.job)) daily.add(workStem(word));
+      }
+    }
+    try {
+      const task = this.world.tasks?.current();
+      if (task && !taskIsOver(task)) {
+        runs = true;
+        for (const word of workWords(task.goal)) running.add(workStem(word));
+      }
+    } catch {
+      // No task is known: only the jobs count.
+    }
+    return text.split(/(?<=[.!?])\s+|\n+/).some((sentence) => {
+      if (
+        !startWord.test(sentence) ||
+        startOfNoWork.test(sentence) ||
+        !claimsAction(sentence)
+      )
+        return false;
+      const words = workWords(sentence);
+      if (claimsNewWork.test(sentence) && words.length > 0)
+        return !words.some((word) => running.has(workStem(word)));
+      // While work runs, the sentence can speak of it in other words.
+      if (runs) return false;
+      // A job that is done can make a word about the past true ("I started
+      // it this morning"), never a word about now or later ("On it", "I'll
+      // start that", "Job started"). And it names itself in a report: a
+      // sentence that names work must name that job ("I started the push"
+      // is not the landing page job).
+      if (!ofTheDay || !reportsAPastStart(sentence)) return true;
+      return (
+        words.length > 0 && !words.some((word) => daily.has(workStem(word)))
+      );
+    });
+  }
+  /**
+   * The answer says that a request was approved or denied now, and no
+   * request was decided in this turn. After a call of the decide tool that
+   * the gate refused, every such sentence is false. With no call, a
+   * sentence is false when it speaks of a request that still waits, by a
+   * word of its text: "I approved the push" can be a true word about an
+   * earlier turn when no push waits. The same holds for a sentence that
+   * says that the work of a waiting request is done or under way ("I
+   * pushed it", "The push is underway now"). After a refused call, a
+   * clause with the request as its subject counts when it says that the
+   * request goes or is done (`goesOrIsDone`).
+   */
+  private claimsUndecided(text: string, refused: boolean) {
+    const waiting = new Set<string>();
+    const heads = new Set<string>();
+    for (const request of this.world.desk.pending()) {
+      for (const word of this.textWords(request))
+        if (word.length >= 3) waiting.add(word);
+      for (const word of this.headWords(request)) heads.add(word);
+    }
+    const head = [...heads].join("|");
+    // "I pushed", "I've deployed": the work of a request that waits, said
+    // as done by ClawdTime. It never runs that work itself.
+    const didIt = head
+      ? new RegExp(
+          `\\bI(?:['\u2019]ve|\\s+have)?\\s+(?:(?:just|also|now)\\s+)*(?:${head})(?:e?d)\\b`,
+          "i",
+        )
+      : null;
+    // A word of the head in "-ed" or "-ing" names the request too: "pushed",
+    // "pushing".
+    const form = head ? new RegExp(`\\b(?:${head})(?:e?d|ing)\\b`, "i") : null;
+    const doingIt = head ? new RegExp(`\\b(?:${head})ing\\b`, "i") : null;
+    // "Let the push run": the request as the thing that is let go.
+    const letGo = head
+      ? new RegExp(
+          `\\blet\\s+(?:the\\s+)?(?:${head})\\s+(?:run|go|through)\\b`,
+          "i",
+        )
+      : null;
+    const pushed = head
+      ? new RegExp(
+          `\\b(?:is|was|got|gets|has\\s+been)\\s+(?:now\\s+)?(?:${head})(?:e?d)\\b`,
+          "i",
+        )
+      : null;
+    // A clause whose subject is the request: "[the] push", "the git push",
+    // "the push request", "the push to main". What follows it is the group.
+    const subject = head
+      ? new RegExp(
+          `^(?:(?:ok|okay|done|sure|yes|great|alright|now|all\\s+set)[.!\\s]+)*(?:(?:the|that|this|your)\\s+)?(?:${head})(?:\\s+(?:${head}))?(?:\\s+(?:request|command|one))?\\s+(\\S.*)$`,
+          "i",
+        )
+      : null;
+    const sessions = (this.world.board()?.sessions ?? []).map((session) =>
+      title(session).toLowerCase(),
+    );
+    return text.split(/(?<=[.!?])\s+|\n+/).some((sentence) => {
+      const named =
+        spokenWords(sentence).some((word) => waiting.has(word)) ||
+        (form?.test(sentence) ?? false);
+      if (saysDecidedNow(sentence)) return refused || named;
+      // No sentence that asks, says the opposite, or speaks of an earlier
+      // time or of a condition.
+      if (
+        /\?\s*$/.test(sentence) ||
+        /\b(?:not|never|nothing|no|none|earlier|before|ago|previously|yesterday|if|when|once|unless|until|after)\b|n['\u2019]t\b/i.test(
+          sentence,
+        )
+      )
+        return false;
+      // After a call that the gate refused: other words for "it is
+      // approved" ("I let it through", "Permission granted", "The push will
+      // go through now", "Okay, pushing").
+      if (
+        refused &&
+        (/\blet\s+(?:it|that|this|them)\s+through\b|\bgreen\s+light\b|\bgranted\b/i.test(
+          sentence,
+        ) ||
+          (doingIt?.test(sentence) ?? false) ||
+          (letGo?.test(sentence) ?? false) ||
+          // The request is the subject of a clause, and the clause says
+          // that it goes or is done ("The push goes out", "The push is
+          // live", "The push can go through now"): one family of meaning,
+          // motion and completion (`goesOrIsDone`). What the request is or
+          // does stands ("The push updates main", "Test results are in").
+          // A sentence that names a session can speak of that session's
+          // own work.
+          (!!subject &&
+            !sessions.some((name) => sentence.toLowerCase().includes(name)) &&
+            sentence
+              .trim()
+              .split(/[,;:]\s+|\s+(?:and|but|so|then)\s+/)
+              .some((clause) => {
+                const rest = subject.exec(clause.trim())?.[1];
+                if (rest === undefined) return false;
+                // "The push to main still waits": what follows "to main"
+                // can be the verb.
+                const after = /^(?:to|for)\s+\S+\s+(.*)$/i.exec(rest)?.[1];
+                const afterTwo = /^(?:to|for)\s+\S+\s+\S+\s+(.*)$/i.exec(
+                  rest,
+                )?.[1];
+                const parts = [rest, after, afterTwo].filter(
+                  (part): part is string => part !== undefined,
+                );
+                return (
+                  !parts.some((part) => stillWaits.test(part)) &&
+                  parts.some((part) => goesOrIsDone.test(part))
+                );
+              })) ||
+          // "The branch is pushed": the work of the request, said as done.
+          (pushed?.test(sentence) ?? false))
+      )
+        return true;
+      // Its work said as done or under way, in a sentence that names the
+      // request ("I pushed it", "The push is underway now"). A sentence
+      // that names a session can speak of that session's own work.
+      const modal = /\b(?:can|could|would|will|should|may|might)\b/i.test(
+        sentence,
+      );
+      return (
+        named &&
+        !modal &&
+        ((didIt?.test(sentence) ?? false) ||
+          (/\b(?:is|are|it['\u2019]s)\s+(?:now\s+)?(?:underway|under\s+way|going\s+(?:through|ahead)|in\s+progress|on\s+its\s+way)\b/i.test(
+            sentence,
+          ) &&
+            !sessions.some((name) => sentence.toLowerCase().includes(name))))
+      );
+    });
+  }
+  /**
+   * The draft speaks of nothing that ClawdTime's last message spoke of: it
+   * shares no word with it (four letters or more, no plain word, no word of
+   * a request that waits). After "Should I keep an eye on the payments
+   * tests?" and the person's "ok", a draft about the request alone leaves
+   * the person's answer with no reply.
+   */
+  private leavesTheirAnswerOut(text: string, turn: Turn) {
+    const last = turn.history.at(-1);
+    if (!last || last.role !== "assistant") return false;
+    const waiting = new Set<string>();
+    for (const request of this.world.desk.pending())
+      for (const word of this.textWords(request)) waiting.add(word);
+    const topic = new Set(
+      spokenWords(last.text).filter(
+        (word) =>
+          word.length >= 4 &&
+          !plainWord.has(word) &&
+          !waiting.has(word) &&
+          !topicFiller.has(word),
+      ),
+    );
+    if (topic.size === 0) return false;
+    return !spokenWords(text).some((word) => topic.has(word));
+  }
+  /**
+   * The request that the person's message decides, where the model answered
+   * with words and called no tool: one plain permission request waits, the
+   * message holds a word of decision and the gate's reader gives allow or
+   * deny for it, and ClawdTime's last message told the person what that
+   * request asks: it ends with the code's own sentence about the request,
+   * it is the last message, on this channel and younger than five minutes. The model is then asked
+   * once more to call the tool. The code decides nothing: the gate of the
+   * tool reads the person's words as always.
+   */
+  private decisionSaid(
+    spoken: string,
+    via: ChatMessage["via"],
+    turn: Turn,
+  ): {
+    id: string;
+    decision: "allow" | "deny";
+    /** The decision is a yes to ClawdTime's own question about a denial. */
+    yes: boolean;
+    waits: string;
+  } | null {
+    if (turn.closed !== undefined || turn.done.has("decide")) return null;
+    const pending = this.world.desk.pending();
+    const request = pending[0];
+    if (pending.length !== 1 || !request || request.kind !== "permission")
+      return null;
+    // "Yes", after ClawdTime's own question whether to deny it.
+    if (this.yesToTheDenial(spoken, via, turn, request))
+      return {
+        id: request.id.slice(0, 8),
+        decision: "deny",
+        yes: true,
+        waits: this.waitingRequest(),
+      };
+    if (
+      request.answerInTerminal === true ||
+      looksSecret(request.summary) ||
+      // The text is one plain command: a text with a full stop and words in
+      // it can make the code's sentence read as two requests.
+      request.summary.length > whichRequestRoom ||
+      !simpleCommand.test(request.summary) ||
+      !heardAsOne(request.summary) ||
+      !namesDecision(spoken) ||
+      this.namesTask(spoken)
+    )
+      return null;
+    const said = interpret(spoken, request);
+    if (!said || said.decision === "answer") return null;
+    // A bare word after a question about a denial is not that decision.
+    if (this.bareWordAfterADenialQuestion(spoken, said.decision, turn))
+      return null;
+    // ClawdTime's last message ends with the code's own sentence about this
+    // request ("One request waits for your answer: ... Say approve or deny
+    // to answer it."): the person then knows what they decide. A message
+    // that only holds the text of the request somewhere does not count.
+    const last = turn.history.at(-1);
+    const waits = this.waitingRequest();
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      last.via !== via ||
+      this.world.now() - last.at >= questionHoldMs ||
+      this.world.now() < last.at ||
+      !clean(last.text, 2000).endsWith(waits)
+    )
+      return null;
+    return {
+      id: request.id.slice(0, 8),
+      decision: said.decision,
+      yes: false,
+      waits: this.waitingRequest(),
+    };
+  }
   private decide(
     request: DecisionRequest | undefined,
     spoken: string,
@@ -3987,9 +5988,28 @@ export class Supervisor {
     if (this.namesTask(spoken))
       return "The person spoke about the task, not about this request. Use the task tools, or ask them.";
     // The person's own last words must say it. The model alone cannot decide.
-    const said = interpret(spoken, request);
+    const read = interpret(spoken, request);
+    // "Yes" after ClawdTime's own question whether to deny this request:
+    // the yes is the denial. The reader takes a yes as an approval, so it
+    // is asked first.
+    const said =
+      wanted.decision === "deny" &&
+      this.yesToTheDenial(spoken, via, turn, request)
+        ? { decision: "deny" as const, text: null }
+        : read;
     if (!said || said.decision !== wanted.decision)
       return "The person did not clearly say that. Ask them.";
+    // A bare word agrees with what was asked. After ClawdTime's own
+    // question about a denial ("Should I deny it?"), a yes approves nothing
+    // and a no denies nothing.
+    if (
+      said === read &&
+      said.decision !== "answer" &&
+      this.bareWordAfterADenialQuestion(spoken, said.decision, turn)
+    )
+      return said.decision === "allow"
+        ? 'A "yes" after the question about a denial approves nothing. The request still waits: say "approve" or "deny".'
+        : 'A "no" after the question about a denial denies nothing. The request still waits: say "approve" or "deny".';
     // With more than one request, the words must also say which one. The
     // model alone cannot choose it.
     const pending = this.world.desk.pending();
@@ -3998,6 +6018,25 @@ export class Supervisor {
       if (named.length !== 1 || named[0]!.id !== request.id)
         return "More than one request waits, and the person did not say which one. Ask them which one, and name each by what it asks.";
     }
+    // A bare word answers what was said last. When ClawdTime said
+    // something before it (its message is the last one, or it is younger
+    // than five minutes) and one request waits, the word decides that
+    // request only when ClawdTime's message is the last one and put the
+    // request before the person. A "yes" to another question ("Should I
+    // keep an eye on the tests?") approves nothing. With no message of
+    // ClawdTime before it, the word belongs to the one request that waits,
+    // as before.
+    if (
+      pending.length === 1 &&
+      said === read &&
+      said.decision !== "answer" &&
+      this.saidLately(turn) &&
+      this.isBareWord(spoken, said.decision, request) &&
+      !this.putBefore(via, turn, request)
+    )
+      return said.decision === "allow"
+        ? bareYesHasNoQuestion
+        : bareNoHasNoQuestion;
     // What the person could not see whole is allowed only in its terminal.
     if (said.decision === "allow" && request.answerInTerminal)
       return answerInTerminalText;
@@ -4096,14 +6135,22 @@ export class Supervisor {
         return this.acceptTask(turn, spoken);
       case "cancel_task":
         return this.cancelTask(turn, spoken);
-      case "decide":
-        return this.decide(
+      case "decide": {
+        const decided = this.decide(
           this.request(String(args.request ?? "")),
           spoken,
           via,
           { decision: String(args.decision) },
           turn,
         );
+        // The person's bare word answered the model's own last message. The
+        // model reads the gate's sentence as an order to ask for "approve",
+        // and then leaves the person's answer without a reply.
+        if (decided !== bareYesHasNoQuestion && decided !== bareNoHasNoQuestion)
+          return decided;
+        turn.bareWordRefused = true;
+        return `${decided} ${bareWordForTheModel}`;
+      }
       case "open_session": {
         // The person's own words must ask to see a session, now or as a
         // correction of such a request ("show me the payments one", then "no
@@ -4112,7 +6159,10 @@ export class Supervisor {
         const see = this.seeWords(spoken);
         // "Ok show me": the session that the exchange just before speaks of,
         // and no other. The model's choice does not stand against it.
-        const bare = this.bareSee(turn, spoken);
+        // "Yes", after ClawdTime's own offer to open one session: that
+        // session, and no other, whatever the model asks for.
+        const offered = this.offeredToOpen(turn, spoken, via);
+        const bare = offered ?? this.bareSee(turn, spoken);
         // "The second one": its place in the question that the code itself
         // asked, and nowhere else.
         const place = bare ? null : this.placeReferent(turn, see.words);
@@ -4126,7 +6176,7 @@ export class Supervisor {
             this.pointsIntoAList(this.seeAsked(spoken)?.thing ?? ""))
         )
           return "The person's words name a place in a list, and that cannot be read for sure here. Open nothing. Ask them to say the name of the session.";
-        if (!this.asksToSeeNow(turn, spoken))
+        if (!offered && !this.asksToSeeNow(turn, spoken))
           return "The person did not ask to open or show a session. Answer what they asked from the state, and open nothing.";
         // "The other one that's still working", as a correction: the one
         // other session that those words fit.
@@ -4154,7 +6204,8 @@ export class Supervisor {
         const result = await this.world.focus(session);
         if (!result.ok)
           return `${title(session)} has no terminal on this Mac to open.`;
-        turn.done.set(opened, "");
+        // The value says how far it came: the tab, or only the application.
+        turn.done.set(opened, result.precision === "app" ? "app" : "tab");
         this.noteActed(turn, session, spoken, via);
         // Only the application came forward: say so, never "opened".
         return result.precision === "app"
@@ -4241,20 +6292,8 @@ export class Supervisor {
       }
       case "start_job":
         return this.startJob(turn, spoken, args.agent);
-      case "job_result": {
-        const now = this.world.now();
-        const listed = this.jobsOfTheDay(now);
-        if (!listed.length) return noJobYet;
-        if (listed.length < 2) return jobLine(listed[0]!, now);
-        // Each job of the last day, in the order in which the jobs started:
-        // "what did the first one find?" has no answer in the newest job
-        // alone, and the model then says that the answer never came.
-        const more =
-          this.jobsNow(jobsListed + 1).filter(
-            (job) => now - job.startedAt < 24 * 60 * 60 * 1000,
-          ).length > jobsListed;
-        return `${more ? `The newest ${jobsListed} jobs` : "The jobs"} that ClawdTime started in the last day, in the order in which they started:\n${listed.map((job, index) => `${index + 1}. ${jobListLine(job, now)}`).join("\n")}`;
-      }
+      case "job_result":
+        return this.jobsReport(this.world.now());
       case "session_window": {
         if (!this.world.window)
           return "I cannot change a terminal window from here.";
@@ -4633,6 +6672,7 @@ export class Supervisor {
       done: new Map(),
       history: spokenHistory,
       whole: history,
+      via,
     };
     const text = await this.turn(spokenHistory, spoken, via, turn);
     let choices: string[] = [];
@@ -4741,6 +6781,17 @@ export class Supervisor {
         }
         return saysNo(words) ? "Okay. Nothing started." : notClearYes;
       }
+    }
+    // Several requests wait. The person's decision can come in one message
+    // ("approve it") and the request in the next ("the push one"): the code
+    // asks which one in fixed words, and reads the next message against that
+    // question. A model that is asked makes its own question, and then
+    // wants an id from the person.
+    if (turn.closed === undefined) {
+      const which =
+        this.answersWhichRequest(words, turn, via) ??
+        this.asksWhichRequest(words, via);
+      if (which !== null) return which;
     }
     // Dispatch an explicit software-work request before conversational generation
     // can invent another confirmation round. The task service still enforces one
@@ -4869,6 +6920,9 @@ export class Supervisor {
           return `Say "tell ${title(about.session)}: ${asked}" and I type it.`;
       }
     }
+    // "Cancel that", and a job still works: the code says what is true.
+    const cannotStop = this.stopsAJob(words, turn);
+    if (cannotStop !== null) return cannotStop;
     // "Open Claude, and build a page": the person named a coding agent and
     // gave it an instruction for software work. It starts at once, as a
     // direct instruction does, under the same vetoes: the strict reader, no
@@ -4915,6 +6969,27 @@ export class Supervisor {
     // A large direct request may only take the full-goal task route above.
     // Refusal/ambiguity must not fall through to another action interpreter.
     if (spoken.length > userMessageLimit) return userMessageTooLong;
+    // A change of mind about the job that the person's last message started
+    // and that still works: "nah make the buttons bigger instead". It is an
+    // instruction, and it corrects or replaces that job, so it is a job of
+    // its own that waits for the first. A model that is asked often starts
+    // nothing and says that the first job was cancelled. The code starts
+    // it, through the same gate as every job. Not while a task is live (an
+    // instruction then answers the task), a request waits, a computer action
+    // waits, or the words are for a session.
+    if (
+      !directGoal &&
+      this.world.jobs &&
+      (!current || taskIsOver(current)) &&
+      this.world.desk.pending().length === 0 &&
+      !this.world.execution?.snapshot().pendingAction &&
+      !this.forSession(words) &&
+      this.changesTheRunningJob(words, turn)
+    ) {
+      const said = await this.startJob(turn, words);
+      if (turn.refused === undefined) return said;
+      turn.refused = undefined;
+    }
     const execution = this.world.execution;
     if (execution?.snapshot().configured) {
       if (
@@ -4990,7 +7065,20 @@ export class Supervisor {
       const waiting = computerApproval();
       if (waiting) return waiting;
     }
-    if (bareDecision.test(words) && !hasDecisionTarget())
+    // A bare word with nothing to decide. When it answers ClawdTime's own
+    // question ("Should I keep an eye on the tests?", then "yes"), it is no
+    // word about a request at all: the model answers it. A word of decision
+    // ("approve") gets the sentence about requests as before, and so does
+    // every bare word when no model is there to word an answer.
+    if (
+      bareDecision.test(words) &&
+      !hasDecisionTarget() &&
+      !(
+        this.model &&
+        !namesDecision(words) &&
+        this.answersItsQuestion(turn, via)
+      )
+    )
       return noPendingDecision;
     if (!this.model) return this.plainly(words, via, turn);
     // The person's own earlier words come first, as their words: they are
@@ -5047,10 +7135,16 @@ export class Supervisor {
     // A message about sessions, agents or what waits is answered from the
     // state, so the state is read first and the model starts with it. It is
     // the same tool, called by the code: one answer of the model less, and
-    // no state from memory. A complaint about how long something takes
-    // ("why is this taking so long", "this is taking forever") is such a
-    // message too: with no state before it, the model makes one up.
-    if (asksAboutState(words) || asksHowLong(words)) {
+    // no state from memory. A complaint about how long a job takes ("why is
+    // this taking so long", "this is taking forever") is such a message
+    // too: with no state before it, the model makes one up. Only when it
+    // is about a job that is not done: "look into why the login is slow" is
+    // work to do, and with the state in front of it the model answers from
+    // the state and asks before it starts.
+    if (
+      asksAboutState(words) ||
+      (asksHowLong(words) && this.complainsAboutAJob(words))
+    ) {
       // When the state cannot be read here, the model reads it as before.
       try {
         const state = this.status().slice(0, 6000);
@@ -5114,6 +7208,48 @@ export class Supervisor {
       } catch {
         // Nothing more is seeded.
       }
+    }
+    // A question, and ClawdTime started a job in the last day: what a job
+    // answered is not in the conversation unless a line of news said it, and
+    // with no answer in front of it the model makes one up ("the biggest
+    // file is large_video.mp4, 2.3 GB"). So the code reads the job list
+    // first, as the model's own call of the job tool would. Not when the
+    // state was read (it holds the jobs), and not when the words fit a
+    // session: the question is then about that session. This read has its
+    // own id: the check of an answer about a job that still works looks only
+    // at a turn that read THE job, never at every question.
+    try {
+      const now = this.world.now();
+      const newest = this.jobsNow(1)[0];
+      if (
+        this.world.jobs &&
+        newest &&
+        now - newest.startedAt < 24 * 60 * 60 * 1000 &&
+        isQuestion(words) &&
+        !messages.some(
+          (message) =>
+            message.role === "tool" &&
+            (message.toolCallId === "state_first" ||
+              message.toolCallId === "job_first"),
+        ) &&
+        this.pick("", words).kind === "none"
+      )
+        messages.push(
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              { id: "jobs_first", name: "job_result", arguments: "{}" },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "jobs_first",
+            content: this.jobsReport(now),
+          },
+        );
+    } catch {
+      // Nothing more is seeded.
     }
     try {
       // The person said the form that ClawdTime offers, with the full name of
@@ -5196,6 +7332,26 @@ export class Supervisor {
         messages.push(
           { role: "assistant", content: "", toolCalls: [call] },
           { role: "tool", toolCallId: call.id, content: typed.slice(0, 6000) },
+        );
+      }
+      // "Yes", after ClawdTime's own offer to open one session ("Want me to
+      // open the docs session?"): the code calls the tool that opens it.
+      // The gate of that tool decides as for a call of the model, and the
+      // model then words the answer.
+      const offeredToOpen = this.offeredToOpen(turn, words, via);
+      if (offeredToOpen) {
+        const call: ToolCall = {
+          id: "open_first",
+          name: "open_session",
+          arguments: JSON.stringify({ session: title(offeredToOpen) }),
+        };
+        messages.push(
+          { role: "assistant", content: "", toolCalls: [call] },
+          {
+            role: "tool",
+            toolCallId: call.id,
+            content: (await this.run(call, words, via, turn)).slice(0, 6000),
+          },
         );
       }
       // "Show me the payments one": the person asks to see a session, and
@@ -5285,10 +7441,15 @@ export class Supervisor {
       // same holds for it as for the start of a job.
       const startsJob = (name: string) =>
         name === "start_job" || (name === "start_task" && !this.world.tasks);
-      const acted = () =>
+      // A call of decide that the gate refused did nothing either.
+      const acted = (besides?: string) =>
         [...ran].some(
           (name) =>
-            names.has(name) && !readingTools.has(name) && !startsJob(name),
+            names.has(name) &&
+            name !== besides &&
+            !readingTools.has(name) &&
+            !startsJob(name) &&
+            (name !== "decide" || turn.done.has("decide")),
         );
       // The note for the model after an answer that claimed an action which no
       // tool did. It is asked once in a turn, and the note goes when a tool ran.
@@ -5301,7 +7462,7 @@ export class Supervisor {
         // Flags only: what a job answered is data from a session, and stays behind job_result.
         const newestJob = this.jobsNow(1)[0];
         const jobFacts = this.world.jobs
-          ? `jobs that you started in the last 24 hours=${this.jobsNow(20).filter((job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000).length}; newest job has its answer=${!!newestJob?.done};${newestJob?.done ? ' that job\'s session is over, so more work on what it made ("now make the header blue", "add a footer") is a new job: call start_job, and do not look for a session to type into;' : ""}`
+          ? `jobs that you started in the last 24 hours=${this.jobsNow(20).filter((job) => this.world.now() - job.startedAt < 24 * 60 * 60 * 1000).length}; newest job has its answer=${!!newestJob?.done};${newestJob?.done ? ' that job\'s session is over, so more work on what it made ("now make the header blue", "add a footer") is a new job: call start_job, and do not look for a session to type into;' : newestJob && !newestJob.waiting && this.world.now() - newestJob.startedAt < 24 * 60 * 60 * 1000 ? ' that job still works and no tool changes or cancels it, so more work on what it makes, or a change of mind about it ("make the buttons bigger instead"), is a new job: call start_job, and never say that a job was cancelled, stopped or changed;' : ""}`
           : "";
         // The kind of each agent, from a fixed list: a label is text that
         // another Mac can send, and has no place in an instruction.
@@ -5311,7 +7472,17 @@ export class Supervisor {
           byAgent.set(kind, (byAgent.get(kind) ?? 0) + 1);
         }
         const agentFacts = `sessions by agent: ${[...byAgent].map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"};`;
-        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} tools that stop, close or restart a session=none. These facts take precedence over chat history.`;
+        // The ids of the requests that wait: the decide tool takes an id,
+        // and a model that must first ask for it sometimes asks the person.
+        // An id is made here, of sixteen hex characters: it is no text of an agent.
+        const waiting = this.world.desk
+          .pending()
+          .slice(0, 8)
+          .map((request) => request.id.slice(0, 8));
+        const requestFacts = waiting.length
+          ? ` (id${waiting.length === 1 ? "" : "s"} ${waiting.join(", ")}; status says what each asks)`
+          : "";
+        const current = `Current service facts: pending desk requests=${this.world.desk.pending().length}${requestFacts}; task can answer=${!!(task && !taskIsOver(task) && task.canAnswer)}; task can accept=${!!(task && !taskIsOver(task) && task.canAccept)}; computer execution mode=${execution?.snapshot().configured ? (execution.snapshot().mode ?? "external adapter") : "not configured"}; computer action awaits panel approval=${!!execution?.snapshot().pendingAction}. ${jobFacts} ${agentFacts} tools that stop, close or restart a session=none. These facts take precedence over chat history.`;
         const reply = await this.model.complete({
           system: `${brief}\n${current}${recheck}`,
           messages,
@@ -5338,6 +7509,68 @@ export class Supervisor {
             names.has("session_window") &&
             !ran.has("session_window") &&
             claimsSize(reply.text);
+          // The person's bare word answered ClawdTime's own question, and
+          // the answer says that ClawdTime typed or told something, or
+          // opened a session ("I told it to go on", after "ok" to an offer
+          // to tell a session). The turn knows what it typed and opened,
+          // and the desk records the turns before. The model answers once
+          // more; a second such answer is replaced by what is true. Only
+          // for a bare answer: a question ("did you tell deploy fix?") can
+          // rightly get "Yes, I told it" about an older turn.
+          // Not in a turn that decided a request: a decided request reaches
+          // its agent ("Approved. I told deploy fix it can push").
+          // Only after ClawdTime's own offer to tell a session something or
+          // to open one: after "Should I keep an eye on the tests?", the
+          // yes asks for no typing and no opening, and a report of what
+          // ClawdTime read must not be taken for one.
+          const falseClaim =
+            (bareDecision.test(words) || yesToAnOffer.test(words.trim())) &&
+            !turn.done.has("decide") &&
+            this.offeredToTellOrOpen(turn, via)
+              ? this.claimsTypingOrOpeningThatWasNot(reply.text, turn)
+              : null;
+          if (falseClaim) {
+            // "Nothing was started or changed" is true only when no tool
+            // acted in this turn. Else the sentence says what did not
+            // happen, and no more.
+            if (rechecked)
+              return !acted()
+                ? nothingStarted
+                : falseClaim === "typing"
+                  ? `${this.openedInTurn(turn)}${nothingTyped}`
+                  : this.openedInTurn(turn)
+                    ? `${this.openedInTurn(turn)}I opened no other session for that message.`
+                    : noSessionOpened;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that you typed or told something, or opened a session, but that did not happen in this turn. The person's last message asked for none of that. Answer it again with what is true. You type only words that the person says themselves: say that they can tell the session in their own words.";
+            continue;
+          }
+          // The person asked for no action, and the answer says that work
+          // started: a job for words that were a question ("tell deploy fix
+          // to push the branch, or should I wait?"). Nothing acted in this
+          // turn, and no job or task that ClawdTime started is that work.
+          // The person would wait for an answer that never comes. The model
+          // answers once more, with no tool named: the person asked for
+          // none. A second such answer is replaced by what is true.
+          if (
+            !sizeClaim &&
+            !(
+              asksForWork(words) ||
+              asksForSize(words) ||
+              this.seeRequest(words) ||
+              this.bareSee(turn, words) !== null
+            ) &&
+            // A session that this turn opened is no work that started.
+            !acted("open_session") &&
+            this.startsNothing(reply.text)
+          ) {
+            if (rechecked) return nothingStarted;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that you started work, but nothing was started in this turn, and no job or task that you started is that work. The person's last message asked you to start nothing. Answer it again with what is true, and do not say that something was started or is under way.";
+            continue;
+          }
           if (
             sizeClaim ||
             // The person asked for an action: work, a window to change, or a
@@ -5396,6 +7629,58 @@ export class Supervisor {
           // rightly get a question back, and "it" after a statement can be
           // another thing.
           const seeAsked = this.seeAsked(words);
+          // The person's message decides the one request that waits, and
+          // the model answered with words: a question back ("Should I deny
+          // it?"), or a claim. It is asked once more to call the tool,
+          // whose gate reads the person's words. A second answer that
+          // claims a decision is replaced by what is true.
+          const decision =
+            names.has("decide") && !ran.has("decide")
+              ? this.decisionSaid(words, via, turn)
+              : null;
+          if (decision) {
+            if (!rechecked) {
+              rechecked = true;
+              recheck = decision.yes
+                ? `\nA check of your last draft: the person's last message is a yes to your own question whether to deny the one request that waits (id ${decision.id}). Call decide with "deny" for it now: its gate reads their yes against your question. Do not ask them again.`
+                : `\nA check of your last draft: the person's last message says to ${decision.decision} the one request that waits (id ${decision.id}), and your last message told them what it asks. Call decide for it now: its gate reads their words. Do not ask them again.`;
+              continue;
+            }
+            if (claimsADecision.test(reply.text))
+              return `Nothing was decided. ${decision.waits}`;
+          }
+          // The answer says that a request was approved or denied, and none
+          // was decided in this turn: the gate refused the call (a bare
+          // word after another question), or the model made no call. The
+          // person would think that the request is answered. The model
+          // answers once more; a second such answer is replaced by what is
+          // true.
+          if (
+            !turn.done.has("decide") &&
+            this.claimsUndecided(reply.text, ran.has("decide"))
+          ) {
+            if (rechecked)
+              return `Nothing was decided. ${this.waitingRequest()}`;
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it said that a request was approved or denied, and none was decided in this turn. Answer again with what is true: say what the person's message asks for, and do not say that anything was approved or denied.";
+            continue;
+          }
+          // The gate refused a bare word in this turn: the person's word
+          // answered ClawdTime's own last message, and the draft speaks of
+          // other things only (the request, mostly). The model answers once
+          // more. A second such answer stands: it is true, and the code
+          // cannot say what the person answered.
+          if (
+            turn.bareWordRefused &&
+            !rechecked &&
+            this.leavesTheirAnswerOut(reply.text, turn)
+          ) {
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it does not reply to the person's word. Their word answered your own last message, which was not about the request. Reply to that in words: say what your last message offered, and do not say that you did it. One short sentence about the request is enough.";
+            continue;
+          }
           const pointsBackToSee =
             names.has("open_session") &&
             !ran.has("open_session") &&
@@ -5463,12 +7748,30 @@ export class Supervisor {
           // is guarded, and a time is right when it fits any listed job.
           const moment = this.world.now();
           // The check reads the jobs that the model saw: the tool's list
-          // when the model called the tool, and the newest job alone when
-          // only the code read it. A job that the model never saw must not
-          // decide whether its answer is right.
-          const listed = ran.has("job_result")
-            ? this.jobsOfTheDay(moment)
-            : this.jobsNow(1);
+          // when the model called the tool; else the jobs in the state that
+          // the code read; else the newest job alone. A job that the model
+          // never saw must not decide whether its answer is right.
+          const listRead = messages.some(
+            (message) =>
+              message.role === "tool" && message.toolCallId === "jobs_first",
+          );
+          const listed =
+            ran.has("job_result") || listRead
+              ? this.jobsOfTheDay(moment)
+              : ran.has("status") ||
+                  messages.some(
+                    (message) =>
+                      message.role === "tool" &&
+                      message.toolCallId === "state_first",
+                  )
+                ? // The state, read by the code or by the model, shows the
+                  // newest three jobs of the last day: the model saw those.
+                  this.jobsNow(3)
+                    .filter(
+                      (job) => moment - job.startedAt < 24 * 60 * 60 * 1000,
+                    )
+                    .reverse()
+                : this.jobsNow(1);
           const working = listed.filter(
             (job) =>
               !job.done &&
@@ -5485,27 +7788,86 @@ export class Supervisor {
               .filter((message) => message.news === true)
               .map((message) => message.text),
           ];
+          // The turn read THE job: the model called the job tool, or the
+          // code read the job for a message that points at it.
+          const jobRead =
+            ran.has("job_result") ||
+            messages.some(
+              (message) =>
+                message.role === "tool" &&
+                message.toolCallId === "job_first" &&
+                message.content !== noJobYet,
+            ) ||
+            // The code read the job list or the state, which shows the jobs,
+            // the person's words name a job by a word of its own ("hows the
+            // downloads thing coming along"), AND the answer itself speaks of
+            // the job: the word "job", a word of its own, or "it". An answer
+            // about the sessions ("Two sessions run their tests.") is not
+            // about the job, whatever the question shares with it.
+            (messages.some(
+              (message) =>
+                message.role === "tool" &&
+                (message.toolCallId === "jobs_first" ||
+                  message.toolCallId === "state_first"),
+            ) &&
+              this.namesAJobAtWork(words) &&
+              (/\bjobs?\b|\bit(?:['\u2019]s)?\b/i.test(reply.text) ||
+                this.namesAJobAtWork(reply.text)));
+          // The turn read the state, which shows the jobs too.
+          const stateRead =
+            ran.has("status") ||
+            messages.some(
+              (message) =>
+                message.role === "tool" && message.toolCallId === "state_first",
+            );
+          // The model read the jobs or the state, and nothing else: an
+          // answer that came from a page or the screen is about that.
+          const onlyRead = [...ran].every(
+            (name) => name === "job_result" || name === "status",
+          );
+          // An offer to cancel, stop or restart a job: no tool does that. It
+          // counts while a job works or waits, whenever the turn read the
+          // jobs or the state, and only for a sentence that speaks of a job:
+          // an offer about a session or a task is another matter. Such an
+          // answer loses that sentence, and nothing else.
+          const offers =
+            onlyRead &&
+            (jobRead || stateRead || listRead) &&
+            listed.some(
+              (job) =>
+                !job.done && moment - job.startedAt < 24 * 60 * 60 * 1000,
+            )
+              ? jobCancelOffers(reply.text, listed, words, (text) =>
+                  (this.world.board()?.sessions ?? []).some(
+                    (session) =>
+                      session.name !== null &&
+                      saidAsWords(title(session), text),
+                  ),
+                )
+              : [];
+          // The answer without those sentences. The rules for a guess read
+          // this: an answer whose only fault is such an offer keeps its own
+          // words and loses the offer.
+          const body = offers.length
+            ? reply.text
+                .split(/(?<=[.!?])\s+/)
+                .filter((sentence) => !offers.includes(sentence))
+                .join(" ")
+            : reply.text;
           if (
-            working.length > 0 &&
-            (ran.has("job_result") ||
-              messages.some(
-                (message) =>
-                  message.role === "tool" &&
-                  message.toolCallId === "job_first" &&
-                  message.content !== noJobYet,
-              )) &&
-            [...ran].every((name) => name === "job_result") &&
+            onlyRead &&
             !(this.world.board()?.sessions ?? []).some(
               (session) =>
-                session.name !== null &&
-                saidAsWords(title(session), reply.text),
+                session.name !== null && saidAsWords(title(session), body),
             ) &&
+            working.length > 0 &&
+            jobRead &&
             (guessesAtAJob(
-              reply.text,
+              body,
               `${listed.map((job) => job.job).join(" ")} ${words} ${told.join(" ")}`,
             ) ||
               wrongTimeOfAJob(
-                reply.text,
+                body,
                 listed.map((job) => moment - job.startedAt),
                 // A time that a job's own line gave ("Done in 5 minutes")
                 // is no guess. The state of the sessions has times too, and
@@ -5522,24 +7884,47 @@ export class Supervisor {
               ) ||
               // "Why is this taking so long": the answer is a time.
               (asksHowLong(words) &&
-                !timesSaid(reply.text).length &&
-                !/\bless\s+than\s+a\s+minute\b/i.test(reply.text)))
+                !timesSaid(body).length &&
+                !/\bless\s+than\s+a\s+minute\b/i.test(body)))
           ) {
             if (rechecked)
-              return listed.length < 2
+              return listed.length < 2 && working.length === 1
                 ? jobStillWorks(working[0]!, moment)
                 : jobsStillWork(listed, moment);
             rechecked = true;
-            const since = ranFor(moment - working[0]!.startedAt);
+            const since = ranFor(moment - (working[0] ?? listed[0]!).startedAt);
             // Only fixed words and a time stand in this note: a job's request
             // is text, and stays behind the job tool.
             recheck =
-              listed.length < 2
+              listed.length < 2 && working.length === 1
                 ? `\nA check of your last draft: the job still works, and a job reports nothing until its answer is written. You know its request and that it has run ${since}, nothing else. Your draft says what the job does now or how far it is, or gives another time, or offers to look into the job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences: it still works and it has run ${since}. You can add that it runs in its own terminal window, where they can watch it. Offer nothing.`
                 : "\nA check of your last draft: a job that still works reports nothing until its answer is written. Of each job you know its request, when it started and, for a job that is done, its answer: the job tool gave you that, and nothing else is known. Your draft says what a job that still works does now or how far it is, or gives a time that fits no job, or offers to look into a job, to check it, to speed it up or to stop it: no tool does that. Answer once more in one or two short sentences, from the lines of the job tool only. Offer nothing.";
             continue;
           }
-          const offered = offeredWords(reply.text);
+          if (offers.length > 0) {
+            if (rechecked) {
+              // The answer without the sentences that offer it. When nothing
+              // else is left: what is known of the jobs.
+              const rest = clean(body, 900);
+              // A bare "Sure." would say yes to what was dropped.
+              return (
+                (rest && !onlyAYes(rest) ? rest : "") ||
+                (listed.length < 2 && working.length === 1
+                  ? jobStillWorks(working[0]!, moment)
+                  : jobsStillWork(listed, moment))
+              );
+            }
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: it offers to cancel, stop or restart a job. No tool does that: a job runs until it writes its answer. Say the same answer once more without that offer, and offer nothing in its place.";
+            continue;
+          }
+          const offered = offeredWords(
+            reply.text,
+            (this.world.board()?.sessions ?? []).map((session) =>
+              title(session),
+            ),
+          );
           if (offered !== null && !this.saidByThePerson(offered, words, turn)) {
             // The message speaks to a session by its name, in plain words
             // that take nothing back: the words for it are in the message.
@@ -5625,7 +8010,8 @@ export class Supervisor {
         (message) =>
           message.role === "tool" &&
           message.toolCallId !== "state_first" &&
-          message.toolCallId !== "job_first",
+          message.toolCallId !== "job_first" &&
+          message.toolCallId !== "jobs_first",
       );
       turn.plainState = false;
       const said = await this.plainly(words, via, turn);
