@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   navigationIntentSchema,
+  navigationTools,
   parseNavigationCalls,
   type NavigationIntent,
 } from "../connectors/computer/navigation.js";
@@ -117,6 +118,44 @@ describe("explicit directional navigation", () => {
         { name: "none", arguments: '{"kind":"desktop","direction":"right"}' },
       ]),
     ).toThrow();
+  });
+  it("takes a move that is only a part of the request as other work, for the planner", () => {
+    const one = (name: string, args: object) =>
+      parseNavigationCalls([{ name, arguments: JSON.stringify(args) }]);
+    // "Open the editor, make a new document and type a line": the app is named, and the message goes on.
+    expect(one("app", { name: "TextEdit", only: false })).toEqual({
+      kind: "none",
+    });
+    expect(one("desktop", { direction: "right", only: false })).toEqual({
+      kind: "none",
+    });
+    expect(one("previous_app", { only: false })).toEqual({ kind: "none" });
+    // The move is the whole request: it stays a move, and the field is not a part of the intent.
+    expect(one("app", { name: "TextEdit", only: true })).toEqual({
+      kind: "app",
+      name: "TextEdit",
+    });
+    expect(one("desktop", { direction: "left", only: true })).toEqual({
+      kind: "desktop",
+      direction: "left",
+    });
+    expect(one("previous_app", { only: true })).toEqual({
+      kind: "previous_app",
+    });
+    // An answer without the field is read as before. A field that is no yes or no is no answer.
+    expect(one("app", { name: "TextEdit" })).toEqual({
+      kind: "app",
+      name: "TextEdit",
+    });
+    expect(() => one("app", { name: "TextEdit", only: "yes" })).toThrow();
+    expect(one("none", {})).toEqual({ kind: "none" });
+    // Every move asks its model for the field.
+    for (const tool of navigationTools.filter((item) =>
+      ["app", "desktop", "previous_app"].includes(item.name),
+    )) {
+      expect(tool.parameters.required).toContain("only");
+      expect(Object.keys(tool.parameters.properties)).toContain("only");
+    }
   });
   it.each([
     [
