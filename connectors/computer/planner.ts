@@ -114,7 +114,7 @@ const screenTools = [
   ),
   tool(
     "type",
-    "Type one line of text. With an element, that field is clicked first. Never a password.",
+    "Type one line of text at the caret, as a keyboard does: it is added to what the field holds, and it takes the place of a selection. To replace the text of a field, give the field the focus, press cmd+a to select all of it, then type. With an element, that field gets the focus first when it does not have it. Never a password.",
     { text: { type: "string" }, element: elementNumber },
     ["text"],
   ),

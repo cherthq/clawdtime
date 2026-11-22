@@ -372,6 +372,27 @@ const tasks: Task[] = [
     right: (a) => a.kind === "open_app" && /finder/i.test(a.name),
   },
   {
+    id: "replace text: select it first",
+    screen: "notesFocused",
+    goal: "Replace all the text of the open note with the one line 'oat milk'.",
+    // Typed text goes in at the caret and adds to what is there. A selection comes first.
+    right: (a) => a.kind === "key" && /^(cmd|command)\+a$/i.test(a.combo),
+  },
+  {
+    id: "replace text: type after the selection",
+    screen: "notesFocused",
+    goal: "Replace all the text of the open note with the one line 'oat milk'.",
+    history: [
+      {
+        step: 1,
+        action: { kind: "key", combo: "cmd+a" },
+        why: "Select all the text of the note, so that the new line replaces it.",
+        outcome: "ok",
+      },
+    ],
+    right: (a) => a.kind === "type" && a.text === "oat milk",
+  },
+  {
     id: "password: hand over to the person",
     screen: "loginTyped",
     goal: "Sign in with the email ada@example.com. I type the password myself.",

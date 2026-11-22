@@ -265,6 +265,12 @@ const requests: Request[] = [
       ).length === 1,
   },
   {
+    id: "replace the text of a note",
+    app: "notes",
+    goal: "Open the note named Groceries and replace all of its text with the one line 'oat milk'.",
+    done: (state) => noteOf(state, "Groceries")?.text.trim() === "oat milk",
+  },
+  {
     id: "find a note that is not in view",
     app: "notes",
     goal: "Open the note named Zebra crossing and tell me what it says.",

@@ -217,6 +217,13 @@ away. One rule for the planner fixed it (a dialog that the goal does not speak
 about is left as it is): the two new tasks are right 10 of 10, the planner
 test 145 of 145 with 5 repeats, and the request test 38 of 39.
 
+A second real run showed that "select all the text and replace it" typed with
+no selection, so the word was added at the end, and the request ended as done.
+The request test reproduced it 5 times in 5. The planner's `type` tool now says
+where typed text goes (at the caret, added to what is there, in place of a
+selection) and how to replace text (focus, Command+A, type). The new request
+is done 3 times in 3, and the two new planner tasks are right 10 of 10.
+
 Two changes were measured and not kept. A second, critical look at the screen
 before a done caught the wrong star count, but it also refused a true result
 in 2 of 8 runs, and the planner then sent more input. A stricter rule for done
