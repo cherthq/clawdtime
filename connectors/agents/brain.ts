@@ -175,6 +175,20 @@ export interface ModelClient {
 /** How long the first request to the model may take, and the one after it. */
 export const modelWaitMs = 15_000;
 /**
+ * A question that asks for a fact and asks nothing of ClawdTime: it starts
+ * with a question word, and "you" is not in it. "How many sessions run?",
+ * "Is the build done?". Such a message is never an order to go to an app or a
+ * desktop, so it does not wait for the reader of navigation, which is one more
+ * model call before every answer. This takes authority from nothing: it only
+ * leaves the reader out, and every rule after it still reads the message.
+ * "Can you switch to Slack?" and "Do you mind going one desktop left?" are no
+ * such question, and the reader reads them.
+ */
+export const asksPlainly = (words: string) =>
+  /^(?:what|how|why|when|who|whom|whose|which|where|is|are|am|was|were|do|does|did|has|have|had|any)\b/i.test(
+    words.trim(),
+  ) && !/\byou(?:r|rs|rself)?\b|\bu\b/i.test(words);
+/**
  * The person says that the unknown result of a computer task can be cleared:
  * "clear the computer task", "I looked, clear it". The whole message is that
  * one order, so a sentence that only speaks of clearing does not count.
@@ -7747,8 +7761,10 @@ export class Supervisor {
       !!current.question;
     // Interpret navigation before coding/session heuristics, from only this message.
     // No keyword allowlist, prior conversation, screen or model paraphrase supplies authority.
+    // A plain question about the state does not wait for that reading: see `asksPlainly`.
     if (
       spoken.length <= userMessageLimit &&
+      !asksPlainly(words) &&
       this.model?.navigation &&
       this.world.execution?.snapshot().configured &&
       this.world.execution.snapshot().mode === "native" &&

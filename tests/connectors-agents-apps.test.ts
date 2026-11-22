@@ -9,6 +9,7 @@ import {
   webAddress,
 } from "../connectors/agents/apps.js";
 import {
+  asksPlainly,
   clearsComputer,
   modelWaitMs,
   Supervisor,
@@ -300,8 +301,59 @@ describe("the brain opens an application", () => {
     expect(f.started).toEqual([]);
   });
 
+  it("does not make a plain question wait for the reader of navigation", async () => {
+    for (const words of [
+      "How many agent sessions are running right now?",
+      "what is every agent doing?",
+      "Is the build done",
+      "which session waits for me?",
+      "Are there any errors in the tests?",
+    ]) {
+      expect(asksPlainly(words)).toBe(true);
+      const f = withExecution();
+      const run = scripted(["Two sessions work."]);
+      let read = 0;
+      run.model.navigation = async () => {
+        read++;
+        return { kind: "none" };
+      };
+      expect(
+        await new Supervisor(f.value, run.model).reply([], words, "call"),
+      ).toBe("Two sessions work.");
+      expect([words, read]).toEqual([words, 0]);
+      expect(f.submitted).toEqual([]);
+    }
+    // A request in the form of a question, and every plain instruction, is still read.
+    for (const words of [
+      "Can you switch to Slack?",
+      "Could you slide us to the neighboring workspace on the left?",
+      "Do you mind going one desktop to the right?",
+      "Would you bring Safari to the front?",
+      "What about you open Notes for me?",
+      "Take me back to the app I was using before",
+      "go to Chrome",
+      "Is it possible for you to move one desktop left?",
+    ])
+      expect([words, asksPlainly(words)]).toEqual([words, false]);
+    const f = withExecution();
+    const run = scripted(["No."]);
+    let read = 0;
+    run.model.navigation = async () => {
+      read++;
+      return { kind: "desktop", direction: "left" };
+    };
+    await new Supervisor(f.value, run.model).reply(
+      [],
+      "Do you mind going one desktop to the left?",
+      "call",
+    );
+    expect(read).toBe(1);
+    expect(f.submitted).toHaveLength(1);
+  });
+
   it("goes on with the message as before when the reader of navigation fails or is slow", async () => {
-    // The reader throws: a question about the state is still answered.
+    // The reader throws: a message about the state is still answered. (A plain
+    // question does not reach the reader at all, so these are no questions.)
     const f = withExecution();
     const run = scripted(["Two sessions work."]);
     let read = 0;
@@ -312,7 +364,7 @@ describe("the brain opens an application", () => {
     expect(
       await new Supervisor(f.value, run.model).reply(
         [],
-        "what is every agent doing?",
+        "tell me what every agent is doing",
         "call",
       ),
     ).toBe("Two sessions work.");
@@ -326,7 +378,7 @@ describe("the brain opens an application", () => {
       later.model.navigation = () => new Promise(() => {});
       const reply = new Supervisor(slow.value, later.model).reply(
         [],
-        "is anything waiting for me?",
+        "tell me whether anything waits for me",
         "chat",
       );
       await vi.advanceTimersByTimeAsync(modelWaitMs + 1);
