@@ -1,10 +1,27 @@
 import AppKit
 import ApplicationServices
+import OSLog
 import TaskPanelCore
 
 /// Foreground desktop work through public AppKit, Accessibility and Quartz APIs.
 /// No Space IDs, private CGS calls, Dock preference mutation or shortcut cycling.
 @MainActor final class HandsDesktop {
+  private static let transitionLog = Logger(subsystem: "com.clawdtime.task-panel", category: "desktop-transition")
+  @MainActor private final class SwitchTrace {
+    var samples = DesktopSwitchSamples<Surface>()
+    var dispatched = false
+    var nativeFailure: HandError?
+    var lastSurfaceReason = "not_sampled"
+    var lastSurfaceRefusal = "none"
+    var spaceBaseline: Int
+    var environmentBaseline: Int
+    var environmentAtResult: Int?
+    init(spaces: Int, environment: Int) { spaceBaseline = spaces; environmentBaseline = environment }
+    func surfaceReason(_ reason: String) {
+      lastSurfaceReason = reason
+      if reason != "source_ready" { lastSurfaceRefusal = reason }
+    }
+  }
   struct Surface: Equatable, @unchecked Sendable {
     let pid: pid_t
     let window: AXUIElement
@@ -129,16 +146,21 @@ import TaskPanelCore
 
   /// A focused AX window must agree with the top ordinary Quartz window on the
   /// current display. A front-app name alone, or an off-Space AX tree, is insufficient.
-  func surface(transition: Bool = false) async -> Surface? {
+  func surface(transition: Bool = false, diagnostic: ((String) -> Void)? = nil) async -> Surface? {
     guard let display = HandsDisplay.main,
-      let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() else { return nil }
+      let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() else { diagnostic?("front_app_or_display_unavailable"); return nil }
     let pid = app.processIdentifier
-    let value = await Task.detached(priority: .userInitiated) {
-      DesktopAX.visibleSurface(pid: pid, display: display)
+    let read = await Task.detached(priority: .userInitiated) {
+      var reason = "ax_quartz_unavailable"
+      let surface = DesktopAX.visibleSurface(pid: pid, display: display, diagnostic: { reason = $0 })
+      return (surface, reason)
     }.value
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, let value,
-      DesktopSurfaceScope.permits(window: value.frame, display: CGDisplayBounds(display.id), ordinary: value.ordinary,
-        fullScreen: value.fullScreen, activeDisplays: singleDisplay ? 1 : 2, transition: transition, fullScreenConfirmed: value.fullScreenConfirmed) else { return nil }
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { diagnostic?("front_app_changed"); return nil }
+    guard let value = read.0 else { diagnostic?(read.1); return nil }
+    guard DesktopSurfaceScope.permits(window: value.frame, display: CGDisplayBounds(display.id), ordinary: value.ordinary,
+      fullScreen: value.fullScreen, activeDisplays: singleDisplay ? 1 : 2, transition: transition, fullScreenConfirmed: value.fullScreenConfirmed)
+      else { diagnostic?("source_scope_unavailable"); return nil }
+    diagnostic?("source_ready")
     return value
   }
 
@@ -414,21 +436,40 @@ import TaskPanelCore
   /// Explicit adjacent move, never an implicit retry of failed app activation.
   /// An operator-attested enabled shortcut is sent once; a Space notification
   /// and changed stable native surface independently witness arrival.
-  func switchDesktop(direction requested: DesktopDirection, configuration: () -> DesktopShortcutPair?,
+  func switchDesktop(direction requested: DesktopDirection, sequence: Int, configuration: () -> DesktopShortcutPair?,
                      send: (DesktopResolvedShortcut, () async -> HandError?) async -> Result<Void, HandError>,
                      allowed: @escaping () async -> HandError?, observer: HandsObserver,
                      pointer: () -> CGPoint) async -> Result<Observation?, HandError> {
+    let began = now
+    let trace = SwitchTrace(spaces: spaceChanges, environment: environmentChanges)
+    let result = await performDesktopSwitch(direction: requested, configuration: configuration, send: send,
+      allowed: allowed, observer: observer, pointer: pointer, trace: trace)
+    let outcome: String
+    switch result {
+    case .success: outcome = "verified"
+    case .failure(let error): outcome = error.rawValue; if trace.nativeFailure == nil { trace.nativeFailure = error }
+    }
+    // Only bounded machine facts; no surface object, identity, title, frame or request text is formatted.
+    let summary = "seq=\(sequence) direction=\(requested.rawValue) dispatched=\(trace.dispatched) spaceDelta=\(spaceChanges - trace.spaceBaseline) environmentDelta=\((trace.environmentAtResult ?? environmentChanges) - trace.environmentBaseline) samples=\(trace.samples.total) candidates=\(trace.samples.candidates) consecutive=\(trace.samples.consecutive) emptySamples=\(trace.samples.empty) lastSurface=\(trace.lastSurfaceReason) lastSurfaceRefusal=\(trace.lastSurfaceRefusal) nativeFailure=\(trace.nativeFailure?.rawValue ?? "none") outcome=\(outcome) elapsedMs=\(Int(max(0, now - began) * 1000))"
+    Self.transitionLog.notice("\(summary, privacy: .public)")
+    return result
+  }
+
+  private func performDesktopSwitch(direction requested: DesktopDirection, configuration: () -> DesktopShortcutPair?,
+                     send: (DesktopResolvedShortcut, () async -> HandError?) async -> Result<Void, HandError>,
+                     allowed: @escaping () async -> HandError?, observer: HandsObserver,
+                     pointer: () -> CGPoint, trace: SwitchTrace) async -> Result<Observation?, HandError> {
     guard enabled else { return .failure(.desktopDisabled) }
     guard singleDisplay else { return .failure(.unsupportedDesktop) }
     if let error = await allowed() { return .failure(error) }
     let beforeEpoch = epoch
-    guard let origin = await surface(transition: true), beforeEpoch == epoch else {
+    guard let origin = await surface(transition: true, diagnostic: { trace.surfaceReason($0) }), beforeEpoch == epoch else {
       // No window is in front. A desktop with no window at all can still be left; the arrival is then a window.
       // The desktop of before has no name here, so "previous" stays unavailable.
       guard beforeEpoch == epoch, requested != .previous, let display = HandsDisplay.main,
-        await surface(transition: true) == nil, DesktopAX.noOrdinaryWindow(display: display.id) else { return .failure(.unsupportedDesktop) }
+        await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == nil, DesktopAX.noOrdinaryWindow(display: display.id) else { return .failure(.unsupportedDesktop) }
       return await leaveEmptyDesktop(direction: requested, display: display, configuration: configuration, send: send,
-        allowed: allowed, observer: observer, pointer: pointer)
+        allowed: allowed, observer: observer, pointer: pointer, trace: trace)
     }
     let direction: DesktopDirection
     let expected: Surface?
@@ -438,29 +479,32 @@ import TaskPanelCore
     } else { direction = requested; expected = nil }
     guard let pair = configuration(), let shortcut = pair.shortcut(for: direction) else { return .failure(.desktopShortcutUnavailable) }
     if let error = await allowed() { return .failure(error) }
-    guard beforeEpoch == epoch, await surface(transition: true) == origin, beforeEpoch == epoch else { return .failure(.staleObservation) }
+    guard beforeEpoch == epoch, await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == origin, beforeEpoch == epoch else { return .failure(.staleObservation) }
     guard configuration() == pair else { return .failure(.desktopShortcutUnavailable) }
     let initialSpaceChanges = spaceChanges, initialEnvironmentChanges = environmentChanges
+    trace.spaceBaseline = initialSpaceChanges; trace.environmentBaseline = initialEnvironmentChanges
     let began = now
     var dispatched = false, ready = false
     // History is retired before the attempt. Nothing restores it on failure.
     history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
     defer {
+      trace.environmentAtResult = environmentChanges
       switching = false
       if !ready { invalidate(); phase(.blocked) }
     }
     func failure(_ error: HandError) -> Result<Observation?, HandError> {
-      .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
+      trace.nativeFailure = error
+      return .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
     }
     let dispatchEpoch = epoch
     switch await send(shortcut, { [self] in
       if let error = await allowed() { return error }
       guard dispatchEpoch == epoch, spaceChanges == initialSpaceChanges, environmentChanges == initialEnvironmentChanges,
-        await surface(transition: true) == origin, dispatchEpoch == epoch else { return .staleObservation }
+        await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == origin, dispatchEpoch == epoch else { return .staleObservation }
       return nil
     }) {
     case .failure(let error): return failure(error)
-    case .success: dispatched = true
+    case .success: dispatched = true; trace.dispatched = true
     }
     phase(.waiting)
     var settlement = DesktopSwitchSettlement(origin: origin, expected: expected, at: began)
@@ -470,13 +514,14 @@ import TaskPanelCore
       let changes = spaceChanges - initialSpaceChanges
       guard changes <= 1 else { return failure(.targetNotVisible) }
       let sampleEpoch = epoch
-      let candidate = await surface(transition: true)
+      let candidate = await surface(transition: true, diagnostic: { trace.surfaceReason($0) })
       let stableCandidate = candidate.flatMap { value -> Surface? in
         guard sampleEpoch == epoch, value.displayID == origin.displayID, value.map == origin.map else { return nil }
         return value
       }
       // No window was read, and the window server lists none: that is the look of a desktop with no window.
       let empty = candidate == nil && sampleEpoch == epoch && DesktopAX.noOrdinaryWindow(display: origin.displayID)
+      trace.samples.record(spaceChanges - initialSpaceChanges == 1 && stableCandidate != origin && (expected.map({ $0 == stableCandidate }) ?? true) ? stableCandidate : nil, epoch: epoch, isEmpty: empty)
       let decision = settlement.sample(stableCandidate, empty: empty, spaceChanges: spaceChanges - initialSpaceChanges, epoch: epoch, at: now)
       if settlement.arrivedEmpty {
         // One Space change, and for a second no window anywhere on the display: the desktop of arrival is empty.
@@ -487,7 +532,7 @@ import TaskPanelCore
         if let error = await allowed() { return failure(error) }
         // The observation of a desktop with no window retires the lease once itself: one more environment change.
         guard now - began < 6, environmentChanges == initialEnvironmentChanges + 1, spaceChanges - initialSpaceChanges == 1,
-          case .success(let seen) = captured, await surface(transition: true) == nil, DesktopAX.noOrdinaryWindow(display: origin.displayID),
+          case .success(let seen) = captured, await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == nil, DesktopAX.noOrdinaryWindow(display: origin.displayID),
           seen.surfaceEpoch == epoch else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)
@@ -506,7 +551,7 @@ import TaskPanelCore
         let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1,
-          case .success(let seen) = captured, let target = await surface(transition: true), target == stableCandidate,
+          case .success(let seen) = captured, let target = await surface(transition: true, diagnostic: { trace.surfaceReason($0) }), target == stableCandidate,
           seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         history.verified(direction, from: origin, to: target)
         ready = true; phase(.ready)
@@ -522,30 +567,33 @@ import TaskPanelCore
   private func leaveEmptyDesktop(direction: DesktopDirection, display: HandsDisplay, configuration: () -> DesktopShortcutPair?,
                                  send: (DesktopResolvedShortcut, () async -> HandError?) async -> Result<Void, HandError>,
                                  allowed: @escaping () async -> HandError?, observer: HandsObserver,
-                                 pointer: () -> CGPoint) async -> Result<Observation?, HandError> {
+                                 pointer: () -> CGPoint, trace: SwitchTrace) async -> Result<Observation?, HandError> {
     guard let pair = configuration(), let shortcut = pair.shortcut(for: direction) else { return .failure(.desktopShortcutUnavailable) }
     if let error = await allowed() { return .failure(error) }
     guard configuration() == pair else { return .failure(.desktopShortcutUnavailable) }
     let initialSpaceChanges = spaceChanges, initialEnvironmentChanges = environmentChanges
+    trace.spaceBaseline = initialSpaceChanges; trace.environmentBaseline = initialEnvironmentChanges
     let began = now
     var dispatched = false, ready = false
     history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
     defer {
+      trace.environmentAtResult = environmentChanges
       switching = false
       if !ready { invalidate(); phase(.blocked) }
     }
     func failure(_ error: HandError) -> Result<Observation?, HandError> {
-      .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
+      trace.nativeFailure = error
+      return .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
     }
     let dispatchEpoch = epoch
     switch await send(shortcut, { [self] in
       if let error = await allowed() { return error }
       guard dispatchEpoch == epoch, spaceChanges == initialSpaceChanges, environmentChanges == initialEnvironmentChanges,
-        await surface(transition: true) == nil, DesktopAX.noOrdinaryWindow(display: display.id), dispatchEpoch == epoch else { return .staleObservation }
+        await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == nil, DesktopAX.noOrdinaryWindow(display: display.id), dispatchEpoch == epoch else { return .staleObservation }
       return nil
     }) {
     case .failure(let error): return failure(error)
-    case .success: dispatched = true
+    case .success: dispatched = true; trace.dispatched = true
     }
     phase(.waiting)
     var settlement = DesktopSettlement<Surface>(at: began)
@@ -556,7 +604,7 @@ import TaskPanelCore
       let changes = spaceChanges - initialSpaceChanges
       guard changes <= 1 else { return failure(.targetNotVisible) }
       let sampleEpoch = epoch
-      let candidate = await surface(transition: true)
+      let candidate = await surface(transition: true, diagnostic: { trace.surfaceReason($0) })
       let stableCandidate = candidate.flatMap { value -> Surface? in
         guard sampleEpoch == epoch, value.displayID == display.id, value.map == display.map else { return nil }
         return value
@@ -564,6 +612,7 @@ import TaskPanelCore
       looks += 1
       if changes != 0 || candidate != nil || !DesktopAX.noOrdinaryWindow(display: display.id) { stayedEmpty = false }
       // A window counts as the arrival only after the one Space change.
+      trace.samples.record(changes == 1 ? stableCandidate : nil, epoch: epoch, isEmpty: false)
       switch settlement.sample(changes == 1 ? stableCandidate : nil, at: now) {
       case .expired:
         // The whole wait showed the empty desktop and no Space change: it did not move. That is known.
@@ -577,7 +626,7 @@ import TaskPanelCore
         let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1,
-          case .success(let seen) = captured, let target = await surface(transition: true), target == stableCandidate,
+          case .success(let seen) = captured, let target = await surface(transition: true, diagnostic: { trace.surfaceReason($0) }), target == stableCandidate,
           seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)

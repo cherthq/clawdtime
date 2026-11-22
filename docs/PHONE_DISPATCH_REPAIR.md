@@ -208,3 +208,30 @@ full-screen foreground app. The existing source-window guard remains intact.
 The operator was asked to exit Codex full-screen manually before the next test;
 the computer-use tool does not permit operating Codex itself. No successful
 desktop transition is claimed yet.
+
+### Human-observed switches and remaining arrival verification
+
+After leaving full-screen mode, two separately dispatched rightward checks
+returned `transition_unknown`. The operator separately confirmed that each
+visibly moved. Each exact uncertain receipt was marked observed only after its
+corresponding confirmation; the original uncertain state and receipt remain in
+the journal, and neither input was replayed. A leftward request between them
+returned the known `desktop_unchanged` result and did not create an unknown.
+
+This establishes that the configured rightward shortcut physically works. It
+does not establish native arrival verification, leftward arrival, or handset
+acceptance. A later read-only source probe returned `source_ready`; a separate
+post-attempt snapshot had shown AX/Quartz disagreement. These later snapshots
+do not prove what failed during the switch. Bounded runtime diagnostics are
+being added before considering any change to the verifier. No target-matching
+or input-lease safeguard has been relaxed.
+
+The installed diagnostic build passed all 358 Swift tests and independent
+review. It emits one fixed-field unified-log summary per native switch, without
+window identities, titles, geometry, pixels, or request content. The fresh
+rightward check recorded exactly one Space notification, no environment change,
+and 27 rejected candidate samples, all ending in `ax_quartz_window_mismatch`.
+The original failure was `target_not_visible` after 5.1 seconds, correctly
+reported as `transition_unknown` after dispatch. No opposite move was sent.
+This establishes the runtime failure rather than inferring it from a later
+window snapshot. Destination matching remains the outstanding local repair.

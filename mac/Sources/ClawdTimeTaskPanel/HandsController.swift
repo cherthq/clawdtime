@@ -225,7 +225,7 @@ import TaskPanelCore
     inputRefusal = nil
     resolvedApp = nil
     presentation.begin(seq)
-    let outcome = await act(command, label: pending.label, accessibility: accessibility)
+    let outcome = await act(command, sequence: seq, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
     let interrupted = input.watching && input.personActed
     if interrupted { presentation.reset() }
@@ -248,7 +248,7 @@ import TaskPanelCore
     }
   }
 
-  private func act(_ command: HandCommand, label: String, accessibility: Bool) async -> Result<Observation?, HandError> {
+  private func act(_ command: HandCommand, sequence: Int, label: String, accessibility: Bool) async -> Result<Observation?, HandError> {
     if case .wait(let ms) = command {
       var left = Double(ms) / 1000
       while left > 0 {
@@ -328,7 +328,7 @@ import TaskPanelCore
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
-      return await desktop.switchDesktop(direction: direction, configuration: { [self] in input.desktopShortcuts() },
+      return await desktop.switchDesktop(direction: direction, sequence: sequence, configuration: { [self] in input.desktopShortcuts() },
         send: { [self] shortcut, gate in await input.dispatchDesktopShortcut(shortcut, allowed: gate) },
         allowed: { [self] in await lastCheck() }, observer: observer, pointer: { [self] in input.pointer })
     case .openURL(let text):

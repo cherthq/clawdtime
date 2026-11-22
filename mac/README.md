@@ -720,3 +720,20 @@ tap, capture, service connection, configuration/receipt access or application UI
 The current surface must remain unchanged while it runs. `source_ready` is a
 source preflight only; it does not verify a shortcut or a destination. Do not
 combine the flag with launch arguments or `--check-access`.
+
+Each native desktop-switch attempt also emits one notice-level unified-log
+summary under subsystem `com.clawdtime.task-panel`, category
+`desktop-transition`. It records command sequence, direction, dispatch status,
+Space/environment deltas, observation counts, elapsed milliseconds and fixed
+failure codes. The environment delta excludes the attempt's own failure
+cleanup; `nativeFailure` preserves the error before an attempted effect becomes
+`transition_unknown`. No app/window identities, titles, geometry, request words
+or screen contents are logged. Read these summaries with:
+
+```sh
+log show --last 10m --style json --predicate 'subsystem == "com.clawdtime.task-panel" AND category == "desktop-transition"'
+```
+
+Diagnostics neither change settlement/Stop checks nor clear or retry an unknown
+effect. A refusal before the desktop coordinator is called has no transition
+summary; the worker's fixed refusal code remains the evidence in that case.
