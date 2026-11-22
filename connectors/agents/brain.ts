@@ -1,3 +1,7 @@
+import {
+  readScreenOwnership,
+  type ScreenOwnership,
+} from "./screen-ownership.js";
 import type { PhoneTurnContext } from "../../src/phone-desktop-contracts.js";
 import {
   phoneTurn,
@@ -3630,6 +3634,8 @@ function taskLine(task: TaskFacts) {
 
 /** What one turn of the conversation did, so that it does each thing once. */
 interface Turn {
+  /** Whole-message ownership reader excluded native execution for this turn. */
+  screenRouteExcluded?: boolean;
   /** Names this turn to the task service: the same turn never acts twice. */
   id: string;
   /** The turn looked at the task, so its answer may offer the task's choices. */
@@ -7570,6 +7576,8 @@ export class Supervisor {
     reading?: NavigationIntent,
   ): Promise<string> {
     const execution = this.world.execution;
+    if (turn.screenRouteExcluded)
+      return "That request belongs to coding or session work. No screen task was started.";
     if (!execution?.snapshot().configured)
       return "No computer executor is connected.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
@@ -8372,6 +8380,30 @@ export class Supervisor {
     return { text, choices };
   }
 
+  /** Resolve lexical/pending-request ambiguity before admitting any new effect. */
+  private async screenOwnership(spoken: string): Promise<ScreenOwnership> {
+    if (!this.model) return "unclear";
+    let timer: NodeJS.Timeout | undefined;
+    let stop!: () => void;
+    try {
+      const halted = new Promise<ScreenOwnership>((resolve) => {
+        stop = () => resolve("unclear");
+        this.navigationStops.add(stop);
+        timer = setTimeout(stop, modelWaitMs);
+        timer.unref();
+      });
+      return await Promise.race([
+        readScreenOwnership(this.model, spoken),
+        halted,
+      ]);
+    } catch {
+      return "unclear";
+    } finally {
+      clearTimeout(timer);
+      this.navigationStops.delete(stop);
+    }
+  }
+
   private async semantic(spoken: string, turn: Turn): Promise<string | null> {
     const classify = this.model?.classifyIntent;
     if (!classify || !this.world.semanticTasks) return null;
@@ -8569,6 +8601,48 @@ export class Supervisor {
       this.navigationGeneration++;
       for (const stop of this.navigationStops) stop();
     }
+    // A pending agent decision must not consume a separate, explicit app task.
+    // The additional reader sees only the complete current message, never the
+    // pending agent's text. It grants no input or approval itself.
+    let independentScreen = false;
+    const nativeAvailable = () => {
+      const state = this.world.execution?.snapshot();
+      return (
+        !!this.world.execution?.answer &&
+        state?.configured &&
+        state.mode === "native" &&
+        !state.pendingAction &&
+        !state.canStop &&
+        ["idle", "completed", "canceled", "blocked"].includes(state.state)
+      );
+    };
+    const pendingTask = this.world.tasks?.current();
+    if (
+      this.world.desk.pending().length > 0 &&
+      nativeAvailable() &&
+      (this.model?.reading || this.model?.navigation) &&
+      !bareDecision.test(words) &&
+      !namesDecision(words) &&
+      !asksPlainly(words) &&
+      !stopsSomething &&
+      !(
+        pendingTask &&
+        !taskIsOver(pendingTask) &&
+        pendingTask.canAnswer &&
+        pendingTask.question
+      )
+    ) {
+      const generation = this.navigationGeneration;
+      const ownership = await this.screenOwnership(spoken);
+      if (!phoneIsLive()) return phoneEnded;
+      if (generation !== this.navigationGeneration)
+        return "Stopped. The pending screen interpretation was discarded.";
+      if (ownership === "standalone_screen") independentScreen = true;
+      else if (ownership === "managed_work" || ownership === "answer")
+        turn.screenRouteExcluded = true;
+      else if (ownership === "unclear")
+        return "I could not separate that screen request from the work waiting for your answer. Nothing new was started; please state the app task separately.";
+    }
     // The notice that a request arrived was the last message. A yes can
     // still mean the work. Only a word for a request decides it now: every
     // other message gets the request in words again, and decides nothing.
@@ -8581,14 +8655,16 @@ export class Supervisor {
         asked.text.includes(withheldText) ||
         asked.text === credentialMarker) &&
       this.world.desk.pending().length > 0 &&
-      !namesDecision(words)
+      !namesDecision(words) &&
+      !independentScreen
     ) {
       turn.closed = "after notice";
       if (!stopsSomething) return this.closedAnswer(turn);
     }
     if (
       asked?.role === "assistant" &&
-      (aboutOfferedWork(asked.text) || asked.text === userMessageTooLong)
+      (aboutOfferedWork(asked.text) || asked.text === userMessageTooLong) &&
+      !independentScreen
     ) {
       // A request of an agent arrived after it. Nothing in this turn decides
       // that request, whatever the words: the person meant the work.
@@ -8648,7 +8724,7 @@ export class Supervisor {
     // asks which one in fixed words, and reads the next message against that
     // question. A model that is asked makes its own question, and then
     // wants an id from the person.
-    if (turn.closed === undefined) {
+    if (turn.closed === undefined && !independentScreen) {
       const which =
         this.answersWhichRequest(words, turn, via) ??
         this.asksWhichRequest(words, via);
@@ -8681,7 +8757,7 @@ export class Supervisor {
       !stopsSomething &&
       !turn.closed &&
       !taskWaits &&
-      this.world.desk.pending().length === 0 &&
+      (this.world.desk.pending().length === 0 || independentScreen) &&
       this.world.execution.snapshot().state !== "waiting_for_person" &&
       !this.world.execution.snapshot().pendingAction
     ) {
@@ -8749,12 +8825,18 @@ export class Supervisor {
           !taskIsOver(waitingTask) &&
           waitingTask.canAnswer &&
           !!waitingTask.question) ||
-        this.world.desk.pending().length ||
+        (this.world.desk.pending().length > 0 && !independentScreen) ||
+        (independentScreen && !nativeAvailable()) ||
         this.world.execution.snapshot().pendingAction ||
         this.world.execution.snapshot().state === "waiting_for_person"
       )
         return "Another request now waits for your answer. Nothing was switched.";
       if (!phoneIsLive()) return phoneEnded;
+      if (
+        independentScreen &&
+        (codingSession || (!work && navigation?.kind === "none"))
+      )
+        return "The screen interpretations did not agree. Nothing new was started; please restate the app task.";
       if (codingSession)
         return this.startJob(
           turn,
@@ -8774,6 +8856,28 @@ export class Supervisor {
           return "App and desktop switching needs the native ClawdTime computer worker. Nothing was switched.";
         return this.delegate(turn, spoken, true, navigation);
       }
+      if (work && speaksOfManagedWork(words) && !independentScreen) {
+        const ownership = await this.screenOwnership(spoken);
+        if (!phoneIsLive()) return phoneEnded;
+        if (generation !== this.navigationGeneration)
+          return "Stopped. The pending screen interpretation was discarded.";
+        if (ownership === "standalone_screen") independentScreen = true;
+        else if (ownership === "managed_work") turn.screenRouteExcluded = true;
+        else
+          return "I could not reliably separate that app task from coding or session work. Nothing new was started; please restate the complete app task.";
+      }
+      // Recheck all waiting states after the additional interpretation awaits.
+      if (
+        independentScreen &&
+        (!nativeAvailable() ||
+          (() => {
+            const task = this.world.tasks?.current();
+            return (
+              !!task && !taskIsOver(task) && task.canAnswer && !!task.question
+            );
+          })())
+      )
+        return "Another task or computer action now waits. Nothing new was started.";
       // No move, but work on the screen: "close the document and quit the
       // editor". The worker does it. Nothing else here can: the model that
       // talks has no tool for it, and it answered such a request with "Done"
@@ -8785,12 +8889,16 @@ export class Supervisor {
         this.world.execution.snapshot().mode === "native" &&
         // Never what the supervisor manages itself, and never words for a
         // session that runs: those keep their own road, below.
-        !speaksOfManagedWork(words) &&
-        !this.forSession(words)
+        (independentScreen ||
+          (!speaksOfManagedWork(words) && !this.forSession(words)))
       )
         // The reader already said that this is no move: the worker plans.
         return this.delegate(turn, spoken, true, { kind: "none" });
+      if (independentScreen)
+        return "I could not confirm the complete screen request. Nothing new was started; please restate it.";
     }
+    if (independentScreen)
+      return "The computer worker is not ready for this separate app task. Nothing new was started.";
     // "Stop all my sessions": no tool stops or closes a session, so the code
     // says that, where nothing else can own the words: no request and no
     // task waits (a "stop" can answer those), the turn is open, and no

@@ -132,3 +132,50 @@ triggers the conservative coding-work keyword filter, despite a correct model
 classification for screen work. "New document" routes to the native worker.
 Record this separately from installation readiness and retain it in upstream
 follow-up. Physical phone acceptance still requires a handset test.
+
+## Routing repair and Space setup — November 22, 2026
+
+The routing limitation above is repaired locally. When a screen interpretation
+collides with coding-work keywords, a bounded, no-effect ownership classifier
+reads the complete original request. Only an unambiguous standalone app task
+reaches the native worker. Real coding/session work stays with its existing
+handler. Pending agent approvals cannot consume unrelated explicit app work;
+pending native or coding-task questions still block conflicting input. Invalid
+results, changed source text, disagreement, timeout, Stop, and expired call
+authority refuse new effects. The full request and constraints are preserved.
+
+`npm run check` passed with 6,456 tests across 159 files plus TypeScript/build.
+The additional 29 regressions cover these routing and interruption boundaries.
+Independent review found no blocking issue. Real model probes classify the
+original "test document" request as standalone screen work and coding tests as
+managed work; negated and mixed-approval requests do not authorize screen work.
+
+System Settings visibly confirmed enabled **Move left a space: Control–Left**
+and **Move right a space: Control–Right**. Those exact mappings are now set in
+the private desktop launcher. The installed panel's access probe reports all
+four checks true, including `desktopShortcutsAvailable`. The service and panel
+were restarted with that configuration. No guessed shortcut or private desktop
+API was used. Existing macOS shortcut settings did not need changes.
+
+Installed service/model/task/worker readiness and scoped phone admission,
+renewal, idle Stop, and close passed. Physical left/right arrival and the repaired
+compound typing request still need a hands-off check or the handset acceptance
+below. Mission Control's desktop inventory was not accessible through the setup
+UI tool; the operator was asked to ensure at least two desktops before movement.
+
+### FaceTime acceptance
+
+Use a FaceTime Video call from the joined phone. Ensure two desktops exist and
+leave the Mac mouse/keyboard untouched while requesting actions. Verify:
+
+1. Status and screen sharing work, with a live picture.
+2. "Open TextEdit, create a new test document, and type PHONE CHECK. Leave it
+   unsaved and do not change existing documents." Verify the actual text.
+3. Move one desktop right, then one left. Verify each arrival before continuing.
+4. Start a harmless new Claude session; confirm its terminal and launch receipt.
+5. Say Stop during a harmless app task, then test hangup during another. Confirm
+   no later native inputs occur. Preserve any uncertain result; do not retry it.
+
+These handset checks are outstanding. Ready for acceptance testing is not a
+claim of unattended production qualification. Automatic updates remain held to
+preserve the local repair until upstream contains and verifies it.
