@@ -445,8 +445,8 @@ export class Jobs implements JobPort {
     return {
       ok: true,
       said: waitsFor
-        ? `On it. ${jobAgentLabels[agent]} starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.`
-        : `On it. ${jobAgentLabels[agent]} is working on that in a new terminal window, and I will tell you its answer when it is done.`,
+        ? `Requested a new ${jobAgentLabels[agent]} terminal session, queued behind the previous job. Its launch has not been verified yet. At the Mac, Return in that window starts it sooner.`
+        : `Requested a new ${jobAgentLabels[agent]} terminal session. Its launch has not been verified yet.`,
     };
   }
 

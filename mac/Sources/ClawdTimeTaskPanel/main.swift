@@ -663,6 +663,11 @@ import TaskPanelCore
 }
 
 MainActor.assumeIsolated {
+  switch PanelDesktopCheck.parse(arguments: CommandLine.arguments) {
+  case .requested: Darwin.exit(PanelAccessDiagnostics.desktop())
+  case .invalid: Darwin.exit(PanelAccessDiagnostics.invalidDesktopArguments())
+  case .notRequested: break
+  }
   switch PanelAccessCheck.parse(arguments: CommandLine.arguments) {
   case .requested: Darwin.exit(PanelAccessDiagnostics.run())
   case .invalid: Darwin.exit(PanelAccessDiagnostics.invalidArguments())

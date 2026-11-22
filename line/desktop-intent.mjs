@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /** Call-scoped provider-input provenance. No model text is compared with speech.
  * Only successful provider input-transcription events grant a response handle
  * its original human request. SDK-synthesized finals after transcription failure
@@ -100,7 +102,7 @@ export function makeCallerRequestBinding({
       !own ||
       own.forwarded ||
       !turn.ended ||
-      turn.used.size > 0 ||
+      (turn.used.size > 0 && !own.dispatchMissing) ||
       !broken(own) ||
       own.noticed === turn
     )
@@ -112,19 +114,20 @@ export function makeCallerRequestBinding({
         request !== own ||
         newest() !== turn ||
         own.forwarded ||
-        turn.used.size > 0
+        (turn.used.size > 0 && !own.dispatchMissing)
       )
         return;
       try {
         // This response has no tool authority, even through continuations.
         const handle = session.generateReply({
-          instructions:
-            "Tell the caller briefly that their request could not be transcribed in full, nothing was sent, and ask them to say the whole request again.",
+          instructions: own.dispatchMissing
+            ? "Tell the caller briefly that their request did not reach the Mac supervisor, no computer action was sent, and ask them to say the request again. Do not claim the requested work was started or completed."
+            : "Tell the caller briefly that their request could not be transcribed in full, nothing was sent, and ask them to say the whole request again.",
           toolChoice: "none",
         });
         // Said in full, the notice ends this request: the caller starts again.
-        watch(handle, { turn, parts: 0, cut: false });
-        emit("transcription_notice");
+        watch(handle, { turn, parts: 0, cut: false, notice: true });
+        emit(own.dispatchMissing ? "dispatch_notice" : "transcription_notice");
       } catch {
         emit("notice_generation_failed");
       }
@@ -203,7 +206,14 @@ export function makeCallerRequestBinding({
       try {
         // SpeechHandle is thenable: do NOT await it. Bind synchronously before
         // any tool can execute; child tool-response handles inherit this root.
-        const handle = session.generateReply({ inputModality: "audio" });
+        // Require a tool for the root caller response. The installed SDK resets
+        // tool continuations to "auto", so the result can then be spoken without
+        // another execution. Do not force a named tool: reductions such as Stop
+        // and Hide must stay available before a slow supervisor reply.
+        const handle = session.generateReply({
+          inputModality: "audio",
+          toolChoice: "required",
+        });
         if (
           !handle ||
           (typeof handle !== "object" && typeof handle !== "function")
@@ -221,9 +231,19 @@ export function makeCallerRequestBinding({
   };
   // An answer that was said in full ends the request up to its item. Speech
   // that started after that item is a new request.
-  const answered = (turn) => {
+  const answered = (turn, notice = false) => {
     const at = stopped || !request ? -1 : request.turns.indexOf(turn);
     if (at < 0) return;
+    if (!notice && !request.forwarded) {
+      // A provider/SDK that speaks despite the required-tool choice must not
+      // silently consume the request. No automatic retry: ask the caller again.
+      request.dispatchMissing = true;
+      turn.failed = true;
+      turn.text = null;
+      emit("dispatch_missing");
+      notify();
+      return;
+    }
     clearDeadline();
     forget(request.turns.slice(0, at + 1));
     const rest = request.turns.slice(at + 1);
@@ -249,7 +269,8 @@ export function makeCallerRequestBinding({
         /* a handle that cannot tell did not finish an answer */
       }
       if (handle.interrupted || failed) answer.cut = true;
-      if (--answer.parts === 0 && !answer.cut) answered(answer.turn);
+      if (--answer.parts === 0 && !answer.cut)
+        answered(answer.turn, answer.notice);
     });
   };
   const speechCreated = (event) => {
@@ -408,6 +429,40 @@ export function makeCallerRequestBinding({
     session?.off("conversation_item_added", itemAdded);
     session?.off("speech_created", speechCreated);
   };
+  const claim = (options, capability = "computer", reuse = false) => {
+    if (stopped) return refuse("call_ended");
+    if (options?.abortSignal?.aborted) return refuse("tool_aborted");
+    if (!session || options?.ctx?.session !== session)
+      return refuse("wrong_session");
+    let handle = options.ctx.speechHandle;
+    let turn = null;
+    const seen = new Set();
+    for (let depth = 0; handle && depth < 64; depth++, handle = handle.parent) {
+      if (seen.has(handle)) return refuse("invalid_handle_chain");
+      seen.add(handle);
+      if (handle.interrupted) return refuse("turn_interrupted");
+      turn ||= handles.get(handle);
+    }
+    if (handle) return refuse("invalid_handle_chain");
+    if (!turn) return refuse("unbound_response");
+    const own = request;
+    if (!own || turn !== newest()) return refuse("superseded_turn");
+    if (
+      !complete(own) ||
+      own.turns.some((item) => typeof item.text !== "string")
+    )
+      return refuse("final_unavailable");
+    if (!fresh(own)) return refuse("turn_expired");
+    if (!held(own)) return refuse("superseded_sdk_item");
+    if (turn.used.has(capability) && !reuse)
+      return refuse("request_already_used");
+    turn.used.add(capability); // Before dispatch, even if delivery then fails.
+    // The forward ends the request: what the caller says next is a new one.
+    // The other tools forward no words, so they leave it open.
+    if (capability === "computer") own.forwarded = true;
+    emit("request_claimed");
+    return { ok: true, text: whole(own), turn };
+  };
   return {
     bindSession(value) {
       if (stopped) return;
@@ -427,41 +482,32 @@ export function makeCallerRequestBinding({
       provider.on("close", disconnected);
     },
     take(options, capability = "computer") {
-      if (stopped) return refuse("call_ended");
-      if (options?.abortSignal?.aborted) return refuse("tool_aborted");
-      if (!session || options?.ctx?.session !== session)
-        return refuse("wrong_session");
-      let handle = options.ctx.speechHandle;
-      let turn = null;
-      const seen = new Set();
-      for (
-        let depth = 0;
-        handle && depth < 64;
-        depth++, handle = handle.parent
-      ) {
-        if (seen.has(handle)) return refuse("invalid_handle_chain");
-        seen.add(handle);
-        if (handle.interrupted) return refuse("turn_interrupted");
-        turn ||= handles.get(handle);
+      const result = claim(options, capability);
+      if (!result.ok) return result;
+      return { ok: true, text: result.text };
+    },
+    forward(options, submit, context = {}) {
+      const result = claim(options, "computer", true);
+      if (!result.ok) return Promise.resolve(result.message);
+      const turn = result.turn;
+      // Publish the promise before invoking transport. Parallel tools and SDK
+      // continuations observe this exact outcome, including an unknown delivery.
+      // They never resend the original request.
+      if (!turn.delivery) {
+        const delivery = Promise.withResolvers();
+        turn.delivery = delivery.promise;
+        try {
+          delivery.resolve(
+            submit(result.text, {
+              requestId: randomUUID(),
+              ...context,
+            }),
+          );
+        } catch (error) {
+          delivery.reject(error);
+        }
       }
-      if (handle) return refuse("invalid_handle_chain");
-      if (!turn) return refuse("unbound_response");
-      const own = request;
-      if (!own || turn !== newest()) return refuse("superseded_turn");
-      if (
-        !complete(own) ||
-        own.turns.some((item) => typeof item.text !== "string")
-      )
-        return refuse("final_unavailable");
-      if (!fresh(own)) return refuse("turn_expired");
-      if (!held(own)) return refuse("superseded_sdk_item");
-      if (turn.used.has(capability)) return refuse("request_already_used");
-      turn.used.add(capability); // Before dispatch, even if delivery then fails.
-      // The forward ends the request: what the caller says next is a new one.
-      // The other tools forward no words, so they leave it open.
-      if (capability === "computer") own.forwarded = true;
-      emit("request_claimed");
-      return { ok: true, text: whole(own) };
+      return turn.delivery;
     },
     cancel() {
       retire();

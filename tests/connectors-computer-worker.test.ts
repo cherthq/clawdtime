@@ -106,6 +106,7 @@ describe("a task", () => {
     ]);
     expect(hands.labels[2]).toBe('Click "Save"');
     expect(worker.snapshot()).toEqual({
+      requestId: "talk_1_execution",
       configured: true,
       mode: "native",
       state: "completed",
@@ -252,6 +253,7 @@ describe("stop", () => {
     await worker.idle();
     expect(hands.sent).toHaveLength(1);
     expect(worker.snapshot()).toEqual({
+      requestId: "r1",
       configured: true,
       mode: "native",
       state: "canceled",
@@ -276,6 +278,7 @@ describe("stop", () => {
     };
     await worker.submit("r1", "Click it");
     await until(() => hands.sent.length === 1);
+    expect(worker.snapshot().requestId).toBe("r1");
     expect(worker.stop()).toMatchObject({ state: "stopping", canStop: false });
     expect(worker.snapshot().message).toBe(stoppedText);
     // A new request waits until the action in flight has ended.
@@ -1869,4 +1872,42 @@ describe("what the panel shows", () => {
       goal: "Send the mail",
     });
   });
+});
+
+it("checks call authority after a plan resolves and before dispatching input", async () => {
+  let live = true;
+  const { worker, hands, journal } = setup([
+    () => {
+      live = false;
+      return click;
+    },
+    done,
+  ]);
+  await worker.submit("phone-turn", "Click Save", {
+    callId: "call",
+    toolCallId: "turn",
+    isLive: () => live,
+  });
+  await worker.idle();
+  expect(hands.sent).toHaveLength(0);
+  expect(worker.snapshot()).toMatchObject({
+    requestId: "phone-turn",
+    state: "canceled",
+  });
+  expect(journal.get("phone-turn")).toMatchObject({
+    state: "canceled",
+    reason: "call_expired",
+  });
+});
+
+it("refuses an already expired call before opening a worker request", async () => {
+  const { worker, hands, journal } = setup([click, done]);
+  await worker.submit("expired", "Click Save", {
+    callId: "call",
+    toolCallId: "turn",
+    isLive: () => false,
+  });
+  await worker.idle();
+  expect(hands.commands).toHaveLength(0);
+  expect(journal.get("expired")).toBeNull();
 });

@@ -1,0 +1,385 @@
+# Phone dispatch and desktop connection repair
+
+November 22, 2026. Local-first repair based on `abbbff2`.
+
+## Installation outcome — November 22, 2026
+
+The operator confirmed that the FaceTime retry worked after installing the warm
+media repair. The matching call lifecycle records show acceptance, actual bridge
+readiness, a healthy audio/video publication assessment, and call end. This
+qualifies the repaired incoming connection with the operator's confirmation;
+it does not separately qualify every computer action or Stop scenario below.
+
+Installation changes made during this work:
+
+- Integrated the upstream computer-use updates into the local repair branch and
+  rebuilt/restarted the desktop service, panel and phone host as needed.
+- Connected the phone host to the intended authenticated desktop service. Added
+  enforced caller-request dispatch and separated new coding-session requests from
+  app navigation, including the explicit app-work routing repair.
+- Configured the Mac's adjacent-desktop shortcuts and repaired destination
+  verification for overlapping full-screen windows. A rightward move and leftward
+  return were physically verified without relaxing click/type target matching.
+- Prepared audio and synthetic mascot video before incoming calls, reused the
+  published tracks during the voice session, and verified greeting and cleanup.
+- Preserved installed permissions, protected credentials, task history and
+  unknown-outcome receipts. Automatic updates remain held while this repair
+  branch is reviewed; pushing it does not merge or deploy new upstream changes.
+
+The qualified desktop binary is `3ba05cc`; the phone startup repair is `3915f40`.
+Mac-specific protected configuration and runtime evidence stay outside Git.
+The upstream provider-admission/native-recovery follow-up remains described below.
+
+## Problem and evidence
+
+An incoming call delivered voice and video, and a status question reached the
+supervisor. Subsequent action requests received spoken acknowledgements without
+corresponding supervisor dispatch or a coding-job launch receipt. The installed
+phone configuration also named a desktop directory with no running service.
+
+The caller-turn code allowed a model to finish a spoken answer without invoking
+the supervisor. A presentation-only tool could also finish a compound request
+without dispatching its computer-work portion. Prompts asked the model to behave
+correctly, but the execution boundary did not enforce that handoff.
+
+This involved merged source plus incomplete local configuration. The code history
+contains contributions from multiple authors; the evidence does not establish a
+single-author regression. Source tests and a status check did not qualify actions.
+
+A local action test also reproduced a second routing defect: asking to start a
+new Claude Code session in a separate terminal window was consumed as desktop
+navigation. No coding session was launched. Session creation needs its own
+structured destination before an app/window interpretation can consume it.
+
+## Local patch
+
+- Require a tool on each authenticated caller response. Reuse one reserved
+  supervisor dispatch for all tools and continuations of that original request.
+- Forward complete validated words, including compound requests. Presentation
+  tools provide bounded factual metadata about what they already did.
+- Keep greetings and proactive announcements outside caller authority. Refuse
+  failed or incomplete transcription and preserve uncertain dispatch without retry.
+- Bind the phone to one authenticated desktop service instance and one expiring
+  call admission. A missing service never falls back to another supervisor.
+- Scope native input to that call. Close, expiry, and shutdown stop only its own
+  active request; unrelated local work and already-launched coding jobs remain.
+- Check call liveness before delayed supervisor effects, not only before model
+  inference. Preserve local Stop, native permissions, and unknown-outcome fences.
+- Report a requested session launch as requested until an observed launch receipt
+  exists. Diagnose desktop connection, task admission, and computer execution
+  separately. Resolve the CLI entrypoint through its installed symlink.
+- Classify new coding-session creation separately from bringing an existing app
+  or window forward. Preserve the complete request and its constraints when
+  launching the selected coding agent.
+
+The local rollout pauses automatic updates and preserves the previous code and
+protected state. It neither resets old tasks nor copies their data into Git.
+
+## Upstream plan
+
+Prepare three reviewable changes, including their local verification evidence:
+
+1. **Dispatch and call ownership.** Include voice binding, scoped desktop
+   transport, native ownership, session routing, liveness guards, and regressions as
+   one compatible change. Deploy the CLI, service, and voice frontend together;
+   a partial upgrade must refuse unsupported phone admission.
+2. **Setup and truthful readiness.** Include the desktop doctor, installed CLI
+   entrypoint repair, accurate launch acknowledgements, and the setup-guide
+   acceptance checklist. Explain which actions need the panel and which do not.
+
+3. **Directional desktop verification.** Keep strict input-window matching, but
+   qualify an explicitly requested adjacent desktop separately when a full-screen
+   parent has bounded same-app overlay windows. Require one Space notification,
+   changed parent identity, stable complete compositor evidence and fresh capture.
+   Never grant an input lease or previous-desktop history from that evidence.
+   Include the runtime diagnostic and physical switching evidence with the review.
+
+Review duplicates, concurrent requests, service replacement, lost replies,
+transcription failure, interruptions, compound presentation requests, and shutdown.
+Do not use guessed completion from files or a terminal-open return code.
+
+Do not merge, publish a package, or resume automatic source updates merely because
+local checks pass. Resume updates only after the deployed repair is represented
+upstream and its installation is verified. Rollback restores code and configuration
+selection; it never restores an older ledger over newer receipts.
+
+## Validation record
+
+The installed panel retains Accessibility and Screen Recording permission.
+The desktop doctor confirms the selected service, model, active task session,
+task admission, enabled computer worker, and no uncertain native result.
+
+A local request through the authenticated phone bridge opened Messages. The
+worker reported verified foreground activation, and an independent macOS query
+also identified Messages as the foreground application. No message was sent.
+A separate compound TextEdit smoke request reached the worker and waited for
+input; closing its admission canceled it. That test does not qualify document
+creation.
+
+After the routing repair, the same Claude-session request produced one requested
+receipt, one launched receipt, and a new live Claude process under that launcher.
+This verifies session launch, not completion of work inside the session. The
+call admission closed without stopping the independently launched coding job.
+
+Final automated validation:
+
+- `npm run check`: TypeScript, 6,333 tests across 158 files, and build passed.
+- `npm --prefix line test`: 173 tests passed.
+- Swift `TaskPanelCoreTests`: 252 tests passed; panel build and installed access
+  probe passed. Desktop Space shortcuts remain unconfigured.
+- Changed-file formatting and `git diff --check` passed.
+
+The local branch is `fix-phone-dispatch`. The repaired desktop and phone host
+use it; automatic updates remain paused to avoid replacing the local repair.
+No upstream merge or package publication has been performed.
+
+The handset must still verify transcription-to-action, compound presentation and
+work, Stop, and hangup. Reading message contents and broader app workflows remain
+unverified. Local bridge checks do not imply phone acceptance.
+
+## Newer upstream installation — November 22, 2026
+
+Integrated upstream `2babb53` (15 commits after the previous `abbbff2` baseline)
+with the local phone repair. The two source conflicts were resolved by keeping
+the upstream reader-model fallback and native approval/timing changes together
+with local exact session routing and call-authority checks. The installed panel
+was rebuilt, its existing bundle identity retained, and the desktop restarted
+against the same protected state. Previous app code is retained for rollback;
+receipts and runtime databases were not reset.
+
+Verification: `npm run check` passed with 6,427 tests across 158 files plus
+TypeScript/build; all 173 voice tests and 354 Swift tests passed. The installed
+panel reports Accessibility and Screen Recording access. Desktop service, chat,
+task admission, and native worker readiness checks pass. Desktop Space shortcut
+mappings remain unconfigured; those moves are not qualified on this installation.
+
+The first compound TextEdit attempt paused on mouse/keyboard activity and was
+canceled when its call admission closed. After the operator explicitly confirmed
+a hands-off window, a new request completed: TextEdit opened a new unsaved
+document and typed exactly `CLAWDTIME UPDATE VERIFIED`. An independent read-only
+AppleScript query confirmed one document with exactly that content and TextEdit
+as the foreground application. The scoped admission closed afterward. This
+qualifies local compound app opening/document creation/typing through the phone
+bridge; actual handset transcription remains unverified.
+
+An existing upstream routing limitation remains: the phrase "test document"
+triggers the conservative coding-work keyword filter, despite a correct model
+classification for screen work. "New document" routes to the native worker.
+Record this separately from installation readiness and retain it in upstream
+follow-up. Physical phone acceptance still requires a handset test.
+
+## Routing repair and Space setup — November 22, 2026
+
+The routing limitation above is repaired locally. When a screen interpretation
+collides with coding-work keywords, a bounded, no-effect ownership classifier
+reads the complete original request. Only an unambiguous standalone app task
+reaches the native worker. Real coding/session work stays with its existing
+handler. Pending agent approvals cannot consume unrelated explicit app work;
+pending native or coding-task questions still block conflicting input. Invalid
+results, changed source text, disagreement, timeout, Stop, and expired call
+authority refuse new effects. The full request and constraints are preserved.
+
+`npm run check` passed with 6,456 tests across 159 files plus TypeScript/build.
+The additional 29 regressions cover these routing and interruption boundaries.
+Independent review found no blocking issue. Real model probes classify the
+original "test document" request as standalone screen work and coding tests as
+managed work; negated and mixed-approval requests do not authorize screen work.
+
+System Settings visibly confirmed enabled **Move left a space: Control–Left**
+and **Move right a space: Control–Right**. Those exact mappings are now set in
+the private desktop launcher. The installed panel's access probe reports all
+four checks true, including `desktopShortcutsAvailable`. The service and panel
+were restarted with that configuration. No guessed shortcut or private desktop
+API was used. Existing macOS shortcut settings did not need changes.
+
+Installed service/model/task/worker readiness and scoped phone admission,
+renewal, idle Stop, and close passed. Physical left/right arrival and the repaired
+compound typing request still need a hands-off check or the handset acceptance
+below. Mission Control's desktop inventory was not accessible through the setup
+UI tool; the operator was asked to ensure at least two desktops before movement.
+
+### FaceTime acceptance
+
+Use a FaceTime Video call from the joined phone. Ensure two desktops exist and
+leave the Mac mouse/keyboard untouched while requesting actions. Verify:
+
+1. Status and screen sharing work, with a live picture.
+2. "Open TextEdit, create a new test document, and type PHONE CHECK. Leave it
+   unsaved and do not change existing documents." Verify the actual text.
+3. Move one desktop right, then one left. Verify each arrival before continuing.
+4. Start a harmless new Claude session; confirm its terminal and launch receipt.
+5. Say Stop during a harmless app task, then test hangup during another. Confirm
+   no later native inputs occur. Preserve any uncertain result; do not retry it.
+
+These handset checks are outstanding. Ready for acceptance testing is not a
+claim of unattended production qualification. Automatic updates remain held to
+preserve the local repair until upstream contains and verifies it.
+
+### Local switching attempt after two-desktop confirmation
+
+The operator confirmed two desktops. The first rightward request reached the
+native worker but was refused before dispatch; the old generic journal reason
+was `desktop_not_sent`. No opposite move or blind retry followed. Read-only
+checks confirmed the actual running panel's shortcut environment and an unlocked
+console session. The worker now preserves only the allowlisted native refusal
+code in its message and journal, so future failures can be diagnosed without
+recording screen content. Unknown input outcomes retain their existing fences.
+TypeScript, build, and all 6,461 tests passed after this diagnostic change.
+
+After preparing a normal TextEdit window and restarting the idle service, the
+next attempt detected external mouse/keyboard activity during its initial
+observation and stopped before any switch. Both call admissions were closed.
+Left/right switching therefore remains physically unverified; a fresh hands-off
+window was requested. These refusals are not successful movement evidence.
+
+A fresh hands-off attempt successfully brought TextEdit forward, then refused
+the rightward move with `unsupported_desktop` before dispatch. A read-only native
+`--check-desktop` probe was added and installed; it reports only fixed reasons,
+counts, and booleans, with no screenshots, titles, input, or service access.
+All 356 Swift tests passed. The probe confirmed one active display, permission
+grants, and a contained/confirmed full-screen window, but rejected AX/Quartz
+window matching. Visible metadata showed additional overlapping windows of the
+full-screen foreground app. The existing source-window guard remains intact.
+The operator was asked to exit Codex full-screen manually before the next test;
+the computer-use tool does not permit operating Codex itself. No successful
+desktop transition is claimed yet.
+
+### Human-observed switches and remaining arrival verification
+
+After leaving full-screen mode, two separately dispatched rightward checks
+returned `transition_unknown`. The operator separately confirmed that each
+visibly moved. Each exact uncertain receipt was marked observed only after its
+corresponding confirmation; the original uncertain state and receipt remain in
+the journal, and neither input was replayed. A leftward request between them
+returned the known `desktop_unchanged` result and did not create an unknown.
+
+This establishes that the configured rightward shortcut physically works. It
+does not establish native arrival verification, leftward arrival, or handset
+acceptance. A later read-only source probe returned `source_ready`; a separate
+post-attempt snapshot had shown AX/Quartz disagreement. These later snapshots
+do not prove what failed during the switch. Bounded runtime diagnostics are
+being added before considering any change to the verifier. No target-matching
+or input-lease safeguard has been relaxed.
+
+The installed diagnostic build passed all 358 Swift tests and independent
+review. It emits one fixed-field unified-log summary per native switch, without
+window identities, titles, geometry, pixels, or request content. The fresh
+rightward check recorded exactly one Space notification, no environment change,
+and 27 rejected candidate samples, all ending in `ax_quartz_window_mismatch`.
+The original failure was `target_not_visible` after 5.1 seconds, correctly
+reported as `transition_unknown` after dispatch. No opposite move was sent.
+This establishes the runtime failure rather than inferring it from a later
+window snapshot. Destination matching remains the outstanding local repair.
+
+### Directional verification repair and qualification
+
+Installed `62e1916` after all 366 Swift tests passed and independent review
+found no remaining blocker. Explicit left/right moves can use a bounded,
+complete compositor group around an independently matched full-screen parent.
+The source settles before dispatch; arrival needs exactly one Space event, a
+changed parent, stable evidence, and a bracketed fresh capture. This evidence
+never grants an input lease or previous-desktop history. Strict window matching
+for clicking, typing, app activation, and previous-desktop navigation is intact.
+
+The subsequent rightward qualification still returned `transition_unknown`: one
+Space event, zero environment changes, but no eligible directional composition
+in 24 samples. No leftward input followed. A later metadata snapshot showed a
+different layout, with full-width toolbar/content windows. The current guard
+may reject its focused content window's top inset. This is being diagnosed
+with a precise fixed refusal reason before any further policy change. The
+unknown result remains held; this build is not physically qualified for the
+requested paired desktop test or handset production acceptance.
+
+A follow-up adds exact parent-match counts and fixed refusal reasons, then
+supports an additional generic full-screen toolbar/content layout. An explicitly
+full-screen, full-width, bottom-aligned parent must still cover at least 85% of
+the display; bounded same-owner toolbar strips must continuously cover any
+excess top gap beyond the original inset. Every row stays in the compositor
+fingerprint. Missing, transparent, or invalid opacity rejects the complete
+directional inventory. Strict input matching is unchanged. All 372 Swift tests
+passed before this build was installed. The unknown receipt was preserved
+byte-for-byte during installation; the next physical check requires its observed
+result to be reconciled first. The prior failure's exact layout cause remains
+unproven until the new runtime trace and physical check establish it.
+
+### Paired local desktop acceptance — passed
+
+With the operator's fresh hands-off confirmation, installed `3ba05cc` completed
+one rightward move and then one leftward return through the authenticated phone
+bridge. Each request completed in one native step. The rightward trace recorded
+one Space event, zero environment changes, five stable destination candidates,
+and verified arrival in 2,396 ms. The return recorded one Space event, zero
+environment changes, five stable candidates, and verified arrival in 2,816 ms.
+The rightward destination used composite evidence; that same evidence qualified
+the leftward source. No unknown receipt remains unresolved. No request was
+replayed, and both scoped admissions closed afterward.
+
+The installed routing repair, configured shortcuts, and directional verifier
+are now ready for the FaceTime acceptance checklist above. The desktop service,
+model connection, task admission, permissions, and warm phone host all pass
+readiness checks. Validation totals are 6,461 backend/connector tests, 173 voice
+tests, and 372 Swift tests; TypeScript/build and changed-file checks passed.
+The final Mac changes were independently reviewed. The exact earlier layout
+refusal was not captured with the newer detailed diagnostic, so successful
+qualification does not retroactively prove that narrower historical cause.
+
+Actual handset transcription-to-action, repaired "test document" wording, Stop,
+and hangup acceptance remain pending. This is readiness for the phone test, not
+a claim that unattended production acceptance is complete. Automatic updates
+remain held to protect the local patch until the upstream repair is integrated.
+
+### Incoming bridge track-registration failure and local repair
+
+The next incoming handset call was accepted, then ended before greeting. The
+remote bridge connected to its room but its native LiveKit 2.17.0 receiver could
+not attach an offered audio track: that track SID was absent from the participant
+publication registry, which contained only the video SID. Three subscription
+attempts failed before the expected-track timeout; the provider reported
+`participant_not_found`. This was not an intentional decline or evidence that
+the agent participant was absent. Both received audio and video frame counters
+were zero. A `measured` counter state alone does not prove media reception.
+
+The local agent now publishes one silent SDK audio output and one mascot
+camera track while the room is waiting. It waits for publication acknowledgements,
+then emits a bounded burst of synthetic frames while the transport negotiates,
+then reuses the same audio output for the voice session, disabling duplicate
+automatic audio publication. Animation starts with the caller. Warm preparation
+opens no model session, caller input, screen capture or desktop authority. Actual
+bridge readiness still gates the greeting. Caller departure, disconnect,
+publication loss and late acknowledgements are fenced and cleaned up without
+replaying actions or waiting indefinitely for a subscriber.
+
+An isolated receiver on the actual remote Mac, built from its exact LiveKit
+2.17.0 revision, received the new helper's synthetic media: 596 audio callbacks,
+286,080 audio frames and 30 video frames. One unmuted audio track and one camera
+track were independently checked. The isolated room was deleted. The production
+bridge executable, configuration and routing were not modified. An equivalent
+old-order experiment also passed once, so the historical registration race is
+established by its original bridge logs, not claimed as deterministically
+reproduced by this experiment.
+
+The provider CLI still admits a warm room based on agent presence rather than
+media readiness. Isolated startup checks also found that frames captured immediately
+before or after camera publication were insufficient: the server still omitted
+video after five seconds. A subsequent isolated experiment observed video appear
+after a delayed synthetic frame, without any subscriber. The bounded warm burst
+addresses that transport startup gap without continuous idle animation. A bridge joining
+during initial publication can therefore still race; local `media_ready` does not
+add a provider admission contract. The upstream
+repair should gate warm admission on the exact publisher's acknowledged audio
+and video publications and add bounded native subscription recovery when a
+publication arrives after its media offer. Cover cold joins, room rotation,
+departure and duplicate publication before deploying either change. Keep identity
+binding and real received-frame readiness intact. These provider/bridge changes
+are not installed by this local patch.
+
+Handset greeting, transcription-to-action, Stop and hangup acceptance must still
+pass on the repaired installation before claiming production qualification.
+
+The final isolated full-agent check passed after the bounded warm burst: the
+server reported both unmuted tracks before the synthetic caller joined, the same
+track SIDs were reused, video and audible greeting arrived, and caller departure
+closed the session. Its temporary room and worker were removed. Validation:
+189 line tests pass; the complete backend/connector check passed 6,475 tests,
+TypeScript and build before the final bounded-frame adjustment, which was covered
+by the line suite and this full-agent check. Native desktop code is unchanged.

@@ -14,12 +14,13 @@ import {
   fallbackComputerModel,
 } from "../connectors/computer/planner.js";
 import type { BrowserPort } from "../connectors/computer/ports.js";
+import { inspectDesktopReadiness } from "../connectors/agents/desktop-readiness.js";
 
 export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself, one checked action at a time
   computer status   on or off, and the last request
   computer on       turn it on. Start the ClawdTime desktop service again after this
   computer off      turn it off. A request that runs stops before its next action
-  computer doctor   what is ready and what is missing
+  computer doctor [--json]   configured service, capabilities and missing checks
   computer clear    you looked at the result of a request with an unknown result: new work can start
   computer timing   the time of the newest steps: the look, the plan and the action of each
 It is off until you turn it on. Every action is checked in code, and a click that
@@ -34,6 +35,8 @@ export interface ComputerCliDependencies {
   print?: (line: string) => void;
   /** The browser, when one is connected: doctor asks it whether it can be driven. */
   browser?: BrowserPort;
+  /** Read-only desktop readiness probe; injectable for isolated tests. */
+  request?: typeof fetch;
 }
 
 const steps = (count: number) => `${count} ${count === 1 ? "step" : "steps"}`;
@@ -62,7 +65,8 @@ export async function computerCli(
   const now = dependencies.now ?? Date.now;
   const root = stateRoot({ env, home: dependencies.home ?? homedir() });
   const command = args[0] ?? "status";
-  if (args.length > 1) throw new Error(usage);
+  const json = command === "doctor" && args[1] === "--json";
+  if (args.length > (json ? 2 : 1)) throw new Error(usage);
   if (command === "help" || command === "--help") return print(computerHelp);
   const journal = new ComputerJournal(root, now);
   const keyName = env.CLAWDTIME_OPENAI_API_KEY
@@ -128,9 +132,49 @@ export async function computerCli(
   }
   if (command === "doctor") {
     const chosen = readComputerSwitch(root);
+    const checks: { name: string; detail: string }[] = [];
     const row = (name: string, text: string) =>
-      print(`  ${name.padEnd(15)} ${text}`);
-    print("Computer use on this Mac");
+      checks.push({ name, detail: text });
+    const desktop = await inspectDesktopReadiness(
+      { env, home: dependencies.home ?? homedir() },
+      dependencies.request ? { request: dependencies.request } : {},
+    );
+    row(
+      "desktop service",
+      {
+        absent:
+          "missing at the configured desktop destination. Start the desktop service and set CLAWDTIME_DESKTOP_STATE to its private state folder. Standalone chat is not a desktop executor.",
+        unavailable:
+          "did not answer the authenticated readiness check. No work was submitted.",
+        identity_mismatch:
+          "does not match the installed service identity. No work was submitted.",
+        connected: "connected to the configured instance",
+      }[desktop.service],
+    );
+    row(
+      "desktop chat",
+      {
+        unknown: "not checked; no verified desktop connection",
+        unavailable: "unavailable; the chat route did not answer",
+        no_model:
+          "service has no language model; configure its environment before using phone requests",
+        connected: "service has a language model",
+      }[desktop.chat],
+    );
+    row(
+      "task session",
+      `${desktop.taskSession}; coding-task admission: ${desktop.taskAdmission}. This is separate from computer-worker availability.`,
+    );
+    row(
+      "executor",
+      desktop.computer === "configured"
+        ? `${desktop.computerMode} configured. Panel connection, macOS permissions and visible action results still need verification.`
+        : desktop.computer === "uncertain"
+          ? "an earlier computer outcome is uncertain. Preserve its receipt; do not replay it or reset the journal to continue."
+          : desktop.computer === "not_configured"
+            ? "not configured in the service. Phone chat cannot perform desktop computer work."
+            : "not verified; no computer readiness claim",
+    );
     row(
       "switch",
       chosen.enabled
@@ -188,7 +232,12 @@ export async function computerCli(
       } catch {
         browser = "cannot be driven. It did not answer.";
       }
-    return row("browser", browser);
+    row("browser", browser);
+    if (json) return print(JSON.stringify({ version: 1, desktop, checks }));
+    print("Computer use on this Mac");
+    for (const { name, detail } of checks)
+      print(`  ${name.padEnd(15)} ${detail}`);
+    return;
   }
   throw new Error(usage);
 }

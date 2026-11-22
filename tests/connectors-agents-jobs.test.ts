@@ -56,7 +56,7 @@ describe("a job for a coding session", () => {
       "Open a tunnel for port 3000 and give me the link; $(rm -rf ~) `whoami` 'x'";
     expect(await jobs.start(job)).toEqual({
       ok: true,
-      said: "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.",
+      said: "Requested a new Claude Code terminal session. Its launch has not been verified yet.",
     });
     const folder = join(directory, "agents", "jobs");
     const [id] = readdirSync(folder);
@@ -844,7 +844,7 @@ describe("job launch receipts and explicit retirement", () => {
         })
       ).said,
     ).toBe(
-      "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.",
+      "Requested a new Claude Code terminal session, queued behind the previous job. Its launch has not been verified yet. At the Mac, Return in that window starts it sooner.",
     );
     expect(jobs.recent(1)[0]!.waiting).toBe(true);
     // The list names a retired job by its status, not as working.
@@ -985,9 +985,9 @@ describe("a job that follows up on a job that still runs", () => {
   const first = "build a small landing page for my bakery in one html file";
   const second = "also add a contact form to it";
   const waiting =
-    "On it. Claude Code starts on that in a new terminal window when the job before it is done, and I will tell you its answer then. At the Mac, Return in that window starts it sooner.";
+    "Requested a new Claude Code terminal session, queued behind the previous job. Its launch has not been verified yet. At the Mac, Return in that window starts it sooner.";
   const atOnce =
-    "On it. Claude Code is working on that in a new terminal window, and I will tell you its answer when it is done.";
+    "Requested a new Claude Code terminal session. Its launch has not been verified yet.";
   const follows = { refersBack: true, followsUp: true };
   const made = () => {
     const directory = root();

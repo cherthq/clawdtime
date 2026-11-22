@@ -17,6 +17,9 @@ import type {
 import type { BackgroundRuntime } from "./background-runtime.js";
 import type { BundledCuaRuntime } from "./bundled-cua-runtime.js";
 import type { LineRuntime } from "./line-runtime.js";
+import type { PhoneDesktop } from "./phone-desktop.js";
+import { mountPhoneDesktop } from "./phone-desktop-routes.js";
+import type { PhoneTurnContext } from "../phone-desktop-contracts.js";
 
 /**
  * Computer use as the panel routes see it. The hands that see the screen and
@@ -65,7 +68,11 @@ export interface AgentBoardPort {
   ): Promise<{ ok: boolean; route: string }>;
   /** The conversation with ClawdTime itself. */
   chat(): unknown;
-  say(text: string): Promise<unknown>;
+  say(
+    text: string,
+    via?: "chat" | "voice",
+    context?: PhoneTurnContext,
+  ): Promise<unknown>;
   hear(recording: string): Promise<unknown>;
   setMemory(enabled: boolean): void;
   /** What the watcher found on the sessions. */
@@ -113,6 +120,7 @@ export function createTaskApp(
   executor?: DesktopExecutor | BundledCuaRuntime | BackgroundRuntime,
   computer?: ComputerPort,
   lineRuntime?: LineRuntime,
+  phone?: { scope: PhoneDesktop; instanceId: string },
 ) {
   if (operatorToken.length < 32)
     throw new Error("Protected operator token required.");
@@ -210,6 +218,12 @@ export function createTaskApp(
       control: false,
     }),
   );
+  if (phone && desktop && agents)
+    mountPhoneDesktop(app, {
+      ...phone,
+      authorize: (token) => desktop.authorizePanel(token),
+      say: (text, via, context) => agents.say(text, via, context),
+    });
   if (lineRuntime) {
     app.get("/line/frame", async (c) => {
       const frame = await lineRuntime.preview(

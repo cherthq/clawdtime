@@ -730,3 +730,50 @@ describe("explicit directional navigation", () => {
     expect(f.hands.sent).toHaveLength(1);
   });
 });
+
+it.each(["stale_observation", "refused", "failed"] as const)(
+  "keeps the bounded predispatch %s code in the switch refusal without retry",
+  async (error) => {
+    const f = setup();
+    f.hands.answer = (command) =>
+      command.kind === "switch_desktop" ? { ok: false, error } : undefined;
+    await f.worker.submit("diagnostic", "Move one desktop right");
+    await f.worker.idle();
+    expect(f.journal.get("diagnostic")).toMatchObject({
+      state: "blocked",
+      reason: error,
+      steps: [],
+    });
+    expect(f.worker.status().message).toContain(`before dispatch (${error})`);
+    expect(f.hands.sent).toHaveLength(1);
+    expect(f.planner.inputs).toHaveLength(0);
+    // Re-reading this exact receipt never submits another command.
+    await f.worker.submit("diagnostic", "Move one desktop right");
+    await f.worker.idle();
+    expect(f.hands.sent).toHaveLength(1);
+  },
+);
+it.each([undefined, "untrusted panel detail"])(
+  "does not reflect missing or unrecognized switch refusal details: %s",
+  async (error) => {
+    const f = setup();
+    f.hands.answer = (command) =>
+      command.kind === "switch_desktop"
+        ? { ok: false, error: error as HandResult["error"] }
+        : undefined;
+    await f.worker.submit("diagnostic", "Move one desktop right");
+    await f.worker.idle();
+    expect(f.journal.get("diagnostic")).toMatchObject({
+      state: "blocked",
+      reason: "desktop_not_sent",
+      steps: [],
+    });
+    expect(f.worker.status().message).toContain("before dispatch.");
+    expect(f.worker.status().message).not.toContain("untrusted");
+    expect(JSON.stringify(f.journal.get("diagnostic"))).not.toContain(
+      "untrusted",
+    );
+    expect(f.hands.sent).toHaveLength(1);
+    expect(f.planner.inputs).toHaveLength(0);
+  },
+);

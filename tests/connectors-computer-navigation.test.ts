@@ -241,3 +241,92 @@ describe("goal-only semantic navigation interpretation", () => {
     },
   );
 });
+
+it("routes new coding sessions only through Supervisor and rejects them as native navigation", async () => {
+  const text =
+    "Start a new Claude Code session in a separate terminal window. Only reply READY; do not edit files or run commands.";
+  const net = network([
+    {
+      name: "coding_session",
+      arguments: JSON.stringify({ source: text, agent: "claude" }),
+    },
+  ]);
+  const supervisor = new OpenAIModel(
+    "fixture-key",
+    "fixture-model",
+    net.request,
+  );
+  expect(await supervisor.reading(text)).toEqual({
+    intent: { kind: "none" },
+    work: false,
+    codingSession: { source: text, agent: "claude" },
+  });
+  expect(net.sent[0]!.messages[1]!.content).toBe(text);
+  await expect(
+    new OpenAIPlanner({ key: "fixture-key", request: net.request }).navigation(
+      text,
+    ),
+  ).rejects.toThrow("Supervisor Jobs");
+});
+
+it("rejects session interpretations that rewrite or omit constraints", async () => {
+  const text = "Start Claude in a new terminal. Do not edit files.";
+  const net = network([
+    {
+      name: "coding_session",
+      arguments: JSON.stringify({ source: "Start Claude", agent: "claude" }),
+    },
+  ]);
+  await expect(
+    new OpenAIModel("fixture-key", "fixture-model", net.request).reading(text),
+  ).rejects.toThrow("complete request");
+});
+
+it("preserves coding-session routing when the configured reader is refused and falls back to the chat model", async () => {
+  const text =
+    "Start a new Claude Code session in a separate terminal window. Only reply READY; do not edit files or run commands.";
+  const requests: {
+    model: string;
+    messages: { role: string; content: string }[];
+  }[] = [];
+  const request: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    requests.push(body);
+    if (body.model === "fixture-reader")
+      return new Response(null, { status: 403 });
+    return Response.json({
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              {
+                id: "session",
+                function: {
+                  name: "coding_session",
+                  arguments: JSON.stringify({ source: text, agent: "claude" }),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  };
+  const model = new OpenAIModel("fixture-key", "fixture-chat", request, {
+    readerModel: "fixture-reader",
+  });
+  expect(await model.reading(text)).toEqual({
+    intent: { kind: "none" },
+    work: false,
+    codingSession: { source: text, agent: "claude" },
+  });
+  await model.reading(text);
+  expect(requests.map((item) => item.model)).toEqual([
+    "fixture-reader",
+    "fixture-chat",
+    "fixture-chat",
+  ]);
+  expect(requests.every((item) => item.messages.at(-1)?.content === text)).toBe(
+    true,
+  );
+});

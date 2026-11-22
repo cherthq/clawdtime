@@ -9,6 +9,7 @@ export function makeCallerTools({
   binding,
   ended,
   ask,
+  stop,
   showScreen,
   setZoom,
   zoomStatus,
@@ -16,6 +17,23 @@ export function makeCallerTools({
   allowShape,
 }) {
   const active = () => (ended() ? "The call has ended." : null);
+  const forward = (options, context) =>
+    binding
+      .forward(options, ask, context)
+      .catch(
+        () =>
+          "The request may have reached the Mac, but its outcome is unknown. I did not send it again. Check its status before repeating the request.",
+      );
+  // A presentation-only tool may be the model's choice for a compound request.
+  // Preserve its complete authenticated words for the supervisor too. All tools
+  // in this response share one dispatch; their results remain separate data.
+  const presented = async (options, result, presentation) => {
+    const supervisor = forward(options, { presentation });
+    return JSON.stringify({
+      presentation: await result,
+      supervisor: await supervisor,
+    });
+  };
   return [
     tool({
       name: "ask_clawdtime",
@@ -25,8 +43,7 @@ export function makeCallerTools({
       execute: async (_args, options) => {
         const closed = active();
         if (closed) return closed;
-        const bound = binding.take(options, "computer");
-        return bound.ok ? ask(bound.text) : bound.message;
+        return forward(options);
       },
     }),
     tool({
@@ -38,7 +55,7 @@ export function makeCallerTools({
         const closed = active();
         if (closed) return closed;
         binding.cancel();
-        return ask("stop");
+        return stop();
       },
     }),
     tool({
@@ -53,7 +70,14 @@ export function makeCallerTools({
           const bound = binding.take(options, "sharing");
           if (!bound.ok) return bound.message;
         }
-        return showScreen(on);
+        // Hide starts synchronously, even if a supervisor action is still
+        // pending. It remains available to an unbound reduction-only response.
+        const result = await showScreen(on);
+        return presented(options, result.message, {
+          kind: "sharing",
+          action: on ? "show" : "hide",
+          applied: result.applied === true,
+        });
       },
     }),
     tool({
@@ -66,17 +90,23 @@ export function makeCallerTools({
         if (closed) return closed;
         const bound = binding.take(options, "zoom");
         if (!bound.ok) return bound.message;
-        if (!setZoom(action))
-          return "The video changed for this call, but its preference could not be saved.";
-        return action === "overview"
-          ? "The whole screen will stay shown until you resume automatic zoom."
-          : action === "resume"
-            ? "Automatic zoom has resumed."
-            : action === "disable"
-              ? "Automatic zoom is disabled."
-              : zoomStatus().overview
-                ? "Automatic zoom is enabled; overview stays on until you ask to resume automatic zoom."
-                : "Automatic zoom is enabled.";
+        const saved = setZoom(action);
+        const result = !saved
+          ? "The video changed for this call, but its preference could not be saved."
+          : action === "overview"
+            ? "The whole screen will stay shown until you resume automatic zoom."
+            : action === "resume"
+              ? "Automatic zoom has resumed."
+              : action === "disable"
+                ? "Automatic zoom is disabled."
+                : zoomStatus().overview
+                  ? "Automatic zoom is enabled; overview stays on until you ask to resume automatic zoom."
+                  : "Automatic zoom is enabled.";
+        return presented(options, result, {
+          kind: "zoom",
+          action,
+          applied: true,
+        });
       },
     }),
     ...(allowShape
@@ -90,7 +120,13 @@ export function makeCallerTools({
               const closed = active();
               if (closed) return closed;
               const bound = binding.take(options, "shape");
-              return bound.ok ? reshape(wide) : bound.message;
+              return bound.ok
+                ? presented(options, reshape(wide), {
+                    kind: "shape",
+                    action: wide ? "wide" : "upright",
+                    applied: true,
+                  })
+                : bound.message;
             },
           }),
         ]

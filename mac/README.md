@@ -709,3 +709,66 @@ the probe completed, even when permissions are false; exit 1 is a probe error.
 Combining `--check-access` with other arguments emits a bounded error and exits
 2 rather than launching the panel. A bare build's permissions do not qualify a
 different signed/installed app: probe the exact deployed executable.
+
+For a source-window refusal, the exact deployed executable also supports the
+standalone `--check-desktop` flag. It reads the current front window's AX and
+Quartz metadata through the same source matcher used for desktop transitions.
+Output contains only fixed reason codes, a display count and boolean facts:
+front-app/visible-window agreement, ordinary/full-screen scope and containment.
+It emits no app identities, titles, text, frames or images, and starts no input
+tap, capture, service connection, configuration/receipt access or application UI.
+The current surface must remain unchanged while it runs. `source_ready` is a
+source preflight only; it does not verify a shortcut or a destination. Do not
+combine the flag with launch arguments or `--check-access`.
+
+Each native desktop-switch attempt also emits one notice-level unified-log
+summary under subsystem `com.clawdtime.task-panel`, category
+`desktop-transition`. It records command sequence, direction, dispatch status,
+Space/environment deltas, observation counts, elapsed milliseconds and fixed
+failure codes. The environment delta excludes the attempt's own failure
+cleanup; `nativeFailure` preserves the error before an attempted effect becomes
+`transition_unknown`. No app/window identities, titles, geometry, request words
+or screen contents are logged. Read these summaries with:
+
+```sh
+log show --last 10m --style json --predicate 'subsystem == "com.clawdtime.task-panel" AND category == "desktop-transition"'
+```
+
+Diagnostics neither change settlement/Stop checks nor clear or retry an unknown
+effect. A refusal before the desktop coordinator is called has no transition
+summary; the worker's fixed refusal code remains the evidence in that case.
+
+### Directional desktop evidence with app overlays
+
+Explicit left/right moves can separately recognize a stable full-screen
+composition when the focused AX parent uniquely matches its Quartz owner,
+title and frame, and up to eight smaller ordinary windows of that same app
+precede it. Every leading row must have complete, finite metadata and a unique
+window ID. Every ordinary row in the directional inventory must also report a
+finite alpha greater than zero and at most one; missing or transparent rows
+reject the inventory rather than being dropped. Overlay frames must intersect the sole display and be no wider or
+taller than the contained full-screen parent. Their full, unclipped geometry
+and ordering are retained, including partly offscreen edges; overlays are not
+declared harmless or ignored. Foreign leading windows, duplicate IDs, missing
+frames and oversized compositions remain unsupported.
+
+A composite source must remain unchanged for three samples over 600 ms before
+one shortcut can be sent. Arrival still requires exactly one Space event, a
+different parent window, stable complete composition, and fresh capture
+bracketed by matching evidence. If either endpoint uses this path, no input
+lease or previous-desktop history is granted. App/window activation and
+click/type targeting keep their original strict matcher. This fallback is not
+used for “previous” or for departures from an empty desktop. The read-only
+`--check-desktop` report adds `directionalCompositionEligible` when the strict
+source matcher fails; it is a source preflight, not physical acceptance.
+
+Some full-screen apps expose content below separate toolbar rows. Directional
+evidence can recognize this layout only when the exact AX/Quartz content parent
+is full width, bottom aligned and at least 85% of the display height, with
+affirmative AX full-screen status. Beyond the existing 80-point menu/notch
+allowance, every part of the top gap must be covered continuously by actual
+same-app, full-width toolbar rows. Supporting rows must fit the display, be at
+most 80 points tall and at most 12% of the parent height. Gaps, missing rows or
+oversized substitutes are not inferred away. All rows remain in the unchanged
+composition fingerprint. `directionalToolbarCoverage` identifies this proof in
+the read-only diagnostic; the strict input/window matcher is unchanged.

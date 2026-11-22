@@ -26,4 +26,19 @@ import TaskPanelCore
     FileHandle.standardOutput.write(Data("{\"version\":1,\"error\":\"invalid_check_access_arguments\"}\n".utf8))
     return 2
   }
+  static func desktop() -> Int32 {
+    do {
+      let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+      var data = try encoder.encode(HandsDesktop.sourceDiagnostics()); data.append(0x0a)
+      FileHandle.standardOutput.write(data)
+      return 0
+    } catch {
+      FileHandle.standardOutput.write(Data("{\"version\":1,\"error\":\"desktop_check_unavailable\"}\n".utf8))
+      return 1
+    }
+  }
+  static func invalidDesktopArguments() -> Int32 {
+    FileHandle.standardOutput.write(Data("{\"version\":1,\"error\":\"invalid_check_desktop_arguments\"}\n".utf8))
+    return 2
+  }
 }
