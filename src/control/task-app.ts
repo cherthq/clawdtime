@@ -122,6 +122,12 @@ export function createTaskApp(
   // of it is read.
   const pictureLimit = bodyLimit({ maxSize: 6 * 1024 * 1024 });
   app.use("*", (c, next) => {
+    // The credential of the phone runtime comes before everything else of a
+    // command: a request with no token or a wrong one gets the same refusal
+    // whatever its body is, and no part of the body is read, measured or
+    // parsed.
+    if (lineRuntime && c.req.path === "/line/command")
+      lineRuntime.authorize(bearer(c.req.header("authorization")));
     if (
       desktop &&
       computer &&
@@ -227,14 +233,13 @@ export function createTaskApp(
         }),
       });
     });
-    app.post("/line/command", async (c) =>
-      c.json(
-        await lineRuntime.command(
-          bearer(c.req.header("authorization")),
-          await c.req.json(),
-        ),
-      ),
-    );
+    app.post("/line/command", async (c) => {
+      // Once more here, so the order does not rest on the middleware alone:
+      // the token first, then the body.
+      const credential = bearer(c.req.header("authorization"));
+      lineRuntime.authorize(credential);
+      return c.json(await lineRuntime.command(credential, await c.req.json()));
+    });
   }
   if (desktop) {
     const credential = (c: any) => bearer(c.req.header("authorization"));

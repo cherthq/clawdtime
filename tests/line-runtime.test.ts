@@ -207,4 +207,119 @@ describe("phone computer runtime", () => {
     expect((await request(token)).status).toBe(200);
     f.store.close();
   });
+  it("checks the token of a command first: with none or a wrong one, the refusal is the same for every body, and no body is read", async () => {
+    const f = fixture();
+    await f.command("open");
+    const app = f.app();
+    /** A body that counts how often it is read. Nothing is read ahead. */
+    const counted = (text: string) => {
+      const state = { reads: 0 };
+      const bytes = new TextEncoder().encode(text);
+      let sent = false;
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            state.reads++;
+            if (sent) return controller.close();
+            sent = true;
+            controller.enqueue(bytes);
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return { state, stream };
+    };
+    const good = JSON.stringify({ action: "status", callId: "fixture_call" });
+    const bodies: {
+      name: string;
+      body: string;
+      headers?: Record<string, string>;
+    }[] = [
+      { name: "a good command", body: good },
+      { name: "text that is not JSON", body: "{ not json" },
+      {
+        name: "a command of another shape",
+        body: JSON.stringify({ action: "unknown", more: true }),
+      },
+      {
+        name: "a body that is not declared as JSON",
+        body: good,
+        headers: { "content-type": "text/plain" },
+      },
+      {
+        name: "a body over the size limit",
+        body: "x".repeat(40_000),
+        headers: { "content-length": "40000" },
+      },
+      { name: "no body at all", body: "" },
+    ];
+    const credentials: { name: string; header?: string }[] = [
+      { name: "no token" },
+      { name: "a wrong token", header: `Bearer ${"o".repeat(40)}` },
+      { name: "the token with one more character", header: `Bearer ${token}l` },
+      { name: "the token under another scheme", header: `Basic ${token}` },
+      { name: "an empty token", header: "Bearer " },
+    ];
+    for (const credential of credentials)
+      for (const item of bodies) {
+        const headers = {
+          "content-type": "application/json",
+          ...(item.headers ?? {}),
+          ...(credential.header ? { authorization: credential.header } : {}),
+        };
+        const plain = await app.request("/line/command", {
+          method: "POST",
+          headers,
+          ...(item.body ? { body: item.body } : {}),
+        });
+        const where = `${credential.name}, ${item.name}`;
+        expect(plain.status, where).toBe(401);
+        expect(await plain.json(), where).toEqual({
+          error: "Line runtime authorization required.",
+        });
+        // The same body as a stream: it is never read.
+        const { state, stream } = counted(item.body);
+        const streamed = await app.request(
+          new Request("http://localhost/line/command", {
+            method: "POST",
+            headers,
+            body: stream,
+            duplex: "half",
+          } as RequestInit),
+        );
+        expect(streamed.status, where).toBe(401);
+        expect(await streamed.json(), where).toEqual({
+          error: "Line runtime authorization required.",
+        });
+        expect(state.reads, where).toBe(0);
+      }
+    // No refused request reached the runtime.
+    expect(f.runtime.submit).not.toHaveBeenCalled();
+    // With the token, the same stream is read and the command is answered.
+    const { state, stream } = counted(good);
+    const admitted = await app.request(
+      new Request("http://localhost/line/command", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: stream,
+        duplex: "half",
+      } as RequestInit),
+    );
+    expect(admitted.status).toBe(200);
+    expect(state.reads).toBeGreaterThan(0);
+    // With the token, a body that is not JSON is still refused as before.
+    const broken = await app.request("/line/command", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: "{ not json",
+    });
+    expect(broken.status).toBe(400);
+    f.store.close();
+  });
 });
