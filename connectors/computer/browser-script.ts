@@ -416,7 +416,10 @@ function read() {
     var facts = factsOf(el);
     if (!facts) return;
     var rect = el.getBoundingClientRect();
-    if (!shown(el, rect) || off(el)) return;
+    // A control that the browser disabled stays in the reading, marked: "Send
+    // is there and cannot be used yet" tells the planner to fill the form
+    // first. Left out, the planner looked for a button that the page shows.
+    if (!shown(el, rect)) return;
     found.push({ el: el, facts: facts, near: inView(rect, width, height) });
   });
   var kept = arrange(found, ${pageLimits.elements});
@@ -438,7 +441,7 @@ function read() {
       if (value !== null) entry.value = value;
     }
     if (facts.tag === "a" && typeof el.href === "string") entry.href = oneLine(el.href, ${pageLimits.link});
-    entry.disabled = hindered(el);
+    entry.disabled = off(el) || hindered(el);
     entry.password = hidden;
     elements.push(entry);
   }

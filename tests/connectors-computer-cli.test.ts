@@ -153,7 +153,9 @@ describe("clawdtime computer", () => {
     expect(missing).toMatch(/hands +in the ClawdTime panel/);
     expect(missing).toMatch(/Accessibility/);
     expect(missing).toMatch(/Screen & System Audio Recording/);
-    expect(missing).toMatch(/browser +not connected in this build/);
+    expect(missing).toMatch(
+      /browser +off\. The worker uses the screen for web pages\. To read and operate the page itself, start the desktop service with CLAWDTIME_COMPUTER_BROWSER=on\./,
+    );
     expect(readdirSync(root)).toEqual([]);
 
     const ready = setup({

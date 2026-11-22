@@ -41,6 +41,7 @@ import { retryExistingSetup } from "./setup-retry.js";
 import { taskCli } from "./tasks.js";
 import { agentsCli } from "./agents.js";
 import { computerCli } from "./computer.js";
+import { browserFromEnvironment } from "../connectors/computer/browser.js";
 
 function options(args: string[]) {
   const values: Record<string, string> = {};
@@ -57,7 +58,11 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "task") return taskCli(args.slice(1));
   if (command === "agents") return agentsCli(args.slice(1));
   if (command === "hosts") return agentsCli(["--hosts", ...args.slice(1)]);
-  if (command === "computer") return computerCli(args.slice(1));
+  if (command === "computer") {
+    // The doctor asks the browser driver only when the person turned it on.
+    const browser = browserFromEnvironment(process.env);
+    return computerCli(args.slice(1), browser ? { browser } : {});
+  }
   if (
     [
       "trove",

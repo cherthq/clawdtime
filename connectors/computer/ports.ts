@@ -233,6 +233,14 @@ export interface BrowserPage {
 }
 
 /** The browser, driven through its scripting door. */
+/**
+ * The browser cannot be driven until the person changes a setting: page
+ * scripts are not allowed in it, or macOS does not let this program control
+ * it. Nothing in one request changes that, so the worker stops offering the
+ * browser for the rest of the request and uses the screen.
+ */
+export class BrowserClosed extends Error {}
+
 export interface BrowserPort {
   /** Whether a browser can be driven now, and what the person must switch on when it cannot. */
   doctor(): Promise<{ ok: boolean; browser: string | null; reason: string }>;
@@ -299,5 +307,7 @@ export interface Planner {
     history: StepRecord[];
     observation: Observation | null;
     page: BrowserPage | null;
+    /** False when the browser cannot be used in this request. The browser functions are then not offered. */
+    browser?: boolean;
   }): Promise<{ action: Action; why: string }>;
 }
