@@ -12,6 +12,11 @@ import {
   type HandResult,
   type Observation,
 } from "../connectors/computer/ports.js";
+import {
+  cleanTitle,
+  sameTitle,
+  verifiedActivation,
+} from "../connectors/computer/desktop.js";
 import { ComputerWorker } from "../connectors/computer/worker.js";
 import {
   element,
@@ -143,24 +148,163 @@ describe("verified desktop activation", () => {
     "unsupported_desktop",
     "target_not_visible",
     "not_found",
+    "stale_observation",
+    "refused",
   ] as const)(
-    "stops on %s before another plan or input can run",
+    "hands %s back to the planner as a refused action, and nothing locks",
     async (error) => {
-      const f = setup([
-        activate,
-        activate,
-        { kind: "type", text: "should never type" },
-      ]);
+      const f = setup([activate, done]);
       f.hands.answer = (c) =>
         c.kind === "open_app" ? { ok: false, error } : undefined;
-      await f.worker.submit("blocked", "Show the disposable target");
+      await f.worker.submit("refused", "Show the disposable target");
       await f.worker.idle();
-      expect(f.worker.status().state).toBe("blocked");
-      expect(f.journal.get("blocked")?.reason).toBe(error);
+      // Nothing was sent, so the request went on: the planner read why and chose again.
       expect(f.hands.sent).toEqual([activate]);
-      expect(f.planner.inputs).toHaveLength(1);
+      expect(f.planner.inputs).toHaveLength(2);
+      expect(f.planner.inputs[1]?.history[0]?.outcome).toMatch(
+        /^refused: .*Nothing was (?:opened|activated|sent)\./,
+      );
+      expect(f.planner.inputs[1]?.observation).toEqual(target);
+      expect(f.journal.get("refused")?.steps[0]?.outcome).toBe(error);
+      expect(f.worker.status().state).toBe("completed");
+      expect(f.journal.unresolved()).toBeNull();
+      expect((await f.worker.submit("next", "Another task")).message).toMatch(
+        /^Started/,
+      );
     },
   );
+
+  it("tells the planner that no app has the name, so that it can use the name this Mac knows", async () => {
+    const chrome = observation([], {
+      surfaceEpoch: 5,
+      app: {
+        name: "Google Chrome",
+        bundleId: "com.google.Chrome",
+        window: "New Tab",
+      },
+    });
+    const f = setup(
+      [
+        { kind: "open_app", name: "Chrome" },
+        { kind: "open_app", name: "Google Chrome" },
+        done,
+      ],
+      [target, target, chrome],
+    );
+    f.hands.answer = (c) =>
+      c.kind !== "open_app"
+        ? undefined
+        : c.name === "Chrome"
+          ? { ok: false, error: "not_found" }
+          : { observation: chrome, resolvedBundleId: "com.google.Chrome" };
+    await f.worker.submit("chrome", "Open Chrome and show me the new tab");
+    await f.worker.idle();
+    expect(f.hands.sent).toEqual([
+      { kind: "open_app", name: "Chrome" },
+      { kind: "open_app", name: "Google Chrome" },
+    ]);
+    expect(f.planner.inputs[1]?.history[0]?.outcome).toMatch(
+      /^refused: No app with that name was found on this Mac\./,
+    );
+    expect(f.planner.inputs[2]?.history[1]?.outcome).toBe("ok");
+    expect(f.worker.status().state).toBe("completed");
+    expect(f.journal.unresolved()).toBeNull();
+  });
+
+  it("ends after three refusals in a row with the reason, asks nothing, and does not lock", async () => {
+    const f = setup([activate, activate, activate, done]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app" ? { ok: false, error: "not_found" } : undefined;
+    await f.worker.submit("absent", "Show the disposable target");
+    await f.worker.idle();
+    // The same refused action is no repeat of an action that went out: no
+    // "I already did this twice" question stands in the way of the end.
+    expect(f.hands.sent).toEqual([activate, activate, activate]);
+    expect(f.worker.status()).toMatchObject({
+      state: "blocked",
+      question: null,
+    });
+    expect(f.worker.status().message).toMatch(
+      /3 actions in a row .* The last reason: No app with that name was found on this Mac\./,
+    );
+    expect(f.journal.get("absent")?.reason).toBe("too_many_refusals");
+    expect(f.journal.unresolved()).toBeNull();
+    expect((await f.worker.submit("next", "Another task")).message).toMatch(
+      /^Started/,
+    );
+  });
+
+  it("counts a refusal of the hands and a refusal of the checks in one row", async () => {
+    const f = setup([
+      activate,
+      { kind: "open_app", name: "../Fixture" },
+      activate,
+      done,
+    ]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? { ok: false, error: "ambiguous_target" }
+        : undefined;
+    await f.worker.submit("row", "Show the disposable target");
+    await f.worker.idle();
+    expect(f.hands.sent).toEqual([activate, activate]);
+    expect(f.worker.status().state).toBe("blocked");
+    expect(f.journal.get("row")?.reason).toBe("too_many_refusals");
+    expect(f.planner.inputs).toHaveLength(3);
+  });
+
+  it("starts the row again after an action that ran", async () => {
+    const f = setup([
+      activate,
+      activate,
+      { kind: "wait", ms: 0 },
+      activate,
+      activate,
+      done,
+    ]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app" ? { ok: false, error: "not_found" } : undefined;
+    await f.worker.submit("reset", "Show the disposable target");
+    await f.worker.idle();
+    expect(f.hands.sent).toHaveLength(4);
+    expect(f.worker.status().state).toBe("completed");
+  });
+
+  it.each([
+    ["no_accessibility", /Accessibility, and turn on the ClawdTime panel/],
+    [
+      "no_screen_recording",
+      /Screen & System Audio Recording, and turn on the ClawdTime panel/,
+    ],
+  ] as const)(
+    "still ends on %s with the sentence that names the missing right",
+    async (error, sentence) => {
+      const f = setup([activate, activate, done]);
+      f.hands.answer = (c) =>
+        c.kind === "open_app" ? { ok: false, error } : undefined;
+      await f.worker.submit("right", "Show the disposable target");
+      await f.worker.idle();
+      expect(f.worker.status().state).toBe("blocked");
+      expect(f.worker.status().message).toMatch(sentence);
+      expect(f.journal.get("right")?.reason).toBe(error);
+      expect(f.hands.sent).toEqual([activate]);
+      expect(f.planner.inputs).toHaveLength(1);
+      expect(f.journal.unresolved()).toBeNull();
+    },
+  );
+
+  it("still ends when the person stops it at the hands, and sends nothing more", async () => {
+    const f = setup([activate, activate, done]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? { ok: false, error: "stopped_by_person" }
+        : undefined;
+    await f.worker.submit("stopped", "Show the disposable target");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("canceled");
+    expect(f.hands.sent).toEqual([activate]);
+    expect(f.planner.inputs).toHaveLength(1);
+  });
 
   it.each([
     { ok: false, error: "transition_unknown" },
@@ -279,6 +423,209 @@ describe("verified desktop activation", () => {
     expect(f.journal.unresolved()?.reason).toBe("input_unknown");
     expect(f.hands.sent).toEqual([{ kind: "type", text: "fixture" }]);
     expect(f.journal.get("partial")?.steps[0]?.outcome).toBe("input_unknown");
+  });
+});
+
+describe("one definition of arrived", () => {
+  // The name that a person says, the name that the app gives itself, and its
+  // bundle identifier. `mac/Tests/TaskPanelCoreTests/DesktopArrivalTests.swift`
+  // shows that the hands find each app by the name that is said here.
+  const apps = [
+    ["iTerm", "iTerm2", "com.googlecode.iterm2"],
+    ["Visual Studio Code", "Code", "com.microsoft.VSCode"],
+    ["Safari.app", "Safari", "com.apple.Safari"],
+  ] as const;
+  const front = (name: string, bundleId: string, window = "Window") =>
+    observation([], { surfaceEpoch: 4, app: { name, bundleId, window } });
+
+  it.each(apps)(
+    'accepts "%s" when the app that the hands found is in front',
+    async (said, name, bundleId) => {
+      const open: Action = { kind: "open_app", name: said };
+      const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+      f.hands.answer = (c) =>
+        c.kind === "open_app"
+          ? { observation: front(name, bundleId), resolvedBundleId: bundleId }
+          : undefined;
+      await f.worker.submit("named", `Open ${said}`);
+      await f.worker.idle();
+      expect(f.hands.sent).toEqual([open]);
+      expect(f.worker.status().state).toBe("completed");
+      expect(f.journal.unresolved()).toBeNull();
+      expect(f.planner.inputs[1]?.history[0]?.outcome).toBe("ok");
+    },
+  );
+
+  it.each(apps)(
+    'does not accept "%s" when another app is in front',
+    async (said, _name, bundleId) => {
+      const open: Action = { kind: "open_app", name: said };
+      const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+      f.hands.answer = (c) =>
+        c.kind === "open_app"
+          ? {
+              observation: front("Finder", "com.apple.finder"),
+              resolvedBundleId: bundleId,
+            }
+          : undefined;
+      await f.worker.submit("other", `Open ${said}`);
+      await f.worker.idle();
+      expect(f.worker.status().state).toBe("uncertain");
+      expect(f.journal.unresolved()?.reason).toBe("transition_unknown");
+      expect(f.hands.sent).toEqual([open]);
+    },
+  );
+
+  it("compares the app in front with the app that was found, not with the name", () => {
+    const open = { kind: "open_app", name: "iTerm" } as const;
+    const seen = front("iTerm2", "com.googlecode.iterm2");
+    const result = (values: Partial<HandResult>): HandResult => ({
+      seq: 1,
+      ok: true,
+      observation: seen,
+      ...values,
+    });
+    expect(
+      verifiedActivation(
+        open,
+        result({ resolvedBundleId: "com.googlecode.iterm2" }),
+      ),
+    ).toBe(true);
+    expect(
+      verifiedActivation(
+        open,
+        result({ resolvedBundleId: "COM.GoogleCode.iTerm2" }),
+      ),
+    ).toBe(true);
+    for (const resolvedBundleId of ["com.apple.Terminal", "", " "])
+      expect(verifiedActivation(open, result({ resolvedBundleId }))).toBe(
+        false,
+      );
+    // A panel that does not say which app it found is judged by the name.
+    expect(verifiedActivation(open, result({}))).toBe(false);
+    expect(
+      verifiedActivation({ kind: "open_app", name: "iTerm2" }, result({})),
+    ).toBe(true);
+    // The picture and the surface generation are needed in every case.
+    expect(
+      verifiedActivation(
+        open,
+        result({
+          resolvedBundleId: "com.googlecode.iterm2",
+          observation: { ...seen, image: undefined },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      handResultSchema.safeParse({
+        seq: 1,
+        ok: true,
+        resolvedBundleId: "a".repeat(201),
+      }).success,
+    ).toBe(false);
+  });
+
+  const titles = [
+    ["Budget\u00a02026", "Budget 2026"],
+    ["Notes\u200e \u2014 Draft", "Notes \u2014 Draft"],
+    ["  padded\ttitle\u2028here ", "padded title here"],
+    ["Cafe\u0301 menu", "Cafe\u0301 menu"],
+    ["a".repeat(250), `${"a".repeat(199)}\u2026`],
+    [`${"a".repeat(198)} bcd`, `${"a".repeat(198)}\u2026`],
+  ] as const;
+  it.each(titles)(
+    "cleans a window title as the observation does %#",
+    (asked, cleaned) => {
+      // The same pairs are in the panel's test of `ElementCleaner.line`.
+      expect(cleanTitle(asked)).toBe(cleaned);
+      expect(cleanTitle(cleaned)).toBe(cleaned);
+      expect(sameTitle(asked, cleaned)).toBe(true);
+    },
+  );
+  it("keeps titles apart that differ in more than their spaces", () => {
+    expect(sameTitle("Budget 2026", "Budget 2027")).toBe(false);
+    expect(sameTitle("Budget 2026", "budget 2026")).toBe(false);
+    expect(sameTitle("Budget2026", "Budget 2026")).toBe(false);
+  });
+  it("takes the same letters stored in two ways as one title, as the panel does", () => {
+    expect(sameTitle("R\u00e9sum\u00e9.pdf", "Re\u0301sume\u0301.pdf")).toBe(
+      true,
+    );
+    const open = {
+      kind: "open_app",
+      name: "Preview",
+      window: "R\u00e9sum\u00e9.pdf",
+    } as const;
+    expect(
+      verifiedActivation(open, {
+        seq: 1,
+        ok: true,
+        observation: front(
+          "Preview",
+          "com.apple.Preview",
+          "Re\u0301sume\u0301.pdf",
+        ),
+        resolvedBundleId: "com.apple.Preview",
+      }),
+    ).toBe(true);
+  });
+  it("never takes a title that cleans to nothing for an untitled window", () => {
+    for (const nothing of ["", " ", "\u200b", "\u200b\u00a0\ufeff"]) {
+      expect(sameTitle(nothing, "")).toBe(false);
+      expect(sameTitle("", nothing)).toBe(false);
+      expect(
+        verifiedActivation(
+          { kind: "open_app", name: "TextEdit", window: nothing },
+          {
+            seq: 1,
+            ok: true,
+            observation: front("TextEdit", "com.apple.TextEdit", ""),
+            resolvedBundleId: "com.apple.TextEdit",
+          },
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a window title with a no-break space that the observation shows with a plain space", async () => {
+    const open: Action = {
+      kind: "open_app",
+      name: "com.apple.TextEdit",
+      window: "Budget\u00a02026",
+    };
+    const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? {
+            observation: front("TextEdit", "com.apple.TextEdit", "Budget 2026"),
+            resolvedBundleId: "com.apple.TextEdit",
+          }
+        : undefined;
+    await f.worker.submit("title", "Show the budget window");
+    await f.worker.idle();
+    expect(f.hands.sent).toEqual([open]);
+    expect(f.worker.status().state).toBe("completed");
+    expect(f.journal.unresolved()).toBeNull();
+  });
+
+  it("does not accept another window of the right app when a title was asked for", async () => {
+    const open: Action = {
+      kind: "open_app",
+      name: "TextEdit",
+      window: "Budget 2026",
+    };
+    const f = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+    f.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? {
+            observation: front("TextEdit", "com.apple.TextEdit", "Budget 2027"),
+            resolvedBundleId: "com.apple.TextEdit",
+          }
+        : undefined;
+    await f.worker.submit("sibling", "Show the budget window");
+    await f.worker.idle();
+    expect(f.worker.status().state).toBe("uncertain");
+    expect(f.hands.sent).toEqual([open]);
   });
 });
 

@@ -39,6 +39,11 @@ or promise that a named app is the most recently used one. Generic keyboard
 commands cannot bypass this verified path. A missing or ambiguous destination
 after dispatch remains unknown and is not retried.
 
+The app switcher shows regular apps only. With no regular app besides the one
+in front, the keys would change nothing, so the panel refuses before anything
+is sent (`DesktopAppSwitch`). The worker says "There is no other app to go back
+to." and nothing locks.
+
 See [the navigation plan](APP_DESKTOP_NAVIGATION_PLAN.md) for semantic routing,
 caller transcript binding and the combined acceptance matrix.
 
@@ -70,43 +75,82 @@ Each request authorizes **one key-down/key-up pair**, not a desktop search.
 Verification requires a post-dispatch `activeSpaceDidChange` notification and
 a distinct, independently observed on-screen surface, stable for at least
 600 ms/three samples within five seconds, followed by fresh bracketed capture
-and AX evidence. Notification or dispatch alone is insufficient. A boundary,
-a shortcut disabled during dispatch, identical visible surfaces, missing window
-evidence, conflicting shortcut, animation timeout, or interruption can leave
-`transition_unknown`. No blind retry occurs, including after Stop/restart.
-Inspect the desktop and reconcile the journal before another request. A
-predispatch refusal and a possibly completed transition are different outcomes.
+and AX evidence. Notification or dispatch alone is insufficient. A shortcut
+disabled during dispatch, identical visible surfaces after a Space change,
+missing window evidence, conflicting shortcut, animation timeout, or
+interruption can leave `transition_unknown`. No blind retry occurs, including
+after Stop/restart. Inspect the desktop and reconcile the journal before another
+request. A predispatch refusal and a possibly completed transition are different
+outcomes.
+
+There is a third outcome: **not moved** (`desktop_unchanged`). The key went out,
+no Space change was reported, and every look of the whole five-second wait
+showed the same surface as before. That is the last desktop on that side, or a
+shortcut that did nothing. It is known, so it is not `transition_unknown` and
+nothing locks. The worker says "The desktop did not change. There may be no
+desktop on that side." One look that shows nothing or another surface, one
+Space change, Stop or a takeover in the wait, and the result stays unknown. A
+move to an empty desktop reports a Space change and shows no window, so it
+still ends as unknown.
 
 ## Target-window activation
 
 Ask the native worker to “switch to the TextEdit window” or “bring the TextEdit
 window named Disposable Spaces Fixture forward.” Its `open_app` action accepts
-an app name or bundle ID and an optional **exact** `window` title. App-only
-selection requires one matching standard AX window, including a positively
-verified single-display full-screen window. Multiple matching apps or
-windows block without choosing the first. A validated plain app-opening request
+an app name or bundle ID and an optional `window` title.
+
+"Arrived" has one definition, in the panel (`DesktopArrival`) and in the worker
+(`verifiedActivation`). The panel finds one app for the name, by its bundle
+identifier, the name of the running app, its file name or its name in Finder,
+and reports the bundle identifier of that app with the result. The worker
+accepts the result when that app is in front, whichever form of the name was
+used: "iTerm" opens an app that calls itself "iTerm2". A window title is
+compared after the cleaning that every observation gets, on both sides: a
+no-break space or a format character counts as a space, and a title over 200
+characters is cut the same way. Two windows with the same cleaned title are
+ambiguous. A validated plain app-opening request
 handled by the supervisor also goes through this worker when it is the selected
 native engine. URL opening, terminal-session selection, and other execution
 engines retain their existing routes.
 
-The panel selects the AX window, restores it if minimized, and requests supported
-activation/raise operations. It never selects a sibling merely because that
-window is already visible. For an absent running app it may launch the installed
-application once; a launch that does not yield a verifiable window is
-an unknown outcome, not success. An app or exact target that cannot be resolved
-before any external effect gets a definite refusal.
+A request has one of two meanings, and "arrived" follows it.
 
-Some running background apps return a successful empty AX window inventory. For
-a named-app request without an exact window title, the panel may activate that
-app once to reveal its window metadata. It then only reads and verifies; it does
-not raise, restore, or activate a second time. Exact-window requests and failed
-inventory reads never use this path. If the revealed window is missing, ambiguous
-or unverifiable, the activation remains unknown and no further input follows.
+**Only an app is named** ("open Chrome", "go to Slack"). The panel sends one
+open request to macOS, as a click on the app's icon in the Dock does. A running
+app comes forward with the window that it chooses, and an app that does not run
+starts. Arrived means: that app is in front. The panel reads which app is in
+front for up to 6 seconds, then takes the picture and the tree with the same
+app in front before and after. The number of displays, the number of windows of
+the app and a window that lies partly off the screen do not matter. An app that
+restored two windows is in front all the same. Only an app that is not in front
+when the wait is over leaves the result unknown.
 
-Readiness requires the same AX window to be focused, its app to be frontmost,
-and a unique matching on-screen Quartz window to agree on owner, title and
-geometry. The selected window must be the front verified window and wholly on
-the main display. Full-screen matching permits at most one same-app auxiliary
+**A window title is named.** The panel selects the one standard AX window with
+that title, restores it if minimized, and requests supported activation/raise
+operations. It never selects a sibling merely because that window is already
+visible, and a title that fits more than one window blocks without choosing the
+first. This path needs one display. For an absent running app it may launch the
+installed application once and reads its windows for up to 6 seconds; a launch
+that does not yield the verifiable window is an unknown outcome, not success.
+A running app that shows no window with that title gets a definite refusal, and
+nothing is activated to look for one.
+
+An app or a window that cannot be resolved before any external effect gets a
+definite refusal. A refusal of `open_app` does not end the request and does not
+lock. The worker gives the planner the reason as a refused action, so that it
+can use the name that this Mac knows ("Chrome" is "Google Chrome" here), leave
+the title out, or tell the person why it cannot be done. That holds for a name
+that matches no app, an ambiguous name or title, a title that no window has, a
+named window with more than one display, and activation that is turned off.
+Three refusals in a row end the request as blocked, with the last reason. A
+missing Accessibility or Screen Recording right still ends the request at once,
+with the sentence that names the right. A refused desktop switch or previous-app
+switch still ends its request: the planner cannot send those.
+
+For a named window, readiness requires the same AX window to be focused, its app
+to be frontmost, and a unique matching on-screen Quartz window to agree on owner,
+title and geometry. The selected window must be the front verified window and
+wholly on the main display. Full-screen matching permits at most one same-app auxiliary
 top strip under narrow geometry checks and only when AX does not expose that
 strip as a window/dialog. Other overlays remain blocking. Repeated observations must agree for at least 600 ms, with
 at least three samples within five seconds. Space-generation changes reset
@@ -121,7 +165,11 @@ effect was submitted and verification, permissions, Stop, takeover, or connectio
 checks fail, the result is `transition_unknown`. The worker preserves that
 uncertainty across restart and blocks new work until the person inspects the
 screen and explicitly clears the journal through `clawdtime computer clear`.
-Clearing is reconciliation, not permission to replay the original request.
+The worker has the same step as a method, `clear()`, so that the supervisor can
+take the words "clear the computer task" from a person who has no terminal: on
+a call, or away from the Mac. Every message of the worker about an unknown
+result names both ways. Clearing is reconciliation, not permission to replay
+the original request.
 
 ## Freshness and interruption
 
@@ -197,8 +245,10 @@ be read, modified/function shortcuts are refused; plain editing remains
 available. This is a guard against a generic key action bypassing verification,
 not the dedicated `switch_desktop` command. Only that command can dispatch the explicitly configured directional combination. No shortcut settings are changed.
 
-Switching supports distinguishable ordinary windows and positively verified
-full-screen app windows on **one active main display**. Full-screen acceptance
+A desktop switch, a previous-app switch and a named window support
+distinguishable ordinary windows and positively verified full-screen app windows
+on **one active main display**. A request that names only an app has none of
+these limits. Full-screen acceptance
 requires `AXFullScreen` plus full-width, near-full-height geometry. Split View,
 multiple displays, off-main/partly off-screen windows, missing AX/CG evidence,
 ambiguous duplicate windows and identical destination surfaces remain unsupported.
@@ -219,7 +269,8 @@ inside the already opted-in native computer engine. This variable does not
 enable computer use, start a service, or change the installed environment. Input
 freshness/Stop checks remain active when desktop activation is disabled. The
 single-display and independently verified window checks apply
-to transitions, not unrelated input. Existing input can still use a fresh
+to a desktop switch, a previous-app switch and a named window, not to unrelated
+input and not to a request that names only an app. Existing input can still use a fresh
 visible main-display window on multi-display or full-screen configurations;
 that does not qualify Space switching in those configurations.
 
@@ -340,8 +391,10 @@ The tester verifies arrival and a harmless unsent edit, then exercises:
    ask right once; independently verify desktop B in person and on the shared
    video. Ask left once and verify A. Repeat as separate requests; test previous.
    Confirm a harmless unsent TextEdit edit lands after a new observation.
-6. At the left/right boundary, send one request and record lack of arrival proof
-   as unknown, never a second automatic dispatch. Reconcile before continuing.
+6. At the left/right boundary, send one request and record the outcome not
+   moved: the worker says that the desktop did not change, nothing locks, and
+   there is never a second automatic dispatch. Send one request toward an empty
+   desktop and record it as unknown. Reconcile that one before continuing.
 7. With a shortcut disabled before dispatch, verify definite refusal. With custom
    enabled shortcuts and matching environment, verify both directions. Change a
    shortcut after preflight if practicable and ensure uncertainty/no retry.
@@ -357,7 +410,9 @@ The tester verifies arrival and a harmless unsent edit, then exercises:
     500 ms; resume and verify a fresh destination view. No outgoing call is a test.
 11. Verify ordinary-to-full-screen and full-screen-to-ordinary transitions, named
     full-screen app activation, and previous-app switching. Confirm Split View and
-    multi-display refusal separately. Reconcile any unknown result before new work.
+    multi-display refusal of a named window and of a desktop switch separately,
+    and that a request that names only an app still works there. Reconcile any
+    unknown result before new work.
 
 Record app/OS/build identities, independently observed target/geometry, result
 classification, and whether the harmless edit landed correctly; retain no screen

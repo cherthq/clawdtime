@@ -152,15 +152,27 @@ public enum DesktopShortcutConfiguration {
 
 /// A notification alone, a changed window alone, and an unchanged pinned window
 /// are insufficient. Repeated evidence must follow exactly one Space change.
+///
+/// The same looks also say when nothing moved: no Space change was reported and
+/// every look, from the first to the one that ends the wait, showed the surface of
+/// before. That is the last desktop on that side, or a shortcut that did nothing.
+/// It is known, so it is not an unknown result. One look that shows nothing or
+/// another surface, or one Space change, and the result stays unknown.
 public struct DesktopSwitchSettlement<Surface: Equatable> {
   private let origin: Surface
   private let expected: Surface?
   private var settlement: DesktopSettlement<Surface>
   private var lastEpoch: Int?
+  private var looks = 0
+  private var stayed = true
   public init(origin: Surface, expected: Surface? = nil, at: TimeInterval) {
     self.origin = origin; self.expected = expected; settlement = .init(at: at)
   }
+  /// Ask this only when the wait is over. Three looks at least, as an arrival needs.
+  public var notMoved: Bool { stayed && looks >= 3 }
   public mutating func sample(_ surface: Surface?, spaceChanges: Int, epoch: Int, at: TimeInterval) -> DesktopSettlement<Surface>.Decision {
+    looks += 1
+    if spaceChanges != 0 || surface != origin { stayed = false }
     if lastEpoch != epoch { _ = settlement.sample(nil, at: at); lastEpoch = epoch }
     guard spaceChanges == 1, let surface, surface != origin, expected.map({ $0 == surface }) ?? true else {
       return settlement.sample(nil, at: at)

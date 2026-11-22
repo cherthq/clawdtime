@@ -142,7 +142,7 @@ final class HandsContractTests: XCTestCase {
     // The words for an error are the contract's own, in its order.
     XCTAssertEqual(HandError.allCases.map(\.rawValue),
       ["no_accessibility", "no_screen_recording", "stopped_by_person", "not_found", "refused", "failed",
-       "desktop_disabled", "desktop_shortcut_unavailable", "desktop_history_unavailable", "ambiguous_target", "unsupported_desktop", "target_not_visible", "transition_unknown", "input_unknown", "stale_observation"])
+       "desktop_disabled", "desktop_shortcut_unavailable", "desktop_history_unavailable", "ambiguous_target", "unsupported_desktop", "target_not_visible", "desktop_unchanged", "transition_unknown", "input_unknown", "stale_observation"])
     let read = try JSONDecoder().decode(HandResult.self, from: Data(#"{"seq":4,"ok":false,"error":"no_screen_recording"}"#.utf8))
     XCTAssertEqual(read, .failure(4, .noScreenRecording))
     XCTAssertNil(read.observation); XCTAssertNil(read.interrupted)

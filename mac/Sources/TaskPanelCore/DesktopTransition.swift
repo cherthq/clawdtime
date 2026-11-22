@@ -55,6 +55,71 @@ public enum DesktopEffectOutcome {
   }
 }
 
+/// One definition of "arrived" for a request that names an app, the same as
+/// `verifiedActivation` in the worker. The hands find one app for the name and
+/// report its bundle identifier; arrived means that this app is in front. A name
+/// has four accepted forms (bundle identifier, running name, file name, Finder
+/// name), so the name itself is never compared again after it was resolved.
+/// A window title is compared as every observation carries it: cleaned.
+public enum DesktopArrival {
+  /// The bundle identifier as an observation carries it.
+  public static func identity(_ bundleID: String) -> String { ElementCleaner.line(bundleID, limit: 200) }
+  public static func sameApp(resolved: String, front: String?) -> Bool {
+    guard let front else { return false }
+    let wanted = identity(resolved)
+    return !wanted.isEmpty && wanted.caseInsensitiveCompare(identity(front)) == .orderedSame
+  }
+  /// The same title after the observation's cleaning: a no-break space, a format
+  /// character or a cut at the length limit does not make another window of it.
+  /// A title that cleans to nothing names no window, so it never fits an untitled one.
+  public static func sameTitle(_ one: String, _ other: String) -> Bool {
+    let title = ElementCleaner.line(one)
+    return !title.isEmpty && title == ElementCleaner.line(other)
+  }
+}
+
+/// What must hold before the hands try to bring an app forward. A request that
+/// names only an app ("open Chrome") is verified by the app in front, so it runs
+/// with any number of displays. A request that names a window is verified by that
+/// window on the main display, so it needs exactly one display.
+public enum DesktopActivationRule {
+  public static func refusal(windowNamed: Bool, displays: Int) -> HandError? {
+    windowNamed && displays != 1 ? .unsupportedDesktop : nil
+  }
+}
+
+/// Which standard window of an app a title names. A title is compared as an
+/// observation carries it. Two windows with that title are ambiguous: the first
+/// is never taken. A request with no title never comes here, because then the
+/// app chooses its own window and nothing can be ambiguous.
+public enum DesktopWindowChoice {
+  public static func index(titled title: String, among titles: [String?]) -> Result<Int, HandError> {
+    let matches = titles.indices.filter { index in titles[index].map { DesktopArrival.sameTitle($0, title) } == true }
+    guard matches.count <= 1 else { return .failure(.ambiguousTarget) }
+    guard let index = matches.first else { return .failure(.targetNotVisible) }
+    return .success(index)
+  }
+}
+
+/// The wait for an app to come to the front after one open request. A cold start
+/// takes seconds, so the wait is longer than the settling of a window, and it is
+/// read again and again instead of slept through. The app in front counts at any
+/// moment of the wait, also at its end. Only an app that is still not in front
+/// when the wait is over leaves the result unknown.
+public struct DesktopAppWait {
+  public enum Decision: Equatable { case waiting, inFront, expired }
+  public static let limit: TimeInterval = 6
+  private let began: TimeInterval
+  public init(at: TimeInterval) { began = at }
+  /// The wait is over. An app in front that gave no evidence until now gets no more time.
+  public func over(at: TimeInterval) -> Bool { !(at.isFinite && at >= began && at - began < Self.limit) }
+  public func sample(inFront: Bool, at: TimeInterval) -> Decision {
+    guard at.isFinite, at >= began else { return .expired }
+    if inFront { return .inFront }
+    return over(at: at) ? .expired : .waiting
+  }
+}
+
 /// One discovered application; aliases can include its localized and file names.
 public struct DesktopAppCandidate: Sendable {
   public let path: String
@@ -73,6 +138,8 @@ public enum DesktopAppSelection {
 /// Successful empty AX inventory is distinct from an unreadable inventory or a
 /// nonempty inventory whose windows do not match. Only the first can justify a
 /// single app-level reveal for a named-app request without an exact window.
+/// The panel does not use this any more: a request that names only an app is
+/// now verified by the app in front (`DesktopAppWait`), with no window to reveal.
 public enum DesktopAppInventory: Equatable { case empty, nonempty, unavailable }
 public struct DesktopAppReveal {
   public private(set) var claimed = false
@@ -94,7 +161,20 @@ public enum DesktopInputOutcome {
     }
   }
   public static func failure(_ error: HandError, submitted: Bool, interrupted: Bool) -> HandError {
-    if submitted && error != .transitionUnknown { return .inputUnknown }
+    // A desktop switch gives its own verdict after its key went out: unknown, or known
+    // not to have moved. Every other failure after input began may have typed or
+    // clicked something, so it stays unknown and is never sent again.
+    if submitted && error != .transitionUnknown && error != .desktopUnchanged { return .inputUnknown }
     return error
+  }
+}
+
+/// Command+Tab goes to another app of the app switcher, which shows regular apps
+/// only. With no regular app besides the one in front, the keys change nothing and
+/// the wait for another app could only end as unknown. So the hands refuse before
+/// anything is sent. ClawdTime itself is never a place to go back to.
+public enum DesktopAppSwitch {
+  public static func hasPrevious(regular: [Int], front: Int?, own: Int) -> Bool {
+    regular.contains { $0 != front && $0 != own }
   }
 }

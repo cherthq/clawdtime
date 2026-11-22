@@ -103,9 +103,12 @@ final class DesktopTransitionTests: XCTestCase {
     XCTAssertEqual(DesktopInputOutcome.failure(.refused, submitted: false, interrupted: true), .refused)
     XCTAssertEqual(DesktopInputOutcome.failure(.stoppedByPerson, submitted: false, interrupted: false), .stoppedByPerson)
     XCTAssertEqual(DesktopInputOutcome.failure(.staleObservation, submitted: false, interrupted: false), .staleObservation)
+    // The two verdicts of a transition keep their names: unknown, and known not to have
+    // moved. Everything else that fails after input began stays unknown.
     for error in HandError.allCases {
-      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: false), error == .transitionUnknown ? .transitionUnknown : .inputUnknown)
-      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: true), error == .transitionUnknown ? .transitionUnknown : .inputUnknown)
+      let kept: HandError = error == .transitionUnknown || error == .desktopUnchanged ? error : .inputUnknown
+      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: false), kept)
+      XCTAssertEqual(DesktopInputOutcome.failure(error, submitted: true, interrupted: true), kept)
     }
   }
   func testWindowSelectorIsExactAndBounded() throws {

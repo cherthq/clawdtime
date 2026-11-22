@@ -42,6 +42,8 @@ import TaskPanelCore
   private var barUp: Date?
   private var typingMark = 0
   private var inputRefusal: HandError?
+  /// The app that the name of the last open_app stood for. It goes out with the result.
+  private var resolvedApp: String?
   private let menuItems = NSHashTable<NSMenuItem>.weakObjects()
   private var rights: (accessibility: Bool, screenRecording: Bool, at: Date)?
   /// A run begins: the app's own sheets get out of the way.
@@ -221,6 +223,7 @@ import TaskPanelCore
     if let missing = command.missingRight(accessibility: accessibility, screenRecording: screenRecording) { return .failure(seq, missing) }
     input.beginCommand()
     inputRefusal = nil
+    resolvedApp = nil
     presentation.begin(seq)
     let outcome = await act(command, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
@@ -228,7 +231,7 @@ import TaskPanelCore
     if interrupted { presentation.reset() }
     switch outcome {
     case .success(let seen):
-      let result = HandResult.done(seq, observation: seen, interrupted: interrupted)
+      let result = HandResult.done(seq, observation: seen, interrupted: interrupted, resolvedBundleId: resolvedApp)
       // Contract failure cannot erase an already-submitted external effect.
       guard (try? result.validate()) != nil else {
         presentation.reset()
@@ -308,8 +311,13 @@ import TaskPanelCore
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
-      return await desktop.activate(url: app, windowTitle: window, allowed: { [self] in await lastCheck() },
-        observer: observer, pointer: { [self] in input.pointer })
+      switch await desktop.activate(url: app, windowTitle: window, allowed: { [self] in await lastCheck() },
+        observer: observer, pointer: { [self] in input.pointer }) {
+      case .success(let arrival):
+        resolvedApp = arrival.bundleID
+        return .success(arrival.observation)
+      case .failure(let error): return .failure(error)
+      }
     case .switchPreviousApp:
       defer { guide.rest() }
       await say(label)
@@ -590,7 +598,7 @@ import TaskPanelCore
     let alert = NSAlert()
     alert.messageText = "App and desktop switching"
     alert.informativeText = "Accessibility and Screen Recording are granted.\n\n" + shortcuts + "\n\n" + appSpaces +
-      " Check Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application.\n\nPrevious app uses Command–Tab once. Named apps use their exact application/window identity. One display is supported; full-screen windows need verifiable window evidence. Split View and multiple displays remain unsupported."
+      " Check Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application.\n\nPrevious app uses Command–Tab once. A named app comes forward with the window that it chooses, on any number of displays. A named window and a desktop switch need one display; full-screen windows need verifiable window evidence, and Split View remains unsupported for them."
     alert.addButton(withTitle: "Done")
     alert.addButton(withTitle: "Open System Settings")
     if alert.runModal() == .alertSecondButtonReturn,
