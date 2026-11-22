@@ -1307,13 +1307,14 @@ Speech and the language model use the OpenAI API. Set `CLAWDTIME_OPENAI_API_KEY`
 service, `clawdtime chat` or `clawdtime talk`. Never put the key in an argument
 or a file of the repository.
 
-| Variable                         | Default                  | Use                                                                                |
-| -------------------------------- | ------------------------ | ---------------------------------------------------------------------------------- |
-| `CLAWDTIME_SUPERVISOR_MODEL`     | `gpt-4.1-mini`           | Chooses tools and writes the answers                                               |
-| `CLAWDTIME_SUPERVISOR_REASONING` | not set                  | The reasoning effort that this model gets. Some models take tools only with `none` |
-| `CLAWDTIME_TRANSCRIBE_MODEL`     | `gpt-4o-mini-transcribe` | Turns your speech into text                                                        |
-| `CLAWDTIME_SPEAK_MODEL`          | `gpt-4o-mini-tts`        | Speaks the answer                                                                  |
-| `CLAWDTIME_VOICE`                | `alloy`                  | The voice                                                                          |
+| Variable                         | Default                  | Use                                                                                                                                       |
+| -------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAWDTIME_SUPERVISOR_MODEL`     | `gpt-4.1-mini`           | Chooses tools and writes the answers                                                                                                      |
+| `CLAWDTIME_SUPERVISOR_REASONING` | not set                  | The reasoning effort that this model gets. Some models take tools only with `none`                                                        |
+| `CLAWDTIME_READER_MODEL`         | `gpt-5.4`                | Reads what a message asks of the screen: a move, work for the computer worker, or neither. A key that may not use it gets the model above |
+| `CLAWDTIME_TRANSCRIBE_MODEL`     | `gpt-4o-mini-transcribe` | Turns your speech into text                                                                                                               |
+| `CLAWDTIME_SPEAK_MODEL`          | `gpt-4o-mini-tts`        | Speaks the answer                                                                                                                         |
+| `CLAWDTIME_VOICE`                | `alloy`                  | The voice                                                                                                                                 |
 
 With no key ClawdTime still answers in text: it tells the state from the board,
 and it takes a clear "approve" or "deny" when exactly one request waits. Voice

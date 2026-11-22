@@ -131,6 +131,8 @@ function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CLAWDTIME_OPENAI_API_KEY",
           "OPENAI_API_KEY",
           "CLAWDTIME_SUPERVISOR_MODEL",
+          // The model that reads what a message asks of the screen.
+          "CLAWDTIME_READER_MODEL",
           // The structured intent reader of the task service, when it is "on".
           "CLAWDTIME_SEMANTIC_TASKS",
           // The language model that plans each action of computer use.
