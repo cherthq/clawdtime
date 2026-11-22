@@ -630,6 +630,61 @@ describe("a secure field", () => {
   });
 });
 
+describe("the time of each step", () => {
+  it("goes to the listener with numbers and the kind of action, and with no text", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-timing-"));
+    roots.push(home);
+    const clock = { now: 5_000 };
+    const hands = new FakeHands([save]);
+    // The look takes 300 ms, the plan 1,200 ms and the action 80 ms.
+    hands.answer = (command) => {
+      clock.now += command.kind === "observe" && command.image ? 300 : 40;
+      return undefined;
+    };
+    const planner = new ScriptedPlanner([
+      () => {
+        clock.now += 1_200;
+        return click;
+      },
+      () => {
+        clock.now += 900;
+        return done;
+      },
+    ]);
+    const heard: unknown[] = [];
+    const worker = new ComputerWorker({
+      hands,
+      planner,
+      journal: new ComputerJournal(home, () => clock.now),
+      now: () => clock.now,
+      timing: (entry) => heard.push(entry),
+    });
+    await worker.submit("r1", "Click the secret button named Save");
+    await worker.idle();
+    expect(heard).toEqual([
+      // The click has a look just before it (40 ms) and the click itself (40 ms).
+      { step: 1, kind: "click_element", lookMs: 300, planMs: 1_200, actMs: 80 },
+      { step: 2, kind: "done", lookMs: 300, planMs: 900, actMs: 0 },
+    ]);
+    expect(JSON.stringify(heard)).not.toMatch(/Save|secret/);
+  });
+  it("changes nothing in the request when the listener fails", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-timing-"));
+    roots.push(home);
+    const worker = new ComputerWorker({
+      hands: new FakeHands([save]),
+      planner: new ScriptedPlanner([click, done]),
+      journal: new ComputerJournal(home),
+      timing: () => {
+        throw new Error("no log");
+      },
+    });
+    await worker.submit("r1", "Click it");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+  });
+});
+
 describe("a look that fails", () => {
   it("is tried once more after a short wait, and the planner then has the screen", async () => {
     const { worker, hands, planner } = setup([done]);

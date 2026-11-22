@@ -121,6 +121,13 @@ every action.
 
 The model is `gpt-4.1`. `CLAWDTIME_COMPUTER_MODEL` changes it.
 
+To find the slow part of a request, start the desktop service with
+`CLAWDTIME_COMPUTER_TIMING=on`. The service then prints one line for each step,
+with numbers and the kind of action only, never a text of the screen:
+`computer step 3 click_element: look 310 ms, plan 1840 ms, act 420 ms`. The
+look is the screen before the plan, the plan is the language model, and the
+act is the checks, a question to you when there is one, and the action.
+
 The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
 request ends as `blocked` and the message names the permission to grant.

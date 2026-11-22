@@ -137,6 +137,8 @@ function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CLAWDTIME_COMPUTER_MODEL",
           // The browser driver of computer use, when it is "on".
           "CLAWDTIME_COMPUTER_BROWSER",
+          // One log line with the time of each step of computer use, when it is "on".
+          "CLAWDTIME_COMPUTER_TIMING",
           "CLAWDTIME_TRANSCRIBE_MODEL",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",
