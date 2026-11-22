@@ -21,13 +21,13 @@ import { realtime } from "@livekit/agents-plugin-openai";
 import {
   LocalVideoTrack,
   RoomEvent,
-  TrackSource,
   VideoBufferType,
   VideoFrame,
   VideoSource,
 } from "@livekit/rtc-node";
 import { jobDoneInstructions, readView, recall, watchJobs } from "./desk.mjs";
 import { makeEars } from "./ears.mjs";
+import { makeWarmMedia } from "./warm-media.mjs";
 import { greetOnBridgeReady } from "./greet.mjs";
 import { framingName, startLayout } from "./layout.mjs";
 import {
@@ -95,9 +95,8 @@ export async function callEntry(ctx) {
     mark("room_connecting");
     await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
     mark("room_connected");
-    // Chert prepares a room before a caller exists. Join at once, and make the picture ready, but send nothing
-    // and open no model session and no screen capture yet. A video track that is sent to an empty room used
-    // 7 percent of a processor core around the clock, at any frame rate, for a gain that could not be measured.
+    // Publish stable synthetic media before the caller's bridge joins. The
+    // avatar stays static while warm; no model/input/screen/desktop starts yet.
     let callStarted = 0;
 
     // One camera track from this agent: the line shows video only from the participant that speaks.
@@ -118,7 +117,8 @@ export async function callEntry(ctx) {
     let video = null,
       settingsTimer = null,
       timer = null,
-      session = null;
+      session = null,
+      warmMedia = null;
     const setZoom = (action) => {
       if (ended) return false;
       video?.control(action);
@@ -191,9 +191,11 @@ export async function callEntry(ctx) {
     ctx.room.on(RoomEvent.ParticipantConnected, participantJoined);
     ctx.room.on(RoomEvent.ParticipantDisconnected, participantLeft);
     let closing;
+    const stopped = Promise.withResolvers();
     cleanup = () => {
       if (ended) return closing ?? Promise.resolve();
       ended = true;
+      stopped.resolve(null);
       clearInterval(timer);
       clearInterval(settingsTimer);
       stopGreeting?.();
@@ -202,13 +204,16 @@ export async function callEntry(ctx) {
       callEnd?.detach();
       ctx.room.off(RoomEvent.ParticipantConnected, participantJoined);
       ctx.room.off(RoomEvent.ParticipantDisconnected, participantLeft);
+      ctx.room.off(RoomEvent.Disconnected, roomEnded);
       jobs?.stop();
       video?.close();
       // Revoke only this call's desktop admission. Never send a global Stop
       // that could cancel unrelated local work. Close is reserved once.
       const desktopClosed = phone.close();
+      const mediaClosed = warmMedia?.close();
       closing = (async () => {
         await quiet(() => session?.close());
+        await quiet(() => mediaClosed);
         await quiet(() => track.close());
         await quiet(() => source.close());
         await quiet(() => desktopClosed);
@@ -216,38 +221,69 @@ export async function callEntry(ctx) {
       })();
       return closing;
     };
+    const roomEnded = () => {
+      void cleanup();
+    };
+    ctx.room.on(RoomEvent.Disconnected, roomEnded);
     ctx.addShutdownCallback(cleanup);
     mark("video_prepared");
+    // Observe the caller immediately so a join/departure during publication
+    // retires preparation too. No caller authority is exercised by this waiter.
+    const waitingCaller = ctx.waitForParticipant().then((caller) => {
+      if (ended) return null;
+      if (
+        !ctx.room.isConnected ||
+        ctx.room.remoteParticipants.get(caller.identity) !== caller
+      ) {
+        log("caller_departed_before_start");
+        void cleanup();
+        return null;
+      }
+      callEnd = bindCallEnd({
+        room: ctx.room,
+        callerIdentity: caller.identity,
+        roomEvents: RoomEvent,
+        sessionCloseEvent: voice.AgentSessionEventTypes.Close,
+        binding: callerRequest,
+        cleanup,
+      });
+      return caller;
+    });
+    // Rejection is consumed even if a failed publication ends startup first.
+    void waitingCaller.catch(() => {});
+    warmMedia = makeWarmMedia({
+      room: ctx.room,
+      camera: track,
+      firstFrame: draw,
+      diagnostic: mark,
+      onFailure: () => {
+        log("warm_audio_failed");
+        void cleanup();
+      },
+    });
+    let audioOutput;
+    try {
+      audioOutput = await warmMedia.prepare();
+    } catch (error) {
+      if (ended) return;
+      throw error;
+    }
+    if (ended) return;
     let caller;
     mark("caller_waiting");
     try {
-      caller = await ctx.waitForParticipant();
+      caller = await Promise.race([waitingCaller, stopped.promise]);
     } catch (error) {
       log("caller_wait_ended", { code: stage, ...startupError(error) });
-      // Chert makes a new waiting room every few minutes. A room that ends before a caller came is no error.
       await cleanup();
       return;
     }
-    if (ended) return;
+    if (ended || !caller) {
+      await cleanup();
+      return;
+    }
+    if (!warmMedia.isReady()) throw new Error("Warm media no longer ready");
     mark("caller_resolved");
-    // A join can resolve the SDK waiter immediately before departure in the
-    // same event turn. Do not start media for that obsolete participant.
-    if (
-      !ctx.room.isConnected ||
-      ctx.room.remoteParticipants.get(caller.identity) !== caller
-    ) {
-      log("caller_departed_before_start");
-      await cleanup();
-      return;
-    }
-    callEnd = bindCallEnd({
-      room: ctx.room,
-      callerIdentity: caller.identity,
-      roomEvents: RoomEvent,
-      sessionCloseEvent: voice.AgentSessionEventTypes.Close,
-      binding: callerRequest,
-      cleanup,
-    });
     mark("call_bound");
     // Admission runs alongside media startup so a slow local service cannot
     // delay the greeting. Every request awaits its result and fails closed.
@@ -269,22 +305,8 @@ export async function callEntry(ctx) {
     // A relative CLAWDTIME_CONFIG_HOME gives the zoom preferences no file. The call goes on, with the
     // preferences in memory until it ends.
     if (!zoomSettings.durable) log("zoom_settings", { code: "memory_only" });
-    // The picture goes out as the first thing of a call: it is ready, so this is one frame and one publish.
-    // A first frame that fails must not end the call. The voice works without it, the camera track is
-    // still published, and the timer below tries every later frame.
-    const first = draw();
-    if (ended) return;
-    mark(first ? "first_frame" : "first_frame_failed");
-    try {
-      await ctx.room.localParticipant.publishTrack(track, {
-        source: TrackSource.SOURCE_CAMERA,
-      });
-    } catch (error) {
-      await cleanup();
-      throw error;
-    }
-    if (ended) return;
-    mark("camera_published");
+    // Warm publications are reused. Only animation begins with the caller.
+    frame();
     timer = setInterval(frame, 1000 / fps);
 
     const showScreen = async (on) => {
@@ -376,6 +398,7 @@ export async function callEntry(ctx) {
     });
     // Bind before session.start invokes the model factory/audio pipeline. Raw
     // successful provider finals schedule responses after SDK history insertion.
+    session.output.audio = audioOutput;
     callerRequest.bindSession(session);
     callEnd.attachSession(session);
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (event) => {
@@ -412,7 +435,8 @@ export async function callEntry(ctx) {
           closeOnDisconnect: true,
           deleteRoomOnClose: false,
         },
-        outputOptions: { audioEnabled: true, transcriptionEnabled: false },
+        // The prepublished SDK output is externally owned by warmMedia.
+        outputOptions: { audioEnabled: false, transcriptionEnabled: false },
       });
     } catch (error) {
       await cleanup();

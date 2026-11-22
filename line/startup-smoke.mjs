@@ -82,9 +82,23 @@ let child,
   audioFrames = 0,
   audibleFrames = 0;
 let failed = false,
-  closed = false;
+  closed = false,
+  step = "worker_start";
 const report = (code, detail = {}) =>
   console.log(JSON.stringify({ code, ...detail }));
+// Counts/booleans only: never room, participant or track identifiers.
+const rosterCounts = (participants) => {
+  const tracks = participants.flatMap((p) => p.tracks);
+  return {
+    participants: participants.length,
+    tracks: tracks.length,
+    audio: tracks.filter((t) => t.type === 0).length,
+    video: tracks.filter((t) => t.type === 1).length,
+    unmutedAudio: tracks.filter((t) => t.type === 0 && !t.muted).length,
+    unmutedVideo: tracks.filter((t) => t.type === 1 && !t.muted).length,
+    missingMutedFlag: tracks.filter((t) => typeof t.muted !== "boolean").length,
+  };
+};
 const deadline = Date.now() + 90000;
 async function until(predicate, label, ms = 20000) {
   const end = Math.min(deadline, Date.now() + ms);
@@ -169,6 +183,7 @@ try {
   // Registration is only a prerequisite, never media readiness.
   await new Promise((resolve) => setTimeout(resolve, 2000));
   if (failed || closed) throw new Error("Isolated worker failed to start");
+  step = "room_create";
   createAttempted = true;
   await api.createRoom({
     name: roomName,
@@ -184,14 +199,75 @@ try {
     ],
   });
   created = true;
+  step = "warm_wait";
   await until(
     () => stages.has("caller_waiting"),
     "Agent did not enter waiting room",
   );
-  const before = await api.listParticipants(roomName);
-  if (before.length !== 1 || before[0].tracks.length !== 0)
-    throw new Error("Waiting room must have one silent agent");
-  report("waiting_without_media");
+  step = "warm_roster_read";
+  let before = await api.listParticipants(roomName);
+  step = "warm_roster_check";
+  report("warm_roster", {
+    ...rosterCounts(before),
+    mediaReady: stages.has("media_ready"),
+  });
+  if (!stages.has("media_ready")) throw new Error("Local media not ready");
+  // Local publication ACK is not server roster propagation. Observe this
+  // isolated room until both publications appear; never republish or retry an
+  // external action. Extra/muted tracks or a changed publisher fail immediately.
+  step = "warm_roster_settle";
+  const rosterDeadline = Math.min(deadline, Date.now() + 5000);
+  let publisherIdentity = before[0]?.identity;
+  let rosterReads = 1;
+  while (true) {
+    const counts = rosterCounts(before);
+    if (
+      before.length > 1 ||
+      counts.tracks > 2 ||
+      counts.audio > 1 ||
+      counts.video > 1 ||
+      counts.audio + counts.video !== counts.tracks ||
+      counts.unmutedAudio !== counts.audio ||
+      counts.unmutedVideo !== counts.video ||
+      counts.missingMutedFlag !== 0 ||
+      (publisherIdentity &&
+        before.length === 1 &&
+        before[0].identity !== publisherIdentity)
+    )
+      throw new Error("Unexpected warm publication roster");
+    if (before.length === 1) publisherIdentity ??= before[0].identity;
+    if (before.length === 1 && counts.audio === 1 && counts.video === 1) break;
+    if (failed || closed || Date.now() >= rosterDeadline)
+      throw new Error("Warm roster did not settle");
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(150, rosterDeadline - Date.now())),
+    );
+    const remaining = rosterDeadline - Date.now();
+    if (remaining <= 0 || failed || closed)
+      throw new Error("Warm roster did not settle");
+    let timeout;
+    try {
+      before = await Promise.race([
+        api.listParticipants(roomName),
+        new Promise((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Warm roster read timeout")),
+            remaining,
+          );
+        }),
+      ]);
+      rosterReads++;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  report("warm_roster_settled", {
+    ...rosterCounts(before),
+    reads: rosterReads,
+  });
+  const warmTrackIds = before[0].tracks.map((t) => t.sid).sort();
+  report("waiting_with_synthetic_media");
+  step = "caller_connect";
   const token = new AccessToken(
     configured.LIVEKIT_API_KEY,
     configured.LIVEKIT_API_SECRET,
@@ -206,28 +282,41 @@ try {
   await room.connect(configured.LIVEKIT_URL, await token.toJwt(), {
     autoSubscribe: true,
   });
+  step = "session_video_wait";
   await until(
     () => stages.has("ready_waiting") && frames >= 3,
     "Video/session startup unavailable",
     30000,
   );
+  step = "active_roster_read";
   const participants = await api.listParticipants(roomName);
   const publisher = participants.find((p) => p.identity === before[0].identity);
+  step = "active_roster_check";
+  report("active_roster", {
+    ...rosterCounts(participants),
+    samePublisher: Boolean(publisher),
+  });
   if (
     !publisher ||
+    JSON.stringify(publisher.tracks.map((t) => t.sid).sort()) !==
+      JSON.stringify(warmTrackIds) ||
     !publisher.tracks.some((t) => t.type === 0 && !t.muted) ||
     !publisher.tracks.some((t) => t.type === 1 && !t.muted)
   )
     throw new Error("Audio and video must share the exact agent publisher");
   report("camera_frames_received", { frames, samePublisher: true });
   // Synthetic readiness only; does not assert the provider's FaceTime bridge.
+  step = "synthetic_ready_mark";
   await api.updateRoomMetadata(
     roomName,
     JSON.stringify({ chert_call: id, chert_bridge_ready: true }),
   );
+  step = "greeting_wait";
   await until(() => audibleFrames >= 3, "Greeting audio unavailable", 15000);
   report("greeting_audio_received", { audioFrames, audibleFrames });
+  step = "caller_disconnect";
   await room.disconnect();
+  step = "cleanup_wait";
   await until(
     () => stages.has("call_ended"),
     "Caller disconnect cleanup unavailable",
@@ -235,8 +324,18 @@ try {
   );
   report("synthetic_startup_passed");
 } catch (error) {
+  const workerFailed = failed;
   failed = true;
-  report("synthetic_startup_failed", startupError(error));
+  report("synthetic_startup_failed", {
+    step,
+    workerFailed,
+    workerExited: closed,
+    deadlineReached: Date.now() >= deadline,
+    frames,
+    audioFrames,
+    audibleFrames,
+    ...startupError(error),
+  });
 } finally {
   for (const reader of readers) await reader.cancel().catch(() => {});
   await room.disconnect().catch(() => {});

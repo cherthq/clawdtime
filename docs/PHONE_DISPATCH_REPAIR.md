@@ -299,3 +299,59 @@ Actual handset transcription-to-action, repaired "test document" wording, Stop,
 and hangup acceptance remain pending. This is readiness for the phone test, not
 a claim that unattended production acceptance is complete. Automatic updates
 remain held to protect the local patch until the upstream repair is integrated.
+
+### Incoming bridge track-registration failure and local repair
+
+The next incoming handset call was accepted, then ended before greeting. The
+remote bridge connected to its room but its native LiveKit 2.17.0 receiver could
+not attach an offered audio track: that track SID was absent from the participant
+publication registry, which contained only the video SID. Three subscription
+attempts failed before the expected-track timeout; the provider reported
+`participant_not_found`. This was not an intentional decline or evidence that
+the agent participant was absent. Both received audio and video frame counters
+were zero. A `measured` counter state alone does not prove media reception.
+
+The local agent now publishes one silent SDK audio output and one mascot
+camera track while the room is waiting. It waits for publication acknowledgements,
+then emits a bounded burst of synthetic frames while the transport negotiates,
+then reuses the same audio output for the voice session, disabling duplicate
+automatic audio publication. Animation starts with the caller. Warm preparation
+opens no model session, caller input, screen capture or desktop authority. Actual
+bridge readiness still gates the greeting. Caller departure, disconnect,
+publication loss and late acknowledgements are fenced and cleaned up without
+replaying actions or waiting indefinitely for a subscriber.
+
+An isolated receiver on the actual remote Mac, built from its exact LiveKit
+2.17.0 revision, received the new helper's synthetic media: 596 audio callbacks,
+286,080 audio frames and 30 video frames. One unmuted audio track and one camera
+track were independently checked. The isolated room was deleted. The production
+bridge executable, configuration and routing were not modified. An equivalent
+old-order experiment also passed once, so the historical registration race is
+established by its original bridge logs, not claimed as deterministically
+reproduced by this experiment.
+
+The provider CLI still admits a warm room based on agent presence rather than
+media readiness. Isolated startup checks also found that frames captured immediately
+before or after camera publication were insufficient: the server still omitted
+video after five seconds. A subsequent isolated experiment observed video appear
+after a delayed synthetic frame, without any subscriber. The bounded warm burst
+addresses that transport startup gap without continuous idle animation. A bridge joining
+during initial publication can therefore still race; local `media_ready` does not
+add a provider admission contract. The upstream
+repair should gate warm admission on the exact publisher's acknowledged audio
+and video publications and add bounded native subscription recovery when a
+publication arrives after its media offer. Cover cold joins, room rotation,
+departure and duplicate publication before deploying either change. Keep identity
+binding and real received-frame readiness intact. These provider/bridge changes
+are not installed by this local patch.
+
+Handset greeting, transcription-to-action, Stop and hangup acceptance must still
+pass on the repaired installation before claiming production qualification.
+
+The final isolated full-agent check passed after the bounded warm burst: the
+server reported both unmuted tracks before the synthetic caller joined, the same
+track SIDs were reused, video and audible greeting arrived, and caller departure
+closed the session. Its temporary room and worker were removed. Validation:
+189 line tests pass; the complete backend/connector check passed 6,475 tests,
+TypeScript and build before the final bounded-frame adjustment, which was covered
+by the line suite and this full-agent check. Native desktop code is unchanged.

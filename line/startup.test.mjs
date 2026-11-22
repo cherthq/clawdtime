@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 import { JobContext, initializeLogger } from "@livekit/agents";
 import {
   LocalVideoTrack,
+  LocalAudioTrack,
+  TrackKind,
   ParticipantKind,
   RoomEvent,
   TrackSource,
@@ -59,23 +61,33 @@ test("startup diagnostics retain only bounded error names and allowlisted source
   assert.deepEqual(startupError(null), { error_name: "UnknownError" });
 });
 
-// Exercise the production entrypoint and installed SDK participant waiter. Only
-// the room/network boundary is synthetic: avatar pixels, RTC source/track,
-// caller lifecycle, and preference isolation use the real implementation.
-// Every case stops before model creation, desktop lookup, or screen capture.
+// Real entrypoint/SDK output and native synthetic tracks; only the room boundary
+// is fake. A local recall barrier stops caller cases before any model can start.
 async function fixture(run, { configHome } = {}) {
   const home = mkdtempSync(join(tmpdir(), "clawdtime-startup-"));
-  const priorHome = process.env.CLAWDTIME_CONFIG_HOME;
-  const priorLog = console.log;
-  const events = [];
+  const prior = {
+    home: process.env.CLAWDTIME_CONFIG_HOME,
+    key: process.env.OPENAI_API_KEY,
+    desktop: process.env.CLAWDTIME_DESKTOP_STATE,
+    log: console.log,
+    command: settings.clawdtime,
+  };
+  const command = join(home, "recall-wait.sh");
+  writeFileSync(
+    command,
+    '#!/bin/sh\ntouch "$0.started"\nwhile [ ! -e "$0.go" ]; do sleep 0.02; done\n',
+    { mode: 0o700 },
+  );
+  settings.clawdtime = command;
   process.env.CLAWDTIME_CONFIG_HOME = configHome ?? home;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.CLAWDTIME_DESKTOP_STATE;
+  const events = [];
   console.log = (line) => {
     try {
-      const event = JSON.parse(line);
-      if (event.clawdtime_line) events.push(event);
-    } catch {
-      // No arbitrary SDK payload is retained by this fixture.
-    }
+      const value = JSON.parse(line);
+      if (value.clawdtime_line) events.push(value);
+    } catch {}
   };
   const room = new EventEmitter();
   room.isConnected = false;
@@ -85,19 +97,44 @@ async function fixture(run, { configHome } = {}) {
   room.connect = async () => {
     room.isConnected = true;
   };
-  const publishFailure = new Error(
-    "synthetic publication failure: private-data",
-  );
-  let publications = 0;
-  let publish = async () => {
-    throw publishFailure;
-  };
+  const calls = [],
+    policies = new Map(),
+    subscribed = Promise.withResolvers();
   room.localParticipant = {
+    trackPublications: new Map(),
     publishTrack: async (track, options) => {
-      publications++;
-      assert.ok(track instanceof LocalVideoTrack);
-      assert.equal(options.source, TrackSource.SOURCE_CAMERA);
-      return publish();
+      const kind = track instanceof LocalAudioTrack ? "audio" : "camera";
+      assert.ok(
+        track instanceof LocalAudioTrack || track instanceof LocalVideoTrack,
+      );
+      assert.equal(
+        options.source,
+        kind === "audio"
+          ? TrackSource.SOURCE_MICROPHONE
+          : TrackSource.SOURCE_CAMERA,
+      );
+      calls.push(kind);
+      await policies.get(kind)?.();
+      const publication = {
+        sid: kind,
+        name: kind === "audio" ? "roomio_audio" : "agent-video",
+        kind: kind === "audio" ? TrackKind.KIND_AUDIO : TrackKind.KIND_VIDEO,
+        source: options.source,
+        muted: false,
+        track,
+        waitForSubscription: () => subscribed.promise,
+      };
+      room.localParticipant.trackPublications.set(kind, publication);
+      room.emit(
+        RoomEvent.LocalTrackPublished,
+        publication,
+        room.localParticipant,
+      );
+      return publication;
+    },
+    unpublishTrack: async (sid) => {
+      room.localParticipant.trackPublications.delete(sid);
+      room.emit(RoomEvent.LocalTrackUnpublished);
     },
   };
   const ctx = new JobContext(
@@ -106,7 +143,7 @@ async function fixture(run, { configHome } = {}) {
       job: {
         id: "synthetic-startup-job",
         room: { name: room.name },
-        metadata: JSON.stringify({ chert_warm: true }),
+        metadata: room.metadata,
       },
       url: "wss://fixture.invalid",
       token: "synthetic-unused-token",
@@ -120,7 +157,7 @@ async function fixture(run, { configHome } = {}) {
   const diagnostics = () =>
     events
       .filter((event) => event.clawdtime_line === "startup")
-      .map((e) => e.code);
+      .map((event) => event.code);
   const disconnect = () => {
     room.isConnected = false;
     room.emit(RoomEvent.Disconnected);
@@ -133,6 +170,16 @@ async function fixture(run, { configHome } = {}) {
     room.remoteParticipants.set(value.identity, value);
     room.emit(RoomEvent.ParticipantConnected, value);
   };
+  const depart = (value) => {
+    room.remoteParticipants.delete(value.identity);
+    room.emit(RoomEvent.ParticipantDisconnected, value);
+  };
+  const until = async (predicate) => {
+    const deadline = Date.now() + 3000;
+    while (!predicate() && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.ok(predicate(), "startup stage reached");
+  };
   try {
     await run({
       room,
@@ -141,14 +188,13 @@ async function fixture(run, { configHome } = {}) {
       diagnostics,
       participant,
       add,
+      depart,
       disconnect,
-      publications: () => publications,
-      setPublish: (value) => {
-        publish = value;
-      },
+      calls,
+      until,
+      setPublish: (kind, fn) => policies.set(kind, fn),
       start: () => {
         assert.equal(task, undefined);
-        // Observe rejection immediately, even while a test waits for a stage.
         task = agent.entry(ctx).then(
           () => ({ error: null }),
           (error) => ({ error }),
@@ -156,20 +202,29 @@ async function fixture(run, { configHome } = {}) {
         return task;
       },
       result: () => task,
-      publishFailure,
+      release: () => writeFileSync(`${command}.go`, ""),
+      recalled: () => existsSync(`${command}.started`),
       flush: () => new Promise((resolve) => setImmediate(resolve)),
     });
   } finally {
     disconnect();
+    subscribed.resolve();
+    writeFileSync(`${command}.go`, "");
     for (const cleanup of ctx.shutdownCallbacks) await cleanup();
     if (task) await task;
-    console.log = priorLog;
-    if (priorHome === undefined) delete process.env.CLAWDTIME_CONFIG_HOME;
-    else process.env.CLAWDTIME_CONFIG_HOME = priorHome;
+    console.log = prior.log;
+    settings.clawdtime = prior.command;
+    for (const [key, value] of [
+      ["CLAWDTIME_CONFIG_HOME", prior.home],
+      ["OPENAI_API_KEY", prior.key],
+      ["CLAWDTIME_DESKTOP_STATE", prior.desktop],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(home, { recursive: true, force: true });
   }
 }
-
 function endedOnce(f) {
   assert.equal(
     f.events.filter((event) => event.clawdtime_line === "call_ended").length,
@@ -178,259 +233,217 @@ function endedOnce(f) {
   assert.equal(f.diagnostics().includes("session_starting"), false);
 }
 
-test("an empty warm room waits without publishing and closes without a caller", async () => {
+test("warm room publishes static synthetic audio/video before waiting, without model or caller authority", async () => {
   await fixture(async (f) => {
     f.start();
-    await f.flush();
-    assert.ok(f.diagnostics().includes("caller_waiting"));
-    assert.equal(f.publications(), 0);
-    assert.equal(f.diagnostics().includes("caller_resolved"), false);
+    await f.until(() => f.diagnostics().includes("caller_waiting"));
+    assert.deepEqual(f.calls, ["audio", "camera"]);
+    assert.equal(f.room.localParticipant.trackPublications.size, 2);
+    assert.ok(
+      f.diagnostics().indexOf("media_ready") <
+        f.diagnostics().indexOf("caller_waiting"),
+    );
+    for (const forbidden of [
+      "caller_resolved",
+      "call_bound",
+      "video_created",
+      "session_starting",
+    ])
+      assert.equal(f.diagnostics().includes(forbidden), false);
+    assert.equal(f.recalled(), false);
+    assert.equal(f.room.metadata, JSON.stringify({ chert_warm: true }));
     f.disconnect();
     assert.equal((await f.result()).error, null);
-    assert.ok(
-      f.events.some((event) => event.clawdtime_line === "caller_wait_ended"),
-    );
     endedOnce(f);
   });
 });
 
-for (const alreadyPresent of [false, true]) {
-  test(`actual SDK caller ${alreadyPresent ? "inventory" : "join event"} reaches avatar publication`, async () => {
+for (const alreadyPresent of [false, true])
+  test(`caller ${alreadyPresent ? "already present" : "joining warmed room"} reuses publications and starts authority only after readiness`, async () => {
     await fixture(async (f) => {
       const caller = f.participant();
       if (alreadyPresent)
         f.room.remoteParticipants.set(caller.identity, caller);
       f.start();
       if (!alreadyPresent) {
-        await f.flush();
-        assert.equal(f.publications(), 0);
+        await f.until(() => f.diagnostics().includes("caller_waiting"));
         f.add(caller);
       }
-      assert.match(
-        (await f.result()).error?.message,
-        /^Call startup failed at /,
-      );
-      assert.equal(f.publications(), 1);
-      const stages = f.diagnostics();
-      for (const stage of [
-        "room_connected",
-        "video_prepared",
-        "caller_waiting",
-        "caller_resolved",
-        "call_bound",
-        "video_created",
-        "first_frame",
-      ])
-        assert.ok(stages.includes(stage), stage);
+      await f.until(f.recalled);
+      assert.deepEqual(f.calls, ["audio", "camera"]);
       assert.ok(
-        stages.indexOf("first_frame") > stages.indexOf("caller_resolved"),
+        f.diagnostics().indexOf("call_bound") >
+          f.diagnostics().indexOf("media_ready"),
       );
-      assert.equal(stages.includes("camera_published"), false);
-      const failure = f.events.find(
-        (event) => event.clawdtime_line === "startup_failed",
-      );
-      assert.equal(failure?.code, "first_frame");
-      assert.equal(failure?.error_name, "Error");
-      assert.equal(JSON.stringify(f.events).includes("private-data"), false);
-      f.room.emit(RoomEvent.ParticipantDisconnected, caller);
-      f.disconnect();
-      for (const cleanup of f.ctx.shutdownCallbacks) await cleanup();
+      assert.equal(f.diagnostics().includes("session_starting"), false);
+      f.depart(caller);
+      f.release();
+      assert.equal((await f.result()).error, null);
       endedOnce(f);
     });
   });
-}
 
-test("a relative CLAWDTIME_CONFIG_HOME does not stop the call: the zoom preferences live in memory", async () => {
-  const relative = `clawdtime-startup-relative-${process.pid}`;
-  for (const configHome of [relative, undefined]) {
-    await fixture(
-      async (f) => {
+for (const kind of ["audio", "camera"])
+  test(`${kind} publication failure never creates caller authority or model`, async () => {
+    await fixture(async (f) => {
+      f.setPublish(kind, async () => {
+        throw Error("private-data");
+      });
+      assert.match(
+        (await f.start()).error?.message,
+        /^Call startup failed at /,
+      );
+      assert.deepEqual(
+        f.calls,
+        kind === "audio" ? ["audio"] : ["audio", "camera"],
+      );
+      assert.equal(f.diagnostics().includes("media_ready"), false);
+      assert.equal(f.diagnostics().includes("call_bound"), false);
+      assert.equal(JSON.stringify(f.events).includes("private-data"), false);
+      endedOnce(f);
+    });
+  });
+
+test("another agent does not activate warm media's caller-only services", async () => {
+  await fixture(async (f) => {
+    f.start();
+    await f.until(() => f.diagnostics().includes("caller_waiting"));
+    f.add(f.participant("other-agent", ParticipantKind.AGENT));
+    await f.flush();
+    assert.equal(f.diagnostics().includes("caller_resolved"), false);
+    assert.equal(f.recalled(), false);
+    f.disconnect();
+    assert.equal((await f.result()).error, null);
+    endedOnce(f);
+  });
+});
+
+test("caller leaving before the waiter resumes starts no caller services", async () => {
+  await fixture(async (f) => {
+    f.start();
+    await f.until(() => f.diagnostics().includes("caller_waiting"));
+    const caller = f.participant();
+    f.add(caller);
+    f.depart(caller);
+    assert.equal((await f.result()).error, null);
+    assert.equal(f.diagnostics().includes("call_bound"), false);
+    assert.equal(f.recalled(), false);
+    endedOnce(f);
+  });
+});
+
+test("warm publication loss ends startup without waiting for a caller", async () => {
+  await fixture(async (f) => {
+    f.start();
+    await f.until(() => f.diagnostics().includes("caller_waiting"));
+    await f.room.localParticipant.unpublishTrack("audio");
+    assert.equal((await f.result()).error, null);
+    assert.equal(f.diagnostics().includes("media_lost"), true);
+    assert.equal(f.diagnostics().includes("call_bound"), false);
+    assert.equal(f.recalled(), false);
+    endedOnce(f);
+  });
+});
+
+for (const kind of ["audio", "camera"])
+  for (const departure of ["caller", "room"])
+    test(`${departure} departure during warm ${kind} publication fences late completion`, async () => {
+      await fixture(async (f) => {
+        const finish = Promise.withResolvers();
+        f.setPublish(kind, () => finish.promise);
         f.start();
+        await f.until(() => f.calls.includes(kind));
+        const caller = f.participant();
+        f.add(caller);
         await f.flush();
-        f.add(f.participant());
-        // The call gets as far as every other call of this fixture: the camera publication, which is
-        // synthetic here and fails.
-        assert.match(
-          (await f.result()).error?.message,
-          /^Call startup failed at /,
-        );
-        assert.equal(f.publications(), 1);
-        assert.equal(
-          f.events.find((event) => event.clawdtime_line === "startup_failed")
-            ?.code,
-          "first_frame",
-        );
-        // One line says that nothing is kept for later calls. A usual folder gives no such line.
-        assert.deepEqual(
-          f.events
-            .filter((event) => event.clawdtime_line === "zoom_settings")
-            .map((event) => event.code),
-          configHome ? ["memory_only"] : [],
-        );
+        if (departure === "caller") f.depart(caller);
+        else f.disconnect();
+        finish.resolve();
+        assert.equal((await f.result()).error, null);
+        await f.flush();
+        assert.equal(f.diagnostics().includes("media_ready"), false);
+        assert.equal(f.diagnostics().includes("call_bound"), false);
+        assert.equal(f.recalled(), false);
         endedOnce(f);
-      },
-      { configHome },
-    );
-  }
+      });
+    });
+
+test("relative preferences stay in memory and do not affect media warming", async () => {
+  const relative = `clawdtime-startup-relative-${process.pid}`;
+  await fixture(
+    async (f) => {
+      f.start();
+      await f.until(() => f.diagnostics().includes("caller_waiting"));
+      const caller = f.participant();
+      f.add(caller);
+      await f.until(f.recalled);
+      assert.deepEqual(
+        f.events
+          .filter((event) => event.clawdtime_line === "zoom_settings")
+          .map((event) => event.code),
+        ["memory_only"],
+      );
+      f.depart(caller);
+      f.release();
+      await f.result();
+      endedOnce(f);
+    },
+    { configHome: relative },
+  );
   assert.equal(existsSync(resolve(relative)), false);
 });
 
-// A first video frame that fails. The call must go on: before, the entry threw and the caller got no voice.
-// The fixture stops every call before the model. To see the frames of the timer, this one holds the call at
-// the read of the earlier talk, which is a command: here a script that waits until the test lets it go.
-for (const failing of ["first", "every"]) {
-  test(`a call goes on when ${failing} video frame fails: the camera is published and later frames are tried`, async () => {
-    await fixture(async (f) => {
-      const folder = process.env.CLAWDTIME_CONFIG_HOME;
-      const command = join(folder, "recall-wait.sh");
-      writeFileSync(
-        command,
-        '#!/bin/sh\nwhile [ ! -e "$0.go" ]; do sleep 0.02; done\n',
-        { mode: 0o700 },
-      );
-      const prior = {
-        capture: VideoSource.prototype.captureFrame,
-        command: settings.clawdtime,
-        key: process.env.OPENAI_API_KEY,
-      };
-      let frames = 0;
-      VideoSource.prototype.captureFrame = function (...args) {
-        frames++;
-        if (failing === "every" || frames === 1)
-          throw new Error("synthetic frame failure: private-data");
-        return prior.capture.apply(this, args);
-      };
-      settings.clawdtime = command;
-      // Without a key no model session can open, whatever this test does.
-      delete process.env.OPENAI_API_KEY;
-      try {
-        f.setPublish(async () => ({}));
-        const caller = f.participant();
-        let over = false;
-        f.start().then(() => {
-          over = true;
-        });
-        await f.flush();
-        f.add(caller);
-        const until = Date.now() + 5000;
-        while (frames < 3 && !over && Date.now() < until)
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        assert.ok(frames >= 3, "the timer tries later frames");
-        assert.equal(f.publications(), 1);
-        const stages = f.diagnostics();
-        assert.equal(stages.includes("first_frame"), false);
+for (const failing of ["first", "every"])
+  test(`${failing} avatar frame failure observes the bounded warm camera requirement`, async () => {
+    const capture = VideoSource.prototype.captureFrame;
+    let frames = 0;
+    VideoSource.prototype.captureFrame = function (...args) {
+      frames++;
+      if (failing === "every" || frames === 1) throw Error("private-data");
+      return capture.apply(this, args);
+    };
+    try {
+      await fixture(async (f) => {
+        f.start();
+        if (failing === "every") {
+          assert.ok((await f.result()).error);
+          assert.equal(frames, 9);
+          assert.equal(f.diagnostics().includes("media_ready"), false);
+          assert.equal(f.diagnostics().includes("warm_frame_failed"), true);
+          assert.equal(f.diagnostics().includes("call_bound"), false);
+          assert.equal(f.recalled(), false);
+          endedOnce(f);
+          return;
+        }
+        await f.until(() => f.diagnostics().includes("caller_waiting"));
+        assert.equal(frames, 9);
         assert.equal(
-          stages.filter((stage) => stage === "first_frame_failed").length,
+          f
+            .diagnostics()
+            .includes(failing === "every" ? "warm_frame_failed" : "warm_frame"),
+          true,
+        );
+        const caller = f.participant();
+        f.add(caller);
+        await f.until(() => frames >= 10);
+        assert.deepEqual(f.calls, ["audio", "camera"]);
+        assert.equal(
+          f.diagnostics().filter((code) => code === "first_frame_failed")
+            .length,
           1,
         );
-        assert.ok(
-          stages.indexOf("camera_published") >
-            stages.indexOf("first_frame_failed"),
-        );
-        // A later frame that fails too is in the log once, not once for each frame.
         assert.equal(
           f.events.filter((event) => event.clawdtime_line === "frame_failed")
             .length,
           failing === "every" ? 1 : 0,
         );
-        assert.equal(
-          f.events.some((event) => event.clawdtime_line === "startup_failed"),
-          false,
-        );
-        assert.equal(
-          f.events.some((event) => event.clawdtime_line === "call_ended"),
-          false,
-        );
         assert.equal(JSON.stringify(f.events).includes("private-data"), false);
-        // The caller hangs up before the model: the call ends as every call does.
-        f.room.remoteParticipants.delete(caller.identity);
-        f.room.emit(RoomEvent.ParticipantDisconnected, caller);
-        writeFileSync(`${command}.go`, "");
-        assert.equal((await f.result()).error, null);
+        f.depart(caller);
+        f.release();
+        await f.result();
         endedOnce(f);
-      } finally {
-        writeFileSync(`${command}.go`, "");
-        VideoSource.prototype.captureFrame = prior.capture;
-        settings.clawdtime = prior.command;
-        if (prior.key !== undefined) process.env.OPENAI_API_KEY = prior.key;
-      }
-    });
-  });
-}
-
-test("another agent joining cannot start a call", async () => {
-  await fixture(async (f) => {
-    f.start();
-    await f.flush();
-    f.add(f.participant("synthetic-other-agent", ParticipantKind.AGENT));
-    await f.flush();
-    assert.equal(f.publications(), 0);
-    assert.equal(f.diagnostics().includes("caller_resolved"), false);
-    f.add(f.participant());
-    assert.match((await f.result()).error?.message, /^Call startup failed at /);
-    assert.equal(f.publications(), 1);
-    endedOnce(f);
-  });
-});
-
-test("a caller departing before the waiter resumes cannot publish or start voice", async () => {
-  await fixture(async (f) => {
-    f.start();
-    await f.flush();
-    const caller = f.participant();
-    f.add(caller);
-    f.room.remoteParticipants.delete(caller.identity);
-    f.room.emit(RoomEvent.ParticipantDisconnected, caller);
-    assert.equal((await f.result()).error, null);
-    assert.equal(f.publications(), 0);
-    assert.ok(
-      f.events.some(
-        (event) =>
-          event.code === "caller_departed_before_start" ||
-          event.clawdtime_line === "caller_departed_before_start",
-      ),
-    );
-    endedOnce(f);
-  });
-});
-
-for (const departure of ["caller", "room"]) {
-  test(`${departure} departure during camera publication retires startup once`, async () => {
-    await fixture(async (f) => {
-      let finishPublish;
-      f.setPublish(
-        () =>
-          new Promise((resolve) => {
-            finishPublish = resolve;
-            // Also settle during fixture cleanup if an assertion fails.
-            f.room.once(RoomEvent.Disconnected, () => resolve({}));
-          }),
-      );
-      const caller = f.participant();
-      f.start();
-      await f.flush();
-      f.add(caller);
-      await f.flush();
-      assert.equal(f.publications(), 1);
-      assert.equal(typeof finishPublish, "function");
-      f.room.emit(RoomEvent.ParticipantDisconnected, {
-        identity: "synthetic-unrelated-participant",
       });
-      assert.equal(
-        f.events.some((event) => event.clawdtime_line === "call_ended"),
-        false,
-      );
-      if (departure === "caller") {
-        f.room.remoteParticipants.delete(caller.identity);
-        f.room.emit(RoomEvent.ParticipantDisconnected, caller);
-      } else f.disconnect();
-      // A late successful publish may settle, but must never start voice/tools.
-      finishPublish({});
-      assert.equal((await f.result()).error, null);
-      f.disconnect();
-      for (const cleanup of f.ctx.shutdownCallbacks) await cleanup();
-      endedOnce(f);
-      assert.equal(f.publications(), 1);
-    });
+    } finally {
+      VideoSource.prototype.captureFrame = capture;
+    }
   });
-}
