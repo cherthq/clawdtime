@@ -668,6 +668,31 @@ describe("the time of each step", () => {
     ]);
     expect(JSON.stringify(heard)).not.toMatch(/Save|secret/);
   });
+  it("says why a step was held back", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-timing-"));
+    roots.push(home);
+    const hands = new FakeHands([save]);
+    // The look just before the click cannot read the screen.
+    hands.answer = (command) =>
+      command.kind === "observe" && !command.image
+        ? { ok: false, error: "failed" }
+        : undefined;
+    const heard: { kind: string; held?: string }[] = [];
+    const worker = new ComputerWorker({
+      hands,
+      planner: new ScriptedPlanner([click, done]),
+      journal: new ComputerJournal(home),
+      timing: (entry) => heard.push(entry),
+    });
+    await worker.submit("r1", "Click it");
+    await worker.idle();
+    expect(heard[0]).toMatchObject({
+      kind: "click_element",
+      held: "The screen could not be read just before the action.",
+    });
+    // The next step was sent: it has no such word.
+    expect(heard[1]!.held).toBeUndefined();
+  });
   it("changes nothing in the request when the listener fails", async () => {
     const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-timing-"));
     roots.push(home);

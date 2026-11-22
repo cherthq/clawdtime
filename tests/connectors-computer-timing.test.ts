@@ -93,6 +93,25 @@ describe("the time of each step, kept in the state folder", () => {
     expect(readFileSync(elsewhere, "utf8")).toBe("{}");
   });
 
+  it("keeps why a step was held back, and prints it", () => {
+    const root = home();
+    recordTiming(
+      root,
+      {
+        ...step(4),
+        held: "Another app or window came to the front. Nothing was sent.",
+      },
+      () => Date.UTC(2026, 10, 22, 9),
+    );
+    const [kept] = readTimings(root);
+    expect(kept!.held).toBe(
+      "Another app or window came to the front. Nothing was sent.",
+    );
+    expect(timingLine(kept!)).toBe(
+      "2026-11-22T09:00:00.000Z step 4 click_element: look 310 ms, plan 1840 ms, act 420 ms. Not sent: Another app or window came to the front. Nothing was sent.",
+    );
+  });
+
   it("prints one step as a line for a person", () => {
     expect(timingLine({ at: Date.UTC(2026, 10, 22, 9), ...step(3) })).toBe(
       "2026-11-22T09:00:00.000Z step 3 click_element: look 310 ms, plan 1840 ms, act 420 ms",

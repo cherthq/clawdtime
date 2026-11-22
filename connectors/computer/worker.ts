@@ -143,6 +143,12 @@ export interface StepTiming {
   planMs: number;
   /** The checks, the questions to the person, and the action itself. */
   actMs: number;
+  /**
+   * Why the worker held the step back, when it did: one of its own fixed
+   * sentences ("Another app or window came to the front. Nothing was sent."),
+   * never a text of the screen.
+   */
+  held?: string;
 }
 
 export interface ComputerWorkerOptions {
@@ -180,6 +186,8 @@ interface Question {
   settle: (reply: Reply) => void;
 }
 interface Run {
+  /** Why the step of this turn was not sent, for the timing record. */
+  held?: string;
   /** Why the browser cannot be driven in this request, once it said so. The screen is used from then on. */
   browserClosed?: string;
   navigation?: NavigationIntent;
@@ -942,6 +950,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         run.plannerFailures = 0;
         run.step++;
         const actFrom = this.now();
+        delete run.held;
         const chosen = (planned as { action?: unknown }).action;
         await this.act(
           run,
@@ -957,6 +966,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               lookMs: planFrom - lookFrom,
               planMs: actFrom - planFrom,
               actMs: this.now() - actFrom,
+              ...(run.held ? { held: run.held } : {}),
             });
           } catch {
             // A listener that fails changes nothing in the request.
@@ -1240,6 +1250,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     reason: string,
   ) {
     run.fresh = false;
+    run.held = reason;
     this.note(run, action, why, target, `not sent: ${reason}`, "changed");
   }
 
