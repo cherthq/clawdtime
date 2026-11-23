@@ -6653,14 +6653,18 @@ export class Supervisor {
    * holds only when, on top of it, the message asks nothing ("wait, is it
    * running?"), is no word of assent ("no, that's fine"), names no session
    * of the board ("no, not the bakery one, I meant deploy fix"), and either
-   * sets a word against a word of the job's request ("a cafe not a bakery",
-   * "instead of a bakery") or, after a word of correction, says what the
-   * thing is ("I meant a cafe", "it's a cafe", "make it a cafe", "the name
-   * is Cafe Luna", "it should say cafe").
+   * sets a word against a word of the job's request that only this request
+   * has ("a cafe not a bakery", "instead of a bakery"; not "page" or
+   * "html", which any page has): "contrast"; or, after a word of
+   * correction, says what the thing is ("it's a cafe", "make it a cafe",
+   * "the name is Cafe Luna", "it should say cafe", "use blue"): "statement".
    */
-  private changesTheJobsRequest(spoken: string, turn: Turn): boolean {
+  private changesTheJobsRequest(
+    spoken: string,
+    turn: Turn,
+  ): "contrast" | "statement" | null {
     const newest = this.jobsNow(1)[0];
-    if (!newest || !this.correctsARunningJob(spoken, turn)) return false;
+    if (!newest || !this.correctsARunningJob(spoken, turn)) return null;
     const words = spoken.trim();
     let rest = words;
     for (let step = 0; step < 4; step++) {
@@ -6681,10 +6685,17 @@ export class Supervisor {
         saidAsWords(title(session), words),
       )
     )
-      return false;
+      return null;
+    // Words that any page or app has stay out: "I'm not on the page yet".
     const requested = new Set(
       (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
-        (word) => !correctionStop.has(word),
+        (word) =>
+          !correctionStop.has(word) &&
+          !softwareThing.test(word) &&
+          !softwareNoun.test(word) &&
+          !/^(?:html|landing|small|simple|single|basic|quick|little|nice|clean|whole)$/.test(
+            word,
+          ),
       ),
     );
     const contrast = [
@@ -6692,13 +6703,13 @@ export class Supervisor {
         /\b(?:not|instead\s+of|rather\s+than)\s+(?:(?:a|an|the|for|in|on|with|my|our|your)\s+)*(\p{L}+)/giu,
       ),
     ].some((match) => requested.has(match[1]!.toLowerCase()));
-    return (
-      contrast ||
-      (rest !== words &&
-        /^(?:i\s+meant|i\s+mean|it['\u2019]s\s+(?:a|an|for|called)\b|it\s+is\s+(?:a|an|for|called)\b|make\s+it|call\s+it|name\s+it|the\s+name\s+is|it\s+should\s+(?:be|say)|should\s+(?:be|say)|use\s+)/i.test(
-          rest,
-        ))
-    );
+    if (contrast) return "contrast";
+    return rest !== words &&
+      /^(?:it['\u2019]s\s+(?:a|an|for|called)\b|it\s+is\s+(?:a|an|for|called)\b|make\s+it|call\s+it|name\s+it|the\s+name\s+is|it\s+should\s+(?:be|say)\b|use\s+)/i.test(
+        rest,
+      )
+      ? "statement"
+      : null;
   }
   /** What the person hears in a turn that decides no request. */
   private closedAnswer(turn: Turn) {
@@ -12005,18 +12016,26 @@ export class Supervisor {
           // it" is false. The model answers once more with the true way; a
           // second such answer is replaced by a sentence that keeps the
           // person's change.
+          // A contrast against a word of the job's own request ("a cafe not
+          // a bakery") leaves the correction behind in any answer that is no
+          // question back. The other forms ("it's a cafe", "use blue") also
+          // fit small talk ("sorry, it's a big one", "use your best
+          // judgment"): there only an answer that says the job was changed
+          // is checked, and a plain "Okay." stands, as before.
           const corrected = this.jobsNow(1)[0];
+          const change =
+            corrected && !corrected.done && !acted()
+              ? this.changesTheJobsRequest(words, turn)
+              : null;
           if (
-            corrected &&
-            !corrected.done &&
-            !acted() &&
-            this.changesTheJobsRequest(words, turn) &&
-            (!/\?["'\u201d)]*\s*$/.test(reply.text.trim()) ||
-              /\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed\s+on)\s+(?:it|that|this|them|the\s+(?:job|page|request|session|landing\s+page))\b/i.test(
-                reply.text,
-              ))
+            change &&
+            (/\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed\s+on)\s+(?:it|that|this|them|the\s+(?:job|page|request|session|landing\s+page))\b/i.test(
+              reply.text,
+            ) ||
+              (change === "contrast" &&
+                !/\?["'\u201d)]*\s*$/.test(reply.text.trim())))
           ) {
-            if (rechecked) return correctionKept(corrected, words);
+            if (rechecked) return correctionKept(corrected!, words);
             rechecked = true;
             recheck =
               "\nA check of your last draft: the person's last message changes what the newest job was asked to do. No tool changes a job or tells it anything. If their change is plain, call start_job now with their whole request as it is meant now: the request of that job with their change; the new job waits for that job. If it is not plain, ask one short question instead. Do not say that the job was changed or told.";

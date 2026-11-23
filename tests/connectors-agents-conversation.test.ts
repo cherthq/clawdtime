@@ -6946,6 +6946,17 @@ describe("a correction to a job that still works waits for that job", () => {
     ["sorry, was that claude code?", "Yes."],
     ["no, not the bakery one, I meant deploy fix", "Deploy fix is working."],
     ["wait no, the api key is abcd1234efgh5678", "Got it."],
+    // Small talk in the shape of a statement (review round 2): only a claim of a change is checked there.
+    ["nah it should be fine", "Okay."],
+    [
+      "sorry, it's a big one",
+      "No problem. It runs in its own terminal window.",
+    ],
+    ["sorry, it's a lot to ask", "No problem."],
+    ["sorry, it's for tomorrow, no rush", "Okay."],
+    ["actually, use your best judgment", "Okay."],
+    // A contrast on a word that any page has.
+    ["I'm not on the page yet, I'm on my phone", "Okay."],
     // Good questions back that hold words of a claim.
     [
       "wait no, it's a cafe not a bakery",
@@ -6960,6 +6971,20 @@ describe("a correction to a job that still works waits for that job", () => {
     const got = await then(words, { model: run.model });
     expect([words, got.jobs, got.answer]).toEqual([words, 1, draft]);
     expect(run.seen.length, words).toBe(1);
+  });
+
+  it("checks a statement of the thing only when the answer says that the job was changed", async () => {
+    const run = scripted(["I've updated the job to say Cafe Luna."]);
+    const got = await then("oops, the name is Cafe Luna", { model: run.model });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).toContain("so your change is not in it");
+    expect(run.seen.length).toBe(2);
+    const plain = scripted(["Okay."]);
+    const kept = await then("oops, the name is Cafe Luna", {
+      model: plain.model,
+    });
+    expect(kept.answer).toBe("Okay.");
+    expect(plain.seen.length).toBe(1);
   });
 
   it("does not say a credential back in the sentence that keeps a change", async () => {
