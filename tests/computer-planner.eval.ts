@@ -1063,6 +1063,8 @@ interface Config {
   label: string;
   model: string;
   detail: "high" | "low";
+  /** The reasoning effort that the request asks for. Absent: the model's own default. */
+  effort?: string;
 }
 const models = words.filter((word) => !word.startsWith("--"));
 const configs: Config[] = (
@@ -1070,10 +1072,23 @@ const configs: Config[] = (
     ? models
     : [process.env.CLAWDTIME_COMPUTER_MODEL || defaultComputerModel]
 ).map((word) => {
-  const [model, detail] = word.split(":");
-  if (!model || (detail !== undefined && detail !== "low" && detail !== "high"))
-    throw new Error(`Use a model, with :low for a small picture. Got: ${word}`);
-  return { label: word, model, detail: detail === "low" ? "low" : "high" };
+  // "model", "model:low" for a small picture, "model@effort" for a reasoning effort.
+  const [named, effort] = word.split("@");
+  const [model, detail] = (named ?? "").split(":");
+  if (
+    !model ||
+    (detail !== undefined && detail !== "low" && detail !== "high") ||
+    (effort !== undefined && !/^[a-z]+$/.test(effort))
+  )
+    throw new Error(
+      `Use a model, with :low for a small picture and @effort for a reasoning effort. Got: ${word}`,
+    );
+  return {
+    label: word,
+    model,
+    detail: detail === "low" ? "low" : "high",
+    ...(effort ? { effort } : {}),
+  };
 });
 const repeats = Math.max(1, Math.floor(Number(process.env.REPEATS ?? "2")));
 
@@ -1100,12 +1115,17 @@ interface Row {
 async function measure(seen: Record<string, Seen>) {
   const rows: Row[] = [];
   async function one(config: Config) {
-    // The planner asks for the large picture. For ":low" the request is changed on its way out.
+    // The planner asks for the large picture. For ":low" the request is changed on its way out,
+    // and for "@effort" it gets that reasoning effort.
     const request: typeof fetch = async (url, init) => {
-      if (config.detail === "high") return fetch(url, init);
+      if (config.detail === "high" && !config.effort) return fetch(url, init);
       const body = JSON.parse(String(init?.body)) as {
         messages: { content: unknown }[];
+        reasoning_effort?: string;
       };
+      if (config.effort) body.reasoning_effort = config.effort;
+      if (config.detail === "high")
+        return fetch(url, { ...init, body: JSON.stringify(body) });
       for (const message of body.messages)
         if (Array.isArray(message.content))
           for (const part of message.content as {
