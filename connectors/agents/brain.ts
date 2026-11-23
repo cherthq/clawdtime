@@ -12571,10 +12571,10 @@ export class Supervisor {
             }
             rechecked = true;
             recheck =
-              "\nA check of your last draft: it offers to cancel, stop or restart a job. No tool does that: a job runs until it writes its answer. Say the same answer once more without that offer, and offer nothing in its place." +
+              "\nA check of your last draft: it offers to cancel, stop or restart a job. No tool does that: a job runs until it writes its answer. " +
               (keepsChange
-                ? " The person's last message changes what the newest job was asked to do: if their change is plain, call start_job with their whole request as it is meant now (the new job waits for that job); else ask one short question about the change."
-                : "");
+                ? "Answer once more without that offer. The person's last message changes what the newest job was asked to do: if their change is plain, call start_job with their whole request as it is meant now (the new job waits for that job); else ask one short question about the change."
+                : "Say the same answer once more without that offer, and offer nothing in its place.");
             continue;
           }
           const offered = offeredWords(
