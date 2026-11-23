@@ -424,6 +424,17 @@ so does a person who watches the shared screen on a phone.
 - **Not in the worker's own picture.** The picture that the hands take for the
   planner leaves out every window of ClawdTime with a filter of its own, so
   the planner never sees the cursor or its label.
+- **The look.** The cursor is ClawdTime's own: a ring around the place where
+  the hands act, and a small pointer. Both have the two colors of the Chert
+  mark, warm at the top and deep at the bottom, with a pale edge, so that all
+  of the ring is clear on a dark and on a bright ground. The ring is a picture
+  that is computed pixel by pixel: its left half is the exact mirror of its
+  right half, and its middle is the middle of every motion.
+- **Two pointers.** The pointer of the Mac stays the person's. The small
+  pointer points at the place. When the hands bring the pointer of the Mac
+  there for a click, a scroll or a drag, the small pointer steps aside and
+  stands beside it, so a person sees both. It points again when the cursor
+  goes on.
 - **The label.** Each command for the hands comes with a short label from the
   worker: `Click "Save"`, `Type in "Search"`, `Press cmd+s`, `Scroll down`,
   `Open Notes`. The cursor shows it in a pill beside the pointer, as one line of
@@ -435,17 +446,23 @@ so does a person who watches the shared screen on a phone.
   way, and the cursor then waits 0.3 seconds at the target. It stays 1.5
   seconds after the command and then fades. The picture of a call defaults to
   20 frames a second, so the shortest glide is in nine of them or more.
+- **The ring in motion.** While the cursor is out, the colors of the ring turn
+  slowly, one turn in five seconds. On its way the ring is open and light. At
+  the place it closes in and is solid. At a click the ring gives way and comes
+  back, and a second ring opens from it and fades.
 - **Typed keys.** A command that types names no place. The cursor goes to the
   field that has the keyboard: to the lower edge of a field of one line, so
   the pointer is under the text. With no field known it stays where it last
   pointed. The checks for a password field and for ClawdTime's own windows run
   again after the glide, just before the first key.
 - **The size.** For a screen that a phone shows as a picture of 1280 by 720
-  pixels: a pointer of 28 points in a bright ring of 44 points, and letters of
-  20 points in the pill. The colors and the typeface are those of the panel.
+  pixels: a ring of 44 points and letters of 20 points in the pill. The small
+  pointer is 16 points, a little smaller than the pointer of the Mac. The
+  colors and the typeface of the pill are those of the panel.
 - **Reduce Motion.** With the macOS setting Reduce Motion the cursor jumps to
   the target with no glide, waits 0.4 seconds, and the ring of a click shows
-  with no growth.
+  with no growth. The colors of the ring do not turn, the ring does not open
+  or close, and the small pointer changes its place with no slide.
 
 The outgoing call video can now automatically frame these agent targets and
 focused typing fields. Capture stays continuous and input coordinates stay

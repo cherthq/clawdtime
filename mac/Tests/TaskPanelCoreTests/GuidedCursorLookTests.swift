@@ -19,14 +19,43 @@ final class GuidedCursorLookTests: XCTestCase {
     XCTAssertTrue(rule.inScreenShare)
   }
 
-  func testThePointerTheRingAndTheLettersAreClearOnAPhoneThatShowsTheScreen() {
-    XCTAssertEqual(GuidedLook.pointer, 28)
+  func testTheSmallPointerStandsBesideOnlyWhileThePointerOfTheMacIsAtThePlace() {
+    let tip = CGPoint(x: 400, y: 300)
+    XCTAssertTrue(GuidedLook.standsBeside(tip: tip, pointer: tip))
+    XCTAssertTrue(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 408, y: 292)))
+    XCTAssertTrue(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 400 + GuidedLook.near, y: 300)))
+    XCTAssertFalse(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 400 + GuidedLook.near + 0.5, y: 300)))
+    XCTAssertFalse(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 100, y: 700)))
+    XCTAssertFalse(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: CGFloat.nan, y: 300)))
+    XCTAssertFalse(GuidedLook.standsBeside(tip: CGPoint(x: CGFloat.infinity, y: 0), pointer: tip))
+    // A pointer that is this near would lie under the small pointer: the two places do not overlap.
+    XCTAssertGreaterThanOrEqual(GuidedLook.near, 12)
+    // The painted bounds hold the small pointer at both of its places.
+    let layout = GuidedLayout(tip: tip, pillWidth: 0, screen: CGRect(x: 0, y: 0, width: 1512, height: 982))
+    let width = GuidedLook.pointer * 15 / 23.4
+    XCTAssertTrue(layout.paintedBounds.contains(CGRect(x: 400, y: 300 - GuidedLook.pointer, width: width, height: GuidedLook.pointer)))
+    XCTAssertTrue(layout.paintedBounds.contains(CGRect(x: 400 + GuidedLook.besideX, y: 300 + GuidedLook.besideY - GuidedLook.pointer,
+      width: width, height: GuidedLook.pointer)))
+  }
+
+  func testTheRingAndTheLettersAreClearOnAPhoneThatShowsTheScreenAndThePointerIsASmallOne() {
+    // The pointer of the Mac is about 17 points high. ClawdTime's own is a little smaller.
+    XCTAssertEqual(GuidedLook.pointer, 16)
     XCTAssertGreaterThan(GuidedLook.ring, GuidedLook.pointer)
+    // Beside the Mac's pointer, which is about 12 points wide from the same tip, the small pointer is clear
+    // of it, and all of it is inside the square that the window keeps around the ring.
+    XCTAssertGreaterThanOrEqual(GuidedLook.besideX, 12)
+    XCTAssertLessThan(GuidedLook.besideY, 0)
+    XCTAssertLessThanOrEqual(GuidedLook.besideX + GuidedLook.pointer * 15 / 23.4 + GuidedCursorArt.pointerInset, GuidedLayout.reach)
+    XCTAssertLessThanOrEqual(-GuidedLook.besideY + GuidedLook.pointer + GuidedCursorArt.pointerInset, GuidedLayout.reach)
+    // The ring in flight, with its pale edge, is inside that square too, and so is the second ring of a click.
+    XCTAssertLessThanOrEqual(GuidedCursorArt.ringSide / 2 * GuidedLook.flight, GuidedLayout.reach)
+    XCTAssertLessThanOrEqual((GuidedLook.ring + GuidedLook.ringLine) / 2 * GuidedLook.pulse, GuidedLayout.reach)
     XCTAssertGreaterThanOrEqual(GuidedLook.ringLine, 3)
     XCTAssertGreaterThan(GuidedLook.pill, GuidedLook.letters)
     // A screen of 1512 by 982 points, shown as a picture of 1280 by 720 pixels, fits by its height.
     func shown(_ points: Double) -> Double { GuidedLook.pixels(points, screenHeight: 982, shownHeight: 720) }
-    XCTAssertGreaterThanOrEqual(shown(GuidedLook.pointer), 20)
+    XCTAssertGreaterThanOrEqual(shown(GuidedLook.pointer), 11)
     XCTAssertGreaterThanOrEqual(shown(GuidedLook.ring), 30)
     XCTAssertGreaterThanOrEqual(shown(GuidedLook.ringLine), 2.5)
     XCTAssertGreaterThanOrEqual(shown(GuidedLook.letters), 14)
