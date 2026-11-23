@@ -1008,6 +1008,13 @@ to a private folder, read once and removed. Nothing of it is kept.
 - macOS asks once for Screen Recording permission, for the application that
   started ClawdTime.
 - Close what you do not want in the picture before you ask.
+- While a computer task runs, waits for you or stops, ClawdTime says of the
+  screen only what the task's engine reported. The language model gets the
+  engine's state and newest message before it answers ("are you stuck?", "is
+  it open?"). An answer that says that something is open, loaded, ready,
+  done, typed, clicked or found, with no tool result of that turn behind it,
+  is not sent: you get the state in its place ("The computer task still
+  runs: it has not reported that it is done. Its newest report: ...").
 
 ### Give it a job
 

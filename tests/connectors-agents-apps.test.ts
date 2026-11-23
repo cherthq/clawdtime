@@ -11,12 +11,16 @@ import {
 import {
   asksPlainly,
   clearsComputer,
+  computerTaskNow,
   modelWaitMs,
   nothingRanOnScreen,
+  screenClaims,
   speaksAsTheEngine,
   speaksOfManagedWork,
   Supervisor,
+  type ChatMessage,
   type ModelClient,
+  type ModelMessage,
   type SupervisorWorld,
   type ToolCall,
   type ToolSpec,
@@ -1075,6 +1079,629 @@ describe("the brain opens an application", () => {
     const run = scripted([[call("start_job")], "Started."]);
     await new Supervisor(value, run.model).reply([], "run tests", "chat");
     expect(started).toEqual(["run tests"]);
+  });
+});
+
+describe("the chat says of a computer task only what its engine reported", () => {
+  /** What the worker's snapshot says while it works, while it is paused, and when it is done. */
+  const working =
+    'Working on: "open example.com and find the roadmap board". Step 4 of at most 40.';
+  const paused =
+    "You moved the mouse or pressed a key, so I paused. Say continue to go on, or stop.";
+  const stopped = "Stopped. An action that was already sent may have finished.";
+  const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
+  /** A draft that says that the page is open, while the task still types the address. */
+  const falseDraft =
+    "Nope, example.com in Chrome is open and ready for the roadmap board, just need your go-ahead to find it or any page you want.";
+  const at = now - 60_000;
+  /** The conversation before the question: the request, the task's question, and the person's answer to it. */
+  const before: ChatMessage[] = [
+    {
+      role: "user",
+      text: "open example.com and find the roadmap board",
+      at,
+      via: "call",
+    },
+    {
+      role: "assistant",
+      text: "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+      at,
+      via: "call",
+    },
+    {
+      role: "assistant",
+      text: "That app is not installed. Should I open example.com in the browser?",
+      at,
+      via: "chat",
+    },
+    { role: "user", text: "just open it in Chrome", at, via: "call" },
+    { role: "assistant", text: "Thank you. I go on.", at, via: "call" },
+  ];
+  const questions = [
+    "Are you stuck? Do you need help?",
+    "What are you doing?",
+    "Is it open?",
+    "Where are you?",
+    "Do you need help anywhere?",
+  ];
+
+  function withTask(
+    state: string,
+    message: string,
+    options: {
+      /** False: an engine with no `answer`, so a message reaches the model while the task waits. */
+      worker?: boolean;
+      pendingAction?: { id: string; description: string };
+    } = {},
+  ) {
+    const f = world();
+    /** Every call that starts, stops or answers a task. */
+    const touched: string[] = [];
+    const snapshot = {
+      configured: true,
+      mode: "native" as const,
+      state,
+      canStop: state === "running" || state === "waiting_for_person",
+      message,
+      ...(options.pendingAction
+        ? { pendingAction: options.pendingAction }
+        : {}),
+    };
+    f.value.execution = {
+      snapshot: () => snapshot,
+      submit: async (_id, text) => {
+        touched.push(`submit ${text}`);
+        return { message: "A computer task is already running." };
+      },
+      stop: () => {
+        touched.push("stop");
+        return snapshot;
+      },
+      ...(options.worker === false
+        ? {}
+        : {
+            answer: async (text: string) => {
+              touched.push(`answer ${text}`);
+              return { message: "No question waits." };
+            },
+          }),
+    };
+    return { ...f, touched };
+  }
+  /** A scripted model that keeps the messages that it was given. */
+  function drafts(steps: (ToolCall[] | string)[]) {
+    let step = 0;
+    const given: ModelMessage[][] = [];
+    const model: ModelClient = {
+      async complete(input) {
+        given.push([...input.messages]);
+        const next = steps[Math.min(step++, steps.length - 1)]!;
+        return typeof next === "string"
+          ? { text: next, toolCalls: [] }
+          : { text: "", toolCalls: next };
+      },
+    };
+    return { model, given, calls: () => step };
+  }
+  const toldByTools = (messages: ModelMessage[]) =>
+    messages
+      .filter((message) => message.role === "tool")
+      .map((message) => message.content)
+      .join("\n");
+
+  it("does not send a draft that says the page is open while the task still runs: the person gets the engine's state", async () => {
+    const f = withTask("running", working);
+    const run = drafts([falseDraft]);
+    const said = await new Supervisor(f.value, run.model).reply(
+      before,
+      questions[0]!,
+      "call",
+    );
+    expect(said).toBe(stillRuns);
+    // Replaced at once: the model is not asked a second time.
+    expect(run.calls()).toBe(1);
+    // Nothing started, stopped or answered a task.
+    expect(f.touched).toEqual([]);
+  });
+
+  it("answers every question about the running task from the engine's state, whatever the model drafts", async () => {
+    for (const words of questions)
+      for (const draft of [
+        falseDraft,
+        "Yes, the page is open.",
+        "I opened example.com in Chrome and found the roadmap board.",
+        "Done. The page is open.",
+        "All set.",
+        "Not stuck. The page is loaded and the board is up.",
+        // A copy of the engine's first answer: nothing started for a question.
+        "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+      ]) {
+        const f = withTask("running", working);
+        const run = drafts([draft]);
+        const said = await new Supervisor(f.value, run.model).reply(
+          before,
+          words,
+          "call",
+        );
+        expect([words, draft, said]).toEqual([words, draft, stillRuns]);
+        expect(f.touched).toEqual([]);
+      }
+  });
+
+  it("gives the model the state of a task that is not over, with the engine's newest message, before it answers", async () => {
+    const told = async (f: ReturnType<typeof withTask>) => {
+      const run = drafts(["It still works on that."]);
+      await new Supervisor(f.value, run.model).reply([], questions[0]!, "chat");
+      return toldByTools(run.given[0]!);
+    };
+    expect(await told(withTask("running", working))).toContain(stillRuns);
+    expect(
+      await told(withTask("waiting_for_person", paused, { worker: false })),
+    ).toContain(`The computer task waits for your answer: ${paused}`);
+    expect(await told(withTask("stopping", stopped))).toContain(
+      `The computer task is stopping: it has not reported that it is over. Its newest report: ${stopped}`,
+    );
+    expect(
+      await told(
+        withTask("running", "An action waits.", {
+          worker: false,
+          pendingAction: { id: "a1", description: "Click Send" },
+        }),
+      ),
+    ).toContain(
+      "The computer task waits for your word on one action: Click Send. Use Approve action or Deny action in the desktop panel.",
+    );
+    // A task that is over, and no task at all: nothing is added.
+    for (const state of ["idle", "completed", "blocked", "canceled"])
+      expect([
+        state,
+        await told(withTask(state, "Done. The page is open.")),
+      ]).toEqual([state, ""]);
+  });
+
+  it("says the state sentence of each state in place of a claim", async () => {
+    for (const [state, message, options, sentence] of [
+      [
+        "waiting_for_person",
+        paused,
+        { worker: false },
+        `The computer task waits for your answer: ${paused}`,
+      ],
+      [
+        "waiting_for_person",
+        "What is the exact app name?",
+        { worker: false },
+        "The computer task waits for your answer: What is the exact app name?",
+      ],
+      [
+        "stopping",
+        stopped,
+        {},
+        `The computer task is stopping: it has not reported that it is over. Its newest report: ${stopped}`,
+      ],
+      [
+        "running",
+        "An action waits.",
+        {
+          worker: false,
+          pendingAction: { id: "a1", description: "Click Send" },
+        },
+        "The computer task waits for your word on one action: Click Send. Use Approve action or Deny action in the desktop panel.",
+      ],
+    ] as const) {
+      const f = withTask(state, message, options);
+      expect(computerTaskNow(f.value.execution!.snapshot())).toBe(sentence);
+      const run = drafts([falseDraft]);
+      expect(
+        await new Supervisor(f.value, run.model).reply(
+          [],
+          "Is it open?",
+          "chat",
+        ),
+      ).toBe(sentence);
+      expect(run.calls()).toBe(1);
+      expect(f.touched).toEqual([]);
+    }
+    // No task that is not over: no sentence.
+    for (const state of [
+      "idle",
+      "completed",
+      "blocked",
+      "canceled",
+      "uncertain",
+    ])
+      expect([
+        state,
+        computerTaskNow(withTask(state, "x").value.execution!.snapshot()),
+      ]).toEqual([state, null]);
+  });
+
+  it("lets a true answer stand", async () => {
+    for (const [state, message, options, draft] of [
+      ["running", working, {}, "It still works on that."],
+      ["running", working, {}, "Nothing is open yet."],
+      ["running", working, {}, "I asked it to open the page."],
+      [
+        "running",
+        working,
+        {},
+        "Not stuck. It is at step 4 of at most 40 and has not said that it is done.",
+      ],
+      [
+        "waiting_for_person",
+        paused,
+        { worker: false },
+        "It is paused: you moved the mouse.",
+      ],
+      [
+        "waiting_for_person",
+        "What is the exact app name?",
+        { worker: false },
+        "The task asks: what is the exact app name?",
+      ],
+    ] as const) {
+      const f = withTask(state, message, options);
+      const run = drafts([draft]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        questions[0]!,
+        "call",
+      );
+      expect([draft, said]).toEqual([draft, draft]);
+      expect(f.touched).toEqual([]);
+    }
+  });
+
+  it("lets the engine's own report of the end stand, and still takes a copy of it for new work that did not run", async () => {
+    // The engine reported the end: its report answers a question about it.
+    for (const words of ["Is it open now?", "Did it finish?"]) {
+      const done = withTask("completed", "Done. The page is open.");
+      const run = drafts(["Done. The page is open."]);
+      expect([
+        words,
+        await new Supervisor(done.value, run.model).reply([], words, "call"),
+      ]).toEqual([words, "Done. The page is open."]);
+      expect(run.calls()).toBe(1);
+    }
+    // Other words about a task that is over are not read here, as before.
+    const over = withTask("completed", "Done. The page is open.");
+    expect(
+      await new Supervisor(
+        over.value,
+        drafts(["Yes, the page is open."]).model,
+      ).reply([], "Is it open now?", "call"),
+    ).toBe("Yes, the page is open.");
+    // New work, and the model copies the report of the task before: nothing ran for it.
+    const copy = withTask("completed", "Done. Closed the document.");
+    expect(
+      await new Supervisor(
+        copy.value,
+        drafts(["Done. Closed the document."]).model,
+      ).reply([], "tidy that editor window away for me", "chat"),
+    ).toBe(nothingRanOnScreen);
+    // A report that the engine did not give is no report of the end.
+    const other = withTask("completed", "Done. Closed the document.");
+    expect(
+      await new Supervisor(
+        other.value,
+        drafts(["Done. The page is open."]).model,
+      ).reply([], "Is it open now?", "call"),
+    ).toBe(nothingRanOnScreen);
+  });
+
+  it("takes a sentence that says a result on the screen, by its grammar", () => {
+    for (const draft of [
+      falseDraft,
+      // A thing is open, loaded, ready, done, found, typed, clicked.
+      "Yes, the page is open.",
+      "It's open now.",
+      "The page is loaded.",
+      "The board is up.",
+      "Everything is ready.",
+      "It's done.",
+      "The address is typed in.",
+      "The button was clicked.",
+      "The board has been found.",
+      "You're all set.",
+      "Not stuck, the page is open.",
+      "It is not stuck, but the page is open.",
+      // A guess is no report.
+      "The page should be open now.",
+      "It looks done.",
+      "It seems to be loaded.",
+      // Someone opened, loaded, typed, clicked or found something.
+      "I opened example.com in Chrome and found the roadmap board.",
+      "I've typed the address.",
+      "I clicked the Search button.",
+      "It found the board.",
+      "It has typed the address and pressed Return.",
+      "Chrome opened and the page loaded.",
+      "The task finished.",
+      "It should have opened by now.",
+      "I got it open in Chrome.",
+      "I have it open.",
+      "It worked.",
+      "The page came up fine.",
+      "Opened Chrome.",
+      "Found the board.",
+      // What the person sees, said for them.
+      "You should see the board in Chrome now.",
+      "The board is right there.",
+      // A bare word that it is done.
+      "Done.",
+      "All set.",
+      "All done, the board is right there.",
+      "Done. The page is open.",
+    ])
+      expect([draft, screenClaims(draft).length > 0]).toEqual([draft, true]);
+    // A yes that opens the answer, when the person asked whether a result is there.
+    for (const [asked, draft] of [
+      ["Is it open?", "Yes."],
+      ["Is it open?", "Yep, go ahead."],
+      ["Did it find the board?", "It did."],
+      ["Has the page loaded?", "Yes, and it waits for you."],
+      ["Did it work?", "Absolutely."],
+    ] as const)
+      expect([asked, draft, screenClaims(draft, { asked })]).toEqual([
+        asked,
+        draft,
+        [draft],
+      ]);
+  });
+
+  it("takes no sentence that claims no result on the screen", () => {
+    for (const draft of [
+      "It still works on that.",
+      "It is paused: you moved the mouse.",
+      "The task asks: what is the exact app name?",
+      "Nothing is open yet.",
+      "I asked it to open the page.",
+      "It is not done yet.",
+      "It has not reported that it is done.",
+      "The page isn't open yet.",
+      "It hasn't found the board.",
+      "It found nothing yet.",
+      "I don't know if the page is open.",
+      "I cannot see whether the page is open.",
+      "It tells you when it is done.",
+      "Once the page is open, it looks for the board.",
+      "It is done when the board shows.",
+      "It will be done soon.",
+      "It may have finished one more action.",
+      "An action that was already sent may have finished.",
+      "I sent it your answer.",
+      "It worked on that for a minute.",
+      "You should see it when it is done.",
+      "It is at step 4 of at most 40.",
+      "Not stuck. It's still working on that: step 4 of at most 40.",
+      "No, I'm not stuck. It still runs, and it has not said it's done.",
+      'It says: Working on "open example.com and find the roadmap board", step 4 of at most 40.',
+      "It is still opening the page.",
+      "It is typing the address now.",
+      "It waits for your answer.",
+      "You moved the mouse or pressed a key, so it paused.",
+      "It paused because you clicked something.",
+      "You said it's open, but the task has not reported that.",
+      "Say stop and it stops.",
+      "Is the page open on your side?",
+      "It asks whether it should open the page in Chrome.",
+      "I'm ready to help with that.",
+      "That is up to you.",
+      "It is open to question whether that works.",
+      "Got it.",
+      "No, I am not stuck.",
+      'Its newest report: Working on: "check that the page is open". Step 2 of at most 40.',
+      stillRuns,
+      `The computer task waits for your answer: ${paused}`,
+    ])
+      expect([draft, screenClaims(draft)]).toEqual([draft, []]);
+    // A yes is no claim after another question, with a "not" in it, or about a session.
+    for (const [asked, draft] of [
+      ["Are you still there?", "Yes."],
+      ["Is it open?", "Yeah, not yet."],
+      ["Is it open?", "No."],
+      ["Is the docs session done?", "Yes."],
+      ["Are the tests done?", "Yes."],
+    ] as const)
+      expect([
+        asked,
+        draft,
+        screenClaims(draft, { asked, sessions: ["docs"] }),
+      ]).toEqual([asked, draft, []]);
+  });
+
+  it("takes no sentence about a session or a job, none that a tool of the turn backs, and none in the engine's own words", () => {
+    // A session by its name, and work that the supervisor manages.
+    for (const draft of [
+      "Docs is done.",
+      "Docs opened a pull request.",
+      "Two sessions are done and one waits for you.",
+      "The job is done.",
+      "The tests are finished.",
+      "The pull request is open.",
+    ])
+      expect([draft, screenClaims(draft, { sessions: ["docs"] })]).toEqual([
+        draft,
+        [],
+      ]);
+    // A name that no session of the board has is no such name.
+    expect(screenClaims("Docs is open.")).toHaveLength(1);
+    // A name or a word that the task's own request holds can be the thing on
+    // the screen: it makes no sentence a sentence about a session.
+    const request =
+      'Working on: "open the docs page and the deploy page". Step 2 of at most 40.';
+    for (const draft of ["Docs is open.", "The deploy page is open."])
+      expect([
+        draft,
+        screenClaims(draft, { sessions: ["docs"], report: request }),
+      ]).toEqual([draft, [draft]]);
+    // With no such word in the request, the sentence is read as one about a
+    // deploy: the list of words decides, and it cannot tell a page from a
+    // deploy.
+    expect(
+      screenClaims("The deploy page is open.", { report: working }),
+    ).toEqual([]);
+    // What a tool of this turn said: half of the naming words of the
+    // sentence, or more, are in it.
+    const told =
+      'Job "find the biggest files in Downloads" is done. Its answer: Found three big files in Downloads.';
+    for (const draft of [
+      "It found three big files in Downloads.",
+      "It found three large ones in Downloads.",
+    ])
+      expect([draft, screenClaims(draft, { told })]).toEqual([draft, []]);
+    // The person asks about a job or a session: the answer is about that.
+    for (const draft of ["Yes, it's done.", "It found them all."])
+      expect([
+        draft,
+        screenClaims(draft, { asked: "did the job find the big files?" }),
+      ]).toEqual([draft, []]);
+    expect(screenClaims("It found the roadmap board.", { told })).toHaveLength(
+      1,
+    );
+    // A sentence with no naming word has nothing that a tool could back.
+    expect(screenClaims("It's done.", { told })).toHaveLength(1);
+    expect(screenClaims("Typed it in.", { told })).toHaveLength(1);
+    // The engine's own words, as its newest message has them, word for word:
+    // a question of the task that says what it sees.
+    const asks = "The page is open. Which board do you want?";
+    expect(screenClaims("The page is open.", { report: asks })).toEqual([]);
+    expect(screenClaims("The board is open.", { report: asks })).toHaveLength(
+      1,
+    );
+    // Words of the request, which the worker quotes in its message, are no
+    // report of a result.
+    expect(
+      screenClaims("example.com is open.", { report: working }),
+    ).toHaveLength(1);
+    expect(
+      screenClaims("The page is open.", {
+        report:
+          'Working on: "make sure that the page is open". Step 2 of at most 40.',
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("does not read the answer of a turn that did something through a gate, and reads it after a refused call", async () => {
+    // Another engine than the worker: the tool for applications opens Chrome
+    // in this turn, and its result stands behind the answer.
+    const opens = withTask("running", working, { worker: false });
+    expect(
+      await new Supervisor(
+        opens.value,
+        drafts([
+          [call("open_app", { name: "Google Chrome" })],
+          "Chrome is open.",
+        ]).model,
+      ).reply([], "open chrome", "chat"),
+    ).toBe("Chrome is open.");
+    expect(opens.opened).toEqual(["Google Chrome -"]);
+    // The gate refused the call (a question opens nothing): nothing stands
+    // behind the same answer.
+    const refused = withTask("running", working, { worker: false });
+    expect(
+      await new Supervisor(
+        refused.value,
+        drafts([
+          [call("open_app", { name: "Google Chrome" })],
+          "Chrome is open.",
+        ]).model,
+      ).reply([], "is chrome open?", "chat"),
+    ).toBe(stillRuns);
+    expect(refused.opened).toEqual([]);
+    // The model asks to hand a question to the engine: the gate refuses, and
+    // the claim after it is not sent.
+    const asked = withTask("running", working);
+    expect(
+      await new Supervisor(
+        asked.value,
+        drafts([[call("delegate_computer_task")], "Yes, it is open."]).model,
+      ).reply(before, "Is it open?", "call"),
+    ).toBe(stillRuns);
+    expect(asked.touched).toEqual([]);
+  });
+
+  it("lets an answer about a job stand while a computer task runs, and holds a claim about the screen beside it", async () => {
+    const withJob = () => {
+      const f = withTask("running", working);
+      f.value.jobs = {
+        start: async () => ({ ok: true, said: "started" }),
+        recent: () => [
+          {
+            id: "job-1",
+            job: "find the biggest files in Downloads",
+            startedAt: now - 5 * 60_000,
+            done: true,
+            result: "Found three big files in Downloads.",
+          },
+        ],
+      };
+      return f;
+    };
+    const first = withJob();
+    expect(
+      await new Supervisor(
+        first.value,
+        drafts(["It found three big files in Downloads."]).model,
+      ).reply([], "what did it find?", "chat"),
+    ).toBe("It found three big files in Downloads.");
+    // The job's answer does not back a claim about the screen.
+    const second = withJob();
+    expect(
+      await new Supervisor(
+        second.value,
+        drafts(["It found the roadmap board."]).model,
+      ).reply([], "what did it find?", "chat"),
+    ).toBe(stillRuns);
+    // The state that the code read holds the engine's own message with the
+    // words of the request: they back no claim.
+    const third = withJob();
+    const run = drafts(["example.com is open."]);
+    expect(
+      await new Supervisor(third.value, run.model).reply(
+        [],
+        "what is everyone doing?",
+        "chat",
+      ),
+    ).toBe(stillRuns);
+    expect(toldByTools(run.given[0]!)).toContain(working);
+  });
+
+  it("leaves a message to the worker that waits for an answer, as before", async () => {
+    // The worker asked something: the message is its answer, and the
+    // worker's own sentence is the reply. No model is asked.
+    const f = withTask("waiting_for_person", paused);
+    const run = drafts([falseDraft]);
+    expect(
+      await new Supervisor(f.value, run.model).reply(
+        before,
+        "Are you stuck?",
+        "call",
+      ),
+    ).toBe("No question waits.");
+    expect(f.touched).toEqual(["answer Are you stuck?"]);
+    expect(run.calls()).toBe(0);
+  });
+
+  it("says why the model gave no answer as before, also while a computer task runs", async () => {
+    const silent: ModelClient = {
+      async complete() {
+        throw new Error("the model is down");
+      },
+    };
+    const idle = withTask("idle", "Computer use is on.");
+    const live = withTask("running", working);
+    const words = "tell me a joke about the weather";
+    const said = await new Supervisor(live.value, silent).reply(
+      [],
+      words,
+      "chat",
+    );
+    expect(said).toBe(
+      await new Supervisor(idle.value, silent).reply([], words, "chat"),
+    );
+    expect(said).toContain("language model");
+    expect(live.touched).toEqual([]);
   });
 });
 
