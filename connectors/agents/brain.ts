@@ -12088,14 +12088,17 @@ export class Supervisor {
             corrected && !corrected.done && !acted()
               ? this.changesTheJobsRequest(words, turn)
               : null;
+          // The same message makes the sentence that keeps the change the
+          // second answer of the checks below too ("I have not done that"
+          // or the state of the job would drop the change).
+          const keepsChange =
+            change === "contrast" && correctionWord.test(words.trim());
           if (
             change &&
             (/\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed\s+on)\s+(?:it|that|this|them|the\s+(?:job|page|request|session|landing\s+page))\b/i.test(
               reply.text,
             ) ||
-              (change === "contrast" &&
-                correctionWord.test(words.trim()) &&
-                !/\?["'\u201d)]*\s*$/.test(reply.text.trim())))
+              (keepsChange && !/\?["'\u201d)]*\s*$/.test(reply.text.trim())))
           ) {
             if (rechecked) return correctionKept(corrected!, words);
             rechecked = true;
@@ -12230,7 +12233,10 @@ export class Supervisor {
             if (rechecked)
               return acted()
                 ? sizeNotDone
-                : (this.endedInTurn(turn) ?? notDone);
+                : (this.endedInTurn(turn) ??
+                    (keepsChange
+                      ? correctionKept(corrected!, words)
+                      : notDone));
             rechecked = true;
             // The tool for what the person asked: a window, a session to
             // see, or work.
@@ -12532,9 +12538,11 @@ export class Supervisor {
                 !/\bless\s+than\s+a\s+minute\b/i.test(body)))
           ) {
             if (rechecked)
-              return listed.length < 2 && working.length === 1
-                ? jobStillWorks(working[0]!, moment)
-                : jobsStillWork(listed, moment);
+              return keepsChange
+                ? correctionKept(corrected!, words)
+                : listed.length < 2 && working.length === 1
+                  ? jobStillWorks(working[0]!, moment)
+                  : jobsStillWork(listed, moment);
             rechecked = true;
             const since = ranFor(moment - (working[0] ?? listed[0]!).startedAt);
             // Only fixed words and a time stand in this note: a job's request

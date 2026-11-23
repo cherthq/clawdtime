@@ -7019,6 +7019,25 @@ describe("a correction to a job that still works waits for that job", () => {
     },
   );
 
+  it("keeps the change when a correction's second answer is a question that guesses at the job", async () => {
+    const run = scripted([
+      [call("job_result")],
+      "The bakery job is switching to a cafe page now. Anything else?",
+    ]);
+    const got = await then("wait no, it's a cafe not a bakery", {
+      model: run.model,
+    });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).toContain("so your change is not in it");
+    // A guess after news keeps the state of the job, as before.
+    const news = scripted([
+      [call("job_result")],
+      "The bakery job is almost done now. Anything else?",
+    ]);
+    const kept = await then("sorry, it's a big one", { model: news.model });
+    expect(kept.answer).toMatch(/^It still works/);
+  });
+
   it("checks a statement of the thing only when the answer says that the job was changed", async () => {
     const run = scripted(["I've updated the job to say Cafe Luna."]);
     const got = await then("oops, the name is Cafe Luna", { model: run.model });
