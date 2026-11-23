@@ -9452,8 +9452,10 @@ export class Supervisor {
     // no board session name. Desktop/previous_app navigation readings still
     // hit the worker's own busy fence without modifying the running run.
     const activeMidTask = computerTaskNotOver(execution);
-    // "Stop" is never a goal of a new screen task.
-    if (!activeMidTask && readWords(spoken) === "stop")
+    // "Stop" is never a goal of a new screen task. Only a message that is a
+    // stop by itself counts: "open Calendar and cancel the 3pm meeting" and
+    // "click the Cancel button" are screen requests.
+    if (!activeMidTask && computerStopKind(spoken) !== null)
       return execution.stop().message;
     const desktopMove =
       reading?.kind === "desktop" || reading?.kind === "previous_app";

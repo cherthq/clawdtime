@@ -4262,6 +4262,29 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     }
   });
 
+  it("final review round 3: a screen request with a stop word starts when no screen task runs", async () => {
+    for (const state of ["idle", "completed", "canceled", "blocked"]) {
+      for (const words of [
+        "open Calendar and cancel the 3pm meeting",
+        "cancel my 3pm meeting in Calendar",
+        "open Netflix in Chrome and cancel my subscription",
+        "click the Cancel button",
+        "click Stop on the timer",
+        "stop the music in Spotify",
+        "cancel the order on example.com",
+        "abort the upload in Chrome",
+      ]) {
+        const f = withRealishWorker(state, "Done.", { goal });
+        const run = scriptedChat([
+          [call("delegate_computer_task", { task: words })],
+          "Started.",
+        ]);
+        await new Supervisor(f.value, run.model).reply(before, words, "call");
+        expect([state, words, f.submitted]).toEqual([state, words, [words]]);
+      }
+    }
+  });
+
   it("final review blocker 4: a bare stop with no screen task running goes to the engine's stop, never to the model", async () => {
     for (const state of ["idle", "completed", "blocked"]) {
       for (const words of ["stop", "stop!", "cancel", "please stop"]) {
