@@ -4412,6 +4412,64 @@ const offeredWords = (
     ? null
     : to[1]!.trim();
 };
+/** Words that cannot be the new thing of a contrast ("the tests are not ..."). */
+const contrastFiller =
+  /^(?:is|are|was|were|am|be|been|it|it's|its|that|that's|this|i|i'm|im|we|we're|they|they're|you|you're|he|she|do|does|did|don't|doesn't|have|has|had|can|could|will|would|should|must|may|might|just|really|still|already|also|and|but|or|so|then|now|maybe|probably|surely|a|an|the|for|in|on|with|my|our|your|of|to|at|by|as|if|no|nope|nah|yes|ok|okay|wait|sorry|oops|actually|instead|rather|one|ones|thing|things|stuff)$/;
+/**
+ * The message sets a new thing against a word of the job's request, in one
+ * clause: "a cafe, not a bakery", "cafe not bakery", "not a bakery website,
+ * it's a blog", "not a bakery but a cafe", "a cafe instead of a bakery". A
+ * "not" with no new thing is news, not a change ("the tests are not failing
+ * anymore"), and so is a sentence about a person ("I'm not on safari") or
+ * one with a time ("yet", "anymore", "right now").
+ */
+const contrastReplaces = (spoken: string, requested: Set<string>) => {
+  const lowered = spoken.toLowerCase().replace(/[\u2018\u2019]/g, "'");
+  if (
+    /\b(?:anymore|any\s+more|no\s+longer|yet|right\s+now|for\s+now)\b/.test(
+      lowered,
+    )
+  )
+    return false;
+  const det = "(?:(?:a|an|the|for|in|on|with|my|our|your)\\s+)*";
+  const word = "(\\p{L}[\\p{L}'-]*)";
+  const fresh = (value: string) =>
+    value.length >= 3 && !requested.has(value) && !contrastFiller.test(value);
+  const aboutAPerson = (at: number) => {
+    const sentence = (
+      lowered
+        .slice(0, at)
+        .split(/[.;!?]/)
+        .at(-1) ?? ""
+    )
+      .replace(
+        /^\s*(?:(?:um+|uh+|oh|ok|okay|so|well|wait|no|nope|nah|oops|sorry|actually|hold\s+on|hang\s+on)[,.!\s]+)*/,
+        "",
+      )
+      .trimStart();
+    return /^(?:i|i'm|im|i\s+am|we|we're|we\s+are|they|they're|they\s+are|he|she|you|you're|you\s+are)\b/.test(
+      sentence,
+    );
+  };
+  for (const [pattern, newAt, oldAt] of [
+    [`${word}\\s*,?\\s+not\\s+${det}${word}`, 1, 2],
+    [
+      `\\bnot\\s+${det}${word}(?:\\s+\\p{L}+)?\\s*(?:,\\s*|\\s+but\\s+)(?:(?:it's|it\\s+is|but|rather|instead)\\s+)?${det}${word}`,
+      2,
+      1,
+    ],
+    [`${word}\\s+(?:instead\\s+of|rather\\s+than)\\s+${det}${word}`, 1, 2],
+  ] as const) {
+    for (const match of lowered.matchAll(new RegExp(pattern, "gu")))
+      if (
+        requested.has(match[oldAt]!) &&
+        fresh(match[newAt]!) &&
+        !aboutAPerson(match.index ?? 0)
+      )
+        return true;
+  }
+  return false;
+};
 /** What ClawdTime says when a second answer offers words of its own again. */
 const ownWordsOnly =
   'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.';
@@ -6698,12 +6756,7 @@ export class Supervisor {
           ),
       ),
     );
-    const contrast = [
-      ...words.matchAll(
-        /\b(?:not|instead\s+of|rather\s+than)\s+(?:(?:a|an|the|for|in|on|with|my|our|your)\s+)*(\p{L}+)/giu,
-      ),
-    ].some((match) => requested.has(match[1]!.toLowerCase()));
-    if (contrast) return "contrast";
+    if (contrastReplaces(words, requested)) return "contrast";
     return rest !== words &&
       /^(?:it['\u2019]s\s+(?:a|an|for|called)\b|it\s+is\s+(?:a|an|for|called)\b|make\s+it|call\s+it|name\s+it|the\s+name\s+is|it\s+should\s+(?:be|say)\b|use\s+)/i.test(
         rest,

@@ -6957,6 +6957,10 @@ describe("a correction to a job that still works waits for that job", () => {
     ["actually, use your best judgment", "Okay."],
     // A contrast on a word that any page has.
     ["I'm not on the page yet, I'm on my phone", "Okay."],
+    // News with a "not" and no new thing (review round 3).
+    ["the bakery is not open anymore", "Okay."],
+    ["I'm not a bakery owner yet, it's for my sister", "Okay."],
+    ["it's not for the bakery right now", "Okay."],
     // Good questions back that hold words of a claim.
     [
       "wait no, it's a cafe not a bakery",
@@ -6972,6 +6976,25 @@ describe("a correction to a job that still works waits for that job", () => {
     expect([words, got.jobs, got.answer]).toEqual([words, 1, draft]);
     expect(run.seen.length, words).toBe(1);
   });
+
+  it.each([
+    "wait no, it's a cafe not a bakery",
+    "it's a cafe, not a bakery",
+    "cafe not bakery",
+    "actually it should say cafe, not bakery",
+    "it's not a bakery website, it's a blog",
+    "not a bakery but a cafe",
+    // "Make that a cafe instead of a bakery" starts its job in code.
+    "a cafe instead of a bakery",
+  ])(
+    "checks a plain answer to a contrast with a new thing: %j",
+    async (words) => {
+      const run = scripted(["Got it."]);
+      const got = await then(words, { model: run.model });
+      expect([words, got.jobs]).toEqual([words, 1]);
+      expect(got.answer, words).toContain("so your change is not in it");
+    },
+  );
 
   it("checks a statement of the thing only when the answer says that the job was changed", async () => {
     const run = scripted(["I've updated the job to say Cafe Luna."]);
