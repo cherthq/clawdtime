@@ -462,6 +462,218 @@ describe("words for a session that runs are never a job", () => {
     );
   });
 
+  describe("work that the person holds until their own word: no job, by the code or by the model", () => {
+    const held = [
+      // "When I say so", in its forms.
+      "build the landing page when I say so",
+      "build the landing page once I give the word",
+      "build the landing page when I tell you to",
+      "build the landing page as soon as I give you the go-ahead",
+      "build the landing page after I approve the design",
+      "build the landing page only after I confirm",
+      "build the landing page when I'm ready",
+      "fix the footer of the landing page when I say so",
+      "find out why the nightly backup fails when I say so",
+      "open claude and build the landing page when I say so",
+      // The person's go, as a noun.
+      "build the landing page on my signal",
+      "build the landing page on my go",
+      // Wait, hold, and ask first.
+      "build the landing page, but wait for my go",
+      "build the landing page but wait until I say go",
+      "build the landing page, hold on",
+      "deploy the app to staging, confirm with me first",
+      "deploy the app to staging but check with me first",
+      "deploy the app to staging, ask me first",
+      "deploy the app to staging, run it by me first",
+      "deploy the app to staging, ask me before you start",
+      "build the landing page when I say so please",
+      "build the landing page, not until I say so",
+      // More verbs of work, a lead, and a question mark.
+      "merge the branch on my go",
+      "publish the page once I approve",
+      "restart the worker if I ask",
+      "can you build the landing page when I say so?",
+      "make a landing page when I say so",
+      // The hold stands first.
+      "when I say go, build the landing page",
+      "once I approve the design, deploy the app to staging",
+      "ok so after I give the word, build the landing page",
+    ];
+
+    it.each(held)("starts nothing by itself for %j", async (words) => {
+      // The model calls no tool: only the code's own path could start.
+      const said = await run(words, ["Okay.", "Okay again."]);
+      expect(said.windows, words).toHaveLength(0);
+      expect(said.typed, words).toEqual([]);
+    });
+
+    it.each(held)(
+      "starts no job and no task for %j when the model calls a start",
+      async (words) => {
+        for (const tool of ["start_job", "start_task"]) {
+          const said = await run(words, [
+            [tool === "start_job" ? call(tool) : call(tool, { goal: words })],
+            "Okay.",
+          ]);
+          expect(said.windows, `${words} / ${tool}`).toHaveLength(0);
+          expect(said.typed, `${words} / ${tool}`).toEqual([]);
+          expect(said.answer, `${words} / ${tool}`).not.toContain(
+            "Requested a new ",
+          );
+        }
+      },
+    );
+
+    it("answers held work in fixed words, and asks the model nothing", async () => {
+      const { model, seen } = scripted(["Okay, I'll wait for your go."]);
+      const made = mac(two());
+      const answer = await new Supervisor(made.world, model).reply(
+        [],
+        "build the landing page when I say so",
+        "chat",
+      );
+      expect(answer).toBe(
+        "I have not started that, and I keep no work for later. When you want it, ask for it again.",
+      );
+      expect(seen).toHaveLength(0);
+      expect(made.windows).toHaveLength(0);
+    });
+
+    it.each([
+      // A question in the form of an order: the model answers it.
+      "explain what happens when I approve",
+      "tell me what to do if I approve the PR",
+      "show me how to deploy once I approve",
+    ])("asks the model for %j, with no fixed answer", async (words) => {
+      const { model, seen } = scripted(["Here is the answer."]);
+      const made = mac(two());
+      const answer = await new Supervisor(made.world, model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(seen.length, words).toBeGreaterThanOrEqual(1);
+      expect(answer, words).toBe("Here is the answer.");
+      expect(made.windows, words).toHaveLength(0);
+    });
+
+    it("starts nothing for held work when a request waits and the model calls a start", async () => {
+      const said = await run(
+        "build the landing page when I say so",
+        [[call("start_job")], "Okay."],
+        two(),
+        (world) => {
+          world.desk.open({
+            agent: "claude-code",
+            sessionId: "s",
+            cwd: "/work/app",
+            pids: [],
+            described: {
+              kind: "permission",
+              tool: "Bash",
+              summary: "git push origin main",
+              options: [],
+            },
+            holdSeconds: 600,
+          });
+        },
+      );
+      expect(said.windows).toHaveLength(0);
+      expect(said.answer).not.toContain("Requested a new ");
+    });
+
+    it.each([
+      // The work starts now; only a later step waits.
+      "build the landing page, but wait for me before deploying",
+      "build the landing page and check with me before you publish it",
+      "fix the footer and ask me before merging",
+      // The first part is for now; only a later step waits, with the hold
+      // at the end.
+      "build the landing page now and ship it once I approve",
+      "fix the login bug and open a PR, but only merge once I approve",
+      "fix the footer and merge it after I approve",
+      "deploy the app to staging now and to production when I say so",
+      "fix the failing tests, I'll review them when I get back",
+      "build both versions of the header so I can pick when I decide",
+      // The person's word inside the thing that is built.
+      "write a script that deploys when I approve the release",
+      "add a confirmation dialog that shows when I approve a request",
+      "add a modal that opens when I ask",
+      "make the button fire only if I confirm",
+      "set up the payment flow so it charges only after I confirm",
+      "add a deploy step that runs after my approval",
+      "build a kill switch that stops the job on my signal",
+      "build a bot that replies when I say so",
+      // A thing that does something on the person's word: "to" and a verb,
+      // or "for when".
+      "write a script to deploy the app when I approve",
+      "add a command to deploy the app when I say go",
+      "create an alias to restart the worker whenever I ask",
+      "add a deploy button to use when I approve",
+      "build the button to fire only if I confirm",
+      "set up a cron job to back up the database when I say so",
+      "write a bot to reply when I say so",
+      "add a reset button for when I say so",
+      // A thing that waits for the person's word: a participle before the
+      // form, or "auto-".
+      "set up a release pipeline gated on my approval",
+      "add a step gated on my approval",
+      "build a deploy hook triggered on my signal",
+      "create a job triggered when I approve",
+      "set up auto-deploy on my approval",
+      "enable auto-merge after my approval",
+      "add an automatic rollback on my signal",
+      // "My approval", "my sign-off" and "my confirmation" as nouns most
+      // often name a gate of the thing: no hold of the start.
+      "set up a pipeline waiting on my approval",
+      "set up a release pipeline with a gate on my approval",
+      "add a manual gate on my approval",
+      "set up autodeploy on my approval",
+      "enable automerge after my approval",
+      "set up a release step pending my sign-off",
+      "build a pipeline gated by tests on my approval",
+      "add a deploy step held on my approval",
+      "deploy the app to staging after my approval",
+      "deploy the app to staging pending my sign-off",
+      "merge the branch on my approval",
+      "publish the page upon my confirmation",
+      // A second request with no mark before it.
+      "fix the footer also deploy the app when I say so",
+      "Fix the footer plus build the landing page when I say so",
+      // An automation to set up now, with the hold first.
+      "once I approve a PR, merge it automatically: set that up",
+      // Work for now in a sentence before the held one.
+      "Fix the footer. Build the landing page when I say so.",
+      // A sign-off in the commit, not a hold.
+      "commit the footer fix with my sign-off",
+      // Do it, and then come to me.
+      "fix the footer and confirm with me",
+      "fix the footer and check with me",
+      "write the migration and run it by me",
+      "build the landing page and wait for me",
+      "prepare the release notes and hold it",
+      // A time that the work runs, not a hold.
+      "build the landing page and keep it up until I'm ready",
+      // A deadline, not a hold.
+      "build the landing page before I get back",
+      "build the landing page by the time I say go live",
+      // The person's word in the work itself.
+      "build a button that shows a toast when I say hello",
+      "build a page that updates when I approve a request in the admin panel",
+      "build the landing page with my logo on my brand colors",
+      "build the landing page as I said this morning",
+      // No hold at all.
+      "build a landing page for the bakery",
+      "hold on, build the landing page with a dark theme instead",
+      "build the landing page, I'm ready",
+    ])("still starts the job for %j", async (words) => {
+      const said = await run(words, [[call("start_job")], "Okay."]);
+      expect(said.windows, words).toHaveLength(1);
+      expect(said.answer, words).toContain("Requested a new ");
+    });
+  });
+
   describe("a message that only asks to be told later in other words, or for a reminder: no job, whatever the model calls", () => {
     it.each([
       // To be told about a session of the board, in forms that the watch

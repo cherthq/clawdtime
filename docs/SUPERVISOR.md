@@ -605,6 +605,19 @@ These rules are in the code, not in the model's instructions:
   such a request after it starts as always: "run the tests and tell me when
   they're done". So does a request that holds work for ClawdTime: "let me
   know when you finish the migration".
+- Work that you hold until your own word starts nothing: "build the landing
+  page when I say so", "..., but wait for my go", "deploy it after I approve
+  the design", "..., confirm with me first", "when I say go, build the
+  page". Neither the code nor the language model starts it. ClawdTime
+  answers in fixed words: "I have not started that, and I keep no work for
+  later. When you want it, ask for it again." A later "go" alone starts
+  nothing: say the work again. The message must be one clause of work with
+  the hold at its end, or the hold first, before a comma. What is no hold
+  starts as always: a hold of a later step ("fix the bug and open a PR, but
+  only merge once I approve", "build the page, but wait for me before
+  deploying"), your word inside the thing that is built ("a script that
+  deploys when I approve the release"), work and then a word with you ("fix
+  the footer and confirm with me"), and a deadline ("before I get back").
 - The same holds in other words, and for a reminder: "let me know if docs
   changes", "give me a heads up if docs changes", "keep me posted on docs",
   "I want to hear the second something happens there" and "remind me in ten

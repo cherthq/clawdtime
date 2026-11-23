@@ -2262,6 +2262,128 @@ const wishForAReminder = new RegExp(
   `^\\s*${fillersBefore}${leadBefore}remind\\s+me\\s+(?:to\\s+\\w+|(?:again\\s+)?(?:in\\s+(?:\\d+|an?|one|two|three|four|five|ten|fifteen|twenty|thirty|half\\s+an?|a\\s+few|a\\s+couple\\s+of)\\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)|at\\s+(?:\\d[\\d:.]*\\s*(?:am|pm)?|noon|midnight)|by\\s+\\d[\\d:.]*\\s*(?:am|pm)?|tomorrow(?:\\s+(?:morning|afternoon|evening|night))?|tonight|later(?:\\s+(?:today|tonight))?|this\\s+(?:evening|afternoon|morning)|in\\s+the\\s+(?:morning|afternoon|evening))(?=\\s*$|\\s+to\\s+\\w+|\\s+about\\b))`,
   "i",
 );
+/**
+ * One plain clause of work, a list of what it is: after fillers and a lead
+ * ("can you", "please", "I want you to"), a verb of doing, and then its
+ * object in at most fourteen words, with
+ * - no mark in it, so no second part and no second sentence;
+ * - none of "and, but, then, so, now, or, also, plus", none of "that,
+ *   which, who, whose", none of "when, if, once, after, before, until,
+ *   unless, while, because, since", no "I" or "we", and no "auto",
+ *   "automatic" or "automatically" ("set up auto-deploy on my approval"
+ *   builds a thing that waits);
+ * - no participle as its last word ("a pipeline gated on my approval", "a
+ *   job triggered when I approve": the thing waits, not the work);
+ * - "to" only before a place ("to the server", "to staging"), never before
+ *   a verb ("a script to deploy the app");
+ * - "for" only before a thing or a person ("for the bakery"), never "for
+ *   when".
+ * "Explain", "tell me" and "show me" ask to say something, and "make the
+ * button fire" says what a thing does: those open no such clause ("make a
+ * landing page" does).
+ */
+const onePlainClauseOfWork = (work: string) => {
+  const text = work.trim();
+  const opens = new RegExp(
+    `^${fillersBefore}(?:(?:(?:can|could|will|would)\\s+you|i(?:['\\u2019]d|\\s+would)\\s+like\\s+you\\s+to|i\\s+(?:want|need)\\s+you\\s+to)\\s+)?(?:(?:please|also|just)\\s+)*(?:find\\s+out|figure\\s+out|look\\s+into|dig\\s+into|investigate|clean\\s+up|set\\s+up|roll\\s+back|kick\\s+off|make\\s+(?:me\\s+|us\\s+)?an?|build|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|move|run|deploy|test|check|find|install|upgrade|clean|merge|publish|restart|commit|push|ship|release|migrate|start|launch|close|delete|revert|rollback|rebase|tag|send|upload|sync|generate|compile|rebuild|rerun|redeploy|restore|reset|rotate|bump|enable|disable|apply)\\b`,
+    "i",
+  ).exec(text);
+  if (!opens) return false;
+  const object = text.slice(opens[0].length);
+  return (
+    !/[,;:.?!\u2014]/.test(object) &&
+    !/\b(?:and|but|then|so|now|or|also|plus|that|which|who|whose|whom|when|if|once|after|before|until|unless|while|because|since|I|we|I['\u2019]ll|we['\u2019]ll|let['\u2019]s|auto(?:matic(?:ally)?)?)\b/i.test(
+      object,
+    ) &&
+    // A participle right before the hold says what the thing waits for:
+    // "a pipeline gated on my approval", "a job triggered when I approve".
+    !/\w+ed\s*$/i.test(object) &&
+    !/\bto\b(?!\s+(?:the|my|our|a|an|this|your|its|staging|production|prod|main|master|dev|develop|test|testing|live|preview|qa|uat|github|origin|upstream)\b)/i.test(
+      object,
+    ) &&
+    !/\bfor\b(?!\s+(?:the|my|our|a|an|this|your|me|us|it|them|everyone|all)\b)/i.test(
+      object,
+    ) &&
+    (object.match(/\S+/g) ?? []).length <= 14
+  );
+};
+/**
+ * The person holds the work until their own word: "build the landing page
+ * when I say so", "..., but wait for my go", "deploy it after I approve the
+ * design", "..., confirm with me first". Such a message starts nothing now.
+ *
+ * A list of what is taken. The message is one plain clause of work
+ * (`onePlainClauseOfWork`) and then the hold at its end, with at most a
+ * word of politeness behind it; or, for the first kind, the hold stands
+ * first, before a comma, and the one plain clause of work follows ("when I
+ * say go, build the page"). The forms of a hold:
+ * - "when", "once", "after", "as soon as", "whenever", "only when|once|
+ *   after|if", "if" or "not until|before", then "I" and a word of their
+ *   go: "say (so)", "tell you (to)", "ask", "give (you) the word|the
+ *   go-ahead|the signal", "approve", "confirm", "ok", "sign off", "decide",
+ *   "agree", "let you know", "green-light", "release"; or "when|once|as
+ *   soon as I'm ready"; or "wait until I ...";
+ * - "on", "after", "upon", "pending", "following" or "subject to", then
+ *   "my go|go-ahead|word|signal|mark|cue|say-so|ok|green light" ("my
+ *   approval" and "my sign-off" as nouns are none: "a gate on my approval"
+ *   is a thing that waits; "once I approve" is a hold);
+ * - "wait for my go|the go-ahead", "hold on", "hold off";
+ * - "confirm|check|clear|verify (it) with me first", "ask me first", "run
+ *   it by me first", or one of those with "before you start".
+ *
+ * These are none, and start or are answered as always:
+ * - a hold of a later step: "fix the bug and open a PR, but only merge
+ *   once I approve", "build the page, but wait for me before deploying";
+ * - the person's word inside the thing that is built: "a script that
+ *   deploys when I approve the release", "a script to deploy the app when
+ *   I approve", "make the button fire only if I confirm";
+ * - a question in the form of an order: "explain what happens when I
+ *   approve";
+ * - work for now in a sentence before: "Fix the footer. Build the page
+ *   when I say so.";
+ * - work and then a word with the person: "fix the footer and confirm
+ *   with me";
+ * - a deadline or a time that the work runs: "before I get back", "keep it
+ *   up until I'm ready".
+ */
+const holdsTheWorkForTheirWord = (spoken: string) => {
+  // "My approval", "my sign-off" and "my confirmation" are no such noun:
+  // in "a gate on my approval" they name what the thing waits for.
+  const theirGo =
+    "(?:go(?:[- ]ahead)?|word|signal|mark|cue|say(?:-so)?|ok|okay|green\\s+light)";
+  // "I say so", "I give the word", "I approve the design".
+  const theirWord =
+    "(?:I(?:['\\u2019]ve|\\s+have)?\\s+(?:say(?:\\s+(?:so|go|when|the\\s+word|yes|ok|okay|start|now|it|that))?|tell\\s+you(?:\\s+(?:to|so|when|to\\s+start|to\\s+go))?|ask(?:\\s+you)?(?:\\s+(?:to|for\\s+it))?|give(?:\\s+you)?\\s+(?:the|my|a)\\s+(?:word|go(?:[- ]ahead)?|signal|ok|okay|green\\s+light|nod|sign|thumbs\\s+up|command|all\\s+clear)|(?:approve|confirm|ok|okay|sign\\s+off|decide|agree|let\\s+you\\s+know|green-?light|release)(?:\\s+[\\w'\\u2019-]+){0,4})\\b)";
+  const whenTheySay = `(?:(?:when|once|after|as\\s+soon\\s+as|whenever|only\\s+(?:when|once|after|if)|if|not\\s+(?:until|before))\\s+${theirWord}|(?:when|once|as\\s+soon\\s+as|whenever|only\\s+when)\\s+I(?:['\\u2019]m|\\s+am)\\s+ready\\b)`;
+  const text = spoken.trim();
+  // The hold stands first: "when I say go, build the landing page".
+  const first = new RegExp(
+    `^\\s*${fillersBefore}${whenTheySay}\\s*,\\s*(?<work>.*?)[.!?\\s]*$`,
+    "is",
+  ).exec(text);
+  if (first) return onePlainClauseOfWork(first.groups?.work ?? "");
+  const found = new RegExp(
+    `\\b(?:${whenTheySay}|wait\\s+(?:until|till)\\s+(?:${theirWord}|I(?:['\\u2019]m|\\s+am)\\s+ready\\b)|(?:on|after|upon|pending|following|subject\\s+to)\\s+my\\s+${theirGo}\\b|wait\\s+for\\s+(?:my\\s+${theirGo}|the\\s+go(?:[- ]ahead)?)\\b|hold\\s+(?:off|on)\\b|(?:confirm|check|clear|verify)\\s+(?:(?:it|that|this)\\s+)?with\\s+me(?:\\s+first\\b|(?=\\s+before\\b))|ask\\s+me(?:\\s+first\\b|(?=\\s+before\\b))|run\\s+it\\s+(?:by|past)\\s+me(?:\\s+first\\b|(?=\\s+before\\b)))(?<rest>[^.!?;,]*)[.!?\\s]*$`,
+    "i",
+  ).exec(text);
+  if (!found) return false;
+  // The work before the hold. "But" or "and" can join the hold to it:
+  // "build the page, but wait for my go".
+  if (
+    !onePlainClauseOfWork(
+      text.slice(0, found.index).replace(/[,\s]*(?:\b(?:but|and)\b)?\s*$/i, ""),
+    )
+  )
+    return false;
+  const rest = found.groups?.rest ?? "";
+  // Behind the form: nothing, a word of politeness, or "before you start".
+  // "Before deploying" holds a later step.
+  if (/\bbefore\b/i.test(rest))
+    return /^\s*before\s+(?:you\s+|we\s+)?(?:start|begin|kick\s+(?:it\s+)?off|go)(?:ing)?(?:\s+(?:it|on\s+it))?\s*$/i.test(
+      rest,
+    );
+  return /^(?:\s+(?:please|thanks|ok|okay|then|though))*\s*$/i.test(rest);
+};
 /** A clause that rules a session out of a request: "show me payments, not docs". */
 const seeNot = (clause: string) =>
   /^(?:(?:and|but|just|only|so)[,\s]+)*(?:not|except|excluding|other\s+than|no)\b/i.test(
@@ -4098,6 +4220,7 @@ interface Turn {
    * model, such a sentence is never the answer: the turn goes on to the model.
    */
   refused?: string;
+
   /** The gate of decide refused a bare word in this turn: the word answered ClawdTime's own last message. */
   bareWordRefused?: boolean;
   /** The channel of the person's message. */
@@ -4119,6 +4242,11 @@ const forThatSession = (session: AgentSession) =>
   `The person's message speaks to the session ${title(session)}: those words are for that session, not work for a new agent, so no job and no task starts for them.`;
 const onlyToHear =
   "The person's message only asks to hear later about a session, or to stop that. That is no work for a new agent: no job and no task starts for it.";
+/** What the person hears for work that they hold until their own word: fixed words, and true. */
+const heldAnswer =
+  "I have not started that, and I keep no work for later. When you want it, ask for it again.";
+const heldForTheirWord =
+  "The person's message holds this work until their own word: nothing starts now, and nothing here keeps it for later. Say that it has not started, and that it starts when they ask for it again.";
 const onlyAReminder =
   "The person's message asks for a reminder. You keep no timer and no reminder, and that is no work for a new agent: no job and no task starts for it.";
 /** Marks a gate's refusal, and gives its sentence back for the model. */
@@ -4978,6 +5106,8 @@ export class Supervisor {
     // Words for a session that runs are no task either.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
+    // Work that the person holds until their own word is no task now.
+    if (this.holdsItsWork(spoken)) return refuse(turn, heldForTheirWord);
     // A request to hear later about a session is no task either, in any
     // words, and a reminder is none.
     if (this.onlyAsksToHear(spoken)) return refuse(turn, onlyToHear);
@@ -5366,6 +5496,10 @@ export class Supervisor {
     // runs are not work for a new one.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
+    // "Build the landing page when I say so", "..., but wait for my go":
+    // the person holds the work until their own word. Nothing starts now,
+    // by the code's own path or by the model's call.
+    if (this.holdsItsWork(spoken)) return refuse(turn, heldForTheirWord);
     // "Tell me when deploy fix is done", "stop watching docs": a request to
     // hear later about a session is no work for a new agent. The same in
     // other words ("give me a heads up if docs changes"), and a reminder.
@@ -5415,6 +5549,17 @@ export class Supervisor {
     }
     turn.done.set("job", said);
     return said;
+  }
+  /**
+   * The person's message holds its work until their own word, as it stands
+   * or behind the name of an agent ("open claude and build the landing
+   * page when I say so").
+   */
+  private holdsItsWork(spoken: string) {
+    return (
+      holdsTheWorkForTheirWord(spoken) ||
+      holdsTheWorkForTheirWord(this.jobText(spoken))
+    );
   }
   /**
    * The job in the person's own words. When the sentence opens with an agent
@@ -9729,6 +9874,31 @@ export class Supervisor {
     // "Cancel that", and a job still works: the code says what is true.
     const cannotStop = this.stopsAJob(words, turn);
     if (cannotStop !== null) return cannotStop;
+    // "Build the landing page when I say so", "..., but wait for my go":
+    // the person asks for work and holds it until their own word. Nothing
+    // starts, and nothing here keeps work for later. The code says so in
+    // fixed words and asks the model nothing: an answer of the model says
+    // that a word such as "go" starts it, and no such word does. Under the
+    // vetoes of a direct start: no request that waits, no computer action
+    // that waits, no task that waits for an answer, no words for a session.
+    if (
+      this.world.jobs &&
+      spoken.length <= userMessageLimit &&
+      asksForWork(words) &&
+      this.world.desk.pending().length === 0 &&
+      !this.world.execution?.snapshot().pendingAction &&
+      !taskWaits &&
+      !this.forSession(words) &&
+      this.holdsItsWork(words)
+    ) {
+      // Through the gate of every job: it refuses held work, and its
+      // refusal is what the fixed answer stands for. Another refusal of
+      // the gate goes to the model, as for every direct start.
+      await this.startJob(turn, words);
+      const held = turn.refused === heldForTheirWord;
+      turn.refused = undefined;
+      if (held) return heldAnswer;
+    }
     // "Open Claude, and build a page": the person named a coding agent and
     // gave it an instruction for software work. It starts at once, as a
     // direct instruction does, under the same vetoes: the strict reader, no
