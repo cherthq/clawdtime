@@ -564,10 +564,19 @@ describe("key combinations", () => {
 });
 
 describe("links, apps and waits", () => {
+  // The person's own request names the site of the links below.
+  const asked = view(observation(), {
+    goal: "Open the page of example.com that the note names",
+  });
   it("opens only http and https", () => {
     for (const kind of ["open_url", "browser_open"]) {
-      expect(run({ kind, url: "https://example.com/a?b=1" }).risk).toBeNull();
-      expect(run({ kind, url: "http://example.com" }).risk).toBeNull();
+      expect(
+        run({ kind, url: "https://example.com/a?b=1" }, asked).risk,
+      ).toBeNull();
+      // Plain http only when the person wrote it: here they did not.
+      expect(run({ kind, url: "http://example.com" }, asked).risk).toMatch(
+        /plain http/,
+      );
       for (const url of [
         "file:///etc/passwd",
         "javascript:alert(1)",
@@ -580,7 +589,10 @@ describe("links, apps and waits", () => {
       ])
         expect(refused({ kind, url })).toMatch(/http/);
     }
-    const opened = run({ kind: "open_url", url: "https://example.com/a?b=1" });
+    const opened = run(
+      { kind: "open_url", url: "https://example.com/a?b=1" },
+      asked,
+    );
     // The record keeps the site, not the path or the query.
     expect(opened.target).toBe("example.com");
     expect(opened.send).toEqual({
@@ -588,6 +600,186 @@ describe("links, apps and waits", () => {
       look: false,
       command: { kind: "open_url", url: "https://example.com/a?b=1" },
     });
+  });
+  it("opens with no question only the site that the person wrote, with its port, its scheme and no long hidden part", () => {
+    const words = (goal: string) => view(observation(), { goal });
+    for (const kind of ["open_url", "browser_open"]) {
+      const risk = (url: string, goal: string) =>
+        run({ kind, url }, words(goal)).risk;
+      // A common word of the request names no site: no site with that name opens unasked.
+      for (const [url, goal] of [
+        ["https://open.ai/x?d=1", "open my notes and summarize them"],
+        ["https://open.so/", "open Notes"],
+        ["https://the.com/", "add the milk to the list"],
+        ["https://mail.com/", "check my mail"],
+        ["https://bank.com/", "open my bank and pay rent"],
+        ["https://www.quillboard.so/", "Open Quillboard in Fixture Browser"],
+      ] as const)
+        expect(risk(url, goal)).toMatch(/not in your request/);
+      // A file name, a mail address, a word in another script and a "dot" phrase name no site.
+      for (const [url, goal] of [
+        ["https://readme.md/?d=1", "open README.md and follow its steps"],
+        ["https://photos.zip/", "unzip photos.zip in Downloads"],
+        ["https://install.sh/", "run install.sh"],
+        ["https://example.com/", "email bob@example.com the report"],
+        ["https://nchen.de/", "open münchen.de"],
+        ["https://the.com/", "an article on the dot com bubble"],
+      ] as const)
+        expect(risk(url, goal)).toMatch(/not in your request/);
+      // The site as written opens, also a search on it.
+      expect(
+        risk(
+          "https://www.example-shop.in/s?k=wireless+earbuds",
+          "find wireless earbuds on example-shop.in",
+        ),
+      ).toBeNull();
+      expect(
+        risk(
+          "https://app.example.com/",
+          "Bro, just open app.example.com on Fixture Browser.",
+        ),
+      ).toBeNull();
+      // The port of the request, and no other.
+      expect(
+        risk("http://localhost:3000/board", "open localhost:3000"),
+      ).toBeNull();
+      expect(risk("http://localhost:8080/", "open localhost:3000")).toMatch(
+        /not in your request/,
+      );
+      // Plain http only when the person wrote it.
+      expect(risk("http://example.com/", "open example.com")).toMatch(
+        /plain http/,
+      );
+      expect(risk("http://example.com/", "open http://example.com")).toBeNull();
+      // A long path or query that the person did not write can carry the screen to the site.
+      const long = `https://example.com/form?entry=${"a".repeat(140)}`;
+      expect(risk(long, "open example.com and copy my notes")).toMatch(
+        /long part/,
+      );
+      expect(risk(long, `open ${long}`)).toBeNull();
+    }
+  });
+
+  it("asks before a browser that the person did not name opens the address", () => {
+    const risk = (browser: string, goal: string) =>
+      run(
+        { kind: "open_url", url: "https://example.org/n", browser },
+        view(observation(), { goal }),
+      ).risk;
+    expect(
+      risk("Chatbox Assistant", "open example.org and check my notifications"),
+    ).toBe("The browser Chatbox Assistant is not in your request.");
+    expect(risk("Fixture Browser", "open example.org in Fixture")).toBeNull();
+    expect(risk("Fixture", "open example.org on Fixture Browser")).toBeNull();
+    expect(
+      risk("the Fixture browser", "open example.org in fixture"),
+    ).toBeNull();
+    // "browser" alone names no app.
+    expect(risk("browser", "open example.org in the browser")).toMatch(
+      /not in your request/,
+    );
+    // After words that the person added, the checks have no request: they ask.
+    expect(risk("Fixture", "")).toMatch(/not in your request/);
+  });
+
+  it("asks before it opens an address that the person's own words do not hold", () => {
+    const words = (goal?: string) =>
+      view(observation(), goal === undefined ? {} : { goal });
+    for (const kind of ["open_url", "browser_open"]) {
+      const risk = (url: string, goal?: string) =>
+        run({ kind, url }, words(goal)).risk;
+      // The planner chose the address: the person says yes first.
+      expect(risk("https://example.net/login", "Open my mail")).toBe(
+        "The address example.net is not in your request.",
+      );
+      expect(risk("https://example.com/")).toMatch(/not in your request/);
+      // The person's words hold the site, in the forms that people write and say.
+      for (const goal of [
+        "open example.com and log in",
+        "Go to https://Example.com/board, then read it",
+        "open www.example.com.",
+      ])
+        expect(risk("https://www.example.com/a?b=1", goal)).toBeNull();
+      expect(
+        risk("http://localhost:3000/", "open localhost:3000 and reload"),
+      ).toBeNull();
+      // Another site is another site, however alike its name is.
+      const goal = "open app.example.com and find the board";
+      expect(risk("https://app.example.com/board", goal)).toBeNull();
+      for (const url of [
+        "https://example.com/",
+        "https://login.app.example.com/",
+        "https://app.example.com.example.net/",
+        "https://myapp.example.com/",
+        "https://app.example.co/",
+      ])
+        expect(risk(url, goal)).toMatch(/not in your request/);
+    }
+  });
+  it("opens an address in a browser that is named by a plain name", () => {
+    const opened = run(
+      {
+        kind: "open_url",
+        url: "https://example.com/a?b=1",
+        browser: "Fixture Browser",
+      },
+      view(observation(), {
+        goal: "Open the page of example.com that the note names in Fixture Browser",
+      }),
+    );
+    expect(opened.label).toBe("Open example.com in Fixture Browser");
+    expect(opened.target).toBe("example.com");
+    expect(opened.risk).toBeNull();
+    expect(opened.send).toEqual({
+      via: "hands",
+      look: false,
+      command: {
+        kind: "open_url",
+        url: "https://example.com/a?b=1",
+        browser: "Fixture Browser",
+      },
+    });
+    // The hands get the address as it was checked, written one way.
+    expect(
+      run({ kind: "open_url", url: "HTTP://Example.COM\\@example.net/" }, asked)
+        .send,
+    ).toMatchObject({
+      command: { kind: "open_url", url: "http://example.com/@example.net/" },
+    });
+    // The same address in another browser is another action.
+    expect(opened.signature).not.toBe(
+      run({ kind: "open_url", url: "https://example.com/a?b=1" }, asked)
+        .signature,
+    );
+    expect(
+      run({ kind: "open_url", url: "https://example.com/" }, asked).label,
+    ).toBe("Open example.com");
+    for (const browser of [
+      "",
+      "  ",
+      "../../bin/sh",
+      "/Applications/Fixture.app",
+      "a\nb",
+      ".hidden",
+    ])
+      expect(
+        refused(
+          { kind: "open_url", url: "https://example.com/", browser },
+          asked,
+        ),
+      ).toMatch(/name/);
+    // The browser that the page is read through has no name to choose.
+    expect(
+      check(
+        {
+          kind: "browser_open",
+          url: "https://example.com/",
+          browser: "Fixture Browser",
+        },
+        asked,
+        "",
+      ).verdict,
+    ).toBe("refuse");
   });
   it("opens an app by a plain name", () => {
     expect(run({ kind: "open_app", name: "Notes" }).send).toEqual({

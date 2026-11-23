@@ -80,6 +80,8 @@ import {
 } from "./desktop.js";
 import { BrowserClosed, handErrors } from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
+import { directAddress } from "./navigation.js";
+import { directOpening } from "./planner.js";
 import type {
   Action,
   BrowserPage,
@@ -828,7 +830,8 @@ export class ComputerWorker implements DesktopExecutorPort {
 
   constructor(private readonly options: ComputerWorkerOptions) {
     this.hands = options.hands;
-    this.planner = options.planner;
+    // A request that only opens one web address needs no model for that step.
+    this.planner = directOpening(options.planner);
     this.journal = options.journal;
     this.browser = options.browser;
     this.enabled = options.enabled ?? (() => true);
@@ -1870,6 +1873,9 @@ export class ComputerWorker implements DesktopExecutorPort {
     run: Run,
     intent: Exclude<NavigationIntent, { kind: "none" | "clarify" }>,
   ): Promise<"plan" | void> {
+    // The person's words only open a web address: that is no move to an app,
+    // whatever the reading says. The first planned step opens the address.
+    if (directAddress(run.goal)) return "plan";
     const looked = await this.hand(
       run,
       { kind: "observe", image: true, elements: true },

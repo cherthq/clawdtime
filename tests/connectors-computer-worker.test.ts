@@ -3526,7 +3526,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       [...again(enter, 4), done],
       { screens: [bar()] },
     );
-    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.submit("r1", "Type example.com/app in the address bar");
     // The third time in a row asks first, as before.
     await until(() => said.length === 1);
     expect(said[0]).toBe(
@@ -3568,7 +3568,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       command.kind === "observe" && !command.image && ++looks === 2
         ? { observation: bar(2) }
         : undefined;
-    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.submit("r1", "Type example.com/app in the address bar");
     await worker.idle();
     expect(hands.sent).toEqual(again(enter, 2));
     expect(planner.inputs).toHaveLength(4);
@@ -3595,7 +3595,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       [...again(enter, 3), { kind: "click_element", element: 1 }, done],
       { screens: [bar()] },
     );
-    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.submit("r1", "Type example.com/app in the address bar");
     await until(() => said.length === 1);
     await worker.answer("yes");
     await worker.idle();
@@ -3730,7 +3730,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     const { worker, hands, journal, said } = setup(again(link, 4));
     hands.answer = (command) =>
       command.kind === "observe" ? { ok: false, error: "failed" } : undefined;
-    await worker.submit("r1", "Open example.com/app");
+    await worker.submit("r1", "Open example.com/app and read its title");
     // With no look the worker cannot tell whether the link moved anything.
     // It asks before each further time with the real count, and ends nothing itself.
     for (let asked = 1; asked <= 2; asked++) {
@@ -3874,7 +3874,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       ],
       { screens: [bar()] },
     );
-    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.submit("r1", "Type example.com/app in the address bar");
     await until(() => said.length === 1);
     await worker.answer("yes");
     await until(() => said.length === 2);
@@ -3936,7 +3936,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       [...again(enter, 3), ...again({ kind: "wait", ms: 1 }, 12), enter, done],
       { screens: [bar()] },
     );
-    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.submit("r1", "Type example.com/app in the address bar");
     await until(() => said.length === 1);
     await worker.answer("yes");
     // Twelve waits later the line is out of the planner's view: the key is
@@ -3963,7 +3963,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       url: "https://example.com/app",
     };
     const { worker, said } = setup(again(link, 5), { browser });
-    await worker.submit("r1", "Open example.com/app");
+    await worker.submit("r1", "Open example.com/app and read its title");
     // No sentence says that it was never sent. The person is asked before
     // each further time with the real count.
     for (let asked = 1; asked <= 3; asked++) {
@@ -4141,7 +4141,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       }
       return undefined;
     };
-    await worker.submit("r1", "Open example.com");
+    await worker.submit("r1", "Open example.com and read its title");
     await worker.idle();
     expect(hands.sent).toEqual([{ kind: "type", text: "example.com" }]);
     expect(journal.get("r1")).toMatchObject({
@@ -4663,7 +4663,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       if (command.kind !== "observe") return undefined;
       return { observation: command.image ? screen(1) : screen(2) };
     };
-    await worker.submit("r1", "Open example.com");
+    await worker.submit("r1", "Open example.com and read its title");
     await worker.idle();
     expect(hands.sent).toEqual([]);
     expect(browser.calls).toEqual([]);
@@ -5160,7 +5160,8 @@ describe("what the planner may not do", () => {
       { kind: "open_url", url: "https://example.com/" },
       done,
     ]);
-    await worker.submit("r1", "Open it");
+    // The request names the site, so the link needs no question.
+    await worker.submit("r1", "Open the page of example.com from the note");
     await worker.idle();
     expect(hands.sent).toEqual([
       { kind: "open_url", url: "https://example.com/" },
@@ -5819,7 +5820,7 @@ describe("stackfix round 1 blockers and rests", () => {
       ],
       { screens: [bar()] },
     );
-    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.submit("r1", "Type example.com/app in the address bar");
     await until(() => said.length === 1);
     expect(said[0]).toBe(
       "I already did this twice in a row: Press return. Say yes to do it a third time, or no to stop.",

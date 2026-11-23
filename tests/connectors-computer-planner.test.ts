@@ -2,16 +2,18 @@ import { describe, expect, it } from "vitest";
 import { actionSchema } from "../connectors/computer/guards.js";
 import {
   defaultComputerModel,
+  directOpening,
   fallbackComputerModel,
   OpenAIPlanner,
   plannerFromEnvironment,
 } from "../connectors/computer/planner.js";
-import type { StepRecord } from "../connectors/computer/ports.js";
+import type { Action, StepRecord } from "../connectors/computer/ports.js";
 import {
   element,
   observation,
   page,
   pageElement,
+  ScriptedPlanner,
 } from "./connectors-computer-fixture.js";
 
 interface Sent {
@@ -266,6 +268,63 @@ describe("the planner on the chat completions API", () => {
     expect(text(sent[1]!)).not.toContain("after the start");
   });
 
+  it("tells the model to open an address with open_url, never through the address bar, and to look before it says done", async () => {
+    const { sent, request } = fakeFetch();
+    await new OpenAIPlanner({ key: "k", request }).next(input());
+    const system = sent[0]!.body.messages[0]!.content as string;
+    expect(system).toMatch(/To open a web address or a site, call open_url/);
+    expect(system).toMatch(/no pointer and no key/);
+    expect(system).toMatch(
+      /never click the address bar, never type an address into it/,
+    );
+    // An app that is not here, and the person says: open it in the browser.
+    expect(system).toMatch(/in the browser.*call open_url/s);
+    // The sent address is not the page.
+    expect(system).toMatch(/only that the address went to the browser/);
+    expect(system).toMatch(/call done only when it shows the page/);
+    const tool = sent[0]!.body.tools.find(
+      (item) => item.function.name === "open_url",
+    )!.function;
+    expect(tool.description).toMatch(/no click and no key/);
+    expect(Object.keys(tool.parameters.properties)).toEqual([
+      "url",
+      "browser",
+      "why",
+    ]);
+    // The browser is named only when the person named one.
+    expect(tool.parameters.required).toEqual(["url", "why"]);
+  });
+
+  it("shows an opened address with its browser, and says that the sent address is not the page", async () => {
+    const history: StepRecord[] = [
+      {
+        step: 1,
+        action: {
+          kind: "open_url",
+          url: "https://example.com/board",
+          browser: "Fixture Browser",
+        },
+        why: "The person asked to open this address.",
+        outcome: "ok",
+      },
+      {
+        step: 2,
+        action: { kind: "open_url", url: "https://example.com/" },
+        why: "again",
+        outcome: "not sent: The person is using the Mac.",
+      },
+    ];
+    const { sent, request } = fakeFetch();
+    await new OpenAIPlanner({ key: "k", request }).next(input({ history }));
+    const brief = text(sent[0]!);
+    expect(brief).toContain(
+      "1. open_url https://example.com/board in Fixture Browser: ok, the address went to the browser. The screen below shows whether the page came. (The person asked to open this address.)",
+    );
+    expect(brief).toContain(
+      "2. open_url https://example.com/: not sent: The person is using the Mac. (again)",
+    );
+  });
+
   it("gives the last 12 steps, with no element number of an old observation", async () => {
     const history: StepRecord[] = Array.from({ length: 15 }, (_, index) => ({
       step: index + 1,
@@ -461,6 +520,20 @@ describe("the planner on the chat completions API", () => {
       [
         "open_url",
         '{"url":"https://example.com","why":"w"}',
+        { kind: "open_url", url: "https://example.com" },
+      ],
+      [
+        "open_url",
+        '{"url":"https://example.com","browser":"Fixture Browser","why":"w"}',
+        {
+          kind: "open_url",
+          url: "https://example.com",
+          browser: "Fixture Browser",
+        },
+      ],
+      [
+        "open_url",
+        '{"url":"https://example.com","browser":null,"why":"w"}',
         { kind: "open_url", url: "https://example.com" },
       ],
       ["wait", '{"ms":500,"why":"w"}', { kind: "wait", ms: 500 }],
@@ -684,5 +757,118 @@ describe("the planner on the chat completions API", () => {
         fallbackComputerModel,
       ]);
     });
+  });
+});
+
+describe("the direct opening of a web address", () => {
+  const said = "Bro, just open app.example.com on Fixture Browser.";
+  const opening: Action = {
+    kind: "open_url",
+    url: "https://app.example.com/",
+    browser: "Fixture Browser",
+  };
+  const done: Action = { kind: "done", summary: "The page is in front." };
+  const held: StepRecord = {
+    step: 1,
+    action: opening,
+    why: "The person asked to open this address.",
+    outcome: "not sent: The person is using the Mac.",
+  };
+  const ask = (goal: string, history: StepRecord[] = []) =>
+    input({ goal, history });
+
+  it("is the first step of such a request, with no question to the model", async () => {
+    const model = new ScriptedPlanner([done]);
+    const planner = directOpening(model);
+    expect(await planner.next(ask(said))).toEqual({
+      action: opening,
+      why: "The person asked to open this address.",
+    });
+    expect(
+      (await planner.next(ask("ok can you open app.example.com?"))).action,
+    ).toEqual({ kind: "open_url", url: "https://app.example.com/" });
+    expect(model.inputs).toHaveLength(0);
+  });
+
+  it("gives the step to the model when the person said more after the start", async () => {
+    const model = new ScriptedPlanner([done]);
+    const planner = directOpening(model);
+    // Held back, then the person said to open it elsewhere: the model reads that, not the old step.
+    const result = await planner.next({
+      ...ask(said, [held]),
+      guidance: ["open it in the other browser instead"],
+    });
+    expect(result.action).toEqual(done);
+    expect(model.inputs).toHaveLength(1);
+    expect(model.inputs[0]!.guidance).toEqual([
+      "open it in the other browser instead",
+    ]);
+  });
+
+  it("comes again while the address was only held back, and the model decides after everything else", async () => {
+    const model = new ScriptedPlanner([done, done, done, done]);
+    const planner = directOpening(model);
+    // Held back for the person: nothing went out, so the address is still to open.
+    expect((await planner.next(ask(said, [held]))).action).toEqual(opening);
+    expect(
+      (await planner.next(ask(said, [held, { ...held, step: 2 }]))).action,
+    ).toEqual(opening);
+    expect(model.inputs).toHaveLength(0);
+    // The address went out: the model looks at the screen and says what it shows.
+    const sent = { ...held, outcome: "ok" };
+    expect((await planner.next(ask(said, [sent]))).action).toEqual(done);
+    // The hands did not run it, or refused it: no second try without the model.
+    for (const outcome of [
+      "did not run: refused",
+      "did not run: failed",
+      "refused: No app with that name opens web addresses on this Mac. Nothing was opened.",
+    ])
+      expect(
+        (await planner.next(ask(said, [{ ...held, outcome }]))).action,
+      ).toEqual(done);
+    expect(model.inputs).toHaveLength(4);
+    // Held back three times: the model decides.
+    const again = new ScriptedPlanner([done]);
+    expect(
+      (
+        await directOpening(again).next(
+          ask(said, [held, { ...held, step: 2 }, { ...held, step: 3 }]),
+        )
+      ).action,
+    ).toEqual(done);
+  });
+
+  it("leaves every other request to the model, from its first step", async () => {
+    const model = new ScriptedPlanner([done, done]);
+    const planner = directOpening(model);
+    for (const goal of [
+      "open app.example.com and log in",
+      "Add milk to the shopping note",
+    ])
+      expect((await planner.next(ask(goal))).action).toEqual(done);
+    expect(model.inputs.map((item) => item.goal)).toEqual([
+      "open app.example.com and log in",
+      "Add milk to the shopping note",
+    ]);
+  });
+
+  it("reads such a request as no move, with no model, and passes every other reading on", async () => {
+    const read: string[] = [];
+    const model = Object.assign(new ScriptedPlanner([]), {
+      navigation: async (goal: string) => {
+        read.push(goal);
+        return { kind: "app" as const, name: "Notes" };
+      },
+    });
+    const planner = directOpening(model);
+    expect(await planner.navigation!(said)).toEqual({ kind: "none" });
+    expect(read).toEqual([]);
+    expect(await planner.navigation!("go to Notes")).toEqual({
+      kind: "app",
+      name: "Notes",
+    });
+    expect(read).toEqual(["go to Notes"]);
+    // A planner that reads no request still reads none.
+    expect(directOpening(new ScriptedPlanner([])).navigation).toBeUndefined();
   });
 });

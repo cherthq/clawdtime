@@ -135,6 +135,36 @@ public enum DesktopAppSelection {
     guard let path = paths.first else { return .failure(.notFound) }
     return .success(path)
   }
+  /// The app that a person means by a name, among the apps that open a web address. A person says less than
+  /// the full name of a browser. The whole name wins. Else every word that was said is a word of the app's
+  /// name, and the name with the fewest words wins. Two such apps open nothing, and so does no such app.
+  public static func opener(named name: String, candidates: [DesktopAppCandidate]) -> Result<String, HandError> {
+    let whole = path(named: name, candidates: candidates)
+    guard case .failure(.notFound) = whole else { return whole }
+    func words(_ text: String) -> [String] {
+      text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+    }
+    func choose(_ said: [String]) -> Result<String, HandError> {
+      guard !said.isEmpty else { return .failure(.notFound) }
+      // For each app, the fewest words of a name of it that holds every word that was said.
+      var fewest: [String: Int] = [:]
+      for candidate in candidates {
+        for alias in candidate.names {
+          let has = words(alias)
+          if said.allSatisfy(has.contains) { fewest[candidate.path] = min(fewest[candidate.path] ?? .max, has.count) }
+        }
+      }
+      guard let least = fewest.values.min() else { return .failure(.notFound) }
+      let best = fewest.filter { $0.value == least }.map(\.key)
+      return best.count == 1 ? .success(best[0]) : .failure(.ambiguousTarget)
+    }
+    // "the Fixture browser", "my Fixture": a word in front that names no app is left out.
+    let said = Array(words(name).drop(while: { ["the", "my", "a", "an", "your", "our"].contains($0) }))
+    let chosen = choose(said)
+    // "the Fixture browser": the word "browser" is in few names, so it may be left out.
+    guard case .failure(.notFound) = chosen, said.count > 1, said.last == "browser" else { return chosen }
+    return choose(Array(said.dropLast()))
+  }
 }
 
 /// Successful empty AX inventory is distinct from an unreadable inventory or a

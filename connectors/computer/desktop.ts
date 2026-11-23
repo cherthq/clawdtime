@@ -78,8 +78,19 @@ const activationRefusedText: Record<string, string> = {
   stale_observation: "The screen changed on the way. Nothing was activated.",
 };
 /**
+ * Why the hands opened no address, when the reason is the browser that was
+ * named. Nothing was sent, so the request goes on and the planner reads it.
+ */
+const browserRefusedText: Record<string, string> = {
+  not_found:
+    "No app with that name opens web addresses on this Mac. Nothing was opened. Use the name that the browser has in Finder, or ask the person whether the usual browser will do.",
+  ambiguous_target:
+    "More than one app that opens web addresses has that name. Nothing was opened. Use the full name of the browser.",
+};
+/**
  * The hands refused open_app before anything was sent: the reason, in words
- * for the planner. Null for every other result.
+ * for the planner. The same for open_url with a browser that the hands could
+ * not find by its name. Null for every other result.
  *
  * The hands say `transition_unknown` for everything that fails after the
  * request went out, so any other error means that nothing was sent. Such a
@@ -91,7 +102,12 @@ export function activationRefusal(
   command: HandCommand,
   result: HandResult | null,
 ): string | null {
-  if (command.kind !== "open_app" || !result || result.ok) return null;
+  if (!result || result.ok) return null;
+  if (command.kind === "open_url")
+    return command.browser === undefined
+      ? null
+      : (browserRefusedText[result.error ?? "failed"] ?? null);
+  if (command.kind !== "open_app") return null;
   const error = result.error ?? "failed";
   if (activationOver.has(error)) return null;
   return (

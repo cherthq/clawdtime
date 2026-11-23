@@ -119,7 +119,18 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("switch_previous_app") }).strict(),
-  z.object({ kind: z.literal("open_url"), url: text(2000) }).strict(),
+  /**
+   * Opens a web address with no pointer and no key. `browser` is the name of
+   * the app that opens it, as a person says it. Without it the usual browser
+   * of this Mac opens the address.
+   */
+  z
+    .object({
+      kind: z.literal("open_url"),
+      url: text(2000),
+      browser: text(120).min(1).optional(),
+    })
+    .strict(),
   /** Quits a running app by its name, the polite way. No key goes out. */
   z.object({ kind: z.literal("quit_app"), name: text(120) }).strict(),
   z
@@ -275,7 +286,8 @@ export type Action =
   | { kind: "scroll"; direction: "up" | "down"; element?: number }
   /** Optional exact title disambiguates ordinary windows of the requested app. */
   | { kind: "open_app"; name: string; window?: string }
-  | { kind: "open_url"; url: string }
+  /** An http or https address, opened with no pointer and no key. The browser by its name, only when the person named one. */
+  | { kind: "open_url"; url: string; browser?: string }
   /** Quits a running app by its name. The person is asked first. */
   | { kind: "quit_app"; name: string }
   | { kind: "browser_read" }

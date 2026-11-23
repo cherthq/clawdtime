@@ -215,7 +215,48 @@ export interface Screen {
   app: { name: string; bundleId: string; window: string };
   html: string;
 }
+/** A browser window on a new tab: an address bar, a search box of the start page and a few tiles. */
+const newTab = page(
+  "New Tab",
+  `
+  .tabs { height: 38px; background: #dfe3e8; display: flex; align-items: flex-end; padding: 0 10px; gap: 6px; }
+  .tab { background: #fff; border-radius: 8px 8px 0 0; padding: 8px 16px; min-width: 180px; }
+  .bar { height: 44px; background: #fff; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 10px; padding: 0 12px; }
+  .address { flex: 1; height: 30px; border-radius: 15px; border: 0; background: #eef1f4; padding: 0 14px; font: inherit; color: #555; }
+  .start { flex: 1; display: flex; flex-direction: column; align-items: center; padding-top: 110px; gap: 28px; background: #fafafa; }
+  .find { width: 560px; height: 44px; border-radius: 22px; border: 1px solid #ccc; padding: 0 20px; font: inherit; font-size: 15px; }
+  .tiles { display: flex; gap: 22px; }
+  .tile { width: 96px; text-align: center; color: #333; text-decoration: none; }
+  .tile i { display: block; width: 52px; height: 52px; margin: 0 auto 8px; border-radius: 50%; background: #e3e7ec; }
+  `,
+  `<div class="window">
+     <div class="titlebar" style="height:30px">${lights}</div>
+     <div class="tabs"><div class="tab" data-role="AXRadioButton" data-title="New Tab" data-key="tab">New Tab</div></div>
+     <div class="bar">
+       <button class="icon" data-role="AXButton" data-title="Back" data-key="back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+       <button class="icon" data-role="AXButton" data-title="Reload" data-key="reload"><svg viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2-5"/><path d="M19 4v4h-4"/></svg></button>
+       <input class="address" data-role="AXTextField" data-title="Address and search bar" data-key="address" placeholder="Search or type a web address">
+     </div>
+     <div class="start">
+       <input class="find" data-role="AXTextField" data-title="Search the web" data-key="find" placeholder="Search the web">
+       <div class="tiles">
+         <a class="tile" href="#" data-role="AXLink" data-title="Mailbox" data-key="tile-mail"><i></i>Mailbox</a>
+         <a class="tile" href="#" data-role="AXLink" data-title="Newsdesk" data-key="tile-news"><i></i>Newsdesk</a>
+         <a class="tile" href="#" data-role="AXLink" data-title="Videoshelf" data-key="tile-video"><i></i>Videoshelf</a>
+       </div>
+     </div>
+   </div>`,
+);
+
 export const screens: Record<string, Screen> = {
+  newTab: {
+    app: {
+      name: "Browser",
+      bundleId: "com.example.browser",
+      window: "New Tab",
+    },
+    html: newTab,
+  },
   notes: {
     app: { name: "Notes", bundleId: "com.example.notes", window: "Notes" },
     html: notes(noteNames),

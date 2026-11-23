@@ -132,6 +132,41 @@ final class DesktopTransitionTests: XCTestCase {
       XCTAssertEqual(error as? HandError, .notFound)
     }
   }
+  func testABrowserIsFoundByTheWordsThatAPersonSaysAndNeverByAGuess() throws {
+    let full = DesktopAppCandidate(path: "/fixture/Fixture Browser.app", names: ["Fixture Browser", "Fixture Browser"])
+    let beta = DesktopAppCandidate(path: "/fixture/Fixture Browser Beta.app", names: ["Fixture Browser Beta"])
+    let other = DesktopAppCandidate(path: "/fixture/Other.app", names: ["Other", "Localized Other"])
+    let all = [full, beta, other]
+    // The whole name, in any case, and the name with fewer words than its channel.
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "fixture browser", candidates: all).get(), full.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "Fixture Browser Beta", candidates: all).get(), beta.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "Browser", candidates: all).get(), full.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "Fixture", candidates: all).get(), full.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "beta", candidates: all).get(), beta.path)
+    // A word in front that names no app is left out, as a person says it.
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "the Fixture browser", candidates: all).get(), full.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "my Fixture", candidates: all).get(), full.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "the beta", candidates: all).get(), beta.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "Localized", candidates: all).get(), other.path)
+    // "the Other browser": the word "browser" is in no name of that app.
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "Other browser", candidates: all).get(), other.path)
+    XCTAssertEqual(try DesktopAppSelection.opener(named: "Beta browser", candidates: all).get(), beta.path)
+    // A part of a word is no word, and an app that is not listed for web addresses is not found.
+    for absent in ["Fix", "Brow", "Absent", "Fixture Absent", "Absent browser", "...", ""] {
+      XCTAssertThrowsError(try DesktopAppSelection.opener(named: absent, candidates: all).get(), absent) { error in
+        XCTAssertEqual(error as? HandError, .notFound)
+      }
+    }
+    // Two apps that the words fit equally open nothing.
+    let twin = DesktopAppCandidate(path: "/fixture/Second Browser.app", names: ["Second Browser"])
+    XCTAssertThrowsError(try DesktopAppSelection.opener(named: "Browser", candidates: [full, twin]).get()) { error in
+      XCTAssertEqual(error as? HandError, .ambiguousTarget)
+    }
+    XCTAssertThrowsError(try DesktopAppSelection.opener(named: "Fixture Browser", candidates: [full,
+      DesktopAppCandidate(path: "/fixture/Copy.app", names: ["Fixture Browser"])]).get()) { error in
+      XCTAssertEqual(error as? HandError, .ambiguousTarget)
+    }
+  }
   func testEpochRoundTripsWithoutChangingLegacyObservation() throws {
     let observation = Observation(at: 100, screen: .init(width: 100, height: 80, scale: 2), cursor: .init(x: 0, y: 0),
       app: .init(name: "Fixture", bundleId: "test.fixture", window: "Disposable"), elements: [], surfaceEpoch: 9)
