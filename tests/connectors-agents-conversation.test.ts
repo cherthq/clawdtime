@@ -6961,6 +6961,10 @@ describe("a correction to a job that still works waits for that job", () => {
     ["the bakery is not open anymore", "Okay."],
     ["I'm not a bakery owner yet, it's for my sister", "Okay."],
     ["it's not for the bakery right now", "Okay."],
+    // A report of where something works confirms the job (review round 4).
+    ["fyi it works on chrome, not on safari", "Okay."],
+    ["it looks fine on desktop, not on mobile", "Okay."],
+    ["the bakery page loads, not broken", "Okay."],
     // Good questions back that hold words of a claim.
     [
       "wait no, it's a cafe not a bakery",
@@ -6979,13 +6983,11 @@ describe("a correction to a job that still works waits for that job", () => {
 
   it.each([
     "wait no, it's a cafe not a bakery",
-    "it's a cafe, not a bakery",
-    "cafe not bakery",
+    "sorry, it's a cafe, not a bakery",
+    "no, cafe not bakery",
     "actually it should say cafe, not bakery",
-    "it's not a bakery website, it's a blog",
-    "not a bakery but a cafe",
-    // "Make that a cafe instead of a bakery" starts its job in code.
-    "a cafe instead of a bakery",
+    "wait, it's not a bakery website, it's a blog",
+    "oops, not a bakery but a cafe",
   ])(
     "checks a plain answer to a contrast with a new thing: %j",
     async (words) => {
@@ -6993,6 +6995,22 @@ describe("a correction to a job that still works waits for that job", () => {
       const got = await then(words, { model: run.model });
       expect([words, got.jobs]).toEqual([words, 1]);
       expect(got.answer, words).toContain("so your change is not in it");
+    },
+  );
+
+  it.each([
+    // With no word of correction, only an answer that claims a change is checked.
+    "it's a cafe, not a bakery",
+    "a cafe instead of a bakery",
+  ])(
+    "checks a contrast with no word of correction only for a claim: %j",
+    async (words) => {
+      const plain = await then(words, { model: scripted(["Got it."]).model });
+      expect([words, plain.answer]).toEqual([words, "Got it."]);
+      const claimed = await then(words, {
+        model: scripted(["I've updated the job to say cafe."]).model,
+      });
+      expect(claimed.answer, words).toContain("so your change is not in it");
     },
   );
 

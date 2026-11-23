@@ -12069,12 +12069,14 @@ export class Supervisor {
           // it" is false. The model answers once more with the true way; a
           // second such answer is replaced by a sentence that keeps the
           // person's change.
-          // A contrast against a word of the job's own request ("a cafe not
-          // a bakery") leaves the correction behind in any answer that is no
-          // question back. The other forms ("it's a cafe", "use blue") also
-          // fit small talk ("sorry, it's a big one", "use your best
-          // judgment"): there only an answer that says the job was changed
-          // is checked, and a plain "Okay." stands, as before.
+          // An answer that says the job was changed or told is false however
+          // the message is read: no tool changes a job. A plain answer that
+          // is no question back is checked only where the message opens
+          // with a word of correction and sets a new thing against a word
+          // of the job's own request ("wait no, it's a cafe not a bakery").
+          // News reads the same way ("it works on chrome, not on safari",
+          // "sorry, it's a big one"): there a plain "Okay." stands, as
+          // before.
           const corrected = this.jobsNow(1)[0];
           const change =
             corrected && !corrected.done && !acted()
@@ -12086,6 +12088,7 @@ export class Supervisor {
               reply.text,
             ) ||
               (change === "contrast" &&
+                correctionWord.test(words.trim()) &&
                 !/\?["'\u201d)]*\s*$/.test(reply.text.trim())))
           ) {
             if (rechecked) return correctionKept(corrected!, words);
