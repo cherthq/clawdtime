@@ -67,7 +67,8 @@ import TaskPanelCore
     input.beforeInput = { [weak self] in
       guard let self else { return false }
       if let error = await self.lastCheck() { self.inputRefusal = error; return false }
-      guard await self.desktop.inputStillCurrent() else { self.inputRefusal = .staleObservation; return false }
+      // Before the first event of this command the windows in front must be as they were. After it they may change.
+      guard await self.desktop.inputStillCurrent(steady: !self.input.submittedInput) else { self.inputRefusal = .staleObservation; return false }
       return true
     }
     desktop.onTransition = { [weak self] phase, epoch in
@@ -295,7 +296,7 @@ import TaskPanelCore
       await pointAtKeyboard(label, presentTyping: !changesSurface)
       // Stop may have come during the waits above, and the keyboard may be in another place now.
       if let refusal = await lastCheck() { return .failure(refusal) }
-      guard await desktop.beginInput() else { return .failure(.staleObservation) }
+      guard await desktop.beginInput(steady: true) else { return .failure(.staleObservation) }
       defer { desktop.endInput() }
       guard NSApp.keyWindow == nil else { return .failure(.refused) }
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
@@ -441,8 +442,11 @@ import TaskPanelCore
     // ClawdTime's windows are not in the picture that the worker saw. A click on
     // one of them goes through to what is behind it, which is what the worker meant.
     // They let clicks through only from here: during the glide the bar keeps its Stop.
-    guard await desktop.beginInput() else { return .failure(.staleObservation) }
+    guard await desktop.beginInput(steady: true, places: places) else { return .failure(.staleObservation) }
     defer { desktop.endInput() }
+    // A place under a small window of the app in front (a list of suggestions, a card) gets no click: the look
+    // does not say what is there.
+    guard !desktop.inputHides(places) else { return .failure(.targetNotVisible) }
     restore = passThrough(places.map(map.flip))
     guard await input.move(to: places[0]) else { return .failure(inputFailure()) }
     // A window of ClawdTime that came up on the way, for example a request with Approve on it, gets no click either.
@@ -485,7 +489,7 @@ import TaskPanelCore
   }
   /// In the middle of typed text: the keyboard is still outside ClawdTime and outside a password field.
   private func mayType() async -> Bool {
-    guard NSApp.keyWindow == nil, await lastCheck() == nil, await desktop.inputStillCurrent() else { return false }
+    guard NSApp.keyWindow == nil, await lastCheck() == nil, await desktop.inputStillCurrent(steady: false) else { return false }
     return !(await focusIsSecure())
   }
   /// The field that has the keyboard is a password field: the Accessibility

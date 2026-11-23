@@ -360,6 +360,52 @@ A sheet, the dialog that hangs from a window ("Do you want to save?"), is a
 window that the hands can act on. It has no title of its own, so it is known by
 its app and its frame as the top window.
 
+A small window of the same app in front of the focused window does not take the
+window away from the hands. A browser shows the suggestions of its address bar
+in such a window. A card and a status line are windows like it. The focused
+window stays the window that the hands act on, when each window in front is of
+the same app, touches the focused window and is not a window in its own right.
+Accessibility says what each window of the app is. Only a window of the kind
+"unknown" and a help tag are parts of another window. A standard window, a
+dialog, a sheet and every other kind stand alone: one of those in front is
+another window, and the hands then send nothing. At most four such windows may
+lie in front, and together they may hide at most 90 percent of the focused
+window.
+
+- **A click.** No click, drag or scroll goes to a place under a window in
+  front: the look does not say what is there. The hands report that the target
+  is not visible. The planner can use the keyboard there: the arrow keys,
+  Return, Escape.
+- **One key.** The windows in front must be as they were at the look. A list
+  that opened, closed or changed after the look is not the list that the
+  planner saw: the key is not sent and the worker looks again.
+- **Typed text.** It goes on while a list of suggestions changes its size.
+- **Where the keys go.** To the focused window of the app, which is the window
+  of the hands. It is read again before every key and every few typed
+  characters. A window in front that took the keyboard would be the focused
+  window, and nothing more is sent.
+- **After the first event.** The first press of a double click can open a
+  list. The second press still goes only when its place is under no window in
+  front.
+- **A window that shows nothing.** It is kept with how solid it is. One that
+  starts to show between the look and a click or a key stops that input.
+- **The look.** The picture shows the windows in front. The list of elements
+  is whole: the worker reads it to know what Return would press.
+
+Some apps keep a window in front that shows nothing: a status line that is
+empty now, a layer for a part that comes later. A person works through it. It
+is no cover, its size does not count, and a click under it goes. It must still
+be of the same app and no window in its own right. The strip that a
+full-screen app keeps over the top of its window is no cover either.
+
+A move to another app or to another desktop keeps the old rule: it starts only
+from a focused window with nothing of its app in front.
+
+Before this rule the focused window always had to be the top window of the
+list of the window server. With the list of an address bar open there was no
+window for the hands, every look said that the desktop had changed, and nothing
+was sent after the first key in an address bar.
+
 Text for a field that has the focus goes in with no click before it. A click
 moves the caret and drops a selection, so "select all, then type" added the
 text in place of replacing what was selected.

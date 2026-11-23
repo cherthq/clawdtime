@@ -35,6 +35,15 @@ import TaskPanelCore
     let ordinary: Bool
     let fullScreen: Bool
     let fullScreenConfirmed: Bool
+    /// Windows of the same app that a person can see in front of this one, top first: a list of suggestions,
+    /// a card. They are no part of what makes two surfaces equal: the window is the same one with them or without.
+    var covers: [DesktopCover] = []
+    /// How many windows of the same app lie in front at all, seen or not, and the ones that show nothing.
+    var front = 0
+    var unseen: [DesktopUnseen] = []
+    /// What one look holds on to: the window, and the windows in front of it as they were.
+    struct Look: Equatable { let surface: Surface; let covers: [DesktopCover] }
+    var look: Look { Look(surface: self, covers: covers) }
     static func == (lhs: Self, rhs: Self) -> Bool {
       lhs.pid == rhs.pid && CFEqual(lhs.window, rhs.window) && lhs.title == rhs.title && lhs.frame == rhs.frame
         && lhs.windowID == rhs.windowID && lhs.displayID == rhs.displayID && lhs.map == rhs.map && lhs.ordinary == rhs.ordinary && lhs.fullScreen == rhs.fullScreen && lhs.fullScreenConfirmed == rhs.fullScreenConfirmed
@@ -62,7 +71,13 @@ import TaskPanelCore
     case selected(Target)
     case failure(HandError)
   }
-  private var lease = DesktopObservationLease<Surface>()
+  /// The lease holds the window with the windows in front of it. A list that opened, closed or changed its size
+  /// after the look retires the look, so no click and no single key goes out on another picture.
+  private var lease = DesktopObservationLease<Surface.Look>()
+  /// For a click, a drag, a scroll or one key: the windows in front as they were when the input began, the
+  /// ones that show nothing among them, and the places of a pointing command.
+  private var inputFront: (covers: [DesktopCover], unseen: [DesktopUnseen])?
+  private var inputPlaces: [CGPoint] = []
   private var tokens: [(NotificationCenter, NSObjectProtocol)] = []
   private var inputSurface: Surface?
   private var inputEpoch: Int?
@@ -105,7 +120,7 @@ import TaskPanelCore
   func invalidate() { lease.invalidate(); history.invalidate(); environmentChanges += 1 }
   /// Idle/run completion consumes input evidence but retains a verified previous
   /// desktop in this panel session. External Space/session/display changes do not.
-  func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil }
+  func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = [] }
   private func phase(_ value: DesktopTransitionPhase) { onTransition?(value, epoch) }
   private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
   /// Zero when the list of displays cannot be read: then nothing that needs one display runs.
@@ -132,8 +147,13 @@ import TaskPanelCore
     report.checks["frontAppIsProbe"] = pid == getpid()
     report.checks["frontAppSameBundleAsProbe"] = app.bundleIdentifier != nil && app.bundleIdentifier == Bundle.main.bundleIdentifier
     guard pid != getpid() else { report.reason = "front_app_is_probe"; return report }
-    let surface = DesktopAX.visibleSurface(pid: pid, display: display,
+    // The facts of a move to another app or desktop come from the strict rule that a move uses.
+    let surface = DesktopAX.visibleSurface(pid: pid, display: display, covers: false,
       diagnostic: { report.reason = $0 }, fact: { report.checks[$0] = $1 })
+    // The hands' input has one rule more: small windows of the app may lie in front of its window.
+    let input = DesktopAX.visibleSurface(pid: pid, display: display, covers: true, diagnostic: { _ in },
+      fact: { name, value in if name.hasPrefix("ownWindows") { report.checks[name] = value } })
+    report.checks["inputSurfaceReady"] = input != nil
     report.checks["frontAppUnchanged"] = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     guard report.checks["frontAppUnchanged"] == true else { report.reason = "front_app_changed"; return report }
     guard let surface else {
@@ -157,15 +177,19 @@ import TaskPanelCore
     return report
   }
 
-  /// A focused AX window must agree with the top ordinary Quartz window on the
-  /// current display. A front-app name alone, or an off-Space AX tree, is insufficient.
+  /// A focused AX window must agree with an ordinary Quartz window on the current
+  /// display. A front-app name alone, or an off-Space AX tree, is insufficient.
+  /// For a transition that window must be the top one. For the hands' input, small
+  /// windows of the same app may lie in front of it: `DesktopWindowVisibility.focusedWindow`.
   func surface(transition: Bool = false, diagnostic: ((String) -> Void)? = nil) async -> Surface? {
     guard let display = HandsDisplay.main,
       let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() else { diagnostic?("front_app_or_display_unavailable"); return nil }
     let pid = app.processIdentifier
     let read = await Task.detached(priority: .userInitiated) {
       var reason = "ax_quartz_unavailable"
-      let surface = DesktopAX.visibleSurface(pid: pid, display: display, diagnostic: { reason = $0 })
+      // A move to another app or desktop starts only from a focused window with nothing of its app in front,
+      // as before. Only the hands' input has the rule for small windows in front.
+      let surface = DesktopAX.visibleSurface(pid: pid, display: display, covers: !transition, diagnostic: { reason = $0 })
       return (surface, reason)
     }.value
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { diagnostic?("front_app_changed"); return nil }
@@ -247,12 +271,14 @@ import TaskPanelCore
     let before = accessibility ? await surface() : nil
     let read = await observer.observe(image: image, elements: elements, accessibility: accessibility, pointer: pointer)
     let after = accessibility ? await surface() : nil
-    guard beforeEpoch == epoch, before == after else { invalidate(); return .failure(.staleObservation) }
+    guard beforeEpoch == epoch, before?.look == after?.look else { invalidate(); return .failure(.staleObservation) }
     guard case .success(let seen) = read else { invalidate(); return read }
     if let after {
-      let previousEpoch = epoch
-      lease.record(after, at: now)
-      if epoch != previousEpoch { history.invalidate() }
+      // Another window retires the way back to the desktop before, as it always did. The same window with
+      // another list in front of it is a new look, and the way back stays.
+      let held = lease.held?.surface
+      lease.record(after.look, at: now)
+      if let held, held != after { history.invalidate() }
     }
     else { invalidate() }
     return .success(Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app,
@@ -260,23 +286,45 @@ import TaskPanelCore
   }
 
   /// Called after the guided cursor, before any physical pointer/keyboard event.
-  func beginInput() async -> Bool {
+  /// `steady` is for a click, a drag, a scroll and one key: until its first event goes, the windows in front
+  /// must stay as they were, because one that comes up would take the click, and a list that changed is not
+  /// the list that the planner saw. Typed text is not steady: a list of suggestions changes its size while the
+  /// hands type, and the text goes to the place of the keyboard whatever lies in front.
+  ///
+  /// Keys go to the app's focused window. That window is the surface, and it is read again before every key and
+  /// every few typed characters: a window in front that took the keyboard would be the focused window, and the
+  /// surface would not be the same. `places` are the places of a pointing command, from the top left of the
+  /// main display.
+  func beginInput(steady: Bool = false, places: [CGPoint] = []) async -> Bool {
     let expected = epoch
     let current = await surface()
-    guard expected == epoch, lease.permits(current, at: now) else { invalidate(); return false }
+    guard expected == epoch, lease.permits(current?.look, at: now) else { invalidate(); return false }
     inputSurface = current; inputEpoch = epoch
+    inputFront = steady ? current.map { ($0.covers, $0.unseen) } : nil
+    inputPlaces = places
     return true
+  }
+  /// One of the places is under a window of the app that lies in front of the surface. The look does not say
+  /// what is there, so no click goes to it.
+  func inputHides(_ places: [CGPoint]) -> Bool {
+    guard let covers = inputSurface?.covers else { return false }
+    return places.contains { DesktopFocusedWindow.hides(covers, $0) }
   }
   /// Cheap event-loop guard between await points; geometry is checked again just
   /// before a click/key and periodically during typing.
   var inputGenerationCurrent: Bool { inputSurface != nil && inputEpoch == epoch }
-  func inputStillCurrent() async -> Bool {
+  func inputStillCurrent(steady: Bool = true) async -> Bool {
     guard inputGenerationCurrent, let expected = inputSurface else { return false }
     let current = await surface()
-    guard inputGenerationCurrent, current == expected else { invalidate(); return false }
+    guard inputGenerationCurrent, let current, current == expected else { invalidate(); return false }
+    // Before the first event of a steady input the windows in front must be as they were, also the ones that
+    // show nothing: one that starts to show could take the click. After it they may change, because the first
+    // press of a double click can open a list. Even then no place of the command may lie under one.
+    if steady, let held = inputFront, held.covers != current.covers || held.unseen != current.unseen { invalidate(); return false }
+    if inputPlaces.contains(where: { DesktopFocusedWindow.hides(current.covers, $0) }) { invalidate(); return false }
     return true
   }
-  func endInput() { inputSurface = nil; inputEpoch = nil; lease.consume() }
+  func endInput() { inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; lease.consume() }
 
   /// One activation attempt. Every effect is preceded by the controller's Stop,
   /// takeover, permission and session checks. Once anything is dispatched, failure
@@ -804,16 +852,19 @@ import TaskPanelCore
         return !bounds.intersection(frame).isEmpty
       }
     }
-    static func visibleSurface(pid: pid_t, display: HandsDisplay,
+    /// `covers`: small windows of the same app may lie in front of the focused window. That is the rule for the
+    /// hands' input. Without it the focused window must be the top one, as a move to another app or desktop needs.
+    static func visibleSurface(pid: pid_t, display: HandsDisplay, covers: Bool = true,
                                diagnostic: ((String) -> Void)? = nil, fact: ((String, Bool) -> Void)? = nil) -> Surface? {
-      guard case .strict(let value) = readSurface(pid: pid, display: display, directional: false, diagnostic: diagnostic, fact: fact) else { return nil }
+      guard case .strict(let value) = readSurface(pid: pid, display: display, directional: false, covers: covers,
+        diagnostic: diagnostic, fact: fact) else { return nil }
       return value
     }
     static func directionalSurface(pid: pid_t, display: HandsDisplay, diagnostic: ((String) -> Void)?,
                                    fact: ((String, Bool) -> Void)? = nil, count: ((String, Int) -> Void)? = nil) -> NavigationSurface? {
-      readSurface(pid: pid, display: display, directional: true, diagnostic: diagnostic, fact: fact, count: count)
+      readSurface(pid: pid, display: display, directional: true, covers: false, diagnostic: diagnostic, fact: fact, count: count)
     }
-    private static func readSurface(pid: pid_t, display: HandsDisplay, directional: Bool,
+    private static func readSurface(pid: pid_t, display: HandsDisplay, directional: Bool, covers allowed: Bool,
                                     diagnostic: ((String) -> Void)?, fact: ((String, Bool) -> Void)?, count: ((String, Int) -> Void)? = nil) -> NavigationSurface? {
       let app = app(pid)
       guard let focused = element(value(app, kAXFocusedWindowAttribute)) else { diagnostic?("ax_focused_window_unavailable"); return nil }
@@ -864,7 +915,8 @@ import TaskPanelCore
         evidence = ordinary.compactMap { row -> DesktopWindowEvidence? in
         guard let owner = row[kCGWindowOwnerPID as String] as? Int, let id = row[kCGWindowNumber as String] as? Int,
           let raw = row[kCGWindowBounds as String] as? NSDictionary, let bounds = CGRect(dictionaryRepresentation: raw) else { return nil }
-        return .init(id: id, pid: owner, title: row[kCGWindowName as String] as? String, frame: bounds)
+        return .init(id: id, pid: owner, title: row[kCGWindowName as String] as? String, frame: bounds,
+          alpha: row[kCGWindowAlpha as String] as? Double)
       }
       }
       // Dropping an incomplete leading row must not expose the window behind it.
@@ -878,18 +930,24 @@ import TaskPanelCore
       fact?("fullScreen", fullScreen(focused)); fact?("fullScreenConfirmed", confirmed)
       fact?("containedInMainDisplay", CGDisplayBounds(display.id).contains(bounds))
       fact?("fullScreenGeometry", DesktopSurfaceScope.fullScreenGeometry(window: bounds, display: CGDisplayBounds(display.id)))
-      // Only the auxiliary-strip case needs an additional AX window inventory.
-      // Ordinary focused windows avoid extra off-Space reads and their latency.
-      var frames: [CGRect]?
-      if !directional, confirmed, evidence.first?.frame != bounds {
-        let axWindows = value(app, kAXWindowsAttribute) as? [AXUIElement]
-        frames = axWindows.flatMap { windows in
-          guard windows.count <= 32 else { return nil }
-          let frames = windows.compactMap(frame)
-          return frames.count == windows.count ? frames : nil
+      // Only a focused window that is not the top one needs the app's own list of windows: for the strip of
+      // a full-screen app, and for small windows of the app in front (a list of suggestions, a card). The
+      // list says which of the app's windows stand alone. Ordinary focused windows avoid these extra
+      // off-Space reads and their latency.
+      var frames: [CGRect]?, standalone: [CGRect]?
+      if !directional, evidence.first?.frame != bounds,
+        let axWindows = value(app, kAXWindowsAttribute) as? [AXUIElement], axWindows.count <= 32 {
+        let all = axWindows.compactMap(frame)
+        if all.count == axWindows.count {
+          frames = all
+          standalone = axWindows.indices.filter {
+            DesktopWindowVisibility.standsAlone(role: value(axWindows[$0], kAXRoleAttribute) as? String,
+              subrole: value(axWindows[$0], kAXSubroleAttribute) as? String)
+          }.map { all[$0] }
         }
       }
       let windowID: Int
+      var covers: [DesktopCover] = [], unseen: [DesktopUnseen] = [], front = 0
       var group: DesktopDirectionalGroup?
       if directional {
         guard !sheet, (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole
@@ -900,14 +958,16 @@ import TaskPanelCore
         fact?("directionalToolbarCoverage", matched.usesToolbarCoverage)
         group = matched; windowID = matched.parentID
       } else {
-        guard let matched = DesktopWindowVisibility.focusedWindowID(pid: Int(pid), title: title, frame: bounds,
+        // Without `allowed` the list of windows that stand alone is withheld, and the match is the strict one.
+        guard let matched = DesktopWindowVisibility.focusedWindow(pid: Int(pid), title: title, frame: bounds,
           fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames,
-          sheet: sheet) else { diagnostic?("ax_quartz_window_mismatch"); return nil }
-        windowID = matched
+          standaloneFrames: allowed ? standalone : nil, sheet: sheet) else { diagnostic?("ax_quartz_window_mismatch"); return nil }
+        windowID = matched.id; covers = matched.covers; front = matched.front; unseen = matched.unseen
+        fact?("ownWindowsInFront", front > 0); fact?("ownWindowsSeenInFront", !covers.isEmpty)
       }
       let parent = Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
-        fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed)
+        fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed, covers: covers, front: front, unseen: unseen)
       diagnostic?(group == nil ? "ax_quartz_matched" : "directional_composition_ready")
       return group.map { .composite(parent, $0) } ?? .strict(parent)
     }

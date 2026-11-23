@@ -46,8 +46,10 @@ public struct DesktopWindowEvidence {
   public let id: Int, pid: Int
   public let title: String?
   public let frame: CGRect
-  public init(id: Int, pid: Int, title: String?, frame: CGRect) {
-    self.id = id; self.pid = pid; self.title = title; self.frame = frame
+  /// How solid the window server draws the window, 0 to 1. Unknown counts as solid.
+  public let alpha: Double?
+  public init(id: Int, pid: Int, title: String?, frame: CGRect, alpha: Double? = nil) {
+    self.id = id; self.pid = pid; self.title = title; self.frame = frame; self.alpha = alpha
   }
 }
 public enum DesktopWindowVisibility {
@@ -64,6 +66,19 @@ public enum DesktopWindowVisibility {
     guard !listed.isEmpty else { return false }
     return [" - ", " \u{2013} ", " \u{2014} "].contains { accessible.hasPrefix(listed + $0) }
   }
+  /// The strip that a full-screen app of the same pid keeps over the top of its window: full width, at most 80
+  /// points and 12 percent high, and not a window or a dialog in Accessibility. Its controls are parts of the
+  /// focused window.
+  private static func isStrip(_ strip: DesktopWindowEvidence, pid: Int, window: DesktopWindowEvidence, frame: CGRect,
+                              fullScreenConfirmed: Bool, display: CGRect, accessibleFrames: [CGRect]?) -> Bool {
+    guard fullScreenConfirmed, DesktopSurfaceScope.fullScreenGeometry(window: frame, display: display), let accessibleFrames else { return false }
+    return strip.pid == pid && strip.id != window.id &&
+      abs(strip.frame.minX - frame.minX) <= 1 && abs(strip.frame.width - frame.width) <= 1 &&
+      abs(strip.frame.minY - frame.minY) <= 1 && strip.frame.height > 0 && strip.frame.height <= 80 &&
+      strip.frame.height <= frame.height * 0.12 && frame.contains(strip.frame) &&
+      !accessibleFrames.contains(where: { sameFrame($0, strip.frame) })
+  }
+
   /// Match exactly one focused AX window to visible Quartz metadata. At most one
   /// same-app full-width auxiliary top strip may precede it, and only when AX
   /// confirms full screen and does not expose the strip as a real window/dialog.
@@ -71,6 +86,8 @@ public enum DesktopWindowVisibility {
   /// A sheet (the dialog that hangs from a window: "Do you want to save?") has no Accessibility title, and the
   /// window server lists it under a name of the app's own ("Save"). It is matched by the app and the frame
   /// alone, and only as the top ordinary window: a sheet is always in front of the window that it hangs from.
+  ///
+  /// This is the whole rule for a move to another app or desktop. The hands' input uses `focusedWindow`.
   public static func focusedWindowID(pid: Int, title: String, frame: CGRect, fullScreenConfirmed: Bool,
                                      display: CGRect, visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?,
                                      sheet: Bool = false) -> Int? {
@@ -79,17 +96,108 @@ public enum DesktopWindowVisibility {
     }
     guard matches.count == 1, let index = matches.first else { return nil }
     if index == 0 { return visible[index].id }
-    guard !sheet else { return nil }
-    guard index == 1, fullScreenConfirmed, DesktopSurfaceScope.fullScreenGeometry(window: frame, display: display),
-      let accessibleFrames else { return nil }
-    let strip = visible[0]
-    guard strip.pid == pid, strip.id != visible[index].id,
-      abs(strip.frame.minX - frame.minX) <= 1, abs(strip.frame.width - frame.width) <= 1,
-      abs(strip.frame.minY - frame.minY) <= 1, strip.frame.height > 0, strip.frame.height <= 80,
-      strip.frame.height <= frame.height * 0.12, frame.contains(strip.frame),
-      !accessibleFrames.contains(where: { sameFrame($0, strip.frame) }) else { return nil }
+    guard !sheet, index == 1, isStrip(visible[0], pid: pid, window: visible[index], frame: frame,
+      fullScreenConfirmed: fullScreenConfirmed, display: display, accessibleFrames: accessibleFrames) else { return nil }
     return visible[index].id
   }
+
+  /// The most windows of the app's own that a person can see in front of the focused window, and how much of the
+  /// focused window they may hide together. Under `unseenAlpha` a window shows nothing. At most `frontLimit`
+  /// windows of the app, seen or not, may lie in front.
+  public static let coverLimit = 4, coverShare = 0.9, unseenAlpha = 0.05, frontLimit = 8
+
+  /// A window in its own right, as Accessibility names it. Only two kinds are parts of another window: a window
+  /// of the kind "unknown", which is how an app lists the suggestions of an address bar or a small card, and a
+  /// help tag. Every other kind, and a window with no kind, stands alone. So does a sheet, whatever its kind.
+  public static func standsAlone(role: String?, subrole: String?) -> Bool {
+    if role == "AXSheet" { return true }
+    return !(role == "AXHelpTag" || subrole == "AXUnknown")
+  }
+
+  /// The focused window as the hands' input may use it. It is the match of `focusedWindowID`, and one case more:
+  /// small windows of the same app lie in front of the focused window. A browser shows the suggestions of its
+  /// address bar in such a window, and a card or a status line is one too. The focused window is still the
+  /// surface, and the windows in front come back as `covers`: the hands send no click to a place under one,
+  /// because the look does not say what is there.
+  ///
+  /// Each window in front must be of the same app and not a window in its own right. `standaloneFrames` are the
+  /// frames of the app's windows for which `standsAlone` holds: a second document or a dialog in front is another
+  /// surface, never a cover. With that list unknown there is no match. A cover must touch the focused window,
+  /// and all covers together may hide at most `coverShare` of it. A sheet stays the top window.
+  ///
+  /// Some apps keep a window in front that shows nothing: a status line that is empty now, a layer for a part
+  /// that comes later. It hides nothing from a person, who works through it, so it is no cover and its size
+  /// does not count. The strip of a full-screen app is no cover either.
+  public static func focusedWindow(pid: Int, title: String, frame: CGRect, fullScreenConfirmed: Bool, display: CGRect,
+                                   visible: [DesktopWindowEvidence], accessibleFrames: [CGRect]?, standaloneFrames: [CGRect]?,
+                                   sheet: Bool = false) -> DesktopFocusedWindow? {
+    if let id = focusedWindowID(pid: pid, title: title, frame: frame, fullScreenConfirmed: fullScreenConfirmed, display: display,
+      visible: visible, accessibleFrames: accessibleFrames, sheet: sheet) {
+      return .init(id: id, covers: [], front: visible.firstIndex(where: { $0.id == id }) ?? 0)
+    }
+    guard !sheet, let standaloneFrames else { return nil }
+    let matches = visible.indices.filter {
+      visible[$0].pid == pid && sameTitle(listed: visible[$0].title, accessible: title) && sameFrame(visible[$0].frame, frame)
+    }
+    guard matches.count == 1, let index = matches.first, index >= 1, index <= frontLimit else { return nil }
+    let area = frame.width * frame.height
+    guard area.isFinite, area > 0 else { return nil }
+    var covers: [DesktopCover] = [], unseen: [DesktopUnseen] = [], hidden: CGFloat = 0, strips = 0
+    for row in visible[..<index] {
+      guard row.pid == pid, row.id != visible[index].id,
+        !standaloneFrames.contains(where: { sameFrame($0, row.frame) }) else { return nil }
+      if isStrip(row, pid: pid, window: visible[index], frame: frame, fullScreenConfirmed: fullScreenConfirmed, display: display,
+        accessibleFrames: accessibleFrames) {
+        strips += 1
+        continue
+      }
+      if let alpha = row.alpha, alpha.isFinite, alpha >= 0, alpha < unseenAlpha {
+        unseen.append(.init(id: row.id, frame: row.frame, alpha: alpha))
+        continue
+      }
+      let part = row.frame.intersection(frame)
+      guard row.frame.width >= 1, row.frame.height >= 1, row.frame.width.isFinite, row.frame.height.isFinite,
+        row.frame.insetBy(dx: -1, dy: -1).intersects(frame) else { return nil }
+      if !part.isNull { hidden += part.width * part.height }
+      covers.append(.init(id: row.id, frame: row.frame))
+    }
+    guard strips <= 1, covers.count <= coverLimit, hidden <= area * coverShare else { return nil }
+    return .init(id: visible[index].id, covers: covers, front: index, unseen: unseen)
+  }
+}
+
+/// A window of the same app in front of the focused window that shows nothing now: its number, its place and
+/// how solid it is. It hides nothing, but one that starts to show between the look and a click could take it.
+public struct DesktopUnseen: Equatable, Sendable {
+  public let id: Int
+  public let frame: CGRect
+  public let alpha: Double
+  public init(id: Int, frame: CGRect, alpha: Double) { self.id = id; self.frame = frame; self.alpha = alpha }
+}
+
+/// A window of the same app that a person can see in front of the focused window: its number in the window
+/// server's list and its place. Another window at the same place is another cover.
+public struct DesktopCover: Equatable, Sendable {
+  public let id: Int
+  public let frame: CGRect
+  public init(id: Int, frame: CGRect) { self.id = id; self.frame = frame }
+}
+
+/// The focused window that the hands act on: its number in the window server's list, the windows of the same
+/// app that a person can see in front of it, top first, how many windows of the app lie in front at all, and
+/// the ones among them that show nothing.
+public struct DesktopFocusedWindow: Equatable, Sendable {
+  public let id: Int
+  public let covers: [DesktopCover]
+  public let front: Int
+  public let unseen: [DesktopUnseen]
+  public init(id: Int, covers: [DesktopCover], front: Int, unseen: [DesktopUnseen] = []) {
+    self.id = id; self.covers = covers; self.front = front; self.unseen = unseen
+  }
+  /// The place is under a window in front: a click there would not go to the focused window.
+  public func hides(_ point: CGPoint) -> Bool { Self.hides(covers, point) }
+  /// The same rule for covers that the panel holds.
+  public static func hides(_ covers: [DesktopCover], _ point: CGPoint) -> Bool { covers.contains { $0.frame.contains(point) } }
 }
 
 /// App switching can stay within a Space or enter another. A changed PID and

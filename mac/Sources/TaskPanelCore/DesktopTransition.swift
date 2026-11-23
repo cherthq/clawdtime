@@ -27,6 +27,8 @@ public struct DesktopObservationLease<Surface: Equatable> {
   private var surface: Surface?
   private var observedAt: TimeInterval?
   public init() {}
+  /// What the lease holds now, if anything.
+  public var held: Surface? { surface }
   public mutating func invalidate() { epoch += 1; surface = nil; observedAt = nil }
   /// A dispatched input consumes freshness, not identity (a focus click can precede typing).
   public mutating func consume() { observedAt = nil }
