@@ -175,7 +175,10 @@ async function fixture(run, { configHome } = {}) {
     room.emit(RoomEvent.ParticipantDisconnected, value);
   };
   const until = async (predicate) => {
-    const deadline = Date.now() + 3000;
+    // The startup draws a real frame. On a busy computer one stage took more
+    // than three seconds: 5 of 36 runs failed with 12 at a time. The wait
+    // ends as soon as the stage is there, so a long limit costs nothing.
+    const deadline = Date.now() + 20_000;
     while (!predicate() && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 5));
     assert.ok(predicate(), "startup stage reached");
