@@ -253,7 +253,7 @@ export const computerTaskNow = (
       : "";
   if (snapshot.pendingAction)
     return `The computer task${taskOf} waits for your word on one action: ${clean(snapshot.pendingAction.description ?? "", 240)}. Use Approve action or Deny action in the desktop panel.`;
-  if (snapshot.waiting === "takeover")
+  if (snapshot.waiting === "takeover" || snapshot.state === "paused")
     return `The computer task${taskOf} is paused: it has not reported that it is done.${newest}`;
   if (snapshot.state === "waiting_for_person")
     return `The computer task${taskOf} waits for your answer${report ? `: ${report}` : "."}`;
@@ -371,34 +371,41 @@ const computerTaskLiveForQuestion = (
     snapshot.state === "paused" ||
     snapshot.state === "waiting_for_person");
 /**
- * Coding work check for the chat's computer-task gate: a verb of code work,
- * a thing of code, a file name with an extension, or "use <tool> for <target>".
+ * Coding work check used only to keep coding instructions out of stops and out
+ * of approval swallowing. Screen orders use `readWords(text) === "order"` alone.
  */
-const hasCodingWork = (words: string): boolean =>
-  /\b(?:fix|add|write|change|implement|refactor|build|create|bump|push|commit|merge|deploy|install|migrate|rename|remove|update|edit)\b/i.test(
+const stopHoldsCodingWork = (words: string): boolean =>
+  /\b(?:fix|add|write|change|implement|refactor|build|create|bump|push|commit|merge|deploy|install|migrate|rename|remove|update|edit|debug|revert)\b/i.test(
     words,
   ) ||
   /(?<!\b(?:press|hit|tap)\s+(?:the\s+)?)\bdelete\b(?!\s+key\b)/i.test(words) ||
-  /\b(?:files?|repos?|repositor(?:y|ies)|branch(?:es)?|commits?|functions?|components?|class(?:es)?|modules?|tests?|code(?:base)?|readmes?|configs?|pull\s+requests?|prs?|worktrees?)\b/i.test(
+  /\b(?:files?|repos?|repositor(?:y|ies)|branch(?:es)?|commits?|functions?|components?|class(?:es)?|modules?|tests?|code(?:base)?|readmes?|configs?|pull\s+requests?|prs?|worktrees?|bugs?|endpoints?|handlers?|controllers?|apis?|parsers?|issues?|tickets?)\b/i.test(
     words,
   ) ||
   /\b[\p{L}\p{N}_-]+\.(?:json|ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|swift|java|kt|cpp|c|h|hpp|cs|php|md|yml|yaml|toml|ini|env|lock|sql|sh|zsh|bash|css|scss|less|html|xml|svg|txt|log|csv|cfg|conf)\b/iu.test(
-    words,
-  ) ||
-  /\buse\s+(?!it\b|that\b|this\b|them\b|the\b|a\b|an\b|my\b|your\b|chrome\b|google\s+chrome\b|safari\b|firefox\b|arc\b|brave\b|edge\b|browser\b)[\p{L}\p{N}_-]+\s+for\s+(?:the\s+)?[\p{L}\p{N}_-]+/iu.test(
     words,
   );
 /**
  * Stops built on the shared `readWords` reader: explicit ("stop the computer")
  * or general ("stop, don't click that", "stop stop", "never mind, stop").
- * Never treats "don't stop", a UI cancel button, or a stop aimed at watching,
- * sessions, jobs, or builds as a screen stop.
+ * Only stops the screen task when the message is no question, holds no coding
+ * work, and names no session, job, build, server, test run, watch, or coding
+ * task.
  */
 const computerStopKind = (spoken: string): "explicit" | "general" | null => {
   const text = clean(spoken, 400);
   if (!text || readWords(text) !== "stop") return null;
+  if (/[?\uff1f]/.test(text)) return null;
   if (
-    /\b(?:don['\u2019]?t|do\s+not)\s+(?:stop|cancel|abort|halt)\b/i.test(text)
+    /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:did|does|is|are|was|were|can|could|will|would|should|why|what|when|where|who|how)\b/i.test(
+      text,
+    )
+  )
+    return null;
+  if (
+    /\b(?:don['\u2019]?t|do\s+not|never)\s+(?:stop|cancel|abort|halt)\b/i.test(
+      text,
+    )
   )
     return null;
   if (
@@ -408,11 +415,12 @@ const computerStopKind = (spoken: string): "explicit" | "general" | null => {
   )
     return null;
   if (
-    /\b(?:stop|cancel|abort|halt)\s+(?:watching\b|(?:all\s+(?:my\s+|the\s+)?)?(?:sessions?|agents?|jobs?|builds?|deploys?|deployments?|tests?|coding\s+task|the\s+(?:job|build|deploy|deployment|test|tests|session|agent|coding\s+task))\b)/i.test(
+    /\b(?:sessions?|agents?|jobs?|builds?|servers?|deploys?|deployments?|tests?|test\s+runs?|watch(?:ing|er)?|coding\s+tasks?|rebases?|migrations?)\b/i.test(
       text,
     )
   )
     return null;
+  if (stopHoldsCodingWork(text)) return null;
   if (
     /\b(?:computer(?:\s+task|\s+use)?|execution|browser(?:\s+task)?|screen(?:\s+task)?)\b/i.test(
       text,
@@ -421,45 +429,51 @@ const computerStopKind = (spoken: string): "explicit" | "general" | null => {
     return "explicit";
   return "general";
 };
-/** Explicit yes for a waiting computer-action approval (never bare ok/okay/sure/yeah/yep). */
+/** Explicit yes for a waiting computer-action approval (never bare ok/okay/sure/yeah/yep, never a question). */
 const explicitApprovalYes =
-  /^(?:(?:please|pls|plz)[,\s]+)?(?:yes(?:[,\s]+(?:please|pls|plz|do\s+it|go\s+ahead|approve(?:\s+it)?|allow(?:\s+it)?))?|approve(?:\s+it)?|allow(?:\s+it)?|go\s+ahead|do\s+it)(?:[,\s]+(?:please|pls|plz))?[.!?]*$/i;
-/** Explicit no or refusal for a waiting computer-action approval. */
+  /^(?:(?:please|pls|plz)[,\s]+)?(?:yes(?:[,\s]+(?:please|pls|plz))?(?:[,\s]+(?:do\s+it|go\s+ahead(?:\s+and\s+do\s+it)?|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|proceed|confirm(?:\s+(?:it|that))?|send\s+(?:it|that)|click\s+(?:it|that)|submit\s+(?:it|that)))?|i\s+approve|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|confirm(?:\s+(?:it|that))?|go\s+ahead(?:\s+and\s+do\s+it)?|do\s+it)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
+/** Explicit no or refusal for a waiting computer-action approval (never a question). */
 const explicitApprovalNo =
-  /^(?:(?:please|pls|plz)[,\s]+)?(?:no|nope|nah|deny(?:\s+it)?|decline|reject|refuse|don['\u2019]?t|do\s+not)(?:[,\s]+(?:please|pls|plz))?[.!?]*$|^(?:(?:no|nope|nah)[,\s]+)?(?:don['\u2019]?t|do\s+not|deny|decline|reject|refuse)\s+(?:do\s+(?:it|that)|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|send(?:\s+(?:it|that))?|click(?:\s+(?:it|that))?|submit(?:\s+(?:it|that))?|proceed|it|that)(?:[,\s]+(?:please|pls|plz))?[.!?]*$/i;
-/** True when the newest assistant message in history is (or repeats) the engine's approval prompt. */
+  /^(?:(?:please|pls|plz)[,\s]+)?(?:no|nope|nah|deny(?:\s+it)?|decline|reject|refuse|cancel|don['\u2019]?t|do\s+not)(?:[,\s]+(?:please|pls|plz))?[.!]*$|^(?:(?:no|nope|nah)[,\s]+)?(?:don['\u2019]?t|do\s+not|deny|decline|reject|refuse)\s+(?:do\s+(?:it|that)|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|send(?:\s+(?:it|that))?|click(?:\s+(?:it|that))?|submit(?:\s+(?:it|that))?|proceed|it|that)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
+/** True when the newest message in history (on any channel) is ClawdTime's approval question, with no user message after it. */
 const sawApprovalPrompt = (
   history: ChatMessage[],
   message: string,
 ): boolean => {
   const prompt = clean(message, 600);
   if (!prompt) return false;
-  const last = [...history]
-    .reverse()
-    .find((entry) => entry.role === "assistant");
-  if (!last) return false;
+  const last = history.at(-1);
+  if (!last || last.role !== "assistant") return false;
   const shown = clean(last.text, 1200);
   return shown === prompt || shown.endsWith(prompt);
 };
+/** Unclear decision, hesitation, or question about a waiting approval (not coding, job, or session work). */
+const unclearApprovalReply = (words: string): boolean =>
+  /\b(?:yes|yeah|yep|yup|ok|okay|sure|approve|allow|confirm|deny|decline|reject|refuse|no|nope|nah|don['\u2019]?t|do\s+not|do\s+it|go\s+ahead|maybe|perhaps|unsure|hmm+|wait|hold\s+on|what(?:'s|\s+is)\s+in\s+it|what\s+(?:are\s+)?you(?:'re|\s+are)?\s+sending)\b/i.test(
+    words,
+  );
+/** Fixed opening lines produced by the computer engine or computer-task state answers. */
+const screenEngineReply =
+  /^(?:Got it\. I (?:take that into the task|go on with the task|hold now)|The task is already running\.|I am still paused|That was no yes:|Continuing\.|Thank you\. I go on\.|The computer task\b|A computer action is waiting:|Stopped\. An action that was already sent|Stopped the computer task\b|Queued\.|Started on the screen\.)/i;
 /**
- * Shared mid-task order check: delegates grammar to `readWords` in
- * `connectors/computer/orders.ts` and excludes coding work.
+ * Shared mid-task order check: delegates purely to `readWords` in
+ * `connectors/computer/orders.ts`.
  */
 export const guidesComputerTask = (spoken: string): boolean => {
   const text = clean(spoken, 2000);
-  return !!text && readWords(text) === "order" && !hasCodingWork(text);
+  return !!text && readWords(text) === "order";
 };
 /**
  * Narrow set of questions that are about the running or waiting screen task
- * for sure: "are you stuck", "is it open", "is it loaded", "where are you",
- * "what are you doing" with nothing after it, "did you hit/press/click/open/type ...",
- * "did it send/load/open/work", "is it done", "do you need help". Never
- * matches coding work, files, sessions, future times, or "open source".
+ * alone: "are you stuck", "is it open", "is it loaded", "where are you",
+ * "what are you doing", "is it done", "do you need help" (with fillers).
+ * Every clause in the message must be one of those exact questions.
  */
 const asksAboutComputerTask = (spoken: string): boolean => {
   const text = clean(spoken, 2000);
   if (!text || !isQuestion(text)) return false;
-  if (/\b(?:everyone|everybody|open\s+source)\b/i.test(text)) return false;
+  if (/\b(?:everyone|everybody|open\s+source|on\s+staging)\b/i.test(text))
+    return false;
   if (
     /\b(?:tonight|tomorrow|later|next\s+(?:week|month|year|weekend)|this\s+(?:evening|weekend)|for\s+(?:dinner|lunch|breakfast))\b/i.test(
       text,
@@ -467,8 +481,7 @@ const asksAboutComputerTask = (spoken: string): boolean => {
   )
     return false;
   if (
-    hasCodingWork(text) ||
-    /\b(?:agents?|sessions?|jobs?|builds?|branch(?:es)?|pull\s+requests?|prs?|commits?|deploys?|deployments?|repos?|repositor(?:y|ies)|codebase|worktrees?|bugs?|migrations?|databases?|projects?)\b/i.test(
+    /\b(?:agents?|sessions?|jobs?|builds?|branch(?:es)?|pull\s+requests?|prs?|commits?|deploys?|deployments?|repos?|repositor(?:y|ies)|codebase|worktrees?|bugs?|migrations?|databases?|projects?|staging)\b/i.test(
       text,
     )
   )
@@ -484,32 +497,29 @@ const asksAboutComputerTask = (spoken: string): boolean => {
     .split(/(?<=[.!?])\s+|\n+/)
     .map((part) => part.trim())
     .filter(Boolean);
-  return clauses.some((part) => {
-    if (!isQuestion(part)) return false;
-    return (
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*(?:are|r)\s+(?:you|u)\s+(?:still\s+)?(?:stuck|frozen|hung)(?:\s+(?:somewhere|right\s+now|at\s+all))?[.?!]*$/i.test(
-        part,
-      ) ||
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*(?:do\s+(?:you|u)\s+(?:need|want)\s+(?:any\s+)?help|need\s+(?:any\s+)?help)(?:\s+(?:anywhere|here|with\s+(?:it|that|this)))?[.?!]*$/i.test(
-        part,
-      ) ||
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*where\s+(?:are|r)\s+(?:you|u)(?:\s+(?:now|right\s+now|at))?[.?!]*$/i.test(
-        part,
-      ) ||
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*what\s+(?:are|r)\s+(?:you|u)\s+(?:doing|doin)[.?!]*$/i.test(
-        part,
-      ) ||
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*(?:is|has)\s+(?:it|that|this|the\s+(?:page|tab|window|browser|screen|board|site|computer\s+task))\s+(?:still\s+|already\s+|all\s+)?(?:open(?:ed)?|loaded|done|finished)(?:\s+(?:yet|now|already))?[.?!]*$/i.test(
-        part,
-      ) ||
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*did\s+(?:you|u)\s+(?:hit|press|click|open|type)\b/i.test(
-        part,
-      ) ||
-      /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but)[,\s]+)*did\s+(?:it|that)\s+(?:send|load|open|work)\b/i.test(
-        part,
-      )
-    );
-  });
+  return (
+    clauses.length > 0 &&
+    clauses.every((part) => {
+      if (!isQuestion(part)) return false;
+      return (
+        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:are|r)\s+(?:you|u)\s+(?:still\s+)?(?:stuck|frozen|hung)(?:\s+(?:somewhere|right\s+now|now|at\s+all))?[.?!]*$/i.test(
+          part,
+        ) ||
+        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:do\s+(?:you|u)\s+(?:need|want)\s+(?:any\s+)?help|need\s+(?:any\s+)?help)(?:\s+(?:anywhere|here|with\s+(?:it|that|this)))?[.?!]*$/i.test(
+          part,
+        ) ||
+        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*where\s+(?:are|r)\s+(?:you|u)(?:\s+(?:now|right\s+now|at))?[.?!]*$/i.test(
+          part,
+        ) ||
+        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*what\s+(?:are|r)\s+(?:you|u)\s+(?:doing|doin)(?:\s+(?:now|right\s+now))?[.?!]*$/i.test(
+          part,
+        ) ||
+        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:is|has)\s+(?:it|that|this|the\s+(?:page|tab|window|browser|screen|board|site|computer\s+task))\s+(?:still\s+|already\s+|all\s+)?(?:open(?:ed)?|loaded|done|finished)(?:\s+(?:yet|now|already))?[.?!]*$/i.test(
+          part,
+        )
+      );
+    })
+  );
 };
 /**
  * Tools that act and leave no record in the turn: a note, away mode, the
@@ -528,7 +538,7 @@ const screenAnswerLead =
   /^(?:(?:no\s+(?:worries|problem))(?:[,.!:;\s]+)|(?:no|nope|nah|yes|yep|yeah|yup|ok|okay|sure|well|so|oh|hey|right|alright|great|perfect|actually|honestly|good\s+news)[,.!:;]\s*)+/i;
 /** What a thing on the screen is, when a sentence says that work there came to its result. */
 const screenResultWords =
-  "open(?:ed)?(?!\\s+to\\b)|up(?!\\s+(?:to|for)\\b)|loaded|ready(?!\\s+(?:to|when|if|whenever)\\b)|done|finished|completed?|launched|installed|typed(?:\\s+in)?|entered|clicked|tapped|toggled|checked|posted|pressed|selected|found|pulled\\s+up|brought\\s+up|in\\s+front|showing|visible|displayed|displaying|on\\s+(?:the\\s+|your\\s+)?screen|on\\s+(?:the\\s+(?:[\\p{L}\\p{N}-]+\\s+){0,2}(?:page|board|site|tab|screen|home\\s+page|login\\s+page|dashboard)|(?:www\\.)?[\\p{L}\\p{N}-]+\\.(?:com|org|net|io|co|ai|app|dev))|there(?=\\s*(?:[.,!]|$))|set(?!\\s+to\\b)|good\\s+to\\s+go|saved|closed|submitted|filled(?:\\s+(?:in|out))?|sent(?!\\s+(?:may|might|could)\\s+have\\b)|signed\\s+in|logged\\s+in|downloaded|copied|cleared|refreshed|reloaded|dismissed|pasted|picked|chosen|dragged|taken\\s+care\\s+of|handled";
+  "open(?:ed)?(?!\\s+to\\b)|up(?!\\s+(?:to|for)\\b)|loaded|ready(?!\\s+(?:to|when|if|whenever)\\b)|done|finished|completed?|launched|installed|typed(?:\\s+in)?|entered|clicked|tapped|toggled|checked|posted|pressed|selected|found|pulled\\s+up|brought\\s+up|in\\s+front|showing|visible|displayed|displaying|on\\s+(?:the\\s+|your\\s+)?screen|on\\s+(?:the\\s+(?:[\\p{L}\\p{N}-]+\\s+){0,2}(?:page|board|site|tab|screen|home\\s+page|login\\s+page|dashboard)|(?:www\\.)?[\\p{L}\\p{N}-]+\\.(?:com|org|net|io|co|ai|app|dev))|there(?=\\s*(?:[.,!]|$))|set(?!\\s+to\\b)|good\\s+to\\s+go|saved|closed|submitted|filled(?:\\s+(?:in|out))?|sent(?!\\s+(?:may|might|could)\\s+have\\b)|signed\\s+in|logged\\s+in|downloaded|copied|cleared|refreshed|reloaded|dismissed|gone|pasted|picked|chosen|dragged|taken\\s+care\\s+of|handled";
 /**
  * "The page is open", "it's all set", "the board has been found", "it looks
  * done", "it should be open now": a form of "to be", then a result. A "not"
@@ -554,9 +564,12 @@ const screenObserve =
 /** Case-sensitive observation of a capitalized app name: "I see Slack.", "I can see Chrome." */
 const screenSeeApp =
   /\b(?:I|We)\s+(?:can\s+(?:now\s+)?)?see\s+(?!No\b|Nothing\b|None\b)[A-Z][a-z][\p{L}\p{N}]*\b/gu;
-/** Case-sensitive "we're in" / "I'm in <AppName>": "We're in Chrome now.", "I'm in Slack now." */
+/** Case-sensitive "we're in" / "I'm in <AppName>": "We're in Chrome now.", "I'm in Notes Plus now." */
 const screenInApp =
-  /\b(?:(?:I|We)(?:['\u2019](?:m|re)|\s+(?:am|are)))\s+(?:now\s+)?in(?:\s+(?:(?:the\s+)?(?:browser|app|window|page|tab)|Google\s+Chrome|Chrome|Safari|Arc|Brave|Firefox|Edge|[A-Z][a-z][\p{L}\p{N}]*))?(?=\s*(?:now\b|[.,!]|$))/gu;
+  /\b(?:(?:I|We)(?:['\u2019](?:m|re)|\s+(?:am|are)))\s+(?:now\s+)?in(?:\s+(?:(?:the\s+)?(?:browser|app|window|page|tab)|Google\s+Chrome|Chrome|Safari|Arc|Brave|Firefox|Edge|[A-Z][a-z][\p{L}\p{N}]*(?:\s+[A-Z][a-z][\p{L}\p{N}]*){0,2}))?(?=\s*(?:now\b|[.,!]|$))/gu;
+/** "We're at example.com now.", "I'm at app.example.com now." */
+const screenAtAddress =
+  /\b(?:(?:I|We)(?:['\u2019](?:m|re)|\s+(?:am|are)))\s+(?:now\s+)?at\s+(?:https?:\/\/)?(?:www\.)?[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.(?:com|org|net|edu|gov|io|co|ai|app|dev)(?:\/[^\s,.;:!?)'"]*)?(?=\s*(?:now\b|[.,!]|$))/giu;
 /** Explicit screen nouns, browsers, web domains, or screen-input verbs in a draft sentence. */
 const screenMention =
   /\b(?:pages?|tabs?|windows?|browsers?|buttons?|links?|popups?|dialogs?|modals?|screens?|google\s+chrome|chrome|safari|arc|brave|firefox|edge|clicked|pressed|scrolled|refreshed|reloaded|pasted|dismissed|dragged)\b|\b[\p{L}\p{N}-]+\.(?:com|org|net|io|co|ai|app|dev)\b/iu;
@@ -602,7 +615,7 @@ const screenYes =
 /** The person asks whether a result is there: "is it open?", "did it find the board?", "did it work?". */
 const asksForAResult = (words: string) =>
   isQuestion(words) &&
-  /\b(?:open(?:ed)?|loaded|ready|done|finished|completed?|typed|clicked|found|find|launched|installed|did\s+(?:it|that)\s+work|go(?:ne)?\s+through)\b/i.test(
+  /\b(?:open(?:ed)?|load(?:ed)?|ready|done|finished|completed?|typ(?:e|ed)|click(?:ed)?|hit|press(?:ed)?|send|sent|submit(?:ted)?|sav(?:e|ed)|clos(?:e|ed)|download(?:ed)?|sign(?:ed)?\s+in|log(?:ged)?\s+in|found|find|launch(?:ed)?|install(?:ed)?|did\s+(?:it|that)\s+work|go(?:ne)?\s+through)\b/i.test(
     words,
   );
 /** In the part of the sentence before a claim: it says the opposite, or that nothing is known. */
@@ -622,7 +635,7 @@ const screenManaged =
   /\b(?:sessions?|jobs?|tests?|builds?|branch(?:es)?|pull\s+requests?|prs?|commits?|deploys?|deployments?|repos?|repositor(?:y|ies)|codebase|worktrees?)\b/gi;
 /** Words of four letters and more that name no thing: a sentence made of them names nothing that a tool could have told. */
 const screenPlainWords = new Set(
-  "open opened opening ready done finished finish complete completed loaded loading load typed clicked pressed scrolled refreshed reloaded dismissed pasted downloaded copied cleared picked chose chosen dragged displays shows selected entered found located launched installed navigated pulled brought came showed popped switched worked filled searched signed logged saved closed submitted sent showing visible screen front good that this these those there here have been being were will would could should must might able just also already still even with from into onto your yours they them their what which when then than nope yeah okay sure well right need needs want wants like more some anything everything something nothing page pages window windows browser website site task computer worker engine everyone each every very really quite much many only both back away again once after before until while because about over under through fully finally currently actually definitely totally completely indeed correct absolutely going goes went does doing make made take took tell told said says know knows think look looks looking seems appears step steps most".split(
+  "open opened opening ready done finished finish complete completed loaded loading load typed clicked pressed scrolled refreshed reloaded dismissed gone pasted downloaded copied cleared picked chose chosen dragged displays shows selected entered found located launched installed navigated pulled brought came showed popped switched worked filled searched signed logged saved closed submitted sent showing visible screen front good that this these those there here have been being were will would could should must might able just also already still even with from into onto your yours they them their what which when then than nope yeah okay sure well right need needs want wants like more some anything everything something nothing page pages window windows browser website site task computer worker engine everyone each every very really quite much many only both back away again once after before until while because about over under through fully finally currently actually definitely totally completely indeed correct absolutely going goes went does doing make made take took tell told said says know knows think look looks looking seems appears step steps most".split(
     " ",
   ),
 );
@@ -721,6 +734,7 @@ export const screenClaims = (
       ...text.matchAll(screenObserve),
       ...text.matchAll(screenSeeApp),
       ...text.matchAll(screenInApp),
+      ...text.matchAll(screenAtAddress),
     ]) {
       const part = before(found.index ?? 0);
       if (!screenNot.test(part) && !screenIf.test(part)) return true;
@@ -5212,30 +5226,45 @@ export class Supervisor {
   }
   /**
    * One shared mid-task gate for computer-task submission: submits only when
-   * `readWords(words)` is "order" (or "stop" when `allowStop` is set), and the
-   * words hold no coding work and name no session of the board by its full name.
+   * `readWords(words)` is "order" (or "stop" when `allowStop` is set) and the
+   * words name no session of the board by its full name.
    */
   private canSubmitMidTask(words: string, allowStop = false): boolean {
     const text = clean(words, 2000);
     if (!text) return false;
     const kind = readWords(text);
-    if (kind === "order") return !hasCodingWork(text) && !this.forSession(text);
+    if (kind === "order") return !this.forSession(text);
     if (allowStop && kind === "stop")
-      return (
-        computerStopKind(text) !== null &&
-        !hasCodingWork(text) &&
-        !this.forSession(text)
-      );
+      return computerStopKind(text) !== null && !this.forSession(text);
     return false;
   }
-  /** True when the message is coding work or words for a session of the board. */
+  /** True when the previous turn in history was about the screen task, or no message stood between. */
+  private previousTurnWasScreenTask(
+    history: ChatMessage[],
+    snapshot: DesktopExecutionSnapshot,
+  ): boolean {
+    if (history.length === 0) return true;
+    const last = history.at(-1)!;
+    if (last.role === "assistant") {
+      const shown = clean(last.text, 1200);
+      if (speaksAsTheEngine(shown) || screenEngineReply.test(shown))
+        return true;
+      const prompt = clean(snapshot.message ?? "", 600);
+      return !!prompt && (shown === prompt || shown.endsWith(prompt));
+    }
+    return this.canSubmitMidTask(last.text) || asksAboutComputerTask(last.text);
+  }
+  /** True when the message is coding, job, or session work (never swallowed at approval). */
   private isCodingOrSessionMessage(words: string): boolean {
     return (
-      hasCodingWork(words) ||
+      stopHoldsCodingWork(words) ||
       this.forSession(words) ||
+      /\b(?:jobs?|builds?|logs?|linters?|tests?|deploys?|servers?|migrations?|rebases?|patches?)\b/i.test(
+        words,
+      ) ||
       asksToBeTold(words) ||
       beginsAsWordsForASession(words) ||
-      /^(?:(?:also|and|please|just|can\s+(?:you|u)|could\s+(?:you|u)|would\s+(?:you|u)|will\s+(?:you|u))[,\s]+)*(?:find\s+out|figure\s+out|look\s+into|dig\s+into|investigate|debug)\b/i.test(
+      /^(?:(?:also|and|please|just|can\s+(?:you|u)|could\s+(?:you|u)|would\s+(?:you|u)|will\s+(?:you|u))[,\s]+)*(?:find\s+out|figure\s+out|look\s+into|dig\s+into|investigate|debug|check|run|revert)\b/i.test(
         words,
       ) ||
       codingGoal(words, "asked") !== null ||
@@ -9410,7 +9439,7 @@ export class Supervisor {
     const desktopMove =
       reading?.kind === "desktop" || reading?.kind === "previous_app";
     if (activeMidTask && !desktopMove && !this.canSubmitMidTask(spoken, true))
-      return hasCodingWork(spoken) || this.forSession(spoken)
+      return this.forSession(spoken)
         ? "That request belongs to coding or session work. No screen task was started."
         : "That message is not a computer action request. Nothing was delegated.";
     // A model cannot turn questions, approvals or scoped coding tasks into execution.
@@ -10438,7 +10467,15 @@ export class Supervisor {
       execSnap?.configured === true &&
       (execSnap.canStop === true ||
         (execSnap.canStop === undefined && execSnap.state === undefined));
-    const rawStopTarget = computerStopKind(words);
+    const waitingForApproval =
+      execSnap?.configured === true &&
+      execSnap.state === "waiting_for_person" &&
+      execSnap.waiting !== "takeover" &&
+      execSnap.waiting !== "question";
+    const rawStopTarget =
+      waitingForApproval && explicitApprovalNo.test(words)
+        ? null
+        : computerStopKind(words);
     const stopTarget =
       rawStopTarget !== null && !this.forSession(words) ? rawStopTarget : null;
     const stopsSomething =
@@ -10603,6 +10640,8 @@ export class Supervisor {
       !taskIsOver(current) &&
       current.canAnswer &&
       !!current.question;
+    const taskNeedsWord =
+      taskWaits || (!!current && !taskIsOver(current) && current.canAccept);
     // Interpret navigation before coding/session heuristics, from only this message.
     // No keyword allowlist, prior conversation, screen or model paraphrase supplies authority.
     // A plain question about the state does not wait for that reading: see `asksPlainly`.
@@ -10631,6 +10670,7 @@ export class Supervisor {
       !(
         computerTaskLiveForQuestion(this.world.execution.snapshot()) &&
         !this.forSession(words) &&
+        this.previousTurnWasScreenTask(history, this.world.execution.snapshot()) &&
         asksAboutComputerTask(words)
       )
     ) {
@@ -10717,7 +10757,11 @@ export class Supervisor {
           codingSession.agent === "default" ? undefined : codingSession.agent,
           codingSession,
         );
-      if (navigation?.kind === "clarify") return navigation.question;
+      if (
+        navigation?.kind === "clarify" &&
+        !computerTaskNotOver(this.world.execution)
+      )
+        return navigation.question;
       if (navigation && navigation.kind !== "none") {
         const execution = this.world.execution;
         const selected = execution.snapshot();
@@ -10955,7 +10999,7 @@ export class Supervisor {
         !turn.semantic &&
         !turn.closed &&
         !stopsSomething &&
-        !taskWaits &&
+        !taskNeedsWord &&
         this.world.desk.pending().length === 0 &&
         canGuideComputerTask(execution) &&
         this.canSubmitMidTask(words)
@@ -10964,65 +11008,52 @@ export class Supervisor {
       const bothWait =
         "The computer task and an agent's request both wait for you. Answer the agent's request first, in the panel or in its terminal. Then answer the computer task here.";
       // The computer worker waits for the person (and no coding task waits):
-      // - waiting === "takeover": stop already stopped; "continue" goes to
-      //   answer; "order" already went to submit; everything else takes the
-      //   chat's normal path with the state note (and bare decision words get
-      //   the paused state instead of noPendingDecision).
-      // - waiting === "question": stop already stopped; coding work or session
-      //   words take the normal path; anything else goes to answer.
-      // - waiting === "approval" (or absent, safe by default): only an explicit
-      //   yes after the approval prompt was shown goes to answer; an explicit
-      //   no goes to answer; a strict "order" goes to submit (set aside);
-      //   coding work or session words take the normal path; everything else
-      //   goes to neither answer nor submit and repeats the approval state.
+      // - waiting === "takeover" or "question": stop already stopped and
+      //   takeover orders already went to submit; every other message takes
+      //   origin/main's execution.answer path.
+      // - waiting === "approval" (or absent, safe by default): an explicit yes
+      //   or explicit no goes to answer only when the newest message in history
+      //   (on any channel) is the engine's approval prompt with no user message
+      //   after it; a strict "order" goes to submit (set aside); unclear
+      //   approval replies repeat the approval state; coding/job/session
+      //   messages take the chat's normal path.
       if (
         execution.answer &&
         executionSnapshot.state === "waiting_for_person" &&
-        !taskWaits
+        !taskNeedsWord
       ) {
-        if (executionSnapshot.waiting === "takeover") {
-          if (readWords(words) === "continue") {
-            if (this.world.desk.pending().length) return bothWait;
+        if (
+          executionSnapshot.waiting === "takeover" ||
+          executionSnapshot.waiting === "question"
+        ) {
+          if (this.world.desk.pending().length) return bothWait;
+          try {
+            return (await execution.answer(words)).message;
+          } catch {
+            return "The computer task did not take that. Say it again.";
+          }
+        }
+        const promptSeen = sawApprovalPrompt(
+          history,
+          executionSnapshot.message,
+        );
+        if (explicitApprovalYes.test(words)) {
+          if (this.world.desk.pending().length) return bothWait;
+          if (promptSeen) {
             try {
               return (await execution.answer(words)).message;
             } catch {
               return "The computer task did not take that. Say it again.";
             }
           }
-          if (
-            this.world.desk.pending().length === 0 &&
-            bareDecision.test(words) &&
-            !this.isCodingOrSessionMessage(words)
-          ) {
-            const pausedNow = computerTaskNow(executionSnapshot);
-            if (pausedNow) return pausedNow;
-          }
-        } else if (executionSnapshot.waiting === "question") {
-          if (!this.isCodingOrSessionMessage(words)) {
-            if (this.world.desk.pending().length) return bothWait;
-            try {
-              return (await execution.answer(words)).message;
-            } catch {
-              return "The computer task did not take that. Say it again.";
-            }
-          }
-        } else {
-          if (explicitApprovalYes.test(words)) {
-            if (this.world.desk.pending().length) return bothWait;
-            if (sawApprovalPrompt(history, executionSnapshot.message)) {
-              try {
-                return (await execution.answer(words)).message;
-              } catch {
-                return "The computer task did not take that. Say it again.";
-              }
-            }
-            const waitingNow = computerTaskNow(executionSnapshot);
-            if (waitingNow) return waitingNow;
-          }
-          if (explicitApprovalNo.test(words)) {
-            if (this.world.desk.pending().length) return bothWait;
+          const waitingNow = computerTaskNow(executionSnapshot);
+          if (waitingNow) return waitingNow;
+        }
+        if (explicitApprovalNo.test(words)) {
+          if (this.world.desk.pending().length) return bothWait;
+          if (promptSeen) {
             const refusal =
-              /\b(?:approve|approved|allow|allowed|proceed|accept|confirm|do\s+it|go\s+ahead)\b/i.test(
+              /\b(?:nah|nope|approve|approved|allow|allowed|proceed|accept|confirm|do\s+it|go\s+ahead)\b/i.test(
                 words,
               )
                 ? "no"
@@ -11033,20 +11064,26 @@ export class Supervisor {
               return "The computer task did not take that. Say it again.";
             }
           }
-          if (this.canSubmitMidTask(words)) {
-            if (this.world.desk.pending().length) return bothWait;
-            return this.delegate(turn, words, true, undefined, true);
-          }
-          if (!this.isCodingOrSessionMessage(words)) {
-            if (this.world.desk.pending().length) return bothWait;
-            const waitingNow = computerTaskNow(executionSnapshot);
-            if (waitingNow) return waitingNow;
-          }
+          const waitingNow = computerTaskNow(executionSnapshot);
+          if (waitingNow) return waitingNow;
+        }
+        if (this.canSubmitMidTask(words)) {
+          if (this.world.desk.pending().length) return bothWait;
+          return this.delegate(turn, words, true, undefined, true);
+        }
+        if (
+          unclearApprovalReply(words) &&
+          !this.isCodingOrSessionMessage(words)
+        ) {
+          if (this.world.desk.pending().length) return bothWait;
+          const waitingNow = computerTaskNow(executionSnapshot);
+          if (waitingNow) return waitingNow;
         }
       }
       // While a screen task is running or waiting (never uncertain, blocked,
-      // completed, or canceled), a narrow question about it is answered by
-      // code with the engine's own state sentence, without asking the model.
+      // completed, or canceled), the exact narrow screen-task questions alone
+      // are answered by code when the previous turn went to the engine or no
+      // other message stood between.
       const taskLiveNow = computerTaskLiveForQuestion(executionSnapshot)
         ? computerTaskNow(executionSnapshot)
         : null;
@@ -11063,24 +11100,24 @@ export class Supervisor {
             24 * 60 * 60 * 1000);
       if (
         taskLiveNow &&
-        !taskWaits &&
+        !taskNeedsWord &&
         this.world.desk.pending().length === 0 &&
         !asksAboutRecentJob &&
         !this.forSession(words) &&
+        this.previousTurnWasScreenTask(history, executionSnapshot) &&
         asksAboutComputerTask(words)
       )
         return taskLiveNow;
     }
     // Obvious UI instructions go directly to the configured app-owned engine;
     // a conversational model must not reinterpret window titles as agent names.
-    // While a screen task is not over (and no panel approval blocks), only
-    // messages that pass the shared mid-task gate take these shortcuts; all
-    // other messages take the chat's normal path.
+    // While a screen task is not over (including while pendingAction waits),
+    // only messages that pass the shared mid-task gate take the UI shortcut so
+    // coding instructions keep origin/main's path.
     const executionMode = execution?.snapshot().mode;
     const midTaskBlocked =
       !!execution &&
       computerTaskNotOver(execution) &&
-      !execution.snapshot().pendingAction &&
       !this.canSubmitMidTask(words);
     if (
       !turn.semantic &&
@@ -11100,7 +11137,11 @@ export class Supervisor {
       !/\b(?:status|progress|pending requests?)\b/i.test(words)
     )
       return this.delegate(turn, words);
-    if (!turn.semantic && !midTaskBlocked && directMailboxRequest.test(words))
+    if (
+      !turn.semantic &&
+      !(midTaskBlocked && !execution?.snapshot().pendingAction) &&
+      directMailboxRequest.test(words)
+    )
       return execution?.snapshot().configured
         ? this.delegate(turn, words)
         : mailboxUnavailable;
@@ -11215,12 +11256,11 @@ export class Supervisor {
       ...(this.world.laterNews ? [laterTool] : []),
       ...(execution?.snapshot().configured
         ? [
-            execution.answer &&
-            execution.snapshot().mode === "native" &&
+            canGuideComputerTask(execution) &&
             this.world.desk.pending().length === 0 &&
             !turn.semantic &&
-            !execution.snapshot().pendingAction &&
-            execution.snapshot().waiting !== "question"
+            !turn.closed &&
+            !taskNeedsWord
               ? executionToolWithGuidance
               : executionTool,
           ]
@@ -11399,13 +11439,15 @@ export class Supervisor {
       const taskNow = taskSnapshot ? computerTaskNow(taskSnapshot) : null;
       if (taskNow && taskSnapshot) {
         const note =
-          taskSnapshot.state === "blocked" || taskSnapshot.state === "canceled"
+          taskSnapshot.state === "blocked" ||
+          taskSnapshot.state === "canceled" ||
+          taskSnapshot.state === "uncertain"
             ? computerTaskEndedUnfinishedNote
             : canGuideComputerTask(execution) &&
                 this.world.desk.pending().length === 0 &&
                 !turn.semantic &&
                 !turn.closed &&
-                !taskWaits
+                !taskNeedsWord
               ? computerTaskGuideNote
               : computerTaskNote;
         messages.push(

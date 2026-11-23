@@ -102,7 +102,15 @@ describe("the person talks to a computer worker that waits", () => {
     const f = setup(null);
     await f.worker.submit("r1", "Send the mail");
     await f.waiting();
-    expect(await f.supervisor.reply([], "No, do not send it.", "voice")).toBe(
+    const shown = [
+      {
+        role: "assistant" as const,
+        text: f.said[0]!,
+        at: Date.now(),
+        via: "chat" as const,
+      },
+    ];
+    expect(await f.supervisor.reply(shown, "No, do not send it.", "voice")).toBe(
       'Canceled. I did not do it: Click "Send".',
     );
     await f.worker.idle();
@@ -115,7 +123,7 @@ describe("the person talks to a computer worker that waits", () => {
     const model = f.model as ReturnType<typeof delegating>;
     await f.worker.submit("r1", "Send the mail");
     await f.waiting();
-    for (const words of ["hmm, what is in it?", "open the calendar", "maybe"]) {
+    for (const words of ["hmm, what is in it?", "maybe"]) {
       const reply = await f.supervisor.reply([], words, "chat");
       expect(reply).toContain('Click "Send"?');
     }

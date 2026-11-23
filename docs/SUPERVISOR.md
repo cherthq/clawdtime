@@ -1008,54 +1008,56 @@ to a private folder, read once and removed. Nothing of it is kept.
 - macOS asks once for Screen Recording permission, for the application that
   started ClawdTime.
 - Close what you do not want in the picture before you ask.
-- While a computer task did not finish cleanly (running, waiting, stopping,
-  stopped, blocked, or with an unknown result), ClawdTime says of the screen
-  only what the task's engine reported. While the task is running or waiting
-  (never when uncertain, blocked, completed, or canceled), narrow questions
-  about the task itself ("are you stuck?", "is it open?", "is it loaded?",
-  "where are you?", "what are you doing?", "did you hit/press/click/open/type
-  ...", "did it send/load/open/work?", "is it done?", "do you need help?")
-  that do not name a file, code, a session, a future time, or "open source"
-  are answered directly from the engine's state without asking the language
-  model. For other turns, the language model gets the engine's state and
-  newest report before it answers, and any answer that claims a screen result
-  without backing from a non-board tool result of that turn is replaced by
-  the state ("The computer task still runs: it has not reported that it is
-  done. Its newest report: ...", or "The computer task was stopped: it did
-  not report that it is done. ...").
-- While a computer task can stop, any stop word read by the engine's shared
+- While a computer task did not finish cleanly (running, paused, waiting,
+  stopping, stopped, blocked, or with an unknown result), ClawdTime says of
+  the screen only what the task's engine reported. While the task is running
+  or waiting (never when uncertain, blocked, completed, or canceled), the
+  exact narrow questions about the task alone ("are you stuck?", "is it
+  open?", "is it loaded?", "where are you?", "what are you doing?", "is it
+  done?", "do you need help?", with fillers) are answered directly from the
+  engine's state without asking the language model only when the previous
+  turn went to the screen engine or no other message stood between. Any
+  follow-up after a session or job question, and anything mentioning a
+  session, a job word, or "on staging", takes the chat's normal path. For
+  other turns, the language model gets the engine's state and newest report
+  before it answers, and any answer that claims a screen result without
+  backing from a non-board tool result of that turn is replaced by the state
+  ("The computer task still runs: it has not reported that it is done. Its
+  newest report: ...", or "The computer task was stopped: it did not report
+  that it is done. ...").
+- While a computer task can stop, a stop read by the engine's shared
   `readWords` reader ("stop", "ok stop", "stop, don't click that", "stop
-  stop", "never mind, stop", "stop typing", "stop the computer", "can you
-  stop it?") stops it before anything else (except "don't stop" or a stop
-  aimed at watching, a session, a job, or a build). When both a coding task
-  and a computer task run and the stop names neither, the computer task stops
-  (it holds the Mac) and ClawdTime says which one stopped. When no computer
-  task can stop, stops never call the computer engine's stop.
+  stop", "never mind, stop", "stop typing", "stop the computer") stops it
+  before anything else only when the message is no question, holds no coding
+  work, and names no session, job, build, server, test run, watch, or coding
+  task. When both a coding task and a computer task run and the stop names
+  neither, the computer task stops (it holds the Mac) and ClawdTime says
+  which one stopped. When no computer task can stop, stops never call the
+  computer engine's stop.
 - While a screen task is not over (running, paused, waiting, stopping), one
   gate governs every path that submits to the engine: words are submitted
   only when the shared `readWords` reader classifies them as an "order" (or
-  "stop" in `delegate`), and the words hold no coding work and name no
-  session of the board by its full name. Screen orders ("Can you just hit
-  enter?", "Uh just open it in Chrome, bro.", "Bro, just open
-  app.example.com on Google Chrome.") go straight to the engine in your own
-  words; everything else stays off `submit` and takes the chat's normal path
-  so coding work still starts its own job while a screen task runs.
+  "stop" in `delegate`) and the words name no session of the board by its
+  full name. Screen orders ("Can you just hit enter?", "Uh just open it in
+  Chrome, bro.", "Bro, just open app.example.com on Google Chrome.") go
+  straight to the engine in your own words; coding holds stay off `submit`
+  and take the chat's normal path, including while a panel approval or
+  approval prompt waits.
 - While the task waits for a panel approval or a non-worker answer, no
   instruction is submitted. While the native worker waits for a yes (or when
-  the waiting kind is unset), an explicit yes ("yes", "yes do it", "approve",
-  "go ahead", "do it", "allow it"; never bare "ok", "okay", "sure", "yeah",
-  or "yep") approves only when the newest ClawdTime message in history is the
-  engine's approval question. An explicit no ("no", "don't", "deny") refuses
-  it, a stop stops it, a strict screen order sets the waiting action aside
-  without approving, coding work or session words take the chat's normal
-  path, and everything else goes to neither `answer` nor `submit` and repeats
-  the approval state. A waiting coding task keeps its own answer path. While
-  the worker waits for a planner question, your words answer it unless they
-  are a stop, coding work, or words for a session. At a takeover pause, a
-  stop stops it, a `readWords` continue phrase resumes it through `answer`, a
-  strict screen order goes to `submit`, and everything else takes the chat's
-  normal path with the state note (bare decision words repeat the paused
-  state without resuming).
+  the waiting kind is unset), an explicit yes ("yes", "yes do it", "yes
+  please", "approve", "go ahead", "do it", "allow it", and clear variants;
+  never bare "ok", "okay", "sure", "yeah", or "yep", and never a question)
+  approves only when the newest message in history, on any channel, is the
+  engine's approval question with no message of the person after it. An
+  explicit no ("no", "nah", "nope", "don't", "deny", "cancel") refuses it
+  only under the same condition (mapping "nah" and "nope" to "no"), a stop
+  stops it, a strict screen order sets the waiting action aside without
+  approving, unclear approval replies repeat the approval state, and coding
+  or session messages take the chat's normal path. A waiting coding task
+  (waiting for an answer or acceptance) keeps its own answer path. At a
+  takeover pause or a planner question, a stop stops it and a takeover order
+  goes to `submit`; every other message takes the engine's `answer` path.
 
 ### Give it a job
 
