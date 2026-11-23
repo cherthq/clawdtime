@@ -221,17 +221,18 @@ const heldEndText = (reason: string, sentBefore = false) => {
 };
 /** The end of a request after held steps across alternating reasons with no progress. */
 const mixedHeldEndText = (
-  reason: string,
+  surface: "window" | "page" | "mixed",
   times: number,
   sentBefore: boolean,
 ) => {
   const noneSent = sentBefore
     ? "so nothing more was sent"
     : "so nothing was sent";
-  const onPage = reason === pageChangedReason || reason === pageUnreadReason;
-  return onPage
-    ? `I cannot act on this page right now: ${times} of my last actions were held back and the page did not move on, ${noneSent}. Wait until the page settles, then ask again.`
-    : `I cannot act on this window right now: ${times} of my last actions were held back and the window did not move on, ${noneSent}. Wait until the window settles, then ask again.`;
+  if (surface === "page")
+    return `I cannot act on this page right now: ${times} of my last actions were held back and the page did not move on, ${noneSent}. Wait until the page settles, then ask again.`;
+  if (surface === "window")
+    return `I cannot act on this window right now: ${times} of my last actions were held back and the window did not move on, ${noneSent}. Wait until the window settles, then ask again.`;
+  return `I cannot act right now: ${times} of my last actions were held back and nothing moved on, ${noneSent}. Wait until things settle, then ask again.`;
 };
 /** The same action is tried this many times with no result before the planner is told. It is the limit of the refusals. */
 const repeatLimit = 3;
@@ -239,8 +240,8 @@ const repeatNote = (times: number) =>
   `This action did not work ${times} times in a row: it was not sent, or the screen did not change after it. Choose another way. If you choose the same action again now, the task ends.`;
 /** The planner reads this many of its last steps. */
 const shownSteps = 12;
-const silentText =
-  "The ClawdTime panel did not answer, so nothing was sent. Open the panel and ask again.";
+const silentText = (sentBefore = false) =>
+  `The ClawdTime panel did not answer, ${sentBefore ? "so nothing more was sent" : "so nothing was sent"}. Open the panel and ask again.`;
 const plannerText =
   "The planner did not answer, so I stopped. Nothing more was sent.";
 const refusalsText =
@@ -296,6 +297,10 @@ const stuckText = (
   // The name of the app only. The title of a window can hold what was typed.
   const app = seen ? clean(seen.app.name, 60) : "";
   return `I tried ${row.count} times to ${tried}, ${came} So I stopped: the task is not finished.${app ? ` ${app} is in front.` : ""} You can ${wanted} yourself, or ask me again in other words.`;
+};
+const focusStuckText = (focus: FocusClicks, seen: Observation | null) => {
+  const app = seen ? clean(seen.app.name, 60) : "";
+  return `I clicked ${focus.field} ${focus.count} times and could not type into it, so I stopped: the task is not finished.${app ? ` ${app} is in front.` : ""} You can ${focus.wanted} yourself, or ask me again in other words.`;
 };
 
 /** What `GET /desktop/computer` answers. */
@@ -461,11 +466,15 @@ interface Run {
   grace?: number;
   /** The same action on the same target, tried in a row with nothing that moved the task on. */
   stuck?: Row;
+  /** Focus clicks in a row on the same field that typed no text. Survives steps with no signature. */
+  focusClicks?: FocusClicks;
   /** Held steps in a row, by reason and in total, whatever the action was. */
   heldRow?: {
     key: string;
     count: number;
     total: number;
+    /** Whether the holds in this row were on a window, a page, or both. */
+    surface: "window" | "page" | "mixed";
     /** Digest before a sent input during this row; if the next look is unchanged, the row stays. */
     sentBefore?: string | null;
   };
@@ -544,6 +553,25 @@ interface Row {
    */
   told?: string | null;
 }
+/** Focus clicks in a row on the same field that typed no text. */
+interface FocusClicks {
+  key: string;
+  field: string;
+  wanted: string;
+  bundleId: string;
+  window: string;
+  role: string;
+  title: string;
+  count: number;
+}
+const focusMovedToField = (seen: Observation | null, focus: FocusClicks) =>
+  seen !== null &&
+  seen.app.bundleId === focus.bundleId &&
+  seen.app.window === focus.window &&
+  seen.elements.some(
+    (item) =>
+      item.focused && item.role === focus.role && item.title === focus.title,
+  );
 
 /** True for what changes nothing on the Mac: a wait, a look, and a reading of the page. */
 const sendsNoInput = (send: Ready["send"]) =>
@@ -673,6 +701,41 @@ function within<T>(work: Promise<T>, ms: number): Promise<T> {
         resolve(value);
       },
       (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+function withinOrHalted<T>(
+  work: Promise<T>,
+  ms: number,
+  halted: Promise<null>,
+): Promise<T | null> {
+  return new Promise<T | null>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new BrowserSilent("The browser did not answer in time."));
+    }, ms);
+    timer.unref();
+    halted.then(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(null);
+    });
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         reject(error);
       },
@@ -1146,9 +1209,6 @@ export class ComputerWorker implements DesktopExecutorPort {
         return { kept: false, why: guidanceUnwrittenText };
       }
       run.guidance.push({ id, text, shown });
-      // The person spoke after the planner was told that an action did not
-      // work. What they said can ask for one more try, so the row starts anew.
-      if (run.stuck?.told !== undefined) delete run.stuck;
       return { kept: true };
     };
 
@@ -1170,7 +1230,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     const navigating =
       !run.inFlight &&
       run.step === 0 &&
-      ((run.navigation === undefined && this.planner.navigation !== undefined) ||
+      ((run.navigation === undefined &&
+        this.planner.navigation !== undefined) ||
         (run.navigation !== undefined && run.navigation.kind !== "none"));
     const firstLook = !run.inFlight && !run.firstLookDone && run.step === 0;
     if (!question && (navigating || firstLook)) {
@@ -1396,9 +1457,10 @@ export class ComputerWorker implements DesktopExecutorPort {
         // keyboard and gives it back. The action of this step or of the
         // next one can be held back for that alone.
         run.grace = run.step + 1;
-        // The person spoke after the planner was told that an action did not
-        // work. What they said can ask for one more try, so the row starts anew.
-        if (run.stuck?.told !== undefined) delete run.stuck;
+        // The person answered a question from the planner after it was told
+        // that an action did not work. That answer gives the action a new start.
+        if (reply.kind === "text" && run.stuck?.told !== undefined)
+          delete run.stuck;
         this.journal.set(
           run.id,
           "running",
@@ -1461,7 +1523,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         this.finish(run, "uncertain", "lost_result", lostText(label));
         return { sent: true, over: true, result: null };
       }
-      this.finish(run, "blocked", "hands_silent", silentText);
+      this.finish(run, "blocked", "hands_silent", silentText(run.sentInput));
       return { sent: false, over: true, result: null };
     } finally {
       if (effect) run.inFlight = false;
@@ -1695,6 +1757,18 @@ export class ComputerWorker implements DesktopExecutorPort {
           }
         }
         if (run.hold) continue;
+        if (run.focusClicks) {
+          if (focusMovedToField(run.observation, run.focusClicks)) {
+            if (run.stuck && run.stuck.clicked > 0) delete run.stuck;
+          } else if (run.focusClicks.count >= repeatLimit) {
+            return this.finish(
+              run,
+              "blocked",
+              "no_progress",
+              focusStuckText(run.focusClicks, run.observation),
+            );
+          }
+        }
         this.remind(run);
         const planFrom = this.now();
         // How many times the person had added words when the planner began.
@@ -2096,14 +2170,17 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.streak?.signature === checked.signature &&
       run.streak.count >= 2
     ) {
-      const question = `I already did this twice in a row: ${checked.label}. Say yes to do it a third time, or no to stop.`;
+      const repeats = run.streak.count;
+      const question =
+        repeats === 2
+          ? `I already did this twice in a row: ${checked.label}. Say yes to do it a third time, or no to stop.`
+          : `I already did this ${repeats} times in a row: ${checked.label}. Say yes to do it again, or no to stop.`;
+      const refusal =
+        repeats === 2
+          ? `Canceled. I did not do it a third time: ${checked.label}.`
+          : `Canceled. I did not do it again: ${checked.label}.`;
       if (!granted.includes(question)) {
-        const reply = await this.ask(
-          run,
-          "yes_no",
-          question,
-          `Canceled. I did not do it a third time: ${checked.label}.`,
-        );
+        const reply = await this.ask(run, "yes_no", question, refusal);
         if (reply.kind !== "yes") return;
       }
       answered.push(question);
@@ -2302,7 +2379,15 @@ export class ComputerWorker implements DesktopExecutorPort {
     const key = heldKey(reason);
     const count = run.heldRow?.key === key ? run.heldRow.count + 1 : 1;
     const total = (run.heldRow?.total ?? 0) + 1;
-    run.heldRow = { key, count, total };
+    const stepSurface =
+      reason === pageChangedReason || reason === pageUnreadReason
+        ? "page"
+        : "window";
+    const surface =
+      !run.heldRow || run.heldRow.surface === stepSurface
+        ? stepSurface
+        : "mixed";
+    run.heldRow = { key, count, total, surface };
     if (count >= heldLimit)
       this.finish(
         run,
@@ -2315,7 +2400,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         run,
         "blocked",
         "repeated_hold",
-        mixedHeldEndText(reason, total, run.sentInput),
+        mixedHeldEndText(surface, total, run.sentInput),
       );
   }
   /**
@@ -2349,6 +2434,10 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (first.send.via !== "hands") return;
     /** The look just before the input, when there was one. */
     let lastLook: Observation | null = null;
+    let targetField =
+      action.kind === "type" && action.element !== undefined
+        ? before?.elements.find((item) => item.id === action.element)
+        : undefined;
     if (first.send.look) {
       // Just before the input: look again, and check the same action against
       // that look. The planner took seconds to choose, and the person may
@@ -2369,6 +2458,13 @@ export class ComputerWorker implements DesktopExecutorPort {
       lastLook = seen;
       const moved = retarget(action, before, seen);
       if (!moved.ok) return this.changed(run, action, why, first, moved.reason);
+      if (moved.action.kind === "type" && moved.action.element !== undefined) {
+        const targetId = moved.action.element;
+        const refound = moved.observation.elements.find(
+          (item) => item.id === targetId,
+        );
+        if (refound) targetField = refound;
+      }
       const again = check(
         moved.action,
         {
@@ -2394,6 +2490,27 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     const send = ready.send;
     if (send.via !== "hands") return;
+    const focusTarget = (): Omit<FocusClicks, "count"> => {
+      const obs = lastLook ?? before;
+      const bundleId = obs?.app.bundleId ?? "";
+      const window = obs?.app.window ?? "";
+      const role = targetField?.role ?? "";
+      const title = targetField?.title ?? ready.target;
+      const field = ready.label.startsWith("Type in ")
+        ? ready.label.slice("Type in ".length)
+        : ready.target
+          ? `"${ready.target}"`
+          : "the field";
+      return {
+        key: `${bundleId}|${window}|${role}|${title}`,
+        field,
+        wanted: wantedOf(action, first, before),
+        bundleId,
+        window,
+        role,
+        title,
+      };
+    };
     /**
      * The click on the field went out, and the text did not. The record says
      * that, and never that the text was typed. When the person took over, the
@@ -2407,12 +2524,37 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (countTry) {
         // No complete action went out, so this is no repeat in run.streak.
         run.tried = "clicked";
+        const target = focusTarget();
+        run.focusClicks =
+          run.focusClicks?.key === target.key
+            ? { ...target, count: run.focusClicks.count + 1 }
+            : { ...target, count: 1 };
       } else {
         delete run.stuck;
       }
       this.note(run, action, why, first.target, said, "clicked");
     };
     if (send.focus) {
+      const target = focusTarget();
+      if (
+        run.focusClicks?.key === target.key &&
+        run.focusClicks.count >= repeatLimit
+      ) {
+        this.note(
+          run,
+          action,
+          why,
+          ready.target,
+          `not sent: clicked ${target.field} ${run.focusClicks.count} times without typing`,
+          "not_sent_repeat",
+        );
+        return this.finish(
+          run,
+          "blocked",
+          "no_progress",
+          focusStuckText(run.focusClicks, lastLook ?? before),
+        );
+      }
       const focus = await this.hand(run, send.focus, ready.label);
       if (!focus.sent) return;
       if (heldForPerson(focus))
@@ -2519,6 +2661,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (handed.result?.ok && !sendsNoInput(send)) {
       run.sentInput = true;
       delete run.grace;
+      if (ready.signature !== null) delete run.focusClicks;
       if (run.heldRow) {
         if (send.command.kind === "open_app") {
           const sameFront = sameScreen(
@@ -2654,7 +2797,13 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (this.halted(run)) return;
       let now: BrowserPage;
       try {
-        now = tidy(await within(browser.read(), this.browserMs));
+        const got = await withinOrHalted(
+          browser.read(),
+          this.browserMs,
+          run.halted,
+        );
+        if (this.halted(run) || !got) return;
+        now = tidy(got);
       } catch (error) {
         run.page = null;
         run.fresh = false;
@@ -2742,7 +2891,17 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.count(run, first.signature);
     if (effect) run.inFlight = true;
     try {
-      run.page = tidy(await within(this.call(browser, call), this.browserMs));
+      if (call.name === "read") {
+        const got = await withinOrHalted(
+          this.call(browser, call),
+          this.browserMs,
+          run.halted,
+        );
+        if (this.halted(run) || !got) return;
+        run.page = tidy(got);
+      } else {
+        run.page = tidy(await within(this.call(browser, call), this.browserMs));
+      }
     } catch (error) {
       run.page = null;
       // Silence after an action is not proof that it did not happen.
@@ -2784,6 +2943,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (call.name !== "read") {
       run.sentInput = true;
       delete run.grace;
+      if (first.signature !== null) delete run.focusClicks;
       if (run.heldRow) {
         const samePage = sameScreen(pageBefore, pagePrint(run.page));
         if (!samePage) delete run.heldRow;
