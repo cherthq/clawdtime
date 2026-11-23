@@ -121,8 +121,12 @@ const pullCodePattern =
 const strongCodeArtifact =
   /\b(?:repos?|repositor(?:y|ies)|branch(?:es)?|commits?|pull\s+requests?|functions?|components?|class(?:es)?|modules?|codebases?|backends?|scripts?|configs?|issues?|bugs?|tickets?)\b/;
 
-/** Code nouns that can also appear in UI labels (checked only after stripping UI labels). */
-const softCodeArtifact = /\b(?:files?|tests?|code)\b/i;
+/**
+ * Code nouns that can also appear in UI labels (checked only after stripping
+ * UI labels). "In the project" and a TODO name the code of a project: "search
+ * for TODO in the project" is coding work, "open the Project tab" a label.
+ */
+const softCodeArtifact = /\b(?:files?|tests?|code|projects?|todos?)\b/i;
 
 /** A code, config, dotfile, or repo build file name (matched both quoted and unquoted, outside URLs). */
 const codeFileName =
@@ -357,7 +361,12 @@ function hasCodeWorkInSentence(sentenceCased: string): boolean {
       " ",
     )
     .replace(/\btype\s+[^,;!?]+?(?=\s+(?:in|into|on)\b|$)/gi, " ")
-    .replace(/\bsearch\s+for\s+[^,;!?]+$/gi, " ");
+    // A search query is a label, but not its scope: "search for TODO in
+    // the project" keeps "in the project".
+    .replace(
+      /\bsearch\s+for\s+[^,;!?]+?(?=\s+in\s+(?:the\s+|this\s+|my\s+|our\s+)?(?:projects?|code(?:base)?|repos?|repository|files?)\b|$)/gi,
+      " ",
+    );
   if (softCodeArtifact.test(withoutUiLabels)) return true;
 
   // Check for a coding-work verb as the main verb of any clause (or infinitive).

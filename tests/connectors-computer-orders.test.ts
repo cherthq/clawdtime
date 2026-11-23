@@ -229,6 +229,8 @@ describe("readWords", () => {
     ["pull up the pricing page and change the copy", "hold"],
     ["open the pricing page and change the copy", "hold"],
     ["open package.json and bump the version", "hold"],
+    ["search for TODO in the project", "hold"],
+    ["search the project for TODO comments", "hold"],
     ["switch to the browser repo and fix the test", "hold"],
     ["open the page and implement search", "hold"],
     ["open the app and refactor the header", "hold"],
@@ -310,6 +312,8 @@ describe("readWords", () => {
 
     // Review rest 7: UI labels, menus, buttons, apps, keys, search queries, and URLs stay orders
     ["open the code tab", "order"],
+    ["open the Project tab", "order"],
+    ["click the projects link", "order"],
     ["click Test connection", "order"],
     ["type test in the search box", "order"],
     ["open the File menu", "order"],
