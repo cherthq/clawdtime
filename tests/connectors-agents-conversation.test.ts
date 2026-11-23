@@ -674,6 +674,220 @@ describe("words for a session that runs are never a job", () => {
     });
   });
 
+  describe("work at a later time: no job now, by the code or by the model", () => {
+    const later = [
+      // "Tomorrow", in its forms.
+      "build the landing page tomorrow",
+      "build the bakery landing page tomorrow",
+      "build the landing page tomorrow morning",
+      "build the landing page first thing tomorrow",
+      "build the landing page tomorrow at 9",
+      "build the landing page the day after tomorrow",
+      "deploy the app to staging tomorrow",
+      "can you build the landing page tomorrow?",
+      "fix this tomorrow",
+      "run tests tomorrow",
+      // Later in the day or the week, and a time to come.
+      "build the landing page later today",
+      "clean up the old branches later this week",
+      "deploy the app next week",
+      "deploy the app next Monday",
+      // A thing whose name ends in "-ing" is a thing as any other.
+      "fix the styling tomorrow",
+      "update the pricing page tomorrow",
+      "build the onboarding flow next week",
+      // No object, with a verb that stands alone.
+      "deploy tomorrow",
+      // Work that must not go out a day early.
+      "ship the release tomorrow",
+      "send the newsletter tomorrow",
+      // "Later" alone, for work that only a person or an agent does.
+      "build the landing page later",
+      "also clean up the old branches in the repo later",
+      "fix it later",
+      "look into the slow login later on",
+      // A word before the time, and a word behind it.
+      "build the landing page, but tomorrow",
+      "build the landing page sometime tomorrow",
+      "fix the footer sometime next week",
+      "build the landing page tomorrow, please",
+      "build the landing page tomorrow, not today",
+      // "Build me a ...", and a run of the tests: the code answers these
+      // too, and the model is not asked.
+      "build me a status page later",
+      "build me a status page tomorrow",
+      "run the full test suite tomorrow",
+      // Behind the name of an agent.
+      "open claude and build the landing page tomorrow",
+      // The time stands first.
+      "tomorrow, build the landing page",
+      "later, clean up the old branches",
+      "tomorrow morning build the landing page",
+      "next week deploy the app to staging",
+    ];
+
+    it.each(later)("starts nothing by itself for %j", async (words) => {
+      // The model calls no tool: only the code's own path could start.
+      const said = await run(words, ["Okay.", "Okay again."]);
+      expect(said.windows, words).toHaveLength(0);
+      expect(said.typed, words).toEqual([]);
+    });
+
+    it.each(later)(
+      "starts no job and no task for %j when the model calls a start",
+      async (words) => {
+        for (const tool of ["start_job", "start_task"]) {
+          const said = await run(words, [
+            [tool === "start_job" ? call(tool) : call(tool, { goal: words })],
+            "Okay.",
+          ]);
+          expect(said.windows, `${words} / ${tool}`).toHaveLength(0);
+          expect(said.typed, `${words} / ${tool}`).toEqual([]);
+          expect(said.answer, `${words} / ${tool}`).not.toContain(
+            "Requested a new ",
+          );
+        }
+      },
+    );
+
+    it.each([
+      "build the landing page tomorrow",
+      "also clean up the old branches in the repo later",
+      "tomorrow, build the landing page",
+      "build me a status page later",
+      "build me a status page tomorrow",
+      "run the full test suite tomorrow",
+    ])(
+      "answers %j in fixed words, and asks the model nothing",
+      async (words) => {
+        const { model, seen } = scripted(["Okay, I'll start it then."]);
+        const made = mac(two());
+        const answer = await new Supervisor(made.world, model).reply(
+          [],
+          words,
+          "chat",
+        );
+        expect(answer, words).toBe(
+          "I have not started that, and I keep no work for later. When you want it, ask for it again.",
+        );
+        expect(seen, words).toHaveLength(0);
+        expect(made.windows, words).toHaveLength(0);
+      },
+    );
+
+    it.each([
+      // A question about a later time: the model answers it.
+      "what is due tomorrow?",
+      "explain what happens later in the flow",
+    ])("asks the model for %j, with no fixed answer", async (words) => {
+      const { model, seen } = scripted(["Here is the answer."]);
+      const made = mac(two());
+      const answer = await new Supervisor(made.world, model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(seen.length, words).toBeGreaterThanOrEqual(1);
+      expect(answer, words).toBe("Here is the answer.");
+      expect(made.windows, words).toHaveLength(0);
+    });
+
+    it("starts nothing for work at a later time when a request waits and the model calls a start", async () => {
+      const said = await run(
+        "build the landing page tomorrow",
+        [[call("start_job")], "Okay."],
+        two(),
+        (world) => {
+          world.desk.open({
+            agent: "claude-code",
+            sessionId: "s",
+            cwd: "/work/app",
+            pids: [],
+            described: {
+              kind: "permission",
+              tool: "Bash",
+              summary: "git push origin main",
+              options: [],
+            },
+            holdSeconds: 600,
+          });
+        },
+      );
+      expect(said.windows).toHaveLength(0);
+      expect(said.answer).not.toContain("Requested a new ");
+    });
+
+    it.each([
+      // A time that the work must be ready by, or that it is for.
+      "build the landing page by tomorrow",
+      "build the landing page before tomorrow",
+      "write the report for tomorrow",
+      "update the docs for the release tomorrow",
+      "fix the page for the client tomorrow",
+      "build the deck for the investors next week",
+      "write the post about the launch tomorrow",
+      // A thing that carries its own time.
+      "add a reminder tomorrow",
+      "create a meeting next week",
+      "add a calendar event tomorrow",
+      "rename the tab to later",
+      "change the launch date to tomorrow",
+      "save the draft for later",
+      // "Later" as a moment in what a thing does, and a move in time.
+      "move the release later",
+      "push the launch later",
+      "start the animation later",
+      "close the modal later",
+      "send the email later",
+      "run the check later",
+      // The name of a feature, and words of the thing itself.
+      "add watch later",
+      "implement read later",
+      "add a toast saying try again later",
+      "add a button called remind me later",
+      "add a label saying back tomorrow",
+      "add a message try again later",
+      "add a banner we are back tomorrow",
+      // What is added is the time itself.
+      "add tomorrow",
+      "add next week",
+      // The time is when a thing in the object does something.
+      "rotate the keys expiring tomorrow",
+      "rotate the certs expiring next week",
+      "update the cert expiring next month",
+      "fix the bug blocking the release tomorrow",
+      "fix the tests failing on the deploy tomorrow",
+      "fix the login bug the demo hits tomorrow",
+      "bump the version shipping tomorrow",
+      "test the release candidate shipping next week",
+      "check the jobs running tomorrow",
+      "update the prices effective tomorrow",
+      // "Later" inside the way of a fix.
+      "fix the race by registering the handler later",
+      "fix the layout shift by loading the font later",
+      "fix the crash by initializing the client later",
+      "fix the bug where images load later",
+      // The work is for now.
+      "deploy the app today",
+      "build the landing page now",
+      "build the landing page right now, I need it tomorrow",
+      "build the landing page, the demo is tomorrow",
+      "fix the footer now and build the landing page tomorrow",
+      // How long the work may take, and a clock time or a weekday alone.
+      "build the landing page in an hour",
+      "run the tests at 5pm",
+      "fix the footer on Monday",
+      // The time inside the thing that is built.
+      "add a cron job to run the tests tomorrow",
+      "build a job that runs tomorrow",
+      "fix the tests that fail later",
+    ])("still starts the job for %j", async (words) => {
+      const said = await run(words, [[call("start_job")], "Okay."]);
+      expect(said.windows, words).toHaveLength(1);
+      expect(said.answer, words).toContain("Requested a new ");
+    });
+  });
+
   describe("a message that only asks to be told later in other words, or for a reminder: no job, whatever the model calls", () => {
     it.each([
       // To be told about a session of the board, in forms that the watch
@@ -2270,8 +2484,6 @@ describe('"build me a ..." is a direct instruction, as "build a ..." is', () => 
     "write me a one page summary",
     // The person puts it off.
     "build me a status page when you have time",
-    "build me a status page later",
-    "build me a status page tomorrow",
     // A question, a take-back, a delay.
     "build me a status page?",
     "can you build me a status page?",
@@ -17586,29 +17798,28 @@ describe("an answer that promises to tell, watch or remind later, with nothing b
     expect(got.reply).toBe(answer);
   });
 
-  it.each([
-    "deploy the app tonight",
-    "run the full test suite tomorrow",
-    "fix the footer after lunch",
-  ])("pushes no start for %j: the person named a later time", async (words) => {
-    const { made, say } = room();
-    const draft = "Sure, I'll let you know when it's done.";
-    const got = await say(words, [draft, [call("start_job")], "On it."]);
-    expect(got.run.seen[1]!.system, words).not.toContain("start it now");
-    // Nor for an offer of that work.
-    const other = room();
-    const offer = await other.say(words, [
-      "Should I start a job for that?",
-      [call("start_job")],
-      "On it.",
-    ]);
-    expect(
-      offer.run.seen.some((seen) => seen.system.includes("start it now")),
-      words,
-    ).toBe(false);
-    expect(other.made.windows, words).toEqual([]);
-    void made;
-  });
+  it.each(["deploy the app tonight", "fix the footer after lunch"])(
+    "pushes no start for %j: the person named a later time",
+    async (words) => {
+      const { made, say } = room();
+      const draft = "Sure, I'll let you know when it's done.";
+      const got = await say(words, [draft, [call("start_job")], "On it."]);
+      expect(got.run.seen[1]!.system, words).not.toContain("start it now");
+      // Nor for an offer of that work.
+      const other = room();
+      const offer = await other.say(words, [
+        "Should I start a job for that?",
+        [call("start_job")],
+        "On it.",
+      ]);
+      expect(
+        offer.run.seen.some((seen) => seen.system.includes("start it now")),
+        words,
+      ).toBe(false);
+      expect(other.made.windows, words).toEqual([]);
+      void made;
+    },
+  );
 
   it("pushes no second job when the draft offers another one for work that already runs", async () => {
     const { made, say } = room();
