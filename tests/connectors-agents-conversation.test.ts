@@ -674,6 +674,102 @@ describe("words for a session that runs are never a job", () => {
     });
   });
 
+  describe("a request to find something out about a session of the board: no job, whatever the model calls", () => {
+    const three = () => [
+      ...two(),
+      session({ id: "102-pay", pid: 102, name: "payments tests" }),
+    ];
+    it.each([
+      // The state of the session: stuck, idle, done, waiting, what it does.
+      "find out why deploy fix is stuck",
+      "look into what docs is doing",
+      "find out what deploy fix is doing",
+      "look into why docs stopped",
+      "find out if deploy fix needs me",
+      "can you find out if docs is done?",
+      "check why the deploy fix session is stuck",
+      "figure out why docs is idle",
+      "find out why deploy fix is waiting",
+      "find out what deploy fix did to the config",
+      "ok so find out why deploy fix is stuck",
+    ])("starts no job and no task for %j", async (words) => {
+      // The model calls no tool: only the code's own path could start.
+      const none = await run(words, ["Okay.", "Okay again."], three());
+      expect(none.windows, words).toHaveLength(0);
+      for (const tool of ["start_job", "start_task"]) {
+        const said = await run(
+          words,
+          [
+            [tool === "start_job" ? call(tool) : call(tool, { goal: words })],
+            "It works.",
+          ],
+          three(),
+        );
+        expect(said.windows, `${words} / ${tool}`).toHaveLength(0);
+        expect(said.answer, `${words} / ${tool}`).not.toContain(
+          "Requested a new ",
+        );
+        // The model hears why: the message asks about that session.
+        expect(said.results.join(" "), `${words} / ${tool}`).toContain(
+          "is a question about that session",
+        );
+      }
+    });
+
+    it.each([
+      // A thing of the project that shares a word with a session.
+      "find out why the docs build is slow",
+      "look into why the login is slow on the staging site",
+      "find out why deploy fix's tests are slow",
+      "find out why the deploy fix branch fails in CI",
+      // No session in it.
+      "find out why the nightly backup of the database is failing",
+      // No question about what the session is or does.
+      "check the docs for typos",
+      "investigate docs",
+      // What a thing of the project is like, not the state of a session:
+      // slow, down, failing, and what it stopped doing.
+      "find out why docs is slow to build",
+      "look into why docs stopped building",
+      "check why payments tests fail",
+      "find out why payments tests are flaky",
+    ])("still starts the job for %j", async (words) => {
+      const said = await run(words, [[call("start_job")], "Okay."], three());
+      expect(said.windows, words).toHaveLength(1);
+      expect(said.answer, words).toContain("Requested a new ");
+    });
+
+    it.each([
+      // A session with no name of its own shows the name of its project
+      // folder: that names the code, not the session.
+      ["app", null, "find out why the app is crashing"],
+      ["app", null, "find out why the app is slow"],
+      ["app", null, "find out what the app does on startup"],
+      ["app", null, "find out why the app is stuck"],
+      ["web", null, "check why the web is down"],
+      ["backend", null, "find out why the backend is failing"],
+      ["backend", null, "look into why the backend keeps timing out"],
+      // A session that is named after a thing of the project.
+      ["work", "tests", "check why tests fail on CI"],
+      ["work", "tests", "check why the tests are flaky"],
+      ["work", "api", "find out why api is down"],
+      ["work", "api", "find out why the api is returning errors"],
+      ["work", "login page", "find out why the login page is slow"],
+      ["work", "build", "find out why the build is failing"],
+    ])(
+      "with a session of the project %j named %j, still starts the job for %j",
+      async (project, name, words) => {
+        const said = await run(
+          words,
+          [[call("start_job")], "Okay."],
+          [session({ id: "103-x", pid: 103, project, name })],
+        );
+        expect(said.windows, words).toHaveLength(1);
+        expect(said.answer, words).toContain("Requested a new ");
+      },
+    );
+  });
+
   describe("work at a later time: no job now, by the code or by the model", () => {
     const later = [
       // "Tomorrow", in its forms.
@@ -16408,6 +16504,27 @@ describe("the person asked for work, and the answer only offers to start it", ()
       expect(got.reply, offer).not.toBe(offer);
     },
   );
+
+  it("tells the model that a request to find something out is work to start, and never to ask which coding agent", async () => {
+    // The cause of most offers: the instructions did not say that "find
+    // out why ..." is work, and the model asked which agent to use.
+    const { say } = room();
+    const got = await say("how is deploy fix?", ["It works."]);
+    const system = got.run.seen[0]!.system;
+    // A request to find something out about a session of the board is a
+    // question about that session, and no job.
+    expect(system).toContain(
+      "A request to find out about the state of a session here",
+    );
+    expect(system).toContain(
+      "is a question about that session: answer it from what you see of that session, and start no job for it",
+    );
+    expect(system).toContain(
+      "Any other request to find something out is work as all other work is",
+    );
+    expect(system).toContain("start it, and do not offer to start it");
+    expect(system).toContain("Never ask which coding agent to use");
+  });
 
   it("lets a second offer stand, and starts nothing by itself", async () => {
     const { made, say } = room();

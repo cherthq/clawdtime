@@ -1019,7 +1019,22 @@ a tunnel and get its link, find something out: all of these are jobs.
 
 - The job is your own sentence. The language model chooses the tool. It does
   not choose the words.
-- Work that you asked for starts with no round of confirmation. When the
+- A request to find out about the state of a session of the board is a
+  question about that session, and no job: "find out why deploy fix is
+  stuck", "look into what docs is doing", "find out if deploy fix needs
+  me". ClawdTime answers it from what it sees of the session, and the tool
+  that starts a job refuses it, whatever the language model calls. The
+  message is a verb of looking, a question word, the full name of one
+  session that has a name of its own, and then what only a session is or
+  does (stuck, idle, done, waiting, doing, needs you, stopped). What a
+  thing of the project is like starts a job as always: "find out why the
+  api is down", "check why the tests fail on CI", "find out why the docs
+  build is slow", also when a session has that name.
+- Work that you asked for starts with no round of confirmation. The
+  instructions of the language model say that a request to find something
+  out is work as all other work is ("find out why the build is slow"),
+  unless it is about a session here. They also say never to ask which
+  coding agent to use: when you name none, the usual one runs. When the
   language model only offers the work ("I see no session about that. Should
   I start a job to look into it?"), the code asks it once more to start the
   work. The tool that starts a job still decides from your own words. This
