@@ -2403,8 +2403,8 @@ const saysWhatAThingDoes =
  * - "for the release tomorrow", "about the launch tomorrow", "by
  *   registering the handler later", "the prices effective tomorrow": a word
  *   that ties a time to a thing;
- * - "by tomorrow", "from tomorrow", "back tomorrow", "try again later": the
- *   time belongs to the last word;
+ * - "by tomorrow", "from tomorrow", "back tomorrow", "try again later",
+ *   "the bugs found after the demo": the time belongs to the last word;
  * - "the keys expiring tomorrow", "the bug blocking the release tomorrow":
  *   a word in "-ing" that says what a thing does. It stands behind a noun
  *   at the end, or before "the", "a" or a word of place. A thing whose name
@@ -2423,7 +2423,7 @@ const theTimeCanBeOfAThing = (object: string) => {
   const before = words.at(-2);
   return (
     /\b(?:for|about|of|during|at|regarding|by|effective)\b/i.test(object) ||
-    /^(?:by|from|than|through|till|on|in|around|within|with|without|like|as|into|onto|over|under|near|between|past|per|via|the|a|an|not|no|say|says|every|each|due|starting|ending|beginning|back|again|me|you|us|maybe|coming|open|available|starts|ends|arriving|expires|returns|live|ready|free|busy|off|out|away|here|there|pay|read|watch|save|buy|ask|decide|try|see|come|talk|sooner|or)$/i.test(
+    /^(?:by|from|than|through|till|on|in|around|within|with|without|like|as|into|onto|over|under|near|between|past|per|via|the|a|an|not|no|say|says|every|each|due|starting|ending|beginning|back|again|me|you|us|maybe|coming|open|available|starts|ends|arriving|expires|returns|live|ready|free|busy|off|out|away|here|there|pay|read|watch|save|buy|ask|decide|try|see|come|talk|sooner|or|found|seen|sent|made|built|shown|done|given|taken|left|held|written|broken|lost|caught|thrown|gone|run|put|set|hit)$/i.test(
       last,
     ) ||
     /\b\w{2,}ing\s+(?:the|a|an|my|our|your|this|that|these|those|its|his|her|their|all|some|every|each|on|in|to|with|from|into|over|under|through|across)\b/i.test(
@@ -2454,6 +2454,29 @@ const theTimeCanBeOfAThing = (object: string) => {
   );
 };
 /**
+ * A time of today is a later time only while it has not begun, by the
+ * clock of this Mac. In the evening "fix the login bug tonight" means now,
+ * and in the afternoon "revert the deploy this afternoon" names the deploy
+ * of this afternoon.
+ * - "tonight", "this evening", "after work": from 5 in the morning to 5 in
+ *   the afternoon;
+ * - "this afternoon", "after lunch": from 5 in the morning to noon;
+ * - "after dinner": from 5 in the morning to 6 in the evening;
+ * - "this weekend": from Monday to Friday;
+ * - "in the morning": from noon to 5 in the morning.
+ */
+const comesLaterToday = (said: string, now: number) => {
+  const at = new Date(now);
+  const hour = at.getHours();
+  const form = said.toLowerCase().replace(/\s+/g, " ");
+  if (/in the morning$/.test(form)) return hour >= 12 || hour < 5;
+  if (form === "this weekend") return at.getDay() >= 1 && at.getDay() <= 5;
+  if (hour < 5) return false;
+  if (form === "this afternoon" || form === "after lunch") return hour < 12;
+  if (form === "after dinner") return hour < 18;
+  return hour < 17;
+};
+/**
  * The person asks for the work at a later time: "build the landing page
  * tomorrow", "deploy the app to staging tomorrow morning", "clean up the
  * old branches later", "tomorrow, build the page". Nothing here keeps work
@@ -2470,10 +2493,16 @@ const theTimeCanBeOfAThing = (object: string) => {
  *   "tomorrow morning", "tomorrow at 9";
  * - "later today", "later tonight", "later this week";
  * - "next week", "next month", "next Monday";
- * - "later" alone or "later on", only for work that a person or an agent
- *   does and no thing does by itself (build, fix, add, write, clean up,
- *   look into, deploy, merge), and only with "the", "a", "my", "it" or the
- *   like in its object.
+ * - a time to come today, while it has not begun by the clock of this Mac
+ *   (`comesLaterToday`): "tonight", "this evening", "this afternoon",
+ *   "this weekend", "after lunch", "after work", "after dinner", "in the
+ *   morning". Not with a verb of looking ("look into the errors this
+ *   afternoon", "check the logs after lunch"): the time can then be when
+ *   it happened;
+ * - "later" alone, "later on", "in a bit", "in a while" and "in a moment",
+ *   only for work that a person or an agent does and no thing does by
+ *   itself (build, fix, add, write, clean up, look into, deploy, merge),
+ *   and only with "the", "a", "my", "it" or the like in its object.
  * With no object, only a verb that stands alone: "deploy tomorrow", "ship
  * next week". With the time first and no comma, the object opens as one:
  * "tomorrow build the landing page".
@@ -2486,21 +2515,29 @@ const theTimeCanBeOfAThing = (object: string) => {
  * - a sentence that says what a thing does: "later, deploy fix should
  *   rebase";
  * - "later" as a moment in what a thing does, or a move in time: "start
- *   the animation later", "close the modal later", "move the release
+ *   the animation later", "close the modal in a moment", "move the release
  *   later";
+ * - a time of today that has begun: "fix the login bug tonight" in the
+ *   evening, "revert the deploy this afternoon" in the afternoon;
  * - the name of a feature: "add watch later";
- * - "today" and "now": the work is for now;
+ * - "today", "this morning" and "now": the work is for now;
  * - "in an hour", "in two days": that can be how long the work may take;
  * - a clock time or a weekday alone ("at 5pm", "on Monday"): that can be
  *   when a thing runs.
  */
-const asksForALaterTime = (spoken: string) => {
+const asksForALaterTime = (spoken: string, now: number) => {
   const clock = "(?:\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?|noon|midnight)";
   const weekday =
     "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)";
-  // A time of the person's own day: never a moment in what a thing does.
+  // A time to come of the person's own day: never a moment in what a
+  // thing does, and never a time that is past.
   const aDay = `(?:(?:first\\s+thing\\s+)?(?:the\\s+day\\s+after\\s+)?tomorrow(?:\\s+(?:morning|afternoon|evening|night))?(?:\\s+at\\s+${clock})?|later\\s+(?:today|tonight|this\\s+(?:week|month|afternoon|evening))|next\\s+(?:week|month|${weekday}))`;
-  const time = `(?:(?<day>${aDay})|(?<later>later(?:\\s+on)?))`;
+  // A time of today, read against the clock (`comesLaterToday`). It can
+  // also be when something happened: "the errors this afternoon".
+  const ofToday =
+    "(?:tonight|this\\s+(?:evening|afternoon|weekend)|after\\s+(?:lunch|dinner|work)|(?:first\\s+thing\\s+)?in\\s+the\\s+morning)";
+  // "Later" and "in a bit" can also be a moment in what a thing does.
+  const time = `(?:(?<day>${aDay})|(?<today>${ofToday})|(?<later>later(?:\\s+on)?|in\\s+a\\s+(?:little\\s+)?(?:bit|while|moment)))`;
   const text = spoken.trim();
   // The time stands first: "tomorrow, build the landing page". With no
   // comma the object must open as one: "next week build fails" is no
@@ -2514,6 +2551,7 @@ const asksForALaterTime = (spoken: string) => {
     if (
       clause &&
       !saysWhatAThingDoes.test(clause.object) &&
+      (!first.groups?.today || comesLaterToday(first.groups.today, now)) &&
       (first.groups?.comma ||
         /^\s*(?:the|a|an|my|our|your|this|these|those|it|them|all|both|some|to|on|in|from)\b/i.test(
           clause.object,
@@ -2526,6 +2564,8 @@ const asksForALaterTime = (spoken: string) => {
     "i",
   ).exec(text);
   if (!found) return false;
+  if (found.groups?.today && !comesLaterToday(found.groups.today, now))
+    return false;
   const clause = plainClauseOfWork(
     text.slice(0, found.index).replace(/[,\s]*$/, ""),
   );
@@ -2533,19 +2573,27 @@ const asksForALaterTime = (spoken: string) => {
   const { verb, object } = clause;
   if (saysWhatAThingDoes.test(object)) return false;
   const day = Boolean(found.groups?.day);
+  const today = Boolean(found.groups?.today);
   // No object: only a verb that stands alone, and a time of the day.
   // "Add tomorrow" and "add next week" name what is added.
   if (!object.trim())
     return (
-      day &&
+      (day || today) &&
       /^(?:deploy|redeploy|ship|merge|commit|push|release|publish|restart|rebase|migrate|sync|rebuild|rerun|compile|launch)$/.test(
         verb,
       )
     );
   if (theTimeCanBeOfAThing(object)) return false;
   if (day) return true;
-  // "Later" alone can be a moment in what a thing does ("start the
-  // animation later") or a part of a name ("add watch later").
+  // "Look into the errors this afternoon", "check the logs after lunch":
+  // with a verb of looking, a time of today can be when it happened.
+  if (today)
+    return !/^(?:look into|find out|figure out|dig into|investigate|debug|check|test|find)$/.test(
+      verb,
+    );
+  // "Later" and "in a moment" can be a moment in what a thing does
+  // ("start the animation later", "close the modal in a moment") or a part
+  // of a name ("add watch later").
   return (
     /^(?:build|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|install|upgrade|clean|clean up|set up|look into|find out|figure out|dig into|investigate|deploy|redeploy|merge|commit|rebase|migrate|revert|roll back|rollback|tag|bump|compile|rebuild|rerun|ship|make(?: me| us)? an?)$/.test(
       verb,
@@ -5744,7 +5792,11 @@ export class Supervisor {
    * tomorrow").
    */
   private asksItsWorkForLater(spoken: string) {
-    return asksForALaterTime(spoken) || asksForALaterTime(this.jobText(spoken));
+    const now = this.world.now();
+    return (
+      asksForALaterTime(spoken, now) ||
+      asksForALaterTime(this.jobText(spoken), now)
+    );
   }
   /**
    * The job in the person's own words. When the sentence opens with an agent

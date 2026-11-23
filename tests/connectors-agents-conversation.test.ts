@@ -701,6 +701,9 @@ describe("words for a session that runs are never a job", () => {
       // Work that must not go out a day early.
       "ship the release tomorrow",
       "send the newsletter tomorrow",
+      // In a while, for work that only a person or an agent does.
+      "build the landing page in a bit",
+      "clean up the old branches in a while",
       // "Later" alone, for work that only a person or an agent does.
       "build the landing page later",
       "also clean up the old branches in the repo later",
@@ -775,6 +778,110 @@ describe("words for a session that runs are never a job", () => {
       },
     );
 
+    // A time of today is read against the clock of the Mac: it is a later
+    // time only while it has not begun. 23 November 2026 is a Monday.
+    const on = (day: number, hour: number) => (world: SupervisorWorld) => {
+      world.now = () => new Date(2026, 10, day, hour, 0, 0).getTime();
+    };
+
+    it.each<[string, number]>([
+      // Before the evening.
+      ["deploy the app to staging tonight", 10],
+      ["build the landing page tonight", 10],
+      ["fix the login bug tonight", 16],
+      ["deploy tonight", 10],
+      ["deploy the app tonight", 10],
+      ["build the landing page this evening", 10],
+      ["deploy the app after work", 10],
+      ["open claude and build the landing page tonight", 10],
+      ["tonight, deploy the app to staging", 10],
+      // Before noon.
+      ["build the landing page this afternoon", 10],
+      ["build the landing page after lunch", 10],
+      ["also build the bakery landing page after lunch", 9],
+      ["fix the footer after lunch", 11],
+      ["after lunch, build the landing page", 10],
+      // On a weekday.
+      ["build the landing page this weekend", 10],
+      // After noon, and in the night.
+      ["build the landing page in the morning", 15],
+      ["deploy the app first thing in the morning", 22],
+      ["in the morning build the landing page", 2],
+    ])(
+      "starts nothing for %j on a Monday at %i o'clock, by any path",
+      async (words, hour) => {
+        const none = await run(
+          words,
+          ["Okay.", "Okay again."],
+          two(),
+          on(23, hour),
+        );
+        expect(none.windows, words).toHaveLength(0);
+        expect(none.typed, words).toEqual([]);
+        for (const tool of ["start_job", "start_task"]) {
+          const said = await run(
+            words,
+            [
+              [tool === "start_job" ? call(tool) : call(tool, { goal: words })],
+              "Okay.",
+            ],
+            two(),
+            on(23, hour),
+          );
+          expect(said.windows, `${words} / ${tool}`).toHaveLength(0);
+          expect(said.answer, `${words} / ${tool}`).not.toContain(
+            "Requested a new ",
+          );
+        }
+      },
+    );
+
+    it("answers work for tonight in fixed words in the morning", async () => {
+      const said = await run(
+        "deploy the app to staging tonight",
+        ["Okay, I'll deploy it tonight."],
+        two(),
+        on(23, 10),
+      );
+      expect(said.answer).toBe(
+        "I have not started that, and I keep no work for later. When you want it, ask for it again.",
+      );
+      expect(said.windows).toHaveLength(0);
+    });
+
+    it.each<[string, number, number]>([
+      // The evening has begun, or it is still that night: "tonight" is now.
+      ["fix the login bug tonight", 23, 21],
+      ["build the landing page tonight", 23, 19],
+      ["ship the hotfix tonight", 23, 21],
+      ["roll back the release tonight", 23, 22],
+      ["fix the outage tonight", 23, 2],
+      ["deploy the app to staging this evening", 23, 18],
+      ["deploy the app after work", 23, 18],
+      // The afternoon has begun: the deploy of this afternoon, the errors
+      // after lunch.
+      ["deploy the app this afternoon", 23, 14],
+      ["revert the deploy this afternoon", 23, 15],
+      ["fix the crash this afternoon", 23, 13],
+      ["fix the errors after lunch", 23, 14],
+      // It is the weekend: 28 November 2026 is a Saturday.
+      ["fix the footer this weekend", 28, 10],
+      // It is the morning.
+      ["build the landing page in the morning", 23, 9],
+    ])(
+      "still starts the job for %j on day %i at %i o'clock: that time has begun",
+      async (words, day, hour) => {
+        const said = await run(
+          words,
+          [[call("start_job")], "Okay."],
+          two(),
+          on(day, hour),
+        );
+        expect(said.windows, words).toHaveLength(1);
+        expect(said.answer, words).toContain("Requested a new ");
+      },
+    );
+
     it.each([
       // A question about a later time: the model answers it.
       "what is due tomorrow?",
@@ -840,6 +947,9 @@ describe("words for a session that runs are never a job", () => {
       "close the modal later",
       "send the email later",
       "run the check later",
+      "close the modal in a moment",
+      "start the animation in a moment",
+      "send the email in a bit",
       // The name of a feature, and words of the thing itself.
       "add watch later",
       "implement read later",
@@ -875,8 +985,27 @@ describe("words for a session that runs are never a job", () => {
       "fix the footer now and build the landing page tomorrow",
       // How long the work may take, and a clock time or a weekday alone.
       "build the landing page in an hour",
+      "build the landing page in a minute",
+      "deploy the app in an hour",
       "run the tests at 5pm",
+      "build the landing page at 5pm",
       "fix the footer on Monday",
+      "deploy the app on Monday",
+      // A time of today that is when something happened: the work is to
+      // look at it now.
+      "look into the outage tonight",
+      "investigate the errors this afternoon",
+      "check the logs after lunch",
+      "debug the crash this evening",
+      "fix the bugs found after the demo",
+      "fix the build going out tonight",
+      // A time of today that the work must be ready by, or that is now.
+      "build the landing page by tonight",
+      "build the landing page for the demo tonight",
+      "build the landing page before lunch",
+      "build the landing page this morning",
+      "build the landing page soon",
+      "build the landing page end of day",
       // The time inside the thing that is built.
       "add a cron job to run the tests tomorrow",
       "build a job that runs tomorrow",
@@ -17798,7 +17927,7 @@ describe("an answer that promises to tell, watch or remind later, with nothing b
     expect(got.reply).toBe(answer);
   });
 
-  it.each(["deploy the app tonight", "fix the footer after lunch"])(
+  it.each(["deploy the app in an hour", "fix the footer on Monday"])(
     "pushes no start for %j: the person named a later time",
     async (words) => {
       const { made, say } = room();
