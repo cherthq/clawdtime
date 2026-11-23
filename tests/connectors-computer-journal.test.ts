@@ -298,6 +298,49 @@ describe("the journal of computer requests", () => {
       expect(looksSecretStrict(sample), sample).toBe(false);
   });
 
+  it("redesign review blocker 6 and rest 10: catches all 19 credential bypass shapes and avoids easy false positives", () => {
+    const secrets = [
+      "my password is set to hunter2",
+      "the password is saved as swordfish",
+      "my pin is set to 4821",
+      'use token "my-live-token-9876"',
+      'use api key "abc123def456"',
+      "type my secret swordfish in the box",
+      "enter token abcdef123456 in the field",
+      "type my token abcdef1234567890 in the box",
+      "my pw is swordfish",
+      "pwd: hunter2",
+      "my 2fa is 482913",
+      "my ssn is 123-45-6789",
+      "my cvv is 482",
+      "my cvc is 482",
+      "use key sk-12345678\n  90abcdefghij",
+      "token ghp_abcdef0123\n  456789abcdef01",
+      "the password for Chrome is swordfish",
+      "type 4821 as the pin in the box",
+      "my pass\u200bword\u200bis swordfish",
+      "my to\u200bken is\u200babcdef123456",
+      "my p\u200bin\u200bis 4821",
+    ];
+    for (const sample of secrets)
+      expect(looksSecretStrict(sample), sample).toBe(true);
+
+    const benign = [
+      "the password is the same",
+      "the password is on my phone",
+      "the password is in the vault",
+      "the token is in the header",
+      "open password generator",
+      "click password recovery",
+      "open passcode lock",
+      "open promo code 2026",
+      "search for order 1234567890123",
+      "open ISBN 978-0-13-468599-1",
+    ];
+    for (const sample of benign)
+      expect(looksSecretStrict(sample), sample).toBe(false);
+  });
+
   it("cuts a long request, a long name and control characters", () => {
     const journal = new ComputerJournal(root(), () => 1);
     journal.open("r1", `Open\n${"x".repeat(600)}`);

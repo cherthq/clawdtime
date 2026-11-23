@@ -117,38 +117,63 @@ export type JournalGuidance = z.infer<typeof saidSchema>;
 
 const clean = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
-const invisibleSecretChars =
-  /[\p{Cf}\u034f\u115f\u1160\u17b4\u17b5\u180e\u3164\uffa0\ufe00-\ufe0f]/gu;
-const invisibleAroundOp =
-  /[\p{Cf}\u034f\u115f\u1160\u17b4\u17b5\u180e\u3164\uffa0\ufe00-\ufe0f]+(is|was|[:=])[\p{Cf}\u034f\u115f\u1160\u17b4\u17b5\u180e\u3164\uffa0\ufe00-\ufe0f]+/giu;
-const plainStateWord =
-  "(?:already|saved|filled|expired|wrong|correct|required|empty|set|needed|not|missing|blank|invalid|valid|hidden|autofilled)(?![A-Za-z0-9_-])";
-const nonPasswordBareWord =
-  "(?:is|was|are|were|be|been|has|have|had|will|would|can|could|should|may|might|must|do|does|did|in|into|on|for|to|of|at|by|from|with|without|and|or|but|if|when|as|that|this|then|than|here|there|now|yet|still|already|not|no|never|please|pls|again|first|next|yourself|myself|field|fields|box|boxes|input|inputs|bar|settings|setting|manager|reset|change|screen|page|tab|button|link|window|dialog|popup|prompt|form|section|entry|label|icon|check|error|message|text|area|row|item|option|menu|list|step|login|sign|account|autofill|saved|filled|expired|wrong|correct|required|empty|set|needed|missing|blank|hidden|invalid|valid)(?![A-Za-z0-9_-])";
+const invisibleSecretClass =
+  "[\\p{Cf}\\u034f\\u115f\\u1160\\u17b4\\u17b5\\u180e\\u3164\\uffa0\\ufe00-\\ufe0f]";
+const invisibleSecretChars = new RegExp(invisibleSecretClass, "gu");
+const invisibleAroundOp = new RegExp(
+  `${invisibleSecretClass}+(is|was|[:=])${invisibleSecretClass}+`,
+  "giu",
+);
+const invisibleBeforeOp = new RegExp(
+  `${invisibleSecretClass}+(is|was)(?=\\s|$)`,
+  "giu",
+);
+const invisibleAfterOp = new RegExp(
+  `(^|\\s)(is|was)${invisibleSecretClass}+`,
+  "giu",
+);
+const invisibleAroundPunctOp = new RegExp(
+  `${invisibleSecretClass}+([:=])|([:=])${invisibleSecretClass}+`,
+  "gu",
+);
+const secretNoun =
+  "(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential|pw|pwd|2fa|ssn|cvv|cvc)";
+const plainStateTail =
+  "(?:(?:already|filled|expired|wrong|correct|required|empty|needed|not|missing|blank|invalid|valid|hidden|autofilled|the\\s+same|different|unchanged|unknown|pending|active|inactive|in\\s+\\S+|on\\s+(?:my|the|your|a|this|that)\\s+\\S+)(?![A-Za-z0-9_-])|set(?!\\s+to\\s+\\S)(?![A-Za-z0-9_-])|saved(?!\\s+as\\s+\\S)(?![A-Za-z0-9_-]))";
+const nonSecretBareWord =
+  "(?:is|was|are|were|be|been|has|have|had|will|would|can|could|should|may|might|must|do|does|did|in|into|on|onto|for|to|of|at|by|from|with|without|about|and|or|but|if|when|as|that|this|these|those|then|than|here|there|now|yet|still|already|not|no|never|please|pls|again|first|next|yourself|myself|the|your|mine|field|fields|box|boxes|input|inputs|bar|settings|setting|manager|reset|change|screen|page|tab|button|link|window|dialog|popup|prompt|form|section|entry|label|icon|check|error|message|text|area|row|item|option|menu|list|step|login|sign|account|autofill|saved|filled|expired|wrong|correct|required|empty|set|needed|missing|blank|hidden|invalid|valid|generator|recovery|lock|locked|unlock|policy|policies|rule|rules|strength|hint|hints|hash|hashed|key|keys|store|vault|sync|value|values|number|numbers|code|codes|card|cards|type|name|header|headers|body|cookie|cookies|file|files|folder|path|scope|scopes|refresh|revoke|rotate|same|different)(?![A-Za-z0-9_-])";
 const strictSecretShapes = [
-  // Sentence and contraction forms: secret noun followed by is/was/'s and a non-state value.
+  // Sentence and contraction forms: secret noun (optionally "for <target>") followed by is/was/'s (optionally "set to"/"saved as") and a non-state value.
   new RegExp(
-    String.raw`\b(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential)(?:\s+(?:is|was)|'s)\s+(?!${plainStateWord})\S+`,
+    String.raw`\b${secretNoun}(?:\s+for\s+(?:[A-Za-z0-9._-]+\s+){0,3}[A-Za-z0-9._-]+)?(?:\s+(?:is|was)(?:\s+(?:set\s+to|saved\s+as))?|'s(?:\s+(?:set\s+to|saved\s+as))?)\s+(?!${plainStateTail})\S+`,
     "i",
   ),
   // Key-value forms with : or = (full-width colon/equals fold via NFKC).
-  /\b(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential)\s*[:=]\s*\S+/i,
-  // Quoted or bare value directly after password, passcode, or passphrase.
+  new RegExp(String.raw`\b${secretNoun}\s*[:=]\s*\S+`, "i"),
+  // Quoted or bare value directly after a secret noun.
   new RegExp(
-    String.raw`\b(?:password|passwd|passcode|passphrase)\s+(?:["'][^"'\s][^"']*["']|(?!${nonPasswordBareWord})[A-Za-z0-9!@#$%^&*_+=~./-]{4,})`,
+    String.raw`\b${secretNoun}\s+(?:["'][^"'\s][^"']*["']|(?!${nonSecretBareWord})[A-Za-z0-9!@#$%^&*_+=~./-]{4,})`,
     "i",
   ),
-  // A 4 to 8 digit code (with or without spaces/hyphens) after pin, code, otp, or passcode.
-  /(?<!\b(?:zip|postal|area|country|error|status|http|exit)\s+)\b(?:pin|code|otp|passcode)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d(?:[ -]?\d){3,7}\b/i,
-  // Payment card numbers: 13 to 19 digits with optional spaces or hyphens.
-  /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/,
+  // A 4 to 8 digit code (with or without spaces/hyphens) after pin, code, otp, passcode, or 2fa, or 3 to 4 digits after cvv/cvc.
+  /(?<!\b(?:zip|postal|area|country|error|status|http|exit|promo|coupon|discount|referral|invite|gift|voucher)\s+)\b(?:pin|code|otp|passcode|2fa)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d(?:[ -]?\d){3,7}\b/i,
+  /\b(?:cvv|cvc)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d{3,4}\b/i,
+  // Value before secret noun: "type 4821 as the pin", "enter hunter2 as the password".
+  new RegExp(
+    String.raw`\b(?:type|enter|use|put)\s+(?:\d(?:[ -]?\d){2,7}|"[^"\n]+"|'[^'\n]+'|\S{3,})\s+as\s+(?:the\s+|my\s+)?(?:code|otp|${secretNoun})\b`,
+    "i",
+  ),
+  // Payment card numbers: 13 to 19 digits with optional spaces or hyphens (excluding order/ISBN/tracking/invoice/shipment references).
+  /(?<!\b(?:order|isbn|tracking|invoice|shipment)\s+)(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/i,
 ];
 /**
  * Strict credential check for computer-use guidance and journal records.
  * Normalizes NFKC, strips format and invisible joiner characters (\p{Cf},
- * U+034F, etc.) to "", tests a newline-joined variant for wrapped tokens, and
- * checks contractions, bare/quoted password values, spaced PIN/OTP codes, and
- * payment card numbers while ignoring plain state remarks ("is already filled").
+ * U+034F, etc.) to "", tests a newline-joined variant for wrapped tokens,
+ * separates one- or two-sided invisible characters around is/was/:/=, and
+ * checks contractions, bare/quoted secret values, spaced PIN/OTP/CVV/SSN codes,
+ * value-before-noun forms, and payment card numbers while ignoring plain state
+ * remarks ("is already filled", "is the same", "is on my phone").
  */
 export function looksSecretStrict(text: string): boolean {
   const normalized = text
@@ -158,8 +183,11 @@ export function looksSecretStrict(text: string): boolean {
   const stripped = normalized.replace(invisibleSecretChars, "");
   const opSpaced = normalized
     .replace(invisibleAroundOp, " $1 ")
+    .replace(invisibleBeforeOp, " $1 ")
+    .replace(invisibleAfterOp, "$1$2 ")
+    .replace(invisibleAroundPunctOp, " $1$2 ")
     .replace(invisibleSecretChars, "");
-  const noNewlines = stripped.replace(/[\r\n]+/g, "");
+  const noNewlines = stripped.replace(/[\r\n]+\s*/g, "");
   if (looksSecret(noNewlines)) return true;
   const variants = [
     normalized,

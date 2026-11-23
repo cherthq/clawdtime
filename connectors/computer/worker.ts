@@ -1153,14 +1153,26 @@ export class ComputerWorker implements DesktopExecutorPort {
     };
 
     const question = run.question;
+    // A one-step navigation command is already dispatched: the task ends once
+    // it returns (unless open_app is refused and falls back to planning).
+    const navInFlight =
+      run.navigation !== undefined &&
+      run.navigation.kind !== "none" &&
+      (run.step > 0 || run.inFlight);
+    if (!question && navInFlight) {
+      recordSeen();
+      if (kind === "hold") run.hold = true;
+      return atEndText;
+    }
     // While the planner's first reading (navigation) or the first look is in
-    // flight, anything other than "stop" sets the hold so no first input goes out.
+    // flight (before any action), anything other than "stop" sets the hold so
+    // no first input goes out.
     const navigating =
-      (run.navigation === undefined && this.planner.navigation !== undefined) ||
-      (run.navigation !== undefined &&
-        run.navigation.kind !== "none" &&
-        run.history.length === 0);
-    const firstLook = !run.firstLookDone && run.step === 0;
+      !run.inFlight &&
+      run.step === 0 &&
+      ((run.navigation === undefined && this.planner.navigation !== undefined) ||
+        (run.navigation !== undefined && run.navigation.kind !== "none"));
+    const firstLook = !run.inFlight && !run.firstLookDone && run.step === 0;
     if (!question && (navigating || firstLook)) {
       run.hold = true;
       run.wake?.();
@@ -1223,7 +1235,13 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     if (kind === "order") {
       const kept = tryKeep();
-      if (kept.kept) return guidedText;
+      if (kept.kept) return run.hold ? heldText : guidedText;
+      if (kept.why === secretText) {
+        run.hold = true;
+        run.wake?.();
+        return heldNotKeptText(secretText);
+      }
+      if (run.hold) return heldNotKeptText(kept.why);
       return kept.why === guidanceFullText
         ? `${guidanceFullText} Stop it, or wait for it to end, and ask again.`
         : kept.why;
@@ -1795,7 +1813,10 @@ export class ComputerWorker implements DesktopExecutorPort {
         "hold",
       );
       if (reply.kind !== "yes") return;
-      if (run.guidance.length > 0) return "plan";
+      if (run.guidance.length > 0) {
+        run.navigation = { kind: "none" };
+        return "plan";
+      }
       return this.navigate(run, intent);
     }
     const before = looked.result?.observation;
@@ -1862,6 +1883,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         handed.result?.error ?? "failed",
       );
       run.refusals = 1;
+      run.navigation = { kind: "none" };
       return "plan";
     }
     if (!handed.result?.ok) {

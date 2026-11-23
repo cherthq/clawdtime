@@ -1709,7 +1709,7 @@ describe("what the person says while a task runs", () => {
 
   it("has a bound: eight additions for one task, 600 characters for each, and no credential", async () => {
     const first = held(done);
-    const { worker, journal } = await running([first.step]);
+    const { worker, journal } = await running([first.step, done]);
     expect(
       (
         await worker.submit(
@@ -1720,25 +1720,6 @@ describe("what the person says while a task runs", () => {
     ).toBe(
       "That is longer than 600 characters, so I did not take it into the task that runs. Say it in fewer words.",
     );
-    expect(
-      (
-        await worker.submit(
-          "secret",
-          "open the page, my password is correct-horse-battery",
-        )
-      ).message,
-    ).toBe(
-      "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.",
-    );
-    // A mark that the cleaning takes away does not hide a credential.
-    expect(
-      (
-        await worker.submit(
-          "hidden",
-          "open the page, my password is\u200bcorrect-horse-battery",
-        )
-      ).message,
-    ).toMatch(/^I do not take a password or a key in the chat\./);
     expect(journal.guidance("r1")).toEqual([]);
     const additions = Array.from(
       { length: 8 },
@@ -1749,12 +1730,34 @@ describe("what the person says while a task runs", () => {
     expect((await worker.submit("g9", "Open tab 9")).message).toBe(
       "This task already took 8 additions from you, and it takes no more. Stop it, or wait for it to end, and ask again.",
     );
+    // Refusing a credential while running also pauses the task so the person can type it.
+    expect(
+      (
+        await worker.submit(
+          "secret",
+          "type my password correct-horse-battery in the search box",
+        )
+      ).message,
+    ).toBe(
+      "I hold now, without taking those words into the task. I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on. Say continue to go on, or stop.",
+    );
+    // A mark that the cleaning takes away does not hide a credential.
+    expect(
+      (
+        await worker.submit(
+          "hidden",
+          "open the page, my password is\u200bcorrect-horse-battery",
+        )
+      ).message,
+    ).toContain("I do not take a password or a key in the chat.");
     expect(worker.snapshot().guidance).toEqual(additions);
     expect(journal.guidance("r1")).toHaveLength(8);
     expect(readFileSync(journal.guidanceFile, "utf8")).not.toContain(
       "correct-horse",
     );
     first.release();
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    await worker.answer("continue");
     await worker.idle();
     // Words that were refused were words for that task. They start none later.
     for (const id of ["long", "secret", "hidden", "g9"])
@@ -1784,7 +1787,7 @@ describe("what the person says while a task runs", () => {
       (
         await worker.submit(
           "secret",
-          "open the page, my password is correct-horse-battery",
+          "type my password correct-horse-battery in the search box",
         )
       ).message,
     ).toBe(
@@ -2198,9 +2201,9 @@ describe("what the person says while a task runs", () => {
       free.worker.stop();
       await free.worker.idle();
     }
-    // A multi-sentence message whose last sentence is a screen order goes on with all sentences.
+    // An observation report followed by a screen order goes on with all sentences.
     for (const words of [
-      "That is the wrong tab. Use the other tab.",
+      "It didn't load. Use the other tab.",
       "I don't still see it open. Can you open it on Chrome?",
     ]) {
       const first = held({ kind: "wait", ms: 0 });
@@ -2369,6 +2372,8 @@ describe("what the person says while a task runs", () => {
       "open the page, my password is swordfish",
     );
     first.release();
+    await until(() => refused.worker.snapshot().state === "waiting_for_person");
+    await refused.worker.answer("continue");
     await refused.worker.idle();
     expect(readFileSync(refused.journal.guidanceFile, "utf8")).not.toContain(
       "swordfish",
@@ -2768,6 +2773,231 @@ describe("what the person says while a task runs", () => {
     expect(planner.inputs[1]).not.toHaveProperty("guidance");
     const onDisk = readFileSync(journal.guidanceFile, "utf8");
     for (const [, , leaked] of secrets) expect(onDisk).not.toContain(leaked);
+  });
+
+  it("redesign review blocker 4: gives truthful replies during in-flight navigate command and after navigate hold resumes with an order", async () => {
+    // Sequence A: in-flight one-step navigation command (switch_desktop)
+    let releaseSwitch = () => {};
+    const switchGate = new Promise<void>((open) => (releaseSwitch = open));
+    const seqA = setup([]);
+    const beforeScreen = observation([element(1, { title: "Save" })], {
+      surfaceEpoch: 1,
+    });
+    const afterScreen = observation([element(1, { title: "Save" })], {
+      surfaceEpoch: 2,
+    });
+    seqA.hands.answer = async (command) => {
+      if (command.kind === "observe") return { observation: beforeScreen };
+      if (command.kind === "switch_desktop") {
+        await switchGate;
+        return { observation: afterScreen };
+      }
+      return {};
+    };
+    await seqA.worker.submitRead("r1", "Switch desktop right", {
+      kind: "desktop",
+      direction: "right",
+    });
+    await until(() =>
+      seqA.hands.sent.some((command) => command.kind === "switch_desktop"),
+    );
+    const midSwitchReply = (await seqA.worker.submit("g1", "wait")).message;
+    expect(midSwitchReply).not.toContain("before the first action");
+    expect(midSwitchReply).not.toContain("I hold now");
+    expect(midSwitchReply).toBe(
+      "The task is at its end, so it takes no more words. Ask again when it has ended.",
+    );
+    releaseSwitch();
+    await seqA.worker.idle();
+    expect(seqA.worker.snapshot().state).toBe("completed");
+    expect(seqA.hands.sent).toHaveLength(1);
+    expect(seqA.journal.guidance("r1")).toEqual([]);
+
+    // Sequence B: resuming a navigate() hold pause with an order resets run.navigation
+    let releaseObserve = () => {};
+    const observeGate = new Promise<void>((open) => (releaseObserve = open));
+    let releaseClick = () => {};
+    const clickGate = new Promise<void>((open) => (releaseClick = open));
+    let observes = 0;
+    const seqB = setup([click, done]);
+    seqB.hands.answer = async (command) => {
+      if (command.kind === "observe" && observes++ === 0) {
+        await observeGate;
+        return { observation: beforeScreen };
+      }
+      if (command.kind === "click") {
+        await clickGate;
+        return {};
+      }
+      return {};
+    };
+    await seqB.worker.submitRead("r1", "Switch desktop right", {
+      kind: "desktop",
+      direction: "right",
+    });
+    await until(() => seqB.hands.commands.length === 1);
+    expect((await seqB.worker.submit("h1", "wait")).message).toBe(
+      "I hold before the first action, and I did not take those words into the task. Say continue to go on, or stop.",
+    );
+    releaseObserve();
+    await seqB.waiting();
+    expect((await seqB.worker.submit("g1", "Open Safari")).message).toBe(
+      "Got it. I go on with the task and take that into it.",
+    );
+    await until(() =>
+      seqB.hands.sent.some((command) => command.kind === "click"),
+    );
+    const secondOrderReply = (
+      await seqB.worker.submit("g2", "Click the Save button")
+    ).message;
+    expect(secondOrderReply).toBe(taken);
+    expect(seqB.journal.guidance("r1").map((g) => g.id)).toEqual(["g1", "g2"]);
+    releaseClick();
+    await seqB.worker.idle();
+    expect(seqB.worker.snapshot().state).toBe("completed");
+  });
+
+  it("redesign review blocker 5: an order holding a secret while running pauses the task with zero further inputs", async () => {
+    const nextScreen = observation([element(1, { title: "Next" })]);
+    for (const phrase of [
+      "type my password swordfish in the box",
+      "type my password swordfish in the search box",
+      "enter my passcode 4821 in the field",
+    ]) {
+      const first = held({ kind: "wait", ms: 0 });
+      const run = await running([first.step, click, done], {
+        screens: [nextScreen],
+      });
+      const reply = (await run.worker.submit("s1", phrase)).message;
+      expect(reply, phrase).toContain("hold");
+      expect(reply, phrase).toContain(
+        "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.",
+      );
+      first.release();
+      await run.waiting();
+      expect(run.worker.snapshot()).toMatchObject({
+        state: "waiting_for_person",
+        waiting: "takeover",
+      });
+      expect(run.hands.sent, phrase).toEqual([]);
+      expect(run.journal.guidance("r1")).toEqual([]);
+      expect(readFileSync(run.journal.guidanceFile, "utf8")).not.toContain(
+        "swordfish",
+      );
+      expect(readFileSync(run.journal.guidanceFile, "utf8")).not.toContain(
+        "4821",
+      );
+      run.worker.stop();
+      await run.worker.idle();
+    }
+  });
+
+  it("redesign review blocker 6: refuses all 19 credential bypass shapes through worker.submit without writing to disk or sending to the planner", async () => {
+    const first = held({ kind: "wait", ms: 0 });
+    const { worker, planner, journal } = await running([first.step, done]);
+    const secrets = [
+      ["c1", "my password is set to hunter2", "hunter2"],
+      ["c2", "the password is saved as swordfish", "swordfish"],
+      ["c3", "my pin is set to 4821", "4821"],
+      ["c4", 'use token "my-live-token-9876"', "my-live-token-9876"],
+      ["c5", 'use api key "abc123def456"', "abc123def456"],
+      ["c6", "type my secret swordfish in the box", "swordfish"],
+      ["c7", "enter token abcdef123456 in the field", "abcdef123456"],
+      ["c8", "my pw is swordfish", "swordfish"],
+      ["c9", "pwd: hunter2", "hunter2"],
+      ["c10", "my 2fa is 482913", "482913"],
+      ["c11", "my ssn is 123-45-6789", "123-45-6789"],
+      ["c12", "my cvv is 482", "482"],
+      ["c13", "use key sk-12345678\n  90abcdefghij", "90abcdefghij"],
+      ["c14", "token ghp_abcdef0123\n  456789abcdef01", "456789abcdef01"],
+      ["c15", "the password for Chrome is swordfish", "swordfish"],
+      ["c16", "type 4821 as the pin in the box", "4821"],
+      ["c17", "my pass\u200bword\u200bis swordfish", "swordfish"],
+      ["c18", "my to\u200bken is\u200babcdef123456", "abcdef123456"],
+      ["c19", "my p\u200bin\u200bis 4821", "4821"],
+    ] as const;
+    for (const [id, words] of secrets)
+      expect((await worker.submit(id, words)).message, words).toContain(
+        "I do not take a password or a key in the chat.",
+      );
+    expect(journal.guidance("r1")).toEqual([]);
+    first.release();
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    await worker.answer("continue");
+    await worker.idle();
+    expect(planner.inputs[1]).not.toHaveProperty("guidance");
+    const onDisk = readFileSync(journal.guidanceFile, "utf8");
+    for (const [, , leaked] of secrets) expect(onDisk).not.toContain(leaked);
+  });
+
+  it("redesign review blocker 7: an order arriving while a hold is pending gets a true pausing reply", async () => {
+    let releaseWait = () => {};
+    const waitGate = new Promise<void>((open) => (releaseWait = open));
+    const run = setup([{ kind: "wait", ms: 0 }, click, done]);
+    run.hands.answer = async (command) => {
+      if (command.kind === "wait") await waitGate;
+      return {};
+    };
+    await run.worker.submit("r1", "Work on page");
+    await until(() =>
+      run.hands.commands.some((command) => command.kind === "wait"),
+    );
+    expect((await run.worker.submit("h1", "hold on")).message).toBe(
+      "Got it. I hold now and take that into the task. Say continue to go on, or stop.",
+    );
+    const secondReply = (await run.worker.submit("g2", "Open Safari")).message;
+    expect(secondReply).not.toBe(taken);
+    expect(secondReply).toBe(
+      "Got it. I hold now and take that into the task. Say continue to go on, or stop.",
+    );
+    releaseWait();
+    await run.waiting();
+    expect(run.worker.snapshot()).toMatchObject({
+      state: "waiting_for_person",
+      waiting: "takeover",
+      message: "I am paused at your word. Say continue to go on, or stop.",
+    });
+    expect(run.hands.sent).toEqual([]);
+    expect(run.journal.guidance("r1").map((g) => g.id)).toEqual(["h1", "g2"]);
+    run.worker.stop();
+    await run.worker.idle();
+  });
+
+  it("redesign review blockers 1 and 2: never resumes a takeover pause on earlier-sentence holds or trailing deferrals", async () => {
+    const nextScreen = observation([element(1, { title: "Next" })]);
+    const phrases = [
+      "Hold on, I'm typing. Open Notion.",
+      "Wait a minute. Click the Save button.",
+      "Pause for a second. Open Chrome.",
+      "Not yet. Press enter.",
+      "No, don't do that right now. Close the tab.",
+      "I'm not ready yet. Click the button.",
+      "open Safari, hang on",
+      "open Safari, give me a second",
+      "click it in 5 seconds",
+      "open Safari, nah",
+      "open Safari, I will do it",
+      "click Save, nvm",
+    ];
+    for (const phrase of phrases) {
+      const run = setup([click, click, done], { screens: [nextScreen] });
+      let clicks = 0;
+      run.hands.answer = (command) =>
+        command.kind === "click" && clicks++ === 0
+          ? { interrupted: true }
+          : undefined;
+      await run.worker.submit("r1", "Click it");
+      await run.waiting();
+      const reply = (await run.worker.submit("g1", phrase)).message;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(reply, phrase).not.toBe("Continuing.");
+      expect(reply, phrase).not.toContain("I go on with the task");
+      expect(run.hands.sent, phrase).toHaveLength(1);
+      expect(run.planner.inputs, phrase).toHaveLength(1);
+      run.worker.stop();
+      await run.worker.idle();
+      expect(run.hands.sent, phrase).toHaveLength(1);
+    }
   });
 
   it("handles continue while running or at a free question, and stops even at step limit, unwritable journal, or secret text", async () => {

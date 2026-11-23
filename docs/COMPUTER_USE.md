@@ -94,13 +94,14 @@ as it was. On a phone call the bridge answers with the state while a request
 runs, and hands no words to it.
 
 - **Stop (`stop`).** Any stop word anywhere in the message (`stop`, `stopp`,
-  `stahp`, `cancel`, `abort`, `halt`, `enough`, `quit it`, `kill it`, also
-  inside polite or casual forms such as "can you stop?", "pls stop",
-  "actually stop", "i said stop", or a screen phrase such as "cancel the
-  dialog" or "stop the video") stops the request at once. This holds in every
-  state, also while the initial navigation reading or the first look is in
-  flight, at the step limit, at the 8-addition cap, when the record cannot be
-  written, or when the words also look like a secret.
+  `stahp`, `cancel`, `abort`, `halt`, `quit it`, `kill it`, also inside polite
+  or casual forms such as "can you stop?", "pls stop", "actually stop", "i said
+  stop", or a screen phrase such as "cancel the dialog" or "stop the video")
+  stops the request at once. This holds in every state, also while the initial
+  navigation reading or the first look is in flight, at the step limit, at the
+  8-addition cap, when the record cannot be written, or when the words also
+  look like a secret. The word `enough` is not a stop word, so phrases such as
+  "scroll down enough to see the button" do not cancel the task.
 - **Continue (`continue`).** A standalone continue phrase (`continue`, `go
   on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
   optional fillers, with no question mark and nothing else ("continue?",
@@ -112,20 +113,36 @@ runs, and hands no words to it.
   word in any sentence) matches a strict screen-order shape: optional
   fillers, an optional polite lead (`can you`, `could you`, `would you`,
   `will you`, `can u`, `pls`; only with that lead may the sentence end with
-  `?`), a screen verb (`open`, `click`, `press`, `hit`, `tap`, `type`,
-  `enter` with an object, `select`, `choose`, `pick`, `scroll up/down`,
-  `drag`, `use`, `try`, `search for`, `close`, `go to`, `go back`, `switch
-  to`), a concrete screen object (pronoun, ordinal, key name, screen noun,
-  web address, quoted label, capitalized name, `<words> in/on/with <browser
-  or app>`, or a single word after `open`, `close` or `switch to`), and no
-  word that negates, defers, conditions or doubts (`not`, `no`, `n't`,
-  `never`, `wait`, `hold`, `pause`, `later`, `when`, `after`, `once`,
-  `until`, `before`, `if`, `unless`, `maybe`, `in a second/minute/moment/bit/few`,
-  `i'm`, `i am`, `i'll`). Earlier sentences may be anything that is not a
-  stop, and the whole message goes to the planner. While running it steers
-  the task; while paused it resumes with a fresh look; while waiting on a
-  yes or a planner question it never approves, sets aside what waited, and
-  the planner chooses again with the words.
+  `?`, and questions with `or`, `should I`, `yet`, `is it`, `do I`, or a
+  behaviour adverb such as `automatically` hold), a screen verb (`open`,
+  `click`, `press`, `hit`, `tap`, `type`, `enter` with an object, `select`,
+  `choose`, `pick`, `scroll up/down`, `drag`, `use`, `try`, `search for`,
+  `close`, `go to`, `go back`, `switch to`), a concrete screen object
+  (pronoun, ordinal, key name, screen noun, web address or `localhost:port`,
+  quoted label for non-`type` verbs, known browser or app name, common UI
+  button label for click verbs, capitalized name after `open`, `switch to`,
+  `close`, `click` or `select`, `<words> in/on/with <browser or app>`, or a
+  single bare word after `open`, `close` or `switch to` that is not an
+  everyday physical object or person word). A person's name after `to` or
+  `for` or in possessive form holds. No remark may follow the order after a
+  comma, dash or semicolon except a filler (`please`, `thanks`, `bro`, `now`,
+  `then`). A second action joined by `and` or `then` is allowed only when it
+  is also a screen verb with a screen object. Any cue of holding, waiting,
+  delay, doubt, refusal, negation or self-takeover (`not`, `no`, `n't`,
+  `never`, `wait`, `hold`, `hang on`, `give me`, `one sec`, `a sec`, `in <N>
+  seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
+  `until`, `before`, `if`, `unless`, `maybe`, `yet`, `nah`, `nope`,
+  `nevermind`, `never mind`, `nvm`, `forget`, `i'm`, `i am`, `i'll`,
+  `i will`, `i got`, `let me`, `already`, `on my cue`, `wrong`, `broken`,
+  `mess`) anywhere in any sentence holds, with one narrow exception for an
+  earlier sentence (separated by `.`, `!`, or `, `) that only reports what
+  the person sees or does not see (`I`, `it`, `the page`, or `nothing` with
+  `see`, `open`, `load`, `happen`, `show`, `work`, or `blank` and their
+  negations). While running it steers the task (unless a hold is already
+  pending, in which case the reply says that the task holds while keeping the
+  words); while paused it resumes with a fresh look; while waiting on a yes or
+  a planner question it never approves, sets aside what waited, and the
+  planner chooses again with the words.
 - **Hold (`hold`).** Everything else (questions, remarks, refusals, busy or
   delay phrases, fillers alone, or non-screen speech such as "go away",
   "switch off", "press pause", "type faster", or "open the door for the
@@ -137,16 +154,25 @@ runs, and hands no words to it.
   when the words hold a secret, the pause still happens and the reply states
   truthfully that the words were not kept.
 - **Startup.** While the planner's initial navigation reading or the first
-  look at the screen is in flight, a stop ends the task at once, and anything
-  else sets the hold so that no first input goes out.
+  look at the screen is in flight (before step 1 and with no command in
+  flight), a stop ends the task at once, and anything else sets the hold so
+  that no first input goes out. Once a one-step navigation command is already
+  in flight, non-stop words are not taken and receive the end-of-task reply.
 - **Secrets.** Words that hold a password, passcode, passphrase, PIN, secret,
-  token, API key, credential, short numeric code (including contractions,
-  quoted or bare values after password/passcode/passphrase, spaced PIN digits,
-  full-width digits or colon after NFKC normalization, invisible format or
-  combining joiner characters, tokens split across line breaks, and 13 to 19
+  token, API key, credential, `pw`, `pwd`, `2fa`, `ssn`, `cvv`, `cvc`, or
+  short numeric code (including contractions, `"set to <value>"`, `"saved as
+  <value>"`, `"<noun> for <target> is <value>"`, value-before-noun forms such
+  as `"type 4821 as the pin"`, quoted or bare values after secret nouns,
+  spaced PIN digits, full-width digits or colon after NFKC normalization,
+  one- or two-sided invisible format or combining joiner characters around
+  `is`/`was`/`:`/`=`, tokens split across indented line breaks, and 13 to 19
   digit payment card numbers) are refused: they are written nowhere and never
-  sent to the planner. Plain state remarks after `is` ("the password is
-  already filled", "the token is expired") are not treated as secrets.
+  sent to the planner. When a running task refuses an order that holds a
+  secret, it also pauses (`hold`) so the person can type the secret on the Mac
+  and tell it to go on. Plain state or location remarks ("the password is
+  already filled", "the password is the same", "the password is on my phone",
+  "the token is expired") and UI labels ("open password generator", "click
+  password recovery") are not treated as secrets.
 - **Limits and scope.** When the task is past its deadline or its call
   authority ended, non-stop words are not taken. Words come only from where
   the request was started: the same call, or the chat on both sides. A
