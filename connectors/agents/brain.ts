@@ -1019,25 +1019,98 @@ const openingVerbOfWork = () =>
  * A question about the scope ("Should I update the docs too?" after "fix
  * the footer"), a choice ("staging or production?") and "something else"
  * are questions that the person must answer.
+ *
+ * The same offer in the other shapes that the model gives it:
+ * - with a last sentence behind it that only goes on from a yes and asks
+ *   which coding agent to use ("Should I start a job to investigate it?
+ *   If yes, which agent do you prefer?"): the offer is the sentence
+ *   before. Any other sentence behind the offer keeps the answer: a
+ *   question that the person must answer ("... Which server runs the
+ *   backup?", "If yes, which branch should it deploy?"), a choice, a need
+ *   or a warning ("If so, staging or production?", "If yes, I'll need the
+ *   staging password.", "If so, note that it restarts the server.");
+ * - as a statement with the person's word as its only condition ("I can
+ *   start a job to investigate it if you want.");
+ * - with other words of starting a job ("Should I run a fresh job to check
+ *   the logs?", "Want me to open a new session for it?");
+ * - with words before it in its sentence, when those are the person's own
+ *   words ("For the nightly backup, should I start a job now?"): "For the
+ *   staging one, ..." and "Without a backup, ..." name something new;
+ * - as a statement and then the question about it ("I can start a job to
+ *   check the logs. Want me to do that?").
  */
+const goesOnFromAYes =
+  /^(?:and\s+)?if\s+(?:yes|so)[,\s]+(?:do\s+you\s+have\s+a\s+(?:preferred|favou?rite)\s+(?:coding\s+)?agent(?:\s+for\s+(?:it|that|this))?\??|(?:please\s+)?(?:specify|tell\s+me|say|name)\s+which\s+(?:coding\s+)?agent\s+you\s+(?:prefer|want|like)(?:\s+for\s+(?:it|that|this))?[.?]?|which\s+(?:coding\s+)?agent\s+(?:do\s+you\s+(?:prefer|want)|should\s+i\s+use)(?:\s+for\s+(?:it|that|this))?\??)\s*$/i;
+/** Words beside the person's own that say nothing: fillers, and words that point at the person. */
+const besideTheirWords = new Set(
+  "so then now also meanwhile and well okay ok as you your yours me my mine i we our us here there".split(
+    " ",
+  ),
+);
+/** Every word of `text` is a word of the person, a plain word or a filler: "Meanwhile, for the nightly report on failed payments to mail you". */
+const onlyTheirWords = (text: string, spoken: string) => {
+  const own = new Set(spokenWords(spoken));
+  return spokenWords(text).every(
+    (word) =>
+      own.has(word) || plainWord.has(word) || besideTheirWords.has(word),
+  );
+};
 const offersTheWork = (answer: string, spoken: string) => {
-  const last =
-    answer
-      .trim()
-      .split(/(?<=[.?!;])\s+/)
-      .at(-1) ?? "";
-  if (
-    /\bor\b|\belse\b|\binstead\b|\bfirst\b|\btoo\b|\balso\b|\bas\s+well\b|\banother\b|\bagain\b|\bsecond\b|\balready\b/i.test(
-      last,
-    )
-  )
-    return false;
+  const sentences = answer.trim().split(/(?<=[.?!;])\s+/);
+  // A last sentence that only goes on from a yes and asks which coding
+  // agent to use (`goesOnFromAYes`, the two shapes of real drafts and
+  // nothing more): the offer is the sentence before it. Any other sentence
+  // behind the offer (a question, a need, a warning) keeps the answer for
+  // the person.
+  const at =
+    sentences.length > 1 && goesOnFromAYes.test(sentences.at(-1)!)
+      ? sentences.length - 2
+      : sentences.length - 1;
+  const whole = sentences[at] ?? "";
+  // Words before the offer in its sentence, up to a comma: only the
+  // person's own words ("For the nightly backup, should I start a job
+  // now?"). "For the staging one, ..." and "Without a backup, ..." name
+  // something that the person must weigh.
+  const opens = whole.search(
+    /(?<=,\s+)(?:so[,\s]+)?(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|can\s+i|may\s+i|i\s+(?:can|could))\b/i,
+  );
+  if (opens > 0 && !onlyTheirWords(whole.slice(0, opens), spoken)) return false;
+  const last = opens > 0 ? whole.slice(opens) : whole;
+  // A choice, the scope, a warning and "something else" are for the
+  // person, in the whole sentence: also in the words before the offer
+  // ("Also, should I start a job?", "For the first one, ..."). Every "or"
+  // is a choice: "start a job or check the logs myself", "run the
+  // migration or check the schema".
+  const forThePerson = (sentence: string) =>
+    /\bor\b|\bbut\b|\banyway\b|\bthough\b|\bhowever\b|\belse\b|\binstead\b|\bfirst\b|\btoo\b|\balso\b|\bas\s+well\b|\banother\b|\bagain\b|\bsecond\b|\balready\b/i.test(
+      sentence,
+    );
+  if (forThePerson(whole)) return false;
   const lead =
     "^(?:so[,\\s]+)?(?:want\\s+me\\s+to|should\\s+i|shall\\s+i|do\\s+you\\s+want\\s+me\\s+to|would\\s+you\\s+like\\s+me\\s+to|can\\s+i|may\\s+i)\\s+(?:(?:just|now|go\\s+ahead\\s+and)\\s+)*";
-  // A word of starting: "Should I start a job to look into it?".
+  const iCan =
+    "^(?:so[,\\s]+)?I\\s+(?:can|could)\\s+(?:(?:just|now|go\\s+ahead\\s+and)\\s+)*";
+  // A word of starting: "start", "look into", "run a fresh job".
+  const starts =
+    "(?:start|kick\\s+off|launch|begin|go\\s+ahead|proceed|get\\s+started|get\\s+going|spin\\s+up|look\\s+into|dig\\s+into|investigate|(?:run|open|create|fire\\s+up|use)\\s+(?:an?|the|one)\\s+(?:(?:new|fresh|quick|separate|coding)\\s+)*(?:job|session|agent|task|terminal|worker))";
+  // "Should I start a job to look into it?".
+  if (new RegExp(`${lead}${starts}\\b[^?]*\\?$`, "i").test(last)) return true;
+  // "I can start a job to check the logs. Want me to do that?": the
+  // statement, and then the question about it.
+  if (
+    at > 0 &&
+    /^(?:so[,\s]+)?(?:(?:want\s+me\s+to|should\s+i|shall\s+i|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to)\s+(?:do|go\s+for|go\s+ahead\s+with)\s+(?:that|it|so|this)(?:\s+now)?|(?:should|shall)\s+i)\?$/i.test(
+      last,
+    ) &&
+    !forThePerson(sentences[at - 1]!) &&
+    new RegExp(`${iCan}${starts}\\b[^.?!]*[.!]$`, "i").test(sentences[at - 1]!)
+  )
+    return true;
+  // "I can start a job to investigate it if you want.": the person's word
+  // is the only condition.
   if (
     new RegExp(
-      `${lead}(?:start|kick\\s+off|launch|begin|go\\s+ahead|proceed|get\\s+started|get\\s+going|spin\\s+up|look\\s+into|dig\\s+into|investigate)\\b[^?]*\\?$`,
+      `${iCan}${starts}\\b[^.?!]*\\b(?:if\\s+you\\s+(?:want|like|wish|prefer|say\\s+so|say\\s+the\\s+word|give\\s+the\\s+word)|whenever\\s+you\\s+(?:want|like|say)|when\\s+you\\s+(?:say|give)(?:\\s+(?:so|the\\s+word))?|just\\s+say(?:\\s+(?:so|the\\s+word))?|on\\s+your\\s+(?:word|go))[^.?!]{0,12}[.!]?$`,
       "i",
     ).test(last)
   )

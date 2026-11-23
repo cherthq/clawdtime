@@ -15821,6 +15821,21 @@ describe("the person asked for work, and the answer only offers to start it", ()
     "The current sessions show nothing about the backup. Should I start a new coding agent job to investigate it?",
     "Nothing runs for that yet. Do you want me to look into it now?",
     "Should I go ahead and check the backup script?",
+    // The same offer with a sentence behind it that only goes on from a
+    // yes: drafts of the real model.
+    "No sessions or jobs are currently running on database backup or related error checking. Should I start a job to investigate the backup failure? If yes, do you have a preferred agent for it?",
+    "No recent job or session covers the database backup failure yet. Should I start a job to investigate it? If yes, please specify which coding agent you prefer.",
+    // The offer as a statement.
+    "No current requests or jobs to check the backup failure. I can start a job to investigate why the nightly database backup is failing if you want.",
+    "Nothing looks at the backup yet. I can look into it whenever you say.",
+    // Other words of starting a job.
+    "No current requests or info directly show why the nightly database backup fails. Should I run a fresh job to check backup logs and error messages?",
+    "Nothing runs for that. Want me to open a new session for it?",
+    // Words before the offer in its sentence.
+    "Nothing runs for that. For the nightly backup, should I start a job now?",
+    // The statement, and then the question about it.
+    "The backup issue is not linked to any current session or request. I can start a job to check the logs and diagnose why the nightly database backup is failing on your Mac. Want me to do that?",
+    "Nothing runs for that. I could start a job for it. Should I?",
   ])(
     "asks the model once more after %j, and the job then starts",
     async (offer) => {
@@ -15855,6 +15870,217 @@ describe("the person asked for work, and the answer only offers to start it", ()
   });
 
   it.each([
+    // The second answer asks something that the person must answer, or
+    // says something else: nothing starts, and the first offer is said.
+    "Which server runs the backup?",
+    "Do you mean the staging database or the production one?",
+    "A job for that is still running, 3 minutes in.",
+    "Okay, I'm on it.",
+    // The same offer once more, in any words: the code starts nothing.
+    "The sessions active don't show one running the nightly backup. Should I start a job to investigate the backup failure directly?",
+    "I can start a job to investigate the backup failure if you want.",
+    "I can start a job to investigate it if you want.",
+    "Should I start a job for it?",
+    // A reason not to start is no offer: it stands for the person.
+    "I cannot start a new job for that right now.",
+    "I can't start that: it would delete the only copy of last week's backup.",
+    "I cannot run that on this Mac.",
+    "Other jobs are still running, so I can't start that one until they wrap up.",
+    "I can't run that while deploy fix is still migrating the database. Should I wait?",
+  ])(
+    "lets the first offer stand when the second answer is %j, and starts nothing by itself",
+    async (second) => {
+      const { made, say } = room();
+      const offer =
+        "Should I start a job to investigate the nightly backup failure?";
+      const got = await say(
+        "find out why the nightly backup of the database is failing",
+        [offer, second],
+      );
+      expect(got.run.seen, second).toHaveLength(2);
+      expect(got.reply, second).toBe(offer);
+      expect(made.windows, second).toEqual([]);
+    },
+  );
+
+  it("starts nothing by itself when the second answer says that it cannot start behind the jobs that run", async () => {
+    // A reason of the model stands for the person, also this one.
+    const { made, say } = room();
+    await say("clean up the old branches in the repo", [
+      [call("start_job")],
+      "Okay.",
+    ]);
+    expect(made.windows).toHaveLength(1);
+    const first =
+      "The job for the old branches is still running. I can start a new job to set up the nightly report if you want.";
+    const got = await say(
+      "set up a nightly report of the failed payments and mail it to me",
+      [
+        first,
+        "The job for the old branches is still running, so I can't start setting up the nightly report till it wraps up.",
+      ],
+    );
+    expect(got.run.seen[1]!.system).toContain(note);
+    expect(made.windows).toHaveLength(1);
+    expect(got.reply).toBe(first);
+  });
+
+  it.each([
+    // The person set a condition, or will say more: the note may go to
+    // the model, and the code starts nothing by itself.
+    ["build it when I say so", "I can't start it until you say so."],
+    ["build it when I say so", "Should I start a job to build it?"],
+    [
+      "fix the footer after I approve the design",
+      "I can't start that before you approve the design.",
+    ],
+    [
+      "investigate the slow login if it happens again",
+      "Should I start a job to investigate the slow login?",
+    ],
+    [
+      "set up the staging server, I'll tell you which region",
+      "Should I start a job to set up the staging server?",
+    ],
+    [
+      "maybe fix the footer of the landing page",
+      "Should I start a job to fix the footer?",
+    ],
+    [
+      "fix the footer if you think it's worth it",
+      "Should I start a job to fix the footer?",
+    ],
+    // The person's go, a detail to come or a condition, in other words.
+    [
+      "deploy the app to production, confirm with me first",
+      "Should I start a job to deploy the app to production?",
+    ],
+    [
+      "deploy the app, but only with my go",
+      "Should I start a job to deploy the app?",
+    ],
+    [
+      "deploy the app to staging whenever I say",
+      "Should I start a job to deploy the app to staging?",
+    ],
+    [
+      "deploy the app to staging on my signal",
+      "Should I start a job to deploy the app to staging?",
+    ],
+    [
+      "deploy the app to staging, I'll confirm the branch",
+      "Should I start a job to deploy the app to staging?",
+    ],
+    [
+      "set up the staging server, region to follow",
+      "Should I start a job to set up the staging server?",
+    ],
+    [
+      "deploy the app to staging, assuming the tests pass",
+      "Should I start a job to deploy the app to staging?",
+    ],
+    [
+      "deploy the app to staging pending my review",
+      "Should I start a job to deploy the app to staging?",
+    ],
+    // The message names no work of its own.
+    ["check that again", "Should I start a job to look into it?"],
+    ["find out more", "Should I start a job to find out more?"],
+    // The second offer speaks of other work than the person's.
+    [
+      "find out why the nightly backup of the database is failing",
+      "Should I start a job to rotate the keys?",
+    ],
+  ])(
+    "starts nothing by itself for %j when the second answer is %j",
+    async (words, second) => {
+      const { made, say } = room();
+      await say(words, ["Should I start a job for it?", second]);
+      expect(made.windows, `${words} / ${second}`).toEqual([]);
+    },
+  );
+
+  it.each([
+    // A choice, a scope, a risk or a cost in the draft: the person must
+    // answer, and no note asks for a start.
+    [
+      "deploy the app",
+      "Should I start a job to deploy it? If so, staging or production?",
+    ],
+    ["deploy the app", "For the staging one, should I start a job?"],
+    ["upgrade the database", "Without a backup, should I start a job anyway?"],
+    [
+      "run the database migration",
+      "I can start a job, but it will lock the table for an hour. Want me to do that?",
+    ],
+    [
+      "run the database migration",
+      "Should I start a job to run the migration or test it on a copy?",
+    ],
+    [
+      "find out why the nightly backup of the database is failing",
+      "Should I start a job to investigate it? If yes, it will read the production logs.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If yes, which branch should it deploy?",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If yes, I'll need the staging password.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If so, note that it restarts the server.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If yes, the server goes down for a minute.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If so, I'd have to stop deploy fix first.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If yes, the agent will have write access to production.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If yes, the agent needs admin rights on the server.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If so, the coding agent runs with full disk access.",
+    ],
+    [
+      "deploy the app to the staging server",
+      "Should I start a job to deploy it? If yes, which agent: the fast one or the careful one?",
+    ],
+  ])(
+    "after %j, lets %j stand: the person must answer",
+    async (words, answer) => {
+      const { made, say } = room();
+      const got = await say(words, [answer, [call("start_job")], "On it."]);
+      expect(got.reply, answer).toBe(answer);
+      expect(got.run.seen, answer).toHaveLength(1);
+      expect(made.windows, answer).toEqual([]);
+    },
+  );
+
+  it("reads an offer behind the person's own words in the same sentence", async () => {
+    const { made, say } = room();
+    const offer =
+      "The checks for why login is slow and for cleaning old branches are running now. Meanwhile, for the nightly report on failed payments to mail you, do you want me to start a new job for that?";
+    const got = await say(
+      "set up a nightly report of the failed payments and mail it to me",
+      [offer, [call("start_job")], "On it."],
+    );
+    expect(got.run.seen[1]!.system).toContain(note);
+    expect(made.windows).toHaveLength(1);
+  });
+
+  it.each([
     // A question to ClawdTime is no request for work.
     [
       "is the nightly backup failing?",
@@ -15885,6 +16111,39 @@ describe("the person asked for work, and the answer only offers to start it", ()
     "Do you mean the nightly job or the weekly one?",
     // A statement.
     "I can't see the backup logs from here.",
+    // A question behind the offer that the person must answer first.
+    "Should I start a job to investigate it? Which server runs the backup?",
+    "Should I start a job to investigate? Which database is it: staging or production?",
+    // A word before the offer that the person must weigh: a second agent
+    // beside work that runs, or a scope.
+    "Deploy fix is on the migration. Also, should I start a job?",
+    "For the first one, should I start a job?",
+    "For the second one, should I start a job?",
+    // Every "or" is a choice for the person, also between two ways to
+    // look into it.
+    "Nothing looks at it yet. Should I start a job to check the logs or look at the cron settings?",
+    "I see no active request or job about the backup. Want me to start a job to check the backup failure logs or diagnose the nightly backup process?",
+    "Should I start a job to run the migration or check the schema?",
+    "Want me to start a job or check the logs?",
+    "Should I start a job to investigate or look into it on my own?",
+    // A choice between a new job and a look by ClawdTime itself.
+    "Should I start a job or check the logs myself?",
+    "Should I start a job to check the logs or read them myself?",
+    "Should I start a job to investigate it or check the status here now?",
+    // A choice that the person must make.
+    "Should I start a job to fix it on staging or production?",
+    "Do you want me to start a job to investigate the backup logs or run diagnostics?",
+    "Should I start a job to investigate the nightly backup failure on the database now? If so, what database or backup system is it?",
+    "Want me to check logs or start a diagnostic job on the Mac?",
+    "Should I start a job to look into it, or check the logs myself first?",
+    // A choice between a new job and something else.
+    "I can start a job to investigate it, or I can ask deploy fix: which do you want?",
+    "Should I start a job for it, or wait until deploy fix is done?",
+    // A condition that is not the person's word alone.
+    "I can look at the backup script if you paste it here.",
+    "I can start a job once the staging database is back up.",
+    // "If yes" behind a question that is no offer of the work.
+    "Is the backup on the staging server? If yes, I need its address.",
   ])("lets %j stand: it is no offer to start the work", async (answer) => {
     const { made, say } = room();
     const got = await say(
