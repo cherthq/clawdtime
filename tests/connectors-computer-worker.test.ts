@@ -2724,7 +2724,9 @@ describe("an action that is not sent, or that moves nothing", () => {
     await mixed.worker.submit("r2", "Open the browser and search example.com");
     await mixed.worker.idle();
     expect(mixed.planner.inputs).toHaveLength(4);
-    expect(mixed.said).toEqual([screenChangingEnd]);
+    expect(mixed.said).toEqual([
+      "I cannot act on this window right now: the screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.",
+    ]);
     expect(mixed.journal.get("r2")).toMatchObject({
       state: "blocked",
       reason: "repeated_hold",
@@ -3231,6 +3233,551 @@ describe("an action that is not sent, or that moves nothing", () => {
     }
     expect(browser.calls).toHaveLength(4);
     worker.stop();
+  });
+
+  it("drops a kept yes on takeover during pre-action look and enforces the shared pause rule", async () => {
+    const notesDelete = observation([element(1, { title: "Delete" })], {
+      surfaceEpoch: 1,
+    });
+    const press: Action = { kind: "click_element", element: 1 };
+    const { worker, hands, said, waiting } = setup([press, press, done], {
+      screens: [notesDelete],
+    });
+    let interruptedOnce = true;
+    hands.answer = (command) => {
+      if (command.kind === "observe" && !command.image && interruptedOnce) {
+        interruptedOnce = false;
+        return { observation: notesDelete, interrupted: true };
+      }
+      return undefined;
+    };
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    expect(said[0]).toMatch(/^Click "Delete"\?/);
+    await worker.answer("yes");
+    // Pre-action look reported person takeover: pause with what it wanted next.
+    await until(() => said.length === 2);
+    expect(said[1]).toBe(hold('click "Delete"'));
+    expect(hands.sent).toEqual([]);
+    // Non-order words during takeover pause do not resume and send nothing.
+    expect((await worker.submit("g1", "I am checking something")).message).toBe(
+      "I am still paused, because you used the Mac. Say continue, or tell me what to do next.",
+    );
+    expect(hands.sent).toEqual([]);
+    const observesBefore = hands.commands.filter(
+      (command) => command.kind === "observe" && command.image,
+    ).length;
+    await worker.answer("continue");
+    // Must take a fresh look AND ask again before clicking Delete.
+    await until(() => said.length === 3);
+    expect(
+      hands.commands.filter(
+        (command) => command.kind === "observe" && command.image,
+      ).length,
+    ).toBeGreaterThan(observesBefore);
+    expect(said[2]).toBe(said[0]);
+    expect(hands.sent).toEqual([]);
+    await worker.answer("yes");
+    await worker.idle();
+    expect(hands.sent).toHaveLength(1);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("drops a kept yes from an earlier non-person hold when personNear triggers a takeover pause", async () => {
+    const notesDelete = (surfaceEpoch: number) =>
+      observation([element(1, { title: "Delete" })], { surfaceEpoch });
+    const press: Action = { kind: "click_element", element: 1 };
+    const { worker, hands, said, waiting } = setup(
+      [press, press, press, done],
+      { screens: [notesDelete(1)] },
+    );
+    let preLooks = 0;
+    let planLooks = 0;
+    hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) {
+        planLooks++;
+        // Second full look (after step 1 hold) reports person near the Mac.
+        return planLooks === 2
+          ? { observation: notesDelete(1), interrupted: true }
+          : { observation: notesDelete(1) };
+      }
+      preLooks++;
+      // Step 1 pre-action look bumps surfaceEpoch (non-person hold -> saves approval).
+      return { observation: notesDelete(preLooks === 1 ? 2 : 1) };
+    };
+    await worker.submit("r1", "Delete it");
+    await waiting();
+    expect(said[0]).toMatch(/^Click "Delete"\?/);
+    await worker.answer("yes");
+    // Step 1 held by surfaceEpoch bump, step 2 planning observe saw personNear -> takeover pause.
+    await until(() => said.length === 2);
+    expect(said[1]).toBe(hold('click "Delete"'));
+    expect(hands.sent).toEqual([]);
+    await worker.answer("continue");
+    // Step 3 must ask again instead of reusing step 1's kept yes.
+    await until(() => said.length === 3);
+    expect(said[2]).toBe(said[0]);
+    expect(hands.sent).toEqual([]);
+    await worker.answer("yes");
+    await worker.idle();
+    expect(hands.sent).toHaveLength(1);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("does not say it was never sent in stuckText when a focus click went out", async () => {
+    const searchField = (surfaceEpoch = 1) =>
+      observation([element(1, { role: "AXTextField", title: "Search" })], {
+        surfaceEpoch,
+      });
+    const empty = observation([], { surfaceEpoch: 1 });
+    const safari = observation([], {
+      app: { name: "Safari", bundleId: "com.apple.Safari", window: "Start" },
+      surfaceEpoch: 1,
+    });
+    const write: Action = { kind: "type", element: 1, text: "hello" };
+    const { worker, hands, said, journal } = setup(
+      [write, write, write, write, write, done],
+      { screens: [searchField(1)] },
+    );
+    let preLooks = 0;
+    hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) return { observation: searchField(1) };
+      preLooks++;
+      // Step 1 pre-look: target gone.
+      if (preLooks === 1) return { observation: empty };
+      // Step 2 pre-look: matches, so focus click goes out; post-focus look bumps epoch (clickedOnly).
+      if (preLooks === 2) return { observation: searchField(1) };
+      if (preLooks === 3) return { observation: searchField(2) };
+      // Step 3 pre-look: target gone.
+      if (preLooks === 4) return { observation: empty };
+      // Step 4 pre-look: Safari in front (frontChangedReason).
+      return { observation: safari };
+    };
+    await worker.submit("r1", "Search for hello");
+    await worker.idle();
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+    });
+    expect(said).toHaveLength(1);
+    expect(said[0]).not.toMatch(/never sent|Nothing was sent/i);
+    expect(said[0]).toContain("Clicked the field without typing: 1.");
+  });
+
+  it("says nothing more was sent when earlier input went out before three held steps", async () => {
+    const addressBar = (surfaceEpoch = 1) =>
+      observation(
+        [
+          element(1, {
+            role: "AXTextField",
+            title: "Address",
+            focused: true,
+          }),
+        ],
+        { app: front, surfaceEpoch },
+      );
+    const write: Action = { kind: "type", element: 1, text: "example.com" };
+    const { worker, hands, said, journal } = setup(
+      [write, enter, enter, enter, done],
+      { screens: [addressBar(1)] },
+    );
+    let step = 0;
+    let epoch = 1;
+    hands.answer = (command) => {
+      if (command.kind === "type") {
+        step = 1;
+        return { ok: true };
+      }
+      if (command.kind === "observe") {
+        if (step === 0) return { observation: addressBar(1) };
+        return { observation: addressBar(++epoch) };
+      }
+      return undefined;
+    };
+    await worker.submit("r1", "Open example.com");
+    await worker.idle();
+    expect(hands.sent).toEqual([{ kind: "type", text: "example.com" }]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(said).toEqual([
+      "I cannot act on this window right now: the screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.",
+    ]);
+  });
+
+  it("marks the observation stale after browser holds so the planner cannot finish on a stale screen", async () => {
+    const chrome = observation([], {
+      app: {
+        name: "Google Chrome",
+        bundleId: "com.google.Chrome",
+        window: "Example",
+      },
+      surfaceEpoch: 1,
+    });
+    const notes = observation([], {
+      app: { name: "Notes", bundleId: "com.apple.Notes", window: "Draft" },
+      surfaceEpoch: 2,
+    });
+    const p1 = page([pageElement(1, { label: "Next" })]);
+    const pMissing = page([]);
+
+    // Case A: pageUnreadReason (browser.read rejects before click).
+    const browserA = new FakeBrowser(p1);
+    let readsA = 0;
+    const readA = browserA.read.bind(browserA);
+    browserA.read = async () => {
+      readsA++;
+      if (readsA === 2) throw new Error("tab closed");
+      return readA();
+    };
+    const caseA = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_click", index: 1 },
+        { kind: "give_up", reason: "Chrome is no longer in front." },
+      ],
+      { browser: browserA, screens: [chrome, notes] },
+    );
+    await caseA.worker.submit("r1", "Click Next");
+    await caseA.worker.idle();
+    expect(
+      caseA.hands.commands.filter(
+        (command) => command.kind === "observe" && command.image,
+      ),
+    ).toHaveLength(2);
+    expect(caseA.planner.inputs[2]!.observation?.app.name).toBe("Notes");
+
+    // Case B: pageChangedReason (element disappeared before click).
+    const browserB = new FakeBrowser(p1);
+    let readsB = 0;
+    const readB = browserB.read.bind(browserB);
+    browserB.read = async () => {
+      readsB++;
+      if (readsB === 2) return pMissing;
+      return readB();
+    };
+    const caseB = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_click", index: 1 },
+        { kind: "give_up", reason: "Chrome is no longer in front." },
+      ],
+      { browser: browserB, screens: [chrome, notes] },
+    );
+    await caseB.worker.submit("r2", "Click Next");
+    await caseB.worker.idle();
+    expect(
+      caseB.hands.commands.filter(
+        (command) => command.kind === "observe" && command.image,
+      ),
+    ).toHaveLength(2);
+    expect(caseB.planner.inputs[2]!.observation?.app.name).toBe("Notes");
+  });
+
+  it("guards repeated clickedOnly focus clicks with both repeat confirmation and stuck stop", async () => {
+    const searchField = (surfaceEpoch = 1) =>
+      observation([element(1, { role: "AXTextField", title: "Search" })], {
+        surfaceEpoch,
+      });
+    const write: Action = { kind: "type", element: 1, text: "hello" };
+    const { worker, hands, said, journal } = setup(again(write, 12), {
+      screens: [searchField(1)],
+      maxSteps: 12,
+    });
+    let afterFocus = false;
+    hands.answer = (command) => {
+      if (command.kind === "click") {
+        afterFocus = true;
+        return { ok: true };
+      }
+      if (command.kind === "observe") {
+        if (!command.image && afterFocus) {
+          afterFocus = false;
+          return { observation: searchField(2) };
+        }
+        return { observation: searchField(1) };
+      }
+      return undefined;
+    };
+    await worker.submit("r1", "Search for hello");
+    // Repeat guard asks before the 3rd click.
+    await until(() => said.length === 1);
+    expect(said[0]).toBe(
+      'I already did this twice in a row: Type in "Search". Say yes to do it a third time, or no to stop.',
+    );
+    expect(hands.sent).toHaveLength(2);
+    await worker.answer("yes");
+    await worker.idle();
+    // 3rd click happens, planner is told, 4th choice ends blocked / no_progress.
+    expect(hands.sent).toHaveLength(3);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+    });
+    expect(said[1]).toContain("Clicked the field without typing: 3.");
+    expect(said[1]).not.toMatch(/never sent/i);
+  });
+
+  it("merges targetGone and screenChanged in heldKey and caps alternating holds at five", async () => {
+    // Part A: alternating targetGoneReason and screenChangedReason ends at 3.
+    const base = observation([element(1, { title: "Save" })], {
+      surfaceEpoch: 1,
+    });
+    const empty = observation([], { surfaceEpoch: 1 });
+    const risky = observation(
+      [element(1, { title: "Save" }), element(2, { title: "Delete" })],
+      { surfaceEpoch: 1 },
+    );
+    const merged = setup(
+      [click, enter, click, enter, done],
+      { screens: [base], maxSteps: 12 },
+    );
+    let preA = 0;
+    merged.hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) return { observation: base };
+      preA++;
+      // Step 1 (click): empty -> targetGoneReason.
+      // Step 2 (return): Delete button appeared -> risk mismatch -> screenChangedReason.
+      // Step 3 (click): empty -> targetGoneReason -> 3rd in merged "target_changed" row!
+      return { observation: preA === 2 ? risky : empty };
+    };
+    await merged.worker.submit("r1", "Save the note");
+    await merged.worker.idle();
+    expect(merged.hands.sent).toEqual([]);
+    expect(merged.planner.inputs).toHaveLength(3);
+    expect(merged.journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(merged.said).toEqual([
+      "I cannot act on this window right now: what I tried to use kept moving or disappearing before I could act, so nothing was sent. Wait until the window settles, then ask again.",
+    ]);
+
+    // Part B: alternating retiredReason and targetGoneReason with alternating actions ends at 5.
+    const twoButtons = (surfaceEpoch = 1) =>
+      observation(
+        [element(1, { title: "Save" }), element(2, { title: "Cancel" })],
+        { surfaceEpoch },
+      );
+    const alt = setup(
+      [
+        click,
+        { kind: "click_element", element: 2 },
+        click,
+        { kind: "click_element", element: 2 },
+        click,
+        { kind: "click_element", element: 2 },
+        done,
+      ],
+      { screens: [twoButtons(1)], maxSteps: 12 },
+    );
+    let preB = 0;
+    alt.hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) return { observation: twoButtons(1) };
+      preB++;
+      return { observation: preB % 2 === 1 ? twoButtons(2) : empty };
+    };
+    await alt.worker.submit("r2", "Click buttons");
+    await alt.worker.idle();
+    expect(alt.hands.sent).toEqual([]);
+    expect(alt.planner.inputs).toHaveLength(5);
+    expect(alt.journal.get("r2")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(alt.said).toEqual([
+      "I cannot act on this window right now: my last 5 actions were held back before I could act, so nothing was sent. Wait until the window settles, then ask again.",
+    ]);
+  });
+
+  it("does not let no-op inputs reset heldRow, and compares open_app sameFront without the picture", async () => {
+    const moreScreenChangingEnd =
+      "I cannot act on this window right now: the screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.";
+    const screen = (surfaceEpoch = 1, image = "aW1hZ2U=") =>
+      observation([element(1, { title: "Save" })], { surfaceEpoch, image });
+
+    // (a) Two holds + key "escape" with unchanged screen + 1 hold -> ends at step 4.
+    const esc = setup(
+      [click, click, { kind: "key", combo: "escape" }, click, done],
+      { screens: [screen(1)], maxSteps: 12 },
+    );
+    let preEsc = 0;
+    esc.hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) return { observation: screen(1) };
+      preEsc++;
+      // Step 3 (escape) succeeds; steps 1, 2, 4 bump surfaceEpoch.
+      return { observation: screen(preEsc === 3 ? 1 : 2) };
+    };
+    await esc.worker.submit("r1", "Save");
+    await esc.worker.idle();
+    expect(esc.hands.sent).toEqual([{ kind: "key", combo: "escape" }]);
+    expect(esc.planner.inputs).toHaveLength(4);
+    expect(esc.journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(esc.said).toEqual([moreScreenChangingEnd]);
+
+    // (b) Two holds + scroll with unchanged screen + 1 hold -> ends at step 4.
+    const scroller = setup(
+      [
+        click,
+        click,
+        { kind: "scroll", direction: "down" },
+        click,
+        done,
+      ],
+      { screens: [screen(1)], maxSteps: 12 },
+    );
+    let preScroll = 0;
+    scroller.hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) return { observation: screen(1) };
+      preScroll++;
+      return { observation: screen(preScroll === 3 ? 1 : 2) };
+    };
+    await scroller.worker.submit("r2", "Save");
+    await scroller.worker.idle();
+    expect(scroller.hands.sent.map((command) => command.kind)).toEqual([
+      "scroll",
+    ]);
+    expect(scroller.planner.inputs).toHaveLength(4);
+    expect(scroller.journal.get("r2")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(scroller.said).toEqual([moreScreenChangingEnd]);
+
+    // (c) Two holds + open_app("Notes") with identical app/window/elements and a 1-byte image change + 1 hold -> ends at step 4.
+    const reopen = setup(
+      [click, click, { kind: "open_app", name: "Notes" }, click, done],
+      { screens: [screen(1, "aW1hZ2U=")], maxSteps: 12 },
+    );
+    reopen.hands.answer = (command) => {
+      if (command.kind === "open_app")
+        return {
+          ok: true,
+          observation: screen(1, "aW1hZ2Uy"),
+          resolvedBundleId: "com.apple.Notes",
+        };
+      if (command.kind === "observe")
+        return {
+          observation: command.image ? screen(1, "aW1hZ2U=") : screen(2, "aW1hZ2U="),
+        };
+      return undefined;
+    };
+    await reopen.worker.submit("r3", "Save");
+    await reopen.worker.idle();
+    expect(reopen.planner.inputs).toHaveLength(4);
+    expect(reopen.journal.get("r3")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(reopen.said).toEqual([moreScreenChangingEnd]);
+
+    // (d) Two browser_click holds (pageChangedReason) + browser_scroll returning unchanged page + 1 browser_click hold -> ends.
+    const p1 = page([pageElement(1, { label: "Next" })]);
+    const pEmpty = page([]);
+    const browser = new FakeBrowser(p1);
+    let reads = 0;
+    browser.read = async () => {
+      browser.calls.push("read");
+      reads++;
+      // Planning reads (1, 3, 5) return p1; pre-click reads (2, 4, 6) return pEmpty.
+      return reads % 2 === 1 ? p1 : pEmpty;
+    };
+    browser.scroll = async (direction) => {
+      browser.calls.push(`scroll ${direction}`);
+      return p1;
+    };
+    const pageLoop = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_click", index: 1 },
+        { kind: "browser_read" },
+        { kind: "browser_click", index: 1 },
+        { kind: "browser_read" },
+        { kind: "browser_scroll", direction: "down" },
+        { kind: "browser_click", index: 1 },
+        done,
+      ],
+      { browser, screens: [screen(1)], maxSteps: 12 },
+    );
+    await pageLoop.worker.submit("r4", "Next");
+    await pageLoop.worker.idle();
+    expect(pageLoop.journal.get("r4")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(pageLoop.said).toEqual([
+      "I cannot act on this page right now: the page kept changing before I could act, so nothing more was sent. Wait until the page finishes loading or settles, then ask again.",
+    ]);
+
+    // (e) A real screen change after two holds still resets heldRow cleanly.
+    const changedScreen = screen(1, "Y2hhbmdlZA==");
+    const realMove = setup(
+      [click, click, { kind: "key", combo: "escape" }, click, click, done],
+      { screens: [screen(1)], maxSteps: 12 },
+    );
+    let moved = false;
+    let preReal = 0;
+    realMove.hands.answer = (command) => {
+      if (command.kind === "key") {
+        moved = true;
+        return { ok: true };
+      }
+      if (command.kind !== "observe") return undefined;
+      if (command.image)
+        return { observation: moved ? changedScreen : screen(1) };
+      preReal++;
+      return {
+        observation:
+          preReal === 3 ? screen(1) : moved ? screen(2, "Y2hhbmdlZA==") : screen(2),
+      };
+    };
+    await realMove.worker.submit("r5", "Save");
+    await realMove.worker.idle();
+    expect(realMove.worker.snapshot().state).toBe("completed");
+  });
+
+  it("does not override stop with repeated_hold when browser.read rejects on the third hold", async () => {
+    const p1 = page([pageElement(5, { label: "Next" })]);
+    const browser = new FakeBrowser(p1);
+    let rejectThird = (_error: Error) => {};
+    let readCount = 0;
+    browser.read = async () => {
+      browser.calls.push("read");
+      readCount++;
+      // Reads 1, 3, 5 are planner browser_read; reads 2, 4, 6 are pre-click reads.
+      if (readCount % 2 === 1) return p1;
+      if (readCount < 6) throw new Error("tab closed");
+      return await new Promise<ReturnType<typeof page>>((_resolve, reject) => {
+        rejectThird = reject;
+      });
+    };
+    const reading: Action = { kind: "browser_read" };
+    const press: Action = { kind: "browser_click", index: 5 };
+    const { worker, journal, said } = setup(
+      [reading, press, reading, press, reading, press, done],
+      { browser },
+    );
+    await worker.submit("r1", "Click Next");
+    await until(() => readCount === 6);
+    worker.stop();
+    rejectThird(new Error("tab closed"));
+    await worker.idle();
+    expect(journal.get("r1")).toMatchObject({
+      state: "canceled",
+      reason: "stopped",
+    });
+    expect(said).toEqual([]);
   });
 });
 

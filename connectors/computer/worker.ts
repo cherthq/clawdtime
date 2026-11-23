@@ -238,6 +238,8 @@ const holdText = (wanted: string) =>
   `You are using the Mac, so I hold. Next I wanted to ${wanted}. Say continue when your hands are off, or stop.`;
 /** This many held steps in a row with the same reason end the task. */
 const heldLimit = 3;
+/** This many held steps in a row across any reasons end the task. */
+const heldTotalLimit = 5;
 const retiredReason =
   "The desktop or display changed. Old coordinates were retired; nothing was sent.";
 const frontChangedReason =
@@ -253,28 +255,47 @@ const pageUnreadReason = "The page could not be read just before the action.";
 const heldKey = (reason: string) =>
   reason === retiredReason || reason.includes("(stale_observation)")
     ? "surface_changed"
-    : reason;
+    : reason === targetGoneReason || reason === screenChangedReason
+      ? "target_changed"
+      : reason;
 /**
  * The end of a request after three held steps in a row with the same reason:
- * what could not be done, why in plain words, that nothing was sent, and what
- * the person can do. Never says done.
+ * what could not be done, why in plain words, truthfully whether anything
+ * went out earlier, and what the person can do. Never says done.
  */
-const heldEndText = (reason: string) => {
+const heldEndText = (reason: string, sentBefore = false) => {
+  const noneSent = sentBefore
+    ? "so nothing more was sent"
+    : "so nothing was sent";
   if (reason === coveredText)
-    return "I cannot click there right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.";
+    return `I cannot click there right now: a list or a card of the app kept lying over that place, ${noneSent}. Press Escape to close it, then ask again.`;
   if (reason === retiredReason || reason.includes("(stale_observation)"))
-    return "I cannot act on this window right now: the screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.";
+    return `I cannot act on this window right now: the screen kept changing under me, ${noneSent}. Close any open menu or list in front, then ask again.`;
   if (reason === frontChangedReason)
-    return "I cannot act on this window right now: another app or window kept coming to the front, so nothing was sent. Bring the window you want to the front, then ask again.";
+    return `I cannot act on this window right now: another app or window kept coming to the front, ${noneSent}. Bring the window you want to the front, then ask again.`;
   if (reason === targetGoneReason || reason === screenChangedReason)
-    return "I cannot act on this window right now: what I tried to use kept moving or disappearing before I could act, so nothing was sent. Wait until the window settles, then ask again.";
+    return `I cannot act on this window right now: what I tried to use kept moving or disappearing before I could act, ${noneSent}. Wait until the window settles, then ask again.`;
   if (reason === screenUnreadReason)
-    return "I cannot act on this window right now: the screen could not be read before I acted, so nothing was sent. Check that the window is visible and the ClawdTime panel is running, then ask again.";
+    return `I cannot act on this window right now: the screen could not be read before I acted, ${noneSent}. Check that the window is visible and the ClawdTime panel is running, then ask again.`;
   if (reason === pageChangedReason)
-    return "I cannot act on this page right now: the page kept changing before I could act, so nothing was sent. Wait until the page finishes loading or settles, then ask again.";
+    return `I cannot act on this page right now: the page kept changing before I could act, ${noneSent}. Wait until the page finishes loading or settles, then ask again.`;
   if (reason === pageUnreadReason)
-    return "I cannot act on this page right now: the browser page could not be read before I acted, so nothing was sent. Check the browser window and ask again.";
-  return "I cannot act on this window right now: the panel could not send the action, so nothing was sent. Check the window and the ClawdTime panel, then ask again.";
+    return `I cannot act on this page right now: the browser page could not be read before I acted, ${noneSent}. Check the browser window and ask again.`;
+  return `I cannot act on this window right now: the panel could not send the action, ${noneSent}. Check the window and the ClawdTime panel, then ask again.`;
+};
+/** The end of a request after held steps in a row across alternating reasons. */
+const mixedHeldEndText = (
+  reason: string,
+  times: number,
+  sentBefore: boolean,
+) => {
+  const noneSent = sentBefore
+    ? "so nothing more was sent"
+    : "so nothing was sent";
+  const onPage = reason === pageChangedReason || reason === pageUnreadReason;
+  return onPage
+    ? `I cannot act on this page right now: my last ${times} actions were held back before I could act, ${noneSent}. Wait until the page settles, then ask again.`
+    : `I cannot act on this window right now: my last ${times} actions were held back before I could act, ${noneSent}. Wait until the window settles, then ask again.`;
 };
 /** The same action is tried this many times with no result before the planner is told. It is the limit of the refusals. */
 const repeatLimit = 3;
@@ -319,12 +340,23 @@ const stuckText = (
   wanted: string,
   seen: Observation | null,
 ) => {
+  const notSent = row.count - row.sent - row.clicked;
   const came =
     row.sent === row.count
       ? "and I saw no change on the screen after it."
-      : row.sent === 0
+      : row.sent === 0 && row.clicked === 0
         ? `and it was never sent.${row.reason ? ` The last reason: ${row.reason}` : ""}`
-        : `and it did not work. Sent with no change on the screen that I saw: ${row.sent}. Not sent: ${row.count - row.sent}.`;
+        : `and it did not work. ${[
+            row.sent > 0
+              ? `Sent with no change on the screen that I saw: ${row.sent}.`
+              : "",
+            row.clicked > 0
+              ? `Clicked the field without typing: ${row.clicked}.`
+              : "",
+            notSent > 0 ? `Not sent: ${notSent}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}`;
   // The name of the app only. The title of a window can hold what was typed.
   const app = seen ? clean(seen.app.name, 60) : "";
   return `I tried ${row.count} times to ${tried}, ${came} So I stopped: the task is not finished.${app ? ` ${app} is in front.` : ""} You can ${wanted} yourself, or ask me again in other words.`;
@@ -480,10 +512,11 @@ interface Run {
   streak: { signature: string; count: number } | null;
   /**
    * What came of the action of this turn, for the row below. Absent: it does
-   * not count there. Free: it was not sent just after an answer of the
-   * person, so it is counted and not held against the action.
+   * not count there. Clicked: the focus click went out, and the text did not.
+   * Free: it was not sent just after an answer of the person, so it is
+   * counted and not held against the action.
    */
-  tried?: "sent" | "unsent" | "free";
+  tried?: "sent" | "clicked" | "unsent" | "free";
   /**
    * The person answered a moment ago. An answer itself changes what is in
    * front, so the action of this step or of the next one can be held back
@@ -492,8 +525,16 @@ interface Run {
   grace?: number;
   /** The same action on the same target, tried in a row with nothing that moved the task on. */
   stuck?: Row;
-  /** Held steps in a row with the same reason, whatever the action was. */
-  heldRow?: { key: string; count: number };
+  /** Held steps in a row, by reason and in total, whatever the action was. */
+  heldRow?: {
+    key: string;
+    count: number;
+    total: number;
+    /** Digest before a sent input during this row; if the next look is unchanged, the row stays. */
+    sentBefore?: string | null;
+  };
+  /** True once any real input or app/page command went out in this request. */
+  sentInput: boolean;
   /** Why the action of this turn was not sent, for the row: one of the worker's own fixed sentences. */
   why?: string;
   /** What the next pause says, when an action was held back: what it would have done. */
@@ -541,8 +582,10 @@ interface Row {
   signature: string;
   /** The tries in a row, sent or not sent. */
   count: number;
-  /** How many of them went out. */
+  /** How many of them went out completely. */
   sent: number;
+  /** How many of them sent only the focus click without typing text. */
+  clicked: number;
   /** How many of them were not sent just after an answer of the person. They do not count toward the limit. */
   free: number;
   /** The last try went out. */
@@ -629,6 +672,25 @@ const screenPrint = (
       ]),
     )
     .update((picture && seen.image) || "")
+    .digest("hex");
+/** Digest of a browser page reading alone, to detect whether a page command changed it. */
+const pagePrint = (page: BrowserPage | null) =>
+  page &&
+  createHash("sha256")
+    .update(
+      JSON.stringify([
+        page.url,
+        page.title,
+        page.text,
+        page.elements.map((item) => [
+          item.tag,
+          item.role,
+          item.label,
+          item.value ?? null,
+          item.disabled,
+        ]),
+      ]),
+    )
     .digest("hex");
 /** True when both looks were read and show the same. */
 const sameScreen = (one: string | null, other: string | null) =>
@@ -1024,6 +1086,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       page: null,
       fresh: false,
       streak: null,
+      sentInput: false,
       refusals: 0,
       plannerFailures: 0,
       question: null,
@@ -1574,6 +1637,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               : holdPauseText;
           run.takeover = false;
           run.hold = false;
+          run.personNear = false;
           delete run.pauseText;
           delete run.heldRow;
           delete run.approval;
@@ -1620,6 +1684,16 @@ export class ComputerWorker implements DesktopExecutorPort {
             ? (handed.result.observation ?? null)
             : null;
           run.fresh = run.observation !== null;
+          if (run.heldRow?.sentBefore !== undefined) {
+            if (
+              !sameScreen(
+                run.heldRow.sentBefore,
+                screenPrint(run.observation, null, true),
+              )
+            )
+              delete run.heldRow;
+            else delete run.heldRow.sentBefore;
+          }
         }
         if (run.hold) continue;
         this.remind(run);
@@ -1967,13 +2041,13 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (run.personNear && !sendsNoInput(checked.send)) {
       run.personNear = false;
       run.takeover = true;
-      return this.changed(
+      delete run.approval;
+      return this.heldByHands(
         run,
         action,
         why,
         checked,
         "The person is using the Mac.",
-        true,
       );
     }
     // A yes that the person gave a moment ago for this same action, which
@@ -2042,6 +2116,10 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (
       answered.length &&
       run.held &&
+      !run.takeover &&
+      run.pauseText === undefined &&
+      !run.hold &&
+      !this.outdated(run) &&
       checked.signature !== null &&
       this.current === run &&
       tries < 2
@@ -2116,11 +2194,12 @@ export class ComputerWorker implements DesktopExecutorPort {
       signature,
       count: (row?.count ?? 0) + 1,
       sent: (row?.sent ?? 0) + (tried === "sent" ? 1 : 0),
+      clicked: (row?.clicked ?? 0) + (tried === "clicked" ? 1 : 0),
       free: (row?.free ?? 0) + (tried === "free" ? 1 : 0),
       lastSent: tried === "sent",
       screen,
       page,
-      reason: tried === "sent" ? null : reason,
+      reason: tried === "sent" || tried === "clicked" ? null : reason,
       step: run.step,
     };
   }
@@ -2205,9 +2284,22 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.tried = "unsent";
     const key = heldKey(reason);
     const count = run.heldRow?.key === key ? run.heldRow.count + 1 : 1;
-    run.heldRow = { key, count };
+    const total = (run.heldRow?.total ?? 0) + 1;
+    run.heldRow = { key, count, total };
     if (count >= heldLimit)
-      this.finish(run, "blocked", "repeated_hold", heldEndText(reason));
+      this.finish(
+        run,
+        "blocked",
+        "repeated_hold",
+        heldEndText(reason, run.sentInput),
+      );
+    else if (total >= heldTotalLimit)
+      this.finish(
+        run,
+        "blocked",
+        "repeated_hold",
+        mixedHeldEndText(reason, total, run.sentInput),
+      );
   }
   /**
    * The hands held an input back because the person acted since the command
@@ -2215,9 +2307,16 @@ export class ComputerWorker implements DesktopExecutorPort {
    * the action is not kept for the next try: the person is asked again, as
    * before.
    */
-  private heldByHands(run: Run, action: Action, why: string, ready: Ready) {
-    this.changed(run, action, why, ready, "The person took over.", true);
+  private heldByHands(
+    run: Run,
+    action: Action,
+    why: string,
+    ready: Ready,
+    reason = "The person took over.",
+  ) {
+    this.changed(run, action, why, ready, reason, true);
     delete run.held;
+    delete run.approval;
   }
 
   private async viaHands(
@@ -2241,15 +2340,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (seen === "over") return;
       if (this.outdated(run))
         return this.changed(run, action, why, first, saidMoreText);
-      if (run.takeover)
-        return this.changed(
-          run,
-          action,
-          why,
-          first,
-          "The person took over.",
-          true,
-        );
+      if (run.takeover) return this.heldByHands(run, action, why, first);
       if (!seen || !before)
         return this.changed(run, action, why, first, screenUnreadReason);
       lastLook = seen;
@@ -2285,9 +2376,17 @@ export class ComputerWorker implements DesktopExecutorPort {
      * that, and never that the text was typed. When the person took over, the
      * pause says what is left to do.
      */
-    const clickedOnly = (said: string) => {
-      if (run.takeover && this.current === run)
+    const clickedOnly = (said: string, countTry = false) => {
+      if (run.takeover && this.current === run) {
+        delete run.approval;
         run.pauseText = holdText(wantedOf(action, first, before));
+      }
+      if (countTry) {
+        this.count(run, ready.signature);
+        run.tried = "clicked";
+      } else {
+        delete run.stuck;
+      }
       this.note(run, action, why, first.target, said, "clicked");
     };
     if (send.focus) {
@@ -2317,8 +2416,9 @@ export class ComputerWorker implements DesktopExecutorPort {
           );
         return;
       }
-      // An input went out: the row of held steps ends.
-      delete run.heldRow;
+      // A focus click went out. Keep heldRow pending until the next look confirms a change.
+      run.sentInput = true;
+      if (run.heldRow) run.heldRow.sentBefore = screenPrint(before, null, true);
       delete run.grace;
       if (run.takeover)
         return clickedOnly("clicked the field. The text was not typed.");
@@ -2329,16 +2429,12 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (!seen || !before || !sameSurface(before, seen))
         return clickedOnly(
           "clicked the field. The text was not typed: the screen changed.",
+          true,
         );
       if (focusedSecure(seen)) return this.personTypes(run, action, why, ready);
       if (this.outdated(run))
-        return this.note(
-          run,
-          action,
-          why,
-          ready.target,
+        return clickedOnly(
           "clicked the field. The text was not typed: the person said more.",
-          "clicked",
         );
     }
     if (this.outdated(run))
@@ -2387,17 +2483,22 @@ export class ComputerWorker implements DesktopExecutorPort {
         ? clickedOnly("clicked the field. The text was not typed.")
         : this.heldByHands(run, action, why, first);
     }
-    // An input that went out ends the row of held steps, unless open_app left
-    // the exact same screen in front.
+    // An input that went out ends the row of held steps only once a real
+    // change is seen. For open_app, compare the front without raw picture bytes.
     if (handed.result?.ok && !sendsNoInput(send)) {
-      const sameFront =
-        send.command.kind === "open_app" &&
-        sameScreen(
-          screenPrint(before, null),
-          screenPrint(handed.result.observation ?? null, null),
-        );
-      if (!sameFront) delete run.heldRow;
+      run.sentInput = true;
       delete run.grace;
+      if (run.heldRow) {
+        if (send.command.kind === "open_app") {
+          const sameFront = sameScreen(
+            screenPrint(before, null, false),
+            screenPrint(handed.result.observation ?? null, null, false),
+          );
+          if (!sameFront) delete run.heldRow;
+        } else {
+          run.heldRow.sentBefore = screenPrint(before, null, true);
+        }
+      }
     }
     // Text with no field to take it went nowhere, or into the keys of the
     // app. The planner reads that, and looks for the text before it says done.
@@ -2426,6 +2527,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       !handed.result.ok &&
       handed.result.error === "failed"
     ) {
+      run.sentInput = true;
       run.tried = "sent";
       return this.note(
         run,
@@ -2458,7 +2560,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         return this.missed(run, coveredText);
       }
       if (send.focus)
-        return clickedOnly("clicked the field. The text was not typed.");
+        return clickedOnly("clicked the field. The text was not typed.", true);
       this.note(run, action, why, ready.target, ...outcome(handed));
       return this.missed(
         run,
@@ -2524,6 +2626,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         now = tidy(await within(browser.read(), this.browserMs));
       } catch (error) {
         run.page = null;
+        run.fresh = false;
         this.note(
           run,
           action,
@@ -2536,8 +2639,8 @@ export class ComputerWorker implements DesktopExecutorPort {
           ),
           "not_sent",
         );
+        if (this.halted(run)) return;
         this.missed(run, pageUnreadReason);
-        this.halted(run);
         return;
       }
       if (this.halted(run)) return;
@@ -2562,6 +2665,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         again.send.via !== "browser" ||
         again.risk !== first.risk
       ) {
+        run.fresh = false;
         run.held = pageChangedReason;
         this.note(
           run,
@@ -2580,7 +2684,11 @@ export class ComputerWorker implements DesktopExecutorPort {
       return this.changed(run, action, why, first, saidMoreText);
     // A scroll changes what the screen shows, but silence after it loses nothing.
     const effect = call.name !== "read" && call.name !== "scroll";
-    if (call.name !== "read") run.fresh = false;
+    const pageBefore = call.name === "read" ? null : pagePrint(run.page);
+    if (call.name !== "read") {
+      run.fresh = false;
+      run.sentInput = true;
+    }
     this.count(run, first.signature);
     if (effect) run.inFlight = true;
     try {
@@ -2619,10 +2727,15 @@ export class ComputerWorker implements DesktopExecutorPort {
     } finally {
       if (effect) run.inFlight = false;
     }
-    // An input that went out ends the row of held steps.
+    // An input that went out ends the row of held steps only when the page or
+    // screen actually changed.
     if (call.name !== "read") {
-      delete run.heldRow;
       delete run.grace;
+      if (run.heldRow) {
+        const samePage = sameScreen(pageBefore, pagePrint(run.page));
+        if (!samePage) delete run.heldRow;
+        else run.heldRow.sentBefore = screenPrint(run.observation, null, true);
+      }
     }
     run.tried = "sent";
     this.note(run, action, why, first.target, "ok", "ok");
