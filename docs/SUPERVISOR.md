@@ -618,6 +618,19 @@ These rules are in the code, not in the model's instructions:
   deploying"), your word inside the thing that is built ("a script that
   deploys when I approve the release"), work and then a word with you ("fix
   the footer and confirm with me"), and a deadline ("before I get back").
+- Work at a later time starts nothing now: "build the landing page
+  tomorrow", "deploy the app to staging tomorrow morning", "clean up the old
+  branches later", "fix the footer next week", "tomorrow, build the page".
+  ClawdTime keeps no work for later, so it answers in the same fixed words,
+  and you ask for the work again when you want it. The message must be one
+  clause of work with the time at its end, or the time first. What is no
+  later time starts as always: a time that the work must be ready by or
+  that it is for ("by tomorrow", "for the release tomorrow"), a thing that
+  carries its own time ("add a reminder tomorrow"), words of the thing
+  itself ("add a toast saying try again later"), "later" as a moment in
+  what a thing does ("start the animation later"), how long the work may
+  take ("in an hour"), and a clock time or a weekday alone ("at 5pm", "on
+  Monday").
 - The same holds in other words, and for a reminder: "let me know if docs
   changes", "give me a heads up if docs changes", "keep me posted on docs",
   "I want to hear the second something happens there" and "remind me in ten

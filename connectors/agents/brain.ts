@@ -2268,7 +2268,8 @@ const wishForAReminder = new RegExp(
  * object in at most fourteen words, with
  * - no mark in it, so no second part and no second sentence;
  * - none of "and, but, then, so, now, or, also, plus", none of "that,
- *   which, who, whose", none of "when, if, once, after, before, until,
+ *   which, who, whose, where", none of "when, if, once, after, before,
+ *   until,
  *   unless, while, because, since", no "I" or "we", and no "auto",
  *   "automatic" or "automatically" ("set up auto-deploy on my approval"
  *   builds a thing that waits);
@@ -2281,18 +2282,20 @@ const wishForAReminder = new RegExp(
  * "Explain", "tell me" and "show me" ask to say something, and "make the
  * button fire" says what a thing does: those open no such clause ("make a
  * landing page" does).
+ * Gives the verb and the object of the clause, or null when the text is
+ * no such clause.
  */
-const onePlainClauseOfWork = (work: string) => {
+const plainClauseOfWork = (work: string) => {
   const text = work.trim();
   const opens = new RegExp(
-    `^${fillersBefore}(?:(?:(?:can|could|will|would)\\s+you|i(?:['\\u2019]d|\\s+would)\\s+like\\s+you\\s+to|i\\s+(?:want|need)\\s+you\\s+to)\\s+)?(?:(?:please|also|just)\\s+)*(?:find\\s+out|figure\\s+out|look\\s+into|dig\\s+into|investigate|clean\\s+up|set\\s+up|roll\\s+back|kick\\s+off|make\\s+(?:me\\s+|us\\s+)?an?|build|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|move|run|deploy|test|check|find|install|upgrade|clean|merge|publish|restart|commit|push|ship|release|migrate|start|launch|close|delete|revert|rollback|rebase|tag|send|upload|sync|generate|compile|rebuild|rerun|redeploy|restore|reset|rotate|bump|enable|disable|apply)\\b`,
+    `^${fillersBefore}(?:(?:(?:can|could|will|would)\\s+you|i(?:['\\u2019]d|\\s+would)\\s+like\\s+you\\s+to|i\\s+(?:want|need)\\s+you\\s+to)\\s+)?(?:(?:please|also|just)\\s+)*(find\\s+out|figure\\s+out|look\\s+into|dig\\s+into|investigate|clean\\s+up|set\\s+up|roll\\s+back|kick\\s+off|make\\s+(?:me\\s+|us\\s+)?an?|build|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|move|run|deploy|test|check|find|install|upgrade|clean|merge|publish|restart|commit|push|ship|release|migrate|start|launch|close|delete|revert|rollback|rebase|tag|send|upload|sync|generate|compile|rebuild|rerun|redeploy|restore|reset|rotate|bump|enable|disable|apply)\\b`,
     "i",
   ).exec(text);
-  if (!opens) return false;
+  if (!opens) return null;
   const object = text.slice(opens[0].length);
-  return (
+  const plain =
     !/[,;:.?!\u2014]/.test(object) &&
-    !/\b(?:and|but|then|so|now|or|also|plus|that|which|who|whose|whom|when|if|once|after|before|until|unless|while|because|since|I|we|I['\u2019]ll|we['\u2019]ll|let['\u2019]s|auto(?:matic(?:ally)?)?)\b/i.test(
+    !/\b(?:and|but|then|so|now|or|also|plus|that|which|who|whose|whom|where|when|if|once|after|before|until|unless|while|because|since|I|we|I['\u2019]ll|we['\u2019]ll|let['\u2019]s|auto(?:matic(?:ally)?)?)\b/i.test(
       object,
     ) &&
     // A participle right before the hold says what the thing waits for:
@@ -2304,9 +2307,13 @@ const onePlainClauseOfWork = (work: string) => {
     !/\bfor\b(?!\s+(?:the|my|our|a|an|this|your|me|us|it|them|everyone|all)\b)/i.test(
       object,
     ) &&
-    (object.match(/\S+/g) ?? []).length <= 14
-  );
+    (object.match(/\S+/g) ?? []).length <= 14;
+  return plain
+    ? { verb: (opens[1] ?? "").toLowerCase().replace(/\s+/g, " "), object }
+    : null;
 };
+/** One plain clause of work, or not. */
+const onePlainClauseOfWork = (work: string) => plainClauseOfWork(work) !== null;
 /**
  * The person holds the work until their own word: "build the landing page
  * when I say so", "..., but wait for my go", "deploy it after I approve the
@@ -2383,6 +2390,170 @@ const holdsTheWorkForTheirWord = (spoken: string) => {
       rest,
     );
   return /^(?:\s+(?:please|thanks|ok|okay|then|though))*\s*$/i.test(rest);
+};
+/**
+ * A word that says what a thing does or must do: "deploy fix should
+ * rebase", "the build is red". A plain order of work holds none.
+ */
+const saysWhatAThingDoes =
+  /\b(?:should|must|needs?|will|would|can|could|may|might|is|are|was|were|has|have|had|does|did)\b/i;
+/**
+ * The time behind this object can be the time of a thing in it, or a part
+ * of its words, and the work is then for now. A list:
+ * - "for the release tomorrow", "about the launch tomorrow", "by
+ *   registering the handler later", "the prices effective tomorrow": a word
+ *   that ties a time to a thing;
+ * - "by tomorrow", "from tomorrow", "back tomorrow", "try again later": the
+ *   time belongs to the last word;
+ * - "the keys expiring tomorrow", "the bug blocking the release tomorrow":
+ *   a word in "-ing" that says what a thing does. It stands behind a noun
+ *   at the end, or before "the", "a" or a word of place. A thing whose name
+ *   ends in "-ing" is a thing as any other: "the landing page", "the
+ *   styling", "to staging";
+ * - "the login bug the demo hits tomorrow": a second thing with no word of
+ *   place before it opens a clause of its own;
+ * - "a reminder tomorrow", "a meeting next week": a thing that carries its
+ *   own time;
+ * - "a toast saying try again later", "a button called remind me later",
+ *   "a message try again later": words of the thing itself.
+ */
+const theTimeCanBeOfAThing = (object: string) => {
+  const words = object.trim().split(/\s+/);
+  const last = words.at(-1) ?? "";
+  const before = words.at(-2);
+  return (
+    /\b(?:for|about|of|during|at|regarding|by|effective)\b/i.test(object) ||
+    /^(?:by|from|than|through|till|on|in|around|within|with|without|like|as|into|onto|over|under|near|between|past|per|via|the|a|an|not|no|say|says|every|each|due|starting|ending|beginning|back|again|me|you|us|maybe|coming|open|available|starts|ends|arriving|expires|returns|live|ready|free|busy|off|out|away|here|there|pay|read|watch|save|buy|ask|decide|try|see|come|talk|sooner|or)$/i.test(
+      last,
+    ) ||
+    /\b\w{2,}ing\s+(?:the|a|an|my|our|your|this|that|these|those|its|his|her|their|all|some|every|each|on|in|to|with|from|into|over|under|through|across)\b/i.test(
+      object,
+    ) ||
+    (/^\w{2,}ing$/i.test(last) &&
+      before !== undefined &&
+      !/^(?:the|a|an|my|our|your|this|that|these|those|its|some|all|any|to|on|in|from|into|onto|with)$/i.test(
+        before,
+      )) ||
+    words.some(
+      (word, at) =>
+        at > 0 &&
+        /^(?:the|a|an|my|our|your)$/i.test(word) &&
+        !/^(?:in|on|to|from|with|into|onto|over|under|near|through|across|behind|inside|outside|within|around|between|per|via|up|out|off|down|back|me|us|him|her|them|all|both)$/i.test(
+          words[at - 1] ?? "",
+        ),
+    ) ||
+    /\b(?:reminder|event|meeting|alarm|timer|cron|schedule|calendar|appointment|deadline|countdown|date|invite|booking)s?\b/i.test(
+      object,
+    ) ||
+    /\b(?:saying|says|reading|reads|called|named|labell?ed|titled|entitled)\b/i.test(
+      object,
+    ) ||
+    /\b(?:text|message|copy|caption|label|title|heading|placeholder|tooltip|toast|banner|button|link|string|phrase|words?|option|badge|chip|sign|notice)\s+\S/i.test(
+      object,
+    )
+  );
+};
+/**
+ * The person asks for the work at a later time: "build the landing page
+ * tomorrow", "deploy the app to staging tomorrow morning", "clean up the
+ * old branches later", "tomorrow, build the page". Nothing here keeps work
+ * for later, so such a message starts nothing now.
+ *
+ * `putsOff` is the wide reader of a time: it only keeps the code from
+ * acting by itself. This one is narrow, a list of what is taken, because a
+ * start gate refuses on it. The message is one plain clause of work
+ * (`plainClauseOfWork`) and then the time at its end, with at most a word
+ * of politeness or "not today" behind it and "but", "only", "just" or
+ * "sometime" before it; or the time stands first and the one plain clause
+ * follows. The times:
+ * - "tomorrow", also "first thing tomorrow", "the day after tomorrow",
+ *   "tomorrow morning", "tomorrow at 9";
+ * - "later today", "later tonight", "later this week";
+ * - "next week", "next month", "next Monday";
+ * - "later" alone or "later on", only for work that a person or an agent
+ *   does and no thing does by itself (build, fix, add, write, clean up,
+ *   look into, deploy, merge), and only with "the", "a", "my", "it" or the
+ *   like in its object.
+ * With no object, only a verb that stands alone: "deploy tomorrow", "ship
+ * next week". With the time first and no comma, the object opens as one:
+ * "tomorrow build the landing page".
+ *
+ * These are none, and start or are answered as always:
+ * - a time that can be the time of a thing in the object, or a part of its
+ *   words (`theTimeCanBeOfAThing`): "for the release tomorrow", "by
+ *   tomorrow", "rotate the keys expiring tomorrow", "add a reminder
+ *   tomorrow", "add a toast saying try again later";
+ * - a sentence that says what a thing does: "later, deploy fix should
+ *   rebase";
+ * - "later" as a moment in what a thing does, or a move in time: "start
+ *   the animation later", "close the modal later", "move the release
+ *   later";
+ * - the name of a feature: "add watch later";
+ * - "today" and "now": the work is for now;
+ * - "in an hour", "in two days": that can be how long the work may take;
+ * - a clock time or a weekday alone ("at 5pm", "on Monday"): that can be
+ *   when a thing runs.
+ */
+const asksForALaterTime = (spoken: string) => {
+  const clock = "(?:\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?|noon|midnight)";
+  const weekday =
+    "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)";
+  // A time of the person's own day: never a moment in what a thing does.
+  const aDay = `(?:(?:first\\s+thing\\s+)?(?:the\\s+day\\s+after\\s+)?tomorrow(?:\\s+(?:morning|afternoon|evening|night))?(?:\\s+at\\s+${clock})?|later\\s+(?:today|tonight|this\\s+(?:week|month|afternoon|evening))|next\\s+(?:week|month|${weekday}))`;
+  const time = `(?:(?<day>${aDay})|(?<later>later(?:\\s+on)?))`;
+  const text = spoken.trim();
+  // The time stands first: "tomorrow, build the landing page". With no
+  // comma the object must open as one: "next week build fails" is no
+  // request.
+  const first = new RegExp(
+    `^\\s*${fillersBefore}${time}(?<comma>\\s*,)?\\s+(?<work>.*?)[.!?\\s]*$`,
+    "is",
+  ).exec(text);
+  if (first) {
+    const clause = plainClauseOfWork(first.groups?.work ?? "");
+    if (
+      clause &&
+      !saysWhatAThingDoes.test(clause.object) &&
+      (first.groups?.comma ||
+        /^\s*(?:the|a|an|my|our|your|this|these|those|it|them|all|both|some|to|on|in|from)\b/i.test(
+          clause.object,
+        ))
+    )
+      return true;
+  }
+  const found = new RegExp(
+    `(?:,?\\s*\\bbut\\s+)?(?:\\b(?:only|just|sometime|some\\s+time)\\s+)?\\b${time}(?:\\s*,?\\s*not\\s+(?:now|today|yet|right\\s+now))?(?:[,\\s]+(?:please|thanks|ok|okay|then|though|instead))*[.!?\\s]*$`,
+    "i",
+  ).exec(text);
+  if (!found) return false;
+  const clause = plainClauseOfWork(
+    text.slice(0, found.index).replace(/[,\s]*$/, ""),
+  );
+  if (!clause) return false;
+  const { verb, object } = clause;
+  if (saysWhatAThingDoes.test(object)) return false;
+  const day = Boolean(found.groups?.day);
+  // No object: only a verb that stands alone, and a time of the day.
+  // "Add tomorrow" and "add next week" name what is added.
+  if (!object.trim())
+    return (
+      day &&
+      /^(?:deploy|redeploy|ship|merge|commit|push|release|publish|restart|rebase|migrate|sync|rebuild|rerun|compile|launch)$/.test(
+        verb,
+      )
+    );
+  if (theTimeCanBeOfAThing(object)) return false;
+  if (day) return true;
+  // "Later" alone can be a moment in what a thing does ("start the
+  // animation later") or a part of a name ("add watch later").
+  return (
+    /^(?:build|create|develop|implement|fix|repair|refactor|debug|add|update|write|design|change|remove|rename|install|upgrade|clean|clean up|set up|look into|find out|figure out|dig into|investigate|deploy|redeploy|merge|commit|rebase|migrate|revert|roll back|rollback|tag|bump|compile|rebuild|rerun|ship|make(?: me| us)? an?)$/.test(
+      verb,
+    ) &&
+    /\b(?:the|a|an|my|our|your|this|these|those|it|them|all|both|some)\b/i.test(
+      object,
+    )
+  );
 };
 /** A clause that rules a session out of a request: "show me payments, not docs". */
 const seeNot = (clause: string) =>
@@ -4247,6 +4418,8 @@ const heldAnswer =
   "I have not started that, and I keep no work for later. When you want it, ask for it again.";
 const heldForTheirWord =
   "The person's message holds this work until their own word: nothing starts now, and nothing here keeps it for later. Say that it has not started, and that it starts when they ask for it again.";
+const heldForLater =
+  "The person's message asks for this work at a later time: nothing starts now, and nothing here keeps it for later. Say that it has not started, and that it starts when they ask for it again.";
 const onlyAReminder =
   "The person's message asks for a reminder. You keep no timer and no reminder, and that is no work for a new agent: no job and no task starts for it.";
 /** Marks a gate's refusal, and gives its sentence back for the model. */
@@ -5108,6 +5281,8 @@ export class Supervisor {
     if (told) return refuse(turn, forThatSession(told));
     // Work that the person holds until their own word is no task now.
     if (this.holdsItsWork(spoken)) return refuse(turn, heldForTheirWord);
+    // Work at a later time is none now either: nothing here keeps it.
+    if (this.asksItsWorkForLater(spoken)) return refuse(turn, heldForLater);
     // A request to hear later about a session is no task either, in any
     // words, and a reminder is none.
     if (this.onlyAsksToHear(spoken)) return refuse(turn, onlyToHear);
@@ -5500,6 +5675,8 @@ export class Supervisor {
     // the person holds the work until their own word. Nothing starts now,
     // by the code's own path or by the model's call.
     if (this.holdsItsWork(spoken)) return refuse(turn, heldForTheirWord);
+    // Work at a later time is none now either: nothing here keeps it.
+    if (this.asksItsWorkForLater(spoken)) return refuse(turn, heldForLater);
     // "Tell me when deploy fix is done", "stop watching docs": a request to
     // hear later about a session is no work for a new agent. The same in
     // other words ("give me a heads up if docs changes"), and a reminder.
@@ -5560,6 +5737,14 @@ export class Supervisor {
       holdsTheWorkForTheirWord(spoken) ||
       holdsTheWorkForTheirWord(this.jobText(spoken))
     );
+  }
+  /**
+   * The person's message asks for its work at a later time, as it stands or
+   * behind the name of an agent ("open claude and build the landing page
+   * tomorrow").
+   */
+  private asksItsWorkForLater(spoken: string) {
+    return asksForALaterTime(spoken) || asksForALaterTime(this.jobText(spoken));
   }
   /**
    * The job in the person's own words. When the sentence opens with an agent
@@ -9889,13 +10074,14 @@ export class Supervisor {
       !this.world.execution?.snapshot().pendingAction &&
       !taskWaits &&
       !this.forSession(words) &&
-      this.holdsItsWork(words)
+      (this.holdsItsWork(words) || this.asksItsWorkForLater(words))
     ) {
       // Through the gate of every job: it refuses held work, and its
       // refusal is what the fixed answer stands for. Another refusal of
       // the gate goes to the model, as for every direct start.
       await this.startJob(turn, words);
-      const held = turn.refused === heldForTheirWord;
+      const held =
+        turn.refused === heldForTheirWord || turn.refused === heldForLater;
       turn.refused = undefined;
       if (held) return heldAnswer;
     }
