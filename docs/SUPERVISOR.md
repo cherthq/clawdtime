@@ -1015,6 +1015,15 @@ to a private folder, read once and removed. Nothing of it is kept.
   done, typed, clicked or found, with no tool result of that turn behind it,
   is not sent: you get the state in its place ("The computer task still
   runs: it has not reported that it is done. Its newest report: ...").
+- While a computer task runs, or is paused because you moved the mouse or
+  pressed a key (and waits for no answer and no yes), orders, polite requests
+  and short corrections for the screen ("open it in the browser", "just hit
+  enter", "no, the other tab") go straight to the engine in your own words,
+  and you get the engine's reply ("Got it. I take that into the task that
+  runs.", or "Got it. I go on with the task and take that into it." when it
+  was paused). Stops, state questions, thanks, coding work and words for a
+  coding session stay on their own paths; while the task waits for your yes
+  or your answer to its question, your message still goes to its answer.
 
 ### Give it a job
 

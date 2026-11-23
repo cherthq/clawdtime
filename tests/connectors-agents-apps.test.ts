@@ -12,6 +12,7 @@ import {
   asksPlainly,
   clearsComputer,
   computerTaskNow,
+  guidesComputerTask,
   modelWaitMs,
   nothingRanOnScreen,
   screenClaims,
@@ -1702,6 +1703,553 @@ describe("the chat says of a computer task only what its engine reported", () =>
     );
     expect(said).toContain("language model");
     expect(live.touched).toEqual([]);
+  });
+});
+
+describe("words for a running computer task reach its engine", () => {
+  const goal = "open example.com and find the roadmap board";
+  const working = `Working on: "${goal}". Step 19 of at most 40.`;
+  const paused =
+    "You moved the mouse or pressed a key, so I paused. Say continue to go on, or stop.";
+  const approval =
+    'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.';
+  const question = "Which workspace should I open?";
+  const stopped = "Stopped. An action that was already sent may have finished.";
+  const guided = "Got it. I take that into the task that runs.";
+  const resumed = "Got it. I go on with the task and take that into it.";
+  const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
+  const at = now - 60_000;
+  const before: ChatMessage[] = [
+    {
+      role: "user",
+      text: "Can you sort of open Slack for me and find the roadmap board?",
+      at,
+      via: "call",
+    },
+    {
+      role: "assistant",
+      text: "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+      at,
+      via: "call",
+    },
+  ];
+  const deploySession: BoardSnapshot = {
+    version: 1,
+    generatedAt: now,
+    intervalMs: 3000,
+    counts: { needs_you: 0, working: 1, idle: 0, unknown: 0 },
+    sessions: [
+      {
+        id: "1001_1",
+        pid: 1001,
+        agent: "claude-code",
+        agentLabel: "Claude Code",
+        agentVersion: "1.0.0",
+        name: "deploy fix",
+        project: "app",
+        cwd: "/work/app",
+        mode: "interactive",
+        state: "working",
+        detail: "turn_running",
+        since: now - 120_000,
+        source: "hook",
+        startedAt: now - 300_000,
+        spawnedBy: null,
+        terminal: {
+          tty: "ttys001",
+          app: "Terminal",
+          appPath: "/System/Applications/Utilities/Terminal.app",
+          tmux: null,
+          remote: false,
+        },
+        focus: "tab",
+      },
+    ],
+  };
+
+  function withWorker(
+    state: string,
+    message: string,
+    options: {
+      goal?: string;
+      waiting?: "takeover" | "approval" | "question";
+      pendingAction?: { id: string; description: string };
+      board?: BoardSnapshot;
+    } = {},
+  ) {
+    const f = world();
+    const submitted: string[] = [];
+    const answered: string[] = [];
+    const typed: { session: string; text: string }[] = [];
+    const focused: string[] = [];
+    let stops = 0;
+    if (options.board) f.value.board = () => options.board!;
+    f.value.send = async (session, text) => {
+      typed.push({ session: session.name ?? session.id, text });
+      return { ok: true, route: "tty" };
+    };
+    f.value.focus = async (session) => {
+      focused.push(session.name ?? session.id);
+      return { ok: true };
+    };
+    const snapshot = {
+      configured: true,
+      mode: "native" as const,
+      state,
+      canStop: state === "running" || state === "waiting_for_person",
+      message,
+      ...(options.goal !== undefined ? { goal: options.goal } : {}),
+      ...(options.waiting !== undefined ? { waiting: options.waiting } : {}),
+      ...(options.pendingAction
+        ? { pendingAction: options.pendingAction }
+        : {}),
+    };
+    f.value.execution = {
+      snapshot: () => snapshot,
+      submit: async (_id, text) => {
+        submitted.push(text);
+        return {
+          message: options.waiting === "takeover" ? resumed : guided,
+        };
+      },
+      stop: () => {
+        stops++;
+        return { ...snapshot, state: "canceled", canStop: false, message: stopped };
+      },
+      answer: async (text: string) => {
+        answered.push(text);
+        return {
+          message:
+            options.waiting === "question"
+              ? "Thank you. I go on."
+              : "Continuing.",
+        };
+      },
+    };
+    return { ...f, submitted, answered, typed, focused, stops: () => stops };
+  }
+
+  function drafts(steps: (ToolCall[] | string)[]) {
+    let step = 0;
+    const given: ModelMessage[][] = [];
+    const model: ModelClient = {
+      async complete(input) {
+        given.push([...input.messages]);
+        const next = steps[Math.min(step++, steps.length - 1)]!;
+        return typeof next === "string"
+          ? { text: next, toolCalls: [] }
+          : { text: "", toolCalls: next };
+      },
+    };
+    return { model, given, calls: () => step };
+  }
+
+  it("takes orders, polite requests and short corrections for the screen by grammar", () => {
+    for (const words of [
+      "open it in the browser",
+      "just hit enter",
+      "Can you just hit enter?",
+      "press return",
+      "no, the other tab",
+      "can you open it on the browser?",
+      "I don't see it open. Can you open it on the browser?",
+      "I don't still see Slack to be open. Can you open Slack on Chrome?",
+      "I don't see it open, can you open it on the browser?",
+      "scroll down",
+      "click the first one",
+      "type hello in it",
+      "try the search box",
+      "use Chrome instead",
+      "go back",
+      "refresh the page",
+      "switch to the other tab",
+      "no, the second one",
+      "no, wait, click the second one",
+      "in the browser instead",
+    ])
+      expect([words, guidesComputerTask(words)]).toEqual([words, true]);
+  });
+
+  it("takes no stop, state question, thanks, bare word, greeting, session message or coding work", () => {
+    for (const words of [
+      "stop",
+      "stop it",
+      "stop the task",
+      "cancel",
+      "abort",
+      "are you stuck?",
+      "Are you stuck somewhere? Do you want help anywhere?",
+      "what are you doing?",
+      "is it open?",
+      "do you need help?",
+      "how is it going?",
+      "did it work?",
+      "computer status",
+      "can you tell me if it's open?",
+      "can you check the status?",
+      "thanks",
+      "thank you",
+      "awesome, thanks",
+      "nice work",
+      "yes",
+      "no",
+      "ok",
+      "okay",
+      "sure",
+      "continue",
+      "approve",
+      "deny",
+      "hi",
+      "hey",
+      "hello",
+      "good morning",
+      "tell me a joke about the weather",
+      "what is everyone doing?",
+      "is deploy fix done?",
+      "what did the job find?",
+      "tell deploy fix to push",
+      "watch deploy fix and tell me when it's done",
+      "also build a landing page for the bakery",
+      "find out why the build is slow",
+      "find out why the login is slow",
+      "fix the flaky test",
+      "write a script to clean the logs",
+      "open Claude and build a landing page",
+      "use Codex to fix the tests",
+      "run the tests again",
+      "don't hit enter",
+      "do not open it",
+      "never mind",
+      "clear the computer task",
+      "remember to use dark mode",
+      "what does the blue Send button do?",
+      '"click the button"',
+      "I clicked the button",
+      "the search box is empty",
+    ])
+      expect([words, guidesComputerTask(words)]).toEqual([words, false]);
+  });
+
+  it("hands follow-up screen requests to the engine even when the model would offer, ask back or falsely claim", async () => {
+    for (const words of [
+      "I don't still see Slack to be open. Can you open Slack on Chrome?",
+      "I don't see it open. Can you open it on the browser?",
+      "open it in the browser",
+      "no, the other tab",
+      "scroll down",
+      "click the first one",
+      "type hello in it",
+      "try the search box",
+    ])
+      for (const draft of [
+        "You want me to open it on the browser now?",
+        "Should I go ahead and open it now?",
+        "so I opened Chrome with example.com",
+      ]) {
+        const f = withWorker("running", working, { goal });
+        const run = drafts([draft]);
+        run.model.reading = async () => ({
+          intent: { kind: "clarify", question: "Which app did you mean?" },
+          work: false,
+        });
+        const said = await new Supervisor(f.value, run.model).reply(
+          before,
+          words,
+          "call",
+        );
+        expect([words, draft, said]).toEqual([words, draft, guided]);
+        expect(f.submitted).toEqual([words]);
+        expect(f.answered).toEqual([]);
+      }
+  });
+
+  it("hands 'Can you just hit enter?' to the engine even when the model would answer with the state or refuse", async () => {
+    for (const draft of [
+      "The task is still running, currently on step 19, not done yet. Want me to keep waiting or do something else?",
+      "The task is still running, so I can't hit Enter in it right now.",
+      stillRuns,
+    ]) {
+      const f = withWorker("running", working, { goal });
+      const run = drafts([draft]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        "Can you just hit enter?",
+        "call",
+      );
+      expect([draft, said]).toEqual([draft, guided]);
+      expect(f.submitted).toEqual(["Can you just hit enter?"]);
+      expect(f.answered).toEqual([]);
+    }
+  });
+
+  it("hands subtler screen instructions on after the draft when the model only offers, refuses or deflects with the state", async () => {
+    const words = "put hello into the right-hand input";
+    expect(guidesComputerTask(words)).toBe(false);
+    for (const draft of [
+      "You want me to put hello into the right-hand input now?",
+      "Should I go ahead and put hello into the right-hand input?",
+      "The task is still running, so I can't put that in right now.",
+      "The task is still running, currently on step 19, not done yet. Want me to keep waiting or do something else?",
+    ]) {
+      const f = withWorker("running", working, { goal });
+      const run = drafts([draft]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([draft, said]).toEqual([draft, guided]);
+      expect(f.submitted).toEqual([words]);
+      expect(f.answered).toEqual([]);
+      expect(run.calls()).toBe(1);
+    }
+  });
+
+  it("steers a task paused by takeover through submit, keeps continue on answer, and reports paused with its goal", async () => {
+    const pausedSentence = `The computer task ("${goal}") is paused: it has not reported that it is done. Its newest report: ${paused}`;
+    expect(
+      computerTaskNow({
+        configured: true,
+        mode: "native",
+        state: "waiting_for_person",
+        waiting: "takeover",
+        canStop: true,
+        goal,
+        message: paused,
+      }),
+    ).toBe(pausedSentence);
+    expect(screenClaims(pausedSentence)).toEqual([]);
+    expect(
+      computerTaskNow({
+        configured: true,
+        mode: "native",
+        state: "running",
+        canStop: true,
+        goal,
+        message: "Step 4 of at most 40.",
+      }),
+    ).toBe(
+      `The computer task ("${goal}") still runs: it has not reported that it is done. Its newest report: Step 4 of at most 40.`,
+    );
+
+    // Screen instruction while paused on takeover goes to submit, not answer.
+    for (const words of [
+      "Can you just hit enter?",
+      "I don't see it open. Can you open it on the browser?",
+    ]) {
+      const f = withWorker("waiting_for_person", paused, {
+        goal,
+        waiting: "takeover",
+      });
+      const run = drafts(["Should I go ahead and do that?"]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect(said).toBe(resumed);
+      expect(f.submitted).toEqual([words]);
+      expect(f.answered).toEqual([]);
+    }
+
+    // "continue" while paused on takeover still goes to answer.
+    const cont = withWorker("waiting_for_person", paused, {
+      goal,
+      waiting: "takeover",
+    });
+    expect(
+      await new Supervisor(cont.value, drafts(["Continuing."]).model).reply(
+        before,
+        "continue",
+        "call",
+      ),
+    ).toBe("Continuing.");
+    expect(cont.answered).toEqual(["continue"]);
+    expect(cont.submitted).toEqual([]);
+
+    // A state question while paused on takeover does not submit and reports paused.
+    const ask = withWorker("waiting_for_person", paused, {
+      goal,
+      waiting: "takeover",
+    });
+    const run = drafts(["Yes, the page is open."]);
+    expect(
+      await new Supervisor(ask.value, run.model).reply(
+        before,
+        "Are you stuck?",
+        "call",
+      ),
+    ).toBe(pausedSentence);
+    expect(ask.submitted).toEqual([]);
+    expect(ask.answered).toEqual([]);
+  });
+
+  it("answers a state question from the engine state with no submit, and gives the model a true note", async () => {
+    for (const words of [
+      "Are you stuck somewhere? Do you want help anywhere?",
+      "what are you doing?",
+      "is it open?",
+      "do you need help?",
+    ]) {
+      const f = withWorker("running", working, { goal });
+      const run = drafts(["Yes, the page is open and ready."]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, said]).toEqual([words, stillRuns]);
+      expect(f.submitted).toEqual([]);
+      expect(f.answered).toEqual([]);
+      const note = run.given[0]!
+        .filter((message) => message.role === "tool")
+        .map((message) => message.content)
+        .join("\n");
+      expect(note).toContain("delegate_computer_task");
+      expect(note).toContain("no offer and no question back");
+    }
+  });
+
+  it("starts coding work beside a running screen task with no submit", async () => {
+    const direct = withWorker("running", working, { goal });
+    const saidDirect = await new Supervisor(
+      direct.value,
+      drafts(["Should I start a job?"]).model,
+    ).reply(before, "also build a landing page for the bakery", "call");
+    expect(saidDirect).toBe("I started a new session for that job.");
+    expect(direct.started).toEqual(["also build a landing page for the bakery"]);
+    expect(direct.submitted).toEqual([]);
+
+    const slow = withWorker("running", working, { goal });
+    const slowModel = drafts([
+      "Should I start a job to look into why the build is slow?",
+      [call("start_job", { job: "find out why the build is slow" })],
+      "Started.",
+    ]);
+    const saidSlow = await new Supervisor(slow.value, slowModel.model).reply(
+      before,
+      "find out why the build is slow",
+      "call",
+    );
+    expect(saidSlow).toBe("I started a new session for that job.");
+    expect(slow.started).toEqual(["find out why the build is slow"]);
+    expect(slow.submitted).toEqual([]);
+  });
+
+  it("routes words for a coding session to that session, with no submit", async () => {
+    const tell = withWorker("running", working, {
+      goal,
+      board: deploySession,
+    });
+    const said = await new Supervisor(
+      tell.value,
+      drafts(["I told deploy fix to push."]).model,
+    ).reply(before, "tell deploy fix to push", "call");
+    expect(said).toBe("I told deploy fix to push.");
+    expect(tell.typed).toEqual([{ session: "deploy fix", text: "push" }]);
+    expect(tell.submitted).toEqual([]);
+
+    const open = withWorker("running", working, {
+      goal,
+      board: deploySession,
+    });
+    await new Supervisor(
+      open.value,
+      drafts(["Brought deploy fix to the front."]).model,
+    ).reply(before, "open deploy fix", "call");
+    expect(open.focused).toEqual(["deploy fix"]);
+    expect(open.submitted).toEqual([]);
+  });
+
+  it("leaves thanks, greetings and bare yes/no off submit, and keeps stop on the stop path", async () => {
+    for (const [words, draft] of [
+      ["thanks", "Any time."],
+      ["hey", "Hey, what can I help with?"],
+    ] as const) {
+      const f = withWorker("running", working, { goal });
+      const run = drafts([draft]);
+      expect(
+        await new Supervisor(f.value, run.model).reply(before, words, "call"),
+      ).toBe(draft);
+      expect(f.submitted).toEqual([]);
+      expect(f.stops()).toBe(0);
+    }
+
+    const bare = withWorker("running", working, { goal });
+    await new Supervisor(bare.value, drafts(["Okay."]).model).reply(
+      before,
+      "yes",
+      "call",
+    );
+    expect(bare.submitted).toEqual([]);
+
+    for (const stopWord of ["stop", "stop it", "cancel"]) {
+      const f = withWorker("running", working, { goal });
+      const run = drafts(["Should I stop it?"]);
+      expect(
+        await new Supervisor(f.value, run.model).reply(
+          before,
+          stopWord,
+          "call",
+        ),
+      ).toBe(stopped);
+      expect(f.stops()).toBe(1);
+      expect(f.submitted).toEqual([]);
+      expect(run.calls()).toBe(0);
+    }
+  });
+
+  it("sends messages to answer and never submit when the task waits for a yes, a question or panel approval", async () => {
+    for (const [waiting, message] of [
+      ["approval", approval],
+      ["question", question],
+    ] as const) {
+      for (const words of [
+        "Can you just hit enter?",
+        "open it in the browser",
+        "yes",
+      ]) {
+        const f = withWorker("waiting_for_person", message, { goal, waiting });
+        const run = drafts(["Should I do that?"]);
+        const said = await new Supervisor(f.value, run.model).reply(
+          before,
+          words,
+          "call",
+        );
+        expect([waiting, words, f.answered, f.submitted]).toEqual([
+          waiting,
+          words,
+          [words],
+          [],
+        ]);
+        expect(said).toBe(
+          waiting === "question" ? "Thank you. I go on." : "Continuing.",
+        );
+        expect(run.calls()).toBe(0);
+      }
+    }
+
+    const pending = withWorker("running", "An action waits.", {
+      goal,
+      pendingAction: { id: "a1", description: "Click Send" },
+    });
+    const saidYes = await new Supervisor(
+      pending.value,
+      drafts(["Approved."]).model,
+    ).reply(before, "yes", "call");
+    expect(saidYes).toContain("Use Approve action or Deny action");
+    expect(pending.submitted).toEqual([]);
+    expect(pending.answered).toEqual([]);
+
+    const pendingGuide = withWorker("running", "An action waits.", {
+      goal,
+      pendingAction: { id: "a1", description: "Click Send" },
+    });
+    await new Supervisor(
+      pendingGuide.value,
+      drafts(["It waits for your approval in the panel."]).model,
+    ).reply(before, "Can you just hit enter?", "call");
+    expect(pendingGuide.submitted).toEqual([]);
   });
 });
 
