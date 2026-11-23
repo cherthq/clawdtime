@@ -4424,7 +4424,11 @@ const sizeNotDone =
  * plain.
  */
 const correctionKept = (job: JobFacts, spoken: string) =>
-  `${requestSaid(job)} still works, and a job that runs cannot be changed, so your change is not in it: "${clean(spoken, 160).replace(/"/g, "'")}". Say the whole request with your change to start it as a new job.`;
+  `${requestSaid(job)} ${job.waiting ? "waits for the job before it" : "still works"}, and no tool changes a job, so your change is not in it${
+    looksSecret(spoken)
+      ? ". Your words are not said here, because they look like a credential."
+      : `: "${clean(spoken, 160).replace(/"/g, "'")}".`
+  } Say the whole request with your change to start it as a new job.`;
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
@@ -6638,6 +6642,60 @@ export class Supervisor {
       corrected &&
       (followsUp(rest) ||
         /^(?:it|it['\u2019]s|its|that|that['\u2019]s|this|the|a|an|not|for|with|should|must|is|was|make\s+it|call\s+it|name\s+it|change\s+it|use)\b/i.test(
+          rest,
+        ))
+    );
+  }
+  /**
+   * The narrow reader for the check of a draft: the message changes what the
+   * newest job was asked to do, as a statement. `correctsARunningJob` is
+   * wide on purpose (it only decides whether a new job waits); this one
+   * holds only when, on top of it, the message asks nothing ("wait, is it
+   * running?"), is no word of assent ("no, that's fine"), names no session
+   * of the board ("no, not the bakery one, I meant deploy fix"), and either
+   * sets a word against a word of the job's request ("a cafe not a bakery",
+   * "instead of a bakery") or, after a word of correction, says what the
+   * thing is ("I meant a cafe", "it's a cafe", "make it a cafe", "the name
+   * is Cafe Luna", "it should say cafe").
+   */
+  private changesTheJobsRequest(spoken: string, turn: Turn): boolean {
+    const newest = this.jobsNow(1)[0];
+    if (!newest || !this.correctsARunningJob(spoken, turn)) return false;
+    const words = spoken.trim();
+    let rest = words;
+    for (let step = 0; step < 4; step++) {
+      const opens = correctionWord.exec(rest);
+      if (!opens) break;
+      rest = rest.slice(opens[0].length);
+    }
+    rest = rest.replace(/^[,.!\s]+/, "");
+    if (
+      /\?/.test(words) ||
+      /^(?:is|was|are|were|did|does|do|has|have|had|should|shall|can|could|will|would|how|what|why|when|where|who|which)\b/i.test(
+        rest,
+      ) ||
+      /^(?:(?:that|it|this)(?:['\u2019]s|\s+is|\s+was)\s+(?:fine|ok|okay|good|alright|all\s+right|great|cool|perfect|quick|fast)|(?:fine|ok|okay|all\s+good|thanks|thank\s+you|never\s*mind|nvm|no\s+worries)\b)/i.test(
+        rest,
+      ) ||
+      (this.world.board()?.sessions ?? []).some((session) =>
+        saidAsWords(title(session), words),
+      )
+    )
+      return false;
+    const requested = new Set(
+      (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) => !correctionStop.has(word),
+      ),
+    );
+    const contrast = [
+      ...words.matchAll(
+        /\b(?:not|instead\s+of|rather\s+than)\s+(?:(?:a|an|the|for|in|on|with|my|our|your)\s+)*(\p{L}+)/giu,
+      ),
+    ].some((match) => requested.has(match[1]!.toLowerCase()));
+    return (
+      contrast ||
+      (rest !== words &&
+        /^(?:i\s+meant|i\s+mean|it['\u2019]s\s+(?:a|an|for|called)\b|it\s+is\s+(?:a|an|for|called)\b|make\s+it|call\s+it|name\s+it|the\s+name\s+is|it\s+should\s+(?:be|say)|should\s+(?:be|say)|use\s+)/i.test(
           rest,
         ))
     );
@@ -11952,16 +12010,16 @@ export class Supervisor {
             corrected &&
             !corrected.done &&
             !acted() &&
-            this.correctsARunningJob(words, turn) &&
+            this.changesTheJobsRequest(words, turn) &&
             (!/\?["'\u201d)]*\s*$/.test(reply.text.trim()) ||
-              /\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed|sent|let)\b/i.test(
+              /\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed\s+on)\s+(?:it|that|this|them|the\s+(?:job|page|request|session|landing\s+page))\b/i.test(
                 reply.text,
               ))
           ) {
             if (rechecked) return correctionKept(corrected, words);
             rechecked = true;
             recheck =
-              "\nA check of your last draft: the person's last message corrects the job that still works. A job that runs cannot be changed, and no tool tells it anything. Call start_job now with their whole request as it is meant now: the request of that job with their change. The new job waits for the one that runs. If the change is not plain, ask one short question instead. Do not say that the running job was changed or told.";
+              "\nA check of your last draft: the person's last message changes what the newest job was asked to do. No tool changes a job or tells it anything. If their change is plain, call start_job now with their whole request as it is meant now: the request of that job with their change; the new job waits for that job. If it is not plain, ask one short question instead. Do not say that the job was changed or told.";
             continue;
           }
           const sizeClaim =

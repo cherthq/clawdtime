@@ -6913,11 +6913,11 @@ describe("a correction to a job that still works waits for that job", () => {
       });
       expect(got.jobs).toBe(1);
       expect(got.answer).toBe(
-        `"${request}" still works, and a job that runs cannot be changed, so your change is not in it: "wait no, it's a cafe not a bakery". Say the whole request with your change to start it as a new job.`,
+        `"${request}" still works, and no tool changes a job, so your change is not in it: "wait no, it's a cafe not a bakery". Say the whole request with your change to start it as a new job.`,
       );
       // The second answer was asked for with the true way.
       expect(JSON.stringify(run.seen[1])).toContain(
-        "corrects the job that still works",
+        "changes what the newest job was asked to do",
       );
     },
   );
@@ -6934,6 +6934,43 @@ describe("a correction to a job that still works waits for that job", () => {
     expect(got.jobs).toBe(2);
     expect(got.waits).toBe(true);
     expect(got.answer).toContain(waiting);
+  });
+
+  it.each([
+    // Questions, words of assent and messages about a session are no change of the job (review of a1c9fd2).
+    ["wait, is it running?", "Yes, it still works: it started 30 seconds ago."],
+    ["no, that's fine", "Okay."],
+    ["no it's fine, thanks", "Okay, it keeps working."],
+    ["actually that was quick", "It was."],
+    ["hold on, is that the bakery one", "Yes, that is the bakery page job."],
+    ["sorry, was that claude code?", "Yes."],
+    ["no, not the bakery one, I meant deploy fix", "Deploy fix is working."],
+    ["wait no, the api key is abcd1234efgh5678", "Got it."],
+    // Good questions back that hold words of a claim.
+    [
+      "wait no, it's a cafe not a bakery",
+      "Should I let the bakery job finish and then start a cafe version?",
+    ],
+    [
+      "wait no, it's a cafe not a bakery",
+      "I changed nothing: the bakery job still runs. Should I start a cafe version after it?",
+    ],
+  ])("leaves the answer to %j as it is", async (words, draft) => {
+    const run = scripted([draft]);
+    const got = await then(words, { model: run.model });
+    expect([words, got.jobs, got.answer]).toEqual([words, 1, draft]);
+    expect(run.seen.length, words).toBe(1);
+  });
+
+  it("does not say a credential back in the sentence that keeps a change", async () => {
+    const words =
+      "wait no, it's a cafe not a bakery, token ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const got = await then(words, {
+      model: scripted(["I've updated the job."]).model,
+    });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).not.toContain("ghp_");
+    expect(got.answer).toContain("look like a credential");
   });
 
   it("lets a question back about the correction stand", async () => {
