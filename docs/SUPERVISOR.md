@@ -1008,22 +1008,42 @@ to a private folder, read once and removed. Nothing of it is kept.
 - macOS asks once for Screen Recording permission, for the application that
   started ClawdTime.
 - Close what you do not want in the picture before you ask.
-- While a computer task runs, waits for you or stops, ClawdTime says of the
-  screen only what the task's engine reported. The language model gets the
-  engine's state and newest message before it answers ("are you stuck?", "is
-  it open?"). An answer that says that something is open, loaded, ready,
-  done, typed, clicked or found, with no tool result of that turn behind it,
-  is not sent: you get the state in its place ("The computer task still
-  runs: it has not reported that it is done. Its newest report: ...").
-- While a computer task runs, or is paused because you moved the mouse or
-  pressed a key (and waits for no answer and no yes), orders, polite requests
-  and short corrections for the screen ("open it in the browser", "just hit
-  enter", "no, the other tab") go straight to the engine in your own words,
-  and you get the engine's reply ("Got it. I take that into the task that
-  runs.", or "Got it. I go on with the task and take that into it." when it
-  was paused). Stops, state questions, thanks, coding work and words for a
-  coding session stay on their own paths; while the task waits for your yes
-  or your answer to its question, your message still goes to its answer.
+- While a computer task is not over (running, waiting, stopping, or with an
+  unknown result), ClawdTime says of the screen only what the task's engine
+  reported. A question about the task ("are you stuck?", "is it open?",
+  "where are you?", "what are you doing?", "did you hit enter?", "did it
+  send?", "is it done?", "do you need help?") is answered directly from the
+  engine's state without asking the language model. For other turns, the
+  language model gets the engine's state and newest report before it answers,
+  and any answer that claims a screen result with no tool result of that turn
+  behind it is replaced by the state ("The computer task still runs: it has
+  not reported that it is done. Its newest report: ...").
+- While a computer task can stop, stops in natural words ("stop", "ok stop",
+  "hey stop", "wait stop", "stop please", "stop now", "stop the computer",
+  "can you stop it?", "pls stop") stop it before anything else. When both a
+  coding task and a computer task run and the stop names neither, the
+  computer task stops (it holds the Mac) and ClawdTime says which one
+  stopped.
+- While the native computer worker runs or is paused after takeover (and
+  waits for no answer, no yes and no panel approval), orders with a verb and
+  object of the screen ("open it in the browser", "just hit enter", "bro just
+  hit enter", "Are you stuck? Just hit enter.") and short corrections ("no,
+  the other tab") go straight to the engine in your own words. Coding or
+  project work, messages to other people, later times, holds, prohibitions,
+  questions framed as orders, and words naming a coding session stay off
+  that path, and a model offer for words outside that grammar is never
+  forced to submit.
+- While the task waits for a panel approval or a non-worker answer, no
+  instruction is submitted. While the native worker waits for a yes, only a
+  bare yes or no goes to its answer; a screen order or a non-bare message
+  with a yes word ("ok, open it in the browser", "sure, click the other
+  one") goes to the engine so it sets the waiting action aside and sends
+  nothing, while unclear words with no yes word repeat the question. While
+  it waits for a free answer, your words answer it. At a takeover pause,
+  only continue words ("continue", "go on", "resume", "carry on", "keep
+  going", "go ahead") resume it, "no"/"nope"/"nah"/"stop" stops it, a screen
+  order goes to the engine, and anything else ("ok", "sure", "hmm") gets the
+  paused state and resumes nothing.
 
 ### Give it a job
 
