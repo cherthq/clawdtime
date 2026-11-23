@@ -183,6 +183,31 @@ seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
   you say more. After the first addition a close asks again, whatever the
   addition says.
 
+### A closer look
+
+A small thing that has no element in the Accessibility tree (one star of a
+rating, a small icon, a check box, a thin line) can be hard to tell apart in
+the picture of the whole screen. The planner can then call `look_closer` at a
+point of the picture:
+
+- **The part.** A quarter of the picture's width and of its height around the
+  point, moved inside the picture near an edge.
+- **The picture.** The hands take that part of the screen, three times
+  larger than the same part of the last picture (command `zoom`). The
+  windows of ClawdTime are left out, as in every picture. Nothing is sent to
+  an app, and no question is asked.
+- **The next turn.** The planner gets the closer picture as a second picture,
+  with the part of the first picture that it shows, for that one turn only.
+  To click a thing in it, the planner calls `click_at` with `closer` true and
+  a point of the second picture. The planner turns that point into a point of
+  the first picture, so the worker and its checks see an ordinary click, and
+  all of them run as for any click. A `click_at` with `closer` in a turn with
+  no closer picture is refused.
+
+The panel scales the part to the asked size (`scalesToFit`): without it, the
+part stays at its own size in a corner and the rest of the picture is empty.
+A capture on the laptop showed the difference.
+
 ## Turn it on
 
 ```sh

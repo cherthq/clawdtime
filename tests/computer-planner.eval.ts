@@ -35,6 +35,8 @@ import type {
   StepRecord,
 } from "../connectors/computer/ports.js";
 import { screens } from "./computer-planner-screens.js";
+import { closerMagnify, closerPart } from "../connectors/computer/guards.js";
+import type { Closer } from "../connectors/computer/ports.js";
 
 const key = process.env.CLAWDTIME_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
 if (!key)
@@ -154,6 +156,8 @@ interface Task {
   /** What the person said after the start, oldest first. */
   guidance?: string[];
   history?: StepRecord[];
+  /** A closer look around this point of the picture comes with the turn, as after look_closer. */
+  closerAt?: (seen: Seen) => { x: number; y: number };
   /** True when the action is a right next step. */
   right: (action: Action, seen: Seen) => boolean;
 }
@@ -173,6 +177,33 @@ const hits = (action: Action, seen: Seen, ...keys: string[]) =>
     );
   });
 const number = (seen: Seen, name: string) => seen.at[name]?.id;
+/** The box around the five drawn stars. */
+const starRow = (seen: Seen) => {
+  const boxes = [1, 2, 3, 4, 5].map((n) => seen.at[`star-${n}`]!);
+  const left = Math.min(...boxes.map((b) => b.x)),
+    top = Math.min(...boxes.map((b) => b.y));
+  const right = Math.max(...boxes.map((b) => b.x + b.w)),
+    bottom = Math.max(...boxes.map((b) => b.y + b.h));
+  return { id: 0, x: left, y: top, w: right - left, h: bottom - top };
+};
+const middle = (box: { x: number; y: number; w: number; h: number }) => ({
+  x: box.x + box.w / 2,
+  y: box.y + box.h / 2,
+});
+/** A point of the action within `margin` pixels of the box. */
+const near = (
+  a: Action,
+  box: { x: number; y: number; w: number; h: number },
+  margin: number,
+) =>
+  "x" in a &&
+  "y" in a &&
+  typeof a.x === "number" &&
+  typeof a.y === "number" &&
+  a.x >= box.x - margin &&
+  a.x <= box.x + box.w + margin &&
+  a.y >= box.y - margin &&
+  a.y <= box.y + box.h + margin;
 /** The host of an address with no "www.", or nothing for an address that cannot be read. */
 const hostOf = (url: string) => {
   try {
@@ -349,15 +380,36 @@ const tasks: Task[] = [
     right: (a, s) => hits(a, s, "tool-zoom"),
   },
   {
+    // Small and drawn: a closer look at it first is a right step too.
     id: "point: a drawn x of 18 pixels",
     screen: "board",
     goal: "Close the yellow banner at the top of the board with its x.",
-    right: (a, s) => hits(a, s, "banner-x"),
+    right: (a, s) =>
+      hits(a, s, "banner-x") ||
+      (a.kind === "look_closer" && near(a, s.at["banner-x"]!, 40)),
   },
   {
+    // The stars are small and drawn: a closer look at them first is a right step too.
     id: "point: one of five drawn stars",
     screen: "board",
     goal: "Rate this board with three stars.",
+    right: (a, s) =>
+      hits(a, s, "star-3") ||
+      (a.kind === "look_closer" && near(a, starRow(s), 60)),
+  },
+  {
+    id: "point: one of five drawn stars, with a closer look",
+    screen: "board",
+    goal: "Rate this board with three stars.",
+    history: [
+      {
+        step: 1,
+        action: { kind: "look_closer", x: 0, y: 0 },
+        why: "The stars are small.",
+        outcome: "ok: the closer picture comes with this turn",
+      },
+    ],
+    closerAt: (s) => middle(starRow(s)),
     right: (a, s) => hits(a, s, "star-3"),
   },
   {
@@ -482,6 +534,8 @@ const configs: Config[] = (
   return { label: word, model, detail: detail === "low" ? "low" : "high" };
 });
 const repeats = Math.max(1, Math.floor(Number(process.env.REPEATS ?? "2")));
+/** ONLY: run the tasks whose id holds these words, and no other. */
+const only = process.env.ONLY?.toLowerCase();
 
 interface Row {
   config: string;
@@ -494,6 +548,43 @@ interface Row {
 }
 const rows: Row[] = [];
 const seen = await render();
+const closers = await renderClosers();
+
+/** The closer pictures of the tasks that have one, made as the hands make them: three times larger. */
+async function renderClosers(): Promise<Record<string, Closer>> {
+  const wanted = tasks.filter((task) => task.closerAt);
+  const out: Record<string, Closer> = {};
+  if (!wanted.length) return out;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({
+      viewport: picture,
+      deviceScaleFactor: closerMagnify,
+    });
+    for (const task of wanted) {
+      const view = seen[task.screen]!;
+      const part = closerPart(task.closerAt!(view), view.observation)!;
+      await page.setContent(screens[task.screen]!.html);
+      const { x, y, w, h } = part.region;
+      const image = (
+        await page.screenshot({
+          type: "jpeg",
+          quality: 80,
+          clip: { x, y, width: w, height: h },
+        })
+      ).toString("base64");
+      out[task.id] = {
+        image,
+        imageWidth: w * closerMagnify,
+        imageHeight: h * closerMagnify,
+        region: part.region,
+      };
+    }
+  } finally {
+    await browser.close();
+  }
+  return out;
+}
 
 async function measure(config: Config) {
   // The planner asks for the large picture. For ":low" the request is changed on its way out.
@@ -520,6 +611,7 @@ async function measure(config: Config) {
   let failures = 0;
   for (let run = 1; run <= repeats; run++)
     for (const task of tasks) {
+      if (only && !task.id.toLowerCase().includes(only)) continue;
       const view = seen[task.screen]!;
       const from = performance.now();
       try {
@@ -529,6 +621,7 @@ async function measure(config: Config) {
           history: task.history ?? [],
           observation: view.observation,
           page: null,
+          ...(closers[task.id] ? { closer: closers[task.id] } : {}),
         });
         const { kind, ...rest } = action;
         rows.push({

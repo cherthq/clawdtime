@@ -150,7 +150,11 @@ class PageHands implements Hands {
 
   async run(command: HandCommand): Promise<HandResult> {
     const seq = ++this.seq;
-    if (command.kind !== "observe" && command.kind !== "wait")
+    if (
+      command.kind !== "observe" &&
+      command.kind !== "wait" &&
+      command.kind !== "zoom"
+    )
       this.sent.push(command);
     const at = (value: number) => value / toScreen;
     switch (command.kind) {
@@ -163,6 +167,33 @@ class PageHands implements Hands {
       case "wait":
         await this.page.waitForTimeout(Math.min(command.ms, 1500));
         return { seq, ok: true };
+      case "zoom": {
+        // A closer look, as the panel takes it: one part, scaled up to the asked pixels.
+        const x = at(command.x),
+          y = at(command.y),
+          w = at(command.w),
+          h = at(command.h);
+        const cdp = await this.page.context().newCDPSession(this.page);
+        try {
+          const shot = (await cdp.send("Page.captureScreenshot", {
+            format: "jpeg",
+            quality: 80,
+            clip: { x, y, width: w, height: h, scale: command.width / w },
+          })) as { data: string };
+          return {
+            seq,
+            ok: true,
+            observation: {
+              ...(await this.observe(false, false)),
+              image: shot.data,
+              imageWidth: command.width,
+              imageHeight: command.height,
+            },
+          };
+        } finally {
+          await cdp.detach();
+        }
+      }
       case "move":
         await this.page.mouse.move(at(command.x), at(command.y));
         return { seq, ok: true };

@@ -112,7 +112,18 @@ const screenTools = [
       y: { type: "number" },
       double: { type: "boolean" },
       right: { type: "boolean" },
+      closer: {
+        type: "boolean",
+        description:
+          "True when x and y are a point of the closer picture of this turn, in its pixels.",
+      },
     },
+    ["x", "y"],
+  ),
+  tool(
+    "look_closer",
+    "Look closer at a part of the picture around a point, in its pixels. The next turn shows that part three times larger, as a second picture. Use it before a click on a small thing that you cannot tell apart in the picture: one star of a rating, a small icon, a check box, a thin line or a small number.",
+    { x: { type: "number" }, y: { type: "number" } },
     ["x", "y"],
   ),
   tool(
@@ -314,17 +325,19 @@ function stepLine(record: StepRecord) {
       ? ` "${line(action.text, 60)}"`
       : action.kind === "key"
         ? ` ${line(action.combo, 40)}`
-        : action.kind === "open_app" || action.kind === "quit_app"
-          ? ` ${line(action.name, 60)}`
-          : action.kind === "open_url"
-            ? ` ${line(action.url, 120)}${action.browser ? ` in ${line(action.browser, 60)}` : ""}`
-            : action.kind === "browser_open"
-              ? ` ${line(action.url, 120)}`
-              : action.kind === "scroll" || action.kind === "browser_scroll"
-                ? ` ${action.direction}`
-                : action.kind === "ask"
-                  ? ` "${line(action.question, 120)}"`
-                  : "";
+        : action.kind === "look_closer"
+          ? ` at ${Math.round(action.x)},${Math.round(action.y)}`
+          : action.kind === "open_app" || action.kind === "quit_app"
+            ? ` ${line(action.name, 60)}`
+            : action.kind === "open_url"
+              ? ` ${line(action.url, 120)}${action.browser ? ` in ${line(action.browser, 60)}` : ""}`
+              : action.kind === "browser_open"
+                ? ` ${line(action.url, 120)}`
+                : action.kind === "scroll" || action.kind === "browser_scroll"
+                  ? ` ${action.direction}`
+                  : action.kind === "ask"
+                    ? ` "${line(action.question, 120)}"`
+                    : "";
   const why = line(record.why, 120);
   // The hands say ok when the address went to the browser. That is not the page.
   const outcome =
@@ -398,6 +411,15 @@ export function brief(
     parts.push(
       "The screen could not be read this time. Call wait: a new look comes after it. Do not ask the person what the screen shows.",
     );
+  const closer = input.closer;
+  if (closer && seen) {
+    const { x, y, w, h } = closer.region;
+    parts.push(
+      "",
+      `A closer look, as you asked: the second picture is the part of the first picture from ${x},${y} to ${x + w},${y + h}, ${closer.imageWidth} by ${closer.imageHeight} pixels, larger. It was taken just before the first picture's look; when the two differ, the first picture is the screen now.`,
+      "To click a thing that you see in the second picture, call click_at with closer true and its point in the second picture, in its pixels.",
+    );
+  }
   if (browser) {
     parts.push("");
     if (input.page) parts.push(...pageLines(input.page));
@@ -497,6 +519,7 @@ export class OpenAIPlanner implements Planner {
     const browser = this.browser && input.browser !== false;
     const text = brief(input, browser);
     const image = input.observation?.image;
+    const closer = image ? input.closer : undefined;
     const response = await this.send({
       messages: [
         { role: "system", content: rules(browser) },
@@ -510,6 +533,17 @@ export class OpenAIPlanner implements Planner {
                     type: "image_url",
                     image_url: {
                       url: `data:image/jpeg;base64,${image}`,
+                      detail: "high",
+                    },
+                  },
+                ]
+              : []),
+            ...(closer
+              ? [
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: `data:image/jpeg;base64,${closer.image}`,
                       detail: "high",
                     },
                   },
@@ -549,6 +583,24 @@ export class OpenAIPlanner implements Planner {
     const given = Object.fromEntries(
       Object.entries(rest).filter(([, value]) => value !== null),
     );
+    if (call.name === "click_at") {
+      const inCloser = given.closer === true;
+      if (given.closer === false) delete given.closer;
+      // A point of the closer picture is a point of the first picture again,
+      // so the worker and its checks see an ordinary click. With no closer
+      // picture in this turn, the flag stays: the checks refuse the action.
+      if (
+        inCloser &&
+        closer &&
+        typeof given.x === "number" &&
+        typeof given.y === "number"
+      ) {
+        const { x, y, w, h } = closer.region;
+        given.x = Math.round(x + (given.x * w) / closer.imageWidth);
+        given.y = Math.round(y + (given.y * h) / closer.imageHeight);
+        delete given.closer;
+      }
+    }
     return {
       // The shape of an action only. The worker checks it before anything runs.
       action: { ...given, kind: call.name } as unknown as Action,

@@ -115,6 +115,10 @@ public enum HandCommand: Equatable, Sendable {
   /// Quits a running app by its name, the polite way: the app may ask about work that is not saved, and stay.
   case quitApp(name: String)
   case wait(ms: Int)
+  /// A picture of one part of the main display, larger than the same part of an observation: a closer look at
+  /// small things. The part is in screen points from the top left; `width` and `height` are the pixels of the
+  /// picture. Nothing is sent to an app, and no Accessibility tree is read.
+  case zoom(x: Double, y: Double, w: Double, h: Double, width: Int, height: Int)
 
   /// The name of the command in the contract.
   public var kind: String {
@@ -132,6 +136,7 @@ public enum HandCommand: Equatable, Sendable {
     case .openURL: return "open_url"
     case .quitApp: return "quit_app"
     case .wait: return "wait"
+    case .zoom: return "zoom"
     }
   }
   /// Where a pointing command starts. The guided cursor travels there before the event.
@@ -159,12 +164,13 @@ public enum HandCommand: Equatable, Sendable {
     switch self {
     case .observe(_, let elements): return elements
     case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop, .switchPreviousApp: return true
-    case .openURL, .quitApp, .wait: return false
+    case .openURL, .quitApp, .wait, .zoom: return false
     }
   }
   /// The command takes a picture of the screen.
   public var needsScreenRecording: Bool {
     if case .observe(let image, _) = self { return image }
+    if case .zoom = self { return true }
     if case .openApp = self { return true }
     if case .switchDesktop = self { return true }
     if case .switchPreviousApp = self { return true }
@@ -180,7 +186,7 @@ public enum HandCommand: Equatable, Sendable {
 
 extension HandCommand: Codable {
   private enum Key: String, CodingKey {
-    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
+    case kind, image, elements, x, y, w, h, width, height, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
   }
   public init(from decoder: Decoder) throws {
     let box = try decoder.container(keyedBy: Key.self)
@@ -244,6 +250,14 @@ extension HandCommand: Codable {
       let ms = try box.decode(Int.self, forKey: .ms)
       guard (0...10_000).contains(ms) else { throw PanelFailure.response }
       self = .wait(ms: ms)
+    case "zoom":
+      try only(.x, .y, .w, .h, .width, .height)
+      let width = try box.decode(Int.self, forKey: .width), height = try box.decode(Int.self, forKey: .height)
+      let w = try number(.w), h = try number(.h)
+      // A part of the screen with a size, and a picture that fits the contract.
+      guard w >= 8, h >= 8, (16...HandsZoom.maxSide).contains(width), (16...HandsZoom.maxSide).contains(height)
+        else { throw PanelFailure.response }
+      self = .zoom(x: try number(.x), y: try number(.y), w: w, h: h, width: width, height: height)
     default:
       // A kind that this panel does not know is never run.
       throw PanelFailure.response
@@ -276,7 +290,24 @@ extension HandCommand: Codable {
       try box.encode(url, forKey: .url); try box.encodeIfPresent(browser, forKey: .browser)
     case .quitApp(let name): try box.encode(name, forKey: .name)
     case .wait(let ms): try box.encode(ms, forKey: .ms)
+    case .zoom(let x, let y, let w, let h, let width, let height):
+      try box.encode(x, forKey: .x); try box.encode(y, forKey: .y); try box.encode(w, forKey: .w); try box.encode(h, forKey: .h)
+      try box.encode(width, forKey: .width); try box.encode(height, forKey: .height)
     }
+  }
+}
+
+/// The limits of a closer look.
+public enum HandsZoom {
+  /// The longest side of its picture, in pixels.
+  public static let maxSide = 1600
+  /// The part of the display that the picture shows: the part asked for, cut to the display. Nil when nothing
+  /// of it is on the display. Points from the top left.
+  public static func region(x: Double, y: Double, w: Double, h: Double, display: CGRect) -> CGRect? {
+    let asked = CGRect(x: x, y: y, width: w, height: h)
+    guard [x, y, w, h].allSatisfy(\.isFinite) else { return nil }
+    let part = asked.intersection(CGRect(origin: .zero, size: display.size))
+    return part.isNull || part.width < 1 || part.height < 1 ? nil : part
   }
 }
 

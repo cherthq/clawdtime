@@ -48,9 +48,12 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"open_url","url":"https://example.com/a?b=1","browser":"Fixture Browser"}"#, .openURL(url: "https://example.com/a?b=1", browser: "Fixture Browser")),
       (#"{"kind":"quit_app","name":"TextEdit"}"#, .quitApp(name: "TextEdit")),
       (#"{"kind":"wait","ms":250}"#, .wait(ms: 250)),
+      (#"{"kind":"zoom","x":900,"y":600.5,"w":240,"h":150,"width":960,"height":600}"#,
+       .zoom(x: 900, y: 600.5, w: 240, h: 150, width: 960, height: 600)),
     ]
     XCTAssertEqual(Set(cases.map { $0.1.kind }),
-      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "quit_app", "wait"])
+      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "quit_app", "wait",
+       "zoom"])
     for (json, expected) in cases {
       let decoded = try command(json)
       XCTAssertEqual(decoded, expected, json)
@@ -73,6 +76,11 @@ final class HandsContractTests: XCTestCase {
       #"{"kind":"move","x":"1","y":2}"#,
       #"{"kind":"observe","image":1,"elements":true}"#,
       #"{"kind":"observe","image":true,"elements":true,"window":"all"}"#,
+      // A closer look with no size, a picture outside the limits, or a field more.
+      #"{"kind":"zoom","x":1,"y":2,"w":4,"h":150,"width":960,"height":600}"#,
+      #"{"kind":"zoom","x":1,"y":2,"w":240,"h":150,"width":4000,"height":600}"#,
+      #"{"kind":"zoom","x":1,"y":2,"w":240,"h":150,"width":960}"#,
+      #"{"kind":"zoom","x":1,"y":2,"w":240,"h":150,"width":960,"height":600,"elements":true}"#,
       #"{"kind":"click","x":1,"y":2,"button":"middle","count":1}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left","count":3}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left","count":0}"#,
@@ -224,6 +232,10 @@ final class HandsContractTests: XCTestCase {
       XCTAssertEqual(command.missingRight(accessibility: false, screenRecording: true), .noAccessibility, command.kind)
       XCTAssertNil(command.missingRight(accessibility: true, screenRecording: false), command.kind)
     }
+    // A closer look is a picture: it needs the screen, and no Accessibility.
+    XCTAssertEqual(HandCommand.zoom(x: 1, y: 2, w: 240, h: 150, width: 960, height: 600).missingRight(accessibility: true, screenRecording: false),
+      .noScreenRecording)
+    XCTAssertNil(HandCommand.zoom(x: 1, y: 2, w: 240, h: 150, width: 960, height: 600).missingRight(accessibility: false, screenRecording: true))
     for command in [HandCommand.openURL(url: "https://example.com"), .wait(ms: 5)] {
       XCTAssertNil(command.missingRight(accessibility: false, screenRecording: false), command.kind)
     }
@@ -298,5 +310,17 @@ final class HandsContractTests: XCTestCase {
                                      run: .init(active: false, goal: "", step: 0, state: "running")), .refused)
     // The service did not answer: nothing is sent.
     XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false, run: nil), .failed)
+  }
+
+  func testACloserLookShowsOnlyThePartOfTheDisplayThatIsThere() {
+    let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    XCTAssertEqual(HandsZoom.region(x: 100, y: 200, w: 240, h: 150, display: display), CGRect(x: 100, y: 200, width: 240, height: 150))
+    // Over an edge: only the part on the display.
+    XCTAssertEqual(HandsZoom.region(x: 1400, y: 900, w: 240, h: 150, display: display), CGRect(x: 1400, y: 900, width: 112, height: 82))
+    XCTAssertEqual(HandsZoom.region(x: -50, y: -20, w: 100, h: 100, display: display), CGRect(x: 0, y: 0, width: 50, height: 80))
+    // Nothing of it on the display, or a number that is no number.
+    XCTAssertNil(HandsZoom.region(x: 2000, y: 100, w: 240, h: 150, display: display))
+    XCTAssertNil(HandsZoom.region(x: .nan, y: 100, w: 240, h: 150, display: display))
+    XCTAssertNil(HandsZoom.region(x: 100, y: 100, w: .infinity, h: 150, display: display))
   }
 }

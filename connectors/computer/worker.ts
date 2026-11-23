@@ -55,6 +55,7 @@ import {
   type Checked,
   type View,
   hasTextFocus,
+  closerPart,
 } from "./guards.js";
 import {
   guidanceLimit,
@@ -93,6 +94,7 @@ import type {
   Observation,
   Planner,
   StepRecord,
+  Closer,
 } from "./ports.js";
 
 /** What every way to stop says. It never claims that an action was undone. */
@@ -413,6 +415,8 @@ const sameSpeaker = (
 ) => started?.callId === said?.callId;
 interface Run {
   authority?: DesktopExecutionAuthority;
+  /** The closer look that the planner asked for, for its next turn only. */
+  closer?: Closer;
   /** Why the step of this turn was not sent, for the timing record. */
   held?: string;
   /**
@@ -579,7 +583,9 @@ const focusMovedToField = (seen: Observation | null, focus: FocusClicks) =>
 const sendsNoInput = (send: Ready["send"]) =>
   send.via === "browser"
     ? send.call.name === "read"
-    : send.command.kind === "wait" || send.command.kind === "observe";
+    : send.command.kind === "wait" ||
+      send.command.kind === "observe" ||
+      send.command.kind === "zoom";
 
 /**
  * The hands held an input back because the person moved the mouse or pressed
@@ -1797,7 +1803,10 @@ export class ComputerWorker implements DesktopExecutorPort {
             observation: run.observation,
             page: run.page,
             ...(run.browserClosed ? { browser: false } : {}),
+            ...(run.closer ? { closer: run.closer } : {}),
           });
+          // A closer picture is for the turn after the look that made it.
+          delete run.closer;
           plan.catch(() => {});
           // Neither Stop, hold nor the time limit waits for the planner.
           planned = await Promise.race([
@@ -2678,6 +2687,27 @@ export class ComputerWorker implements DesktopExecutorPort {
         } else {
           run.heldRow.sentBefore = screenPrint(before, null, true);
         }
+      }
+    }
+    // A closer look: the picture goes with the next turn of the planner.
+    if (send.command.kind === "zoom" && action.kind === "look_closer") {
+      const seen = handed.result?.ok ? handed.result.observation : undefined;
+      const part = closerPart(action, before);
+      if (seen?.image && seen.imageWidth && seen.imageHeight && part) {
+        run.closer = {
+          image: seen.image,
+          imageWidth: seen.imageWidth,
+          imageHeight: seen.imageHeight,
+          region: part.region,
+        };
+        return this.note(
+          run,
+          action,
+          why,
+          ready.target,
+          "ok: the closer picture comes with this turn",
+          "ok",
+        );
       }
     }
     // Text with no field to take it went nowhere, or into the keys of the

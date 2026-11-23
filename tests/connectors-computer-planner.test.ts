@@ -145,6 +145,7 @@ describe("the planner on the chat completions API", () => {
     expect(names).toEqual([
       "click_element",
       "click_at",
+      "look_closer",
       "type",
       "key",
       "scroll",
@@ -169,7 +170,7 @@ describe("the planner on the chat completions API", () => {
       browser: true,
     }).next(input());
     expect(
-      wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(12),
+      wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(13),
     ).toEqual([
       "browser_read",
       "browser_open",
