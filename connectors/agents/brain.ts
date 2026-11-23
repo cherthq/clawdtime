@@ -12555,6 +12555,9 @@ export class Supervisor {
           }
           if (offers.length > 0) {
             if (rechecked) {
+              // After a correction of the job, what is left of the answer
+              // drops the change: the sentence that keeps it stands.
+              if (keepsChange) return correctionKept(corrected!, words);
               // The answer without the sentences that offer it. When nothing
               // else is left: what is known of the jobs.
               const rest = clean(body, 900);
@@ -12568,7 +12571,10 @@ export class Supervisor {
             }
             rechecked = true;
             recheck =
-              "\nA check of your last draft: it offers to cancel, stop or restart a job. No tool does that: a job runs until it writes its answer. Say the same answer once more without that offer, and offer nothing in its place.";
+              "\nA check of your last draft: it offers to cancel, stop or restart a job. No tool does that: a job runs until it writes its answer. Say the same answer once more without that offer, and offer nothing in its place." +
+              (keepsChange
+                ? " The person's last message changes what the newest job was asked to do: if their change is plain, call start_job with their whole request as it is meant now (the new job waits for that job); else ask one short question about the change."
+                : "");
             continue;
           }
           const offered = offeredWords(
