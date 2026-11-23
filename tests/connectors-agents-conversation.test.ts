@@ -16091,6 +16091,562 @@ describe("an answer that promises to tell, watch or remind later, with nothing b
     );
   });
 
+  describe("a promise in other words about a session that the chat does not wait for", () => {
+    /** The chat waits for deploy fix. Docs is idle and payments tests works: it waits for neither. */
+    const waiting = async () => {
+      const made = room();
+      await made.say("keep an eye on deploy fix", ["Will do."]);
+      return made;
+    };
+
+    it.each([
+      // Answers of the real model to "give me a heads up if docs changes".
+      "Got it, I'll give you a heads up here if docs changes happen.",
+      "Got it, I'll give you a heads up if docs changes.",
+      "Got it, I'll give you a heads up when docs changes happen.",
+      "I got you, I'll give you a heads up here if any docs changes happen.",
+      "I'll give you a heads up here if docs changes get deployed or fail.",
+      "I got you\u2014I'll give you a heads up here if anything changes in the docs.",
+      "Got it, I'll alert you right here whenever docs changes happen.",
+      "Got it, I'll notify you here anytime docs changes happen.",
+      "Got it, I'm also watching docs and will give you a heads up here when it's done or if it hits an error.",
+      "Got it, I'll wait on docs changes too, to tell you right when something happens there.",
+      "Got it, I'll tell you here the second something happens with the docs session.",
+      "I'll track docs changes and update you the moment something shows up there.",
+      "I'll keep an ear on docs and let you know when it moves.",
+      // Words that negate nothing hide no promise.
+      "No problem, I'll tell you when docs is done.",
+      "Don't worry, I'll ping you when docs changes.",
+      // After the person asked to hear something and nothing was taken, a
+      // promise is read widely: "I'll" with a word of telling or watching
+      // behind it.
+      "Got it, I'll notify you here immediately on any docs changes or events as soon as they happen.",
+      "I got that noted for this chat, so I'll update you without you asking again about docs changes or events.",
+      "I got you, I'll catch any docs changes and tell you here.",
+      "Sure thing, I'll be on the lookout and you will know about docs right away.",
+      // It names the session that the chat waits for beside the one that
+      // the person asked about: the promise is for docs too.
+      "I'll watch deploy fix and docs changes for you and give you heads up when any happens.",
+      "Got it, I'll watch deploy fix and docs for changes and give you heads up as soon as they finish or update.",
+    ])("asks the model once more after the promise %j", async (promise) => {
+      const { later, say } = await waiting();
+      const got = await say("cool. give me a heads up if docs changes", [
+        promise,
+        "Docs is idle.",
+      ]);
+      expect(got.run.seen, promise).toHaveLength(2);
+      expect(got.run.seen[1]!.system, promise).toContain(note);
+      expect(got.reply, promise).toBe("Docs is idle.");
+      expect(later.watching(), promise).toEqual(["deploy fix"]);
+    });
+
+    it.each([
+      // The promise names no session, and the person asked to hear about
+      // docs, for which nothing was taken: it is about docs.
+      "Got it, I'll watch for doc changes and let you know here if anything happens.",
+      "I'll watch for doc changes and tell you here if anything new shows up.",
+      "I'll watch for doc changes and let you know here when they happen.",
+      "Got it, I'll give you a heads up if doc changes come through.",
+      "Will do, I'll keep an eye out.",
+    ])(
+      "asks the model once more after the promise with no name %j, and then says what is true",
+      async (promise) => {
+        const { later, say } = await waiting();
+        const once = await say("cool. give me a heads up if docs changes", [
+          promise,
+          "Docs is idle.",
+        ]);
+        expect(once.run.seen, promise).toHaveLength(2);
+        expect(once.reply, promise).toBe("Docs is idle.");
+        const twice = await say("and give me a heads up if docs changes", [
+          promise,
+          promise,
+        ]);
+        expect(twice.reply, promise).toBe(
+          "I tell you when deploy fix is done. For anything else, ask me when you want to know.",
+        );
+        expect(later.watching(), promise).toEqual(["deploy fix"]);
+      },
+    );
+
+    it.each([
+      // A second promise goes with its whole sentence, as before.
+      "Docs is idle right now, but I'll keep an eye on docs for you.",
+      // "No problem" and "don't worry" negate nothing.
+      "No problem, I'll tell you when docs is done.",
+      "I'll keep an eye on docs for you, no worries.",
+      "Don't worry, I'll ping you when docs changes.",
+    ])("replaces the second promise %j by what is true", async (promise) => {
+      const { say } = await waiting();
+      const got = await say("cool. give me a heads up if docs changes", [
+        promise,
+        promise,
+      ]);
+      expect(got.reply, promise).toBe(
+        "I do not say that later by myself. Ask me again when you want to know.",
+      );
+    });
+
+    it.each([
+      // A sentence that says what is not done stands whole, as before,
+      // also with a promise beside it: no true word about a decision, a
+      // start, typed text or a watch is cut out of it.
+      "I'm not watching docs yet, but I'll add it to the watch list so you get a heads up right away when something happens there.",
+      "Got it, I won't remind you later by myself, but I'll keep an eye on docs and let you know the second anything happens there.",
+      "Docs is not active yet, so I can't watch it yet\u2014but I'll keep that in mind to watch docs when it starts.",
+      "I will watch docs, and I have not approved the push.",
+      "I didn't type anything, and I haven't approved it, but I'll keep an eye on docs.",
+      "I haven't deployed anything, but I'll keep an eye on docs.",
+      "I didn't close it, but I'll keep an eye on docs.",
+      "I made no change, but I'll keep an eye on docs.",
+      "No window was moved, but I'll keep an eye on docs.",
+      "Nothing was deleted, but I'll keep an eye on docs.",
+      "I haven't fixed it yet, but I'll keep an eye on docs.",
+      "I didn't restart deploy fix, but I'll keep an eye on docs.",
+      "I won't approve anything without you, but I'll keep an eye on docs.",
+      "I'm not going to start a job for that, but I'll keep an eye on docs.",
+      "I'll not type anything into docs, but I'll keep an eye on docs.",
+      "Nothing was decided, and the watch list is empty, but I'll keep an eye on docs.",
+      "I haven't started anything and nobody is watching docs, but I'll keep an eye on it.",
+      "I can't promise anything; I'll keep an eye on docs; nothing else changes.",
+      "No worries, I'm not watching docs yet, but I'll watch it.",
+      "Nothing will be typed into docs, but I'll keep an eye on it.",
+      "No job will start, but I'll keep an eye on docs.",
+      "I'm not set up to watch docs, but I'll tell you when it changes.",
+      // A true word about an act with "stop" or "skip" in it.
+      "I didn't stop the job, and I'll tell you when docs changes.",
+      "I won't stop deploy fix, but I'll tell you when docs changes.",
+      "I can't stop the job from here; I'll ping you when docs changes.",
+      "I didn't skip the tests, and I'll tell you when docs changes.",
+      // A promise in words of what is not done reads as what is not done:
+      // the sentence stands, as before.
+      "I won't forget: I'll keep an eye on docs for you.",
+      "I'll keep an eye on docs, and I won't forget to ping you when it changes.",
+      "I'll keep an eye on docs; I won't let it slip.",
+      "I'll keep an eye on docs; nothing will get past me.",
+      "I'll keep an eye on docs; nothing will go unnoticed.",
+      "I'll keep an eye on docs; I won't let it out of my sight.",
+      "I'll keep an eye on docs; nothing goes unnoticed.",
+    ])("lets %j stand whole: it says what is not done", async (answer) => {
+      const { later, say } = await waiting();
+      const got = await say("cool. give me a heads up if docs changes", [
+        answer,
+        "Other.",
+      ]);
+      expect(got.reply, answer).toBe(answer);
+      expect(got.run.seen, answer).toHaveLength(1);
+      expect(later.watching(), answer).toEqual(["deploy fix"]);
+    });
+
+    it("says what is true for a second promise that names docs beside the session that the chat waits for", async () => {
+      const { later, say } = await waiting();
+      const promise =
+        "I'll watch deploy fix and docs changes for you and give you heads up when any happens.";
+      const got = await say("cool. give me a heads up if docs changes", [
+        promise,
+        promise,
+      ]);
+      expect(got.reply).toBe(
+        "I tell you when deploy fix is done. For anything else, ask me when you want to know.",
+      );
+      expect(later.watching()).toEqual(["deploy fix"]);
+    });
+
+    it("tells the model what the chat waits for, in the note of the check", async () => {
+      const { say } = await waiting();
+      const got = await say("cool. give me a heads up if docs changes", [
+        "Got it, I'll give you a heads up here if docs changes happen.",
+        "Docs is idle.",
+      ]);
+      const system = got.run.seen[1]!.system;
+      expect(system).toContain(note);
+      expect(system).toContain(
+        "About sessions, you tell only when deploy fix is done: nothing was taken for another session.",
+      );
+      expect(system).not.toContain("only after the person asked to hear it");
+      // With nothing watched, the note says so.
+      const empty = room();
+      const none = await empty.say("cool. give me a heads up if docs changes", [
+        "Got it, I'll give you a heads up here if docs changes happen.",
+        "Docs is idle.",
+      ]);
+      expect(none.run.seen[1]!.system).toContain(
+        "You wait for no session now: nothing was taken.",
+      );
+      // With no record of watched sessions, it speaks of "from here".
+      const made = room();
+      const run = scripted([
+        "Got it, I'll give you a heads up here if docs changes happen.",
+        "Docs is idle.",
+      ]);
+      const { laterNews: _none, ...world } = made.world;
+      await new Supervisor(world, run.model).reply(
+        [],
+        "cool. give me a heads up if docs changes",
+        "chat",
+      );
+      expect(run.seen[1]!.system).toContain(
+        "From here nothing is said by itself about a session.",
+      );
+      expect(run.seen[1]!.system).not.toContain("Want me to tell you when");
+    });
+
+    it("reads a turn that decided as before: a true word about the decision is not cut by a new form", async () => {
+      // Nothing is watched: a promise with no name would be empty.
+      const { made, say } = room();
+      const request = made.world.desk.open({
+        agent: "claude-code",
+        sessionId: "s",
+        cwd: "/work/app",
+        pids: [],
+        described: {
+          kind: "permission",
+          tool: "Bash",
+          summary: "git push origin main",
+          options: [],
+        },
+        holdSeconds: 600,
+      });
+      const answer =
+        "Approved the push; I'll give you a heads up if another request comes in.";
+      const got = await say("approve the push", [
+        [call("decide", { request: request.id, decision: "allow" })],
+        answer,
+        answer,
+      ]);
+      expect(got.reply).toBe(answer);
+    });
+
+    it("reads a turn that typed as before: a true word about the typed text is not cut by a new form", async () => {
+      const { say } = room();
+      const answer =
+        "I typed it into docs; I'll update you whenever it answers.";
+      const got = await say("tell docs: run the tests", [answer, answer]);
+      expect(got.reply).toBe(answer);
+    });
+
+    it("offers nothing when the promise is for two sessions, one of them by a word that points back", async () => {
+      // Nothing is watched. "It" is payments tests, from the part before.
+      const { later, say } = room();
+      const promise =
+        "Payments tests runs; I'll keep an eye on it and on deploy fix.";
+      const got = await say("how is payments tests?", [promise, promise]);
+      expect(got.reply).toBe(
+        "I do not say that later by myself. Ask me again when you want to know.",
+      );
+      expect(later.watching()).toEqual([]);
+      // One session, by a word that points back: the offer, as before.
+      const one = room();
+      const single = "Payments tests runs; I'll keep an eye on it.";
+      expect(
+        (await one.say("how is payments tests?", [single, single])).reply,
+      ).toBe("Want me to tell you when payments tests is done?");
+    });
+
+    it("offers nothing for a session that only the other part of the sentence names", async () => {
+      // Nothing is watched. Deploy fix works, and the promise is for docs.
+      const { later, say } = room();
+      const promise = "Deploy fix runs on, but I'll keep an eye on docs.";
+      const got = await say("cool. give me a heads up if docs changes", [
+        promise,
+        promise,
+      ]);
+      expect(got.reply).toBe(
+        "I do not say that later by myself. Ask me again when you want to know.",
+      );
+      expect(later.watching()).toEqual([]);
+    });
+
+    it("says what is true for a second promise that names docs", async () => {
+      const { say } = await waiting();
+      const promise =
+        "Got it, I'll give you a heads up here if docs changes happen.";
+      const got = await say("cool. give me a heads up if docs changes", [
+        promise,
+        promise,
+      ]);
+      expect(got.reply).toBe(
+        "I do not say that later by myself. Ask me again when you want to know.",
+      );
+    });
+
+    it.each([
+      // The person asked about nothing new: a promise with no name is about
+      // what the chat waits for.
+      ["thanks", "Anytime. I'll let you know when it's done."],
+      ["are you still watching it?", "Yes, I'll tell you when it's done."],
+      // The person asked again for the session that the chat waits for.
+      [
+        "tell me when deploy fix is done",
+        "Already on it, I'll give you a heads up when it's done.",
+      ],
+      // The person named docs and asked to hear nothing later.
+      ["what is docs doing?", "Docs is idle. I'll keep you posted."],
+      // The promise names the session that the chat waits for.
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle, so there is nothing to wait for there. I'll still give you a heads up when deploy fix is done.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I can't watch docs, but I'm still watching deploy fix and I'll tell you the second it finishes.",
+      ],
+      // Telling now is no promise for later.
+      [
+        "anything new?",
+        "I'll tell you the second thing first: payments tests still works.",
+      ],
+      ["anything new?", "I'll give you a heads up: docs is idle."],
+      // An offer with its condition.
+      [
+        "cool. give me a heads up if docs changes",
+        "I'm not watching docs; say \"watch docs\" and I'll tell you when it is done.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "Tell me when docs works again, and I'll watch it for you, no worries.",
+      ],
+      // What is not done.
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle, so I'll not watch it and you'll get no heads up from me when it changes.",
+      ],
+      // How the news of a job comes: a statement, and it is true.
+      [
+        "how will I know when the job is done?",
+        "You get a message here when a job finishes.",
+      ],
+      [
+        "how do I hear about jobs?",
+        "You get a notification in this chat when a job finishes.",
+      ],
+      [
+        "let me know how I hear about a job that is done",
+        "You'll get a message here when a job finishes.",
+      ],
+      // A question about now that opens like a request to hear, and its
+      // answer now.
+      [
+        "tell me if docs is idle",
+        "Docs is idle. I'll tell you more about its last run: it finished the rewrite a minute ago.",
+      ],
+      [
+        "let me know if docs looks right",
+        "It looks right. I'll tell you straight: the second step can go.",
+      ],
+      [
+        "let me know if docs looks right",
+        "I'll tell you honestly, it looks right.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll tell you one thing about docs: it is idle.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll tell you briefly how docs stands.",
+      ],
+      // To wait for the person's word is true, and promises no news.
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle. I'll wait for your go-ahead.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle. I'll wait for your call on the push.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll wait for your word before I do anything.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle. I'll wait on your next message.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll wait for the go-ahead.",
+      ],
+      // "No problems" as a true word about the state.
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs shows no problems so far, and I'll let you know if that changes.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs had no trouble with the tests, and I'll tell you if that changes.",
+      ],
+      // Telling now: what is told follows the colon.
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll tell you here and now: docs is idle.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll let you know right away what I see: docs is idle.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll tell you again: docs is idle.",
+      ],
+      // Telling now, in a turn where a promise is read widely.
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle. I'll tell you what that means: nothing changes there by itself.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll tell you now how docs stands: it is idle.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll be plain: docs is idle, and deploy fix still works.",
+      ],
+      // A wide promise outside such a turn is read by the forms only.
+      [
+        "what is docs doing?",
+        "Docs is idle. I'll say more about docs on request.",
+      ],
+      // An answer on request, beside what is not done.
+      [
+        "cool. give me a heads up if docs changes",
+        "I can't watch docs, but you can check in anytime and I'll let you know if it changed.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I don't say that by myself, but whenever you ask I'll tell you if docs moved.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "Docs is idle; you can always ask and I'll tell you when it last changed.",
+      ],
+    ])("after %j, lets %j stand", async (words, answer) => {
+      const { later, say } = await waiting();
+      const got = await say(words, [answer, "Other."]);
+      expect(got.reply, answer).toBe(answer);
+      expect(got.run.seen, answer).toHaveLength(1);
+      expect(later.watching(), answer).toEqual(["deploy fix"]);
+    });
+
+    it.each([
+      "I can't tell you that later from here, but you can check in anytime and I'll let you know if it's done.",
+      "I can't do that from here, but whenever you ask I'll tell you if it changed.",
+      "Nothing is said later from here; ask me any time and I'll tell you when it last changed.",
+      "I can't watch docs from here, but I'll tell you how it stands if asked.",
+    ])(
+      "with no record of watched sessions, lets the answer on request %j stand",
+      async (answer) => {
+        const made = room();
+        const run = scripted([answer, "Other."]);
+        const { laterNews: _none, ...world } = made.world;
+        const reply = await new Supervisor(world, run.model).reply(
+          [],
+          "cool. give me a heads up if docs changes",
+          "chat",
+        );
+        expect(reply, answer).toBe(answer);
+        expect(run.seen, answer).toHaveLength(1);
+      },
+    );
+
+    it.each([
+      // How the news of a job comes: a statement, and it is true. Nothing
+      // is watched here.
+      [
+        "how will I know when the job is done?",
+        "You get a message here when a job finishes.",
+      ],
+      [
+        "how do I hear about jobs?",
+        "You get a notification in this chat when a job finishes.",
+      ],
+      [
+        "let me know how I hear about a job that is done",
+        "You'll get a message here when a job finishes.",
+      ],
+      [
+        "how do I hear about jobs?",
+        "When a job is done, you will know right away: its answer comes here.",
+      ],
+      // An explanation of how it works, behind a colon.
+      [
+        "what's on the watch list?",
+        "Nothing is on it now. I'll explain how I watch a session: you ask, and I tell you when it's done.",
+      ],
+      [
+        "anything new?",
+        "I'll explain how it works: I watch a session and tell you when it is done.",
+      ],
+      // An answer on request, a warning that the person gave, a word that
+      // only looks like one of watching, and a heads up that is given now.
+      [
+        "remember that docs is flaky",
+        "Got it, I'll keep that in mind to check docs first next time you ask.",
+      ],
+      [
+        "heads up, the deploy is risky",
+        "Thanks, I'll look out for that in the logs right now.",
+      ],
+      [
+        "let's focus on the footer",
+        "Sure, I'll stay on track with the footer.",
+      ],
+      ["is docs ok?", "I'll give you a heads up that docs looks stuck."],
+      ["is docs ok?", "I'll give you a heads up, docs looks stuck."],
+      // Said now, in the words of the new forms.
+      ["anything new?", "I'll give you a heads up now, docs looks stuck."],
+      ["is docs idle?", "I'll look at docs and tell you if it is idle: it is."],
+      ["what do you see?", "I'm tracking three sessions right now."],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll explain how I watch a session: only after a request that names it.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "I'll say what I see, and that is all I watch for: docs is idle.",
+      ],
+      // How the news of a session comes: true statements, in the future.
+      [
+        "how do I hear when a session is done?",
+        "You'll get a message here when a session you asked me about is done.",
+      ],
+      [
+        "how do I hear when a session is done?",
+        "You will get a notification here when a watched session finishes.",
+      ],
+      [
+        "cool. give me a heads up if docs changes",
+        "Sure, you'll get a heads up from me when a session that I watch is done.",
+      ],
+    ])(
+      "with nothing watched, after %j, lets %j stand",
+      async (words, answer) => {
+        const { later, say } = room();
+        const got = await say(words, [answer, "Other."]);
+        expect(got.reply, answer).toBe(answer);
+        expect(got.run.seen, answer).toHaveLength(1);
+        expect(later.watching(), answer).toEqual([]);
+      },
+    );
+
+    it("with no record of watched sessions, the same promise is sent back", async () => {
+      const made = room();
+      const run = scripted([
+        "Got it, I'll give you a heads up here if docs changes happen.",
+        "Docs is idle.",
+      ]);
+      const { laterNews: _none, ...world } = made.world;
+      const reply = await new Supervisor(world, run.model).reply(
+        [],
+        "cool. give me a heads up if docs changes",
+        "chat",
+      );
+      expect(run.seen).toHaveLength(2);
+      expect(run.seen[1]!.system).toContain(note);
+      expect(reply).toBe("Docs is idle.");
+    });
+  });
+
   describe("a promise with something behind it stands", () => {
     it.each([
       "Got it, I'll tell you when deploy fix is done.",

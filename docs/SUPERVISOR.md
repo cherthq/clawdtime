@@ -1317,6 +1317,24 @@ is done, when you asked to hear that.
   runs, a promise to tell when something is done stands: the chat says the
   answer of that job. When you asked for work and the answer only promises
   ("Sure, I'll report back when I know more."), the work starts first.
+  The promise is read in the words that the model uses ("I'll give you a
+  heads up if docs changes", "I'll alert you whenever it moves", "I'll
+  tell you the second something happens"). A sentence that says what is
+  not done is no promise ("I'm not watching docs yet, but I'll keep an eye
+  on it" stands); "no problem" and "don't worry" say nothing of that kind.
+  A turn that decided, typed, opened or started something is read with the
+  shorter list of before, so that a sentence such as "Approved the push;
+  I'll give you a heads up if another request comes in" stays. A promise with no name is about what you just
+  asked: after "give me a heads up if docs changes", with nothing taken for
+  docs, "I'll watch for doc changes and let you know" is empty also while
+  the chat waits for another session, and you then get "I tell you when
+  deploy fix is done. For anything else, ask me when you want to know." In
+  such a turn a promise is read in more words ("I'll update you without
+  you asking again"), and a promise that names the session that you asked
+  about is empty also when it names a watched session beside it. The note
+  that goes back to the language model says which sessions the chat waits
+  for. An answer on request is no promise ("you can check in anytime and
+  I'll tell you if it changed").
 - The desktop service says the line on its own rhythm. In `clawdtime chat`
   with no desktop service nothing runs between your messages.
 

@@ -1068,15 +1068,145 @@ const opensWithAVerbOfWork = (text: string) => openingVerbOfWork().test(text);
  */
 const speaksOfStateOrOwnTools =
   /\b(?:sessions?|agents?|status|state|progress|running|waiting|idle|requests?|time|clock|calendar|notes?|reminders?|memory|away|windows?|mic|microphone|camera|screen|volume|call)\b/i;
-/** A sentence that is no promise whatever else it holds: it says what is not done, asks, or names a condition ("Just tell me which session and I'll let you know"). */
-const noPromiseForm =
-  /\?\s*$|\b(?:not|never|no|nothing|cannot|unable)\b|n['\u2019]t\b|\b(?:if\s+you|when\s+you|once\s+you|ask\s+me|tell\s+me\s+which|just\s+(?:tell|say|name|ask))\b|^\s*say\b/i;
+/**
+ * A sentence that is no promise whatever else it holds: it asks, it names
+ * a condition ("Just tell me which session and I'll let you know", 'say
+ * "watch docs" and I'll tell you', "Tell me when docs works again, and
+ * I'll watch it"), or it answers on request ("you can check in anytime
+ * and I'll tell you if it changed", "whenever you ask I'll tell you").
+ */
+const asksOrNamesACondition =
+  /\?\s*$|\b(?:if\s+you|when\s+you|once\s+you|whenever\s+you|any\s?time\s+you|ask\s+me|tell\s+me\s+which|just\s+(?:tell|say|name|ask)|you\s+can\s+(?:(?:just|always|also)\s+)?(?:ask|check)|check\s+(?:in|back)\s+with\s+me|if\s+asked|when\s+asked|on\s+request|unless\s+you\s+ask|until\s+you\s+ask|(?:the\s+)?next\s+time\s+you)\b|(?:^|[;:,\u2014]\s*|\b(?:but|so|and|then)\s+)\s*say\b|^\s*(?:(?:just|please)\s+)?(?:tell|ask|name|give)\s+me\b[^.!?]{0,80}?\band\s+I(?:['\u2019]ll|\s+will)\b/i;
+/**
+ * Words that hold a "no" or a "not" and negate nothing: "no problem" and
+ * "no worries" as a word by themselves, and "don't worry". "No problem,
+ * I'll tell you when docs is done" promises. "Docs shows no problems so
+ * far" says something about docs.
+ */
+const negatesNothing =
+  /(?:^|[.!?;,]\s*)\s*no\s+(?:problem|problems|worries|sweat|rush|trouble)(?:\s+at\s+all)?(?=\s*(?:[.!,;:]|$))|\bdon['\u2019]?t\s+(?:you\s+)?worry\b/gi;
+/**
+ * A sentence that says what is not done: "I can't watch it", "nothing is
+ * said later", "I'll not watch it". Such a sentence is no promise,
+ * whatever else it holds.
+ */
+const saysWhatIsNotDone = (sentence: string) =>
+  /\b(?:not|never|nothing|cannot|unable|no)\b|n['\u2019]t\b/i.test(
+    sentence.replace(negatesNothing, " "),
+  );
+/**
+ * Where one part of a sentence ends and the next begins: ";", a dash,
+ * "but", ", so I", ", and I". The parts say which sessions a promise is
+ * for: "Docs is idle, but I'm still watching deploy fix" promises for
+ * deploy fix.
+ */
+const partsOfASentence = () =>
+  /\s*[;\u2014]\s*|\s+-+\s+|,?\s+(?:but|though|although|yet)\s+|,\s*(?:and|so)\s+(?=(?:I|we|you)\b)/gi;
+/** The parts of a sentence in their order, each with the break that stands before it. */
+const partsOf = (sentence: string) => {
+  const parts: { text: string; before: string; from: number }[] = [];
+  let from = 0;
+  let before = "";
+  for (const found of sentence.matchAll(partsOfASentence())) {
+    parts.push({ text: sentence.slice(from, found.index), before, from });
+    before = found[0];
+    from = found.index + found[0].length;
+  }
+  parts.push({ text: sentence.slice(from), before, from });
+  return parts;
+};
+/** The part of the sentence that holds the place `at`. */
+const partAround = (sentence: string, at: number) =>
+  partsOf(sentence).findLast((part) => part.from <= at)!.text;
 /** A promise of a reminder or of a time: "I'll remind you in ten minutes", "Reminder set", "I'll check again at 5". "I'll tell you in a second: ..." says it now. */
 const promisesATime =
   /\b(?:I(?:['\u2019]ll|\s+will)\s+(?:\w+\s+){0,2}?remind\s+you|reminder\s+(?:is\s+)?set|I(?:['\u2019]ve|\s+have)\s+set\s+(?:a|the|up\s+a)\s+(?:reminder|timer|alarm)|I(?:['\u2019]ll|\s+will)\s+(?:\w+\s+){0,4}?(?:in\s+(?:\d+|two|three|five|ten|fifteen|twenty|thirty|a\s+few|a\s+couple\s+of)\s+(?:seconds?|minutes?|hours?)|in\s+(?:an?|one)\s+hour|at\s+\d))\b/i;
-/** A promise to watch a session, or to say something when it changes: "I'll let you know when it's done", "I'm keeping an eye on it", "You'll hear from me". "I'll tell you what it did" says it now. */
-const promisesToWatch =
+/**
+ * The reading of a turn that decided, typed, opened or started something:
+ * the two lists as they were before the list of forms grew. A sentence of
+ * such a turn often holds a true word about that act ("Approved the push;
+ * I'll give you a heads up if another request comes in"), and a sentence
+ * with an empty promise goes whole: no new form may take such a sentence.
+ */
+const noPromiseAsBefore =
+  /\?\s*$|\b(?:not|never|no|nothing|cannot|unable)\b|n['\u2019]t\b|\b(?:if\s+you|when\s+you|once\s+you|ask\s+me|tell\s+me\s+which|just\s+(?:tell|say|name|ask))\b|^\s*say\b/i;
+const promisesToWatchAsBefore =
   /\b(?:I(?:['\u2019]ll|\s+will|['\u2019]m\s+going\s+to|\s+am\s+going\s+to)\s+(?:\w+\s+){0,2}?(?:(?:let\s+you\s+know|tell\s+you|notify\s+you|ping\s+you|alert\s+you|update\s+you|message\s+you|text\s+you|call\s+you)\b[^.!?]{0,30}?\b(?:when|once|as\s+soon\s+as|if|after|the\s+moment)\b|keep\s+(?:an?\s+|a\s+close\s+)?(?:eyes?|watch|track|tabs)\b|keep\s+you\s+(?:posted|updated)\b|watch\b|monitor\b|check\s+back\b|report\s+back\b|get\s+back\s+to\s+you\b)|I(?:['\u2019]m|\s+am)\s+(?:(?:now|still|already)\s+)?(?:watching|monitoring|keeping\s+(?:an?\s+|a\s+close\s+)?(?:eyes?|track|watch|tabs))\b|\byou(?:['\u2019]ll|\s+will)\s+hear\s+from\s+me\b)/i;
+/** To tell, in the words of a promise: "let you know", "tell you", "update you". */
+const tellsYou =
+  "(?:let\\s+you\\s+know|tell\\s+you|notify\\s+you|ping\\s+you|alert\\s+you|update\\s+you|message\\s+you|text\\s+you|call\\s+you)";
+/**
+ * When, in the words of a promise: "when", "whenever", "anytime", "as soon
+ * as", "the moment", and "the second something happens" ("the second" with a verb of
+ * happening behind it: "I'll tell you the second thing first: ..." says
+ * it now).
+ */
+const laterWhen =
+  "(?:when(?:ever)?|any\\s?time|once|as\\s+soon\\s+as|if|after|the\\s+moment|the\\s+(?:second|minute|instant)\\b(?=[^.!?:]{0,40}?\\b(?:happens?|changes?|finish(?:es)?|done|ends?|fails?|breaks?|completes?|shows?\\s+up|comes?|starts?|stops?|updates?|moves?|goes|gets?)\\b))";
+/** "I'll", "I will", "I'm going to". */
+const iWill =
+  "I(?:['\\u2019]ll|\\s+will|['\\u2019]m\\s+going\\s+to|\\s+am\\s+going\\s+to)";
+/** What is kept on a thing: "an eye", "an ear", "watch", "track", "tabs". */
+const eyeOrEar = "(?:an?\\s+|a\\s+close\\s+)?(?:eyes?|ears?|watch|track|tabs)";
+/**
+ * A promise to watch a session, or to say something when it changes. A
+ * list of the forms, each from an answer that the model gave:
+ * - "I'll let you know when it's done", "I'll alert you whenever docs
+ *   changes", "I'll tell you the second something happens": to tell, with
+ *   a word of when. "I'll tell you what it did" says it now.
+ * - "I'll keep an eye on it", "I'll keep an ear out", "I'll keep you
+ *   posted", "I'll watch", "I'll monitor", "I'll track docs", "I'll check
+ *   back", "I'll report back", "I'll get back to you".
+ * - "I'll give you a heads up if docs changes", with its word of when
+ *   ("I'll give you a heads up: docs is idle" and "I'll give you a heads
+ *   up, docs looks stuck" say it now), "I'll add it to the watch list",
+ *   "I'll keep that in mind to watch docs".
+ * - "I'll look at docs now and then and let you know when it moves": to
+ *   tell with a word of when, behind "and", with no colon before or
+ *   behind it ("I'll look and tell you if it is idle: it is" and "I'll
+ *   explain how it works: I watch and tell you when it is done" say it
+ *   now).
+ * - "I'm watching it", "I'm also watching docs", "I'm keeping an eye on it".
+ * - "You'll hear from me".
+ */
+const promisesToWatch = new RegExp(
+  `\\b(?:${iWill}\\s+(?:\\w+\\s+){0,2}?(?:${tellsYou}\\b[^.!?]{0,30}?\\b${laterWhen}\\b|keep\\s+${eyeOrEar}\\b|keep\\s+you\\s+(?:posted|updated|in\\s+the\\s+loop)\\b|keep\\s+(?:that|it|this)\\s+in\\s+mind\\s+to\\s+(?:watch|monitor|track|tell|let|notify)\\b|watch\\b|monitor\\b|(?<!\\bo(?:n|ff)\\s)track(?!\\s+down)\\b|check\\s+back\\b|report\\s+back\\b|get\\s+back\\s+to\\s+you\\b|give\\s+you\\s+a\\s+(?:heads[- ]up|shout)\\b[^.!?:]{0,30}?\\b${laterWhen}\\b|add\\s+(?:\\w+\\s+){1,3}?to\\s+(?:the|my|your)\\s+watch\\s*list\\b)|${iWill}\\b[^.!?:]{0,80}?\\band\\s+(?:then\\s+)?${tellsYou}\\b(?![^.!?]*:)[^.!?]{0,30}?\\b${laterWhen}\\b|I(?:['\\u2019]m|\\s+am)\\s+(?:(?:now|still|already|also)\\s+)?(?:watching|monitoring|keeping\\s+${eyeOrEar})\\b|\\byou(?:['\\u2019]ll|\\s+will)\\s+hear\\s+from\\s+me\\b)`,
+  "i",
+);
+/**
+ * The person's message speaks of hearing something later, in any words:
+ * "give me a heads up if docs changes", "I want to hear the second
+ * something happens there", "keep me posted". Wider than the forms that
+ * the watch tool takes: it takes nothing, it only says what a promise of
+ * the answer is about. "Tell me if" and "I want to know when" count with a
+ * word of change or of an end behind them: "tell me if docs is idle" asks
+ * about now. "Watch" and "monitor" count as verbs ("what's on the watch
+ * list?" asks about now), and a heads up as a request ("heads up, the
+ * deploy is risky" gives one).
+ */
+const speaksOfHearingLater =
+  /\b(?:(?:(?:tell|let|ping|notify|message|text|alert|update|warn|call)\s+me|(?:want|need|like)\s+to\s+(?:know|hear))\b[^.?!]{0,60}?\b(?:when(?:ever)?|once|as\s+soon\s+as|if|after|the\s+(?:moment|second|minute|instant))\b[^.?!]{0,60}?\b(?:chang(?:es?|ed)|done|finish(?:es|ed)?|complet(?:es?|ed)|ends?|stops?|starts?|breaks?|fails?|crash(?:es)?|errors?|happens?|comes?\s+(?:up|in|through)|moves?|updates?|shows?\s+up)\b|(?:give|send|drop|shoot)\s+(?:me|us)\s+(?:a\s+)?(?:heads[- ]up|shout)|(?:heads[- ]up|shout)\b[^.?!]{0,40}?\b(?:when(?:ever)?|once|as\s+soon\s+as|if|the\s+(?:moment|second|minute|instant))\b|keep\s+me\s+(?:posted|updated|in\s+the\s+loop)|report\s+back|(?<!\b(?:a|the|my|your|this|that|on)\s)(?:watch|monitor)(?!\s+(?:out|list)\b)|keep(?:ing)?\s+(?:an?\s+|a\s+close\s+|your\s+)?(?:eyes?|ears?|watch|tabs|track))\b/i;
+/**
+ * A promise in any words, read only in a turn where the person asked to
+ * hear something later and nothing was taken for it. A list of what is
+ * taken, each as the verb of "I'll" with at most five plain words between
+ * ("I'll explain how I watch a session: you ask, and I tell you when it's
+ * done" is none): a word of watching ("I'll catch any docs changes",
+ * "I'll be on the lookout", "I'll wait on docs changes too, to tell you
+ * right when something happens"; "I'll wait for your go-ahead" waits for
+ * the person, and is none), or a word of telling
+ * and, behind that, a word that cannot mean now: "without you asking",
+ * "by myself", "automatically", or a word of when ("I'll notify you here
+ * right away on any change as soon as it happens", "I'll update you
+ * without you asking again"). With a colon behind the word of telling, it
+ * says it now ("I'll tell you again: docs is idle", "I'll let you know
+ * right away what I see: ..."), and so do "I'll tell you straight" and
+ * "I'll tell you more about its last run".
+ */
+const promisesWidely = new RegExp(
+  `\\b${iWill}\\s+(?:(?!(?:how|why|what|that|if|whether|when|I|you|we)\\b)[\\w'\\u2019-]+\\s+){0,5}?(?:(?:${tellsYou}|remind\\s+you)\\b(?![^.!?]*:)[^.!?]{0,60}?\\b(?:without\\s+(?:you\\s+)?(?:asking|having\\s+to\\s+ask)|unprompted|automatically|proactively|by\\s+myself|on\\s+my\\s+own|${laterWhen})\\b|give\\s+you\\s+(?:a\\s+)?(?:heads[- ]up|shout)\\b[^.!?:]{0,30}?\\b${laterWhen}\\b|keep\\s+you\\s+(?:posted|updated|in\\s+the\\s+loop)\\b|keep\\s+${eyeOrEar}\\b|watch\\b|monitor\\b|(?<!\\bo(?:n|ff)\\s)track(?![^.!?]{0,30}\\bdown\\b)\\b|catch(?!\\s+(?:you\\s+)?up)\\b|on\\s+the\\s+lookout\\b|look\\s+out\\b|listen\\b|wait\\s+(?:on|for)\\b(?!\\s+(?:you|your|me|the\\s+(?:go[- ]ahead|word|ok|okay)|a\\s+(?:yes|go))\\b)[^.!?:]{0,60}?\\b(?:to|and)\\s+(?:then\\s+)?${tellsYou}\\b|check\\s+back\\b|report\\s+back\\b|get\\s+back\\s+to\\s+you\\b)`,
+  "i",
+);
 /** A sentence that speaks of a request that waits for the person, or of a failure: what away mode calls for. */
 const aboutARequestOrAFailure =
   /\b(?:approv\w*|permissions?|input|decisions?|requests?|prompts?|needs?\s+(?:you|your)|wait(?:s|ing)?(?:\s+(?:for|on)\s+you)?|asks?|asking|stuck|blocked|fail(?:s|ed|ure|ures)?|errors?|crash(?:es|ed)?|breaks?|goes\s+wrong)\b/i;
@@ -5522,11 +5652,32 @@ export class Supervisor {
    * session while the chat waits for one. While a job of ClawdTime still
    * runs, every such promise stands: the news of a job says its answer. With away mode on, a promise about
    * a request that waits or about a failure is true: away mode calls.
+   *
+   * More cases come from the person's own message of this turn
+   * (`spoken`), when it speaks of hearing something later and this turn
+   * took nothing. A promise is then read in any words (`promisesWidely`).
+   * A promise that names a session of that message which the chat does not
+   * wait for is empty, also when it names a watched session beside it
+   * ("I'll watch deploy fix and docs and give you a heads up"). And when
+   * the chat waits for none of the sessions of that message, a promise
+   * with no name is about those, and is empty ("give me a heads up if docs
+   * changes": "I'll watch for doc changes and let you know").
+   *
+   * A sentence that says what is not done holds no promise, whatever else
+   * it holds ("I'm not watching docs yet, but I'll keep an eye on it"
+   * stands, as before). Words that negate nothing do not count for that
+   * (`negatesNothing`): "No problem, I'll tell you when docs is done".
+   *
+   * A turn that decided, typed, opened or started something is read with
+   * the lists as they were before (`promisesToWatchAsBefore`): its
+   * sentences often hold a true word about that act, and none of the new
+   * forms may take such a sentence.
    */
   private emptyPromises(
     answer: string,
     turn: Turn,
-  ): { instead: string; kept: string } | null {
+    spoken = "",
+  ): { instead: string; kept: string; waits: string[] } | null {
     const sentences = answer.trim().split(/(?<=[.!?])\s+/);
     const tookNow = [...turn.done]
       .filter(([key]) => key.startsWith("watching "))
@@ -5565,10 +5716,46 @@ export class Supervisor {
     } catch {
       away = false;
     }
+    // What the person asked to hear about in this turn, with nothing taken
+    // for it: the sessions that their message names, when the chat waits
+    // for none of them.
+    // A turn that decided, typed, opened or started something is read as
+    // before (`promisesToWatchAsBefore`).
+    const acted = [...turn.done.keys()].some(
+      (key) => !key.startsWith("watching "),
+    );
+    const askedToHear =
+      !acted && tookNow.length === 0 && speaksOfHearingLater.test(spoken);
+    const asked = askedToHear ? namedIn(spoken) : [];
+    const askedOthers = asked.filter(
+      (session) => !known.has(title(session).toLowerCase()),
+    );
+    const askedOfOthers =
+      asked.length > 0 && askedOthers.length === asked.length;
+    // The parts of the sentence that hold a form of a promise.
+    const promiseParts = (forms: RegExp[], sentence: string) =>
+      forms.flatMap((form) =>
+        [...sentence.matchAll(new RegExp(form.source, `${form.flags}g`))].map(
+          (found) => partAround(sentence, found.index),
+        ),
+      );
+    const promisedBy = (form: RegExp, sentence: string) =>
+      promiseParts([form], sentence).length > 0;
+    // The forms of a promise that are read in this turn.
+    const forms = acted
+      ? [promisesToWatchAsBefore]
+      : askedToHear
+        ? [promisesToWatch, promisesWidely]
+        : [promisesToWatch];
     const isEmpty = (sentence: string, index: number) => {
-      if (noPromiseForm.test(sentence)) return false;
-      if (promisesATime.test(sentence)) return true;
-      if (!promisesToWatch.test(sentence)) return false;
+      if (
+        acted
+          ? noPromiseAsBefore.test(sentence)
+          : asksOrNamesACondition.test(sentence) || saysWhatIsNotDone(sentence)
+      )
+        return false;
+      if (promisedBy(promisesATime, sentence)) return true;
+      if (!forms.some((form) => promisedBy(form, sentence))) return false;
       // By its kind: away mode calls for a request that waits and for a
       // session that fails. With it on, a promise is empty only when it
       // speaks of the end of the work and of no request and no failure
@@ -5591,9 +5778,19 @@ export class Supervisor {
       // stands, also when it names more ("I'm watching payments tests, and
       // I have stopped watching deploy fix"): which names the promise is
       // for cannot be read for sure, and the true part must not be lost.
+      // The part that promises names a session that the person just asked
+      // about and that the chat does not wait for: it is for that one too.
+      // "I can't watch docs, but I'm still watching deploy fix" names docs
+      // in the part that says what is not done.
+      if (
+        promiseParts(forms, sentence)
+          .flatMap(namedIn)
+          .some((session) => askedOthers.includes(session))
+      )
+        return true;
       return named.length
         ? !named.some((session) => known.has(title(session).toLowerCase()))
-        : known.size === 0;
+        : known.size === 0 || askedOfOthers;
     };
     const emptyAt = sentences
       .map((sentence, index) => (isEmpty(sentence, index) ? index : -1))
@@ -5606,7 +5803,21 @@ export class Supervisor {
     const offered = [
       ...new Set(
         emptyAt
-          .flatMap(about)
+          .flatMap((index) => {
+            // "I didn't restart deploy fix, but I'll keep an eye on docs":
+            // the promise is for docs. "Payments tests runs; I'll keep an
+            // eye on it and on deploy fix": it is for both, "it" points to
+            // the session of the other part.
+            const parts = promiseParts(forms, sentences[index]!);
+            const inPromise = parts.flatMap(namedIn);
+            const pointsBack = parts.some((part) =>
+              /\b(?:it|its|they|them|that\s+one|both)\b/i.test(part),
+            );
+            if (acted || !inPromise.length) return about(index);
+            return pointsBack
+              ? [...inPromise, ...namedIn(sentences[index]!)]
+              : inPromise;
+          })
           .filter(
             (session) =>
               session.name !== null &&
@@ -5629,8 +5840,20 @@ export class Supervisor {
       !!this.world.laterNews &&
       offered.length === 1 &&
       kept.flatMap(namedIn).every((session) => session === offered[0]);
+    // A promise with no name, or one that also names a session that the
+    // chat waits for: what is true is said in full, so that nothing true is
+    // lost with the promise.
     const general =
-      "I do not say that later by myself. Ask me again when you want to know.";
+      waited.length &&
+      emptyAt.some((index) => {
+        const named = about(index);
+        return (
+          named.length === 0 ||
+          named.some((session) => known.has(title(session).toLowerCase()))
+        );
+      })
+        ? `I tell you when ${waited.join(" and ")} ${waited.length > 1 ? "are" : "is"} done. For anything else, ask me when you want to know.`
+        : "I do not say that later by myself. Ask me again when you want to know.";
     const tail = tookNow.length
       ? `I tell you when ${waited.join(" and ")} ${waited.length > 1 ? "are" : "is"} done.`
       : empty.some((sentence) => promisesATime.test(sentence))
@@ -5650,6 +5873,7 @@ export class Supervisor {
         : [...kept, said]
       ).join(" "),
       kept: kept.join(" "),
+      waits: waited,
     };
   }
   /**
@@ -10542,7 +10766,7 @@ export class Supervisor {
             this.asksForNewWork(words);
           const empty =
             !task || taskIsOver(task)
-              ? this.emptyPromises(reply.text, turn)
+              ? this.emptyPromises(reply.text, turn, words)
               : null;
           // The offer is read in the draft without its empty promises:
           // "Should I start a job to look into it? I'll report back when
@@ -10590,7 +10814,15 @@ export class Supervisor {
             }
             if (rechecked) return clean(empty.instead, 900) || "Done.";
             rechecked = true;
-            recheck = `\nA check of your last draft: it promised to tell, watch or remind later, and nothing will do that. You keep no timer and no reminder, and you say that a session is done only after the person asked to hear it. ${newWork ? "" : "Call no tool for this. "}Answer again with what is true now, and promise nothing for later. When they may want to hear when one session is done, you can ask "Want me to tell you when NAME is done?".`;
+            // The facts of this turn stand in the note: after "give me a
+            // heads up if docs changes", "you say that a session is done
+            // only after the person asked" reads as a yes.
+            const waits = empty.waits.length
+              ? `About sessions, you tell only when ${empty.waits.join(" and ")} ${empty.waits.length > 1 ? "are" : "is"} done: nothing was taken for another session.`
+              : this.world.laterNews
+                ? "You wait for no session now: nothing was taken."
+                : "From here nothing is said by itself about a session.";
+            recheck = `\nA check of your last draft: it promised to tell, watch or remind later, and nothing will do that. You keep no timer and no reminder. ${waits} ${newWork ? "" : "Call no tool for this. "}Answer again with what is true now, and promise nothing for later.${this.world.laterNews ? ' When they may want to hear when one session that works now is done, you can ask "Want me to tell you when NAME is done?".' : ""}`;
             continue;
           }
           if (onlyOffersTheWork) {
