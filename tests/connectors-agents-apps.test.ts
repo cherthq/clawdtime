@@ -2689,12 +2689,7 @@ describe("chat routing safety and truth for computer tasks", () => {
   });
 
   it("blocker 2: when a coding task and a screen task both run, an unqualified stop stops the screen task and says which one stopped", async () => {
-    for (const words of [
-      "stop",
-      "ok stop",
-      "stop it",
-      "stop the task",
-    ]) {
+    for (const words of ["stop", "ok stop", "stop it", "stop the task"]) {
       const f = withFakeWorker("running", working, {
         goal,
         codingTaskRunning: true,
@@ -2862,10 +2857,7 @@ describe("chat routing safety and truth for computer tasks", () => {
 
   it("blocker 4: delegate refuses submit while pendingAction or waiting_for_person waits across all shortcuts and tool calls", async () => {
     for (const mode of ["native", "browser"] as const) {
-      for (const words of [
-        "open it in the browser",
-        "check my inbox",
-      ]) {
+      for (const words of ["open it in the browser", "check my inbox"]) {
         const f = withFakeWorker("running", "An action waits.", {
           mode,
           worker: mode === "native",
@@ -4122,6 +4114,97 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     expect(stopSaid).toBe(stoppedText);
   });
 
+  it("final review blocker 1: after a screen task ended, or for coding and job questions, the model's answer stands", async () => {
+    for (const state of ["canceled", "blocked", "uncertain"]) {
+      for (const [words, draft] of [
+        [
+          "is the login fix done?",
+          "Yes. The login fix is done and the tests pass.",
+        ],
+        ["did claude finish?", "Yes, it finished."],
+        ["thanks!", "You're welcome. All set."],
+        ["is it done?", "Yes, it's done."],
+        ["is the server up?", "Yes, it's up on port 3000."],
+      ] as const) {
+        const f = withRealishWorker(state, stoppedText, { goal });
+        const run = scriptedChat([draft]);
+        const reply = await new Supervisor(f.value, run.model).reply(
+          before,
+          words,
+          "call",
+        );
+        expect([state, words, reply]).toEqual([state, words, draft]);
+      }
+    }
+    // While a screen task runs, a question about a session or coding work
+    // keeps the model's answer too.
+    const f = withRealishWorker("running", working, {
+      goal,
+      board: boardWith("deploy fix"),
+    });
+    const run = scriptedChat(["Yes, it's done."]);
+    const reply = await new Supervisor(f.value, run.model).reply(
+      before,
+      "is the deploy fix session done?",
+      "call",
+    );
+    expect(reply).toBe("Yes, it's done.");
+  });
+
+  it("final review blocker 2: a stop word as a noun in coding work starts the job and stops nothing", async () => {
+    for (const words of [
+      "make the stop button red",
+      "make the cancel button bigger",
+      "the cancel flow is broken, can you look at it",
+      "make the abort message clearer",
+      "let's make the stop sound quieter",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([
+        [call("start_job", { job: words })],
+        "Started job.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.execStops(), f.submitted, f.started]).toEqual([
+        words,
+        0,
+        [],
+        [words],
+      ]);
+    }
+    // A stop that opens a clause still stops the screen task.
+    for (const words of [
+      "stop, don't click that",
+      "no stop",
+      "never mind, stop",
+      "ok cancel",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat(["Okay."]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.execStops()]).toEqual([words, 1]);
+    }
+  });
+
+  it("final review blocker 4: a bare stop with no screen task running goes to the engine's stop, never to the model", async () => {
+    for (const state of ["idle", "completed", "blocked"]) {
+      for (const words of ["stop", "stop!", "cancel", "please stop"]) {
+        const f = withRealishWorker(state, "Done.", { goal });
+        const run = scriptedChat([
+          [call("delegate_computer_task", { task: words })],
+          "Started.",
+        ]);
+        await new Supervisor(f.value, run.model).reply(before, words, "call");
+        expect([state, words, f.submitted, run.calls()]).toEqual([
+          state,
+          words,
+          [],
+          0,
+        ]);
+      }
+    }
+  });
+
   it("round3 blocker 1: stops ignore questions, coding work, and non-screen targets while allowing genuine stops and click Cancel", async () => {
     // Coding instructions with stop words never stop the screen task and start their job.
     for (const words of [
@@ -4204,14 +4287,16 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     ).reply(before, "close enough", "call");
     expect(closeEnoughF.execStops()).toBe(0);
 
-    // "click Cancel" while a screen task runs may stop it (safe).
+    // "click Cancel" while a screen task runs: the stop word does not open
+    // the message, so it is no stop of the screen task; the model answers,
+    // as on main.
     const clickCancel = withRealishWorker("running", working, { goal });
     const clickCancelSaid = await new Supervisor(
       clickCancel.value,
       scriptedChat(["Normal reply."]).model,
     ).reply(before, "click Cancel", "call");
-    expect(clickCancel.execStops()).toBe(1);
-    expect(clickCancelSaid).toBe(stoppedText);
+    expect(clickCancel.execStops()).toBe(0);
+    expect(clickCancelSaid).toBe("Normal reply.");
   });
 
   it("round3 blocker 2 and rests 7-8: strict approval yes/no binding, nah/nope mapping, canAccept coding task, and main-path takeover/question", async () => {
@@ -4227,10 +4312,11 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       waiting: "approval",
     });
     expect(
-      await new Supervisor(
-        crossF.value,
-        scriptedChat(["Okay."]).model,
-      ).reply(crossChannelHistory, "yes", "call"),
+      await new Supervisor(crossF.value, scriptedChat(["Okay."]).model).reply(
+        crossChannelHistory,
+        "yes",
+        "call",
+      ),
     ).toBe("Continuing.");
     expect(crossF.answered).toEqual(["yes"]);
 
@@ -4244,7 +4330,15 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
         via: "call",
       },
     ];
-    for (const words of ["yes", "approve", "no", "nah", "nope", "deny", "cancel"]) {
+    for (const words of [
+      "yes",
+      "approve",
+      "no",
+      "nah",
+      "nope",
+      "deny",
+      "cancel",
+    ]) {
       const f = withRealishWorker("waiting_for_person", approval, {
         goal,
         waiting: "approval",
@@ -4562,7 +4656,12 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     // Follow-up after a session question goes to the model, never hijacked with stillRuns.
     const afterSession: ChatMessage[] = [
       ...before,
-      { role: "user", text: "How is deploy fix doing?", at: at + 10_000, via: "call" },
+      {
+        role: "user",
+        text: "How is deploy fix doing?",
+        at: at + 10_000,
+        via: "call",
+      },
       {
         role: "assistant",
         text: "Deploy fix is running the checkout suite.",
@@ -4570,7 +4669,12 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
         via: "call",
       },
     ];
-    for (const words of ["is it done?", "is it finished yet?", "is it open?", "did it work?"]) {
+    for (const words of [
+      "is it done?",
+      "is it finished yet?",
+      "is it open?",
+      "did it work?",
+    ]) {
       const f = withRealishWorker("running", working, {
         goal,
         board: boardWith("deploy fix"),

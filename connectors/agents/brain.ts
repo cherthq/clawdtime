@@ -395,6 +395,19 @@ const stopHoldsCodingWork = (words: string): boolean =>
 const computerStopKind = (spoken: string): "explicit" | "general" | null => {
   const text = clean(spoken, 400);
   if (!text || readWords(text) !== "stop") return null;
+  // The stop word opens a clause (after fillers): "stop, don't click that",
+  // "no stop", "never mind, stop", "ok cancel". As a noun inside a request
+  // ("make the stop button red", "the cancel flow is broken") it is none.
+  if (
+    !text
+      .split(/[,;.!\u2014]+|\s+-+\s+/)
+      .some((clause) =>
+        /^\s*(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but|uh+|um+|no+|nope|nah|actually|now|please|pls|plz|just|i\s+said|never\s*mind|nvm|then)[,\s]+)*(?:stop+|stahp|cancel|abort|halt)\b/i.test(
+          clause,
+        ),
+      )
+  )
+    return null;
   if (/[?\uff1f]/.test(text)) return null;
   if (
     /^(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:did|does|is|are|was|were|can|could|will|would|should|why|what|when|where|who|how)\b/i.test(
@@ -10479,9 +10492,9 @@ export class Supervisor {
     const stopTarget =
       rawStopTarget !== null && !this.forSession(words) ? rawStopTarget : null;
     const stopsSomething =
-      (/^(?:please\s+)?(?:stop|cancel|abort)\b/i.test(words) ||
-        stopTarget !== null) &&
-      (execSnap?.configured === true || codingTaskLive);
+      (/^(?:please\s+)?(?:stop|cancel|abort)\b/i.test(words) &&
+        (execSnap?.configured === true || codingTaskLive)) ||
+      (stopTarget !== null && screenCanStop);
     if (stopsSomething) {
       const canceledNavigation = this.navigationStops.size > 0;
       this.navigationGeneration++;
@@ -10670,7 +10683,10 @@ export class Supervisor {
       !(
         computerTaskLiveForQuestion(this.world.execution.snapshot()) &&
         !this.forSession(words) &&
-        this.previousTurnWasScreenTask(history, this.world.execution.snapshot()) &&
+        this.previousTurnWasScreenTask(
+          history,
+          this.world.execution.snapshot(),
+        ) &&
         asksAboutComputerTask(words)
       )
     ) {
@@ -10974,6 +10990,20 @@ export class Supervisor {
     }
     const execution = this.world.execution;
     if (execution?.snapshot().configured) {
+      // A bare stop, as on main: the engine says what it stopped, or that
+      // nothing runs. It never goes to the model, which could start a task
+      // with the goal "stop".
+      if (
+        !execution.snapshot().canStop &&
+        !(
+          this.world.tasks?.current() &&
+          !taskIsOver(this.world.tasks.current()!)
+        ) &&
+        /^(?:please\s+)?(?:stop|cancel|abort)(?:\s+(?:computer(?: task)?|execution|browser(?: task)?))?[.!?]*$/i.test(
+          words,
+        )
+      )
+        return execution.stop().message;
       const executionSnapshot = execution.snapshot();
       // An earlier request has a result that nobody knows, and nothing new
       // starts until a person looked at the screen. On a call the person is
@@ -11790,9 +11820,37 @@ export class Supervisor {
           // a gate (it typed, opened, decided, read the screen or a page):
           // such a turn has a tool result of its own behind its answer, and
           // the other checks read that answer.
-          const taskNow = execution
-            ? computerTaskNow(execution.snapshot())
-            : null;
+          // Only while the screen task is not over, and only when the
+          // person's message is not about coding work, a session or a job:
+          // after a task ended, or for "is the login fix done?", the draft
+          // answers something else and stands, as on main.
+          const aboutOtherWork =
+            (this.forSession(words) ||
+              speaksOfManagedWork(words) ||
+              /\b(?:fix|fixed|add|write|change|implement|refactor|build|create|bump|push|commit|merge|deploy|install|migrate|rename|remove|update|edit|debug|revert)\b/i.test(
+                words,
+              ) ||
+              /\b[\p{L}\p{N}_-]+\.(?:json|ts|tsx|js|jsx|mjs|py|rb|go|rs|swift|md|yml|yaml|toml|sql|sh|css|html)\b/iu.test(
+                words,
+              )) &&
+            !/\b[\p{L}\p{N}-]+\.(?:com|org|net|io|app|dev|in|co|ai)\b|\b(?:chrome|safari|firefox|browser|tab|web\s*page|website|site)\b/iu.test(
+              words,
+            );
+          // After a screen task ended, only a question that names an act on
+          // the screen is checked ("did it send?", "is it open?"); "is it
+          // done?" can be about anything, and its answer stands, as on main.
+          const screenThing =
+            "(?:it|you|we|the\\s+(?:page|site|website|tab|window|form|email|mail|message|file|download|upload|popup|dialog|search|login|board))";
+          const asksAboutAScreenAct = new RegExp(
+            `^\\s*(?:(?:ok|okay|so|and|but|hey|um+|uh+)[,\\s]+)*(?:(?:did|has)\\s+${screenThing}\\s+(?:send|sent|load|loaded|open|opened|submit|submitted|hit|press|click|type|typed|download|downloaded|upload|uploaded)|is\\s+${screenThing}\\s+(?:open|loaded|showing)|(?:are\\s+we|am\\s+i)\\s+(?:signed|logged)\\s+in)\\b`,
+            "i",
+          ).test(words);
+          const taskNow =
+            execution &&
+            !aboutOtherWork &&
+            (computerTaskNotOver(execution) || asksAboutAScreenAct)
+              ? computerTaskNow(execution.snapshot())
+              : null;
           if (
             taskNow &&
             turn.done.size === 0 &&

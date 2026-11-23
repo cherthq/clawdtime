@@ -3127,6 +3127,45 @@ describe("work with a don't in it waits for the person's yes", () => {
     },
   );
 
+  it.each(["nah, stop", "no, stop", "no stop", "nope, cancel it", "ok cancel"])(
+    "keeps the fixed answer for %j when a computer engine is set up and idle",
+    async (reply) => {
+      // An idle engine can stop nothing: a stop word in the answer to the
+      // question is still an answer to the question, as with no engine.
+      const { world, windows, jobs } = mac();
+      world.execution = {
+        snapshot: () => ({
+          configured: true,
+          mode: "native",
+          state: "idle",
+          canStop: false,
+          message: "Computer use is on.",
+        }),
+        submit: async () => ({ message: "Started." }),
+        stop: () => ({
+          configured: true,
+          mode: "native",
+          state: "idle",
+          canStop: false,
+          message: "Nothing runs.",
+        }),
+        answer: async () => ({ message: "Nothing waits." }),
+      };
+      const history: ChatMessage[] = [];
+      await talk(world, null, history, "build a landing page, don't use React");
+      const answer = await talk(
+        world,
+        scripted([[call("start_job")], "Sure, I will start that now."]).model,
+        history,
+        reply,
+      );
+      expect(answer, reply).not.toContain("Requested a new ");
+      expect(answer, reply).not.toBe("Sure, I will start that now.");
+      expect(windows, reply).toHaveLength(0);
+      expect(jobs.offered(), reply).toBeNull();
+    },
+  );
+
   it("takes a yes only as the next message after the question", async () => {
     const { world, windows, jobs } = mac();
     await new Supervisor(world, null).reply([], limit, "chat");
