@@ -308,6 +308,12 @@ export interface Planner {
   ): Promise<import("./navigation.js").NavigationIntent>;
   next(input: {
     goal: string;
+    /**
+     * What the person said for this request after it began, oldest first. It
+     * is part of the goal, and the newest wins where two differ. Absent when
+     * the person said nothing more.
+     */
+    guidance?: string[];
     history: StepRecord[];
     observation: Observation | null;
     page: BrowserPage | null;

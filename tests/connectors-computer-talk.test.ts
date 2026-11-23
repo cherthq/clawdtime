@@ -81,8 +81,16 @@ describe("the person talks to a computer worker that waits", () => {
     expect(f.said).toHaveLength(1);
     expect(f.said[0]).toMatch(/^Click "Send"\?/);
     expect(f.hands.sent).toEqual([]);
-    // A plain yes is the answer to that question. The model is not asked.
-    expect(await f.supervisor.reply([], "yes", "chat")).toBe("Continuing.");
+    // A plain yes after seeing the approval question answers it. The model is not asked.
+    const shown = [
+      {
+        role: "assistant" as const,
+        text: f.said[0]!,
+        at: Date.now(),
+        via: "chat" as const,
+      },
+    ];
+    expect(await f.supervisor.reply(shown, "yes", "chat")).toBe("Continuing.");
     expect(model.complete).toHaveBeenCalledTimes(1);
     await f.worker.idle();
     expect(f.hands.sent).toHaveLength(1);
@@ -94,7 +102,15 @@ describe("the person talks to a computer worker that waits", () => {
     const f = setup(null);
     await f.worker.submit("r1", "Send the mail");
     await f.waiting();
-    expect(await f.supervisor.reply([], "No, do not send it.", "voice")).toBe(
+    const shown = [
+      {
+        role: "assistant" as const,
+        text: f.said[0]!,
+        at: Date.now(),
+        via: "chat" as const,
+      },
+    ];
+    expect(await f.supervisor.reply(shown, "No, do not send it.", "voice")).toBe(
       'Canceled. I did not do it: Click "Send".',
     );
     await f.worker.idle();
@@ -107,9 +123,9 @@ describe("the person talks to a computer worker that waits", () => {
     const model = f.model as ReturnType<typeof delegating>;
     await f.worker.submit("r1", "Send the mail");
     await f.waiting();
-    for (const words of ["hmm, what is in it?", "open the calendar", "maybe"]) {
+    for (const words of ["hmm, what is in it?", "maybe"]) {
       const reply = await f.supervisor.reply([], words, "chat");
-      expect(reply).toMatch(/^I did not get a clear answer\. Click "Send"\?/);
+      expect(reply).toContain('Click "Send"?');
     }
     // Nothing reached the model, so nothing new was started in the meantime.
     expect(model.complete).not.toHaveBeenCalled();
@@ -165,11 +181,19 @@ describe("the person talks to a computer worker that waits", () => {
     expect(f.desk.take(asked.id)).toBeNull();
     expect(f.worker.snapshot().state).toBe("waiting_for_person");
     expect(f.hands.sent).toEqual([]);
-    // Once the agent has its answer, the yes is the worker's.
+    // Once the agent has its answer, a yes after seeing the approval question is the worker's.
     expect(f.desk.answer(asked.id, { decision: "deny", via: "panel" })).toBe(
       true,
     );
-    expect(await f.supervisor.reply([], "yes", "chat")).toBe("Continuing.");
+    const shown = [
+      {
+        role: "assistant" as const,
+        text: f.said[0]!,
+        at: Date.now(),
+        via: "chat" as const,
+      },
+    ];
+    expect(await f.supervisor.reply(shown, "yes", "chat")).toBe("Continuing.");
     await f.worker.idle();
     expect(f.hands.sent).toHaveLength(1);
   });

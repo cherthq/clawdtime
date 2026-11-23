@@ -20,6 +20,26 @@ export const desktopBlockedText = {
     "The desktop did not change. There may be no desktop on that side.",
 } as const;
 
+/**
+ * The panel refused a pointing command because a window of the app in front
+ * (the suggestion list of an address bar, a card) lies over its place. Nothing
+ * was sent. The keys still reach that window.
+ */
+export const coveredText =
+  "A list or a card of the app lies over that place, so nothing was sent. Use the keyboard there (Down, Return, Escape), or press Escape to close it.";
+/** A click, a drag, a scroll or a move that the panel refused for a window over its place. */
+export const coversThePlace = (
+  command: HandCommand,
+  result: HandResult | null,
+) =>
+  !!result &&
+  !result.ok &&
+  result.error === "target_not_visible" &&
+  (command.kind === "click" ||
+    command.kind === "drag" ||
+    command.kind === "scroll" ||
+    command.kind === "move");
+
 /** Command+Tab was refused before anything was sent: no other app runs. */
 export const noOtherAppText =
   "There is no other app to go back to. Nothing was sent.";

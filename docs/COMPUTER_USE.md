@@ -71,6 +71,118 @@ screen for web pages.
 One request runs at a time. A request ends after 40 actions or 15 minutes,
 whichever comes first. The 15 minutes hold the time that it waits for you.
 
+What you say while a request runs is for that request: "open it in the
+browser", "use the other tab", "just press return". It starts no second
+request. The worker keeps your words in order and gives them to the planner
+with its next action, marked as what you said after the start, so that your
+newest word wins. An action that was chosen before you spoke did not have your
+words: it is not sent, also when it was already on its way, and the planner
+chooses again. The answer is a fixed sentence that says where your words are
+now, for example "Got it. I take that into the task that runs.". It never says
+that something was done. Every action after it goes through the same checks.
+One request takes 8 such additions of 600 characters each, and none that holds
+a password or a key. The same message a second time adds nothing and starts
+nothing.
+
+These rules hold at the worker, for words that are handed to it as a request
+(`submit`). They are read by `readWords` in `connectors/computer/orders.ts`,
+which is safe by default: a task goes on only for a narrow written shape of
+screen order (or a plain continue phrase without a question mark), and
+everything else holds. While the worker waits for you, the chat hands your
+next message to it as the answer (see Questions and answers), and `answer` is
+as it was. On a phone call the bridge answers with the state while a request
+runs, and hands no words to it.
+
+- **Stop (`stop`).** Any stop word anywhere in the message (`stop`, `stopp`,
+  `stahp`, `cancel`, `abort`, `halt`, `quit it`, `kill it`, also inside polite
+  or casual forms such as "can you stop?", "pls stop", "actually stop", "i said
+  stop", or a screen phrase such as "cancel the dialog" or "stop the video")
+  stops the request at once. This holds in every state, also while the initial
+  navigation reading or the first look is in flight, at the step limit, at the
+  8-addition cap, when the record cannot be written, or when the words also
+  look like a secret. The word `enough` is not a stop word, so phrases such as
+  "scroll down enough to see the button" do not cancel the task.
+- **Continue (`continue`).** A standalone continue phrase (`continue`, `go
+  on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
+  optional fillers, with no question mark and nothing else ("continue?",
+  "ok?", "yes?", and "can you continue?" all hold). While paused, it resumes
+  with a fresh look before the first input. While running, nothing changes.
+  At a waiting approval or question of the planner, it never approves: what
+  waited is set aside and the task pauses (`hold`).
+- **Screen order (`order`).** The last sentence of the message (with no stop
+  word in any sentence) matches a strict screen-order shape: optional
+  fillers, an optional polite lead (`can you`, `could you`, `would you`,
+  `will you`, `can u`, `pls`; only with that lead may the sentence end with
+  `?`, and questions with `or`, `should I`, `yet`, `is it`, `do I`, or a
+  behaviour adverb such as `automatically` hold), a screen verb (`open`,
+  `click`, `press`, `hit`, `tap`, `type`, `enter` with an object, `select`,
+  `choose`, `pick`, `scroll up/down`, `drag`, `use`, `try`, `search for`,
+  `close`, `go to`, `go back`, `switch to`), a concrete screen object
+  (pronoun, ordinal, key name, screen noun, web address or `localhost:port`,
+  quoted label for non-`type` verbs, known browser or app name, common UI
+  button label for click verbs, capitalized name after `open`, `switch to`,
+  `close`, `click` or `select`, `<words> in/on/with <browser or app>`, or a
+  single bare word after `open`, `close` or `switch to` that is not an
+  everyday physical object or person word). A person's name after `to` or
+  `for` or in possessive form holds. No remark may follow the order after a
+  comma, dash or semicolon except a filler (`please`, `thanks`, `bro`, `now`,
+  `then`). A second action joined by `and` or `then` is allowed only when it
+  is also a screen verb with a screen object. Any cue of holding, waiting,
+  delay, doubt, refusal, negation or self-takeover (`not`, `no`, `n't`,
+  `never`, `wait`, `hold`, `hang on`, `give me`, `one sec`, `a sec`, `in <N>
+  seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
+  `until`, `before`, `if`, `unless`, `maybe`, `yet`, `nah`, `nope`,
+  `nevermind`, `never mind`, `nvm`, `forget`, `i'm`, `i am`, `i'll`,
+  `i will`, `i got`, `let me`, `already`, `on my cue`, `wrong`, `broken`,
+  `mess`) anywhere in any sentence holds, with one narrow exception for an
+  earlier sentence (separated by `.`, `!`, or `, `) that only reports what
+  the person sees or does not see (`I`, `it`, `the page`, or `nothing` with
+  `see`, `open`, `load`, `happen`, `show`, `work`, or `blank` and their
+  negations). While running it steers the task (unless a hold is already
+  pending, in which case the reply says that the task holds while keeping the
+  words); while paused it resumes with a fresh look; while waiting on a yes or
+  a planner question it never approves, sets aside what waited, and the
+  planner chooses again with the words.
+- **Hold (`hold`).** Everything else (questions, remarks, refusals, busy or
+  delay phrases, fillers alone, or non-screen speech such as "go away",
+  "switch off", "press pause", "type faster", or "open the door for the
+  delivery guy") holds. While running, the task pauses at once (with the
+  words kept when they can be kept). While paused, it stays paused. At a
+  waiting approval or planner question, what waited is set aside and the task
+  pauses. The hold takes effect whatever happens to the words: even at the
+  step limit, at the 8-addition cap, when the record cannot be written, or
+  when the words hold a secret, the pause still happens and the reply states
+  truthfully that the words were not kept.
+- **Startup.** While the planner's initial navigation reading or the first
+  look at the screen is in flight (before step 1 and with no command in
+  flight), a stop ends the task at once, and anything else sets the hold so
+  that no first input goes out. Once a one-step navigation command is already
+  in flight, non-stop words are not taken and receive the end-of-task reply.
+- **Secrets.** Words that hold a password, passcode, passphrase, PIN, secret,
+  token, API key, credential, `pw`, `pwd`, `2fa`, `ssn`, `cvv`, `cvc`, or
+  short numeric code (including contractions, `"set to <value>"`, `"saved as
+  <value>"`, `"<noun> for <target> is <value>"`, value-before-noun forms such
+  as `"type 4821 as the pin"`, quoted or bare values after secret nouns,
+  spaced PIN digits, full-width digits or colon after NFKC normalization,
+  one- or two-sided invisible format or combining joiner characters around
+  `is`/`was`/`:`/`=`, tokens split across indented line breaks, and 13 to 19
+  digit payment card numbers) are refused: they are written nowhere and never
+  sent to the planner. When a running task refuses an order that holds a
+  secret, it also pauses (`hold`) so the person can type the secret on the Mac
+  and tell it to go on. Plain state or location remarks ("the password is
+  already filled", "the password is the same", "the password is on my phone",
+  "the token is expired") and UI labels ("open password generator", "click
+  password recovery") are not treated as secrets.
+- **Limits and scope.** When the task is past its deadline or its call
+  authority ended, non-stop words are not taken. Words come only from where
+  the request was started: the same call, or the chat on both sides. A
+  request that is stopping takes none. Words that were read as a one-step
+  move to another desktop or to the app before are a request of their own,
+  and wait as before.
+- Only the request itself can say that a close was asked for, and only until
+  you say more. After the first addition a close asks again, whatever the
+  addition says.
+
 ## Turn it on
 
 ```sh
@@ -545,6 +657,14 @@ file are for their owner only. It keeps the last 30 requests:
 
 - The request in your words, cut to 300 characters. A request that holds a
   credential is replaced by a marker.
+- What you said for the request while it ran, each cut to 300 characters, with
+  the time. These are in `computer/guidance.json`, beside the journal, for as
+  long as the journal keeps their request (pruned when old requests drop from
+  the journal). The file also keeps a bounded list of ids only (never text)
+  for stops and refused words so that a replay after a restart starts nothing.
+  `clear()` sets aside an unreadable `guidance.json` under a new name, as it
+  does for `journal.json`. A build that does not know them reads the journal
+  as before.
 - Its state and one word for how it got there: `done`, `stopped`, `restart`.
 - Each step as the kind of action, the name of the element and one word for
   the outcome. For a link it keeps the site, not the path.
@@ -556,7 +676,8 @@ The chat keeps what the worker said to you: its questions and its last message.
 The last message of a finished request is the planner's summary, cut to 900
 characters. It can repeat words from the screen.
 
-The language model receives, for each action: your request, the last 12 steps
+The language model receives, for each action: your request, what you said for
+it while it ran, the last 12 steps
 with the text that was typed, the names and values of up to 150 elements, the
 image of the screen, and the text of the page when the browser read it. The
 value of a secure field is never sent. Nothing of this is written to disk by
@@ -572,6 +693,11 @@ refuse a browser origin.
 | `GET /desktop/hands/next?after=N` | The command that waits for the hands, when its number is above `N`, and what runs. Shape `handsNextSchema`                              |
 | `POST /desktop/hands/result`      | What came of one command. Shape `handResultSchema`, body up to 6 megabytes (MB). Answers `{ "ok": false }` when no command waits for it |
 | `GET /desktop/computer`           | `enabled`, `state`, `message`, `step`, `goal` and `question`. Shape `computerStatusSchema` in `worker.ts`                               |
+
+While a request runs, `GET /desktop/computer` can also carry `guidance`, what
+you said for the request after its start, and `waiting`, why it waits for you:
+`takeover`, `approval` or `question`. The snapshot of the engine that the chat
+reads carries the same two, with the `goal`.
 
 The same command is served until its result arrives, with the same number. The
 panel must never run one number twice. The numbers start at the time of the
@@ -597,6 +723,7 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | Limit                          | Value                                       |
 | ------------------------------ | ------------------------------------------- |
 | Requests at one time           | 1                                           |
+| Additions to one request       | 8, of 600 characters each                   |
 | Actions for one request        | 40                                          |
 | Time for one request           | 15 minutes                                  |
 | One command to the hands       | 20 seconds, more for a wait and a long text |

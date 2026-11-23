@@ -8,6 +8,12 @@
  * desk: a folder for its owner only, files for its owner only, written whole
  * and then renamed, and no symbolic link is followed.
  *
+ * What the person said for a request while it ran is part of the record too.
+ * It is kept in a file of its own beside the journal, `guidance.json`. The
+ * journal is read whole and strictly, so a build that does not know a field
+ * cannot read a journal that has it, and then blocks all work. A file that
+ * such a build never opens cannot do that.
+ *
  * The journal is what makes a restart safe. A request that was running when
  * the service stopped has an unknown result. It becomes `uncertain`, it is
  * never run again, and it blocks new work until the person clears it.
@@ -55,9 +61,10 @@ const stepSchema = z
     at: moment,
   })
   .strict();
+const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
 const requestSchema = z
   .object({
-    id: z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/),
+    id: identity,
     /** What the person asked, as one line. */
     goal: z.string().max(300),
     state: z.enum(requestStates),
@@ -76,8 +83,126 @@ const journalSchema = z
 export type JournalStep = z.infer<typeof stepSchema>;
 export type JournalRequest = z.infer<typeof requestSchema>;
 
+/** The most times that the person can add words to one request while it runs. */
+export const guidanceLimit = 8;
+/**
+ * How many ids of refused, stopped or otherwise handled words are kept per
+ * request so that a replay after a restart starts nothing. Ids only, no text.
+ */
+const seenLimit = 64;
+const saidSchema = z.object({
+  /** The id that the words came with. The same id is taken once. */
+  id: identity,
+  /** What the person said, as one line. It is kept as the goal is kept. */
+  text: z.string().max(300),
+  at: moment,
+});
+/** A field that a later build adds here is dropped on reading, not refused. */
+const guidanceSchema = z.object({
+  version: z.literal(1),
+  requests: z
+    .array(
+      z.object({
+        /** The request that the words were for. */
+        id: identity,
+        /** Oldest first. */
+        said: z.array(saidSchema).max(guidanceLimit),
+        /** Ids of words for this request that were not added to `said`. */
+        seen: z.array(identity).max(seenLimit).optional(),
+      }),
+    )
+    .max(400),
+});
+export type JournalGuidance = z.infer<typeof saidSchema>;
+
 const clean = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+const invisibleSecretClass =
+  "[\\p{Cf}\\u034f\\u115f\\u1160\\u17b4\\u17b5\\u180e\\u3164\\uffa0\\ufe00-\\ufe0f]";
+const invisibleSecretChars = new RegExp(invisibleSecretClass, "gu");
+const invisibleAroundOp = new RegExp(
+  `${invisibleSecretClass}+(is|was|[:=])${invisibleSecretClass}+`,
+  "giu",
+);
+const invisibleBeforeOp = new RegExp(
+  `${invisibleSecretClass}+(is|was)(?=\\s|$)`,
+  "giu",
+);
+const invisibleAfterOp = new RegExp(
+  `(^|\\s)(is|was)${invisibleSecretClass}+`,
+  "giu",
+);
+const invisibleAroundPunctOp = new RegExp(
+  `${invisibleSecretClass}+([:=])|([:=])${invisibleSecretClass}+`,
+  "gu",
+);
+const secretNoun =
+  "(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential|pw|pwd|2fa|ssn|cvv|cvc)";
+const plainStateTail =
+  "(?:(?:already|filled|expired|wrong|correct|required|empty|needed|not|missing|blank|invalid|valid|hidden|autofilled|the\\s+same|different|unchanged|unknown|pending|active|inactive|in\\s+\\S+|on\\s+(?:my|the|your|a|this|that)\\s+\\S+)(?![A-Za-z0-9_-])|set(?!\\s+to\\s+\\S)(?![A-Za-z0-9_-])|saved(?!\\s+as\\s+\\S)(?![A-Za-z0-9_-]))";
+const nonSecretBareWord =
+  "(?:is|was|are|were|be|been|has|have|had|will|would|can|could|should|may|might|must|do|does|did|in|into|on|onto|for|to|of|at|by|from|with|without|about|and|or|but|if|when|as|that|this|these|those|then|than|here|there|now|yet|still|already|not|no|never|please|pls|again|first|next|yourself|myself|the|your|mine|field|fields|box|boxes|input|inputs|bar|settings|setting|manager|reset|change|screen|page|tab|button|link|window|dialog|popup|prompt|form|section|entry|label|icon|check|error|message|text|area|row|item|option|menu|list|step|login|sign|account|autofill|saved|filled|expired|wrong|correct|required|empty|set|needed|missing|blank|hidden|invalid|valid|generator|recovery|lock|locked|unlock|policy|policies|rule|rules|strength|hint|hints|hash|hashed|key|keys|store|vault|sync|value|values|number|numbers|code|codes|card|cards|type|name|header|headers|body|cookie|cookies|file|files|folder|path|scope|scopes|refresh|revoke|rotate|same|different)(?![A-Za-z0-9_-])";
+const strictSecretShapes = [
+  // Sentence and contraction forms: secret noun (optionally "for <target>") followed by is/was/'s (optionally "set to"/"saved as") and a non-state value.
+  new RegExp(
+    String.raw`\b${secretNoun}(?:\s+for\s+(?:[A-Za-z0-9._-]+\s+){0,3}[A-Za-z0-9._-]+)?(?:\s+(?:is|was)(?:\s+(?:set\s+to|saved\s+as))?|'s(?:\s+(?:set\s+to|saved\s+as))?)\s+(?!${plainStateTail})\S+`,
+    "i",
+  ),
+  // Key-value forms with : or = (full-width colon/equals fold via NFKC).
+  new RegExp(String.raw`\b${secretNoun}\s*[:=]\s*\S+`, "i"),
+  // Quoted or bare value directly after a secret noun.
+  new RegExp(
+    String.raw`\b${secretNoun}\s+(?:["'][^"'\s][^"']*["']|(?!${nonSecretBareWord})[A-Za-z0-9!@#$%^&*_+=~./-]{4,})`,
+    "i",
+  ),
+  // A 4 to 8 digit code (with or without spaces/hyphens) after pin, code, otp, passcode, or 2fa, or 3 to 4 digits after cvv/cvc.
+  /(?<!\b(?:zip|postal|area|country|error|status|http|exit|promo|coupon|discount|referral|invite|gift|voucher)\s+)\b(?:pin|code|otp|passcode|2fa)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d(?:[ -]?\d){3,7}\b/i,
+  /\b(?:cvv|cvc)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d{3,4}\b/i,
+  // Value before secret noun: "type 4821 as the pin", "enter hunter2 as the password".
+  new RegExp(
+    String.raw`\b(?:type|enter|use|put)\s+(?:\d(?:[ -]?\d){2,7}|"[^"\n]+"|'[^'\n]+'|\S{3,})\s+as\s+(?:the\s+|my\s+)?(?:code|otp|${secretNoun})\b`,
+    "i",
+  ),
+  // Payment card numbers: 13 to 19 digits with optional spaces or hyphens (excluding order/ISBN/tracking/invoice/shipment references).
+  /(?<!\b(?:order|isbn|tracking|invoice|shipment)\s+)(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/i,
+];
+/**
+ * Strict credential check for computer-use guidance and journal records.
+ * Normalizes NFKC, strips format and invisible joiner characters (\p{Cf},
+ * U+034F, etc.) to "", tests a newline-joined variant for wrapped tokens,
+ * separates one- or two-sided invisible characters around is/was/:/=, and
+ * checks contractions, bare/quoted secret values, spaced PIN/OTP/CVV/SSN codes,
+ * value-before-noun forms, and payment card numbers while ignoring plain state
+ * remarks ("is already filled", "is the same", "is on my phone").
+ */
+export function looksSecretStrict(text: string): boolean {
+  const normalized = text
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"');
+  const stripped = normalized.replace(invisibleSecretChars, "");
+  const opSpaced = normalized
+    .replace(invisibleAroundOp, " $1 ")
+    .replace(invisibleBeforeOp, " $1 ")
+    .replace(invisibleAfterOp, "$1$2 ")
+    .replace(invisibleAroundPunctOp, " $1$2 ")
+    .replace(invisibleSecretChars, "");
+  const noNewlines = stripped.replace(/[\r\n]+\s*/g, "");
+  if (looksSecret(noNewlines)) return true;
+  const variants = [
+    normalized,
+    stripped,
+    opSpaced,
+    clean(normalized, normalized.length),
+    clean(stripped, stripped.length),
+    clean(opSpaced, opSpaced.length),
+  ];
+  return variants.some(
+    (value) =>
+      looksSecret(value) ||
+      strictSecretShapes.some((shape) => shape.test(value)),
+  );
+}
 /** What the journal holds in place of a request that carried a credential. */
 export const credentialMarker =
   "[A request that held a credential. Its text is not kept.]";
@@ -87,12 +212,15 @@ const maximumBytes = 2 * 1024 * 1024;
 
 export class ComputerJournal {
   readonly file: string;
+  /** What the person said for requests while they ran. */
+  readonly guidanceFile: string;
   private cache: { stamp: string; requests: JournalRequest[] } | undefined;
   constructor(
     readonly root: string,
     private readonly now: () => number = Date.now,
   ) {
     this.file = join(computerDirectory(root), "journal.json");
+    this.guidanceFile = join(computerDirectory(root), "guidance.json");
   }
 
   /** The requests, or null when the file is there and cannot be read. */
@@ -129,6 +257,23 @@ export class ComputerJournal {
     });
     secureWrite(this.file, { version: 1, requests: kept });
     this.cache = undefined;
+    if (kept.length < requests.length) this.pruneGuidance(kept);
+  }
+  private pruneGuidance(kept: JournalRequest[]) {
+    if (!existsSync(this.guidanceFile)) return;
+    const entries = this.said();
+    if (!entries) return;
+    const known = new Set(kept.map((request) => request.id));
+    const retained = entries.filter((entry) => known.has(entry.id));
+    if (retained.length === entries.length) return;
+    try {
+      secureWrite(
+        this.guidanceFile,
+        guidanceSchema.parse({ version: 1, requests: retained }),
+      );
+    } catch {
+      // Pruning guidance must never break saving the journal.
+    }
   }
   private change(
     id: string,
@@ -216,7 +361,7 @@ export class ComputerJournal {
     const request = requestSchema.parse({
       id,
       // A credential is never kept, here as in the chat and in memory.
-      goal: looksSecret(goal) ? credentialMarker : clean(goal, 300),
+      goal: looksSecretStrict(goal) ? credentialMarker : clean(goal, 300),
       state: "running",
       reason: "started",
       createdAt: at,
@@ -233,6 +378,106 @@ export class ComputerJournal {
       reason: clean(reason, 80),
       updatedAt: this.now(),
     }));
+  }
+  /** The words that are kept, by request. Empty when there is no file, null when it cannot be read. */
+  private said(): z.infer<typeof guidanceSchema>["requests"] | null {
+    let stat;
+    try {
+      stat = lstatSync(this.guidanceFile);
+    } catch {
+      return [];
+    }
+    if (!stat.isFile() || stat.size > maximumBytes) return null;
+    try {
+      return guidanceSchema.parse(
+        JSON.parse(readFileSync(this.guidanceFile, "utf8")),
+      ).requests;
+    } catch {
+      return null;
+    }
+  }
+  /** What the person said for this request after it began, oldest first. */
+  guidance(id: string): JournalGuidance[] {
+    return this.said()?.find((entry) => entry.id === id)?.said ?? [];
+  }
+  /**
+   * Records what the person said for a request after it began. The words are
+   * kept as the goal is kept: one line, and a marker in place of a
+   * credential. A request has room for `guidanceLimit` of them: one more is
+   * not written. Words stay as long as the journal holds their request.
+   * Returns the line as it is kept.
+   */
+  guide(id: string, said: { id: string; text: string }): string {
+    const requests = this.load();
+    if (!requests?.some((request) => request.id === id))
+      throw new Error("No such computer request.");
+    const kept = this.said();
+    if (!kept)
+      throw new Error("The words for computer requests cannot be read.");
+    const line = clean(said.text, 300);
+    // Check raw, format-stripped (\p{Cf} -> "") and cleaned forms, plus strict shapes.
+    const text = looksSecretStrict(said.text) ? credentialMarker : line;
+    const existing = kept.find((entry) => entry.id === id);
+    const before = existing?.said ?? [];
+    const known = new Set(requests.map((request) => request.id));
+    secureWrite(
+      this.guidanceFile,
+      guidanceSchema.parse({
+        version: 1,
+        requests: [
+          ...kept.filter((entry) => entry.id !== id && known.has(entry.id)),
+          {
+            id,
+            said: [...before, { id: said.id, text, at: this.now() }],
+            ...(existing?.seen?.length ? { seen: existing.seen } : {}),
+          },
+        ],
+      }),
+    );
+    return text;
+  }
+  /**
+   * Records only the id of words for a request that were not kept as guidance
+   * (stops, refusals, secrets, over-limit or late words). Ids stay outside the
+   * 8-addition cap in a bounded list so a replay after a restart starts nothing.
+   */
+  seen(id: string, wordId: string) {
+    const parsedId = identity.parse(wordId);
+    const requests = this.load();
+    if (!requests?.some((request) => request.id === id))
+      throw new Error("No such computer request.");
+    const kept = this.said();
+    if (!kept)
+      throw new Error("The words for computer requests cannot be read.");
+    const existing = kept.find((entry) => entry.id === id);
+    const said = existing?.said ?? [];
+    const before = existing?.seen ?? [];
+    if (
+      said.some((entry) => entry.id === parsedId) ||
+      before.includes(parsedId)
+    )
+      return;
+    const known = new Set(requests.map((request) => request.id));
+    secureWrite(
+      this.guidanceFile,
+      guidanceSchema.parse({
+        version: 1,
+        requests: [
+          ...kept.filter((entry) => entry.id !== id && known.has(entry.id)),
+          { id, said, seen: [...before, parsedId].slice(-seenLimit) },
+        ],
+      }),
+    );
+  }
+  /** The id of the request that took or handled the words with this id while it ran. Null when none did. */
+  guided(id: string): string | null {
+    return (
+      this.said()?.find(
+        (entry) =>
+          entry.said.some((said) => said.id === id) ||
+          (entry.seen?.includes(id) ?? false),
+      )?.id ?? null
+    );
   }
   /** One step: the kind of action, the name of the element and the outcome. Nothing else is taken. */
   step(id: string, step: { kind: string; target: string; outcome: string }) {
@@ -252,6 +497,17 @@ export class ComputerJournal {
     }));
   }
 
+  private setAsideGuidance(): string | null {
+    if (this.said() !== null) return null;
+    const aside = join(
+      computerDirectory(this.root),
+      `guidance.unreadable-${this.now()}.json`,
+    );
+    if (existsSync(aside)) throw new Error("Clear it again in a moment.");
+    renameSync(this.guidanceFile, aside);
+    return aside;
+  }
+
   /**
    * The person says that they looked at the result of the uncertain request.
    * Its record stays, with the time. A file that cannot be read is set aside
@@ -267,6 +523,11 @@ export class ComputerJournal {
       if (existsSync(aside)) throw new Error("Clear it again in a moment.");
       renameSync(this.file, aside);
       this.cache = undefined;
+      try {
+        this.setAsideGuidance();
+      } catch {
+        // The journal is already set aside; a second clear can handle guidance.
+      }
       return { cleared: [], setAside: aside };
     }
     const cleared: JournalRequest[] = [];
@@ -278,7 +539,8 @@ export class ComputerJournal {
       return done;
     });
     if (cleared.length) this.save(next);
-    return { cleared, setAside: null };
+    const guidanceAside = this.setAsideGuidance();
+    return { cleared, setAside: guidanceAside };
   }
 }
 

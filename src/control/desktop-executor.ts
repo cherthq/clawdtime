@@ -12,6 +12,16 @@ export interface DesktopExecutionSnapshot {
   canStop: boolean;
   message: string;
   pendingAction?: { id: string; description: string };
+  /** What the task that runs now was asked, as one line. Absent when no task runs. */
+  goal?: string;
+  /** What the person said for that task after it began, oldest first. Absent when they said nothing more. */
+  guidance?: string[];
+  /**
+   * Why the task that runs now waits for the person: they took over the Mac
+   * and it paused, an action needs their yes, or the task asked them a
+   * question. Absent when it does not wait.
+   */
+  waiting?: "takeover" | "approval" | "question";
 }
 export interface DesktopExecutorPort {
   snapshot(): DesktopExecutionSnapshot;

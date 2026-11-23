@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ComputerJournal,
   computerDirectory,
+  looksSecretStrict,
   readComputerSwitch,
   setComputerSwitch,
 } from "../connectors/computer/journal.js";
@@ -102,6 +103,242 @@ describe("the journal of computer requests", () => {
       "[A request that held a credential. Its text is not kept.]",
     );
     expect(readFileSync(journal.file, "utf8")).not.toContain("correct-horse");
+  });
+
+  it("keeps what the person said after the start beside the journal, in order, as it keeps the request", () => {
+    let now = 1000;
+    const home = root();
+    const journal = new ComputerJournal(home, () => now);
+    journal.open("r1", "Open the editor");
+    // A request that got no more words has none, and there is no file for them.
+    expect(journal.guidance("r1")).toEqual([]);
+    expect(journal.guided("g1")).toBeNull();
+    expect(existsSync(journal.guidanceFile)).toBe(false);
+    expect(journal.guide("r1", { id: "g1", text: "Use the\nother tab" })).toBe(
+      "Use the other tab",
+    );
+    now = 2000;
+    journal.guide("r1", {
+      id: "g2",
+      text: "log in, my password is correct-horse-battery",
+    });
+    // A mark that the cleaning takes away does not hide a credential.
+    journal.guide("r1", {
+      id: "g3",
+      text: "log in, my password is\u200bcorrect-horse-battery",
+    });
+    journal.guide("r1", { id: "g4", text: "x".repeat(600) });
+    const marker = "[A request that held a credential. Its text is not kept.]";
+    const kept = journal.guidance("r1");
+    expect(kept.slice(0, 3)).toEqual([
+      { id: "g1", text: "Use the other tab", at: 1000 },
+      { id: "g2", text: marker, at: 2000 },
+      { id: "g3", text: marker, at: 2000 },
+    ]);
+    expect(kept[3]!.text).toHaveLength(300);
+    expect(journal.guidanceFile).toBe(join(home, "computer", "guidance.json"));
+    expect(mode(journal.guidanceFile)).toBe(0o600);
+    expect(readFileSync(journal.guidanceFile, "utf8")).not.toContain(
+      "correct-horse",
+    );
+    // The id of the words finds the request that took them, and is no request itself.
+    expect(journal.guided("g2")).toBe("r1");
+    expect(journal.get("g2")).toBeNull();
+    // There is room for eight. One more is not written, and the eight stay.
+    for (let n = 5; n <= 8; n++)
+      journal.guide("r1", { id: `g${n}`, text: `Addition ${n}` });
+    expect(() => journal.guide("r1", { id: "g9", text: "One more" })).toThrow();
+    expect(journal.guidance("r1")).toHaveLength(8);
+    expect(() => journal.guide("none", { id: "g10", text: "x" })).toThrow();
+    // Another reader of the same folder reads the record.
+    expect(new ComputerJournal(home).guidance("r1")).toHaveLength(8);
+  });
+
+  it("leaves the journal as a build before these words reads it, and drops the words with their request", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 1);
+    journal.open("r1", "Open the editor");
+    journal.guide("r1", { id: "g1", text: "Use the other tab" });
+    // The journal has the keys that it had, and no other.
+    const request = JSON.parse(readFileSync(journal.file, "utf8")).requests[0];
+    expect(Object.keys(request).sort()).toEqual([
+      "createdAt",
+      "goal",
+      "id",
+      "reason",
+      "state",
+      "steps",
+      "updatedAt",
+    ]);
+    expect(journal.readable()).toBe(true);
+    // The journal keeps the last 30 requests. Words for a request that it
+    // dropped go with the next write.
+    journal.set("r1", "completed", "done");
+    for (let n = 2; n <= 32; n++) {
+      journal.open(`r${n}`, "Next");
+      journal.set(`r${n}`, "completed", "done");
+    }
+    expect(journal.get("r1")).toBeNull();
+    journal.open("last", "Last");
+    journal.guide("last", { id: "g2", text: "Use the other tab" });
+    expect(journal.guided("g1")).toBeNull();
+    expect(journal.guided("g2")).toBe("last");
+    // Words that cannot be read are not written over, and block no request.
+    writeFileSync(journal.guidanceFile, "not json");
+    expect(journal.guidance("last")).toEqual([]);
+    expect(journal.guided("g2")).toBeNull();
+    expect(() => journal.guide("last", { id: "g3", text: "More" })).toThrow();
+    expect(readFileSync(journal.guidanceFile, "utf8")).toBe("not json");
+    expect(journal.unresolved()).toBeNull();
+  });
+
+  it("masks secrets hidden with zero-width characters, plain-word passwords and short codes, and records seen ids outside the 8-addition cap", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 1);
+    journal.open("r1", "Sign in");
+    const marker = "[A request that held a credential. Its text is not kept.]";
+    const cases = [
+      ["g1", "use key sk-\u200b1234567890abcdefghij", "1234567890abcdefghij"],
+      ["g2", "my pass\u200bword is correct-horse-battery", "correct-horse"],
+      ["g3", "token ghp_abc\u200bdefghijklmnopqrstuvw", "defghijklmnopqrstuvw"],
+      ["g4", "my password is swordfish", "swordfish"],
+      ["g5", "my pin is 1234", "1234"],
+      ["g6", "otp 482913", "482913"],
+      ["g7", "code 12345678", "12345678"],
+      ["g8", "api key = mysecretval", "mysecretval"],
+    ] as const;
+    for (const [id, text] of cases)
+      expect(journal.guide("r1", { id, text })).toBe(marker);
+    const raw = readFileSync(journal.guidanceFile, "utf8");
+    for (const [, , secret] of cases) expect(raw).not.toContain(secret);
+    // All 8 guidance slots are full, yet seen ids still persist without error.
+    journal.seen("r1", "g_stop");
+    journal.seen("r1", "g_refused");
+    expect(journal.guided("g_stop")).toBe("r1");
+    expect(journal.guided("g_refused")).toBe("r1");
+    expect(journal.guidance("r1")).toHaveLength(8);
+    // Another reader on the same folder sees the persisted ids.
+    const reloaded = new ComputerJournal(home, () => 2);
+    expect(reloaded.guided("g_stop")).toBe("r1");
+    expect(reloaded.guided("g_refused")).toBe("r1");
+    // The file stays version 1 with requests[].said of at most 8 items (readable by ec4496d).
+    const parsed = JSON.parse(readFileSync(journal.guidanceFile, "utf8"));
+    expect(parsed.version).toBe(1);
+    expect(parsed.requests[0].said).toHaveLength(8);
+    expect(parsed.requests[0].seen).toEqual(["g_stop", "g_refused"]);
+  });
+
+  it("prunes guidance.json when save drops old requests even with no further guidance", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 1);
+    journal.open("r1", "Old task");
+    journal.guide("r1", { id: "g1", text: "sensitive context" });
+    journal.set("r1", "completed", "done");
+    for (let n = 2; n <= 35; n++) {
+      journal.open(`r${n}`, "Next");
+      journal.set(`r${n}`, "completed", "done");
+    }
+    expect(journal.get("r1")).toBeNull();
+    expect(journal.guidance("r1")).toEqual([]);
+    expect(journal.guided("g1")).toBeNull();
+    expect(readFileSync(journal.guidanceFile, "utf8")).not.toContain(
+      "sensitive context",
+    );
+  });
+
+  it("sets aside an unreadable guidance.json on clear", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 9);
+    journal.open("r1", "First");
+    writeFileSync(journal.guidanceFile, "{ bad json", { mode: 0o600 });
+    const result = journal.clear();
+    expect(result.setAside).toMatch(/guidance\.unreadable-9\.json$/);
+    expect(readFileSync(result.setAside!, "utf8")).toBe("{ bad json");
+    expect(existsSync(journal.guidanceFile)).toBe(false);
+    expect(journal.guide("r1", { id: "g1", text: "Works again" })).toBe(
+      "Works again",
+    );
+  });
+
+  it("round 2 blocker 6: catches contractions, bare/quoted values, spaced PINs, NFKC full-width, card numbers, wrapped tokens, and invisible joiners without false positives on state words", () => {
+    const secrets = [
+      "my passcode's 4821",
+      "my password's swordfish",
+      "passcode 4821",
+      'use password "hunter2"',
+      "pin 1 2 3 4",
+      "use pin \uff11\uff12\uff13\uff14",
+      "code \uff14\uff18\uff12\uff19\uff11\uff13",
+      "password\uff1aswordfish",
+      "my card number is 4532 1234 5678 9010",
+      "card 4532-1234-5678-9010",
+      "use key sk-12345678\n90abcdefghij",
+      "token ghp_abcdef0123\n456789abcdef01",
+      "my pass\u200bword\u200bis\u200bswordfish",
+      "my pass\u034fword is swordfish",
+    ];
+    for (const sample of secrets)
+      expect(looksSecretStrict(sample), sample).toBe(true);
+
+    const benign = [
+      "the password is already filled",
+      "the password is saved in Chrome",
+      "the pin is not needed",
+      "the token is expired",
+      "the password is wrong",
+      "the password is correct",
+      "the password is required",
+      "the password is empty",
+      "the password is set",
+      "open zip code 94107",
+      "press the code tab",
+      "open the PIN settings",
+    ];
+    for (const sample of benign)
+      expect(looksSecretStrict(sample), sample).toBe(false);
+  });
+
+  it("redesign review blocker 6 and rest 10: catches all 19 credential bypass shapes and avoids easy false positives", () => {
+    const secrets = [
+      "my password is set to hunter2",
+      "the password is saved as swordfish",
+      "my pin is set to 4821",
+      'use token "my-live-token-9876"',
+      'use api key "abc123def456"',
+      "type my secret swordfish in the box",
+      "enter token abcdef123456 in the field",
+      "type my token abcdef1234567890 in the box",
+      "my pw is swordfish",
+      "pwd: hunter2",
+      "my 2fa is 482913",
+      "my ssn is 123-45-6789",
+      "my cvv is 482",
+      "my cvc is 482",
+      "use key sk-12345678\n  90abcdefghij",
+      "token ghp_abcdef0123\n  456789abcdef01",
+      "the password for Chrome is swordfish",
+      "type 4821 as the pin in the box",
+      "my pass\u200bword\u200bis swordfish",
+      "my to\u200bken is\u200babcdef123456",
+      "my p\u200bin\u200bis 4821",
+    ];
+    for (const sample of secrets)
+      expect(looksSecretStrict(sample), sample).toBe(true);
+
+    const benign = [
+      "the password is the same",
+      "the password is on my phone",
+      "the password is in the vault",
+      "the token is in the header",
+      "open password generator",
+      "click password recovery",
+      "open passcode lock",
+      "open promo code 2026",
+      "search for order 1234567890123",
+      "open ISBN 978-0-13-468599-1",
+    ];
+    for (const sample of benign)
+      expect(looksSecretStrict(sample), sample).toBe(false);
   });
 
   it("cuts a long request, a long name and control characters", () => {
