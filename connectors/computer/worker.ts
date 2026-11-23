@@ -22,6 +22,9 @@
  * - Done counts only after an observation that came after the last action.
  * - A request whose result is not known is never repeated. It is `uncertain`
  *   and blocks new work until the person clears it.
+ * - What the person says while a request runs is for that request. It goes to
+ *   the planner as their newest words. It starts no second request, it is no
+ *   answer to a question, and it is no yes to an action.
  */
 import { z } from "zod";
 import type {
@@ -29,7 +32,7 @@ import type {
   DesktopExecutionAuthority,
   DesktopExecutorPort,
 } from "../../src/control/desktop-executor.js";
-import { interpret } from "../agents/call.js";
+import { holdsBack, interpret } from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
 import {
   actionSchema,
@@ -43,10 +46,11 @@ import {
   type View,
   hasTextFocus,
 } from "./guards.js";
-import type {
-  ComputerJournal,
-  JournalRequest,
-  RequestState,
+import {
+  guidanceLimit,
+  type ComputerJournal,
+  type JournalRequest,
+  type RequestState,
 } from "./journal.js";
 import { HandsTimeout } from "./panel-hands.js";
 import {
@@ -84,6 +88,35 @@ const startedText =
   "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
 const busyText =
   "A computer task is already running. Stop it, or wait for it to end, before a new one.";
+/** The most characters of what the person adds to a request that runs. */
+const guidanceLength = 600;
+/** How many ids of such words the worker remembers, so that none of them starts a request later. */
+const rememberedWords = 256;
+/**
+ * What the person hears when their words went into the request that runs.
+ * Each sentence says where the words are now. None says that they were done.
+ */
+const guidedText = "Got it. I take that into the task that runs.";
+const resumedText = "Got it. I go on with the task and take that into it.";
+/** The words came while a yes or an answer was awaited: what waited is set aside, and nothing is approved. */
+const asideText = {
+  yes_no:
+    "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
+  free: "Got it. I take that into the task and choose again. The question that waited is set aside.",
+} as const;
+const unclearText = (question: string) =>
+  `I did not get a clear answer. ${question}`;
+const guidanceFullText = `This task already took ${guidanceLimit} additions from you, and it takes no more.`;
+const guidanceLongText = `That is longer than ${guidanceLength} characters, so I did not take it into the task that runs. Say it in fewer words.`;
+const guidanceUnwrittenText =
+  "The record of computer tasks could not be written, so I did not take that into the task.";
+/** What follows a refusal of words: the question that still waits, or what the person can do. */
+const andNow = (question: Question | null, otherwise = "") =>
+  question ? ` ${question.text}` : otherwise;
+/** Why an action that was on its way was held back: it was chosen without the person's newest words. */
+const saidMoreText = "The person said more before it went out.";
+/** Words that open with one of these stop the request, as they do in the chat. */
+const stopWords = /^(?:please\s+)?(?:stop|cancel|abort)\b/i;
 const ownershipText =
   "Screen input is held by the current phone walkthrough or an unresolved owner. No new computer action was sent.";
 const idleText =
@@ -131,6 +164,14 @@ export const computerStatusSchema = z
     goal: z.string().max(300),
     /** What the worker asks the person now. Null when it asks nothing. */
     question: z.string().max(2000).nullable(),
+    /** What the person said for the request that runs after it began, oldest first. Absent when they said nothing more. */
+    guidance: z.array(z.string().max(300)).max(guidanceLimit).optional(),
+    /**
+     * Why the request that runs waits for the person: they took over the Mac
+     * and it paused, an action needs their yes, or the planner asked them a
+     * question. Absent when it does not wait.
+     */
+    waiting: z.enum(["takeover", "approval", "question"]).optional(),
   })
   .strict();
 export type ComputerStatus = z.infer<typeof computerStatusSchema>;
@@ -178,6 +219,12 @@ export interface ComputerWorkerOptions {
 type Reply =
   | { kind: "yes" }
   | { kind: "text"; text: string }
+  /**
+   * The person said something else for the request in place of an answer.
+   * It is no yes and no answer: what waited is not done, and the request goes
+   * on to the planner's next choice.
+   */
+  | { kind: "aside" }
   /** The request ended while it waited: Stop, a no, the time limit. */
   | { kind: "over" };
 interface Question {
@@ -188,6 +235,26 @@ interface Question {
   refusal: string;
   settle: (reply: Reply) => void;
 }
+/** Why a request waits, in the word that the status and the snapshot carry. */
+const waitingFor = {
+  continue: "takeover",
+  yes_no: "approval",
+  free: "question",
+} as const;
+/** What the person said for a request after it began. */
+interface Guidance {
+  /** The id that the words came with. The same id is taken once. */
+  id: string;
+  /** The words as one line, for the planner and for the checks. */
+  text: string;
+  /** The same as the journal keeps them, for the panel and the chat. */
+  shown: string;
+}
+/** Words join a request only from the surface that started it: the same call, or no call on both sides. */
+const sameSpeaker = (
+  started: DesktopExecutionAuthority | undefined,
+  said: DesktopExecutionAuthority | undefined,
+) => started?.callId === said?.callId;
 interface Run {
   authority?: DesktopExecutionAuthority;
   /** Why the step of this turn was not sent, for the timing record. */
@@ -214,6 +281,10 @@ interface Run {
   goal: string;
   /** The same as the journal keeps them, for the panel. */
   shown: string;
+  /** What the person said for this request after it began, oldest first. */
+  guidance: Guidance[];
+  /** How many of those the planner had when it last began to choose. */
+  heard: number;
   deadline: number;
   step: number;
   state: "running" | "waiting_for_person" | "stopping";
@@ -342,6 +413,12 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
   }
   private current: Run | null = null;
+  /**
+   * The ids of words that were taken as words for a request, whatever came
+   * of them. Such an id never starts a request of its own: the same message
+   * that comes a second time gets the state and nothing else.
+   */
+  private readonly words = new Set<string>();
   private last: {
     requestId: string;
     state: RequestState;
@@ -463,6 +540,10 @@ export class ComputerWorker implements DesktopExecutorPort {
         step: run.step,
         goal: clean(run.shown, 200),
         question: run.question?.text ?? null,
+        ...(run.guidance.length
+          ? { guidance: run.guidance.map((said) => said.shown) }
+          : {}),
+        ...(run.question ? { waiting: waitingFor[run.question.mode] } : {}),
       };
     const unresolved = this.journal.unresolved();
     if (unresolved)
@@ -519,6 +600,11 @@ export class ComputerWorker implements DesktopExecutorPort {
         status.enabled &&
         (status.state === "running" || status.state === "waiting_for_person"),
       message: status.message,
+      // For a chat that is asked what runs: the request, what the person
+      // added to it, and why it waits. Only while a request runs.
+      ...(this.current ? { goal: status.goal } : {}),
+      ...(status.guidance ? { guidance: status.guidance } : {}),
+      ...(status.waiting ? { waiting: status.waiting } : {}),
     };
   }
   /** What the panel shows while it serves the hands. */
@@ -535,7 +621,9 @@ export class ComputerWorker implements DesktopExecutorPort {
   /**
    * Starts one request and answers at once. The work goes on after the
    * answer. The same id never starts a second time, and nothing starts while
-   * another request runs or while one has an unknown result.
+   * another request runs or while one has an unknown result. Words that come
+   * while a request runs are the person's newest words for that request: see
+   * `guide`.
    */
   /**
    * `reading` is what the supervisor's reader made of this same message,
@@ -575,9 +663,16 @@ export class ComputerWorker implements DesktopExecutorPort {
       reading === undefined ? undefined : navigationIntentSchema.parse(reading);
     if (read?.kind === "clarify")
       throw new Error("A question to the person is no reading of a request.");
-    if (this.journal.get(id)) return { message: this.snapshot().message };
+    // An id that is known, as a request or as words for one, starts nothing
+    // and adds nothing: it gets the state as it is now.
+    if (this.journal.get(id) || this.words.has(id) || this.journal.guided(id))
+      return { message: this.snapshot().message };
     if (!this.enabled()) return { message: offText };
-    if (this.current) return { message: busyText };
+    // A request runs: these are words for it.
+    if (this.current)
+      return {
+        message: await this.guide(this.current, id, goal, read, authority),
+      };
     const unresolved = this.journal.unresolved();
     if (unresolved) return { message: uncertainText(unresolved) };
     let shown: string;
@@ -594,6 +689,8 @@ export class ComputerWorker implements DesktopExecutorPort {
       id,
       goal,
       shown,
+      guidance: [],
+      heard: 0,
       deadline: this.now() + this.maxMs,
       step: 0,
       state: "running",
@@ -616,6 +713,141 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.last = null;
     this.ended = this.loop(run);
     return { message: startedText };
+  }
+
+  /**
+   * The person spoke while a request runs. Those words are their newest ones
+   * for that request, not a second request: "open it in the browser", "no,
+   * the other tab", "just press return". They are kept in order, written to
+   * the record, and given to the planner at its next step. An action that
+   * was chosen before they came is not sent: `loop` drops the choice, and
+   * `outdated` holds an action that is on its way.
+   *
+   * They passed the same gates as a new request before they came here: the
+   * owner of the screen input, a call that is live, the switch. And they come
+   * from the surface that started the request, or they are refused as before.
+   *
+   * What they never are: a yes to an action, or an answer to a question of
+   * the planner. When the request waits for one of those, the person has
+   * said something else in its place, and the newest word wins: what waited
+   * is set aside. The action that needed the yes is not sent, the question
+   * of the planner gets no answer, and the planner chooses again with the
+   * words. When it chooses the same action again, the person is asked again.
+   * A yes that was kept for an action that was not sent ends too, in `loop`.
+   * `answer` reads an answer as it always did.
+   *
+   * The pause after the person took over the Mac ends with them as it ends
+   * with "continue": they say what to do next, so they are a wish to go on.
+   *
+   * Three readings stand before all of that, each on the careful side. Words
+   * that open with stop, cancel or abort stop the request. Words that
+   * `answer` takes as a no or a stop end a request that waits, as they do
+   * through `answer`. And words that hesitate or ask about something ("wait",
+   * "hold on", "why did you stop") change nothing in a request that waits:
+   * they are no wish to go on.
+   *
+   * The planner's choice stays an untrusted single-action plan. Every action
+   * after these words goes through the same checks, with the same questions.
+   */
+  private async guide(
+    run: Run,
+    id: string,
+    words: string,
+    reading: NavigationIntent | undefined,
+    authority?: DesktopExecutionAuthority,
+  ): Promise<string> {
+    // As for an answer: a request that waited past its time has ended.
+    this.expire();
+    const text = clean(words, 2000);
+    if (
+      this.current === run &&
+      (!text ||
+        run.stop ||
+        run.state === "stopping" ||
+        !sameSpeaker(run.authority, authority) ||
+        // A move of one step asks no planner, so nothing could take the
+        // words. While the worker still reads whether the request is such a
+        // move, nobody knows yet.
+        (run.navigation === undefined
+          ? this.planner.navigation !== undefined
+          : run.navigation.kind !== "none" && run.history.length === 0) ||
+        // A move that the planner can never make is a request of its own.
+        reading?.kind === "desktop" ||
+        reading?.kind === "previous_app")
+    )
+      return busyText;
+    // From here on these were words for this request. Their id starts none.
+    this.remember(id);
+    if (this.current !== run) return this.snapshot().message;
+    const question = run.question;
+    const paused = question?.mode === "continue";
+    const record = () => {
+      try {
+        this.journal.guide(run.id, { id, text });
+      } catch {
+        // The words end the request. A record that could not be written changes nothing of that.
+      }
+    };
+    if (stopWords.test(text)) {
+      record();
+      this.stop();
+      return stoppedText;
+    }
+    if (
+      question &&
+      question.mode !== "free" &&
+      (paused ? readContinue : readYes)(clean(words, 600)) === false
+    ) {
+      record();
+      return (await this.answer(words)).message;
+    }
+    if (question && holdsBack(text)) return unclearText(question.text);
+    // A credential goes neither to the planner nor into the record. It is
+    // looked for before and after the cleaning: a mark that the cleaning
+    // takes away can hide its shape.
+    if (looksSecret(words) || looksSecret(text))
+      return `${secretText}${andNow(question)}`;
+    if (text.length > guidanceLength)
+      return `${guidanceLongText}${andNow(question)}`;
+    if (run.guidance.length >= guidanceLimit)
+      return `${guidanceFullText}${andNow(question, " Stop it, or wait for it to end, and ask again.")}`;
+    let shown: string;
+    try {
+      // The record comes first, as for the request itself.
+      shown = this.journal.guide(run.id, { id, text });
+    } catch {
+      return `${guidanceUnwrittenText}${andNow(question)}`;
+    }
+    run.guidance.push({ id, text, shown });
+    if (!question) return guidedText;
+    run.question = null;
+    question.settle(paused ? { kind: "yes" } : { kind: "aside" });
+    return question.mode === "continue"
+      ? resumedText
+      : asideText[question.mode];
+  }
+  private remember(id: string) {
+    this.words.add(id);
+    // The oldest goes first. The record on disk still knows the words that were kept.
+    if (this.words.size > rememberedWords)
+      this.words.delete(this.words.values().next().value!);
+  }
+  /**
+   * The person's words for the checks. Only the request itself can say that a
+   * close was asked for, and only until the person says more. Their later
+   * words can mean "not that one" in many ways, and no pattern knows them
+   * all. So after the first of them a close asks again, whatever they say.
+   */
+  private spoken(run: Run) {
+    return run.guidance.length ? "" : run.goal;
+  }
+  /**
+   * True when the person said more since the planner chose the action that
+   * is on its way. It was chosen without their newest words, so it is not
+   * sent: the planner chooses again with them.
+   */
+  private outdated(run: Run) {
+    return run.guidance.length !== run.heard;
   }
 
   /**
@@ -682,8 +914,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     const said =
       question.mode === "continue" ? readContinue(words) : readYes(words);
-    if (said === null)
-      return { message: `I did not get a clear answer. ${question.text}` };
+    if (said === null) return { message: unclearText(question.text) };
     if (said) {
       run.question = null;
       question.settle({ kind: "yes" });
@@ -724,7 +955,11 @@ export class ComputerWorker implements DesktopExecutorPort {
         run.state = "running";
         // The person took time to answer: the last look is old now.
         run.fresh = false;
-        this.journal.set(run.id, "running", "answered");
+        this.journal.set(
+          run.id,
+          "running",
+          reply.kind === "aside" ? "guided" : "answered",
+        );
       }
       return reply;
     });
@@ -966,6 +1201,12 @@ export class ComputerWorker implements DesktopExecutorPort {
           run.fresh = run.observation !== null;
         }
         const planFrom = this.now();
+        // How many times the person had added words when the planner began.
+        // A yes that was kept for an action that was not sent does not
+        // outlive words that came after it: the same action asks again.
+        const heard = run.guidance.length;
+        if (heard !== run.heard) delete run.approval;
+        run.heard = heard;
         let planned: Awaited<ReturnType<Planner["next"]>> | null;
         let late: NodeJS.Timeout | undefined;
         try {
@@ -973,6 +1214,9 @@ export class ComputerWorker implements DesktopExecutorPort {
           planned = await Promise.race([
             this.planner.next({
               goal: run.goal,
+              ...(run.guidance.length
+                ? { guidance: run.guidance.map((said) => said.text) }
+                : {}),
               history: run.history.slice(-12),
               observation: run.observation,
               page: run.page,
@@ -1000,6 +1244,11 @@ export class ComputerWorker implements DesktopExecutorPort {
         // No answer and no Stop: the time ran out while the planner chose.
         if (!planned)
           return this.finish(run, "blocked", "time_limit", this.timeText);
+        // The person said more while the planner chose, so that choice did
+        // not have their newest words. It is dropped, nothing is sent for it,
+        // and the planner chooses again with them. A request takes a small
+        // number of additions, so this ends.
+        if (run.guidance.length !== heard) continue;
         run.plannerFailures = 0;
         run.step++;
         const actFrom = this.now();
@@ -1160,7 +1409,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       page: run.page,
       fresh: run.fresh,
       browser: this.drives(run),
-      goal: run.goal,
+      goal: this.spoken(run),
     };
     const parsed = actionSchema.safeParse(raw);
     // The history needs an action even for output that was none.
@@ -1330,6 +1579,18 @@ export class ComputerWorker implements DesktopExecutorPort {
       `${field.label}: that is a password field, and I never type there. Type it yourself, then say yes to go on, or no to stop.`,
       "Canceled. Nothing was typed.",
     );
+    // The person said something else in place of the yes. A click that gave
+    // the field the focus may have gone out before the question, so the
+    // step stays in the record.
+    if (reply.kind === "aside")
+      return this.note(
+        run,
+        action,
+        why,
+        field.target,
+        "not typed: that is a password field. The person said something else in place of a yes.",
+        "set_aside",
+      );
     if (reply.kind !== "yes") return;
     this.note(
       run,
@@ -1380,6 +1641,8 @@ export class ComputerWorker implements DesktopExecutorPort {
       // have taken minutes to say yes. The screen can be another one now.
       const seen = await this.look(run);
       if (seen === "over") return;
+      if (this.outdated(run))
+        return this.changed(run, action, why, first.target, saidMoreText);
       if (run.takeover)
         return this.changed(
           run,
@@ -1407,7 +1670,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           page: null,
           fresh: true,
           browser: this.drives(run),
-          goal: run.goal,
+          goal: this.spoken(run),
         },
         why,
       );
@@ -1457,6 +1720,15 @@ export class ComputerWorker implements DesktopExecutorPort {
           "clicked",
         );
       if (focusedSecure(seen)) return this.personTypes(run, action, why, ready);
+      if (this.outdated(run))
+        return this.note(
+          run,
+          action,
+          why,
+          ready.target,
+          "clicked the field. The text was not typed: the person said more.",
+          "clicked",
+        );
     }
     const streak = run.streak;
     this.count(run, ready.signature);
@@ -1611,7 +1883,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               page: now,
               fresh: run.fresh,
               browser: true,
-              goal: run.goal,
+              goal: this.spoken(run),
             },
             why,
           )
@@ -1635,6 +1907,8 @@ export class ComputerWorker implements DesktopExecutorPort {
       call = again.send.call;
     }
     if (this.halted(run)) return;
+    if (this.outdated(run))
+      return this.changed(run, action, why, first.target, saidMoreText);
     // A scroll changes what the screen shows, but silence after it loses nothing.
     const effect = call.name !== "read" && call.name !== "scroll";
     if (call.name !== "read") run.fresh = false;

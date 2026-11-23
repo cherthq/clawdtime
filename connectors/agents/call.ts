@@ -143,6 +143,25 @@ export const endsNegated = (spoken: string) =>
 /** True when the words give no clear answer: they turn around, hesitate or ask. */
 const unclear = (spoken: string, words: string) =>
   negated.test(words) || unsure.test(words) || asks(spoken);
+/**
+ * True when the words tell nobody to go on: they hesitate or ask for time
+ * ("wait", "hold on", "one moment", "not yet", "maybe"), or they open with a
+ * word that asks about something ("why did you stop", "what is that"). A
+ * request that is worded as a question ("can you press return") is not among
+ * them: it tells what to do.
+ */
+export const holdsBack = (spoken: string) => {
+  const words = plainWords(spoken);
+  return (
+    unsure.test(words) ||
+    /\bnot (?:yet|now|so fast)\b|\b(?:later|in a (?:moment|second|sec|minute|bit))\b/.test(
+      words,
+    ) ||
+    /^(?:why|what|which|who|whose|when|where|how)\b/.test(
+      words.replace(fillers, ""),
+    )
+  );
+};
 
 /**
  * Reads what the person said as an answer. It returns null when the words are

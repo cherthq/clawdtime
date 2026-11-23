@@ -8,6 +8,12 @@
  * desk: a folder for its owner only, files for its owner only, written whole
  * and then renamed, and no symbolic link is followed.
  *
+ * What the person said for a request while it ran is part of the record too.
+ * It is kept in a file of its own beside the journal, `guidance.json`. The
+ * journal is read whole and strictly, so a build that does not know a field
+ * cannot read a journal that has it, and then blocks all work. A file that
+ * such a build never opens cannot do that.
+ *
  * The journal is what makes a restart safe. A request that was running when
  * the service stopped has an unknown result. It becomes `uncertain`, it is
  * never run again, and it blocks new work until the person clears it.
@@ -55,9 +61,10 @@ const stepSchema = z
     at: moment,
   })
   .strict();
+const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
 const requestSchema = z
   .object({
-    id: z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/),
+    id: identity,
     /** What the person asked, as one line. */
     goal: z.string().max(300),
     state: z.enum(requestStates),
@@ -76,6 +83,31 @@ const journalSchema = z
 export type JournalStep = z.infer<typeof stepSchema>;
 export type JournalRequest = z.infer<typeof requestSchema>;
 
+/** The most times that the person can add words to one request while it runs. */
+export const guidanceLimit = 8;
+const saidSchema = z.object({
+  /** The id that the words came with. The same id is taken once. */
+  id: identity,
+  /** What the person said, as one line. It is kept as the goal is kept. */
+  text: z.string().max(300),
+  at: moment,
+});
+/** A field that a later build adds here is dropped on reading, not refused. */
+const guidanceSchema = z.object({
+  version: z.literal(1),
+  requests: z
+    .array(
+      z.object({
+        /** The request that the words were for. */
+        id: identity,
+        /** Oldest first. */
+        said: z.array(saidSchema).max(guidanceLimit),
+      }),
+    )
+    .max(400),
+});
+export type JournalGuidance = z.infer<typeof saidSchema>;
+
 const clean = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
 /** What the journal holds in place of a request that carried a credential. */
@@ -87,12 +119,15 @@ const maximumBytes = 2 * 1024 * 1024;
 
 export class ComputerJournal {
   readonly file: string;
+  /** What the person said for requests while they ran. */
+  readonly guidanceFile: string;
   private cache: { stamp: string; requests: JournalRequest[] } | undefined;
   constructor(
     readonly root: string,
     private readonly now: () => number = Date.now,
   ) {
     this.file = join(computerDirectory(root), "journal.json");
+    this.guidanceFile = join(computerDirectory(root), "guidance.json");
   }
 
   /** The requests, or null when the file is there and cannot be read. */
@@ -233,6 +268,66 @@ export class ComputerJournal {
       reason: clean(reason, 80),
       updatedAt: this.now(),
     }));
+  }
+  /** The words that are kept, by request. Empty when there is no file, null when it cannot be read. */
+  private said(): z.infer<typeof guidanceSchema>["requests"] | null {
+    let stat;
+    try {
+      stat = lstatSync(this.guidanceFile);
+    } catch {
+      return [];
+    }
+    if (!stat.isFile() || stat.size > maximumBytes) return null;
+    try {
+      return guidanceSchema.parse(
+        JSON.parse(readFileSync(this.guidanceFile, "utf8")),
+      ).requests;
+    } catch {
+      return null;
+    }
+  }
+  /** What the person said for this request after it began, oldest first. */
+  guidance(id: string): JournalGuidance[] {
+    return this.said()?.find((entry) => entry.id === id)?.said ?? [];
+  }
+  /**
+   * Records what the person said for a request after it began. The words are
+   * kept as the goal is kept: one line, and a marker in place of a
+   * credential. A request has room for `guidanceLimit` of them: one more is
+   * not written. Words stay as long as the journal holds their request.
+   * Returns the line as it is kept.
+   */
+  guide(id: string, said: { id: string; text: string }): string {
+    const requests = this.load();
+    if (!requests?.some((request) => request.id === id))
+      throw new Error("No such computer request.");
+    const kept = this.said();
+    if (!kept)
+      throw new Error("The words for computer requests cannot be read.");
+    const line = clean(said.text, 300);
+    // Before and after the cleaning: a mark that the cleaning takes away can hide the shape.
+    const text =
+      looksSecret(said.text) || looksSecret(line) ? credentialMarker : line;
+    const before = kept.find((entry) => entry.id === id)?.said ?? [];
+    const known = new Set(requests.map((request) => request.id));
+    secureWrite(
+      this.guidanceFile,
+      guidanceSchema.parse({
+        version: 1,
+        requests: [
+          ...kept.filter((entry) => entry.id !== id && known.has(entry.id)),
+          { id, said: [...before, { id: said.id, text, at: this.now() }] },
+        ],
+      }),
+    );
+    return text;
+  }
+  /** The id of the request that took the words with this id while it ran. Null when none did. */
+  guided(id: string): string | null {
+    return (
+      this.said()?.find((entry) => entry.said.some((said) => said.id === id))
+        ?.id ?? null
+    );
   }
   /** One step: the kind of action, the name of the element and the outcome. Nothing else is taken. */
   step(id: string, step: { kind: string; target: string; outcome: string }) {

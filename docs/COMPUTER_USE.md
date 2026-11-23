@@ -71,6 +71,47 @@ screen for web pages.
 One request runs at a time. A request ends after 40 actions or 15 minutes,
 whichever comes first. The 15 minutes hold the time that it waits for you.
 
+What you say while a request runs is for that request: "open it in the
+browser", "no, the other tab", "just press return". It starts no second
+request. The worker keeps your words in order and gives them to the planner
+with its next action, marked as what you said after the start, so that your
+newest word wins. An action that was chosen before you spoke did not have your
+words: it is not sent, also when it was already on its way, and the planner
+chooses again. The answer is a fixed sentence that says where your words are
+now, for example "Got it. I take that into the task that runs.". It never says
+that something was done. Every action after it goes through the same checks.
+One request takes 8 such additions of 600 characters each, and none that holds
+a password or a key. The same message a second time adds nothing and starts
+nothing.
+
+These rules hold at the worker, for words that are handed to it as a request
+(`submit`). While the worker waits for you, the chat hands your next message to
+it as the answer (see Questions and answers), and that reader is as it was. On
+a phone call the bridge answers with the state while a request runs, and hands
+no words to it.
+
+- Words that open with stop, cancel or abort stop the request.
+- When the request paused because you used the Mac, such words are a wish to
+  go on: it goes on with them.
+- When an action waits for your yes, or the task asked you a question, such
+  words are no yes and no answer. You said something else in their place, so
+  what waited is set aside: the action is not sent, the question gets no
+  answer, and the planner chooses again with your words. When it chooses the
+  same action again, you are asked again. A yes that was kept for an action
+  that was not sent ends too.
+- Words that the reader of an answer takes as a no or a stop end a request
+  that waits, at the pause and before an action that waits for your yes, as
+  they do when they come as the answer.
+- Words that hesitate or ask about something ("wait", "hold on", "why did you
+  stop") change nothing in a request that waits. They are no wish to go on.
+- Words come only from where the request was started: the same call, or the
+  chat on both sides. A request that stops, and a move of one step, take none.
+  Words that were read as a move of one step to another desktop or to the app
+  before are a request of their own, and wait as before.
+- Only the request itself can say that a close was asked for, and only until
+  you say more. After the first addition a close asks again, whatever the
+  addition says.
+
 ## Turn it on
 
 ```sh
@@ -545,6 +586,10 @@ file are for their owner only. It keeps the last 30 requests:
 
 - The request in your words, cut to 300 characters. A request that holds a
   credential is replaced by a marker.
+- What you said for the request while it ran, each cut to 300 characters, with
+  the time. These are in `computer/guidance.json`, beside the journal, for as
+  long as the journal keeps their request. A build that does not know them
+  reads the journal as before.
 - Its state and one word for how it got there: `done`, `stopped`, `restart`.
 - Each step as the kind of action, the name of the element and one word for
   the outcome. For a link it keeps the site, not the path.
@@ -556,7 +601,8 @@ The chat keeps what the worker said to you: its questions and its last message.
 The last message of a finished request is the planner's summary, cut to 900
 characters. It can repeat words from the screen.
 
-The language model receives, for each action: your request, the last 12 steps
+The language model receives, for each action: your request, what you said for
+it while it ran, the last 12 steps
 with the text that was typed, the names and values of up to 150 elements, the
 image of the screen, and the text of the page when the browser read it. The
 value of a secure field is never sent. Nothing of this is written to disk by
@@ -572,6 +618,11 @@ refuse a browser origin.
 | `GET /desktop/hands/next?after=N` | The command that waits for the hands, when its number is above `N`, and what runs. Shape `handsNextSchema`                              |
 | `POST /desktop/hands/result`      | What came of one command. Shape `handResultSchema`, body up to 6 megabytes (MB). Answers `{ "ok": false }` when no command waits for it |
 | `GET /desktop/computer`           | `enabled`, `state`, `message`, `step`, `goal` and `question`. Shape `computerStatusSchema` in `worker.ts`                               |
+
+While a request runs, `GET /desktop/computer` can also carry `guidance`, what
+you said for the request after its start, and `waiting`, why it waits for you:
+`takeover`, `approval` or `question`. The snapshot of the engine that the chat
+reads carries the same two, with the `goal`.
 
 The same command is served until its result arrives, with the same number. The
 panel must never run one number twice. The numbers start at the time of the
@@ -597,6 +648,7 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | Limit                          | Value                                       |
 | ------------------------------ | ------------------------------------------- |
 | Requests at one time           | 1                                           |
+| Additions to one request       | 8, of 600 characters each                   |
 | Actions for one request        | 40                                          |
 | Time for one request           | 15 minutes                                  |
 | One command to the hands       | 20 seconds, more for a wait and a long text |

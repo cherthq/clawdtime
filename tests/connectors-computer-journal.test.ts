@@ -104,6 +104,93 @@ describe("the journal of computer requests", () => {
     expect(readFileSync(journal.file, "utf8")).not.toContain("correct-horse");
   });
 
+  it("keeps what the person said after the start beside the journal, in order, as it keeps the request", () => {
+    let now = 1000;
+    const home = root();
+    const journal = new ComputerJournal(home, () => now);
+    journal.open("r1", "Open the editor");
+    // A request that got no more words has none, and there is no file for them.
+    expect(journal.guidance("r1")).toEqual([]);
+    expect(journal.guided("g1")).toBeNull();
+    expect(existsSync(journal.guidanceFile)).toBe(false);
+    expect(journal.guide("r1", { id: "g1", text: "Use the\nother tab" })).toBe(
+      "Use the other tab",
+    );
+    now = 2000;
+    journal.guide("r1", {
+      id: "g2",
+      text: "log in, my password is correct-horse-battery",
+    });
+    // A mark that the cleaning takes away does not hide a credential.
+    journal.guide("r1", {
+      id: "g3",
+      text: "log in, my password is\u200bcorrect-horse-battery",
+    });
+    journal.guide("r1", { id: "g4", text: "x".repeat(600) });
+    const marker = "[A request that held a credential. Its text is not kept.]";
+    const kept = journal.guidance("r1");
+    expect(kept.slice(0, 3)).toEqual([
+      { id: "g1", text: "Use the other tab", at: 1000 },
+      { id: "g2", text: marker, at: 2000 },
+      { id: "g3", text: marker, at: 2000 },
+    ]);
+    expect(kept[3]!.text).toHaveLength(300);
+    expect(journal.guidanceFile).toBe(join(home, "computer", "guidance.json"));
+    expect(mode(journal.guidanceFile)).toBe(0o600);
+    expect(readFileSync(journal.guidanceFile, "utf8")).not.toContain(
+      "correct-horse",
+    );
+    // The id of the words finds the request that took them, and is no request itself.
+    expect(journal.guided("g2")).toBe("r1");
+    expect(journal.get("g2")).toBeNull();
+    // There is room for eight. One more is not written, and the eight stay.
+    for (let n = 5; n <= 8; n++)
+      journal.guide("r1", { id: `g${n}`, text: `Addition ${n}` });
+    expect(() => journal.guide("r1", { id: "g9", text: "One more" })).toThrow();
+    expect(journal.guidance("r1")).toHaveLength(8);
+    expect(() => journal.guide("none", { id: "g10", text: "x" })).toThrow();
+    // Another reader of the same folder reads the record.
+    expect(new ComputerJournal(home).guidance("r1")).toHaveLength(8);
+  });
+
+  it("leaves the journal as a build before these words reads it, and drops the words with their request", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 1);
+    journal.open("r1", "Open the editor");
+    journal.guide("r1", { id: "g1", text: "Use the other tab" });
+    // The journal has the keys that it had, and no other.
+    const request = JSON.parse(readFileSync(journal.file, "utf8")).requests[0];
+    expect(Object.keys(request).sort()).toEqual([
+      "createdAt",
+      "goal",
+      "id",
+      "reason",
+      "state",
+      "steps",
+      "updatedAt",
+    ]);
+    expect(journal.readable()).toBe(true);
+    // The journal keeps the last 30 requests. Words for a request that it
+    // dropped go with the next write.
+    journal.set("r1", "completed", "done");
+    for (let n = 2; n <= 32; n++) {
+      journal.open(`r${n}`, "Next");
+      journal.set(`r${n}`, "completed", "done");
+    }
+    expect(journal.get("r1")).toBeNull();
+    journal.open("last", "Last");
+    journal.guide("last", { id: "g2", text: "Use the other tab" });
+    expect(journal.guided("g1")).toBeNull();
+    expect(journal.guided("g2")).toBe("last");
+    // Words that cannot be read are not written over, and block no request.
+    writeFileSync(journal.guidanceFile, "not json");
+    expect(journal.guidance("last")).toEqual([]);
+    expect(journal.guided("g2")).toBeNull();
+    expect(() => journal.guide("last", { id: "g3", text: "More" })).toThrow();
+    expect(readFileSync(journal.guidanceFile, "utf8")).toBe("not json");
+    expect(journal.unresolved()).toBeNull();
+  });
+
   it("cuts a long request, a long name and control characters", () => {
     const journal = new ComputerJournal(root(), () => 1);
     journal.open("r1", `Open\n${"x".repeat(600)}`);
