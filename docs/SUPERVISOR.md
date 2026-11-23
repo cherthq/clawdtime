@@ -998,9 +998,18 @@ a tunnel and get its link, find something out: all of these are jobs.
   question to ClawdTime, a request to watch, words for a session, "check
   what's running" and "open the settings page" are none. An offer is a
   question with a word of starting or with your own verb ("Should I start a
-  job for it?", "Should I fix it now?"). A question that you must answer
-  ("staging or production?", "Should I update the docs too?") stands. When
-  the second answer starts nothing either, you get the first one: the offer
+  job for it?", "Should I fix it now?"), also with a sentence behind it
+  that only asks which coding agent to use ("... If yes, do you have a
+  preferred agent for it?"), as a statement ("I can start a job to
+  investigate it if you want.", "I can start a job to check the logs. Want
+  me to do that?"), with other words of starting ("Should I run a fresh
+  job to check the logs?") and behind your own words ("For the nightly
+  backup, should I start a job now?"). A question that you must answer
+  stands: a choice, a scope, a warning, a cost or a need ("staging or
+  production?", "Should I update the docs too?", "Should I start a job?
+  Which server runs the backup?", "If yes, which branch should it
+  deploy?", "Without a backup, should I start a job anyway?"). When the
+  second answer starts nothing either, you get the first one: the offer
   was true.
 - "Build me a status page", "make us a pricing page" and "and build me a
   small dashboard" start at once, as "build a landing page" does. In this
