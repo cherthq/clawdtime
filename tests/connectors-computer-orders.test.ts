@@ -187,7 +187,7 @@ describe("readWords", () => {
     ["will you close the window automatically?", "hold"],
     ["open the window, it is hot in here", "hold"],
     ["close the window, it is freezing", "hold"],
-    ["open the box from Amazon", "hold"],
+    ["open the box from the shop", "hold"],
     ["open door", "hold"],
     ["open the door for Sarah", "hold"],
     ["close the door, John", "hold"],

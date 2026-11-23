@@ -4267,10 +4267,10 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       for (const words of [
         "open Calendar and cancel the 3pm meeting",
         "cancel my 3pm meeting in Calendar",
-        "open Netflix in Chrome and cancel my subscription",
+        "open the video site in Chrome and cancel my subscription",
         "click the Cancel button",
         "click Stop on the timer",
-        "stop the music in Spotify",
+        "stop the music in the player app",
         "cancel the order on example.com",
         "abort the upload in Chrome",
       ]) {
