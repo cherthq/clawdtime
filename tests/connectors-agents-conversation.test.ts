@@ -6601,7 +6601,11 @@ describe("a correction to a job that still works waits for that job", () => {
    */
   const then = async (
     words: string,
-    options: { finish?: boolean; between?: [string, string] } = {},
+    options: {
+      finish?: boolean;
+      between?: [string, string];
+      model?: ModelClient;
+    } = {},
   ) => {
     const made = mac([
       session({ name: "deploy fix" }),
@@ -6634,7 +6638,7 @@ describe("a correction to a job that still works waits for that job", () => {
       await say(scripted([options.between[1]]).model, options.between[0]);
       made.clock.now += 30_000;
     }
-    const answer = await say(wantsJob().model, words);
+    const answer = await say(options.model ?? wantsJob().model, words);
     const waits =
       made.ids().length === 2 &&
       made
@@ -6894,6 +6898,52 @@ describe("a correction to a job that still works waits for that job", () => {
     expect(got.jobs, words).toBe(2);
     expect(got.waits, words).toBe(false);
     expect(got.answer, words).toBe(started);
+  });
+
+  it.each([
+    "I've updated the job to say cafe instead of bakery.",
+    "Got it, cafe instead. The landing page will use cafe.",
+    "I told the job about the change. Should I wait for it?",
+  ])(
+    "keeps the person's change when the answer to a correction twice leaves it behind or claims it: %j",
+    async (draft) => {
+      const run = scripted([draft]);
+      const got = await then("wait no, it's a cafe not a bakery", {
+        model: run.model,
+      });
+      expect(got.jobs).toBe(1);
+      expect(got.answer).toBe(
+        `"${request}" still works, and a job that runs cannot be changed, so your change is not in it: "wait no, it's a cafe not a bakery". Say the whole request with your change to start it as a new job.`,
+      );
+      // The second answer was asked for with the true way.
+      expect(JSON.stringify(run.seen[1])).toContain(
+        "corrects the job that still works",
+      );
+    },
+  );
+
+  it("starts the corrected job after one false answer, and it waits for the first", async () => {
+    const run = scripted([
+      "I've updated the job to say cafe.",
+      [call("start_job")],
+      "Okay.",
+    ]);
+    const got = await then("wait no, it's a cafe not a bakery", {
+      model: run.model,
+    });
+    expect(got.jobs).toBe(2);
+    expect(got.waits).toBe(true);
+    expect(got.answer).toContain(waiting);
+  });
+
+  it("lets a question back about the correction stand", async () => {
+    const question =
+      "The bakery page job still runs and cannot be changed. Should I start a cafe version after it?";
+    const got = await then("wait no, it's a cafe not a bakery", {
+      model: scripted([question]).model,
+    });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).toBe(question);
   });
 
   it("starts a correction at once when the job before it is done: nothing runs beside it", async () => {

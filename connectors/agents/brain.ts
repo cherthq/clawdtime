@@ -4417,6 +4417,14 @@ const ownWordsOnly =
   'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.';
 const sizeNotDone =
   "I did not change the size of a window. Say that part once more.";
+/**
+ * Said in place of a second answer that left a correction of a job that
+ * still works behind, or said that the job was changed. The person's change
+ * stays in the sentence, so that it is not lost, and the way to start it is
+ * plain.
+ */
+const correctionKept = (job: JobFacts, spoken: string) =>
+  `${requestSaid(job)} still works, and a job that runs cannot be changed, so your change is not in it: "${clean(spoken, 160).replace(/"/g, "'")}". Say the whole request with your change to start it as a new job.`;
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
@@ -11931,6 +11939,31 @@ export class Supervisor {
           // size changed, and the tool for windows did not run: another tool
           // that ran (the session came to the front) stands behind no such
           // claim.
+          // The person's message corrects the job that still works ("wait
+          // no, it's a cafe not a bakery"), and no job started in this turn
+          // (a job that starts ends the turn with its own sentence). A job
+          // that runs cannot be changed: an answer that is no question back
+          // leaves the correction behind, and "I told the job" or "I updated
+          // it" is false. The model answers once more with the true way; a
+          // second such answer is replaced by a sentence that keeps the
+          // person's change.
+          const corrected = this.jobsNow(1)[0];
+          if (
+            corrected &&
+            !corrected.done &&
+            !acted() &&
+            this.correctsARunningJob(words, turn) &&
+            (!/\?["'\u201d)]*\s*$/.test(reply.text.trim()) ||
+              /\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed|sent|let)\b/i.test(
+                reply.text,
+              ))
+          ) {
+            if (rechecked) return correctionKept(corrected, words);
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: the person's last message corrects the job that still works. A job that runs cannot be changed, and no tool tells it anything. Call start_job now with their whole request as it is meant now: the request of that job with their change. The new job waits for the one that runs. If the change is not plain, ask one short question instead. Do not say that the running job was changed or told.";
+            continue;
+          }
           const sizeClaim =
             asksForSize(words) &&
             names.has("session_window") &&
