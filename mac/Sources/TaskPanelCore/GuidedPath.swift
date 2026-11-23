@@ -67,11 +67,18 @@ public struct GuidedPath: Equatable, Sendable {
   }
   /// Seconds that the cursor waits at the target before the click or the first key, so the eye
   /// is there before the hand and the label can be read: three frames of a call's picture. Reduce
-  /// Motion had no glide to lead the eye, so its wait is longer.
-  public static func dwell(still: Bool) -> Double { still ? 0.40 : 0.30 }
+  /// Motion had no glide to lead the eye, so its wait is longer. A cursor that did not move (the
+  /// next key in the field that it points at) already has the eye there: it waits only for the new
+  /// label, one or two frames.
+  public static func dwell(still: Bool, moved: Bool = true) -> Double { !moved ? 0.15 : still ? 0.40 : 0.30 }
+  /// A way shorter than this many points is no way: the cursor is already at the target, and it
+  /// does not glide.
+  public static let inPlace = 3.0
   /// Seconds that the cursor stays after a command, before it fades. A command that comes in this
-  /// time takes the cursor on from where it is.
-  public static let rest = 1.5
+  /// time takes the cursor on from where it is. It is longer than the usual time between two steps
+  /// (a look and a plan, about two seconds), so the cursor goes from one action to the next and
+  /// does not come out of the mascot again for each one.
+  public static let rest = 3.0
   /// Where the cursor leaves from. While it is on the screen it goes on from where it is, so its
   /// way from one action to the next is one line. It first comes out of the mascot. With the
   /// mascot put away it starts at the real pointer.
@@ -82,7 +89,9 @@ public struct GuidedPath: Equatable, Sendable {
   /// The way of the guided cursor to one target. `still` is Reduce Motion: a jump with no glide.
   public static func glide(from start: CGPoint, to target: CGPoint, still: Bool) -> GuidedPath {
     let length = hypot(Double(target.x - start.x), Double(target.y - start.y))
-    return GuidedPath(from: start, to: target, duration: glideDuration(length: length), still: still)
+    // Already there: no glide, and no time spent on one.
+    let duration = length.isFinite && length < inPlace ? 0 : glideDuration(length: length)
+    return GuidedPath(from: start, to: target, duration: duration, still: still)
   }
   /// How far the mascot leans toward a target, in radians. A positive lean is toward the left.
   public static func lean(from mascot: CGPoint, to target: CGPoint) -> Double {
