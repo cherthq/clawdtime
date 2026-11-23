@@ -74,6 +74,8 @@ import {
   sameSurface,
   transitionUnknownText,
   verifiedActivation,
+  coveredText,
+  coversThePlace,
 } from "./desktop.js";
 import { BrowserClosed, handErrors } from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
@@ -258,6 +260,8 @@ const heldKey = (reason: string) =>
  * the person can do. Never says done.
  */
 const heldEndText = (reason: string) => {
+  if (reason === coveredText)
+    return "I cannot click there right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.";
   if (reason === retiredReason || reason.includes("(stale_observation)"))
     return "I cannot act on this window right now: the screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.";
   if (reason === frontChangedReason)
@@ -1447,6 +1451,11 @@ export class ComputerWorker implements DesktopExecutorPort {
     } else if (activationRefusal(command, result)) {
       // Nothing was sent, so the request goes on: the caller hands the
       // reason to the planner, as it does for an action that a check refused.
+    } else if (coversThePlace(command, result)) {
+      // A list or a card of the app lies over the place of a click. Nothing
+      // was sent, and the keys still reach that window: the caller tells the
+      // planner, and the refusal counts in the row of held steps. It is no
+      // refusal of a desktop switch, so it does not end the request here.
     } else if (
       !result.ok &&
       command.kind === "switch_previous_app" &&
@@ -2286,6 +2295,18 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (!focus.sent) return;
       if (heldForPerson(focus))
         return this.heldByHands(run, action, why, first);
+      // A list or a card of the app lies over the field: nothing went out.
+      if (!focus.over && coversThePlace(send.focus, focus.result)) {
+        this.note(
+          run,
+          action,
+          why,
+          ready.target,
+          `not sent: ${coveredText}`,
+          "not_sent",
+        );
+        return this.missed(run, coveredText);
+      }
       if (focus.over || !focus.result?.ok) {
         this.note(run, action, why, ready.target, ...outcome(focus));
         // The panel did not run the click: nothing went out.
@@ -2423,6 +2444,19 @@ export class ComputerWorker implements DesktopExecutorPort {
       !sendsNoInput(send)
     ) {
       run.streak = streak;
+      // A list or a card of the app lies over the place: the planner reads
+      // that in plain words, and it counts in the row of held steps.
+      if (coversThePlace(send.command, handed.result)) {
+        this.note(
+          run,
+          action,
+          why,
+          ready.target,
+          `not sent: ${coveredText}`,
+          "not_sent",
+        );
+        return this.missed(run, coveredText);
+      }
       if (send.focus)
         return clickedOnly("clicked the field. The text was not typed.");
       this.note(run, action, why, ready.target, ...outcome(handed));

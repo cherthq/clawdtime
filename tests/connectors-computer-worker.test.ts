@@ -2417,6 +2417,84 @@ describe("an action that is not sent, or that moves nothing", () => {
       command.kind === "observe" ? { observation: bar(++epoch) } : undefined;
   };
 
+  // The panel refuses a click whose place lies under a window of the app in
+  // front: the suggestion list of an address bar, a card.
+  const covered =
+    "A list or a card of the app lies over that place, so nothing was sent. Use the keyboard there (Down, Return, Escape), or press Escape to close it.";
+  const coveredEnd =
+    "I cannot click there right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.";
+  const coveredHands = (hands: FakeHands) => {
+    hands.answer = (command) =>
+      command.kind === "click" || command.kind === "drag"
+        ? { ok: false, error: "target_not_visible" }
+        : undefined;
+  };
+
+  it("tells the planner in plain words that a list or a card lies over the place of a click", async () => {
+    const { worker, planner, journal, hands } = setup(
+      [
+        { kind: "click_element", element: 1 },
+        { kind: "key", combo: "escape" },
+      ],
+      { screens: [bar()] },
+    );
+    coveredHands(hands);
+    await worker.submit("r1", "Click the address bar");
+    await worker.idle();
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(`not sent: ${covered}`);
+    expect(journal.get("r1")!.steps[0]).toMatchObject({
+      kind: "click_element",
+      outcome: "not_sent",
+    });
+  });
+
+  it("ends after three clicks in a row under a list or a card, with what the person can do", async () => {
+    const { worker, said, journal, hands } = setup(
+      again({ kind: "click_element", element: 1 }, 10),
+      { screens: [bar()] },
+    );
+    coveredHands(hands);
+    await worker.submit("r1", "Click the address bar");
+    await worker.idle();
+    expect(worker.snapshot()).toMatchObject({
+      state: "blocked",
+      message: coveredEnd,
+    });
+    expect(said).toEqual([coveredEnd]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(journal.get("r1")!.steps).toHaveLength(3);
+  });
+
+  it("counts the click before a text the same way when a list or a card lies over the field", async () => {
+    // A field with no focus: a click on it goes first, and the panel refuses it.
+    const field = observation(
+      [element(1, { role: "AXTextField", title: "Search", value: "" })],
+      { app: front, surfaceEpoch: 1 },
+    );
+    const { worker, said, hands, journal } = setup(
+      again({ kind: "type", element: 1, text: "phone" }, 10),
+      { screens: [field] },
+    );
+    coveredHands(hands);
+    await worker.submit("r1", "Type phone into the search box");
+    await worker.idle();
+    expect(worker.snapshot()).toMatchObject({
+      state: "blocked",
+      message: coveredEnd,
+    });
+    expect(said).toEqual([coveredEnd]);
+    // The text was never typed.
+    expect(hands.sent.filter((command) => command.kind === "type")).toEqual([]);
+    expect(journal.get("r1")!.steps.map((step) => step.outcome)).toEqual([
+      "not_sent",
+      "not_sent",
+      "not_sent",
+    ]);
+  });
+
   it("holds at once when the person took over, and says what it wanted to do next", async () => {
     const { worker, hands, planner, journal, said } = setup(again(enter, 7), {
       screens: [bar()],
@@ -2533,7 +2611,11 @@ describe("an action that is not sent, or that moves nothing", () => {
     expect(repeat.said[1]).toBe(hold(wanted));
     await repeat.worker.answer("continue");
     await repeat.worker.idle();
-    expect(repeat.said).toEqual([hold(wanted), hold(wanted), "Done. The note is saved."]);
+    expect(repeat.said).toEqual([
+      hold(wanted),
+      hold(wanted),
+      "Done. The note is saved.",
+    ]);
   });
 
   it("ends after three held steps in a row with the same reason, telling the planner each time", async () => {
@@ -2545,12 +2627,8 @@ describe("an action that is not sent, or that moves nothing", () => {
     await worker.idle();
     // Three plans, not forty, and no false pause blaming the person.
     expect(planner.inputs).toHaveLength(3);
-    expect(planner.inputs[1]!.history[0]!.outcome).toBe(
-      `not sent: ${retired}`,
-    );
-    expect(planner.inputs[2]!.history[1]!.outcome).toBe(
-      `not sent: ${retired}`,
-    );
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(`not sent: ${retired}`);
+    expect(planner.inputs[2]!.history[1]!.outcome).toBe(`not sent: ${retired}`);
     expect(worker.snapshot()).toMatchObject({
       state: "blocked",
       message: screenChangingEnd,
@@ -2594,7 +2672,11 @@ describe("an action that is not sent, or that moves nothing", () => {
   });
 
   it("ends after three held steps with the same reason when the planner alternates type, key and open_app", async () => {
-    const write: Action = { kind: "type", text: "example.com/shop", element: 1 };
+    const write: Action = {
+      kind: "type",
+      text: "example.com/shop",
+      element: 1,
+    };
     const focusBar: Action = { kind: "key", combo: "cmd+l" };
     const openBrowser: Action = { kind: "open_app", name: "Browser" };
 
@@ -2625,16 +2707,7 @@ describe("an action that is not sent, or that moves nothing", () => {
 
     // Replay 2: type, key cmd+l, open_app (same front window, no change), type.
     const mixed = setup(
-      [
-        write,
-        focusBar,
-        openBrowser,
-        write,
-        focusBar,
-        openBrowser,
-        write,
-        done,
-      ],
+      [write, focusBar, openBrowser, write, focusBar, openBrowser, write, done],
       { screens: [bar()] },
     );
     let epoch = 1;
@@ -2648,10 +2721,7 @@ describe("an action that is not sent, or that moves nothing", () => {
         };
       return undefined;
     };
-    await mixed.worker.submit(
-      "r2",
-      "Open the browser and search example.com",
-    );
+    await mixed.worker.submit("r2", "Open the browser and search example.com");
     await mixed.worker.idle();
     expect(mixed.planner.inputs).toHaveLength(4);
     expect(mixed.said).toEqual([screenChangingEnd]);
@@ -2669,13 +2739,22 @@ describe("an action that is not sent, or that moves nothing", () => {
 
   it("counts held steps by reason: ends on three in a row of one reason, not mixed reasons", async () => {
     const otherWindow = observation(
-      [element(1, { role: "AXTextField", title: "Address and search bar", focused: true })],
+      [
+        element(1, {
+          role: "AXTextField",
+          title: "Address and search bar",
+          focused: true,
+        }),
+      ],
       { app: { ...front, window: "Other" }, surfaceEpoch: 1 },
     );
     // Three in a row where another window kept coming to the front.
-    const stealing = setup([enter, { kind: "key", combo: "cmd+l" }, enter, done], {
-      screens: [bar(1)],
-    });
+    const stealing = setup(
+      [enter, { kind: "key", combo: "cmd+l" }, enter, done],
+      {
+        screens: [bar(1)],
+      },
+    );
     stealing.hands.answer = (command) =>
       command.kind === "observe"
         ? { observation: command.image ? bar(1) : otherWindow }
