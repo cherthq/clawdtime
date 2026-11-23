@@ -28,8 +28,24 @@ public struct GuidedOverlay: Equatable, Sendable {
 /// shows the whole screen in a picture 720 pixels high: the pointer, its ring
 /// and the letters of the label stay clear there.
 public enum GuidedLook {
-  /// The pointer, from its tip to the end of its tail.
-  public static let pointer = 28.0
+  /// ClawdTime's own pointer, from its tip to the end of its tail. It is a small one, a little smaller than
+  /// the pointer of the Mac. The ring and the label are the parts that a phone must show clearly.
+  public static let pointer = 16.0
+  /// Where the tip of that small pointer goes, from the middle of the ring, while the pointer of the Mac is
+  /// there: to the right of the Mac's pointer and a little under its tip, so neither one covers the other.
+  public static let besideX = 14.0, besideY = -9.0
+  /// The pointer of the Mac is "there" when its tip is this near to the middle of the ring.
+  public static let near = 14.0
+  /// One turn of the ring's colors, in seconds. How long the ring takes to close in when the cursor arrives,
+  /// and the small pointer to step aside. While the cursor glides, the ring is this many times its size.
+  public static let turn = 5.0, settle = 0.26, aside = 0.16, flight = 1.16
+
+  /// ClawdTime's own pointer stands beside the place, not on it: the tip of the Mac's pointer is there.
+  public static func standsBeside(tip: CGPoint, pointer: CGPoint) -> Bool {
+    let dx = Double(pointer.x - tip.x), dy = Double(pointer.y - tip.y)
+    guard dx.isFinite, dy.isFinite else { return false }
+    return (dx * dx + dy * dy).squareRoot() <= near
+  }
   /// The ring around the tip: across, and the width of its line.
   public static let ring = 44.0, ringLine = 3.5
   /// A click opens a second ring to this many times the first.
@@ -120,10 +136,13 @@ public struct GuidedLayout: Equatable, Sendable {
     let radius = max((GuidedLook.ring + GuidedLook.ringLine) * GuidedLook.pulse / 2,
                      (GuidedLook.ring + GuidedLook.ringLine + 3) / 2)
     let ring = CGRect(x: at.x - radius, y: at.y - radius, width: radius * 2, height: radius * 2)
-    // The pointer outline is 15 units wide and 23.4 high. Its shadow fits in the
-    // same shade allowance as the pill; normally the pulse already encloses it.
-    let pointer = CGRect(x: at.x, y: at.y - GuidedLook.pointer,
-      width: GuidedLook.pointer * 15 / 23.4, height: GuidedLook.pointer).insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade)
+    // The pointer outline is 15 units wide and 23.4 high. Its tip is at the middle of
+    // the ring, or beside it while the Mac's pointer is there: both places count. Its
+    // shadow fits in the same shade allowance as the pill; normally the pulse already
+    // encloses it.
+    let pointer = CGRect(x: at.x, y: at.y + GuidedLook.besideY - GuidedLook.pointer,
+      width: GuidedLook.besideX + GuidedLook.pointer * 15 / 23.4, height: GuidedLook.pointer - GuidedLook.besideY)
+      .insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade)
     let glyphs = ring.union(pointer)
     guard !pill.isEmpty else { return glyphs }
     return glyphs.union(pill.offsetBy(dx: window.minX, dy: window.minY).insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade))
