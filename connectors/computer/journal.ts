@@ -85,6 +85,11 @@ export type JournalRequest = z.infer<typeof requestSchema>;
 
 /** The most times that the person can add words to one request while it runs. */
 export const guidanceLimit = 8;
+/**
+ * How many ids of refused, stopped or otherwise handled words are kept per
+ * request so that a replay after a restart starts nothing. Ids only, no text.
+ */
+const seenLimit = 64;
 const saidSchema = z.object({
   /** The id that the words came with. The same id is taken once. */
   id: identity,
@@ -102,6 +107,8 @@ const guidanceSchema = z.object({
         id: identity,
         /** Oldest first. */
         said: z.array(saidSchema).max(guidanceLimit),
+        /** Ids of words for this request that were not added to `said`. */
+        seen: z.array(identity).max(seenLimit).optional(),
       }),
     )
     .max(400),
@@ -110,6 +117,32 @@ export type JournalGuidance = z.infer<typeof saidSchema>;
 
 const clean = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+const strictSecretShapes = [
+  // Sentence and key-value forms: secret noun followed by is/was/:/= and any value.
+  /\b(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential)\s*(?:(?:\bis\b|\bwas\b)\s+|[:=]\s*)\S+/i,
+  // A bare 4 to 8 digit code after pin, code or otp.
+  /\b(?:pin|code|otp)\b(?:\s+(?:is|was))?\s*[:=#-]?\s*\d{4,8}\b/i,
+];
+/**
+ * Strict credential check for computer-use guidance and journal records.
+ * Strips format characters (\p{Cf}, including zero-width characters) to ""
+ * so they cannot split a keyword or token, and also refuses sentence forms
+ * with plain-word values and short numeric PIN/code/OTP values.
+ */
+export function looksSecretStrict(text: string): boolean {
+  const stripped = text.replace(/\p{Cf}/gu, "");
+  const variants = [
+    text,
+    stripped,
+    clean(text, text.length),
+    clean(stripped, stripped.length),
+  ];
+  return variants.some(
+    (value) =>
+      looksSecret(value) ||
+      strictSecretShapes.some((shape) => shape.test(value)),
+  );
+}
 /** What the journal holds in place of a request that carried a credential. */
 export const credentialMarker =
   "[A request that held a credential. Its text is not kept.]";
@@ -164,6 +197,23 @@ export class ComputerJournal {
     });
     secureWrite(this.file, { version: 1, requests: kept });
     this.cache = undefined;
+    if (kept.length < requests.length) this.pruneGuidance(kept);
+  }
+  private pruneGuidance(kept: JournalRequest[]) {
+    if (!existsSync(this.guidanceFile)) return;
+    const entries = this.said();
+    if (!entries) return;
+    const known = new Set(kept.map((request) => request.id));
+    const retained = entries.filter((entry) => known.has(entry.id));
+    if (retained.length === entries.length) return;
+    try {
+      secureWrite(
+        this.guidanceFile,
+        guidanceSchema.parse({ version: 1, requests: retained }),
+      );
+    } catch {
+      // Pruning guidance must never break saving the journal.
+    }
   }
   private change(
     id: string,
@@ -251,7 +301,7 @@ export class ComputerJournal {
     const request = requestSchema.parse({
       id,
       // A credential is never kept, here as in the chat and in memory.
-      goal: looksSecret(goal) ? credentialMarker : clean(goal, 300),
+      goal: looksSecretStrict(goal) ? credentialMarker : clean(goal, 300),
       state: "running",
       reason: "started",
       createdAt: at,
@@ -305,10 +355,10 @@ export class ComputerJournal {
     if (!kept)
       throw new Error("The words for computer requests cannot be read.");
     const line = clean(said.text, 300);
-    // Before and after the cleaning: a mark that the cleaning takes away can hide the shape.
-    const text =
-      looksSecret(said.text) || looksSecret(line) ? credentialMarker : line;
-    const before = kept.find((entry) => entry.id === id)?.said ?? [];
+    // Check raw, format-stripped (\p{Cf} -> "") and cleaned forms, plus strict shapes.
+    const text = looksSecretStrict(said.text) ? credentialMarker : line;
+    const existing = kept.find((entry) => entry.id === id);
+    const before = existing?.said ?? [];
     const known = new Set(requests.map((request) => request.id));
     secureWrite(
       this.guidanceFile,
@@ -316,17 +366,57 @@ export class ComputerJournal {
         version: 1,
         requests: [
           ...kept.filter((entry) => entry.id !== id && known.has(entry.id)),
-          { id, said: [...before, { id: said.id, text, at: this.now() }] },
+          {
+            id,
+            said: [...before, { id: said.id, text, at: this.now() }],
+            ...(existing?.seen?.length ? { seen: existing.seen } : {}),
+          },
         ],
       }),
     );
     return text;
   }
-  /** The id of the request that took the words with this id while it ran. Null when none did. */
+  /**
+   * Records only the id of words for a request that were not kept as guidance
+   * (stops, refusals, secrets, over-limit or late words). Ids stay outside the
+   * 8-addition cap in a bounded list so a replay after a restart starts nothing.
+   */
+  seen(id: string, wordId: string) {
+    const parsedId = identity.parse(wordId);
+    const requests = this.load();
+    if (!requests?.some((request) => request.id === id))
+      throw new Error("No such computer request.");
+    const kept = this.said();
+    if (!kept)
+      throw new Error("The words for computer requests cannot be read.");
+    const existing = kept.find((entry) => entry.id === id);
+    const said = existing?.said ?? [];
+    const before = existing?.seen ?? [];
+    if (
+      said.some((entry) => entry.id === parsedId) ||
+      before.includes(parsedId)
+    )
+      return;
+    const known = new Set(requests.map((request) => request.id));
+    secureWrite(
+      this.guidanceFile,
+      guidanceSchema.parse({
+        version: 1,
+        requests: [
+          ...kept.filter((entry) => entry.id !== id && known.has(entry.id)),
+          { id, said, seen: [...before, parsedId].slice(-seenLimit) },
+        ],
+      }),
+    );
+  }
+  /** The id of the request that took or handled the words with this id while it ran. Null when none did. */
   guided(id: string): string | null {
     return (
-      this.said()?.find((entry) => entry.said.some((said) => said.id === id))
-        ?.id ?? null
+      this.said()?.find(
+        (entry) =>
+          entry.said.some((said) => said.id === id) ||
+          (entry.seen?.includes(id) ?? false),
+      )?.id ?? null
     );
   }
   /** One step: the kind of action, the name of the element and the outcome. Nothing else is taken. */
@@ -347,6 +437,17 @@ export class ComputerJournal {
     }));
   }
 
+  private setAsideGuidance(): string | null {
+    if (this.said() !== null) return null;
+    const aside = join(
+      computerDirectory(this.root),
+      `guidance.unreadable-${this.now()}.json`,
+    );
+    if (existsSync(aside)) throw new Error("Clear it again in a moment.");
+    renameSync(this.guidanceFile, aside);
+    return aside;
+  }
+
   /**
    * The person says that they looked at the result of the uncertain request.
    * Its record stays, with the time. A file that cannot be read is set aside
@@ -362,6 +463,11 @@ export class ComputerJournal {
       if (existsSync(aside)) throw new Error("Clear it again in a moment.");
       renameSync(this.file, aside);
       this.cache = undefined;
+      try {
+        this.setAsideGuidance();
+      } catch {
+        // The journal is already set aside; a second clear can handle guidance.
+      }
       return { cleared: [], setAside: aside };
     }
     const cleared: JournalRequest[] = [];
@@ -373,7 +479,8 @@ export class ComputerJournal {
       return done;
     });
     if (cleared.length) this.save(next);
-    return { cleared, setAside: null };
+    const guidanceAside = this.setAsideGuidance();
+    return { cleared, setAside: guidanceAside };
   }
 }
 

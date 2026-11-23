@@ -90,20 +90,38 @@ it as the answer (see Questions and answers), and that reader is as it was. On
 a phone call the bridge answers with the state while a request runs, and hands
 no words to it.
 
-- Words that open with stop, cancel or abort stop the request.
-- When the request paused because you used the Mac, such words are a wish to
-  go on: it goes on with them.
-- When an action waits for your yes, or the task asked you a question, such
-  words are no yes and no answer. You said something else in their place, so
-  what waited is set aside: the action is not sent, the question gets no
-  answer, and the planner chooses again with your words. When it chooses the
-  same action again, you are asked again. A yes that was kept for an action
-  that was not sent ends too.
-- Words that the reader of an answer takes as a no or a stop end a request
-  that waits, at the pause and before an action that waits for your yes, as
-  they do when they come as the answer.
-- Words that hesitate or ask about something ("wait", "hold on", "why did you
-  stop") change nothing in a request that waits. They are no wish to go on.
+- Words that open with stop, cancel, abort or halt (also after fillers and
+  punctuation such as "ok stop", "no stop", "wait stop", "hey stop", "please,
+  stop now", or with an object such as "stop the video") stop the request.
+- When the request paused because you used the Mac, it resumes only on
+  continue words (as an answer reads them) or on an imperative order for the
+  screen (a screen verb first after optional fillers). Anything else ("hmm",
+  "are you paused?", "I'm typing", "hold up", "give me a few seconds") keeps
+  the pause and keeps nothing as guidance.
+- Words that forbid or ask to hold while the task runs or while it waits on a
+  question of the planner ("don't X", "do not X", "never X", "not that one",
+  "wait", "hold on", "hold off", or a bare "no") pause the task at once, keep
+  the words for when it goes on, and send no input until you say continue or
+  give an order for the screen. A correction that carries an order ("no, the
+  other tab", "no, open Recipes instead") is guidance and the task goes on.
+- When an action waits for your yes, any refusal word ("no", "stop", "don't",
+  "do not", "cancel", "wait") ends the request as a no does through `answer`:
+  the action is not sent, and it is never set aside to continue. For other
+  non-hesitating words at an action that waits for your yes, or at a question
+  that the task asked, those words are no yes and no answer: what waited is
+  set aside, the action is not sent, the question gets no answer, and the
+  planner chooses again with your words. When it chooses the same action
+  again, you are asked again. A yes that was kept for an action that was not
+  sent ends too.
+- Words that hesitate or ask about something ("wait, not yet", "hold on",
+  "why did you stop?") change nothing in a request that waits. They are no
+  wish to go on.
+- Words that hold a password, passcode, passphrase, PIN, secret, token, API
+  key, credential or short numeric code (also when hidden with zero-width
+  format characters) are refused: they are written nowhere and never sent to
+  the planner.
+- When the task is already at its step limit, past its deadline, or its call
+  authority ended, it takes no more words and does not say "Got it".
 - Words come only from where the request was started: the same call, or the
   chat on both sides. A request that stops, and a move of one step, take none.
   Words that were read as a move of one step to another desktop or to the app
@@ -588,8 +606,12 @@ file are for their owner only. It keeps the last 30 requests:
   credential is replaced by a marker.
 - What you said for the request while it ran, each cut to 300 characters, with
   the time. These are in `computer/guidance.json`, beside the journal, for as
-  long as the journal keeps their request. A build that does not know them
-  reads the journal as before.
+  long as the journal keeps their request (pruned when old requests drop from
+  the journal). The file also keeps a bounded list of ids only (never text)
+  for stops and refused words so that a replay after a restart starts nothing.
+  `clear()` sets aside an unreadable `guidance.json` under a new name, as it
+  does for `journal.json`. A build that does not know them reads the journal
+  as before.
 - Its state and one word for how it got there: `done`, `stopped`, `restart`.
 - Each step as the kind of action, the name of the element and one word for
   the outcome. For a link it keeps the site, not the path.

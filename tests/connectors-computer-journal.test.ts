@@ -191,6 +191,74 @@ describe("the journal of computer requests", () => {
     expect(journal.unresolved()).toBeNull();
   });
 
+  it("masks secrets hidden with zero-width characters, plain-word passwords and short codes, and records seen ids outside the 8-addition cap", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 1);
+    journal.open("r1", "Sign in");
+    const marker = "[A request that held a credential. Its text is not kept.]";
+    const cases = [
+      ["g1", "use key sk-\u200b1234567890abcdefghij", "1234567890abcdefghij"],
+      ["g2", "my pass\u200bword is correct-horse-battery", "correct-horse"],
+      ["g3", "token ghp_abc\u200bdefghijklmnopqrstuvw", "defghijklmnopqrstuvw"],
+      ["g4", "my password is swordfish", "swordfish"],
+      ["g5", "my pin is 1234", "1234"],
+      ["g6", "otp 482913", "482913"],
+      ["g7", "code 12345678", "12345678"],
+      ["g8", "api key = mysecretval", "mysecretval"],
+    ] as const;
+    for (const [id, text] of cases)
+      expect(journal.guide("r1", { id, text })).toBe(marker);
+    const raw = readFileSync(journal.guidanceFile, "utf8");
+    for (const [, , secret] of cases) expect(raw).not.toContain(secret);
+    // All 8 guidance slots are full, yet seen ids still persist without error.
+    journal.seen("r1", "g_stop");
+    journal.seen("r1", "g_refused");
+    expect(journal.guided("g_stop")).toBe("r1");
+    expect(journal.guided("g_refused")).toBe("r1");
+    expect(journal.guidance("r1")).toHaveLength(8);
+    // Another reader on the same folder sees the persisted ids.
+    const reloaded = new ComputerJournal(home, () => 2);
+    expect(reloaded.guided("g_stop")).toBe("r1");
+    expect(reloaded.guided("g_refused")).toBe("r1");
+    // The file stays version 1 with requests[].said of at most 8 items (readable by ec4496d).
+    const parsed = JSON.parse(readFileSync(journal.guidanceFile, "utf8"));
+    expect(parsed.version).toBe(1);
+    expect(parsed.requests[0].said).toHaveLength(8);
+    expect(parsed.requests[0].seen).toEqual(["g_stop", "g_refused"]);
+  });
+
+  it("prunes guidance.json when save drops old requests even with no further guidance", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 1);
+    journal.open("r1", "Old task");
+    journal.guide("r1", { id: "g1", text: "sensitive context" });
+    journal.set("r1", "completed", "done");
+    for (let n = 2; n <= 35; n++) {
+      journal.open(`r${n}`, "Next");
+      journal.set(`r${n}`, "completed", "done");
+    }
+    expect(journal.get("r1")).toBeNull();
+    expect(journal.guidance("r1")).toEqual([]);
+    expect(journal.guided("g1")).toBeNull();
+    expect(readFileSync(journal.guidanceFile, "utf8")).not.toContain(
+      "sensitive context",
+    );
+  });
+
+  it("sets aside an unreadable guidance.json on clear", () => {
+    const home = root();
+    const journal = new ComputerJournal(home, () => 9);
+    journal.open("r1", "First");
+    writeFileSync(journal.guidanceFile, "{ bad json", { mode: 0o600 });
+    const result = journal.clear();
+    expect(result.setAside).toMatch(/guidance\.unreadable-9\.json$/);
+    expect(readFileSync(result.setAside!, "utf8")).toBe("{ bad json");
+    expect(existsSync(journal.guidanceFile)).toBe(false);
+    expect(journal.guide("r1", { id: "g1", text: "Works again" })).toBe(
+      "Works again",
+    );
+  });
+
   it("cuts a long request, a long name and control characters", () => {
     const journal = new ComputerJournal(root(), () => 1);
     journal.open("r1", `Open\n${"x".repeat(600)}`);
