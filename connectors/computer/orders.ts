@@ -60,6 +60,22 @@ const screenNoun = new RegExp(`\\b${screenNounSource}\\b`);
 const pronounObject =
   /^(?:it|that|this|them|there|here|one|this one|that one)$|^(?:it|that|this|them)\s+(?:in|on|with|to|into|from|at|for)\s+/;
 
+const pronounAndScreenVerb = new RegExp(
+  `^(?:it|that|this|them|there|here|one|this one|that one)\\s+(?:and\\s+(?:then\\s+)?|then\\s+)${screenVerb.source.slice(1)}`,
+);
+
+/** Verbs that ask for work on code or content rather than a screen action. */
+const codeWorkVerb =
+  /\b(?:fix|add|write|change|implement|refactor|build|create|bump|push|commit|merge|deploy|install|migrate|rename|delete|remove|update|edit)\b/;
+
+/** Objects that name code artifacts rather than UI targets. */
+const codeWorkObject =
+  /\b(?:files?|repos?|repositor(?:y|ies)|branch(?:es)?|commits?|functions?|components?|class(?:es)?|modules?|tests?|code|readme|configs?)\b/;
+
+/** A file name with a common code, markup, data or config extension. */
+const codeFileName =
+  /(?:^|[\s(])(?:[a-z0-9_.-]+\/)*[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|json|md|mdx|yml|yaml|toml|sql|swift|rs|go|rb|php|java|kt|kts|c|h|cpp|hpp|cs|vue|svelte|css|scss|less|html|xml|env|lock|ini|cfg|conf|proto|graphql|gql)(?=$|[\s,.;:!?)'"])/;
+
 const ordinalObject = new RegExp(
   `\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|next|previous|prev|other|top|bottom|1st|2nd|3rd|[4-9]th)\\s+(?:one|${screenNounSource})\\b|^(?:the\\s+)?(?:first|second|third|fourth|fifth|last|next|previous|other)$`,
 );
@@ -72,6 +88,11 @@ const keyVerbs = new Set(["press", "hit", "tap", "use", "try"]);
 
 const webAddress =
   /(?:https?:\/\/)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.(?:com|org|net|edu|gov|io|co|ai|app|dev|me|us|uk|ca|de|fr|jp|au|in|gg|tv|so|sh|xyz|info|biz|page|site|cloud|tech|news|blog|shop|store|pro|ly|to|cc|fm|nl|se|ch|es|eu|br|kr|cn|tw|hk|sg|nz|mx|pl)\b/;
+
+const webAddressWithPath = new RegExp(
+  `${webAddress.source}(?:/[^\\s,.;:!?)'"]*)?`,
+  "g",
+);
 
 const quotedLabel = /"[^"\n]{1,120}"|(?:^|\s)'[^'\n]{1,120}'(?=$|\s|[,.;!])/;
 
@@ -150,13 +171,27 @@ function hasCapitalizedName(objCased: string): boolean {
   return matches.some((word) => !nonNameCapitalized.has(word.toLowerCase()));
 }
 
+function hasCodeWork(verb: string, objLower: string): boolean {
+  if (!objLower) return false;
+  const unquoted = objLower
+    .replace(/"[^"\n]{1,120}"/g, " ")
+    .replace(/(?:^|\s)'[^'\n]{1,120}'(?=$|\s|[,.;!?])/g, " ");
+  if (codeWorkObject.test(unquoted)) return true;
+  const withoutWeb = unquoted.replace(webAddressWithPath, " ");
+  if (codeFileName.test(withoutWeb)) return true;
+  if (keyVerbs.has(verb) && keyObject.test(objLower)) return false;
+  const forVerb = unquoted.replace(/\bdelete\s+key\b/g, " ");
+  return codeWorkVerb.test(forVerb);
+}
+
 function hasValidObject(
   verb: string,
   objCased: string,
   objLower: string,
 ): boolean {
   if (!objLower) return false;
-  if (pronounObject.test(objLower)) return true;
+  if (pronounObject.test(objLower) || pronounAndScreenVerb.test(objLower))
+    return true;
   if (ordinalObject.test(objLower)) return true;
   if (keyVerbs.has(verb) && keyObject.test(objLower)) return true;
   if (explicitKey.test(objLower)) return true;
@@ -204,6 +239,8 @@ function isOrderSentence(sentenceCased: string): boolean {
   const objLower = tailMatch
     ? rawLower.slice(0, rawLower.length - tailMatch[0].length).trim()
     : rawLower;
+
+  if (hasCodeWork(verb, objLower)) return false;
 
   if (verb === "go back") {
     if (!objLower) return true;

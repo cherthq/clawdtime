@@ -2910,7 +2910,7 @@ describe("an action that is not sent, or that moves nothing", () => {
   const covered =
     "A list or a card of the app lies over that place, so nothing was sent. Use the keyboard there (Down, Return, Escape), or press Escape to close it.";
   const coveredEnd =
-    "I cannot click there right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.";
+    "I cannot act on that place right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.";
   const coveredHands = (hands: FakeHands) => {
     hands.answer = (command) =>
       command.kind === "click" || command.kind === "drag"
@@ -3966,7 +3966,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     expect(caseB.planner.inputs[2]!.observation?.app.name).toBe("Notes");
   });
 
-  it("guards repeated clickedOnly focus clicks with both repeat confirmation and stuck stop", async () => {
+  it("guards repeated clickedOnly focus clicks with stuck stop without a false repeat confirmation", async () => {
     const searchField = (surfaceEpoch = 1) =>
       observation([element(1, { role: "AXTextField", title: "Search" })], {
         surfaceEpoch,
@@ -3992,22 +3992,17 @@ describe("an action that is not sent, or that moves nothing", () => {
       return undefined;
     };
     await worker.submit("r1", "Search for hello");
-    // Repeat guard asks before the 3rd click.
-    await until(() => said.length === 1);
-    expect(said[0]).toBe(
-      'I already did this twice in a row: Type in "Search". Say yes to do it a third time, or no to stop.',
-    );
-    expect(hands.sent).toHaveLength(2);
-    await worker.answer("yes");
     await worker.idle();
-    // 3rd click happens, planner is told, 4th choice ends blocked / no_progress.
+    // 3 focus clicks happen without asking "already did this twice", planner is told, 4th choice ends blocked / no_progress.
     expect(hands.sent).toHaveLength(3);
     expect(journal.get("r1")).toMatchObject({
       state: "blocked",
       reason: "no_progress",
     });
-    expect(said[1]).toContain("Clicked the field without typing: 3.");
-    expect(said[1]).not.toMatch(/never sent/i);
+    expect(said).toHaveLength(1);
+    expect(said[0]).not.toContain("I already did this twice in a row");
+    expect(said[0]).toContain("Clicked the field without typing: 3.");
+    expect(said[0]).not.toMatch(/never sent/i);
   });
 
   it("merges targetGone and screenChanged in heldKey and caps alternating holds at five", async () => {
@@ -4080,7 +4075,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(alt.said).toEqual([
-      "I cannot act on this window right now: my last 5 actions were held back before I could act, so nothing was sent. Wait until the window settles, then ask again.",
+      "I cannot act on this window right now: 5 of my last actions were held back and the window did not move on, so nothing was sent. Wait until the window settles, then ask again.",
     ]);
   });
 
@@ -4266,6 +4261,338 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "stopped",
     });
     expect(said).toEqual([]);
+  });
+
+  it("does not count focus-only clicks in the repeat streak on post-focus surface change", async () => {
+    const searchField = (surfaceEpoch: number, focused = false) =>
+      observation(
+        [element(1, { role: "AXTextField", title: "Search", focused })],
+        { surfaceEpoch },
+      );
+    const write: Action = { kind: "type", element: 1, text: "hello" };
+    const { worker, hands, said, journal } = setup([write, write, write, done], {
+      screens: [searchField(1)],
+      maxSteps: 10,
+    });
+    let planLooks = 0;
+    let afterFocus = false;
+    hands.answer = (command) => {
+      if (command.kind === "click") {
+        afterFocus = true;
+        return { ok: true };
+      }
+      if (command.kind === "observe") {
+        if (command.image) {
+          planLooks++;
+          return { observation: searchField(1, planLooks >= 3) };
+        }
+        if (afterFocus) {
+          afterFocus = false;
+          return { observation: searchField(2, false) };
+        }
+        return { observation: searchField(1, planLooks >= 3) };
+      }
+      return undefined;
+    };
+    await worker.submit("r1", "Search for hello");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent.map((command) => command.kind)).toEqual([
+      "click",
+      "click",
+      "type",
+    ]);
+    expect(said.join("\n")).not.toContain("I already did this twice in a row");
+    expect(journal.get("r1")).toMatchObject({ state: "completed" });
+  });
+
+  it("does not ask a repeat question on post-focus type refusals and still stops at no_progress", async () => {
+    const searchField = observation(
+      [element(1, { role: "AXTextField", title: "Search" })],
+      { surfaceEpoch: 1 },
+    );
+    const write: Action = { kind: "type", element: 1, text: "hello" };
+    const { worker, hands, said, journal } = setup(again(write, 10), {
+      screens: [searchField],
+      maxSteps: 10,
+    });
+    hands.answer = (command) => {
+      if (command.kind === "type") return { ok: false, error: "refused" };
+      return undefined;
+    };
+    await worker.submit("r1", "Search for hello");
+    await worker.idle();
+    expect(hands.sent.filter((command) => command.kind === "click")).toHaveLength(
+      3,
+    );
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+    });
+    expect(said).toHaveLength(1);
+    expect(said[0]).not.toContain("I already did this twice in a row");
+    expect(said[0]).toContain("Clicked the field without typing: 3.");
+  });
+
+  it("phrases mixedHeldEndText truthfully when a no-op sent action sits inside the 5-hold window", async () => {
+    const notes = (surfaceEpoch = 1) =>
+      observation(
+        [element(1, { title: "Save" }), element(2, { title: "Cancel" })],
+        { surfaceEpoch },
+      );
+    const empty = observation([], { surfaceEpoch: 1 });
+    const safari = observation([element(1, { title: "Save" })], {
+      app: { name: "Safari", bundleId: "com.apple.Safari", window: "Start" },
+      surfaceEpoch: 1,
+    });
+    const { worker, hands, said, journal } = setup(
+      [
+        click,
+        { kind: "click_element", element: 2 },
+        click,
+        { kind: "click_element", element: 2 },
+        { kind: "key", combo: "escape" },
+        click,
+        done,
+      ],
+      { screens: [notes(1)], maxSteps: 12 },
+    );
+    let preLooks = 0;
+    hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (command.image) return { observation: notes(1) };
+      preLooks++;
+      if (preLooks === 1 || preLooks === 4) return { observation: notes(2) };
+      if (preLooks === 2 || preLooks === 6) return { observation: empty };
+      if (preLooks === 3) return { observation: safari };
+      return { observation: notes(1) };
+    };
+    await worker.submit("r1", "Click buttons");
+    await worker.idle();
+    expect(hands.sent).toEqual([{ kind: "key", combo: "escape" }]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(said).toEqual([
+      "I cannot act on this window right now: 5 of my last actions were held back and the window did not move on, so nothing more was sent. Wait until the window settles, then ask again.",
+    ]);
+  });
+
+  it("does not mark sentInput when viaBrowser fails with BrowserClosed", async () => {
+    const screen = (surfaceEpoch = 1) =>
+      observation([element(1, { title: "Save" })], { surfaceEpoch });
+    const browser = new FakeBrowser(page([]));
+    browser.open = async () => {
+      throw new BrowserClosed("Chrome is not running.");
+    };
+    const { worker, hands, said, journal } = setup(
+      [
+        { kind: "browser_open", url: "https://example.com" },
+        click,
+        click,
+        click,
+        done,
+      ],
+      { browser, screens: [screen(1)], maxSteps: 10 },
+    );
+    hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      return { observation: command.image ? screen(1) : screen(2) };
+    };
+    await worker.submit("r1", "Open example.com");
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(browser.calls).toEqual([]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(said).toEqual([
+      "I cannot act on this window right now: the screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.",
+    ]);
+  });
+
+  it("honors word hold and mid-task orders arriving during pre-action browser.read before counting repeated_hold", async () => {
+    const p1 = page([pageElement(1, { label: "Next" })]);
+    const pEmpty = page([]);
+    const reading: Action = { kind: "browser_read" };
+    const press: Action = { kind: "browser_click", index: 1 };
+
+    // Variant 1: pre-click browser.read resolves with changed page after hold word.
+    const browserA = new FakeBrowser(p1);
+    let readsA = 0;
+    let resolveThirdA = (_value: ReturnType<typeof page>) => {};
+    browserA.read = async () => {
+      readsA++;
+      if (readsA % 2 === 1) return p1;
+      if (readsA < 6) return pEmpty;
+      return await new Promise<ReturnType<typeof page>>((resolve) => {
+        resolveThirdA = resolve;
+      });
+    };
+    const caseA = setup(
+      [reading, press, reading, press, reading, press, done],
+      { browser: browserA, maxSteps: 12 },
+    );
+    await caseA.worker.submit("r1", "Click Next");
+    await until(() => readsA === 6);
+    const holdReplyA = await caseA.worker.submit(
+      "g1",
+      "wait, don't click that",
+    );
+    expect(holdReplyA.message).toBe(
+      "Got it. I hold now and take that into the task. Say continue to go on, or stop.",
+    );
+    resolveThirdA(pEmpty);
+    await until(() => caseA.worker.status().state === "waiting_for_person");
+    expect(caseA.worker.status()).toMatchObject({
+      state: "waiting_for_person",
+      question: "I am paused at your word. Say continue to go on, or stop.",
+    });
+    expect(caseA.said).toContain(
+      "I am paused at your word. Say continue to go on, or stop.",
+    );
+    caseA.worker.stop();
+    await caseA.worker.idle();
+
+    // Variant 2: pre-click browser.read rejects after hold word.
+    const browserB = new FakeBrowser(p1);
+    let readsB = 0;
+    let rejectThirdB = (_error: Error) => {};
+    browserB.read = async () => {
+      readsB++;
+      if (readsB % 2 === 1) return p1;
+      if (readsB < 6) throw new Error("tab closed");
+      return await new Promise<ReturnType<typeof page>>((_resolve, reject) => {
+        rejectThirdB = reject;
+      });
+    };
+    const caseB = setup(
+      [reading, press, reading, press, reading, press, done],
+      { browser: browserB, maxSteps: 12 },
+    );
+    await caseB.worker.submit("r2", "Click Next");
+    await until(() => readsB === 6);
+    const holdReplyB = await caseB.worker.submit("g2", "hold on");
+    expect(holdReplyB.message).toBe(
+      "Got it. I hold now and take that into the task. Say continue to go on, or stop.",
+    );
+    rejectThirdB(new Error("tab closed"));
+    await until(() => caseB.worker.status().state === "waiting_for_person");
+    expect(caseB.worker.status()).toMatchObject({
+      state: "waiting_for_person",
+      question: "I am paused at your word. Say continue to go on, or stop.",
+    });
+    caseB.worker.stop();
+    await caseB.worker.idle();
+
+    // Variant 3: non-hold mid-task order arrives during 3rd pre-click browser.read.
+    const browserC = new FakeBrowser(p1);
+    let readsC = 0;
+    let resolveThirdC = (_value: ReturnType<typeof page>) => {};
+    browserC.read = async () => {
+      readsC++;
+      if (readsC % 2 === 1) return p1;
+      if (readsC < 6) return pEmpty;
+      return await new Promise<ReturnType<typeof page>>((resolve) => {
+        resolveThirdC = resolve;
+      });
+    };
+    const caseC = setup(
+      [reading, press, reading, press, reading, press, done],
+      { browser: browserC, maxSteps: 12 },
+    );
+    await caseC.worker.submit("r3", "Click Next");
+    await until(() => readsC === 6);
+    const orderReplyC = await caseC.worker.submit("g3", "open Safari");
+    expect(orderReplyC.message).toBe(
+      "Got it. I take that into the task that runs.",
+    );
+    resolveThirdC(pEmpty);
+    await caseC.worker.idle();
+    expect(caseC.journal.get("r3")).toMatchObject({ state: "completed" });
+    expect(
+      caseC.planner.inputs.some((input) =>
+        input.guidance?.includes("open Safari"),
+      ),
+    ).toBe(true);
+  });
+
+  it("uses action-neutral wording when held scrolls are blocked by a covering list or card", async () => {
+    const listScreen = observation([element(1, { title: "List" })], {
+      app: front,
+      surfaceEpoch: 1,
+    });
+    const scroll: Action = { kind: "scroll", direction: "down", element: 1 };
+    const { worker, said, journal, hands } = setup(again(scroll, 6), {
+      screens: [listScreen],
+    });
+    hands.answer = (command) =>
+      command.kind === "scroll"
+        ? { ok: false, error: "target_not_visible" }
+        : undefined;
+    await worker.submit("r1", "Scroll the list");
+    await worker.idle();
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(said).toEqual([
+      "I cannot act on that place right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.",
+    ]);
+    expect(said[0]).not.toContain("click");
+  });
+
+  it("clears the stuck repeat warning when a mid-task order arrives after remind", async () => {
+    const refreshScreen = observation([element(1, { title: "Refresh" })], {
+      surfaceEpoch: 1,
+    });
+    let releasePlan4 = () => {};
+    let planCalls = 0;
+    const { worker, hands, planner, said, journal } = setup(
+      [
+        click,
+        click,
+        click,
+        async () => {
+          planCalls++;
+          if (planCalls === 1) {
+            await new Promise<void>((resolve) => {
+              releasePlan4 = resolve;
+            });
+          }
+          return click;
+        },
+        click,
+        done,
+      ],
+      { screens: [refreshScreen], maxSteps: 12 },
+    );
+    await worker.submit("r1", "Click Refresh");
+    // After 2 clicks, the repeat confirmation asks before the 3rd click.
+    await until(() => worker.status().state === "waiting_for_person");
+    await worker.answer("yes");
+    // After the 3rd click on an unchanged screen, remind() marks row.told and Step 4 starts planning.
+    await until(() => planCalls === 1);
+    const guideReply = await worker.submit(
+      "g1",
+      "try clicking Refresh one more time",
+    );
+    expect(guideReply.message).toBe(
+      "Got it. I take that into the task that runs.",
+    );
+    releasePlan4();
+    // With row.told cleared by the mid-task order, Step 4 does not end no_progress;
+    // it asks to confirm the repeat and then sends the 4th click on "yes".
+    await until(() => worker.status().state !== "running");
+    expect(worker.status().state).toBe("waiting_for_person");
+    await worker.answer("yes");
+    await worker.idle();
+    expect(hands.sent).toHaveLength(4);
+    expect(journal.get("r1")).toMatchObject({ state: "completed" });
+    expect(planner.inputs.some((input) => input.guidance?.includes("try clicking Refresh one more time"))).toBe(true);
+    expect(said.at(-1)).toMatch(/^Done\./);
   });
 });
 

@@ -204,7 +204,7 @@ const heldEndText = (reason: string, sentBefore = false) => {
     ? "so nothing more was sent"
     : "so nothing was sent";
   if (reason === coveredText)
-    return `I cannot click there right now: a list or a card of the app kept lying over that place, ${noneSent}. Press Escape to close it, then ask again.`;
+    return `I cannot act on that place right now: a list or a card of the app kept lying over that place, ${noneSent}. Press Escape to close it, then ask again.`;
   if (reason === retiredReason || reason.includes("(stale_observation)"))
     return `I cannot act on this window right now: the screen kept changing under me, ${noneSent}. Close any open menu or list in front, then ask again.`;
   if (reason === frontChangedReason)
@@ -219,7 +219,7 @@ const heldEndText = (reason: string, sentBefore = false) => {
     return `I cannot act on this page right now: the browser page could not be read before I acted, ${noneSent}. Check the browser window and ask again.`;
   return `I cannot act on this window right now: the panel could not send the action, ${noneSent}. Check the window and the ClawdTime panel, then ask again.`;
 };
-/** The end of a request after held steps in a row across alternating reasons. */
+/** The end of a request after held steps across alternating reasons with no progress. */
 const mixedHeldEndText = (
   reason: string,
   times: number,
@@ -230,8 +230,8 @@ const mixedHeldEndText = (
     : "so nothing was sent";
   const onPage = reason === pageChangedReason || reason === pageUnreadReason;
   return onPage
-    ? `I cannot act on this page right now: my last ${times} actions were held back before I could act, ${noneSent}. Wait until the page settles, then ask again.`
-    : `I cannot act on this window right now: my last ${times} actions were held back before I could act, ${noneSent}. Wait until the window settles, then ask again.`;
+    ? `I cannot act on this page right now: ${times} of my last actions were held back and the page did not move on, ${noneSent}. Wait until the page settles, then ask again.`
+    : `I cannot act on this window right now: ${times} of my last actions were held back and the window did not move on, ${noneSent}. Wait until the window settles, then ask again.`;
 };
 /** The same action is tried this many times with no result before the planner is told. It is the limit of the refusals. */
 const repeatLimit = 3;
@@ -1146,6 +1146,9 @@ export class ComputerWorker implements DesktopExecutorPort {
         return { kept: false, why: guidanceUnwrittenText };
       }
       run.guidance.push({ id, text, shown });
+      // The person spoke after the planner was told that an action did not
+      // work. What they said can ask for one more try, so the row starts anew.
+      if (run.stuck?.told !== undefined) delete run.stuck;
       return { kept: true };
     };
 
@@ -2380,7 +2383,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         run.pauseText = holdText(wantedOf(action, first, before));
       }
       if (countTry) {
-        this.count(run, ready.signature);
+        // No complete action went out, so this is no repeat in run.streak.
         run.tried = "clicked";
       } else {
         delete run.stuck;
@@ -2633,6 +2636,15 @@ export class ComputerWorker implements DesktopExecutorPort {
       } catch (error) {
         run.page = null;
         run.fresh = false;
+        if (this.halted(run)) return;
+        if (run.hold || this.outdated(run))
+          return this.changed(
+            run,
+            action,
+            why,
+            first,
+            run.hold ? heldByWordReason : saidMoreText,
+          );
         this.note(
           run,
           action,
@@ -2645,12 +2657,19 @@ export class ComputerWorker implements DesktopExecutorPort {
           ),
           "not_sent",
         );
-        if (this.halted(run)) return;
         this.missed(run, pageUnreadReason);
         return;
       }
       if (this.halted(run)) return;
       run.page = now;
+      if (run.hold || this.outdated(run))
+        return this.changed(
+          run,
+          action,
+          why,
+          first,
+          run.hold ? heldByWordReason : saidMoreText,
+        );
       const same = samePageElement(call.element, now);
       const again = same
         ? check(
@@ -2697,10 +2716,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     // A scroll changes what the screen shows, but silence after it loses nothing.
     const effect = call.name !== "read" && call.name !== "scroll";
     const pageBefore = call.name === "read" ? null : pagePrint(run.page);
-    if (call.name !== "read") {
-      run.fresh = false;
-      run.sentInput = true;
-    }
+    if (call.name !== "read") run.fresh = false;
     this.count(run, first.signature);
     if (effect) run.inFlight = true;
     try {
@@ -2724,6 +2740,8 @@ export class ComputerWorker implements DesktopExecutorPort {
           lostText(first.label),
         );
       }
+      if (call.name !== "read" && !(error instanceof BrowserClosed))
+        run.sentInput = true;
       this.note(
         run,
         action,
@@ -2742,6 +2760,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     // An input that went out ends the row of held steps only when the page or
     // screen actually changed.
     if (call.name !== "read") {
+      run.sentInput = true;
       delete run.grace;
       if (run.heldRow) {
         const samePage = sameScreen(pageBefore, pagePrint(run.page));
