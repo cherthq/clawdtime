@@ -621,8 +621,11 @@ so does a person who watches the shared screen on a phone.
   the screen names it.
 - **The glide.** The cursor goes on from where it is. The first time it comes
   out of the mascot. A glide takes 0.45 to 0.70 seconds, longer for a longer
-  way, and the cursor then waits 0.3 seconds at the target. It stays 1.5
-  seconds after the command and then fades. The picture of a call defaults to
+  way, and the cursor then waits 0.3 seconds at the target. It stays 3
+  seconds after the command and then fades: longer than a look and a plan, so
+  it goes from one action to the next. When it already points at the target
+  (the next key in the same field), it does not glide and waits 0.15 seconds
+  for the new label. The picture of a call defaults to
   20 frames a second, so the shortest glide is in nine of them or more.
 - **The ring in motion.** While the cursor is out, the colors of the ring turn
   slowly, one turn in five seconds. On its way the ring is open and light. At

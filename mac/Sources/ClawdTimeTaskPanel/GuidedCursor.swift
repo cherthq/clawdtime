@@ -124,7 +124,7 @@ import TaskPanelCore
     clock.framesPerSecond = 30
     put(target)
     view.fly(false, still: still)
-    await pause(GuidedPath.dwell(still: still))
+    await pause(GuidedPath.dwell(still: still, moved: way.length >= GuidedPath.inPlace))
   }
   /// The hands click where the cursor is. They brought the pointer of the Mac here for it.
   func pulse() {

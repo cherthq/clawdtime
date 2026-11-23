@@ -129,6 +129,28 @@ final class GuidedPathTests: XCTestCase {
     }
   }
 
+  func testACursorThatIsAlreadyThereDoesNotGlideAndWaitsOnlyForTheNewLabel() {
+    let here = CGPoint(x: 400, y: 300)
+    // The next key in the same field: the cursor points there already.
+    for target in [here, CGPoint(x: 401, y: 301), CGPoint(x: 402, y: 300)] {
+      let path = GuidedPath.glide(from: here, to: target, still: false)
+      XCTAssertEqual(path.duration, 0)
+      XCTAssertEqual(path.point(at: 0), target)
+    }
+    // Three points or more is a way, and it glides as before.
+    let away = GuidedPath.glide(from: here, to: CGPoint(x: 403, y: 300), still: false)
+    XCTAssertEqual(away.duration, GuidedPath.glideDuration(length: 3))
+    XCTAssertGreaterThanOrEqual(away.duration, GuidedPath.shortestGlide)
+    // The wait at a place that did not change is short, with Reduce Motion too, and never longer than a moved one.
+    XCTAssertEqual(GuidedPath.dwell(still: false, moved: false), 0.15)
+    XCTAssertEqual(GuidedPath.dwell(still: true, moved: false), 0.15)
+    XCTAssertLessThan(GuidedPath.dwell(still: false, moved: false), GuidedPath.dwell(still: false))
+    // A picture of a call at 10 frames a second still shows the new label in one frame or more.
+    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false, moved: false), 0.1)
+    // The cursor stays between two steps: a look and a plan take about two seconds.
+    XCTAssertGreaterThanOrEqual(GuidedPath.rest, 2.5)
+  }
+
   func testWithReduceMotionTheGlideIsAJump() {
     for (start, target) in ways {
       let path = GuidedPath.glide(from: start, to: target, still: true)
