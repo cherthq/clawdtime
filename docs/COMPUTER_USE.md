@@ -72,7 +72,7 @@ One request runs at a time. A request ends after 40 actions or 15 minutes,
 whichever comes first. The 15 minutes hold the time that it waits for you.
 
 What you say while a request runs is for that request: "open it in the
-browser", "no, the other tab", "just press return". It starts no second
+browser", "use the other tab", "just press return". It starts no second
 request. The worker keeps your words in order and gives them to the planner
 with its next action, marked as what you said after the start, so that your
 newest word wins. An action that was chosen before you spoke did not have your
@@ -85,47 +85,74 @@ a password or a key. The same message a second time adds nothing and starts
 nothing.
 
 These rules hold at the worker, for words that are handed to it as a request
-(`submit`). While the worker waits for you, the chat hands your next message to
-it as the answer (see Questions and answers), and that reader is as it was. On
-a phone call the bridge answers with the state while a request runs, and hands
-no words to it.
+(`submit`). They are read by `readWords` in `connectors/computer/orders.ts`,
+which is safe by default: a task goes on only for a narrow written shape of
+screen order (or a plain continue phrase without a question mark), and
+everything else holds. While the worker waits for you, the chat hands your
+next message to it as the answer (see Questions and answers), and `answer` is
+as it was. On a phone call the bridge answers with the state while a request
+runs, and hands no words to it.
 
-- Words that open with stop, cancel, abort or halt (also after fillers and
-  punctuation such as "ok stop", "no stop", "wait stop", "hey stop", "please,
-  stop now", or with an object such as "stop the video") stop the request.
-- When the request paused because you used the Mac, it resumes only on
-  continue words (as an answer reads them) or on an imperative order for the
-  screen (a screen verb first after optional fillers). Anything else ("hmm",
-  "are you paused?", "I'm typing", "hold up", "give me a few seconds") keeps
-  the pause and keeps nothing as guidance.
-- Words that forbid or ask to hold while the task runs or while it waits on a
-  question of the planner ("don't X", "do not X", "never X", "not that one",
-  "wait", "hold on", "hold off", or a bare "no") pause the task at once, keep
-  the words for when it goes on, and send no input until you say continue or
-  give an order for the screen. A correction that carries an order ("no, the
-  other tab", "no, open Recipes instead") is guidance and the task goes on.
-- When an action waits for your yes, any refusal word ("no", "stop", "don't",
-  "do not", "cancel", "wait") ends the request as a no does through `answer`:
-  the action is not sent, and it is never set aside to continue. For other
-  non-hesitating words at an action that waits for your yes, or at a question
-  that the task asked, those words are no yes and no answer: what waited is
-  set aside, the action is not sent, the question gets no answer, and the
-  planner chooses again with your words. When it chooses the same action
-  again, you are asked again. A yes that was kept for an action that was not
-  sent ends too.
-- Words that hesitate or ask about something ("wait, not yet", "hold on",
-  "why did you stop?") change nothing in a request that waits. They are no
-  wish to go on.
-- Words that hold a password, passcode, passphrase, PIN, secret, token, API
-  key, credential or short numeric code (also when hidden with zero-width
-  format characters) are refused: they are written nowhere and never sent to
-  the planner.
-- When the task is already at its step limit, past its deadline, or its call
-  authority ended, it takes no more words and does not say "Got it".
-- Words come only from where the request was started: the same call, or the
-  chat on both sides. A request that stops, and a move of one step, take none.
-  Words that were read as a move of one step to another desktop or to the app
-  before are a request of their own, and wait as before.
+- **Stop (`stop`).** Any stop word anywhere in the message (`stop`, `stopp`,
+  `stahp`, `cancel`, `abort`, `halt`, `enough`, `quit it`, `kill it`, also
+  inside polite or casual forms such as "can you stop?", "pls stop",
+  "actually stop", "i said stop", or a screen phrase such as "cancel the
+  dialog" or "stop the video") stops the request at once. This holds in every
+  state, also while the initial navigation reading or the first look is in
+  flight, at the step limit, at the 8-addition cap, when the record cannot be
+  written, or when the words also look like a secret.
+- **Continue (`continue`).** A standalone continue phrase (`continue`, `go
+  on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
+  optional fillers, with no question mark and nothing else ("continue?",
+  "ok?", "yes?", and "can you continue?" all hold). While paused, it resumes
+  with a fresh look before the first input. While running, nothing changes.
+  At a waiting approval or question of the planner, it never approves: what
+  waited is set aside and the task pauses (`hold`).
+- **Screen order (`order`).** The last sentence of the message (with no stop
+  word in any sentence) matches a strict screen-order shape: optional
+  fillers, an optional polite lead (`can you`, `could you`, `would you`,
+  `will you`, `can u`, `pls`; only with that lead may the sentence end with
+  `?`), a screen verb (`open`, `click`, `press`, `hit`, `tap`, `type`,
+  `enter` with an object, `select`, `choose`, `pick`, `scroll up/down`,
+  `drag`, `use`, `try`, `search for`, `close`, `go to`, `go back`, `switch
+  to`), a concrete screen object (pronoun, ordinal, key name, screen noun,
+  web address, quoted label, capitalized name, `<words> in/on/with <browser
+  or app>`, or a single word after `open`, `close` or `switch to`), and no
+  word that negates, defers, conditions or doubts (`not`, `no`, `n't`,
+  `never`, `wait`, `hold`, `pause`, `later`, `when`, `after`, `once`,
+  `until`, `before`, `if`, `unless`, `maybe`, `in a second/minute/moment/bit/few`,
+  `i'm`, `i am`, `i'll`). Earlier sentences may be anything that is not a
+  stop, and the whole message goes to the planner. While running it steers
+  the task; while paused it resumes with a fresh look; while waiting on a
+  yes or a planner question it never approves, sets aside what waited, and
+  the planner chooses again with the words.
+- **Hold (`hold`).** Everything else (questions, remarks, refusals, busy or
+  delay phrases, fillers alone, or non-screen speech such as "go away",
+  "switch off", "press pause", "type faster", or "open the door for the
+  delivery guy") holds. While running, the task pauses at once (with the
+  words kept when they can be kept). While paused, it stays paused. At a
+  waiting approval or planner question, what waited is set aside and the task
+  pauses. The hold takes effect whatever happens to the words: even at the
+  step limit, at the 8-addition cap, when the record cannot be written, or
+  when the words hold a secret, the pause still happens and the reply states
+  truthfully that the words were not kept.
+- **Startup.** While the planner's initial navigation reading or the first
+  look at the screen is in flight, a stop ends the task at once, and anything
+  else sets the hold so that no first input goes out.
+- **Secrets.** Words that hold a password, passcode, passphrase, PIN, secret,
+  token, API key, credential, short numeric code (including contractions,
+  quoted or bare values after password/passcode/passphrase, spaced PIN digits,
+  full-width digits or colon after NFKC normalization, invisible format or
+  combining joiner characters, tokens split across line breaks, and 13 to 19
+  digit payment card numbers) are refused: they are written nowhere and never
+  sent to the planner. Plain state remarks after `is` ("the password is
+  already filled", "the token is expired") are not treated as secrets.
+- **Limits and scope.** When the task is past its deadline or its call
+  authority ended, non-stop words are not taken. Words come only from where
+  the request was started: the same call, or the chat on both sides. A
+  request that is stopping takes none. Words that were read as a one-step
+  move to another desktop or to the app before are a request of their own,
+  and wait as before.
 - Only the request itself can say that a close was asked for, and only until
   you say more. After the first addition a close asks again, whatever the
   addition says.

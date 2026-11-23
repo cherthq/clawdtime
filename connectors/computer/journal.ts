@@ -117,25 +117,57 @@ export type JournalGuidance = z.infer<typeof saidSchema>;
 
 const clean = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+const invisibleSecretChars =
+  /[\p{Cf}\u034f\u115f\u1160\u17b4\u17b5\u180e\u3164\uffa0\ufe00-\ufe0f]/gu;
+const invisibleAroundOp =
+  /[\p{Cf}\u034f\u115f\u1160\u17b4\u17b5\u180e\u3164\uffa0\ufe00-\ufe0f]+(is|was|[:=])[\p{Cf}\u034f\u115f\u1160\u17b4\u17b5\u180e\u3164\uffa0\ufe00-\ufe0f]+/giu;
+const plainStateWord =
+  "(?:already|saved|filled|expired|wrong|correct|required|empty|set|needed|not|missing|blank|invalid|valid|hidden|autofilled)(?![A-Za-z0-9_-])";
+const nonPasswordBareWord =
+  "(?:is|was|are|were|be|been|has|have|had|will|would|can|could|should|may|might|must|do|does|did|in|into|on|for|to|of|at|by|from|with|without|and|or|but|if|when|as|that|this|then|than|here|there|now|yet|still|already|not|no|never|please|pls|again|first|next|yourself|myself|field|fields|box|boxes|input|inputs|bar|settings|setting|manager|reset|change|screen|page|tab|button|link|window|dialog|popup|prompt|form|section|entry|label|icon|check|error|message|text|area|row|item|option|menu|list|step|login|sign|account|autofill|saved|filled|expired|wrong|correct|required|empty|set|needed|missing|blank|hidden|invalid|valid)(?![A-Za-z0-9_-])";
 const strictSecretShapes = [
-  // Sentence and key-value forms: secret noun followed by is/was/:/= and any value.
-  /\b(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential)\s*(?:(?:\bis\b|\bwas\b)\s+|[:=]\s*)\S+/i,
-  // A bare 4 to 8 digit code after pin, code or otp.
-  /\b(?:pin|code|otp)\b(?:\s+(?:is|was))?\s*[:=#-]?\s*\d{4,8}\b/i,
+  // Sentence and contraction forms: secret noun followed by is/was/'s and a non-state value.
+  new RegExp(
+    String.raw`\b(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential)(?:\s+(?:is|was)|'s)\s+(?!${plainStateWord})\S+`,
+    "i",
+  ),
+  // Key-value forms with : or = (full-width colon/equals fold via NFKC).
+  /\b(?:password|passwd|passcode|passphrase|pin|secret|token|api[ _-]?key|credential)\s*[:=]\s*\S+/i,
+  // Quoted or bare value directly after password, passcode, or passphrase.
+  new RegExp(
+    String.raw`\b(?:password|passwd|passcode|passphrase)\s+(?:["'][^"'\s][^"']*["']|(?!${nonPasswordBareWord})[A-Za-z0-9!@#$%^&*_+=~./-]{4,})`,
+    "i",
+  ),
+  // A 4 to 8 digit code (with or without spaces/hyphens) after pin, code, otp, or passcode.
+  /(?<!\b(?:zip|postal|area|country|error|status|http|exit)\s+)\b(?:pin|code|otp|passcode)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d(?:[ -]?\d){3,7}\b/i,
+  // Payment card numbers: 13 to 19 digits with optional spaces or hyphens.
+  /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/,
 ];
 /**
  * Strict credential check for computer-use guidance and journal records.
- * Strips format characters (\p{Cf}, including zero-width characters) to ""
- * so they cannot split a keyword or token, and also refuses sentence forms
- * with plain-word values and short numeric PIN/code/OTP values.
+ * Normalizes NFKC, strips format and invisible joiner characters (\p{Cf},
+ * U+034F, etc.) to "", tests a newline-joined variant for wrapped tokens, and
+ * checks contractions, bare/quoted password values, spaced PIN/OTP codes, and
+ * payment card numbers while ignoring plain state remarks ("is already filled").
  */
 export function looksSecretStrict(text: string): boolean {
-  const stripped = text.replace(/\p{Cf}/gu, "");
+  const normalized = text
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"');
+  const stripped = normalized.replace(invisibleSecretChars, "");
+  const opSpaced = normalized
+    .replace(invisibleAroundOp, " $1 ")
+    .replace(invisibleSecretChars, "");
+  const noNewlines = stripped.replace(/[\r\n]+/g, "");
+  if (looksSecret(noNewlines)) return true;
   const variants = [
-    text,
+    normalized,
     stripped,
-    clean(text, text.length),
+    opSpaced,
+    clean(normalized, normalized.length),
     clean(stripped, stripped.length),
+    clean(opSpaced, opSpaced.length),
   ];
   return variants.some(
     (value) =>

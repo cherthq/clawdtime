@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ComputerJournal,
   computerDirectory,
+  looksSecretStrict,
   readComputerSwitch,
   setComputerSwitch,
 } from "../connectors/computer/journal.js";
@@ -257,6 +258,44 @@ describe("the journal of computer requests", () => {
     expect(journal.guide("r1", { id: "g1", text: "Works again" })).toBe(
       "Works again",
     );
+  });
+
+  it("round 2 blocker 6: catches contractions, bare/quoted values, spaced PINs, NFKC full-width, card numbers, wrapped tokens, and invisible joiners without false positives on state words", () => {
+    const secrets = [
+      "my passcode's 4821",
+      "my password's swordfish",
+      "passcode 4821",
+      'use password "hunter2"',
+      "pin 1 2 3 4",
+      "use pin \uff11\uff12\uff13\uff14",
+      "code \uff14\uff18\uff12\uff19\uff11\uff13",
+      "password\uff1aswordfish",
+      "my card number is 4532 1234 5678 9010",
+      "card 4532-1234-5678-9010",
+      "use key sk-12345678\n90abcdefghij",
+      "token ghp_abcdef0123\n456789abcdef01",
+      "my pass\u200bword\u200bis\u200bswordfish",
+      "my pass\u034fword is swordfish",
+    ];
+    for (const sample of secrets)
+      expect(looksSecretStrict(sample), sample).toBe(true);
+
+    const benign = [
+      "the password is already filled",
+      "the password is saved in Chrome",
+      "the pin is not needed",
+      "the token is expired",
+      "the password is wrong",
+      "the password is correct",
+      "the password is required",
+      "the password is empty",
+      "the password is set",
+      "open zip code 94107",
+      "press the code tab",
+      "open the PIN settings",
+    ];
+    for (const sample of benign)
+      expect(looksSecretStrict(sample), sample).toBe(false);
   });
 
   it("cuts a long request, a long name and control characters", () => {

@@ -42,7 +42,7 @@ import type {
   DesktopExecutionAuthority,
   DesktopExecutorPort,
 } from "../../src/control/desktop-executor.js";
-import { holdsBack, interpret } from "../agents/call.js";
+import { interpret } from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
 import {
   actionSchema,
@@ -63,6 +63,7 @@ import {
   type JournalRequest,
   type RequestState,
 } from "./journal.js";
+import { readWords } from "./orders.js";
 import { HandsTimeout } from "./panel-hands.js";
 import {
   activationRefusal,
@@ -111,8 +112,15 @@ const rememberedWords = 256;
  */
 const guidedText = "Got it. I take that into the task that runs.";
 const resumedText = "Got it. I go on with the task and take that into it.";
+const alreadyRunningText = "The task is already running.";
+const pausingText =
+  "I am pausing at your word. Say continue once paused, or stop.";
+const startingHoldText =
+  "I hold before the first action, and I did not take those words into the task. Say continue to go on, or stop.";
 const heldText =
   "Got it. I hold now and take that into the task. Say continue to go on, or stop.";
+const heldNotKeptText = (why: string) =>
+  `I hold now, without taking those words into the task. ${why} Say continue to go on, or stop.`;
 const holdPauseText =
   "I am paused at your word. Say continue to go on, or stop.";
 const stillPausedText = (pause?: "takeover" | "hold") =>
@@ -127,101 +135,29 @@ const asideText = {
     "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
   free: "Got it. I take that into the task and choose again. The question that waited is set aside.",
 } as const;
+const asideContinueHoldText = {
+  yes_no:
+    "That was no yes: what waited for one is set aside, and I hold now. Say continue to go on, or stop.",
+  free: "The question that waited is set aside, and I hold now. Say continue to go on, or stop.",
+} as const;
+const asideHoldText = {
+  yes_no:
+    "Got it. I hold now and take that into the task. That was no yes: what waited for one is set aside. Say continue to go on, or stop.",
+  free: "Got it. I hold now and take that into the task. The question that waited is set aside. Say continue to go on, or stop.",
+} as const;
+const asideHoldNotKeptText = (mode: "yes_no" | "free", why: string) =>
+  mode === "yes_no"
+    ? `I hold now, without taking those words into the task. That was no yes: what waited for one is set aside. ${why} Say continue to go on, or stop.`
+    : `I hold now, without taking those words into the task. The question that waited is set aside. ${why} Say continue to go on, or stop.`;
 const unclearText = (question: string) =>
   `I did not get a clear answer. ${question}`;
 const guidanceFullText = `This task already took ${guidanceLimit} additions from you, and it takes no more.`;
 const guidanceLongText = `That is longer than ${guidanceLength} characters, so I did not take it into the task that runs. Say it in fewer words.`;
 const guidanceUnwrittenText =
   "The record of computer tasks could not be written, so I did not take that into the task.";
-/** What follows a refusal of words: the question that still waits, or what the person can do. */
-const andNow = (question: Question | null, otherwise = "") =>
-  question ? ` ${question.text}` : otherwise;
 /** Why an action that was on its way was held back: it was chosen without the person's newest words. */
 const saidMoreText = "The person said more before it went out.";
-const plainWords = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[^a-z0-9' ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-/** Fillers and marks that can come before a stop word. */
-const stopFillers =
-  /^(?:(?:ok|okay|no|nope|wait|hey|hi|hello|please|uh+|um+|er+|hmm+|oh|ah|well|so|just|alright|all right|right|hold on|hang on) )+/;
-const stopCommand = /^(?:stop|cancel|abort|halt)\b/;
-/** True for a stop word after optional fillers and marks, also with an object after it. */
-const isStop = (text: string) =>
-  stopCommand.test(plainWords(text).replace(stopFillers, ""));
-const whQuestion = /^(?:why|what|which|who|whose|when|where|how)\b/;
-const approvalRefusalWords =
-  /\b(?:no|nope|stop|don'?t|do not|cancel|abort|halt|deny|decline|reject|refuse|never)\b/;
-const delayWait =
-  /\bwait\b.*(?:\bnot (?:yet|now|so fast)\b|\b(?:a|one|few) (?:moment|second|sec|minute|bit)s?\b)/;
-/** At an action that waits for a yes, any refusal word cancels instead of setting aside and continuing. */
-const refusesApproval = (text: string) => {
-  const words = plainWords(text);
-  if (whQuestion.test(words)) return false;
-  if (approvalRefusalWords.test(words)) return true;
-  return /\bwait\b/.test(words) && !delayWait.test(words);
-};
-const screenVerb =
-  /^(?:open|click|press|hit|type|go|scroll|use|try|select|choose|switch|search|find|enter|show|move|drag|continue|resume|carry on|keep going|go on)\b/;
-const orderFillers =
-  /^(?:(?:ok|okay|yes|yeah|yep|sure|please|now|then|well|so|just|alright|all right|right|hey|uh+|um+|er+|hmm+|oh|ah|can you|could you|would you) )+/;
-const explicitForbid =
-  /\b(?:don'?t|do not|never)\b|\bnot (?:that|this|there|here|yet|now|so fast)\b|\bhold (?:on|off|up)\b|\bhang on\b/;
-const bareNo =
-  /^(?:(?:ok|okay|wait|hey|please|uh+|um+|oh|well|so) )*(?:no|nope)$/;
-const bareWait =
-  /^(?:(?:ok|okay|hey|please|uh+|um+|oh|well|so|just) )*wait(?: (?:a |one |for a )?(?:moment|second|sec|minute|bit|few seconds))?$/;
-/** Words that forbid or ask to hold while running or at a free question pause the task at once. */
-const shouldHold = (text: string) => {
-  const words = plainWords(text);
-  if (!words) return false;
-  if (explicitForbid.test(words)) return true;
-  if (bareNo.test(words) || bareWait.test(words)) return true;
-  if (
-    /^wait\b/.test(words) &&
-    !screenVerb.test(words.replace(/^(?:wait|please|just|now|ok|okay) +/g, ""))
-  )
-    return true;
-  return false;
-};
-const resumeWord =
-  /\b(?:ok|okay|yes|yeah|yep|sure|alright|all right|continue|resume|proceed|go ahead|go on|keep going|carry on|do it)\b/;
-const pureContinue =
-  /^(?:(?:ok|okay|yes|yeah|yep|sure|alright|all right|right|please|just|now|continue|resume|proceed|go ahead|go on|keep going|carry on|do it)(?: |$))+$/;
-/** True for continue words (as `answer` reads them) with no extra non-order statement. */
-const isPureContinue = (text: string) => {
-  if (holdsBack(text) || shouldHold(text)) return false;
-  const words = plainWords(text);
-  return !!words && pureContinue.test(words) && resumeWord.test(words);
-};
-/** True for an imperative order for the screen after optional fillers. */
-const isScreenOrder = (text: string) => {
-  if (shouldHold(text)) return false;
-  const words = plainWords(text);
-  return screenVerb.test(words.replace(orderFillers, ""));
-};
-/** Non-order fillers, status questions or busy statements that must never set aside a waiting question. */
-const extraHoldsBack = (text: string) => {
-  const words = plainWords(text);
-  if (!words) return true;
-  if (/^(?:hmm+|um+|uh+|er+|oh|ah|well)$/.test(words)) return true;
-  if (
-    /\b(?:hold up|hold off|i'?m typing|i am typing|give me a few seconds|a few seconds|a few moments)\b/.test(
-      words,
-    )
-  )
-    return true;
-  if (
-    /^(?:are|is|did|do|does|have|has|were|was) (?:you|it|we|that|this|there)\b/.test(
-      words.replace(orderFillers, ""),
-    )
-  )
-    return true;
-  return false;
-};
+const heldByWordReason = "The person asked to hold before it went out.";
 const ownershipText =
   "Screen input is held by the current phone walkthrough or an unresolved owner. No new computer action was sent.";
 const idleText =
@@ -535,6 +471,8 @@ interface Run {
   };
   /** True once any real input or app/page command went out in this request. */
   sentInput: boolean;
+  /** True once the initial look at the screen has completed at least once. */
+  firstLookDone: boolean;
   /** Why the action of this turn was not sent, for the row: one of the worker's own fixed sentences. */
   why?: string;
   /** What the next pause says, when an action was held back: what it would have done. */
@@ -1087,6 +1025,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       fresh: false,
       streak: null,
       sentInput: false,
+      firstLookDone: false,
       refusals: 0,
       plannerFailures: 0,
       question: null,
@@ -1106,38 +1045,22 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
 
   /**
-   * The person spoke while a request runs. Those words are their newest ones
-   * for that request, not a second request: "open it in the browser", "no,
-   * the other tab", "just press return". They are kept in order, written to
-   * the record, and given to the planner at its next step. An action that
-   * was chosen before they came is not sent: `loop` drops the choice, and
-   * `outdated` holds an action that is on its way.
-   *
-   * They passed the same gates as a new request before they came here: the
-   * owner of the screen input, a call that is live, the switch. And they come
-   * from the surface that started the request, or they are refused as before.
-   *
-   * What they never are: a yes to an action, or an answer to a question of
-   * the planner. When the request waits for one of those, the person has
-   * said something else in its place, and the newest word wins: what waited
-   * is set aside. The action that needed the yes is not sent, the question
-   * of the planner gets no answer, and the planner chooses again with the
-   * words. When it chooses the same action again, the person is asked again.
-   * A yes that was kept for an action that was not sent ends too, in `loop`.
-   * `answer` reads an answer as it always did.
-   *
-   * The pause after the person took over the Mac ends with them as it ends
-   * with "continue": they say what to do next, so they are a wish to go on.
-   *
-   * Three readings stand before all of that, each on the careful side. Words
-   * that open with stop, cancel or abort stop the request. Words that
-   * `answer` takes as a no or a stop end a request that waits, as they do
-   * through `answer`. And words that hesitate or ask about something ("wait",
-   * "hold on", "why did you stop") change nothing in a request that waits:
-   * they are no wish to go on.
-   *
-   * The planner's choice stays an untrusted single-action plan. Every action
-   * after these words goes through the same checks, with the same questions.
+   * The person spoke while a request runs. Words are read by `readWords` in
+   * `orders.ts`, which is safe by default:
+   * - "stop" stops the request at once, also during initial navigation or the
+   *   first look, at the step limit, when words cannot be kept, or on secrets.
+   * - "order" (a strict screen order on the last sentence) is kept when it can
+   *   be kept and steers the task, resumes a pause, or sets aside a waiting
+   *   approval/question without ever approving it.
+   * - "continue" resumes a pause; while running it changes nothing; at a
+   *   waiting approval or question it never approves, sets it aside and holds.
+   * - "hold" (everything else) pauses the task at once, keeps a pause paused,
+   *   or sets aside a waiting approval/question and pauses. The hold takes
+   *   effect even if the words cannot be kept (8-cap, unwritable, step limit,
+   *   or secret).
+   * - While the planner's first reading (navigation) or the first look is in
+   *   flight, anything other than "stop" sets the hold so no first input goes
+   *   out.
    */
   private async guide(
     run: Run,
@@ -1152,16 +1075,15 @@ export class ComputerWorker implements DesktopExecutorPort {
       (!text ||
         run.stop ||
         run.state === "stopping" ||
-        !sameSpeaker(run.authority, authority) ||
-        // A move of one step asks no planner, so nothing could take the
-        // words. While the worker still reads whether the request is such a
-        // move, nobody knows yet.
-        (run.navigation === undefined
-          ? this.planner.navigation !== undefined
-          : run.navigation.kind !== "none" && run.history.length === 0) ||
-        // A move that the planner can never make is a request of its own.
-        reading?.kind === "desktop" ||
-        reading?.kind === "previous_app")
+        !sameSpeaker(run.authority, authority))
+    )
+      return busyText;
+    const kind = readWords(words);
+    // A move that the planner can never make is a request of its own.
+    if (
+      this.current === run &&
+      kind !== "stop" &&
+      (reading?.kind === "desktop" || reading?.kind === "previous_app")
     )
       return busyText;
     // From here on these were words for this request. Their id starts none.
@@ -1173,6 +1095,15 @@ export class ComputerWorker implements DesktopExecutorPort {
         // A record that could not be written changes nothing of ending or refusing.
       }
     };
+    if (this.current !== run) {
+      recordSeen();
+      return this.snapshot().message;
+    }
+    if (kind === "stop") {
+      recordSeen();
+      this.stop();
+      return stoppedText;
+    }
     // Check deadline, authority, switch and ownership even when no question
     // waits. If an effect command is in flight, do not finish prematurely (so
     // a lost result can still become uncertain), and take no more words.
@@ -1189,87 +1120,116 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
       return atEndText;
     }
-    if (this.current !== run) {
-      recordSeen();
-      return this.snapshot().message;
-    }
+    const tryKeep = (): { kept: true } | { kept: false; why: string } => {
+      if (run.step >= this.maxSteps) {
+        recordSeen();
+        return { kept: false, why: atEndText };
+      }
+      // A credential goes neither to the planner nor into the record.
+      if (looksSecretStrict(words) || looksSecretStrict(text)) {
+        recordSeen();
+        return { kept: false, why: secretText };
+      }
+      if (text.length > guidanceLength) {
+        recordSeen();
+        return { kept: false, why: guidanceLongText };
+      }
+      if (run.guidance.length >= guidanceLimit) {
+        recordSeen();
+        return { kept: false, why: guidanceFullText };
+      }
+      let shown: string;
+      try {
+        // The record comes first, as for the request itself.
+        shown = this.journal.guide(run.id, { id, text });
+      } catch {
+        return { kept: false, why: guidanceUnwrittenText };
+      }
+      run.guidance.push({ id, text, shown });
+      return { kept: true };
+    };
+
     const question = run.question;
-    const paused = question?.mode === "continue";
-    if (isStop(text)) {
-      recordSeen();
-      this.stop();
-      return stoppedText;
+    // While the planner's first reading (navigation) or the first look is in
+    // flight, anything other than "stop" sets the hold so no first input goes out.
+    const navigating =
+      (run.navigation === undefined && this.planner.navigation !== undefined) ||
+      (run.navigation !== undefined &&
+        run.navigation.kind !== "none" &&
+        run.history.length === 0);
+    const firstLook = !run.firstLookDone && run.step === 0;
+    if (!question && (navigating || firstLook)) {
+      run.hold = true;
+      run.wake?.();
+      if (navigating || kind === "continue") {
+        recordSeen();
+        return startingHoldText;
+      }
+      const kept = tryKeep();
+      return kept.kept ? heldText : heldNotKeptText(kept.why);
     }
-    if (
-      question &&
-      question.mode !== "free" &&
-      ((paused ? readContinue : readYes)(clean(words, 600)) === false ||
-        (question.mode === "yes_no" && refusesApproval(text)))
-    ) {
-      recordSeen();
-      this.finish(
-        run,
-        "canceled",
-        paused ? "stopped" : "refused_by_person",
-        question.refusal,
-        false,
-      );
-      return question.refusal;
-    }
-    if (question && (holdsBack(text) || (!paused && extraHoldsBack(text)))) {
-      recordSeen();
-      return unclearText(question.text);
-    }
-    if (paused) {
-      if (isPureContinue(text)) {
+
+    // Paused (takeover or hold on words).
+    if (question?.mode === "continue") {
+      if (kind === "continue") {
         recordSeen();
         run.question = null;
         question.settle({ kind: "yes" });
         return "Continuing.";
       }
-      if (!isScreenOrder(text)) {
-        recordSeen();
-        return stillPausedText(question.pause);
+      if (kind === "order") {
+        const kept = tryKeep();
+        if (!kept.kept) return `${kept.why} ${question.text}`;
+        run.question = null;
+        question.settle({ kind: "yes" });
+        return resumedText;
       }
-    }
-    if (run.step >= this.maxSteps) {
       recordSeen();
-      return `${atEndText}${andNow(question)}`;
+      if (looksSecretStrict(words) || looksSecretStrict(text))
+        return `${secretText} ${stillPausedText(question.pause)}`;
+      return stillPausedText(question.pause);
     }
-    // A credential goes neither to the planner nor into the record. Check raw,
-    // format-stripped (\p{Cf} -> "") and cleaned forms, plus strict patterns.
-    if (looksSecretStrict(words) || looksSecretStrict(text)) {
-      recordSeen();
-      return `${secretText}${andNow(question)}`;
-    }
-    if (text.length > guidanceLength) {
-      recordSeen();
-      return `${guidanceLongText}${andNow(question)}`;
-    }
-    if (run.guidance.length >= guidanceLimit) {
-      recordSeen();
-      return `${guidanceFullText}${andNow(question, " Stop it, or wait for it to end, and ask again.")}`;
-    }
-    let shown: string;
-    try {
-      // The record comes first, as for the request itself.
-      shown = this.journal.guide(run.id, { id, text });
-    } catch {
-      return `${guidanceUnwrittenText}${andNow(question)}`;
-    }
-    run.guidance.push({ id, text, shown });
-    const hold = !paused && shouldHold(text);
-    if (hold) {
+
+    // Waiting on an approval (yes_no) or a planner question (free).
+    if (question) {
+      if (kind === "order") {
+        const kept = tryKeep();
+        if (!kept.kept) return `${kept.why} ${question.text}`;
+        run.question = null;
+        question.settle({ kind: "aside" });
+        return asideText[question.mode];
+      }
+      // "continue" or "hold": never approve; set aside and hold, whatever happens to the words.
       run.hold = true;
-      run.wake?.();
+      run.question = null;
+      question.settle({ kind: "aside" });
+      if (kind === "continue") {
+        recordSeen();
+        return asideContinueHoldText[question.mode];
+      }
+      const kept = tryKeep();
+      return kept.kept
+        ? asideHoldText[question.mode]
+        : asideHoldNotKeptText(question.mode, kept.why);
     }
-    if (!question) return hold ? heldText : guidedText;
-    run.question = null;
-    question.settle(paused ? { kind: "yes" } : { kind: "aside" });
-    if (hold) return heldText;
-    return question.mode === "continue"
-      ? resumedText
-      : asideText[question.mode];
+
+    // Running.
+    if (kind === "continue") {
+      recordSeen();
+      return run.hold ? pausingText : alreadyRunningText;
+    }
+    if (kind === "order") {
+      const kept = tryKeep();
+      if (kept.kept) return guidedText;
+      return kept.why === guidanceFullText
+        ? `${guidanceFullText} Stop it, or wait for it to end, and ask again.`
+        : kept.why;
+    }
+    // "hold": pause at once, whatever happens to the words.
+    run.hold = true;
+    run.wake?.();
+    const kept = tryKeep();
+    return kept.kept ? heldText : heldNotKeptText(kept.why);
   }
   private remember(id: string) {
     this.words.add(id);
@@ -1613,20 +1573,30 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (
         run.navigation &&
         run.navigation.kind !== "none" &&
-        run.navigation.kind !== "clarify" &&
-        (await this.navigate(run, run.navigation)) !== "plan"
-      )
-        return;
+        run.navigation.kind !== "clarify"
+      ) {
+        if (run.hold) {
+          run.hold = false;
+          delete run.approval;
+          const reply = await this.ask(
+            run,
+            "continue",
+            holdPauseText,
+            stoppedText,
+            "hold",
+          );
+          if (reply.kind !== "yes") return;
+          if (run.guidance.length > 0) run.navigation = { kind: "none" };
+        }
+        if (
+          run.navigation.kind !== "none" &&
+          (await this.navigate(run, run.navigation)) !== "plan"
+        )
+          return;
+      }
       for (;;) {
         if (this.halted(run)) return;
-        if (run.step >= this.maxSteps)
-          return this.finish(
-            run,
-            "blocked",
-            "step_limit",
-            `I stopped at the limit of ${this.maxSteps} steps. The task is not finished.`,
-          );
-        // The pause comes at once, before the next look and the next plan.
+        // The pause comes at once, before the next look, plan, or step-limit end.
         // When an action was held back, it says what that action was.
         if (run.takeover || run.pauseText !== undefined || run.hold) {
           const reason =
@@ -1651,6 +1621,13 @@ export class ComputerWorker implements DesktopExecutorPort {
           if (reply.kind !== "yes") return;
           continue;
         }
+        if (run.step >= this.maxSteps)
+          return this.finish(
+            run,
+            "blocked",
+            "step_limit",
+            `I stopped at the limit of ${this.maxSteps} steps. The task is not finished.`,
+          );
         const lookFrom = this.now();
         if (!run.fresh || !run.observation) {
           const look = () =>
@@ -1684,6 +1661,7 @@ export class ComputerWorker implements DesktopExecutorPort {
             ? (handed.result.observation ?? null)
             : null;
           run.fresh = run.observation !== null;
+          run.firstLookDone = true;
           if (run.heldRow?.sentBefore !== undefined) {
             if (
               !sameScreen(
@@ -1803,6 +1781,20 @@ export class ComputerWorker implements DesktopExecutorPort {
       "Check desktop before switching",
     );
     if (looked.over) return;
+    if (run.hold) {
+      run.hold = false;
+      delete run.approval;
+      const reply = await this.ask(
+        run,
+        "continue",
+        holdPauseText,
+        stoppedText,
+        "hold",
+      );
+      if (reply.kind !== "yes") return;
+      if (run.guidance.length > 0) return "plan";
+      return this.navigate(run, intent);
+    }
     const before = looked.result?.observation;
     if (run.takeover)
       return this.finish(
@@ -2261,8 +2253,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (person) {
       delete run.tried;
       run.pauseText = holdText(wantedOf(action, ready, run.observation));
-    } else if (reason === saidMoreText) {
-      // The person said more before it went out: no fault of the screen or action.
+    } else if (reason === saidMoreText || reason === heldByWordReason) {
+      // The person said more or asked to hold before it went out: no fault of the screen or action.
       delete run.tried;
     } else this.missed(run, reason);
   }
@@ -2338,8 +2330,14 @@ export class ComputerWorker implements DesktopExecutorPort {
       // have taken minutes to say yes. The screen can be another one now.
       const seen = await this.look(run);
       if (seen === "over") return;
-      if (this.outdated(run))
-        return this.changed(run, action, why, first, saidMoreText);
+      if (run.hold || this.outdated(run))
+        return this.changed(
+          run,
+          action,
+          why,
+          first,
+          run.hold ? heldByWordReason : saidMoreText,
+        );
       if (run.takeover) return this.heldByHands(run, action, why, first);
       if (!seen || !before)
         return this.changed(run, action, why, first, screenUnreadReason);
@@ -2432,13 +2430,21 @@ export class ComputerWorker implements DesktopExecutorPort {
           true,
         );
       if (focusedSecure(seen)) return this.personTypes(run, action, why, ready);
-      if (this.outdated(run))
+      if (run.hold || this.outdated(run))
         return clickedOnly(
-          "clicked the field. The text was not typed: the person said more.",
+          run.hold
+            ? "clicked the field. The text was not typed: the person asked to hold."
+            : "clicked the field. The text was not typed: the person said more.",
         );
     }
-    if (this.outdated(run))
-      return this.changed(run, action, why, ready, saidMoreText);
+    if (run.hold || this.outdated(run))
+      return this.changed(
+        run,
+        action,
+        why,
+        ready,
+        run.hold ? heldByWordReason : saidMoreText,
+      );
     const streak = run.streak;
     this.count(run, ready.signature);
     // A wait changes nothing on the Mac: the person's input during it is
@@ -2680,8 +2686,14 @@ export class ComputerWorker implements DesktopExecutorPort {
       call = again.send.call;
     }
     if (this.halted(run)) return;
-    if (this.outdated(run))
-      return this.changed(run, action, why, first, saidMoreText);
+    if (run.hold || this.outdated(run))
+      return this.changed(
+        run,
+        action,
+        why,
+        first,
+        run.hold ? heldByWordReason : saidMoreText,
+      );
     // A scroll changes what the screen shows, but silence after it loses nothing.
     const effect = call.name !== "read" && call.name !== "scroll";
     const pageBefore = call.name === "read" ? null : pagePrint(run.page);
