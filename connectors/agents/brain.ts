@@ -2152,6 +2152,43 @@ const seeLater = (clause: string) => {
       ))
   );
 };
+/** A word of when in a wish to be told: "when", "whenever", "anytime", "once", "as soon as", "the moment", "the second", "if", "after". */
+const wishWhen =
+  "(?:when(?:ever)?|any\\s?time|once|as\\s+soon\\s+as|the\\s+(?:moment|second|minute|instant)|if|after)";
+/**
+ * A clause that opens with a wish to be told later, in words that the
+ * watch tool does not take: "let me know if docs changes", "give me a heads
+ * up if docs changes", "keep me posted on docs", "I want to hear the second
+ * something happens there". What follows the wish is the group.
+ */
+const wishToBeTold = new RegExp(
+  `^\\s*${fillersBefore}${leadBefore}(?:${hearCue}(?:\\s+know)?\\s+${wishWhen}\\b(.*)|(?:give|send|drop|shoot)\\s+(?:me|us)\\s+a\\s+(?:heads[- ]up|shout)\\b(.*)|keep\\s+me\\s+(?:posted|updated|in\\s+the\\s+loop)\\b(.*)|(?:i\\s+|i(?:['\\u2019]d|\\s+would)\\s+)?(?:want|need|like)\\s+to\\s+(?:know|hear)\\s+${wishWhen}\\b(.*))$`,
+  "i",
+);
+/**
+ * What a session does, in a wish to be told about it: "docs changes",
+ * "deploy fix needs me", "docs gets stuck". A list: "the docs mention the
+ * API key" and "docs is the right folder" speak of something else, and can
+ * be work to find it out.
+ */
+const sessionDoes =
+  "(?:changes?|moves?|does\\s+(?:anything|something)|updates?|needs?\\s+(?:me|you|attention|input|an?\\s+answer|approval|help)|asks?(?:\\s+(?:me|something|for\\s+\\w+))?|wants?\\s+(?:me|something|input)|waits?|stops?|starts?|finish(?:es)?|is\\s+(?:done|stuck|idle|ready|waiting|finished|blocked|back)|gets?\\s+(?:stuck|blocked|done)|breaks?|fails?|goes\\s+wrong|comes?\\s+up|has\\s+(?:news|something|a\\s+question)|says?\\s+(?:something|anything)|answers?|replies|hangs?|crash(?:es)?|errors?|ends?|completes?)";
+/** Every session as the subject of a wish, and what happens: "anything changes", "something comes up". */
+const anythingHappens =
+  "(?:anything|something|everything|any\\s+of\\s+(?:them|those|these)|(?:any|one)\\s+of\\s+(?:the|my)\\s+(?:sessions|agents))\\s+(?:new\\s+)?(?:changes?|happens?|comes?\\s+up|moves?|breaks?|fails?|goes\\s+wrong|updates?|shows?\\s+up|needs?\\s+(?:me|attention))";
+/**
+ * A clause that is a reminder: "remind me to check deploy fix", or "remind
+ * me" with a time ("in ten minutes", "at 5", "tomorrow", "tonight",
+ * "later", "in the morning") and then nothing more, "to" with a thing to
+ * do, or "about" a thing. A list of what is taken: "remind me how the
+ * deploy script works", "remind me when we last deployed docs", "remind me
+ * next steps" and "remind me in the morning how the deploy went" ask to
+ * say something, and can be work to find it out.
+ */
+const wishForAReminder = new RegExp(
+  `^\\s*${fillersBefore}${leadBefore}remind\\s+me\\s+(?:to\\s+\\w+|(?:again\\s+)?(?:in\\s+(?:\\d+|an?|one|two|three|four|five|ten|fifteen|twenty|thirty|half\\s+an?|a\\s+few|a\\s+couple\\s+of)\\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)|at\\s+(?:\\d[\\d:.]*\\s*(?:am|pm)?|noon|midnight)|by\\s+\\d[\\d:.]*\\s*(?:am|pm)?|tomorrow(?:\\s+(?:morning|afternoon|evening|night))?|tonight|later(?:\\s+(?:today|tonight))?|this\\s+(?:evening|afternoon|morning)|in\\s+the\\s+(?:morning|afternoon|evening))(?=\\s*$|\\s+to\\s+\\w+|\\s+about\\b))`,
+  "i",
+);
 /** A clause that rules a session out of a request: "show me payments, not docs". */
 const seeNot = (clause: string) =>
   /^(?:(?:and|but|just|only|so)[,\s]+)*(?:not|except|excluding|other\s+than|no)\b/i.test(
@@ -4009,6 +4046,8 @@ const forThatSession = (session: AgentSession) =>
   `The person's message speaks to the session ${title(session)}: those words are for that session, not work for a new agent, so no job and no task starts for them.`;
 const onlyToHear =
   "The person's message only asks to hear later about a session, or to stop that. That is no work for a new agent: no job and no task starts for it.";
+const onlyAReminder =
+  "The person's message asks for a reminder. You keep no timer and no reminder, and that is no work for a new agent: no job and no task starts for it.";
 /** Marks a gate's refusal, and gives its sentence back for the model. */
 const refuse = (turn: Turn, sentence: string) => {
   turn.refused = sentence;
@@ -4512,6 +4551,104 @@ export class Supervisor {
     );
   }
   /**
+   * The message asks for nothing but to be told later, in words that the
+   * watch tool does not take, or for a reminder: "let me know if docs
+   * changes", "give me a heads up if docs changes", "keep me posted on
+   * docs", "and don't forget docs, I want to hear the second something
+   * happens there", "remind me in ten minutes to check the payments tests".
+   * That is no work for a new agent, whatever the model calls. A list of
+   * what is refused:
+   * - a clause that opens with a wish to be told (`wishToBeTold`) and
+   *   then says what a session of the board does, by its name ("docs
+   *   changes", "deploy fix needs me": `sessionDoes`), speaks of every
+   *   session and of nothing else ("anything changes", "something happens
+   *   there"), names only a session ("keep me posted on docs"), or says
+   *   nothing more ("keep me posted"), with no "you" that does something;
+   * - a clause that is a reminder for a time or for a thing to do
+   *   (`wishForAReminder`), with no "you" that does something;
+   * - and beside those only clauses that say nothing, say the state of a
+   *   session by its name in a word of state ("deploy fix is running"), or
+   *   only name a session ("don't forget docs").
+   * A clause of any other kind keeps the message what it was: "run the
+   * tests and let me know if docs changes", "fix the footer and remind me
+   * to review it". A wish about something else can be work to find it out,
+   * and stays what it was: "let me know if the tests pass", and, with the
+   * name of a session as a common word, "let me know if the docs mention
+   * the API key".
+   */
+  private onlyAsksToBeTold(spoken: string): "told" | "reminder" | null {
+    let sessions: AgentSession[] = [];
+    try {
+      sessions = (this.world.board()?.sessions ?? []).filter(
+        (session) => session.name !== null,
+      );
+    } catch {
+      sessions = [];
+    }
+    const names = sessions.map((session) =>
+      title(session).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    );
+    const aSession = names.length
+      ? `(?:the\\s+|my\\s+)?(?:${names.join("|")})(?:\\s+(?:session|one|agent))?`
+      : null;
+    // What may follow a wish. A word of when can stand first ("a heads up
+    // IF docs changes").
+    const afterAWish = new RegExp(
+      `^\\s*(?:${wishWhen}\\s+)?(?:${[
+        ...(aSession
+          ? [
+              `${aSession}\\s+${sessionDoes}(?:\\s+or\\s+${sessionDoes})*(?:\\s+(?:again|too|at\\s+all|now|there))*`,
+              `${anythingHappens}\\s+(?:with|on|in|at)\\s+${aSession}`,
+              `(?:on|about)\\s+${aSession}`,
+            ]
+          : []),
+        `${anythingHappens}(?:\\s+(?:there|here|(?:with|on|in)\\s+(?:it|them|that|those)))?`,
+        "(?:on|about)\\s+(?:everything|anything|all\\s+of\\s+(?:them|it)|them|it|that|those)",
+      ].join("|")})\\s*$`,
+      "iu",
+    );
+    const saysNothing = new RegExp(`^\\s*${fillersBefore}$`, "i");
+    const aboutASession = names.length
+      ? new RegExp(
+          `^\\s*${fillersBefore}(?:(?:(?:don['\\u2019]?t|do\\s+not)\\s+forget\\s+(?:about\\s+)?|same\\s+(?:for|with)\\s+|what\\s+about\\s+|plus\\s+)?(?:the\\s+|my\\s+)?(?:${names.join("|")})(?:\\s+(?:session|one|agent))?(?:\\s+(?:too|as\\s+well|either))?\\s*$|(?:the\\s+|my\\s+)?(?:${names.join("|")})(?:\\s+(?:session|one|agent))?\\s+(?:(?:is|was|looks|seems)\\s+(?:still\\s+)?(?:running|working|busy|going|idle|done|stuck|waiting|blocked|active|on\\s+it|at\\s+it)|(?:still\\s+)?(?:runs|works)|keeps\\s+(?:running|working|going))(?:\\s+(?:now|again|too|there))*\\s*$)`,
+          "iu",
+        )
+      : null;
+    let told = false;
+    let reminder = false;
+    for (const clause of clausesOf(spoken)) {
+      // A form of politeness is read away first: "remind me in an hour if
+      // you can".
+      const plain = clause.replace(politeYou, " ").trim();
+      const asked = wishForAReminder.exec(plain);
+      if (asked) {
+        // "Remind me to review the footer after you fix it": work for
+        // ClawdTime, behind the reminder.
+        if (/\byou\b/i.test(plain.slice(asked.index + asked[0].length)))
+          return null;
+        reminder = true;
+        continue;
+      }
+      const wish = wishToBeTold.exec(clause);
+      if (wish) {
+        const rest = wish.slice(1).find((group) => group !== undefined) ?? "";
+        // "Let me know if you find the bug": work for ClawdTime.
+        if (/\byou\b/i.test(rest.replace(politeYou, " "))) return null;
+        if (rest.trim() !== "" && !afterAWish.test(rest)) return null;
+        told = true;
+        continue;
+      }
+      if (
+        saysNothing.test(`${clause} `) ||
+        politeOnly.test(clause) ||
+        (aboutASession?.test(clause) ?? false)
+      )
+        continue;
+      return null;
+    }
+    return told ? "told" : reminder ? "reminder" : null;
+  }
+  /**
    * "Tell deploy fix to run the tests again", as people say it: the last
    * clause of the message speaks to one session, and the words for it follow
    * "to". Before that clause there is nothing but a filler ("um, ...") or a
@@ -4768,8 +4905,12 @@ export class Supervisor {
     // Words for a session that runs are no task either.
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
-    // A request to hear later about a session is no task either.
+    // A request to hear later about a session is no task either, in any
+    // words, and a reminder is none.
     if (this.onlyAsksToHear(spoken)) return refuse(turn, onlyToHear);
+    const wish = this.onlyAsksToBeTold(spoken);
+    if (wish)
+      return refuse(turn, wish === "reminder" ? onlyAReminder : onlyToHear);
     if (turn.typedByCode)
       return refuse(
         turn,
@@ -5153,8 +5294,12 @@ export class Supervisor {
     const told = this.toldSession(spoken, turn);
     if (told) return refuse(turn, forThatSession(told));
     // "Tell me when deploy fix is done", "stop watching docs": a request to
-    // hear later about a session is no work for a new agent.
+    // hear later about a session is no work for a new agent. The same in
+    // other words ("give me a heads up if docs changes"), and a reminder.
     if (this.onlyAsksToHear(spoken)) return refuse(turn, onlyToHear);
+    const wish = this.onlyAsksToBeTold(spoken);
+    if (wish)
+      return refuse(turn, wish === "reminder" ? onlyAReminder : onlyToHear);
     // The code typed words of this message into a session already: those
     // words were what the person asked for.
     if (turn.typedByCode)

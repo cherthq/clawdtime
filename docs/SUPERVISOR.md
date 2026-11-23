@@ -605,6 +605,14 @@ These rules are in the code, not in the model's instructions:
   such a request after it starts as always: "run the tests and tell me when
   they're done". So does a request that holds work for ClawdTime: "let me
   know when you finish the migration".
+- The same holds in other words, and for a reminder: "let me know if docs
+  changes", "give me a heads up if docs changes", "keep me posted on docs",
+  "I want to hear the second something happens there" and "remind me in ten
+  minutes to check the payments tests" start no job and no task, whatever
+  the language model calls. The wish must say what a session does, by its
+  name, or speak of every session: "let me know if the tests pass" and "let
+  me know if the docs mention the API key" can be work to find that out,
+  and start as before. So does "remind me how the deploy script works".
 - Your words are typed as you said them. "Tell deploy fix to pull main and
   run the tests" types "pull main and run the tests": ClawdTime never turns
   your words into a shell command. An answer that offers a sentence to type

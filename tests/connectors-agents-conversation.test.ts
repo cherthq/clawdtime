@@ -462,6 +462,95 @@ describe("words for a session that runs are never a job", () => {
     );
   });
 
+  describe("a message that only asks to be told later in other words, or for a reminder: no job, whatever the model calls", () => {
+    it.each([
+      // To be told about a session of the board, in forms that the watch
+      // tool does not take.
+      "let me know if docs changes",
+      "give me a heads up if docs changes",
+      "cool. give me a heads up if docs changes",
+      "ping me if deploy fix changes",
+      "can you give me a shout if deploy fix changes",
+      "keep me posted on docs",
+      "keep me posted",
+      "I want to know the moment docs moves",
+      "I want to hear the second something happens with docs",
+      "and don't forget docs, I want to hear the second something happens there",
+      "tell me as soon as deploy fix needs me",
+      "let me know if docs changes or breaks",
+      "ping me the moment deploy fix gets stuck",
+      "keep me posted on docs and deploy fix",
+      "give me a heads up",
+      // About every session.
+      "let me know if anything changes",
+      "give me a heads up if something comes up",
+      // A reminder: nothing keeps a timer, and it is no work for an agent.
+      "remind me in ten minutes to check the payments tests",
+      "remind me to check deploy fix",
+      "remind me to buy milk at five",
+      "please remind me tomorrow to review docs",
+      "can you remind me in an hour",
+      "ok remind me later to push the branch",
+      "remind me in the morning to check docs",
+      "remind me at noon to check docs",
+      "remind me in an hour if you can",
+    ])("starts no job and no task for %j", async (words) => {
+      for (const tool of ["start_job", "start_task"]) {
+        const said = await run(words, [
+          [tool === "start_job" ? call(tool) : call(tool, { goal: words })],
+          "Okay.",
+        ]);
+        expect(said.windows, `${words} / ${tool}`).toHaveLength(0);
+        expect(said.typed, `${words} / ${tool}`).toEqual([]);
+        // No fixed question about a job either.
+        expect(said.answer, `${words} / ${tool}`).not.toContain(
+          "Should I start",
+        );
+      }
+    });
+
+    it.each([
+      // To be told about something that is no session: that can be work
+      // to find it out.
+      "let me know if the tests pass",
+      "tell me if the build is green on main",
+      // The name of a session as a common word: the wish asks to find
+      // something out.
+      "let me know if the docs mention the API key",
+      "tell me if docs is the right folder for the release notes",
+      "give me a heads up if deploy fix is the cause of the outage",
+      "let me know if anything is wrong with the login code",
+      // Work beside the wish, in a clause of its own.
+      "find out why the nightly backup fails and let me know",
+      "run the tests and let me know if docs changes",
+      "fix the footer and remind me to review it",
+      "let me know if docs changes and then deploy the app",
+      // Work for ClawdTime inside the wish: "you" does something.
+      "give me a heads up if you find the bug in the login code",
+      "let me know when you finish the migration",
+      // "Remind me how ..." asks to explain, and names no time.
+      "remind me how the deploy script works",
+      "remind me once more how the deploy script works",
+      "remind me when we last deployed docs",
+      "remind me when the deploy script last changed",
+      "remind me next steps for the migration",
+      "remind me before we push which tests are flaky",
+      "remind me in the morning how the deploy went",
+      // A reminder with work for ClawdTime in it: "you" does something.
+      "remind me to review the footer after you fix it",
+      "remind me to deploy once you finish the footer fix",
+      // A clause about a session that is no word about its state.
+      "docs has to be rewritten for the new API, let me know if anything changes",
+    ])(
+      "still starts the job for %j: it can hold work of its own",
+      async (words) => {
+        const said = await run(words, [[call("start_job")], "Okay."]);
+        expect(said.windows, words).toHaveLength(1);
+        expect(said.answer, words).toContain("Requested a new ");
+      },
+    );
+  });
+
   it.each([
     ["tell deploy fix to run the tests again", "deploy fix"],
     ["Tell deploy fix to run the tests again.", "deploy fix"],
