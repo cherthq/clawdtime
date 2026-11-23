@@ -109,7 +109,9 @@ public enum HandCommand: Equatable, Sendable {
   case openApp(name: String, window: String? = nil)
   case switchDesktop(direction: DesktopDirection)
   case switchPreviousApp
-  case openURL(url: String)
+  /// A web address, opened with no pointer and no key. `browser` is the name of the app that opens it, as a
+  /// person says it. Without it the usual browser of this Mac opens the address.
+  case openURL(url: String, browser: String? = nil)
   /// Quits a running app by its name, the polite way: the app may ask about work that is not saved, and stay.
   case quitApp(name: String)
   case wait(ms: Int)
@@ -178,7 +180,7 @@ public enum HandCommand: Equatable, Sendable {
 
 extension HandCommand: Codable {
   private enum Key: String, CodingKey {
-    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, ms
+    case kind, image, elements, x, y, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
   }
   public init(from decoder: Decoder) throws {
     let box = try decoder.container(keyedBy: Key.self)
@@ -230,8 +232,10 @@ extension HandCommand: Codable {
       try only(.direction)
       self = .switchDesktop(direction: try box.decode(DesktopDirection.self, forKey: .direction))
     case "open_url":
-      try only(.url)
-      self = .openURL(url: try string(.url, 2000))
+      try only(.url, .browser)
+      let browser = try box.decodeIfPresent(String.self, forKey: .browser)
+      guard browser.map({ HandsTarget.appName($0) != nil }) ?? true else { throw PanelFailure.response }
+      self = .openURL(url: try string(.url, 2000), browser: browser)
     case "quit_app":
       try only(.name)
       self = .quitApp(name: try string(.name, 120))
@@ -268,7 +272,8 @@ extension HandCommand: Codable {
       try box.encode(name, forKey: .name); try box.encodeIfPresent(window, forKey: .window)
     case .switchDesktop(let direction): try box.encode(direction, forKey: .direction)
     case .switchPreviousApp: break
-    case .openURL(let url): try box.encode(url, forKey: .url)
+    case .openURL(let url, let browser):
+      try box.encode(url, forKey: .url); try box.encodeIfPresent(browser, forKey: .browser)
     case .quitApp(let name): try box.encode(name, forKey: .name)
     case .wait(let ms): try box.encode(ms, forKey: .ms)
     }

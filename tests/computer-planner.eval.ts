@@ -173,8 +173,39 @@ const hits = (action: Action, seen: Seen, ...keys: string[]) =>
     );
   });
 const number = (seen: Seen, name: string) => seen.at[name]?.id;
+/** The host of an address with no "www.", or nothing for an address that cannot be read. */
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+};
 
 const tasks: Task[] = [
+  // A web address opens with open_url: no click on the address bar, no typed address, no Return.
+  {
+    id: "open a site to read it: open_url, not the address bar",
+    screen: "newTab",
+    goal: "Open example-shop.in in the browser and tell me what the top deal is.",
+    right: (a) => a.kind === "open_url" && hostOf(a.url) === "example-shop.in",
+  },
+  {
+    id: "search on a site: open_url on that site",
+    screen: "newTab",
+    goal: "Find wireless earbuds on example-shop.in",
+    right: (a) => a.kind === "open_url" && hostOf(a.url) === "example-shop.in",
+  },
+  {
+    id: "a service by its name, in the browser: open_url, or ask for its address",
+    screen: "newTab",
+    goal: "Open Quillboard in the browser",
+    // The name is invented, so no model knows its address: a question for it is right too.
+    // Never the address bar.
+    right: (a) =>
+      (a.kind === "open_url" && /quillboard/.test(hostOf(a.url))) ||
+      (a.kind === "ask" && /address|link|url|site/i.test(a.question)),
+  },
   {
     id: "open a named row",
     screen: "notes",

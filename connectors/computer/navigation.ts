@@ -57,6 +57,187 @@ export function readCodingSession(
   }
 }
 
+/** What a request that only opens one web address asks for. */
+export interface DirectAddress {
+  /** The address in full, http or https. */
+  url: string;
+  /** The browser as the person named it. Absent: the usual browser of this Mac. */
+  browser?: string;
+}
+/**
+ * Endings of the name of a site that files and apps seldom have. A bare name
+ * with another ending ("notes.txt", "README.md", an app with ".app") is no
+ * address here. With "https://" or "www." in front, every ending counts.
+ */
+const siteEndings = new Set(
+  "com org net edu gov io co dev info xyz fyi tech site online store shop blog cloud me tv gg ly us uk ca de fr es eu au jp nl se ch br in".split(
+    " ",
+  ),
+);
+/** Endings of a site that are also endings of files: a bare name with one opens directly only with a browser named. */
+const fileEndings = new Set(["in", "ly", "info"]);
+const hostLabel = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+const siteName = new RegExp(`^(?:${hostLabel}\\.)+([a-z]{2,})$`, "i");
+/** After a bare name: a port, and a path. A question mark right after the name ends a question. */
+const afterHost = "(?::\\d{1,5})?(?:/\\S*)?$";
+const bareSite = new RegExp(`^(?:${hostLabel}\\.)+[a-z]{2,}${afterHost}`, "i");
+/** A server of this Mac. It has no https. */
+const ownServer = new RegExp(`^(?:localhost|127\\.0\\.0\\.1)${afterHost}`, "i");
+const sentenceMarks = /[,;:.!?]+$/;
+/**
+ * One word of a sentence as a web address: "https://example.com/board",
+ * "www.example.org", "example.com", "localhost:3000". Null for every other
+ * word: a file path, a mail address, a word with a dot that is no site, an
+ * address with a login in it. The same reading serves the direct request and
+ * the check of an address that the planner chose, so both mean one thing by
+ * "an address in the person's words".
+ */
+export function webAddress(word: string): { url: URL; fileLike?: true } | null {
+  // The marks around a word in a sentence are no part of it.
+  let text = word.replace(sentenceMarks, "");
+  const inside = /^(?:"(.+)"|'(.+)'|<(.+)>|\((.+)\)|\[(.+)\])$/.exec(text);
+  if (inside) text = inside.slice(1).find(Boolean)!.replace(sentenceMarks, "");
+  // Plain characters only: a name in another script reads as two names.
+  if (!text || text.length > 2000 || /[^\x21-\x7e]/.test(text)) return null;
+  const scheme = /^https?:\/\//i.test(text);
+  const own = !scheme && ownServer.test(text);
+  if (!scheme && !own && !bareSite.test(text)) return null;
+  let url: URL;
+  try {
+    url = new URL(scheme ? text : `${own ? "http" : "https"}://${text}`);
+  } catch {
+    return null;
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password
+  )
+    return null;
+  const host = url.hostname;
+  // The host that opens is the host as it was written. A parser reads
+  // "017.0.0.1", "2130706433" and "ex%61mple.com" as other names.
+  const written = /^(?:https?:\/\/)?([^/?#:]*)/i.exec(text)?.[1]?.toLowerCase();
+  if (written !== host) return null;
+  if (host === "localhost" || host === "127.0.0.1") return { url };
+  // A number as the host only with the scheme: "1.2.3.4" alone is a version.
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return scheme ? { url } : null;
+  const ending = siteName.exec(host)?.[1];
+  if (!ending) return null;
+  const marked = scheme || host.startsWith("www.");
+  if (!marked && !siteEndings.has(ending)) return null;
+  // "MANIFEST.in", "setup.info", "score.ly": such a bare name is often a file.
+  return !marked && fileEndings.has(ending) && text.toLowerCase() === host
+    ? { url, fileLike: true }
+    : { url };
+}
+/**
+ * Words before the request that ask for nothing. The first group is the
+ * polite form of a request. "Would you open ...?" is not in it: it also asks
+ * for an opinion.
+ */
+const leadIn =
+  /^(?:((?:can|could|will) (?:you|u))|ok(?:ay)?|hey|hi|hello|yo|bro|dude|man|buddy|so|well|alright|right|please|pls|just|now|and|then|also|yeah|yes|yep|sure|quickly|go ahead and|let'?s|let us|i (?:want|need) you to|i(?:'d| would) like you to)(?:[,.!:;]+ ?| |$)/i;
+const openVerb =
+  /^(?:open(?: up)?|go to|goto|visit|load(?: up)?|pull up|bring up|navigate to|browse to|take me to|head(?: over)? to) /i;
+const siteNoun =
+  /^(?:(?:the|this|that|my) )?(?:(?:web ?)?(?:site|page|address)|link|url) /i;
+/** Words after the request that ask for nothing. */
+const leadOut =
+  /(?:^|[ ,]+)(?:please|pls|plz|now|right now|for me|thanks|thank you|bro|man|dude|buddy|quickly|real quick|asap|ok(?:ay)?)[.!,]*$/i;
+/** Words that name no browser: the usual one opens the address. */
+const usualBrowser =
+  /^(?:(?:(?:the|my|a|your|our|this) )?(?:(?:default|usual|main|normal|regular|own|web) )*browser|(?:the|my|this|your) (?:mac|computer|laptop|machine))$/i;
+/**
+ * Words that are in no name of a browser: "in a new tab", "on my phone",
+ * "on desktop 2", "in Fixture not now" and "in private mode" ask for more
+ * than an address in a browser, or for another time.
+ */
+const noName = new Set(
+  "a an the my your our this that these those it one some any another other new private incognito guest tab tabs window windows mode background foreground front back left right top bottom side half corner full fullscreen screen display monitor desktop space split view dark light and or then but not no instead to for of at by from so if when while after before until me i you we us him her them there here phone tablet tv order case minute minutes min mins second seconds sec secs hour hours hr hrs later soon afterwards today tonight tomorrow monday tuesday wednesday thursday friday saturday sunday first next last again once twice".split(
+    " ",
+  ),
+);
+/**
+ * One to three plain words, as an app is named. No list of browsers is kept
+ * here: the hands find the app among those that open web addresses, or say
+ * that none has the name, and then nothing is opened.
+ */
+function browserName(phrase: string): string | null {
+  const words = phrase.split(" ");
+  if (phrase.length > 40 || words.length > 3) return null;
+  return words.every(
+    (word) =>
+      /^\p{L}[\p{L}\p{N}+&'-]*(?:\.app)?$/u.test(word) &&
+      !noName.has(word.toLowerCase()),
+  )
+    ? phrase
+    : null;
+}
+/**
+ * Reads a request that asks for one thing only: to open one web address. It
+ * is read by grammar, with no model, from the person's complete message:
+ *
+ *   [fillers] open [the site] <address> [in|on|with <browser>] [please]
+ *   <address> [in|on|with <browser>] [please]
+ *
+ * "Bro, just open example.com on <a browser>." is such a request, and so is
+ * "ok can you open example.com?". The worker then opens the address as its
+ * first step, with no pointer and no key, and looks at the screen after it.
+ *
+ * Everything else is null and goes on as before: an address inside a longer
+ * task ("open example.com and log in"), a sentence that only speaks about an
+ * address ("example.com is down", "don't open example.com"), a question
+ * ("open example.com?"), a file path, and a word with a dot that is no
+ * address ("notes.txt"). Nothing here guesses: one word that the grammar
+ * does not know makes the message another request.
+ */
+export function directAddress(message: string): DirectAddress | null {
+  let rest = message
+    .replace(/\s+/g, " ")
+    .replace(/\u2019/g, "'")
+    .trim();
+  if (!rest || rest.length > 2200 || /\p{C}/u.test(rest)) return null;
+  // A question mark ends a request only in its polite form: "can you open ...?"
+  const question = /\?[ .!?)]*$/.test(rest);
+  rest = rest.replace(/[ .!?]+$/, "");
+  let led = false;
+  let polite = false;
+  for (let found = leadIn.exec(rest); found; found = leadIn.exec(rest)) {
+    led = true;
+    if (found[1]) polite = true;
+    rest = rest.slice(found[0].length);
+  }
+  if (question && !polite) return null;
+  const verb = openVerb.exec(rest);
+  if (verb) {
+    rest = rest.slice(verb[0].length);
+    rest = rest.slice(siteNoun.exec(rest)?.[0].length ?? 0);
+  }
+  // With no verb, the address is the whole message: "hey example.com" asks for nothing.
+  else if (led) return null;
+  const end = rest.indexOf(" ");
+  const word = end < 0 ? rest : rest.slice(0, end);
+  // "open example.com? ok" asks whether to open it.
+  if (word.endsWith("?") && !polite) return null;
+  const found = webAddress(word);
+  if (!found) return null;
+  const url = found.url.href;
+  let tail = end < 0 ? "" : rest.slice(end + 1);
+  while (leadOut.test(tail)) tail = tail.replace(leadOut, "");
+  tail = tail.replace(/^[ ,]+|[ ,.!]+$/g, "");
+  // A bare name that may be a file ("open MANIFEST.in") is no direct request
+  // by itself: the planner reads it. With a browser named it is a site.
+  if (!tail) return found.fileLike ? null : { url };
+  // Anything after the address must say where it opens, and nothing more.
+  const where = /^(?:in|on|with|using|via) (.+)$/i.exec(tail)?.[1];
+  if (!where) return null;
+  if (usualBrowser.test(where)) return { url };
+  // "in the <name> browser" names the browser as "<name> browser".
+  const browser = browserName(where.replace(/^the (?=.+ browser$)/i, ""));
+  return browser ? { url, browser } : null;
+}
+
 export const navigationRules = [
   "Interpret the meaning of the person's complete current message. Return exactly one routing tool call. This is intent interpretation, not execution.",
   "coding_session means a direct request to create/start a NEW coding-agent session (Claude Code or Codex), including a separate/new terminal window or a session with no coding task yet. This is creation, never app activation or a desktop/Space transition. Call coding_session with the entire original message copied exactly as source, and the requested agent (default only if unspecified). Preserve all work and constraints, including only reply READY, do not edit files, or do not run commands: these restrict the new session and do not negate its creation. Never classify existing-window focus, instructions to an already-running session, status questions, hypotheticals, quoted/reported content, or requests NOT to start a session as coding_session. With unclear or conflicting creation intent, use clarify; never discard a constraint or reinterpret a session/window as a desktop.",

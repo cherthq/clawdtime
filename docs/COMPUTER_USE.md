@@ -103,7 +103,7 @@ runs, and hands no words to it.
   look like a secret. The word `enough` is not a stop word, so phrases such as
   "scroll down enough to see the button" do not cancel the task.
 - **Continue (`continue`).** A standalone continue phrase (`continue`, `go
-  on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
+on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
   optional fillers, with no question mark and nothing else ("continue?",
   "ok?", "yes?", and "can you continue?" all hold). While paused, it resumes
   with a fresh look before the first input. While running, nothing changes.
@@ -130,7 +130,7 @@ runs, and hands no words to it.
   is also a screen verb with a screen object. Any cue of holding, waiting,
   delay, doubt, refusal, negation or self-takeover (`not`, `no`, `n't`,
   `never`, `wait`, `hold`, `hang on`, `give me`, `one sec`, `a sec`, `in <N>
-  seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
+seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
   `until`, `before`, `if`, `unless`, `maybe`, `yet`, `nah`, `nope`,
   `nevermind`, `never mind`, `nvm`, `forget`, `i'm`, `i am`, `i'll`,
   `i will`, `i got`, `let me`, `already`, `on my cue`, `wrong`, `broken`,
@@ -161,7 +161,7 @@ runs, and hands no words to it.
 - **Secrets.** Words that hold a password, passcode, passphrase, PIN, secret,
   token, API key, credential, `pw`, `pwd`, `2fa`, `ssn`, `cvv`, `cvc`, or
   short numeric code (including contractions, `"set to <value>"`, `"saved as
-  <value>"`, `"<noun> for <target> is <value>"`, value-before-noun forms such
+<value>"`, `"<noun> for <target> is <value>"`, value-before-noun forms such
   as `"type 4821 as the pin"`, quoted or bare values after secret nouns,
   spaced PIN digits, full-width digits or colon after NFKC normalization,
   one- or two-sided invisible format or combining joiner characters around
@@ -448,6 +448,26 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
 - **Done is checked.** `done` counts only after an observation that came after
   the last action.
 - **Links.** Only http and https links are opened, with no login in the link.
+  An address opens with no question only when your own request holds its site
+  as you wrote it ("example.com", "https://example.com/board",
+  "localhost:3000"), with the same port, with plain http only when you wrote
+  http (or for a server of this Mac), and with no long path or query that you
+  did not write: such a part could carry what the screen shows to the site. A
+  word alone names no site ("open my notes" does not allow a site called
+  open), and neither does a file name, a mail address or a word in another
+  script. For every other address you say yes first, and the question names
+  the site. After you said more during a task, every address asks.
+- **Opening an address.** A request that only opens one address ("open
+  example.com", also with the name of a browser after it) opens it as its
+  first step, with no model, no pointer and no key, in the browser that you
+  named or in the usual one. The planner opens every other address with
+  `open_url` too, never through the address bar. A bare name with an ending
+  that files have too ("MANIFEST.in") goes to the planner unless a browser is
+  named. The sent address is not the page: the worker looks at the screen
+  again before it says done.
+- **The browser.** It must be one that you named, by a word of its name
+  (one word of its full name is enough); else you are asked. The hands look for it only
+  among the apps in the usual app folders that open web addresses.
 - **Typed text is one line.** A line break or a tab in typed text is refused.
   Return and Tab are keys of their own, so the key rules see them.
 

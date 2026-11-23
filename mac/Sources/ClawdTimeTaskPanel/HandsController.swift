@@ -332,15 +332,29 @@ import TaskPanelCore
       return await desktop.switchDesktop(direction: direction, sequence: sequence, configuration: { [self] in input.desktopShortcuts() },
         send: { [self] shortcut, gate in await input.dispatchDesktopShortcut(shortcut, allowed: gate) },
         allowed: { [self] in await lastCheck() }, observer: observer, pointer: { [self] in input.pointer })
-    case .openURL(let text):
+    case .openURL(let text, let browser):
       // Only a web address. Another scheme can start a program or a call.
       guard let url = HandsTarget.webURL(text) else { return .failure(.refused) }
+      // A browser by its name: one app that opens web addresses has it, or nothing is opened.
+      var opener: URL?
+      if let browser {
+        guard let safe = HandsTarget.appName(browser) else { return .failure(.refused) }
+        switch Self.opener(named: safe, of: url) {
+        case .success(let app): opener = app
+        case .failure(let error): return .failure(error)
+        }
+      }
       presentationTransition()
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
       desktop.invalidate()
-      return NSWorkspace.shared.open(url) ? .success(nil) : .failure(.failed)
+      guard let opener else { return NSWorkspace.shared.open(url) ? .success(nil) : .failure(.failed) }
+      // The app takes the address itself: no key goes out, and the address bar is not touched.
+      do {
+        _ = try await NSWorkspace.shared.open([url], withApplicationAt: opener, configuration: NSWorkspace.OpenConfiguration())
+        return .success(nil)
+      } catch { return .failure(.failed) }
     case .quitApp(let name):
       guard let safe = HandsTarget.appName(name) else { return .failure(.refused) }
       guard case .success(let url) = Self.application(named: safe) else { return .failure(.notFound) }
@@ -546,9 +560,7 @@ import TaskPanelCore
       guard app.activationPolicy == .regular, let url = app.bundleURL, let name = app.localizedName else { return nil }
       return DesktopAppCandidate(path: url.resolvingSymlinksInPath().path, names: [name])
     }
-    let folders = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/Applications/Utilities",
-                   NSHomeDirectory() + "/Applications", "/System/Library/CoreServices", "/System/Library/CoreServices/Applications"]
-    for folder in folders {
+    for folder in appFolders {
       for file in ((try? files.contentsOfDirectory(atPath: folder)) ?? []) where file.hasSuffix(".app") {
         let url = URL(fileURLWithPath: folder + "/" + file).resolvingSymlinksInPath()
         let shown = files.displayName(atPath: url.path)
@@ -557,6 +569,29 @@ import TaskPanelCore
       }
     }
     return DesktopAppSelection.path(named: name, candidates: candidates).map { URL(fileURLWithPath: $0) }
+  }
+  /// The folders where `open_app` looks for an app by its name.
+  private static let appFolders = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/Applications/Utilities",
+                                   NSHomeDirectory() + "/Applications", "/System/Library/CoreServices", "/System/Library/CoreServices/Applications"]
+  /// Where macOS keeps its own browser now. It lists that browser there, not under /Applications.
+  private static let systemAppsInCryptex = "/System/Volumes/Preboot/Cryptexes/App/System/Applications"
+  /// The app that a person means by a name, among the apps that this Mac lists for a web address. Only an app
+  /// in the folders of `open_app`, or the system browser in its own place: a browser of a test kit in a cache folder,
+  /// or a copy in Downloads, is never chosen by its name.
+  private static func opener(named name: String, of url: URL) -> Result<URL, HandError> {
+    let files = FileManager.default
+    let folders = Set((appFolders + [systemAppsInCryptex]).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path })
+    let listed = NSWorkspace.shared.urlsForApplications(toOpen: url).filter { app in
+      let path = app.resolvingSymlinksInPath()
+      return folders.contains(path.deletingLastPathComponent().path)
+    }
+    let candidates = listed.map { app -> DesktopAppCandidate in
+      let path = app.resolvingSymlinksInPath().path
+      let shown = files.displayName(atPath: path)
+      return DesktopAppCandidate(path: path,
+        names: [app.deletingPathExtension().lastPathComponent, shown.hasSuffix(".app") ? String(shown.dropLast(4)) : shown])
+    }
+    return DesktopAppSelection.opener(named: name, candidates: candidates).map { URL(fileURLWithPath: $0) }
   }
 
   // MARK: rights

@@ -16,6 +16,7 @@ import type {
   Observation,
   ScreenElement,
 } from "./ports.js";
+import { webAddress } from "./navigation.js";
 
 const finite = z.number().finite();
 const number = z.number().int().nonnegative();
@@ -64,7 +65,13 @@ export const actionSchema = z.discriminatedUnion("kind", [
       window: words(200).min(1).optional(),
     })
     .strict(),
-  z.object({ kind: z.literal("open_url"), url: words(2000) }).strict(),
+  z
+    .object({
+      kind: z.literal("open_url"),
+      url: words(2000),
+      browser: words(120).optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("quit_app"), name: words(120) }).strict(),
   z.object({ kind: z.literal("browser_read") }).strict(),
   z.object({ kind: z.literal("browser_open"), url: words(2000) }).strict(),
@@ -393,6 +400,81 @@ function safeLink(raw: string) {
 }
 const linkRefusal =
   "Only http and https links are opened, with no login in the link.";
+/** A site as the checks compare it: its host with no "www." in front, and its port when it has one. */
+const siteKey = (url: URL) =>
+  `${url.hostname.toLowerCase().replace(/^www\./, "")}${url.port ? `:${url.port}` : ""}`;
+/**
+ * The sites that the person's own words name. Each word is read as the
+ * reader of a direct request reads an address (`webAddress`): "example.com",
+ * "https://Example.com/board," and "localhost:3000" name a site; a file name
+ * ("README.md"), a mail address and a word in another script do not.
+ */
+function sitesIn(said: string) {
+  const sites = new Set<string>();
+  for (const word of said.split(/\s+/)) {
+    const found = webAddress(word);
+    if (found) sites.add(siteKey(found.url));
+  }
+  return sites;
+}
+/** A path and a query longer than this, that the person did not write, can carry what the screen shows. */
+const longAddressPart = 120;
+/**
+ * An address that the planner chose is a plan that nobody checked, as every
+ * other part of its action. It may open with no question only when the
+ * person's own request holds its site, with the same port; with plain http
+ * only when the person wrote http, or for a server of this Mac; and with a
+ * long path or query only when the person wrote it. For every other address
+ * the person says yes first, and the question names the site.
+ */
+const unaskedRisk = (link: URL, goal?: string) => {
+  const host = clean(link.host, 80);
+  const said = goal ?? "";
+  if (!sitesIn(said).has(siteKey(link)))
+    return `The address ${host} is not in your request.`;
+  const own = link.hostname === "localhost" || link.hostname === "127.0.0.1";
+  if (
+    link.protocol === "http:" &&
+    !own &&
+    !said.toLowerCase().includes(`http://${link.hostname.toLowerCase()}`) &&
+    !said.toLowerCase().includes(`http://www.${link.hostname.toLowerCase()}`)
+  )
+    return `The address ${host} would open with plain http, which you did not ask for.`;
+  const rest = `${link.pathname}${link.search}`;
+  if (
+    rest.length > longAddressPart &&
+    !said.toLowerCase().includes(rest.toLowerCase())
+  )
+    return `The address ${host} carries a long part that is not in your request.`;
+  return null;
+};
+/** Words of a browser's name that name nothing by themselves. */
+const browserFillers = new Set([
+  "the",
+  "my",
+  "a",
+  "an",
+  "your",
+  "our",
+  "browser",
+  "web",
+  "app",
+]);
+/**
+ * A browser that the planner chose: it opens the address with no question
+ * only when the person named it, by a word of its name ("Fixture" for
+ * "Fixture Browser"). Another app that opens web addresses could read the page.
+ */
+const browserRisk = (browser: string, goal?: string) => {
+  const said = new Set((goal ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u));
+  const named = browser
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word && !browserFillers.has(word));
+  return named.length && named.some((word) => said.has(word))
+    ? null
+    : `The browser ${clean(browser, 60)} is not in your request.`;
+};
 
 const textRoles = new Set([
   "AXTextField",
@@ -610,16 +692,33 @@ export function check(raw: unknown, view: View, why: string): Checked {
     case "open_url": {
       const link = safeLink(action.url);
       if (!link) return refuse(linkRefusal);
+      const browser = action.browser?.trim();
+      if (
+        browser !== undefined &&
+        (!browser || browser.startsWith(".") || /[\p{C}/\\:]/u.test(browser))
+      )
+        return refuse("That is not the plain name of an app.");
+      const host = clean(link.hostname, 80);
       return {
         verdict: "run",
-        label: `Open ${clean(link.hostname, 80)}`,
-        target: clean(link.hostname, 80),
-        risk: null,
-        signature: `open_url|${action.url}`,
+        label: browser
+          ? `Open ${host} in ${clean(browser, 60)}`
+          : `Open ${host}`,
+        target: host,
+        risk:
+          unaskedRisk(link, view.goal) ??
+          (browser ? browserRisk(browser, view.goal) : null),
+        signature: `open_url|${action.url}${browser ? `|${browser}` : ""}`,
         send: {
           via: "hands",
           look: false,
-          command: { kind: "open_url", url: action.url },
+          command: {
+            kind: "open_url",
+            // The address as it was checked here, written one way: the hands
+            // then read the same site that the question above was about.
+            url: link.href,
+            ...(browser ? { browser } : {}),
+          },
         },
       };
     }
@@ -867,7 +966,7 @@ function checkBrowser(
       return ready(
         `Open ${host} in the browser`,
         host,
-        null,
+        unaskedRisk(link, view.goal),
         `browser_open|${action.url}`,
         { name: "open", url: action.url },
       );
