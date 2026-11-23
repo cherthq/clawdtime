@@ -4420,13 +4420,19 @@ const contrastFiller =
  * clause: "a cafe, not a bakery", "cafe not bakery", "not a bakery website,
  * it's a blog", "not a bakery but a cafe", "a cafe instead of a bakery". A
  * "not" with no new thing is news, not a change ("the tests are not failing
- * anymore"), and so is a sentence about a person ("I'm not on safari") or
- * one with a time ("yet", "anymore", "right now").
+ * anymore"), and so is a sentence about a person ("I'm not on safari"),
+ * one with a time ("yet", "anymore", "right now") and one with a word of
+ * things working ("it works on chrome, not on safari").
  */
 const contrastReplaces = (spoken: string, requested: Set<string>) => {
   const lowered = spoken.toLowerCase().replace(/[\u2018\u2019]/g, "'");
+  // A time, or a word of things working, makes it news: "actually, it works
+  // on chrome, not on safari" confirms the job.
   if (
     /\b(?:anymore|any\s+more|no\s+longer|yet|right\s+now|for\s+now)\b/.test(
+      lowered,
+    ) ||
+    /\b(?:works?|worked|working|fine|good|great|ok|okay|loads?|loaded|pass|passes|passed|passing|green|fast)\b/.test(
       lowered,
     )
   )

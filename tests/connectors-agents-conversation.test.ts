@@ -6965,6 +6965,11 @@ describe("a correction to a job that still works waits for that job", () => {
     ["fyi it works on chrome, not on safari", "Okay."],
     ["it looks fine on desktop, not on mobile", "Okay."],
     ["the bakery page loads, not broken", "Okay."],
+    // The same news after a word of correction (review round 5).
+    ["actually, it works on a phone, not on a bakery laptop", "Okay."],
+    ["no, the bakery page is fine, not broken", "Okay."],
+    ["sorry, it loads in one browser, not in the bakery one", "Okay."],
+    ["oh wait, it looks fine on desktop, not on the bakery tablet", "Okay."],
     // Good questions back that hold words of a claim.
     [
       "wait no, it's a cafe not a bakery",
