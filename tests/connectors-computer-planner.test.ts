@@ -171,6 +171,7 @@ describe("the planner on the chat completions API", () => {
     expect(names).toEqual([
       "click_element",
       "click_at",
+      "look_closer",
       "type",
       "key",
       "scroll",
@@ -197,7 +198,7 @@ describe("the planner on the chat completions API", () => {
       browser: true,
     }).next(input());
     expect(
-      wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(14),
+      wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(15),
     ).toEqual([
       "browser_read",
       "browser_open",
@@ -967,11 +968,11 @@ describe("the newer actions in the planner", () => {
       browser: true,
       browserMethods: [...browserMethodNames],
     });
-    expect(all.names.slice(20)).toEqual(later);
+    expect(all.names.slice(21)).toEqual(later);
     // A driver with no newer method: the browser functions of before, and no more.
     const plain = await offered({ key: "k", browser: true });
     expect(plain.names.filter((name) => later.includes(name))).toEqual([]);
-    expect(plain.names).toHaveLength(20);
+    expect(plain.names).toHaveLength(21);
     const some = await offered({
       key: "k",
       browser: true,

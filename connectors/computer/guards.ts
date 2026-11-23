@@ -21,6 +21,7 @@ import type {
 } from "./ports.js";
 import { webAddress } from "./navigation.js";
 import { parsePageKey, type PageKey } from "./browser-script.js";
+import { closerSecureText, secureInArea } from "./closer.js";
 
 const finite = z.number().finite();
 const number = z.number().int().nonnegative();
@@ -140,6 +141,7 @@ export const actionSchema = z.discriminatedUnion("kind", [
       ms: z.number().int().min(0).max(10_000),
     })
     .strict(),
+  z.object({ kind: z.literal("look_closer"), x: finite, y: finite }).strict(),
   z.object({ kind: z.literal("ask"), question: words(2000) }).strict(),
   z.object({ kind: z.literal("done"), summary: words(4000) }).strict(),
   z.object({ kind: z.literal("give_up"), reason: words(2000) }).strict(),
@@ -580,6 +582,47 @@ function screenPoint(observation: Observation, x: number, y: number) {
 export const focusedSecure = (observation: Observation) =>
   observation.elements.find((item) => item.focused && item.secure) ?? null;
 
+/** How much larger a closer look shows its part than the last picture does. */
+export const closerMagnify = 3;
+/** The part of the last picture that a closer look shows: a quarter of its width and of its height. */
+const closerShare = 0.25;
+/**
+ * The part of the last picture around a point that a closer look shows, in
+ * its pixels, kept inside the picture, and the command for the hands, in
+ * screen points. Null with no picture, or a point outside it.
+ */
+export function closerPart(
+  point: { x: number; y: number },
+  seen: Observation | null,
+): {
+  region: { x: number; y: number; w: number; h: number };
+  command: HandCommand;
+} | null {
+  const width = seen?.imageWidth,
+    height = seen?.imageHeight;
+  if (!seen || !width || !height) return null;
+  if (!(point.x >= 0 && point.x <= width && point.y >= 0 && point.y <= height))
+    return null;
+  const w = Math.round(width * closerShare),
+    h = Math.round(height * closerShare);
+  const x = Math.round(Math.min(Math.max(point.x - w / 2, 0), width - w));
+  const y = Math.round(Math.min(Math.max(point.y - h / 2, 0), height - h));
+  const across = seen.screen.width / width,
+    down = seen.screen.height / height;
+  return {
+    region: { x, y, w, h },
+    command: {
+      kind: "zoom",
+      x: x * across,
+      y: y * down,
+      w: w * across,
+      h: h * down,
+      width: Math.min(1600, w * closerMagnify),
+      height: Math.min(1600, h * closerMagnify),
+    },
+  };
+}
+
 /** What the worker knows when it checks an action. */
 export interface View {
   /** The last observation of the screen. Null after an action, until the next look. */
@@ -781,6 +824,28 @@ export function check(raw: unknown, view: View, why: string): Checked {
           command: { kind: "wait", ms: action.ms },
         },
       };
+    case "look_closer": {
+      const part = closerPart(action, view.observation);
+      if (!part)
+        return refuse(
+          "A closer look needs a picture of the screen, and a point inside it.",
+        );
+      // A password field is never shown larger (closer.ts).
+      if (
+        view.observation &&
+        part.command.kind === "zoom" &&
+        secureInArea(view.observation, part.command)
+      )
+        return refuse(closerSecureText);
+      return {
+        verdict: "run",
+        label: "Look closer",
+        target: "",
+        risk: null,
+        signature: null,
+        send: { via: "hands", look: false, command: part.command },
+      };
+    }
     case "open_app": {
       const name = action.name.trim();
       if (!name || name.startsWith(".") || /[\p{C}/\\:]/u.test(name))

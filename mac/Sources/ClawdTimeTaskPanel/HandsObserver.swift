@@ -56,15 +56,40 @@ struct HandsDisplay {
     return .success(seen)
   }
 
-  /// One picture of the main display with ClawdTime's own windows left out, as a JPEG in base64.
-  private func capture(_ display: HandsDisplay) async throws -> (base64: String, width: Int, height: Int) {
+  /// A closer look: a picture of one part of the main display, `width` by `height` pixels, with ClawdTime's own
+  /// windows left out. The observation names the app in front and has no elements: they are those of the last look.
+  func closer(x: Double, y: Double, w: Double, h: Double, width: Int, height: Int, pointer: CGPoint) async -> Result<Observation, HandError> {
+    guard let display = HandsDisplay.main else { return .failure(.failed) }
+    let map = display.map
+    guard let part = HandsZoom.region(x: x, y: y, w: w, h: h, display: CGRect(x: 0, y: 0, width: map.width, height: map.height))
+      else { return .failure(.refused) }
+    // The picture keeps the shape of the part that is on the display.
+    let wide = min(Double(width), Double(height) * Double(part.width / part.height))
+    let pixels = (width: max(16, Int(wide.rounded())), height: max(16, Int((wide * Double(part.height / part.width)).rounded())))
+    guard let taken = try? await capture(display, part: part, pixels: pixels) else { return .failure(.failed) }
+    let app = frontApp
+    return .success(Observation(at: (Date().timeIntervalSince1970 * 1000).rounded(),
+      screen: .init(width: map.width, height: map.height, scale: map.scale),
+      cursor: .init(x: Double(pointer.x), y: Double(pointer.y)),
+      app: .init(name: ElementCleaner.line(app?.localizedName ?? "", limit: 120), bundleId: ElementCleaner.line(app?.bundleIdentifier ?? "", limit: 200),
+                 window: ""),
+      elements: [], image: taken.base64, imageWidth: taken.width, imageHeight: taken.height))
+  }
+
+  /// One picture of the main display with ClawdTime's own windows left out, as a JPEG in base64. With `part`,
+  /// only that part of the display, in points from the top left, at `pixels`.
+  private func capture(_ display: HandsDisplay, part: CGRect? = nil, pixels: (width: Int, height: Int)? = nil) async throws
+    -> (base64: String, width: Int, height: Int) {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     guard let screen = content.displays.first(where: { $0.displayID == display.id }) else { throw Unseen() }
     // The windows also carry a sharing type that keeps them out. This filter does not depend on it.
     let own = content.applications.filter { $0.processID == getpid() }
     let filter = SCContentFilter(display: screen, excludingApplications: own, exceptingWindows: [])
     let settings = SCStreamConfiguration()
-    settings.width = display.map.imageWidth; settings.height = display.map.imageHeight
+    settings.width = pixels?.width ?? display.map.imageWidth; settings.height = pixels?.height ?? display.map.imageHeight
+    // A part of the display is scaled to the asked size: without scalesToFit it stays at its own size in a
+    // corner of the picture, and the rest is empty (measured on the laptop, 23 Nov 2026).
+    if let part { settings.sourceRect = part; settings.scalesToFit = true }
     settings.showsCursor = true; settings.capturesAudio = false
     let frame = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: settings)
     let bitmap = NSBitmapImageRep(cgImage: frame)

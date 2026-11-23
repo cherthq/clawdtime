@@ -139,8 +139,36 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
       ms: z.number().int().min(0).max(10_000),
     })
     .strict(),
+  /**
+   * A closer look: a picture of one part of the main display, in screen
+   * points, `width` by `height` pixels. Nothing is sent to an app.
+   */
+  z
+    .object({
+      kind: z.literal("zoom"),
+      x: finite,
+      y: finite,
+      w: finite.min(8),
+      h: finite.min(8),
+      width: z.number().int().min(16).max(1600),
+      height: z.number().int().min(16).max(1600),
+    })
+    .strict(),
 ]);
 export type HandCommand = z.infer<typeof handCommandSchema>;
+
+/**
+ * A closer look that the planner asked for: a picture of one part of the last
+ * picture of the screen, larger. `region` is that part, in pixels of the last
+ * picture. A point in the closer picture is a point of the last picture at
+ * region.x + x * region.w / imageWidth, and the same for y.
+ */
+export interface Closer {
+  image: string;
+  imageWidth: number;
+  imageHeight: number;
+  region: { x: number; y: number; w: number; h: number };
+}
 
 /**
  * What the panel reads from `GET /desktop/hands/next`: the next command, if
@@ -351,6 +379,8 @@ export type Action =
   /** Brings one listed tab to the front. */
   | { kind: "browser_switch_tab"; tab: number }
   | { kind: "wait"; ms: number }
+  /** A closer look around a point of the last picture, in its pixels. The next turn gets a larger picture of that part. */
+  | { kind: "look_closer"; x: number; y: number }
   /** The person must decide or supply something. The worker stops and asks. */
   | { kind: "ask"; question: string }
   | { kind: "done"; summary: string }
@@ -389,6 +419,8 @@ export interface Planner {
     /** The plan of this request, with the state of each subgoal (`plan.ts`). Absent when it has none. */
     plan?: import("./plan.js").PlanView;
     signal?: AbortSignal;
+    /** The closer look that the planner asked for in its last turn. It comes with this turn only. */
+    closer?: Closer;
   }): Promise<{ action: Action; why: string } | import("./plan.js").PlanChoice>;
   /** Splits the goal into ordered subgoals, after the first look and before the first action. */
   outline?(

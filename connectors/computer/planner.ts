@@ -21,6 +21,7 @@
 import type {
   Action,
   BrowserPage,
+  Closer,
   Observation,
   Planner,
   ScreenElement,
@@ -36,6 +37,7 @@ import {
 } from "./navigation.js";
 import { pageKeys } from "./browser-script.js";
 import { actionSchema, browserCan, type BrowserMethod } from "./guards.js";
+import { fromCloserPicture } from "./closer.js";
 import {
   callWithRetries,
   CircuitBreaker,
@@ -200,7 +202,18 @@ const screenTools = [
       y: { type: "number" },
       double: { type: "boolean" },
       right: { type: "boolean" },
+      closer: {
+        type: "boolean",
+        description:
+          "True when x and y are a point of the closer picture of this turn, in its pixels.",
+      },
     },
+    ["x", "y"],
+  ),
+  tool(
+    "look_closer",
+    "Look closer at a part of the picture around a point, in its pixels. The next turn shows that part three times larger, as a second picture. Use it before a click on a small thing that you cannot tell apart in the picture: one star of a rating, a small icon, a check box, a thin line or a small number.",
+    { x: { type: "number" }, y: { type: "number" } },
     ["x", "y"],
   ),
   tool(
@@ -543,23 +556,25 @@ function stepLine(record: StepRecord) {
       ? ` "${line(action.text, 60)}"`
       : action.kind === "key" || action.kind === "browser_key"
         ? ` ${line(action.combo, 40)}`
-        : action.kind === "open_app" || action.kind === "quit_app"
-          ? ` ${line(action.name, 60)}`
-          : action.kind === "open_url"
-            ? ` ${line(action.url, 120)}${action.browser ? ` in ${line(action.browser, 60)}` : ""}`
-            : action.kind === "browser_open"
-              ? ` ${line(action.url, 120)}`
-              : action.kind === "scroll"
-                ? ` ${action.direction}${action.amount ? ` ${action.amount}` : ""}`
-                : action.kind === "browser_scroll"
-                  ? ` ${action.direction}`
-                  : action.kind === "ask"
-                    ? ` "${line(action.question, 120)}"`
-                    : action.kind === "browser_select"
-                      ? ` "${line(action.option, 60)}"`
-                      : action.kind === "browser_wait" && action.text
-                        ? ` for "${line(action.text, 60)}"`
-                        : "";
+        : action.kind === "look_closer"
+          ? ` at ${Math.round(action.x)},${Math.round(action.y)}`
+          : action.kind === "open_app" || action.kind === "quit_app"
+            ? ` ${line(action.name, 60)}`
+            : action.kind === "open_url"
+              ? ` ${line(action.url, 120)}${action.browser ? ` in ${line(action.browser, 60)}` : ""}`
+              : action.kind === "browser_open"
+                ? ` ${line(action.url, 120)}`
+                : action.kind === "scroll"
+                  ? ` ${action.direction}${action.amount ? ` ${action.amount}` : ""}`
+                  : action.kind === "browser_scroll"
+                    ? ` ${action.direction}`
+                    : action.kind === "ask"
+                      ? ` "${line(action.question, 120)}"`
+                      : action.kind === "browser_select"
+                        ? ` "${line(action.option, 60)}"`
+                        : action.kind === "browser_wait" && action.text
+                          ? ` for "${line(action.text, 60)}"`
+                          : "";
   const why = line(record.why, 120);
   // The hands say ok when the address went to the browser. That is not the page.
   const outcome =
@@ -652,6 +667,15 @@ export function brief(
     parts.push(
       "The screen could not be read this time. Call wait: a new look comes after it. Do not ask the person what the screen shows.",
     );
+  const closer = input.closer;
+  if (closer && seen?.image) {
+    const { x, y, w, h } = closer.region;
+    parts.push(
+      "",
+      `A closer look, as you asked: the second picture is the part of the first picture from ${x},${y} to ${x + w},${y + h}, ${closer.imageWidth} by ${closer.imageHeight} pixels, larger. It was taken just before the first picture's look; when the two differ, the first picture is the screen now.`,
+      "To click a thing that you see in the second picture, call click_at with closer true and its point in the second picture, in its pixels.",
+    );
+  }
   if (browser) {
     parts.push("");
     if (input.page) parts.push(...pageLines(input.page));
@@ -802,7 +826,12 @@ function repairReply(
  * call of an offered function, with one JSON object of arguments that fit
  * that action, is malformed.
  */
-function readAnswer(body: unknown, offered: ReadonlySet<string>): Reading {
+function readAnswer(
+  body: unknown,
+  offered: ReadonlySet<string>,
+  /** The closer picture of this turn: a click in it becomes a click in the first picture. */
+  closer?: Closer,
+): Reading {
   const { message, finish } = firstChoice(body);
   if (refusedIn(message, finish)) return { kind: "refused" };
   const calls = toolCalls(message);
@@ -846,6 +875,12 @@ function readAnswer(body: unknown, offered: ReadonlySet<string>): Reading {
   const plan = readPlanCall(name, parsed as Record<string, unknown>, malformed);
   if (plan) return plan;
   const planned = toAction(name, parsed as Record<string, unknown>);
+  // A point of the closer picture is a point of the first picture again
+  // (closer.ts), so the worker and its checks see an ordinary click.
+  const mapped = fromCloserPicture(planned.action, closer);
+  if ("problem" in mapped)
+    return malformed("closer_point", `${name}: ${mapped.problem}`);
+  planned.action = mapped.action;
   const checked = actionSchema.safeParse(planned.action);
   if (!checked.success) {
     const issues = checked.error.issues
@@ -1062,6 +1097,7 @@ export class OpenAIPlanner implements Planner {
     const browser = this.browser && input.browser !== false;
     const text = brief(input, browser);
     const image = input.observation?.image;
+    const closer = image ? input.closer : undefined;
     const chosen = await this.decide(
       {
         messages: [
@@ -1085,6 +1121,17 @@ export class OpenAIPlanner implements Planner {
                     },
                   ]
                 : []),
+              ...(closer
+                ? [
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: `data:image/jpeg;base64,${closer.image}`,
+                        detail: "high",
+                      },
+                    },
+                  ]
+                : []),
             ],
           },
         ],
@@ -1097,6 +1144,7 @@ export class OpenAIPlanner implements Planner {
         parallel_tool_calls: false,
       },
       input.signal,
+      closer,
     );
     // The outline is offered only in its own call.
     if ("outline" in chosen) throw unreadable("unknown_function");
@@ -1156,10 +1204,16 @@ export class OpenAIPlanner implements Planner {
       tools: readonly { function: { name: string } }[];
     } & Record<string, unknown>,
     signal: AbortSignal | undefined,
+    /** The closer picture of this turn, when there is one. */
+    closer?: Closer,
   ): Promise<Chosen | PlanReading["chosen"]> {
     const deadline = this.clock.now() + this.policy.budgetMs;
     const offered = new Set(body.tools.map((tool) => tool.function.name));
-    const first = readAnswer(await this.send(body, signal, deadline), offered);
+    const first = readAnswer(
+      await this.send(body, signal, deadline),
+      offered,
+      closer,
+    );
     if (first.kind === "action")
       return { action: first.action, why: first.why };
     if (first.kind === "plan") return first.chosen;
@@ -1177,6 +1231,7 @@ export class OpenAIPlanner implements Planner {
         deadline,
       ),
       offered,
+      closer,
     );
     if (second.kind === "action")
       return { action: second.action, why: second.why };

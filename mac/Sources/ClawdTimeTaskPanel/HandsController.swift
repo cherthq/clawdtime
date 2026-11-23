@@ -265,6 +265,10 @@ import TaskPanelCore
     case .observe(let image, let elements):
       shield(true)
       return await desktop.observe(observer: observer, image: image, elements: elements, accessibility: accessibility, pointer: input.pointer).map { Optional($0) }
+    case .zoom(let x, let y, let w, let h, let width, let height):
+      // A picture only: no app gets input, the Accessibility tree is not read, and the look of the hands stays.
+      shield(true)
+      return await observer.closer(x: x, y: y, w: w, h: h, width: width, height: height, pointer: input.pointer).map { Optional($0) }
     case .move, .click, .drag, .scroll:
       return await point(command, label: label)
     case .type(let text):

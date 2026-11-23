@@ -70,7 +70,9 @@ import {
   type Checked,
   type View,
   hasTextFocus,
+  closerPart,
 } from "./guards.js";
+import { closerHold, closerSecureText, closerShowsSecure } from "./closer.js";
 import {
   guidanceLimit,
   looksSecretStrict,
@@ -117,6 +119,7 @@ import type {
   Observation,
   Planner,
   StepRecord,
+  Closer,
 } from "./ports.js";
 
 /** What every way to stop says. It never claims that an action was undone. */
@@ -541,6 +544,10 @@ const sameSpeaker = (
 ) => started?.callId === said?.callId;
 interface Run {
   authority?: DesktopExecutionAuthority;
+  /** The closer look that the planner asked for, for its next turn only. */
+  closer?: Closer;
+  /** The closer looks sent in this request (closer.ts). */
+  closerLooks?: number;
   /** Why the step of this turn was not sent, for the timing record. */
   held?: string;
   /**
@@ -740,7 +747,9 @@ const focusMovedToField = (seen: Observation | null, focus: FocusClicks) =>
 const sendsNoInput = (send: Ready["send"]) =>
   send.via === "browser"
     ? quietCall(send.call)
-    : send.command.kind === "wait" || send.command.kind === "observe";
+    : send.command.kind === "wait" ||
+      send.command.kind === "observe" ||
+      send.command.kind === "zoom";
 
 /**
  * The hands held an input back because the person moved the mouse or pressed
@@ -1731,7 +1740,11 @@ export class ComputerWorker implements DesktopExecutorPort {
   ): Promise<Handed> {
     if (this.halted(run)) return { sent: false, over: true, result: null };
     const beforeTransition = run.observation;
-    const effect = command.kind !== "observe" && command.kind !== "wait";
+    // A closer look (zoom) is a picture too: it sends nothing to an app.
+    const effect =
+      command.kind !== "observe" &&
+      command.kind !== "wait" &&
+      command.kind !== "zoom";
     // After anything but a look, the screen and the page may be other ones.
     // That holds for a wait too: it waits for the screen to change.
     if (command.kind !== "observe") {
@@ -2062,6 +2075,7 @@ export class ComputerWorker implements DesktopExecutorPort {
             ...(run.browserClosed ? { browser: false } : {}),
             signal: controller.signal,
             ...(run.plan ? { plan: run.plan.view() } : {}),
+            ...this.closerFor(run),
           };
           const plan = this.planner.next(input);
           plan.catch(() => {});
@@ -2895,6 +2909,42 @@ export class ComputerWorker implements DesktopExecutorPort {
     return read.call(behind, goal, signal);
   }
   /**
+   * The closer picture for this turn, once. It stays back when the look of
+   * this turn has a password field in its part, or cannot say (closer.ts):
+   * the planner then reads why.
+   */
+  private closerFor(run: Run): { closer?: Closer } {
+    const closer = run.closer;
+    delete run.closer;
+    if (!closer) return {};
+    if (!closerShowsSecure(closer, run.observation)) return { closer };
+    const last = run.history.at(-1);
+    if (last?.action.kind === "look_closer")
+      last.outcome = `not shown: ${closerSecureText}`;
+    return {};
+  }
+  /**
+   * A check just before the command held the action back: nothing went out.
+   * It counts as a refusal of the checks, in the same row of three.
+   */
+  private withheld(
+    run: Run,
+    action: Action,
+    why: string,
+    ready: Ready,
+    reason: string,
+    refused: number,
+  ) {
+    this.note(run, action, why, ready.target, `refused: ${reason}`, "refused");
+    if ((run.refusals = refused + 1) >= 3)
+      this.finish(
+        run,
+        "blocked",
+        "too_many_refusals",
+        `${refusalsText} The last reason: ${reason}`,
+      );
+  }
+  /**
    * The action was not sent: the screen is not what the planner saw, or the
    * person took over. The planner gets a new look. The journal keeps it as
    * not sent. For the person the pause comes at once, and says what was held
@@ -3063,6 +3113,13 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     const send = ready.send;
     if (send.via !== "hands") return;
+    // Checks that only the worker can make, just before the command: a few
+    // closer looks for each request (closer.ts). Nothing goes out.
+    const withheld = closerHold(action, run.closerLooks ?? 0);
+    if (withheld)
+      return this.withheld(run, action, why, ready, withheld, refused);
+    if (action.kind === "look_closer")
+      run.closerLooks = (run.closerLooks ?? 0) + 1;
     const focusTarget = (): Omit<FocusClicks, "count"> => {
       const obs = lastLook ?? before;
       const bundleId = obs?.app.bundleId ?? "";
@@ -3240,6 +3297,27 @@ export class ComputerWorker implements DesktopExecutorPort {
         } else {
           run.heldRow.sentBefore = screenPrint(before, null, true);
         }
+      }
+    }
+    // A closer look: the picture goes with the next turn of the planner.
+    if (send.command.kind === "zoom" && action.kind === "look_closer") {
+      const seen = handed.result?.ok ? handed.result.observation : undefined;
+      const part = closerPart(action, before);
+      if (seen?.image && seen.imageWidth && seen.imageHeight && part) {
+        run.closer = {
+          image: seen.image,
+          imageWidth: seen.imageWidth,
+          imageHeight: seen.imageHeight,
+          region: part.region,
+        };
+        return this.note(
+          run,
+          action,
+          why,
+          ready.target,
+          "ok: the closer picture comes with this turn",
+          "ok",
+        );
       }
     }
     // Text with no field to take it went nowhere, or into the keys of the
