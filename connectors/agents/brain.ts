@@ -398,11 +398,14 @@ const computerStopKind = (spoken: string): "explicit" | "general" | null => {
   // The stop word opens a clause (after fillers): "stop, don't click that",
   // "no stop", "never mind, stop", "ok cancel". As a noun inside a request
   // ("make the stop button red", "the cancel flow is broken") it is none.
+  // After the stop word only words of stopping may follow ("stop it",
+  // "stop now", "stop clicking", "cancel the task"): "stop polling when the
+  // tab is hidden" and "cancel button should be blue" are coding work.
   if (
     !text
       .split(/[,;.!\u2014]+|\s+-+\s+/)
       .some((clause) =>
-        /^\s*(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but|uh+|um+|no+|nope|nah|actually|now|please|pls|plz|just|i\s+said|never\s*mind|nvm|then)[,\s]+)*(?:stop+|stahp|cancel|abort|halt)\b/i.test(
+        /^\s*(?:(?:hey|hi|yo|ok|okay|so|well|wait|and|but|uh+|um+|no+|nope|nah|actually|now|please|pls|plz|just|i\s+said|never\s*mind|nvm|then)[,\s]+)*(?:stop+|stahp|cancel|abort|halt)(?:\s+(?:stop+|stahp|cancel|abort|halt|it|that|this|now|please|pls|everything|all|right\s+now|immediately|(?:the\s+)?(?:computer|screen|browser)(?:\s+(?:task|use))?|the\s+task|what\s+you(?:['\u2019]re|\s+are)\s+doing|doing\s+(?:that|this|it)|(?:clicking|typing|scrolling|moving|opening|closing|pressing|dragging|searching|going)(?:\s+(?:it|that|there|around|now))?))*[\s?.!]*$/i.test(
           clause,
         ),
       )
@@ -9449,6 +9452,9 @@ export class Supervisor {
     // no board session name. Desktop/previous_app navigation readings still
     // hit the worker's own busy fence without modifying the running run.
     const activeMidTask = computerTaskNotOver(execution);
+    // "Stop" is never a goal of a new screen task.
+    if (!activeMidTask && readWords(spoken) === "stop")
+      return execution.stop().message;
     const desktopMove =
       reading?.kind === "desktop" || reading?.kind === "previous_app";
     if (activeMidTask && !desktopMove && !this.canSubmitMidTask(spoken, true))
@@ -11827,7 +11833,7 @@ export class Supervisor {
           const aboutOtherWork =
             (this.forSession(words) ||
               speaksOfManagedWork(words) ||
-              /\b(?:fix|fixed|add|write|change|implement|refactor|build|create|bump|push|commit|merge|deploy|install|migrate|rename|remove|update|edit|debug|revert)\b/i.test(
+              /\b(?:fix|fixed|add|write|change|implement|refactor|build|create|bump|push|commit|merge|deploy|install|migrate|rename|remove|update|edit|debug|revert|claude|codex|server|dev\s+server)\b/i.test(
                 words,
               ) ||
               /\b[\p{L}\p{N}_-]+\.(?:json|ts|tsx|js|jsx|mjs|py|rb|go|rs|swift|md|yml|yaml|toml|sql|sh|css|html)\b/iu.test(

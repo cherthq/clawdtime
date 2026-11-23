@@ -4186,6 +4186,82 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     }
   });
 
+  it("final review round 2: coding work that opens with stop or cancel starts its job and stops nothing", async () => {
+    for (const words of [
+      "stop polling when the tab is hidden",
+      "stop retrying on 404s",
+      "stop logging passwords",
+      "stop sending the welcome email twice",
+      "stop caching the user list",
+      "stop using lodash in the app",
+      "stop showing the banner on mobile",
+      "stop the spinner after the request fails",
+      "cancel the old subscription when they upgrade",
+      "cancel button should be blue",
+      "stop button should be red",
+      "cancel flow needs a confirm dialog",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([
+        [call("start_job", { job: words })],
+        "Started job.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.execStops(), f.submitted, f.started]).toEqual([
+        words,
+        0,
+        [],
+        [words],
+      ]);
+    }
+    // Stops of the screen task, with words of stopping behind the stop word.
+    for (const words of [
+      "stop",
+      "stop it",
+      "stop now",
+      "stop clicking",
+      "please stop",
+      "cancel the task",
+      "stop, don't click that",
+      "i said stop",
+      "stop the computer task",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat(["Okay."]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.execStops()]).toEqual([words, 1]);
+    }
+  });
+
+  it("final review round 2 rests: agent and server questions keep the model's answer while a task runs; no screen task starts with the goal stop", async () => {
+    for (const [words, draft] of [
+      ["did claude finish?", "Yes, it finished."],
+      ["is codex done?", "Yes, it's done."],
+      ["is the dev server running?", "Yes, on port 3000."],
+    ] as const) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([draft]);
+      const reply = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, reply]).toEqual([words, draft]);
+    }
+    for (const words of ["stop", "abort", "please stop"]) {
+      const f = withRealishWorker("idle", "Computer use is on.", {
+        goal,
+        codingTaskRunning: true,
+      });
+      const run = scriptedChat([
+        [call("delegate_computer_task", { task: words })],
+        "Started.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.submitted]).toEqual([words, []]);
+    }
+  });
+
   it("final review blocker 4: a bare stop with no screen task running goes to the engine's stop, never to the model", async () => {
     for (const state of ["idle", "completed", "blocked"]) {
       for (const words of ["stop", "stop!", "cancel", "please stop"]) {
