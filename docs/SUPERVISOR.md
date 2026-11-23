@@ -620,7 +620,11 @@ These rules are in the code, not in the model's instructions:
   the footer and confirm with me"), and a deadline ("before I get back").
 - Work at a later time starts nothing now: "build the landing page
   tomorrow", "deploy the app to staging tomorrow morning", "clean up the old
-  branches later", "fix the footer next week", "tomorrow, build the page".
+  branches later", "fix the footer next week", "tomorrow, build the page",
+  and a time to come today, while it has not begun by the clock of this
+  Mac: "deploy the app to staging tonight", "build the page after lunch",
+  "... this evening", "... in the morning". In the evening "fix the login
+  bug tonight" means now, and it starts.
   ClawdTime keeps no work for later, so it answers in the same fixed words,
   and you ask for the work again when you want it. The message must be one
   clause of work with the time at its end, or the time first. What is no
@@ -628,9 +632,10 @@ These rules are in the code, not in the model's instructions:
   that it is for ("by tomorrow", "for the release tomorrow"), a thing that
   carries its own time ("add a reminder tomorrow"), words of the thing
   itself ("add a toast saying try again later"), "later" as a moment in
-  what a thing does ("start the animation later"), how long the work may
-  take ("in an hour"), and a clock time or a weekday alone ("at 5pm", "on
-  Monday").
+  what a thing does ("start the animation later"), a time of today that is
+  when something happened ("look into the errors this afternoon"), how long
+  the work may take ("in an hour"), and a clock time or a weekday alone
+  ("at 5pm", "on Monday").
 - The same holds in other words, and for a reminder: "let me know if docs
   changes", "give me a heads up if docs changes", "keep me posted on docs",
   "I want to hear the second something happens there" and "remind me in ten
