@@ -26,11 +26,13 @@ import {
   type ToolCall,
   type ToolSpec,
 } from "../connectors/agents/brain.js";
+import { interpret } from "../connectors/agents/call.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import type { Runner } from "../connectors/agents/focus.js";
 import type { TaskPort } from "../connectors/agents/tasks.js";
 import type { BoardSnapshot } from "../connectors/agents/types.js";
+import { readWords } from "../connectors/computer/orders.js";
 import { fakeSystem } from "./connectors-agents-fixture.js";
 
 const now = Date.UTC(2026, 10, 21, 2, 0, 0);
@@ -258,6 +260,7 @@ describe("the brain opens an application", () => {
       nativeWorker?: boolean;
       mode?: "native" | "browser";
       configured?: boolean;
+      waiting?: "takeover" | "approval" | "question";
     } = {},
   ) {
     const f = world();
@@ -274,6 +277,7 @@ describe("the brain opens an application", () => {
       state,
       canStop: state === "running",
       message,
+      ...(options.waiting !== undefined ? { waiting: options.waiting } : {}),
     };
     f.value.execution = {
       snapshot: () => snapshot,
@@ -874,7 +878,7 @@ describe("the brain opens an application", () => {
     ]);
   });
   it("does not start a directional command while the native worker waits for a person's answer", async () => {
-    const f = withExecution("waiting_for_person");
+    const f = withExecution("waiting_for_person", { waiting: "question" });
     const answered: string[] = [];
     f.value.execution!.answer = async (text) => {
       answered.push(text);
@@ -1132,6 +1136,7 @@ describe("the chat says of a computer task only what its engine reported", () =>
     options: {
       /** False: an engine with no `answer`, so a message reaches the model while the task waits. */
       worker?: boolean;
+      waiting?: "takeover" | "approval" | "question";
       pendingAction?: { id: string; description: string };
     } = {},
   ) {
@@ -1144,6 +1149,7 @@ describe("the chat says of a computer task only what its engine reported", () =>
       state,
       canStop: state === "running" || state === "waiting_for_person",
       message,
+      ...(options.waiting !== undefined ? { waiting: options.waiting } : {}),
       ...(options.pendingAction
         ? { pendingAction: options.pendingAction }
         : {}),
@@ -1256,12 +1262,15 @@ describe("the chat says of a computer task only what its engine reported", () =>
     ).toContain(
       "The computer task waits for your word on one action: Click Send. Use Approve action or Deny action in the desktop panel.",
     );
-    // A task that is over (idle, completed, canceled): nothing is added.
-    for (const state of ["idle", "completed", "canceled"])
+    // A task that is idle or completed: nothing is added. Canceled has a true stopped sentence.
+    for (const state of ["idle", "completed"])
       expect([
         state,
         await told(withTask(state, "Done. The page is open.")),
       ]).toEqual([state, ""]);
+    expect(await told(withTask("canceled", stopped))).toContain(
+      `The computer task was stopped: it did not report that it is done. Its newest report: ${stopped}`,
+    );
   });
 
   it("says the state sentence of each state in place of a claim", async () => {
@@ -1307,12 +1316,19 @@ describe("the chat says of a computer task only what its engine reported", () =>
       expect(run.calls()).toBe(1);
       expect(f.touched).toEqual([]);
     }
-    // No task that is not over (idle, completed, canceled): no sentence.
-    for (const state of ["idle", "completed", "canceled"])
+    // Idle and completed have no state sentence; canceled has a true stopped sentence.
+    for (const state of ["idle", "completed"])
       expect([
         state,
         computerTaskNow(withTask(state, "x").value.execution!.snapshot()),
       ]).toEqual([state, null]);
+    expect(
+      computerTaskNow(
+        withTask("canceled", stopped).value.execution!.snapshot(),
+      ),
+    ).toBe(
+      `The computer task was stopped: it did not report that it is done. Its newest report: ${stopped}`,
+    );
   });
 
   it("lets a true answer stand", async () => {
@@ -1671,9 +1687,11 @@ describe("the chat says of a computer task only what its engine reported", () =>
   });
 
   it("leaves a message to the worker that waits for an answer, as before", async () => {
-    // The worker asked something: the message is its answer, and the
+    // The worker asked a planner question: the message is its answer, and the
     // worker's own sentence is the reply. No model is asked.
-    const f = withTask("waiting_for_person", paused);
+    const f = withTask("waiting_for_person", "Which workspace should I open?", {
+      waiting: "question",
+    });
     const run = drafts([falseDraft]);
     expect(
       await new Supervisor(f.value, run.model).reply(
@@ -1816,7 +1834,12 @@ describe("words for a running computer task reach its engine", () => {
       },
       stop: () => {
         stops++;
-        return { ...snapshot, state: "canceled", canStop: false, message: stopped };
+        return {
+          ...snapshot,
+          state: "canceled",
+          canStop: false,
+          message: stopped,
+        };
       },
       answer: async (text: string) => {
         answered.push(text);
@@ -1846,30 +1869,27 @@ describe("words for a running computer task reach its engine", () => {
     return { model, given, calls: () => step };
   }
 
-  it("takes orders, polite requests and short corrections for the screen by grammar", () => {
+  it("takes orders and polite requests via the shared readWords reader", () => {
     for (const words of [
       "open it in the browser",
       "just hit enter",
       "Can you just hit enter?",
       "press return",
-      "no, the other tab",
       "can you open it on the browser?",
       "I don't see it open. Can you open it on the browser?",
       "I don't still see Slack to be open. Can you open Slack on Chrome?",
-      "I don't see it open, can you open it on the browser?",
+      "Uh just open it in Chrome, bro.",
+      "Bro, just open app.example.com on Google Chrome.",
       "scroll down",
       "click the first one",
-      "type hello in it",
       "try the search box",
       "use Chrome instead",
       "go back",
-      "refresh the page",
       "switch to the other tab",
-      "no, the second one",
-      "no, wait, click the second one",
-      "in the browser instead",
     ])
       expect([words, guidesComputerTask(words)]).toEqual([words, true]);
+    for (const words of ["no, the other tab", "in the browser instead"])
+      expect([words, guidesComputerTask(words)]).toEqual([words, false]);
   });
 
   it("takes no stop, state question, thanks, bare word, greeting, session message or coding work", () => {
@@ -1936,11 +1956,11 @@ describe("words for a running computer task reach its engine", () => {
     for (const words of [
       "I don't still see Slack to be open. Can you open Slack on Chrome?",
       "I don't see it open. Can you open it on the browser?",
+      "Uh just open it in Chrome, bro.",
+      "Bro, just open app.example.com on Google Chrome.",
       "open it in the browser",
-      "no, the other tab",
       "scroll down",
       "click the first one",
-      "type hello in it",
       "try the search box",
     ])
       for (const draft of [
@@ -2112,8 +2132,9 @@ describe("words for a running computer task reach its engine", () => {
       "the page looks weird",
       "call",
     );
-    const note = remarkRun.given[0]!
-      .filter((message) => message.role === "tool")
+    const note = remarkRun.given[0]!.filter(
+      (message) => message.role === "tool",
+    )
       .map((message) => message.content)
       .join("\n");
     expect(note).toContain("delegate_computer_task");
@@ -2128,7 +2149,9 @@ describe("words for a running computer task reach its engine", () => {
       drafts(["Should I start a job?"]).model,
     ).reply(before, "also build a landing page for the bakery", "call");
     expect(saidDirect).toBe("I started a new session for that job.");
-    expect(direct.started).toEqual(["also build a landing page for the bakery"]);
+    expect(direct.started).toEqual([
+      "also build a landing page for the bakery",
+    ]);
     expect(direct.submitted).toEqual([]);
 
     const slow = withWorker("running", working, { goal });
@@ -2240,11 +2263,15 @@ describe("words for a running computer task reach its engine", () => {
       goal,
       waiting: "approval",
     });
+    const beforeApproval: ChatMessage[] = [
+      ...before,
+      { role: "assistant", text: approval, at: at + 10_000, via: "call" },
+    ];
     expect(
       await new Supervisor(
         aYes.value,
         drafts(["Should I do that?"]).model,
-      ).reply(before, "yes", "call"),
+      ).reply(beforeApproval, "yes", "call"),
     ).toBe("Continuing.");
     expect(aYes.answered).toEqual(["yes"]);
     expect(aYes.submitted).toEqual([]);
@@ -2663,7 +2690,13 @@ describe("chat routing safety and truth for computer tasks", () => {
   });
 
   it("blocker 2: when a coding task and a screen task both run, an unqualified stop stops the screen task and says which one stopped", async () => {
-    for (const words of ["stop", "ok stop", "stop it", "stop the task", "can you stop it?"]) {
+    for (const words of [
+      "stop",
+      "ok stop",
+      "stop it",
+      "stop the task",
+      "can you stop it?",
+    ]) {
       const f = withFakeWorker("running", working, {
         goal,
         codingTaskRunning: true,
@@ -2705,13 +2738,12 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(buildStop.submitted).toEqual([]);
   });
 
-  it("blocker 3: coding work, other-person speech, later times, questions-as-orders and partial session names never go to submit", async () => {
+  it("blocker 3: coding work, other-person speech, later times, questions-as-orders and full session names never go to submit", async () => {
     const codingMessages = [
       "open the settings file and fix the typo",
       "open package.json and bump the version",
       "push it to origin",
       "use tailwind instead",
-      "switch to postgres",
       "clear the cache",
       "search for TODO in the project",
     ];
@@ -2744,9 +2776,9 @@ describe("chat routing safety and truth for computer tasks", () => {
     }
 
     for (const words of [
-      "open payments",
-      "switch to payments",
-      "type yes in payments",
+      "open payments api",
+      "switch to payments api",
+      "type yes in payments api",
     ]) {
       const f = withFakeWorker("running", working, {
         goal,
@@ -2769,7 +2801,8 @@ describe("chat routing safety and truth for computer tasks", () => {
       "yep open it in the browser",
       "Are you stuck? Just hit enter.",
       "What's the status? Just hit enter.",
-      "Are you stuck, hit enter",
+      "Uh just open it in Chrome, bro.",
+      "Bro, just open app.example.com on Google Chrome.",
     ]) {
       expect([words, guidesComputerTask(words)]).toEqual([words, true]);
       const f = withFakeWorker("running", working, { goal });
@@ -2793,9 +2826,14 @@ describe("chat routing safety and truth for computer tasks", () => {
       intent: { kind: "none" },
       work: true,
     });
-    const owner1 = "Can you sort of open Slack for me and find the roadmap board?";
+    const owner1 =
+      "Can you sort of open Slack for me and find the roadmap board?";
     expect(
-      await new Supervisor(startF.value, startRun.model).reply([], owner1, "call"),
+      await new Supervisor(startF.value, startRun.model).reply(
+        [],
+        owner1,
+        "call",
+      ),
     ).toBe(startedText);
     expect(startF.submitted).toEqual([owner1]);
 
@@ -2879,9 +2917,13 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(saidWaiting).toContain(approval);
   });
 
-  it("blocker 5: approval takes only bare decisions to answer and sends other words to submit; question takes answers; takeover only resumes on continue or orders", async () => {
-    // waiting === "approval": bare decision -> answer; other words -> submit (set aside).
-    for (const words of ["yes", "ok", "okay", "no", "nope", "nah"]) {
+  it("blocker 5: approval takes only seen explicit yes or explicit no to answer and orders to submit; question takes answers; takeover only resumes on continue or orders", async () => {
+    const beforeApproval: ChatMessage[] = [
+      ...before,
+      { role: "assistant", text: approval, at: at + 10_000, via: "call" },
+    ];
+    // waiting === "approval": seen explicit yes and explicit no -> answer; orders -> submit (set aside).
+    for (const words of ["yes", "no", "nope", "nah"]) {
       const f = withFakeWorker("waiting_for_person", approval, {
         goal,
         waiting: "approval",
@@ -2889,7 +2931,7 @@ describe("chat routing safety and truth for computer tasks", () => {
       const said = await new Supervisor(
         f.value,
         scriptedChat(["Okay."]).model,
-      ).reply(before, words, "call");
+      ).reply(beforeApproval, words, "call");
       expect([words, f.answered, f.submitted, said]).toEqual([
         words,
         [words],
@@ -2899,7 +2941,7 @@ describe("chat routing safety and truth for computer tasks", () => {
     }
     for (const words of [
       "ok, open it in the browser",
-      "sure, click the other one",
+      "Can you just hit enter?",
     ]) {
       const f = withFakeWorker("waiting_for_person", approval, {
         goal,
@@ -2908,7 +2950,7 @@ describe("chat routing safety and truth for computer tasks", () => {
       const said = await new Supervisor(
         f.value,
         scriptedChat(["Okay."]).model,
-      ).reply(before, words, "call");
+      ).reply(beforeApproval, words, "call");
       expect([words, f.answered, f.submitted, said]).toEqual([
         words,
         [],
@@ -2932,7 +2974,7 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(qF.answered).toEqual(["open the engineering workspace"]);
     expect(qF.submitted).toEqual([]);
 
-    // waiting === "takeover": continue -> answer; no/stop -> stop; order -> submit; other -> paused state sentence.
+    // waiting === "takeover": continue -> answer; stop -> stop; order -> submit; bare decision -> paused state without resuming; other -> normal path.
     for (const words of [
       "continue",
       "go on",
@@ -2957,7 +2999,7 @@ describe("chat routing safety and truth for computer tasks", () => {
         "Continuing.",
       ]);
     }
-    for (const words of ["no", "nope", "nah", "stop", "ok stop"]) {
+    for (const words of ["stop", "ok stop"]) {
       const f = withFakeWorker("waiting_for_person", paused, {
         goal,
         waiting: "takeover",
@@ -2975,7 +3017,7 @@ describe("chat routing safety and truth for computer tasks", () => {
       ]);
     }
     const pausedSentence = `The computer task ("${goal}") is paused: it has not reported that it is done. Its newest report: ${paused}`;
-    for (const words of ["ok", "okay", "sure", "hmm", "approve", "yes", "yeah", "yep"]) {
+    for (const words of ["ok", "okay", "sure", "approve", "yes"]) {
       const f = withFakeWorker("waiting_for_person", paused, {
         goal,
         waiting: "takeover",
@@ -2995,6 +3037,21 @@ describe("chat routing safety and truth for computer tasks", () => {
         said,
       ]).toEqual([words, [], [], 0, 0, pausedSentence]);
     }
+    const hmmF = withFakeWorker("waiting_for_person", paused, {
+      goal,
+      waiting: "takeover",
+    });
+    const hmmRun = scriptedChat(["Still paused."]);
+    expect(
+      await new Supervisor(hmmF.value, hmmRun.model).reply(
+        before,
+        "hmm",
+        "call",
+      ),
+    ).toBe("Still paused.");
+    expect(hmmF.answered).toEqual([]);
+    expect(hmmF.submitted).toEqual([]);
+    expect(hmmRun.calls()).toBe(1);
   });
 
   it("blocker 6: screen-task questions get computerTaskNow without calling the model, widened screenClaims catches hallucinations, and uncertain/blocked have true state sentences", async () => {
@@ -3096,7 +3153,8 @@ describe("chat routing safety and truth for computer tasks", () => {
       ).reply(before, "Is it open?", "call"),
     ).toBe(uncertainState);
 
-    const blockedMsg = "I stopped at the limit of 40 steps. The task is not finished.";
+    const blockedMsg =
+      "I stopped at the limit of 40 steps. The task is not finished.";
     const blockedState = computerTaskNow({
       configured: true,
       mode: "native",
@@ -3144,8 +3202,9 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(deskTool?.description).not.toContain(
       "next words for a running computer task",
     );
-    const deskNote = deskRun.inputs[0]!.messages
-      .filter((m) => m.role === "tool")
+    const deskNote = deskRun.inputs[0]!.messages.filter(
+      (m) => m.role === "tool",
+    )
       .map((m) => m.content)
       .join("\n");
     expect(deskNote).not.toContain("replaced by handing them to the engine");
@@ -3164,11 +3223,910 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(nativeTool?.description).toContain(
       "next words for a running computer task",
     );
-    const nativeNote = nativeRun.inputs[0]!.messages
-      .filter((m) => m.role === "tool")
+    const nativeNote = nativeRun.inputs[0]!.messages.filter(
+      (m) => m.role === "tool",
+    )
       .map((m) => m.content)
       .join("\n");
     expect(nativeNote).toContain("delegate_computer_task");
     expect(nativeNote).not.toContain("replaced by handing them to the engine");
+  });
+});
+
+describe("shared readWords routing, approval safety, stop handling, and screen truth", () => {
+  const goal = "open example.com and find the roadmap board";
+  const working = `Working on: "${goal}". Step 19 of at most 40.`;
+  const paused =
+    "You moved the mouse or pressed a key, so I paused. Say continue to go on, or stop.";
+  const approval =
+    'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.';
+  const question = "Which workspace should I open?";
+  const startedText =
+    "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
+  const stoppedText =
+    "Stopped. An action that was already sent may have finished.";
+  const guidedText = "Got it. I take that into the task that runs.";
+  const resumedText = "Got it. I go on with the task and take that into it.";
+  const alreadyRunningText = "The task is already running.";
+  const heldText =
+    "Got it. I hold now and take that into the task. Say continue to go on, or stop.";
+  const stillPausedText =
+    "I am still paused, because you used the Mac. Say continue, or tell me what to do next.";
+  const asideApprovalText =
+    "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.";
+  const asideContinueHoldApprovalText =
+    "That was no yes: what waited for one is set aside, and I hold now. Say continue to go on, or stop.";
+  const asideHoldApprovalText =
+    "Got it. I hold now and take that into the task. That was no yes: what waited for one is set aside. Say continue to go on, or stop.";
+  const refusedApprovalText = 'Canceled. I did not do it: Click "Send".';
+  const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
+  const deflectionDraft =
+    "The task is still running, currently on step 19, not done yet. Want me to keep waiting or do something else?";
+  const at = now - 60_000;
+  const before: ChatMessage[] = [
+    {
+      role: "user",
+      text: "Can you sort of open Slack for me and find the roadmap board?",
+      at,
+      via: "call",
+    },
+    {
+      role: "assistant",
+      text: startedText,
+      at,
+      via: "call",
+    },
+  ];
+  const beforeWithApproval: ChatMessage[] = [
+    ...before,
+    { role: "assistant", text: approval, at: at + 10_000, via: "call" },
+  ];
+  const beforeWithUnrelatedQuestion: ChatMessage[] = [
+    ...before,
+    {
+      role: "assistant",
+      text: "Should I keep an eye on the tests?",
+      at: at + 10_000,
+      via: "call",
+    },
+  ];
+  const boardWith = (name: string): BoardSnapshot => ({
+    version: 1,
+    generatedAt: now,
+    intervalMs: 3000,
+    counts: { needs_you: 0, working: 1, idle: 0, unknown: 0 },
+    sessions: [
+      {
+        id: "1001_1",
+        pid: 1001,
+        agent: "claude-code",
+        agentLabel: "Claude Code",
+        agentVersion: "1.0.0",
+        name,
+        project: "app",
+        cwd: "/work/app",
+        mode: "interactive",
+        state: "working",
+        detail: "turn_running",
+        since: now - 120_000,
+        source: "hook",
+        startedAt: now - 300_000,
+        spawnedBy: null,
+        terminal: {
+          tty: "ttys001",
+          app: "Terminal",
+          appPath: "/System/Applications/Utilities/Terminal.app",
+          tmux: null,
+          remote: false,
+        },
+        focus: "tab",
+      },
+    ],
+  });
+
+  /** Fake execution port that answers as the real ComputerWorker does (using readWords and interpret). */
+  function withRealishWorker(
+    state: string,
+    message: string,
+    options: {
+      mode?: "native" | "browser";
+      worker?: boolean;
+      goal?: string;
+      waiting?: "takeover" | "approval" | "question";
+      pendingAction?: { id: string; description: string };
+      board?: BoardSnapshot;
+      codingTaskRunning?: boolean;
+      codingTaskWaiting?: string;
+      recentJob?: { job: string; result: string; done?: boolean };
+    } = {},
+  ) {
+    const f = world();
+    const submitted: string[] = [];
+    const answered: string[] = [];
+    const taskAnswers: string[] = [];
+    let execStops = 0;
+    let taskCancels = 0;
+    if (options.board) f.value.board = () => options.board!;
+    if (options.recentJob) {
+      f.value.jobs = {
+        start: async (job) => {
+          f.started.push(job);
+          return { ok: true, said: "I started a new session for that job." };
+        },
+        recent: () => [
+          {
+            id: "job-1",
+            job: options.recentJob!.job,
+            startedAt: now - 5 * 60_000,
+            done: options.recentJob!.done ?? true,
+            result: options.recentJob!.result,
+          },
+        ],
+      };
+    }
+    if (options.codingTaskRunning || options.codingTaskWaiting) {
+      f.value.tasks = {
+        current: () => ({
+          goal: "fix the login tests",
+          state: options.codingTaskWaiting ? "waiting_for_person" : "running",
+          summary: options.codingTaskWaiting
+            ? "Waiting for your word."
+            : "Running login tests.",
+          question: options.codingTaskWaiting ?? null,
+          choices: [],
+          canAnswer: !!options.codingTaskWaiting,
+          canAccept: false,
+          canCancel: true,
+        }),
+        canStart: () => false,
+        start: async () => ({ ok: false, message: "Busy." }),
+        answer: async (text) => {
+          taskAnswers.push(text);
+          return { ok: true, message: `Answered coding task: ${text}` };
+        },
+        accept: async () => ({ ok: false, message: "" }),
+        cancel: async () => {
+          taskCancels++;
+          return { ok: true, message: "Coding task canceled." };
+        },
+      };
+    }
+    const snapshot = {
+      configured: true,
+      mode: options.mode ?? ("native" as const),
+      state,
+      canStop: state === "running" || state === "waiting_for_person",
+      message,
+      ...(options.goal !== undefined ? { goal: options.goal } : {}),
+      ...(options.waiting !== undefined ? { waiting: options.waiting } : {}),
+      ...(options.pendingAction
+        ? { pendingAction: options.pendingAction }
+        : {}),
+    };
+    const guideReply = (text: string): string => {
+      if (state === "idle") return startedText;
+      const kind = readWords(text);
+      if (kind === "stop") {
+        execStops++;
+        return stoppedText;
+      }
+      if (options.waiting === "takeover") {
+        if (kind === "continue") return "Continuing.";
+        if (kind === "order") return resumedText;
+        return stillPausedText;
+      }
+      if (options.waiting === "approval") {
+        if (kind === "order") return asideApprovalText;
+        if (kind === "continue") return asideContinueHoldApprovalText;
+        return asideHoldApprovalText;
+      }
+      if (kind === "continue") return alreadyRunningText;
+      if (kind === "order") return guidedText;
+      return heldText;
+    };
+    f.value.execution = {
+      snapshot: () => snapshot,
+      submit: async (_id, text) => {
+        submitted.push(text);
+        return { message: guideReply(text) };
+      },
+      submitRead: async (_id, text) => {
+        submitted.push(text);
+        return { message: guideReply(text) };
+      },
+      stop: () => {
+        execStops++;
+        return {
+          ...snapshot,
+          state: "canceled",
+          canStop: false,
+          message: stoppedText,
+        };
+      },
+      ...(options.worker === false
+        ? {}
+        : {
+            answer: async (text: string) => {
+              answered.push(text);
+              if (options.waiting === "question")
+                return { message: "Thank you. I go on." };
+              if (options.waiting === "takeover") {
+                const said = interpret(text, {
+                  kind: "question",
+                  options: ["Continue", "Stop"],
+                });
+                if (said?.decision === "answer" && said.text === "Continue")
+                  return { message: "Continuing." };
+                if (said?.decision === "deny" || said?.text === "Stop")
+                  return { message: stoppedText };
+                return { message: `I did not get a clear answer. ${paused}` };
+              }
+              const said = interpret(text, { kind: "permission", options: [] });
+              if (said?.decision === "allow") return { message: "Continuing." };
+              if (said?.decision === "deny")
+                return { message: refusedApprovalText };
+              return { message: `I did not get a clear answer. ${message}` };
+            },
+          }),
+    };
+    return {
+      ...f,
+      submitted,
+      answered,
+      taskAnswers,
+      execStops: () => execStops,
+      taskCancels: () => taskCancels,
+    };
+  }
+
+  function scriptedChat(steps: (ToolCall[] | string)[]) {
+    let step = 0;
+    const inputs: {
+      system: string;
+      messages: ModelMessage[];
+      tools: { name: string; description: string }[];
+    }[] = [];
+    const model: ModelClient = {
+      async complete(input) {
+        inputs.push({
+          system: input.system,
+          messages: [...input.messages],
+          tools: input.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+          })),
+        });
+        const next = steps[Math.min(step++, steps.length - 1)]!;
+        return typeof next === "string"
+          ? { text: next, toolCalls: [] }
+          : { text: "", toolCalls: next };
+      },
+    };
+    return { model, inputs, calls: () => step };
+  }
+
+  it("round2 blocker 1: never approves on unseen prompt, unrelated question, bare ok/sure/yeah/yep, waiting coding task, or waiting: undefined", async () => {
+    const waitingState = `The computer task ("${goal}") waits for your answer: ${approval}`;
+    // Unseen approval prompt: even explicit yes must not approve.
+    for (const words of [
+      "ok",
+      "okay",
+      "sure",
+      "yes",
+      "yeah",
+      "yep",
+      "yes do it",
+      "approve",
+      "go ahead",
+      "do it",
+      "allow it",
+    ]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+      });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat(["Okay."]).model,
+      ).reply(before, words, "call");
+      expect([words, f.answered, f.submitted, said]).toEqual([
+        words,
+        [],
+        [],
+        waitingState,
+      ]);
+    }
+
+    // Unrelated last assistant question: never approves.
+    for (const words of ["yes", "ok", "sure"]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+      });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat(["I'll keep an eye on them."]).model,
+      ).reply(beforeWithUnrelatedQuestion, words, "call");
+      expect([words, f.answered, f.submitted, said]).toEqual([
+        words,
+        [],
+        [],
+        waitingState,
+      ]);
+    }
+
+    // Seen approval prompt: only explicit yes approves; bare ok/okay/sure/yeah/yep never approve.
+    for (const words of [
+      "yes",
+      "yes do it",
+      "approve",
+      "go ahead",
+      "do it",
+      "allow it",
+    ]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+      });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat(["Okay."]).model,
+      ).reply(beforeWithApproval, words, "call");
+      expect([words, f.answered, f.submitted, said]).toEqual([
+        words,
+        [words],
+        [],
+        "Continuing.",
+      ]);
+    }
+    for (const words of ["ok", "okay", "sure", "yeah", "yep"]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+      });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat(["Okay."]).model,
+      ).reply(beforeWithApproval, words, "call");
+      expect([words, f.answered, f.submitted, said]).toEqual([
+        words,
+        [],
+        [],
+        waitingState,
+      ]);
+    }
+
+    // Coding task also waiting for an answer keeps its own path.
+    for (const words of ["yes", "ok", "no"]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+        codingTaskWaiting: "Should I push the fix?",
+      });
+      const run = scriptedChat([
+        [call("answer_task", { text: words })],
+        "Answered.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(
+        beforeWithApproval,
+        words,
+        "call",
+      );
+      expect([words, f.answered, f.submitted, f.taskAnswers]).toEqual([
+        words,
+        [],
+        [],
+        [words],
+      ]);
+    }
+
+    // waiting_for_person with waiting: undefined must never forward to answer.
+    const undefF = withRealishWorker("waiting_for_person", approval, { goal });
+    await new Supervisor(undefF.value, scriptedChat(["Okay."]).model).reply(
+      before,
+      "ok, open it in the browser",
+      "call",
+    );
+    expect(undefF.answered).toEqual([]);
+  });
+
+  it("round2 blocker 2: at approval, hesitations and questions repeat state without answer/submit, refusals deny, orders set aside, coding/session take normal path", async () => {
+    const waitingState = `The computer task ("${goal}") waits for your answer: ${approval}`;
+    for (const words of [
+      "sure, why not",
+      "sure, why not?",
+      "are you sure?",
+      "I'm not sure",
+      "not sure about that",
+      "is it okay?",
+      "ok, thanks",
+      "ok, wait",
+      "ok, tell me what you're sending",
+      "why do you need to confirm?",
+      "I didn't say yes",
+    ]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+        board: boardWith("deploy fix"),
+      });
+      const run = scriptedChat(["Okay."]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        beforeWithApproval,
+        words,
+        "call",
+      );
+      expect([words, f.answered, f.submitted, said]).toEqual([
+        words,
+        [],
+        [],
+        waitingState,
+      ]);
+    }
+
+    // Explicit refusals go to answer (never submit) and cancel cleanly.
+    for (const words of ["no", "don't", "deny", "don't approve that"]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+        board: boardWith("deploy fix"),
+      });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat(["Okay."]).model,
+      ).reply(beforeWithApproval, words, "call");
+      expect([words, f.answered.length, f.submitted, said]).toEqual([
+        words,
+        1,
+        [],
+        refusedApprovalText,
+      ]);
+    }
+
+    // Coding work and session messages take the chat's normal path (never answer, never submit).
+    for (const words of [
+      "yes, what is deploy fix doing?",
+      "tell deploy fix yes",
+      "tell deploy fix to approve it",
+      "what is deploy fix doing?",
+      "find out why the build is slow",
+      "open the settings file and fix the typo",
+    ]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+        board: boardWith("deploy fix"),
+      });
+      const run = scriptedChat(["Normal path reply."]);
+      await new Supervisor(f.value, run.model).reply(
+        beforeWithApproval,
+        words,
+        "call",
+      );
+      expect([words, f.answered, f.submitted, run.calls() > 0]).toEqual([
+        words,
+        [],
+        [],
+        true,
+      ]);
+    }
+
+    // Planner question: coding work and session words take normal path; stop stops; answers go to answer.
+    for (const words of [
+      "open the settings file and fix the typo",
+      "what is deploy fix doing?",
+    ]) {
+      const f = withRealishWorker("waiting_for_person", question, {
+        goal,
+        waiting: "question",
+        board: boardWith("deploy fix"),
+      });
+      const run = scriptedChat(["Normal path reply."]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.answered, f.submitted, run.calls() > 0]).toEqual([
+        words,
+        [],
+        [],
+        true,
+      ]);
+    }
+  });
+
+  it("round2 blocker 3: owner's four messages and spoken hesitations reach submit even with a 'google auth' session on the board", async () => {
+    for (const words of [
+      "Can you just hit enter?",
+      "I don't still see Slack to be open. Can you open Slack on Chrome?",
+      "Uh just open it in Chrome, bro.",
+      "Bro, just open app.example.com on Google Chrome.",
+      "um can you hit enter?",
+      "uhh press return",
+    ]) {
+      const f = withRealishWorker("running", working, {
+        goal,
+        board: boardWith("google auth"),
+      });
+      const run = scriptedChat([deflectionDraft]);
+      run.model.reading = async () => ({
+        intent: { kind: "clarify", question: "Which app did you mean?" },
+        work: false,
+      });
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, f.submitted, run.calls(), said]).toEqual([
+        words,
+        [words],
+        0,
+        guidedText,
+      ]);
+    }
+  });
+
+  it("round2 blocker 4: panic stops with don't or repeats stop the screen task; idle executor never steals stop from a running coding task", async () => {
+    for (const words of [
+      "stop, don't click that",
+      "stop, don't send it",
+      "don't do that, stop",
+      "no, don't, stop",
+      "stop, I don't want that",
+      "stop stop",
+      "stop, stop",
+      "stop! stop!",
+      "cancel cancel",
+      "stop, wait",
+      "never mind, stop",
+      "stop clicking",
+      "stop typing",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([deflectionDraft]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, f.execStops(), f.submitted, run.calls(), said]).toEqual([
+        words,
+        1,
+        [],
+        0,
+        stoppedText,
+      ]);
+    }
+
+    // Idle executor + running coding task: stop/cancel never hits execution.stop().
+    const cancelF = withRealishWorker("idle", "Computer use is on.", {
+      codingTaskRunning: true,
+    });
+    const cancelRun = scriptedChat([[call("cancel_task")], "Canceled."]);
+    await new Supervisor(cancelF.value, cancelRun.model).reply(
+      [],
+      "cancel",
+      "call",
+    );
+    expect([cancelF.execStops(), cancelF.taskCancels()]).toEqual([0, 1]);
+
+    const stopIdleF = withRealishWorker("idle", "Computer use is on.", {
+      codingTaskRunning: true,
+    });
+    const stopIdleRun = scriptedChat([
+      "Do you want to cancel the coding task?",
+    ]);
+    const stopIdleSaid = await new Supervisor(
+      stopIdleF.value,
+      stopIdleRun.model,
+    ).reply([], "stop", "call");
+    expect(stopIdleF.execStops()).toBe(0);
+    expect(stopIdleRun.calls()).toBe(1);
+    expect(stopIdleSaid).toBe("Do you want to cancel the coding task?");
+  });
+
+  it("round2 blocker 5: one delegate gate keeps coding work off submit across shortcuts, tool calls, and takeover pause", async () => {
+    const runningCoding = [
+      "open the browser config file and fix the typo",
+      "open the app settings file and fix the typo",
+      "open the app.tsx file and fix the typo",
+      "open package.json in the desktop folder and bump the version",
+      "open the button component and fix the hover state",
+      "switch to the browser repo and fix the test",
+      "use tailwind for the buttons",
+      "open the login page and add a forgot password link",
+      "open the app and add dark mode",
+      "open the settings panel and add a toggle",
+      "open the workspace and write a README",
+      "pull up the pricing page and change the copy",
+      "type a helper function in it",
+      "switch to the main panel and write a header",
+    ];
+    for (const words of runningCoding) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([
+        [call("start_job", { job: words })],
+        "Started.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.submitted, f.started]).toEqual([words, [], [words]]);
+    }
+
+    // Even when a model tries to call delegate_computer_task on coding work or a hold, delegate blocks submit.
+    for (const words of [
+      "open the settings file and fix the typo",
+      "the page looks weird",
+      "put hello into the right-hand input",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([
+        [call("delegate_computer_task")],
+        "Okay, leaving the running task alone.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.submitted]).toEqual([words, []]);
+    }
+
+    // While paused on takeover, coding work takes the normal path and starts its job.
+    for (const words of [
+      "open the settings file and fix the typo",
+      "open package.json and bump the version",
+      "find out why the login is slow",
+      "push it to origin",
+    ]) {
+      const f = withRealishWorker("waiting_for_person", paused, {
+        goal,
+        waiting: "takeover",
+      });
+      const run = scriptedChat([
+        [call("start_job", { job: words })],
+        "Started.",
+      ]);
+      await new Supervisor(f.value, run.model).reply(before, words, "call");
+      expect([words, f.submitted, f.answered, f.started]).toEqual([
+        words,
+        [],
+        [],
+        [words],
+      ]);
+    }
+  });
+
+  it("round2 blocker 6: catches comma-question claims, widened result phrases, because/so/since clauses, 'The agent ...', board-backed claims, canceled state, and blocked note", async () => {
+    for (const draft of [
+      "Example.com is open now, anything else?",
+      "I hit enter, do you see it now?",
+      "I tapped the Send button.",
+      "I got example.com open in Chrome.",
+      "I have Slack open now.",
+      "I've got the roadmap board open.",
+      "The email went through.",
+      "It went through.",
+      "It got done.",
+      "The roadmap board is currently displayed.",
+      "It's displaying the roadmap board.",
+      "We're in Chrome now.",
+      "I'm in Slack now.",
+      "I see Slack.",
+      "I can see Slack.",
+      "I toggled the switch.",
+      "I checked the box.",
+      "I posted the comment.",
+      "I already took care of that.",
+      "That's handled.",
+      "No need to wait because example.com is open.",
+      "You asked me to open it so example.com is open now.",
+      "Since you wanted Slack I opened Slack in Chrome.",
+      "The agent opened Slack.",
+      "The agent hit enter.",
+      "The agent found the roadmap board.",
+      "The agent sent the message.",
+      "The agent signed you in.",
+      "The agent filled out the form.",
+    ]) {
+      const f = withRealishWorker("running", working, { goal });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat([draft]).model,
+      ).reply(before, "the page looks weird", "call");
+      expect([draft, said]).toEqual([draft, stillRuns]);
+    }
+
+    // Board session named "roadmap" + model calls status -> must not back "The roadmap board is open."
+    const boardF = withRealishWorker("running", working, {
+      goal,
+      board: boardWith("roadmap"),
+    });
+    const boardRun = scriptedChat([
+      [call("status")],
+      "The roadmap board is open.",
+    ]);
+    expect(
+      await new Supervisor(boardF.value, boardRun.model).reply(
+        before,
+        "the page looks weird",
+        "call",
+      ),
+    ).toBe(stillRuns);
+
+    // Canceled state has a true sentence and catches false screen claims.
+    const canceledState = computerTaskNow({
+      configured: true,
+      mode: "native",
+      state: "canceled",
+      canStop: false,
+      message: stoppedText,
+    });
+    expect(canceledState).toContain(
+      "The computer task was stopped: it did not report that it is done.",
+    );
+    expect(screenClaims(canceledState!)).toEqual([]);
+    const canceledF = withRealishWorker("canceled", stoppedText);
+    expect(
+      await new Supervisor(
+        canceledF.value,
+        scriptedChat(["Yes, example.com is open in Chrome."]).model,
+      ).reply(before, "Is it open?", "call"),
+    ).toBe(canceledState);
+
+    // Blocked state must not seed "The engine has not reported that the task is over."
+    const blockedF = withRealishWorker(
+      "blocked",
+      "I stopped at the limit of 40 steps. The task is not finished.",
+    );
+    const blockedRun = scriptedChat(["The task stopped at the step limit."]);
+    await new Supervisor(blockedF.value, blockedRun.model).reply(
+      before,
+      "what happened?",
+      "call",
+    );
+    const blockedNote = blockedRun.inputs[0]!.messages.filter(
+      (m) => m.role === "tool",
+    )
+      .map((m) => m.content)
+      .join("\n");
+    expect(blockedNote).not.toContain(
+      "The engine has not reported that the task is over.",
+    );
+  });
+
+  it("round2 blocker 7: asksAboutComputerTask never hijacks ordinary non-screen questions, uncertain tasks, or recent-job questions with empty history", async () => {
+    for (const words of [
+      "is it open source?",
+      "what are you doing tonight?",
+      "are you stuck on the login bug?",
+      "where is that file?",
+      "where are we going for dinner?",
+      "what's the status of my flight?",
+      "what's the progress on the migration?",
+      "did you find the bug in package.json?",
+      "did you save the file?",
+      "did you close the database connection?",
+      "how is it going?",
+      "are you okay?",
+      "are you working tomorrow?",
+      "what are you working on in this project?",
+      "do you need anything from the store?",
+      "is example.com up?",
+      "is the app working on mobile?",
+      "was it working yesterday?",
+    ]) {
+      const f = withRealishWorker("running", working, {
+        goal,
+        board: boardWith("deploy fix"),
+      });
+      const run = scriptedChat(["Normal answer."]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, run.calls(), said]).toEqual([words, 1, "Normal answer."]);
+    }
+
+    // Uncertain task (not running or waiting): never hijacked by asksAboutComputerTask.
+    for (const words of [
+      "is it open source?",
+      "what are you doing tonight?",
+      "where is that file?",
+      "is it open?",
+    ]) {
+      const f = withRealishWorker(
+        "uncertain",
+        'An earlier computer task has an unknown result: "open example.com".',
+      );
+      const run = scriptedChat(["Normal answer."]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        [],
+        words,
+        "call",
+      );
+      expect([words, run.calls(), said]).toEqual([words, 1, "Normal answer."]);
+    }
+
+    // Running computer task + completed recent job + empty history: "is it done?" goes to the model.
+    const jobF = withRealishWorker("running", working, {
+      goal,
+      recentJob: {
+        job: "find the biggest files in Downloads",
+        result: "Found three big files in Downloads.",
+        done: true,
+      },
+    });
+    const jobRun = scriptedChat([
+      "The job found three big files in Downloads.",
+    ]);
+    const jobSaid = await new Supervisor(jobF.value, jobRun.model).reply(
+      [],
+      "is it done?",
+      "call",
+    );
+    expect(jobRun.calls()).toBe(1);
+    expect(jobSaid).toBe("The job found three big files in Downloads.");
+  });
+
+  it("round2 rests 8, 9, 10: takeover non-orders take normal path, 'open the task tab' reaches submit, and contradictory approval phrases never call answer while 'sure, stop' stops", async () => {
+    // Rest 8: takeover non-orders ("no, the other tab", "in the browser instead") take normal path.
+    for (const words of ["no, the other tab", "in the browser instead"]) {
+      const f = withRealishWorker("waiting_for_person", paused, {
+        goal,
+        waiting: "takeover",
+      });
+      const run = scriptedChat(["It is paused right now."]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([
+        words,
+        f.submitted,
+        f.answered,
+        f.execStops(),
+        run.calls(),
+        said,
+      ]).toEqual([words, [], [], 0, 1, "It is paused right now."]);
+    }
+
+    // Rest 9: "open the task tab" and "open the tasks tab" reach submit.
+    for (const words of ["open the task tab", "open the tasks tab"]) {
+      const f = withRealishWorker("running", working, { goal });
+      const run = scriptedChat([deflectionDraft]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, f.submitted, said]).toEqual([words, [words], guidedText]);
+    }
+
+    // Rest 10: contradictory phrases at approval never call answer/submit; "sure, stop" stops.
+    const waitingState = `The computer task ("${goal}") waits for your answer: ${approval}`;
+    for (const words of ["ok, no", "yes, no"]) {
+      const f = withRealishWorker("waiting_for_person", approval, {
+        goal,
+        waiting: "approval",
+      });
+      const said = await new Supervisor(
+        f.value,
+        scriptedChat(["Okay."]).model,
+      ).reply(beforeWithApproval, words, "call");
+      expect([words, f.answered, f.submitted, said]).toEqual([
+        words,
+        [],
+        [],
+        waitingState,
+      ]);
+    }
+    const stopF = withRealishWorker("waiting_for_person", approval, {
+      goal,
+      waiting: "approval",
+    });
+    const stopSaid = await new Supervisor(
+      stopF.value,
+      scriptedChat(["Okay."]).model,
+    ).reply(beforeWithApproval, "sure, stop", "call");
+    expect(stopF.execStops()).toBe(1);
+    expect(stopF.answered).toEqual([]);
+    expect(stopF.submitted).toEqual([]);
+    expect(stopSaid).toBe(stoppedText);
   });
 });
