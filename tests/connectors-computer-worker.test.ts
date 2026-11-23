@@ -781,8 +781,16 @@ describe("a yes after which the action was not sent", () => {
     await worker.submit("r1", "Delete it");
     await waiting();
     await worker.answer("yes");
-    await waiting();
-    // The yes covered the first try and two more. The fourth plan asks again.
+    // The yes covered the first try and two more. The worker then holds, and
+    // says what it could not send.
+    await until(() => said.length === 2);
+    expect(said[1]).toMatch(
+      /^My last 2 actions were not sent, so I hold\. .* Next I wanted to click "Delete"\. Say continue when your hands are off, or stop\.$/,
+    );
+    expect(hands.sent).toEqual([]);
+    await worker.answer("continue");
+    await until(() => said.length === 3);
+    // The fourth plan asks again: continue is no yes for the click.
     expect(questions(said)).toBe(2);
     expect(hands.sent).toEqual([]);
     worker.stop();
@@ -973,6 +981,9 @@ describe("the person takes over", () => {
     hands.answer = (command) =>
       command.kind === "click" ? { interrupted: true } : undefined;
   };
+  // An action that was held back for the person: the pause says what it was.
+  const held = (wanted: string) =>
+    `You are using the Mac, so I hold. Next I wanted to ${wanted}. Say continue when your hands are off, or stop.`;
   it("pauses and asks: continue goes on", async () => {
     const { worker, hands, waiting, said } = setup([click, done]);
     interrupted(hands);
@@ -1015,7 +1026,7 @@ describe("the person takes over", () => {
     await worker.submit("r1", "Click it");
     await waiting();
     expect(hands.sent).toEqual([]);
-    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    expect(worker.snapshot().message).toBe(held('click "Save"'));
     worker.stop();
   });
   // The person works on the Mac while the worker looks at the screen to plan.
@@ -1042,7 +1053,7 @@ describe("the person takes over", () => {
     await waiting();
     // Nothing went out: the question comes before the click.
     expect(hands.sent).toEqual([]);
-    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    expect(worker.snapshot().message).toBe(held('click "Save"'));
     expect((await worker.answer("continue")).message).toBe("Continuing.");
     await worker.idle();
     expect(planner.inputs[1]!.history[0]!.outcome).toBe(
@@ -1068,7 +1079,7 @@ describe("the person takes over", () => {
     expect(ran).toContain("wait");
     expect(ran).not.toContain("click");
     expect(hands.sent).toEqual([]);
-    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    expect(worker.snapshot().message).toBe(held('click "Save"'));
     worker.stop();
   });
   it("keeps the person's input during a wait for the next input", async () => {
@@ -1088,7 +1099,7 @@ describe("the person takes over", () => {
       "observe",
     ]);
     expect(hands.sent).toEqual([]);
-    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    expect(worker.snapshot().message).toBe(held('click "Save"'));
     worker.stop();
   });
   it("pauses before a click on a page too", async () => {
@@ -1101,7 +1112,7 @@ describe("the person takes over", () => {
     await worker.submit("r1", "Next");
     await waiting();
     expect(browser.calls).toEqual(["read"]);
-    expect(worker.snapshot().message).toMatch(/^You moved the mouse/);
+    expect(worker.snapshot().message).toBe(held('click "Next" on the page'));
     worker.stop();
   });
   it("ends as stopped when the hands say that the person stopped them", async () => {
@@ -2351,6 +2362,453 @@ describe("what the person says while a task runs", () => {
     expect((await after.worker.submit("g2", "Use Safari")).message).toBe(taken);
     second.release();
     await after.worker.idle();
+  });
+});
+
+describe("an action that is not sent, or that moves nothing", () => {
+  // A session with fakes: an address stands typed in the address bar, and
+  // the planner presses Return again and again.
+  const front = {
+    name: "Browser",
+    bundleId: "com.example.browser",
+    window: "New Tab",
+  };
+  const bar = (surfaceEpoch = 1) =>
+    observation(
+      [
+        element(1, {
+          role: "AXTextField",
+          title: "Address and search bar",
+          value: "example.com/app",
+          focused: true,
+        }),
+      ],
+      { app: front, surfaceEpoch },
+    );
+  const enter: Action = { kind: "key", combo: "return" };
+  const again = (action: Action, times: number): Action[] =>
+    Array.from({ length: times }, () => action);
+  const wanted = 'press return in "Address and search bar"';
+  const hold = (next: string) =>
+    `You are using the Mac, so I hold. Next I wanted to ${next}. Say continue when your hands are off, or stop.`;
+  const retired =
+    "The desktop or display changed. Old coordinates were retired; nothing was sent.";
+  const unsentHold = (next: string) =>
+    `My last 2 actions were not sent, so I hold. The last reason: ${retired} Next I wanted to ${next}. Say continue when your hands are off, or stop.`;
+  const told = (times: number) =>
+    `This action did not work ${times} times in a row: it was not sent, or the screen did not change after it. Choose another way. The same action once more ends the task.`;
+  const inFront = 'Browser is in front, with the window "New Tab".';
+  const ending = (times: number, what: string, next: string, shows = inFront) =>
+    `I tried ${times} times to ${next}, ${what} So I stopped: the task is not finished. ${shows} You can ${next} yourself, or ask me again in other words.`;
+  /** The person works in another window: every look has another generation of the screen. */
+  const moving = (hands: FakeHands) => {
+    let epoch = 1;
+    hands.answer = (command) =>
+      command.kind === "observe" ? { observation: bar(++epoch) } : undefined;
+  };
+
+  it("holds at once when the person took over, and says what it wanted to do next", async () => {
+    const { worker, hands, planner, journal, said } = setup(again(enter, 7), {
+      screens: [bar()],
+    });
+    // The person types in another window: the look just before each key sees it.
+    hands.answer = (command) =>
+      command.kind === "observe" && !command.image
+        ? { interrupted: true }
+        : undefined;
+    await worker.submit("r1", "Press Return on the address that you wrote");
+    await until(() => said.length === 1);
+    expect(said[0]).toBe(hold(wanted));
+    expect(worker.snapshot()).toMatchObject({
+      state: "waiting_for_person",
+      message: hold(wanted),
+    });
+    expect(planner.inputs).toHaveLength(1);
+    // Continue with the hands still on the Mac: the same hold, and still no key.
+    expect((await worker.answer("continue")).message).toBe("Continuing.");
+    await until(() => said.length === 2);
+    expect(said[1]).toBe(hold(wanted));
+    expect(planner.inputs[1]!.history[0]!.outcome).toBe(
+      "not sent: The person took over.",
+    );
+    expect((await worker.answer("stop")).message).toBe(stoppedText);
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "canceled",
+      reason: "stopped",
+      steps: [
+        { kind: "key", target: "return", outcome: "not_sent_person" },
+        { kind: "key", target: "return", outcome: "not_sent_person" },
+      ],
+    });
+  });
+
+  it("holds in the same words when the hands held the key back for the person", async () => {
+    const { worker, hands, journal, said } = setup(again(enter, 3), {
+      screens: [bar()],
+    });
+    // The hands refuse an input when the person acted since the command began.
+    hands.answer = (command) =>
+      command.kind === "key"
+        ? { ok: false, error: "refused", interrupted: true }
+        : undefined;
+    await worker.submit("r1", "Press Return on the address that you wrote");
+    await until(() => said.length === 1);
+    expect(said[0]).toBe(hold(wanted));
+    worker.stop();
+    await worker.idle();
+    expect(journal.get("r1")!.steps).toMatchObject([
+      { kind: "key", target: "return", outcome: "not_sent_person" },
+    ]);
+
+    // The same for the click that gives a field the focus before the text.
+    const field = observation([
+      element(1, { role: "AXTextField", title: "Address and search bar" }),
+    ]);
+    const typing = setup(
+      [{ kind: "type", text: "example.com/app", element: 1 }, done],
+      { screens: [field] },
+    );
+    typing.hands.answer = (command) =>
+      command.kind === "click"
+        ? { ok: false, error: "refused", interrupted: true }
+        : undefined;
+    await typing.worker.submit("r2", "Write the address");
+    await until(() => typing.said.length === 1);
+    expect(typing.said[0]).toBe(hold('type in "Address and search bar"'));
+    // The sentence holds the name of the field, and never the text.
+    expect(typing.said[0]).not.toContain("example.com");
+    typing.worker.stop();
+    await typing.worker.idle();
+    expect(typing.hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(typing.journal.get("r2")!.steps).toMatchObject([
+      {
+        kind: "type",
+        target: "Address and search bar",
+        outcome: "not_sent_person",
+      },
+    ]);
+  });
+
+  it("holds after two actions in a row that were not sent, then tells the planner, and then ends with the truth", async () => {
+    const { worker, hands, planner, journal, said } = setup(again(enter, 7), {
+      screens: [bar()],
+    });
+    moving(hands);
+    await worker.submit("r1", "Press Return on the address that you wrote");
+    await until(() => said.length === 1);
+    expect(said[0]).toBe(unsentHold(wanted));
+    // Two plans, not seven, and the person knows why nothing happens.
+    expect(planner.inputs).toHaveLength(2);
+    expect(worker.snapshot().state).toBe("waiting_for_person");
+    await worker.answer("continue");
+    await worker.idle();
+    // The answer itself changes what is in front, so the first try after it
+    // is held against nothing. The next one was not sent either: the planner
+    // reads that plainly.
+    expect(planner.inputs).toHaveLength(5);
+    expect(planner.inputs[3]!.history.at(-1)!.outcome).toBe(
+      `not sent: ${retired}`,
+    );
+    expect(planner.inputs[4]!.history.at(-1)!.outcome).toBe(
+      `${told(4)} Last outcome: not sent: ${retired}`,
+    );
+    // It chose the same action again: the request ends, and says what is true.
+    const end = ending(
+      4,
+      `and it was never sent. The last reason: ${retired}`,
+      wanted,
+    );
+    expect(worker.snapshot()).toMatchObject({ state: "blocked", message: end });
+    expect(said).toEqual([unsentHold(wanted), end]);
+    expect(said.join(" ")).not.toMatch(/\bdone\b/i);
+    expect(hands.sent).toEqual([]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+      steps: [
+        { kind: "key", target: "return", outcome: "not_sent" },
+        { kind: "key", target: "return", outcome: "not_sent" },
+        { kind: "key", target: "return", outcome: "not_sent" },
+        { kind: "key", target: "return", outcome: "not_sent" },
+        { kind: "key", target: "return", outcome: "not_sent_repeat" },
+      ],
+    });
+  });
+
+  it("holds after two different actions in a row that were not sent", async () => {
+    // The middle of the address bar, as a point of the picture.
+    const point: Action = { kind: "click_at", x: 133, y: 188 };
+    const { worker, hands, planner, said } = setup(
+      [enter, point, enter, enter, point, point, enter],
+      { screens: [bar()] },
+    );
+    moving(hands);
+    await worker.submit("r1", "Open example.com/app in the browser");
+    await until(() => said.length === 1);
+    expect(said[0]).toBe(unsentHold('click "Address and search bar"'));
+    expect(planner.inputs).toHaveLength(2);
+    expect(hands.sent).toEqual([]);
+    worker.stop();
+  });
+
+  it("tells the planner after three tries that changed nothing, and ends when it chooses the same again", async () => {
+    const { worker, hands, planner, journal, said } = setup(
+      [...again(enter, 4), done],
+      { screens: [bar()] },
+    );
+    await worker.submit("r1", "Open example.com/app in the browser");
+    // The third time in a row asks first, as before.
+    await until(() => said.length === 1);
+    expect(said[0]).toBe(
+      "I already did this twice in a row: Press return. Say yes to do it a third time, or no to stop.",
+    );
+    await worker.answer("yes");
+    await worker.idle();
+    expect(hands.sent).toEqual(again(enter, 3));
+    expect(planner.inputs).toHaveLength(4);
+    // After two tries the planner reads no more than before. After three it is told.
+    expect(planner.inputs[2]!.history.at(-1)!.outcome).toBe("ok");
+    expect(planner.inputs[3]!.history.at(-1)!.outcome).toBe(
+      `${told(3)} Last outcome: ok`,
+    );
+    const end = ending(
+      3,
+      "and I saw no change on the screen after it.",
+      wanted,
+    );
+    expect(worker.snapshot()).toMatchObject({ state: "blocked", message: end });
+    expect(said.at(-1)).toBe(end);
+    expect(said.join(" ")).not.toMatch(/\bdone\b/i);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+      steps: [
+        { kind: "key", target: "return", outcome: "ok" },
+        { kind: "key", target: "return", outcome: "ok" },
+        { kind: "key", target: "return", outcome: "ok" },
+        { kind: "key", target: "return", outcome: "not_sent_repeat" },
+      ],
+    });
+  });
+
+  it("counts tries that went out and tries that were not sent in one row, and says how many of each", async () => {
+    const { worker, hands, planner, journal, said } = setup(
+      [...again(enter, 4), done],
+      { screens: [bar()] },
+    );
+    // The look just before the second key shows another generation of the screen.
+    let looks = 0;
+    hands.answer = (command) =>
+      command.kind === "observe" && !command.image && ++looks === 2
+        ? { observation: bar(2) }
+        : undefined;
+    await worker.submit("r1", "Open example.com/app in the browser");
+    await worker.idle();
+    expect(hands.sent).toEqual(again(enter, 2));
+    expect(planner.inputs).toHaveLength(4);
+    expect(said).toEqual([
+      ending(
+        3,
+        "and it did not work. Sent with no change on the screen that I saw: 2. Not sent: 1.",
+        wanted,
+      ),
+    ]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+      steps: [
+        { kind: "key", target: "return", outcome: "ok" },
+        { kind: "key", target: "return", outcome: "not_sent" },
+        { kind: "key", target: "return", outcome: "ok" },
+        { kind: "key", target: "return", outcome: "not_sent_repeat" },
+      ],
+    });
+  });
+
+  it("goes on when the planner chooses another way after it was told", async () => {
+    const { worker, hands, planner, said } = setup(
+      [...again(enter, 3), { kind: "click_element", element: 1 }, done],
+      { screens: [bar()] },
+    );
+    await worker.submit("r1", "Open example.com/app in the browser");
+    await until(() => said.length === 1);
+    await worker.answer("yes");
+    await worker.idle();
+    expect(planner.inputs[3]!.history.at(-1)!.outcome).toBe(
+      `${told(3)} Last outcome: ok`,
+    );
+    expect(hands.sent.map((command) => command.kind)).toEqual([
+      "key",
+      "key",
+      "key",
+      "click",
+    ]);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it.each([
+    ["tab", "the focus goes to the next field"],
+    ["down", "only the picture shows the row that is chosen now"],
+  ] as const)(
+    "lets %s repeat while the screen moves with it: %s",
+    async (combo, _how) => {
+      const form = (step: number) =>
+        observation(
+          [1, 2, 3, 4, 5, 6].map((id) =>
+            element(id, {
+              role: "AXTextField",
+              title: `Field ${id}`,
+              focused: id === (combo === "tab" ? step : 1),
+            }),
+          ),
+          combo === "tab"
+            ? {}
+            : { image: Buffer.from(`picture ${step}`).toString("base64") },
+        );
+      const key: Action = { kind: "key", combo };
+      const { worker, hands, said } = setup([...again(key, 5), done], {
+        screens: [form(1)],
+      });
+      // Each key moves something that the next look shows.
+      hands.answer = (command) =>
+        command.kind === "observe"
+          ? { observation: form(1 + hands.sent.length) }
+          : undefined;
+      await worker.submit("r1", "Go to the sixth field");
+      // From the third time on the person is asked, as before. Nothing ends the task.
+      for (let asked = 1; asked <= 3; asked++) {
+        await until(() => said.length === asked);
+        expect(said[asked - 1]).toBe(
+          `I already did this twice in a row: Press ${combo}. Say yes to do it a third time, or no to stop.`,
+        );
+        await worker.answer("yes");
+      }
+      await worker.idle();
+      expect(hands.sent).toEqual(again(key, 5));
+      expect(worker.snapshot().state).toBe("completed");
+    },
+  );
+
+  it("lets different texts into the same field, and scrolls and waits, as often as the planner likes", async () => {
+    const texts = setup(
+      [
+        ...["a", "b", "c", "d"].map((text): Action => ({
+          kind: "type",
+          text,
+          element: 1,
+        })),
+        done,
+      ],
+      { screens: [bar()] },
+    );
+    await texts.worker.submit("r1", "Write four letters");
+    await texts.worker.idle();
+    expect(texts.hands.sent).toEqual(
+      ["a", "b", "c", "d"].map((text) => ({ kind: "type", text })),
+    );
+    expect(texts.said).toEqual(["Done. The note is saved."]);
+
+    const scrolls = setup([
+      ...again({ kind: "scroll", direction: "down" }, 5),
+      ...again({ kind: "wait", ms: 1 }, 5),
+      done,
+    ]);
+    await scrolls.worker.submit("r1", "Scroll down and wait");
+    await scrolls.worker.idle();
+    expect(scrolls.hands.sent).toHaveLength(5);
+    expect(scrolls.said).toEqual(["Done. The note is saved."]);
+  });
+
+  it("does not say that nothing changed when the screen could not be read", async () => {
+    const link: Action = { kind: "open_url", url: "https://example.com/app" };
+    const { worker, hands, journal, said } = setup(again(link, 4));
+    hands.answer = (command) =>
+      command.kind === "observe" ? { ok: false, error: "failed" } : undefined;
+    await worker.submit("r1", "Open example.com/app");
+    // With no look the worker cannot tell whether the link moved anything.
+    // It asks before each further time, as before, and ends nothing itself.
+    for (let asked = 1; asked <= 2; asked++) {
+      await until(() => said.length === asked);
+      expect(said[asked - 1]).toBe(
+        "I already did this twice in a row: Open example.com. Say yes to do it a third time, or no to stop.",
+      );
+      await worker.answer("yes");
+    }
+    await worker.idle();
+    expect(hands.sent).toEqual(again(link, 4));
+    expect(journal.get("r1")).toMatchObject({ reason: "gave_up" });
+  });
+
+  it("goes on in silence after one action that was not sent, and the journal keeps it as not sent", async () => {
+    const screen = (surfaceEpoch: number) =>
+      observation([element(1, { title: "Save" })], { surfaceEpoch });
+    const { worker, hands, journal, said } = setup([click, click, done], {
+      screens: [screen(1), screen(2)],
+    });
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
+    expect(said).toEqual(["Done. The note is saved."]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "completed",
+      reason: "done",
+      steps: [
+        { kind: "click_element", target: "Save", outcome: "not_sent" },
+        { kind: "click_element", target: "Save", outcome: "ok" },
+        { kind: "done", target: "", outcome: "ok" },
+      ],
+    });
+  });
+
+  it("counts a click on a page that was not sent, with readings of the page between", async () => {
+    const browser = new FakeBrowser(page([pageElement(5, { label: "Next" })]));
+    // The page cannot be read just before each click.
+    let silent = false;
+    const read = browser.read.bind(browser);
+    browser.read = async () => {
+      if (silent) throw new Error("The page did not answer.");
+      return read();
+    };
+    const reading = (): Action => {
+      silent = false;
+      return { kind: "browser_read" };
+    };
+    const press = (): Action => {
+      silent = true;
+      return { kind: "browser_click", index: 5 };
+    };
+    const { worker, planner, journal, said } = setup(
+      [reading, press, reading, press, reading, press, reading, press, done],
+      { browser },
+    );
+    await worker.submit("r1", "Go to the next page");
+    await worker.idle();
+    expect(browser.calls).not.toContain("click 5");
+    expect(planner.inputs).toHaveLength(8);
+    expect(planner.inputs[6]!.history.at(-1)!.outcome).toMatch(
+      new RegExp(`^${told(3)} Last outcome: not sent: `),
+    );
+    const next = 'click "Next" on the page';
+    expect(said).toEqual([
+      ending(
+        3,
+        "and it was never sent.",
+        next,
+        'Notes is in front, with the window "Shopping".',
+      ),
+    ]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+    });
+    expect(
+      journal
+        .get("r1")!
+        .steps.filter((step) => step.kind === "browser_click")
+        .map((step) => step.outcome),
+    ).toEqual(["not_sent", "not_sent", "not_sent", "not_sent_repeat"]);
   });
 });
 
