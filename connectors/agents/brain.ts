@@ -4412,11 +4412,87 @@ const offeredWords = (
     ? null
     : to[1]!.trim();
 };
+/** Words that cannot be the new thing of a contrast ("the tests are not ..."). */
+const contrastFiller =
+  /^(?:is|are|was|were|am|be|been|it|it's|its|that|that's|this|i|i'm|im|we|we're|they|they're|you|you're|he|she|do|does|did|don't|doesn't|have|has|had|can|could|will|would|should|must|may|might|just|really|still|already|also|and|but|or|so|then|now|maybe|probably|surely|a|an|the|for|in|on|with|my|our|your|of|to|at|by|as|if|no|nope|nah|yes|ok|okay|wait|sorry|oops|actually|instead|rather|one|ones|thing|things|stuff)$/;
+/**
+ * The message sets a new thing against a word of the job's request, in one
+ * clause: "a cafe, not a bakery", "cafe not bakery", "not a bakery website,
+ * it's a blog", "not a bakery but a cafe", "a cafe instead of a bakery". A
+ * "not" with no new thing is news, not a change ("the tests are not failing
+ * anymore"), and so is a sentence about a person ("I'm not on safari"),
+ * one with a time ("yet", "anymore", "right now") and one with a word of
+ * things working ("it works on chrome, not on safari").
+ */
+const contrastReplaces = (spoken: string, requested: Set<string>) => {
+  const lowered = spoken.toLowerCase().replace(/[\u2018\u2019]/g, "'");
+  // A time, or a word of things working, makes it news: "actually, it works
+  // on chrome, not on safari" confirms the job.
+  if (
+    /\b(?:anymore|any\s+more|no\s+longer|yet|right\s+now|for\s+now)\b/.test(
+      lowered,
+    ) ||
+    /\b(?:works?|worked|working|fine|good|great|ok|okay|loads?|loaded|pass|passes|passed|passing|green|fast)\b/.test(
+      lowered,
+    )
+  )
+    return false;
+  const det = "(?:(?:a|an|the|for|in|on|with|my|our|your)\\s+)*";
+  const word = "(\\p{L}[\\p{L}'-]*)";
+  const fresh = (value: string) =>
+    value.length >= 3 && !requested.has(value) && !contrastFiller.test(value);
+  const aboutAPerson = (at: number) => {
+    const sentence = (
+      lowered
+        .slice(0, at)
+        .split(/[.;!?]/)
+        .at(-1) ?? ""
+    )
+      .replace(
+        /^\s*(?:(?:um+|uh+|oh|ok|okay|so|well|wait|no|nope|nah|oops|sorry|actually|hold\s+on|hang\s+on)[,.!\s]+)*/,
+        "",
+      )
+      .trimStart();
+    return /^(?:i|i'm|im|i\s+am|we|we're|we\s+are|they|they're|they\s+are|he|she|you|you're|you\s+are)\b/.test(
+      sentence,
+    );
+  };
+  for (const [pattern, newAt, oldAt] of [
+    [`${word}\\s*,?\\s+not\\s+${det}${word}`, 1, 2],
+    [
+      `\\bnot\\s+${det}${word}(?:\\s+\\p{L}+)?\\s*(?:,\\s*|\\s+but\\s+)(?:(?:it's|it\\s+is|but|rather|instead)\\s+)?${det}${word}`,
+      2,
+      1,
+    ],
+    [`${word}\\s+(?:instead\\s+of|rather\\s+than)\\s+${det}${word}`, 1, 2],
+  ] as const) {
+    for (const match of lowered.matchAll(new RegExp(pattern, "gu")))
+      if (
+        requested.has(match[oldAt]!) &&
+        fresh(match[newAt]!) &&
+        !aboutAPerson(match.index ?? 0)
+      )
+        return true;
+  }
+  return false;
+};
 /** What ClawdTime says when a second answer offers words of its own again. */
 const ownWordsOnly =
   'I type only your own words into a session. Say "tell", the name of the session and your words, or say the work alone and I start it.';
 const sizeNotDone =
   "I did not change the size of a window. Say that part once more.";
+/**
+ * Said in place of a second answer that left a correction of a job that
+ * still works behind, or said that the job was changed. The person's change
+ * stays in the sentence, so that it is not lost, and the way to start it is
+ * plain.
+ */
+const correctionKept = (job: JobFacts, spoken: string) =>
+  `${requestSaid(job)} ${job.waiting ? "waits for the job before it" : "still works"}, and no tool changes a job, so your change is not in it${
+    looksSecret(spoken)
+      ? ". Your words are not said here, because they look like a credential."
+      : `: "${clean(spoken, 160).replace(/"/g, "'")}".`
+  } Say the whole request with your change to start it as a new job.`;
 /** Said in place of an answer that claims an action that no tool did, twice. */
 const notDone =
   "I have not done that: nothing was started or changed for it. Say it once more.";
@@ -6633,6 +6709,66 @@ export class Supervisor {
           rest,
         ))
     );
+  }
+  /**
+   * The narrow reader for the check of a draft: the message changes what the
+   * newest job was asked to do, as a statement. `correctsARunningJob` is
+   * wide on purpose (it only decides whether a new job waits); this one
+   * holds only when, on top of it, the message asks nothing ("wait, is it
+   * running?"), is no word of assent ("no, that's fine"), names no session
+   * of the board ("no, not the bakery one, I meant deploy fix"), and either
+   * sets a word against a word of the job's request that only this request
+   * has ("a cafe not a bakery", "instead of a bakery"; not "page" or
+   * "html", which any page has): "contrast"; or, after a word of
+   * correction, says what the thing is ("it's a cafe", "make it a cafe",
+   * "the name is Cafe Luna", "it should say cafe", "use blue"): "statement".
+   */
+  private changesTheJobsRequest(
+    spoken: string,
+    turn: Turn,
+  ): "contrast" | "statement" | null {
+    const newest = this.jobsNow(1)[0];
+    if (!newest || !this.correctsARunningJob(spoken, turn)) return null;
+    const words = spoken.trim();
+    let rest = words;
+    for (let step = 0; step < 4; step++) {
+      const opens = correctionWord.exec(rest);
+      if (!opens) break;
+      rest = rest.slice(opens[0].length);
+    }
+    rest = rest.replace(/^[,.!\s]+/, "");
+    if (
+      /\?/.test(words) ||
+      /^(?:is|was|are|were|did|does|do|has|have|had|should|shall|can|could|will|would|how|what|why|when|where|who|which)\b/i.test(
+        rest,
+      ) ||
+      /^(?:(?:that|it|this)(?:['\u2019]s|\s+is|\s+was)\s+(?:fine|ok|okay|good|alright|all\s+right|great|cool|perfect|quick|fast)|(?:fine|ok|okay|all\s+good|thanks|thank\s+you|never\s*mind|nvm|no\s+worries)\b)/i.test(
+        rest,
+      ) ||
+      (this.world.board()?.sessions ?? []).some((session) =>
+        saidAsWords(title(session), words),
+      )
+    )
+      return null;
+    // Words that any page or app has stay out: "I'm not on the page yet".
+    const requested = new Set(
+      (newest.job.toLowerCase().match(/\p{L}{4,}/gu) ?? []).filter(
+        (word) =>
+          !correctionStop.has(word) &&
+          !softwareThing.test(word) &&
+          !softwareNoun.test(word) &&
+          !/^(?:html|landing|small|simple|single|basic|quick|little|nice|clean|whole)$/.test(
+            word,
+          ),
+      ),
+    );
+    if (contrastReplaces(words, requested)) return "contrast";
+    return rest !== words &&
+      /^(?:it['\u2019]s\s+(?:a|an|for|called)\b|it\s+is\s+(?:a|an|for|called)\b|make\s+it|call\s+it|name\s+it|the\s+name\s+is|it\s+should\s+(?:be|say)\b|use\s+)/i.test(
+        rest,
+      )
+      ? "statement"
+      : null;
   }
   /** What the person hears in a turn that decides no request. */
   private closedAnswer(turn: Turn) {
@@ -11931,6 +12067,45 @@ export class Supervisor {
           // size changed, and the tool for windows did not run: another tool
           // that ran (the session came to the front) stands behind no such
           // claim.
+          // The person's message corrects the job that still works ("wait
+          // no, it's a cafe not a bakery"), and no job started in this turn
+          // (a job that starts ends the turn with its own sentence). A job
+          // that runs cannot be changed: an answer that is no question back
+          // leaves the correction behind, and "I told the job" or "I updated
+          // it" is false. The model answers once more with the true way; a
+          // second such answer is replaced by a sentence that keeps the
+          // person's change.
+          // An answer that says the job was changed or told is false however
+          // the message is read: no tool changes a job. A plain answer that
+          // is no question back is checked only where the message opens
+          // with a word of correction and sets a new thing against a word
+          // of the job's own request ("wait no, it's a cafe not a bakery").
+          // News reads the same way ("it works on chrome, not on safari",
+          // "sorry, it's a big one"): there a plain "Okay." stands, as
+          // before.
+          const corrected = this.jobsNow(1)[0];
+          const change =
+            corrected && !corrected.done && !acted()
+              ? this.changesTheJobsRequest(words, turn)
+              : null;
+          // The same message makes the sentence that keeps the change the
+          // second answer of the checks below too ("I have not done that"
+          // or the state of the job would drop the change).
+          const keepsChange =
+            change === "contrast" && correctionWord.test(words.trim());
+          if (
+            change &&
+            (/\b(?:I|we)(?:['\u2019]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:told|updated|changed|switched|corrected|passed\s+on)\s+(?:it|that|this|them|the\s+(?:job|page|request|session|landing\s+page))\b/i.test(
+              reply.text,
+            ) ||
+              (keepsChange && !/\?["'\u201d)]*\s*$/.test(reply.text.trim())))
+          ) {
+            if (rechecked) return correctionKept(corrected!, words);
+            rechecked = true;
+            recheck =
+              "\nA check of your last draft: the person's last message changes what the newest job was asked to do. No tool changes a job or tells it anything. If their change is plain, call start_job now with their whole request as it is meant now: the request of that job with their change; the new job waits for that job. If it is not plain, ask one short question instead. Do not say that the job was changed or told.";
+            continue;
+          }
           const sizeClaim =
             asksForSize(words) &&
             names.has("session_window") &&
@@ -12058,7 +12233,10 @@ export class Supervisor {
             if (rechecked)
               return acted()
                 ? sizeNotDone
-                : (this.endedInTurn(turn) ?? notDone);
+                : (this.endedInTurn(turn) ??
+                    (keepsChange
+                      ? correctionKept(corrected!, words)
+                      : notDone));
             rechecked = true;
             // The tool for what the person asked: a window, a session to
             // see, or work.
@@ -12360,9 +12538,11 @@ export class Supervisor {
                 !/\bless\s+than\s+a\s+minute\b/i.test(body)))
           ) {
             if (rechecked)
-              return listed.length < 2 && working.length === 1
-                ? jobStillWorks(working[0]!, moment)
-                : jobsStillWork(listed, moment);
+              return keepsChange
+                ? correctionKept(corrected!, words)
+                : listed.length < 2 && working.length === 1
+                  ? jobStillWorks(working[0]!, moment)
+                  : jobsStillWork(listed, moment);
             rechecked = true;
             const since = ranFor(moment - (working[0] ?? listed[0]!).startedAt);
             // Only fixed words and a time stand in this note: a job's request

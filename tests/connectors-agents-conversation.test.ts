@@ -6601,7 +6601,11 @@ describe("a correction to a job that still works waits for that job", () => {
    */
   const then = async (
     words: string,
-    options: { finish?: boolean; between?: [string, string] } = {},
+    options: {
+      finish?: boolean;
+      between?: [string, string];
+      model?: ModelClient;
+    } = {},
   ) => {
     const made = mac([
       session({ name: "deploy fix" }),
@@ -6634,7 +6638,7 @@ describe("a correction to a job that still works waits for that job", () => {
       await say(scripted([options.between[1]]).model, options.between[0]);
       made.clock.now += 30_000;
     }
-    const answer = await say(wantsJob().model, words);
+    const answer = await say(options.model ?? wantsJob().model, words);
     const waits =
       made.ids().length === 2 &&
       made
@@ -6894,6 +6898,179 @@ describe("a correction to a job that still works waits for that job", () => {
     expect(got.jobs, words).toBe(2);
     expect(got.waits, words).toBe(false);
     expect(got.answer, words).toBe(started);
+  });
+
+  it.each([
+    "I've updated the job to say cafe instead of bakery.",
+    "Got it, cafe instead. The landing page will use cafe.",
+    "I told the job about the change. Should I wait for it?",
+  ])(
+    "keeps the person's change when the answer to a correction twice leaves it behind or claims it: %j",
+    async (draft) => {
+      const run = scripted([draft]);
+      const got = await then("wait no, it's a cafe not a bakery", {
+        model: run.model,
+      });
+      expect(got.jobs).toBe(1);
+      expect(got.answer).toBe(
+        `"${request}" still works, and no tool changes a job, so your change is not in it: "wait no, it's a cafe not a bakery". Say the whole request with your change to start it as a new job.`,
+      );
+      // The second answer was asked for with the true way.
+      expect(JSON.stringify(run.seen[1])).toContain(
+        "changes what the newest job was asked to do",
+      );
+    },
+  );
+
+  it("starts the corrected job after one false answer, and it waits for the first", async () => {
+    const run = scripted([
+      "I've updated the job to say cafe.",
+      [call("start_job")],
+      "Okay.",
+    ]);
+    const got = await then("wait no, it's a cafe not a bakery", {
+      model: run.model,
+    });
+    expect(got.jobs).toBe(2);
+    expect(got.waits).toBe(true);
+    expect(got.answer).toContain(waiting);
+  });
+
+  it.each([
+    // Questions, words of assent and messages about a session are no change of the job (review of a1c9fd2).
+    ["wait, is it running?", "Yes, it still works: it started 30 seconds ago."],
+    ["no, that's fine", "Okay."],
+    ["no it's fine, thanks", "Okay, it keeps working."],
+    ["actually that was quick", "It was."],
+    ["hold on, is that the bakery one", "Yes, that is the bakery page job."],
+    ["sorry, was that claude code?", "Yes."],
+    ["no, not the bakery one, I meant deploy fix", "Deploy fix is working."],
+    ["wait no, the api key is abcd1234efgh5678", "Got it."],
+    // Small talk in the shape of a statement (review round 2): only a claim of a change is checked there.
+    ["nah it should be fine", "Okay."],
+    [
+      "sorry, it's a big one",
+      "No problem. It runs in its own terminal window.",
+    ],
+    ["sorry, it's a lot to ask", "No problem."],
+    ["sorry, it's for tomorrow, no rush", "Okay."],
+    ["actually, use your best judgment", "Okay."],
+    // A contrast on a word that any page has.
+    ["I'm not on the page yet, I'm on my phone", "Okay."],
+    // News with a "not" and no new thing (review round 3).
+    ["the bakery is not open anymore", "Okay."],
+    ["I'm not a bakery owner yet, it's for my sister", "Okay."],
+    ["it's not for the bakery right now", "Okay."],
+    // A report of where something works confirms the job (review round 4).
+    ["fyi it works on chrome, not on safari", "Okay."],
+    ["it looks fine on desktop, not on mobile", "Okay."],
+    ["the bakery page loads, not broken", "Okay."],
+    // The same news after a word of correction (review round 5).
+    ["actually, it works on a phone, not on a bakery laptop", "Okay."],
+    ["no, the bakery page is fine, not broken", "Okay."],
+    ["sorry, it loads in one browser, not in the bakery one", "Okay."],
+    ["oh wait, it looks fine on desktop, not on the bakery tablet", "Okay."],
+    // Good questions back that hold words of a claim.
+    [
+      "wait no, it's a cafe not a bakery",
+      "Should I let the bakery job finish and then start a cafe version?",
+    ],
+    [
+      "wait no, it's a cafe not a bakery",
+      "I changed nothing: the bakery job still runs. Should I start a cafe version after it?",
+    ],
+  ])("leaves the answer to %j as it is", async (words, draft) => {
+    const run = scripted([draft]);
+    const got = await then(words, { model: run.model });
+    expect([words, got.jobs, got.answer]).toEqual([words, 1, draft]);
+    expect(run.seen.length, words).toBe(1);
+  });
+
+  it.each([
+    "wait no, it's a cafe not a bakery",
+    "sorry, it's a cafe, not a bakery",
+    "no, cafe not bakery",
+    "actually it should say cafe, not bakery",
+    "wait, it's not a bakery website, it's a blog",
+    "oops, not a bakery but a cafe",
+  ])(
+    "checks a plain answer to a contrast with a new thing: %j",
+    async (words) => {
+      const run = scripted(["Got it."]);
+      const got = await then(words, { model: run.model });
+      expect([words, got.jobs]).toEqual([words, 1]);
+      expect(got.answer, words).toContain("so your change is not in it");
+    },
+  );
+
+  it.each([
+    // With no word of correction, only an answer that claims a change is checked.
+    "it's a cafe, not a bakery",
+    "a cafe instead of a bakery",
+  ])(
+    "checks a contrast with no word of correction only for a claim: %j",
+    async (words) => {
+      const plain = await then(words, { model: scripted(["Got it."]).model });
+      expect([words, plain.answer]).toEqual([words, "Got it."]);
+      const claimed = await then(words, {
+        model: scripted(["I've updated the job to say cafe."]).model,
+      });
+      expect(claimed.answer, words).toContain("so your change is not in it");
+    },
+  );
+
+  it("keeps the change when a correction's second answer is a question that guesses at the job", async () => {
+    const run = scripted([
+      [call("job_result")],
+      "The bakery job is switching to a cafe page now. Anything else?",
+    ]);
+    const got = await then("wait no, it's a cafe not a bakery", {
+      model: run.model,
+    });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).toContain("so your change is not in it");
+    // A guess after news keeps the state of the job, as before.
+    const news = scripted([
+      [call("job_result")],
+      "The bakery job is almost done now. Anything else?",
+    ]);
+    const kept = await then("sorry, it's a big one", { model: news.model });
+    expect(kept.answer).toMatch(/^It still works/);
+  });
+
+  it("checks a statement of the thing only when the answer says that the job was changed", async () => {
+    const run = scripted(["I've updated the job to say Cafe Luna."]);
+    const got = await then("oops, the name is Cafe Luna", { model: run.model });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).toContain("so your change is not in it");
+    expect(run.seen.length).toBe(2);
+    const plain = scripted(["Okay."]);
+    const kept = await then("oops, the name is Cafe Luna", {
+      model: plain.model,
+    });
+    expect(kept.answer).toBe("Okay.");
+    expect(plain.seen.length).toBe(1);
+  });
+
+  it("does not say a credential back in the sentence that keeps a change", async () => {
+    const words =
+      "wait no, it's a cafe not a bakery, token ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const got = await then(words, {
+      model: scripted(["I've updated the job."]).model,
+    });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).not.toContain("ghp_");
+    expect(got.answer).toContain("look like a credential");
+  });
+
+  it("lets a question back about the correction stand", async () => {
+    const question =
+      "The bakery page job still runs and cannot be changed. Should I start a cafe version after it?";
+    const got = await then("wait no, it's a cafe not a bakery", {
+      model: scripted([question]).model,
+    });
+    expect(got.jobs).toBe(1);
+    expect(got.answer).toBe(question);
   });
 
   it("starts a correction at once when the job before it is done: nothing runs beside it", async () => {
