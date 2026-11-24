@@ -88,11 +88,3 @@ The opt-in app-owned runtime uses a replaceable model planner, isolated Chromium
 and the Mac companion. Agent-S remains a candidate, not an installed dependency.
 The presentation layer renders walkthrough zooms. Shared-screen actions retain
 explicit permissions, exclusive control, fresh-screen checks and visible Stop.
-
-## Comparisons
-
-1. General assistants (Grok Bot, OpenClaw, Sentient OSSentient OS, TurnstoneTurnstone, TaskletTasklet): They do everyday tasks themselves and check in by text or chat.
-2. Coding-agent managers (herdrherdr, Boxes.devBoxes.dev, Agent RelayAgent Relay): They keep coding agents running, coordinated and visible, then alert you through a dashboard or message.
-3. FaceTime projects:
-   1. FaceTimeOS: You call your Mac to control it.
-   2. Argos: A single-purpose watcher for ML training.
