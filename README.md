@@ -89,18 +89,6 @@ and the Mac companion. Agent-S remains a candidate, not an installed dependency.
 The presentation layer renders walkthrough zooms. Shared-screen actions retain
 explicit permissions, exclusive control, fresh-screen checks and visible Stop.
 
-### Model Choice: lets try Grok first.
-
-Grok is a reasonable demo candidate, not an established winner.
-
-[https://github.com/dylanelu/FaceTimeOS](https://github.com/dylanelu/FaceTimeOS) is a useful reference for combining a floating interface, Agent-S, and phone interaction.
-
-Its launcher ([https://github.com/dylanelu/FaceTimeOS/blob/main/run.sh](https://github.com/dylanelu/FaceTimeOS/blob/main/run.sh) ) distinguishes the recommended Grok-only setup from the recorded demo configuration ([https://github.com/dylanelu/FaceTimeOS/blob/main/Agent-S/run_demo_fast.sh](https://github.com/dylanelu/FaceTimeOS/blob/main/Agent-S/run_demo_fast.sh) ), which uses Grok with UI-TARS to locate screen targets. Reproduce and test a pinned configuration on our Mac before selecting it. Keep the model replaceable.
-
-### The initial demo
-
-Start with one coding-agent integration and a small demo project. Prepare the walkthrough before dialing, show the relevant code or failing test, apply the spoken instruction through the worker, and verify the result before the final review call. Add more worker integrations after this complete flow works reliably.
-
 ## Comparisons
 
 1. General assistants (Grok Bot, OpenClaw, Sentient OSSentient OS, TurnstoneTurnstone, TaskletTasklet): They do everyday tasks themselves and check in by text or chat.
